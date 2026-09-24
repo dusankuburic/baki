@@ -65,4 +65,40 @@ describe('CodeBlock', () => {
     await screen.findByText('Copied')
     expect(screen.getByText('Copied')).toBeTruthy()
   })
+
+  // Prism names its token classes after the grammar ("token table"), and
+  // Tailwind ships a `table` utility (`display: table`): a markdown table in
+  // a code fence rendered one cell per line.
+  it('keeps Prism token classes out of the Tailwind utility namespace', () => {
+    const table = '| a | b |\n| --- | --- |\n| 1 | 2 |'
+    const {container} = render(<CodeBlock language="markdown" value={table} />)
+    // The grammar did tokenize the table…
+    expect(container.querySelector('pre .tok-table')).not.toBeNull()
+    // …and no span carries a bare grammar name.
+    expect(container.querySelector('pre .table')).toBeNull()
+    const spans = Array.from(container.querySelectorAll('pre span'))
+    expect(spans.length).toBeGreaterThan(0)
+    for (const span of spans) {
+      for (const cls of span.className.split(' ')) expect(cls.startsWith('tok-')).toBe(true)
+    }
+  })
+
+  it('wraps long lines by default; the toggle switches the block to horizontal scrolling', () => {
+    const {container} = render(<CodeBlock language="text" value="a very long line" />)
+    const pre = container.querySelector('pre')!
+    expect(pre.className).toContain('whitespace-pre-wrap')
+    const toggle = screen.getByRole('button', {name: 'Wrap long lines'})
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect(pre.className).not.toContain('whitespace-pre-wrap')
+    expect(pre.className).toContain('whitespace-pre')
+    expect(pre.className).toContain('overflow-x-auto')
+  })
+
+  it('wraps a streaming (plain) block the same way', () => {
+    const {container} = render(<CodeBlock language="text" value="streaming" plain />)
+    expect(container.querySelector('pre')!.className).toContain('whitespace-pre-wrap')
+  })
 })

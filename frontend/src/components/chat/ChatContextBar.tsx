@@ -67,7 +67,7 @@ export default function ChatContextBar({
   if (!showScope && !showFiles) return null
 
   return (
-    <div className="flex flex-wrap items-center gap-1 px-2 py-1 border-b border-border-subtle">
+    <div className="chat-bar flex flex-wrap items-center gap-1 py-1 border-b border-border-subtle">
       {contextBlockId ? (
         <span className="flex items-center gap-1 max-w-full px-1.5 py-0.5 rounded-md bg-brand-500/10 border border-brand-500/20 text-2xs text-text-secondary">
           <Crosshair size={10} className="shrink-0 text-brand-400" />

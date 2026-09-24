@@ -40,11 +40,14 @@ export interface GeneralSettings {
   firstRunCompleted: boolean
 }
 
+export type ChatTextSize = 'sm' | 'md' | 'lg'
+
 export interface AppearanceSettings {
   theme: ThemeMode
   density: 'comfortable' | 'compact'
   reduceMotion: boolean
   highContrast: boolean
+  chatTextSize: ChatTextSize
 }
 
 export interface LayoutSettings {
@@ -54,7 +57,6 @@ export interface LayoutSettings {
   inspectorCollapsed: boolean
   lastActiveInspectorTab: 'details' | 'ai' | 'findings' | 'metrics' | 'sharing'
   lastViewMode: 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin'
-  chatPanelHeight?: number
 }
 
 export interface AIPromptsConfig {

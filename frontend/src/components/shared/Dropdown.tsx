@@ -171,6 +171,9 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
           close(true)
         }
       } else if (e.key === 'Escape') {
+        // Claimed: the same keypress used to reach the chat's Escape binding
+        // and stop a reply just because a menu was closed.
+        e.preventDefault()
         close(true)
       } else if (e.key === 'Tab') {
         // Let Tab leave the menu naturally; just close without restoring
@@ -195,7 +198,10 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
           aria-activedescendant={activeIndex >= 0 ? `menu-item-${activeIndex}` : undefined}
           tabIndex={-1}
           onKeyDown={e => {
-            if (e.key === 'Escape') close(true)
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              close(true)
+            }
           }}
         >
           {/* eslint-disable-next-line react-hooks/refs -- `close` reaches

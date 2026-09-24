@@ -88,3 +88,18 @@ describe('MessageBubble — chat→app navigation', () => {
     expect(link).toHaveAttribute('target', '_blank')
   })
 })
+
+describe('MessageBubble — reading layout', () => {
+  it('wraps a markdown table in its own horizontal scroll container', () => {
+    const table = '| a | b |\n| --- | --- |\n| 1 | 2 |'
+    const {container} = render(<MessageBubble message={msg({content: table})} />)
+    const wrap = container.querySelector('.chat-table-wrap')
+    expect(wrap).not.toBeNull()
+    expect(wrap!.querySelector('table')).not.toBeNull()
+  })
+
+  it('tints the user bubble with an opacity step Tailwind generates', () => {
+    const {container} = render(<MessageBubble message={msg({role: 'user', content: 'hi'})} />)
+    expect(container.querySelector('.bg-brand-500\\/10')).not.toBeNull()
+  })
+})

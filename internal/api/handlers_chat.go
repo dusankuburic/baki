@@ -101,6 +101,7 @@ func (h *ChatHandler) handleBeginStream(w http.ResponseWriter, r *http.Request) 
 			"text":      res.Text,
 			"done":      res.Done,
 			"error":     res.Error,
+			"errorCode": res.ErrorCode,
 			"tokensIn":  res.TokensIn,
 			"tokensOut": res.TokensOut,
 		})

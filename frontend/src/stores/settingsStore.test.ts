@@ -74,7 +74,7 @@ describe('loadFromBackend', () => {
     mockGet.mockResolvedValue({
       version: 1,
       general: {firstRunCompleted: false},
-      appearance: {theme: '', density: ''},
+      appearance: {theme: '', density: '', chatTextSize: ''},
       parser: {maxFileSizeMB: 0},
       layout: {sidebarWidth: 0, inspectorWidth: 0, lastActiveInspectorTab: '', lastViewMode: ''},
       ai: {activeProvider: '', embeddingProvider: '', dailyBudget: 0},
@@ -87,6 +87,7 @@ describe('loadFromBackend', () => {
     expect(s.parser.maxFileSizeMB).toBe(50)
     expect(s.appearance.theme).toBe('dark')
     expect(s.appearance.density).toBe('comfortable')
+    expect(s.appearance.chatTextSize).toBe('md')
     expect(s.ai.activeProvider).toBeTruthy()
     expect(s.ai.dailyBudget).toBeGreaterThan(0)
     expect(s.layout.sidebarWidth).toBeGreaterThan(0)

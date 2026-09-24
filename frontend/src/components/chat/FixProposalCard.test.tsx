@@ -87,6 +87,19 @@ describe('FixProposalCard', () => {
     expect(screen.getByText(/expiring…/)).toBeInTheDocument()
   })
 
+  it('keeps counting from when the proposal arrived across a remount', () => {
+    const receivedAt = Date.now()
+    const {unmount} = render(<FixProposalCard proposal={pendingCard({receivedAt})} onRespond={vi.fn()} />)
+    act(() => {
+      vi.advanceTimersByTime(20_000)
+    })
+    unmount()
+    // Thread switch-back / pop-out remounts the card; the server's window did
+    // not restart, so neither may the countdown.
+    render(<FixProposalCard proposal={pendingCard({receivedAt})} onRespond={vi.fn()} />)
+    expect(screen.getByText(/40s to decide/)).toBeInTheDocument()
+  })
+
   it('stops the countdown once resolved', () => {
     const {rerender} = render(<FixProposalCard proposal={pendingCard()} onRespond={vi.fn()} />)
     act(() => {

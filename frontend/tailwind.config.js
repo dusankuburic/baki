@@ -1,93 +1,121 @@
 /** @type {import('tailwindcss').Config} */
+
+// Every theme colour is a CSS variable. Tailwind cannot add alpha to a bare
+// `var(--x)`, so `bg-brand-500/10`-style tints generated NOTHING (282 usages
+// were silently dropped) and a bare `ring-1` fell back to Tailwind's blue.
+// Wrapping each token in color-mix with the <alpha-value> placeholder fixes
+// both: `/10` becomes `calc(0.1 * 100%)`, and the plain utility keeps the
+// `--tw-*-opacity` variable at 1, which renders exactly as before.
+const token = name => `color-mix(in srgb, var(--${name}) calc(<alpha-value> * 100%), transparent)`
+
+// The ring plugin resolves its default colour at build time, outside the
+// utility pipeline that understands <alpha-value>, so this one is a function.
+const ringDefault = ({opacityValue = 1}) =>
+  `color-mix(in srgb, var(--brand-500) calc(${opacityValue} * 100%), transparent)`
+
 export default {
   // Test files are excluded: classNames in fixtures/mocks would otherwise be
   // extracted as production utilities (pure CSS bloat in the built sheet).
   content: ['./index.html', './src/**/*.{ts,tsx}', '!./src/**/*.test.*'],
-  darkMode: ['class', '[data-theme="dark"], [data-theme="midnight"], [data-theme="warm"], [data-theme="tokyo-night"], [data-theme="one-dark"], [data-theme="dracula"], [data-theme="nord"], [data-theme="gruvbox-dark"], [data-theme="catppuccin-mocha"], [data-theme="rose-pine"], [data-theme="rose-pine-moon"], [data-theme="github-dark"], [data-theme="kanagawa"], [data-theme="everforest"]'],
+  darkMode: [
+    'class',
+    '[data-theme="dark"], [data-theme="midnight"], [data-theme="warm"], [data-theme="tokyo-night"], [data-theme="one-dark"], [data-theme="dracula"], [data-theme="nord"], [data-theme="gruvbox-dark"], [data-theme="catppuccin-mocha"], [data-theme="rose-pine"], [data-theme="rose-pine-moon"], [data-theme="github-dark"], [data-theme="kanagawa"], [data-theme="everforest"]',
+  ],
   theme: {
     extend: {
       colors: {
         surface: {
-          0: 'var(--surface-0)',
-          1: 'var(--surface-1)',
-          2: 'var(--surface-2)',
-          3: 'var(--surface-3)',
-          4: 'var(--surface-4)',
+          0: token('surface-0'),
+          1: token('surface-1'),
+          2: token('surface-2'),
+          3: token('surface-3'),
+          4: token('surface-4'),
+          // Already translucent (rgba): the Modal / palette backdrop.
+          overlay: 'var(--surface-overlay)',
         },
         text: {
-          primary: 'var(--text-primary)',
-          secondary: 'var(--text-secondary)',
-          tertiary: 'var(--text-tertiary)',
-          disabled: 'var(--text-disabled)',
+          primary: token('text-primary'),
+          secondary: token('text-secondary'),
+          tertiary: token('text-tertiary'),
+          disabled: token('text-disabled'),
         },
         border: {
-          subtle: 'var(--border-subtle)',
-          DEFAULT: 'var(--border-default)',
-          strong: 'var(--border-strong)',
-          focus: 'var(--border-focus)',
+          subtle: token('border-subtle'),
+          DEFAULT: token('border-default'),
+          // `border-border-default` is written all over the app; without this
+          // alias it generated nothing (the plain `border` default carried it).
+          default: token('border-default'),
+          strong: token('border-strong'),
+          focus: token('border-focus'),
         },
         brand: {
-          50: 'var(--brand-50)',
-          100: 'var(--brand-100)',
-          300: 'var(--brand-300)',
-          400: 'var(--brand-400)',
-          500: 'var(--brand-500)',
-          600: 'var(--brand-600)',
-          700: 'var(--brand-700)',
-          foreground: 'var(--brand-foreground)',
+          50: token('brand-50'),
+          100: token('brand-100'),
+          300: token('brand-300'),
+          400: token('brand-400'),
+          500: token('brand-500'),
+          600: token('brand-600'),
+          700: token('brand-700'),
+          foreground: token('brand-foreground'),
         },
         block: {
-          action: 'var(--block-action)',
-          loop: 'var(--block-loop)',
-          condition: 'var(--block-condition)',
-          subflow: 'var(--block-subflow)',
-          error: 'var(--block-error)',
-          comment: 'var(--block-comment)',
-          variable: 'var(--block-variable)',
-          string: 'var(--block-string)',
-          wait: 'var(--block-wait)',
-          'action-bg':    'var(--block-action-bg)',
-          'loop-bg':      'var(--block-loop-bg)',
-          'condition-bg': 'var(--block-condition-bg)',
-          'subflow-bg':   'var(--block-subflow-bg)',
-          'error-bg':     'var(--block-error-bg)',
-          'comment-bg':   'var(--block-comment-bg)',
-          'variable-bg':  'var(--block-variable-bg)',
-          'string-bg':    'var(--block-string-bg)',
-          'wait-bg':      'var(--block-wait-bg)',
+          action: token('block-action'),
+          loop: token('block-loop'),
+          condition: token('block-condition'),
+          subflow: token('block-subflow'),
+          error: token('block-error'),
+          comment: token('block-comment'),
+          variable: token('block-variable'),
+          string: token('block-string'),
+          wait: token('block-wait'),
+          'action-bg': token('block-action-bg'),
+          'loop-bg': token('block-loop-bg'),
+          'condition-bg': token('block-condition-bg'),
+          'subflow-bg': token('block-subflow-bg'),
+          'error-bg': token('block-error-bg'),
+          'comment-bg': token('block-comment-bg'),
+          'variable-bg': token('block-variable-bg'),
+          'string-bg': token('block-string-bg'),
+          'wait-bg': token('block-wait-bg'),
         },
         semantic: {
-          success: 'var(--success)',
-          warning: 'var(--warning)',
-          error: 'var(--error)',
-          info: 'var(--info)',
+          success: token('success'),
+          warning: token('warning'),
+          error: token('error'),
+          info: token('info'),
         },
       },
       borderColor: {
         DEFAULT: 'var(--border-default)',
+      },
+      ringColor: {
+        DEFAULT: ringDefault,
       },
       fontFamily: {
         sans: 'var(--font-sans)',
         mono: 'var(--font-mono)',
       },
       fontSize: {
-        '2xs': ['10px', { lineHeight: '14px' }],
-        xs: ['11px', { lineHeight: '16px' }],
-        sm: ['13px', { lineHeight: '18px' }],
-        base: ['15px', { lineHeight: '22px' }],
-        lg: ['17px', { lineHeight: '24px' }],
-        xl: ['20px', { lineHeight: '28px' }],
-        '2xl': ['28px', { lineHeight: '36px', letterSpacing: '-0.01em' }],
-        '3xl': ['36px', { lineHeight: '44px', letterSpacing: '-0.02em' }],
+        '2xs': ['10px', {lineHeight: '14px'}],
+        xs: ['11px', {lineHeight: '16px'}],
+        sm: ['13px', {lineHeight: '18px'}],
+        base: ['15px', {lineHeight: '22px'}],
+        lg: ['17px', {lineHeight: '24px'}],
+        xl: ['20px', {lineHeight: '28px'}],
+        '2xl': ['28px', {lineHeight: '36px', letterSpacing: '-0.01em'}],
+        '3xl': ['36px', {lineHeight: '44px', letterSpacing: '-0.02em'}],
       },
+      // A custom-property name cannot contain a dot: `--space-1.5` was dropped
+      // by browsers and every half-step utility (p-1.5, gap-1.5, py-0.5, h-3.5)
+      // computed to 0. The half steps use an underscore in index.css.
       spacing: {
-        0.5: 'var(--space-0.5)',
+        0.5: 'var(--space-0_5)',
         1: 'var(--space-1)',
-        1.5: 'var(--space-1.5)',
+        1.5: 'var(--space-1_5)',
         2: 'var(--space-2)',
-        2.5: 'var(--space-2.5)',
+        2.5: 'var(--space-2_5)',
         3: 'var(--space-3)',
-        3.5: 'var(--space-3.5)',
+        3.5: 'var(--space-3_5)',
         4: 'var(--space-4)',
         5: 'var(--space-5)',
         6: 'var(--space-6)',
@@ -140,4 +168,4 @@ export default {
     },
   },
   plugins: [],
-};
+}

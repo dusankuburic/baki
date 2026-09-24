@@ -157,11 +157,20 @@ export const allShortcuts: Shortcut[] = [
   {
     id: 'ai.cancel.stream',
     keys: 'escape',
-    description: 'Cancel AI response',
+    description: 'Stop the reply, or leave focus mode',
     category: 'AI',
     scope: 'chat',
     allowInInputs: true,
     preventDefault: false,
+  },
+  // mod+. pairs with mod+, (settings); mod+shift+f is the global search.
+  {
+    id: 'ai.focus',
+    keys: 'mod+.',
+    description: 'Toggle chat focus mode',
+    category: 'AI',
+    scope: 'chat',
+    allowInInputs: true,
   },
 
   {

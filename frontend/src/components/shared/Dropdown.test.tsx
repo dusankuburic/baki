@@ -178,3 +178,14 @@ describe('Dropdown roving focus', () => {
     expect((document.activeElement as HTMLElement)?.dataset.index).toBe('1')
   })
 })
+
+describe('Dropdown Escape', () => {
+  it('claims the Escape that closes the menu so parent shortcuts ignore it', () => {
+    const items: DropdownItem[] = [{type: 'item', label: 'A', onSelect: vi.fn()}]
+    render(<Dropdown trigger={<button>Open</button>} items={items} />)
+    const menu = open()
+    // fireEvent returns false when preventDefault was called.
+    expect(fireEvent.keyDown(menu, {key: 'Escape'})).toBe(false)
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+  })
+})

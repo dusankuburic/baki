@@ -36,9 +36,15 @@ export function downloadTextFile(filename: string, content: string, mime = 'text
 }
 
 // safeFilename sanitizes a thread title into a filesystem-safe basename.
+// Letters and digits of ANY script are kept (an ASCII-only class turned
+// "Šta radi ovaj flow" into "ta-radi-ovaj-flow"); everything else — path
+// separators and reserved characters included — collapses to "-".
 export function safeFilename(title: string): string {
   const base = (title || 'conversation')
-    .replace(/[^a-z0-9]+/gi, '-')
+    // NFC first, and combining marks kept: a decomposed "Š" or a Devanagari
+    // vowel sign is part of a letter, not a separator.
+    .normalize('NFC')
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/g, '')
     .toLowerCase()
   return `chat-${base || 'conversation'}.md`

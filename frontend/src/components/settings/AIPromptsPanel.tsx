@@ -24,6 +24,7 @@ export default function AIPromptsPanel() {
         <PromptList
           title={t('prompts.flowTitle')}
           description={t('prompts.flowDescription')}
+          listKey="flow"
           items={p.flow}
           onChange={newItems => updateAI({prompts: {...p, flow: newItems}})}
         />
@@ -31,6 +32,7 @@ export default function AIPromptsPanel() {
         <PromptList
           title={t('prompts.blockTitle')}
           description={t('prompts.blockDescription')}
+          listKey="block"
           items={p.block}
           onChange={newItems => updateAI({prompts: {...p, block: newItems}})}
         />
@@ -38,6 +40,7 @@ export default function AIPromptsPanel() {
         <PromptList
           title={t('prompts.findingTitle')}
           description={t('prompts.findingDescription')}
+          listKey="finding"
           items={p.finding}
           onChange={newItems => updateAI({prompts: {...p, finding: newItems}})}
         />
@@ -45,6 +48,7 @@ export default function AIPromptsPanel() {
         <PromptList
           title={t('prompts.blockWithFindingsTitle')}
           description={t('prompts.blockWithFindingsDescription')}
+          listKey="blockWithFindings"
           items={p.blockWithFindings}
           onChange={newItems => updateAI({prompts: {...p, blockWithFindings: newItems}})}
         />
@@ -60,14 +64,21 @@ function reorder(arr: string[], from: number, to: number): string[] {
   return next
 }
 
+// Drag payload type for prompt reordering. The payload names its list: a bare
+// index let a row dropped onto ANOTHER list reorder the wrong item there, and
+// an out-of-range index inserted `undefined` (saved as null).
+const PROMPT_DRAG_TYPE = 'application/x-baki-prompt'
+
 function PromptList({
   title,
   description,
+  listKey,
   items,
   onChange,
 }: {
   title: string
   description: string
+  listKey: string
   items: string[] | null | undefined
   onChange: (items: string[]) => void
 }) {
@@ -115,7 +126,7 @@ function PromptList({
             key={i}
             draggable={dragArmed === i}
             onDragStart={e => {
-              e.dataTransfer.setData('text/plain', String(i))
+              e.dataTransfer.setData(PROMPT_DRAG_TYPE, JSON.stringify({list: listKey, from: i}))
               e.dataTransfer.effectAllowed = 'move'
             }}
             onDragOver={e => {
@@ -126,9 +137,20 @@ function PromptList({
             onDragLeave={() => setDropIndex(null)}
             onDrop={e => {
               e.preventDefault()
-              const from = parseInt(e.dataTransfer.getData('text/plain'))
-              if (!isNaN(from) && from !== i) onChange(reorder(list, from, i))
               setDropIndex(null)
+              let payload: {list?: unknown; from?: unknown} | null
+              try {
+                payload = JSON.parse(e.dataTransfer.getData(PROMPT_DRAG_TYPE) || 'null')
+              } catch {
+                return
+              }
+              const from = payload?.from
+              if (payload?.list !== listKey || typeof from !== 'number' || !Number.isInteger(from)) return
+              if (from < 0 || from >= list.length || from === i) return
+              // The indicator is the target row's TOP border, so the item
+              // lands before that row; removing it first shifts a lower
+              // target up by one.
+              onChange(reorder(list, from, from < i ? i - 1 : i))
             }}
             onDragEnd={() => {
               setDropIndex(null)

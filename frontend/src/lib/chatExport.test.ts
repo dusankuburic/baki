@@ -44,3 +44,22 @@ describe('safeFilename', () => {
     expect(safeFilename('')).toBe('chat-conversation.md')
   })
 })
+
+describe('safeFilename (non-ASCII titles)', () => {
+  it('keeps letters of any script instead of dropping them', () => {
+    expect(safeFilename('Šta radi ovaj flow')).toBe('chat-šta-radi-ovaj-flow.md')
+    expect(safeFilename('日本語のフロー')).toBe('chat-日本語のフロー.md')
+  })
+
+  it('still strips path separators and reserved characters', () => {
+    expect(safeFilename('../etc/passwd: "x"')).toBe('chat-etc-passwd-x.md')
+  })
+})
+
+describe('safeFilename (combining marks)', () => {
+  it('keeps vowel signs and decomposed accents as part of their letters', () => {
+    expect(safeFilename('नमस्ते')).toBe('chat-नमस्ते.md')
+    // "S" + combining caron: normalised to "š", not split at the mark.
+    expect(safeFilename('S\u030Cta')).toBe('chat-šta.md')
+  })
+})

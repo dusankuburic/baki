@@ -24,6 +24,7 @@ vi.mock('@/hooks/useStreamingMessage', () => ({
 }))
 
 vi.mock('@/api', () => ({
+  ApiError: class ApiError extends Error {},
   chatApi: {
     streamMessage: vi.fn(),
     cancelStream: vi.fn(),
@@ -46,20 +47,19 @@ vi.mock('@/platform/adapters', () => ({
 
 import {useChatStreamEngine} from './useChatStreamEngine'
 import {chatApi} from '@/api'
+import {useFlowStore} from '@/stores/flowStore'
 import type {FlowDocument} from '@/types'
 
-const mockDoc = {id: 'flow-1', name: 'Test', subflows: []} as unknown as FlowDocument
+// What produced a stream: captured per stream at beginAcc (the engine no
+// longer reads the panel's provider/model, which can change mid-stream).
+const META = {provider: 'claude' as never, model: 'claude-sonnet-4'}
 
 function renderEngine() {
-  return renderHook(() =>
-    useChatStreamEngine({
-      doc: mockDoc,
-      provider: 'claude' as never,
-      selectedModel: 'claude-sonnet-4',
-      getMessages: (threadId: string) => useChatStore.getState().conversations.get(threadId) ?? [],
-    }),
-  )
+  return renderHook(() => useChatStreamEngine())
 }
+
+// Saves only happen for threads whose server history has loaded.
+const LOADED = {state: 'loaded' as const, token: 1}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -82,8 +82,8 @@ describe('useChatStreamEngine', () => {
     it('keeps stream A text separate from stream B', () => {
       const {result} = renderEngine()
       act(() => {
-        result.current.beginAcc('streamA', 'threadA')
-        result.current.beginAcc('streamB', 'threadB')
+        result.current.beginAcc('streamA', 'threadA', META)
+        result.current.beginAcc('streamB', 'threadB', META)
         useChatStore.setState({
           streams: {
             threadA: {
@@ -122,7 +122,7 @@ describe('useChatStreamEngine', () => {
     it('ignores chunks for an unknown streamId', () => {
       const {result} = renderEngine()
       act(() => {
-        result.current.beginAcc('streamA', 'threadA')
+        result.current.beginAcc('streamA', 'threadA', META)
         useChatStore.setState({
           streams: {
             threadA: {
@@ -176,7 +176,7 @@ describe('useChatStreamEngine', () => {
     it('returns byte length for non-ASCII', () => {
       const {result} = renderEngine()
       act(() => {
-        result.current.beginAcc('streamA', 'threadA')
+        result.current.beginAcc('streamA', 'threadA', META)
         useChatStore.setState({
           streams: {
             threadA: {
@@ -221,7 +221,7 @@ describe('useChatStreamEngine', () => {
           ],
           conversations: new Map([['threadA', []]]),
         })
-        result.current.beginAcc('streamA', 'threadA')
+        result.current.beginAcc('streamA', 'threadA', META)
         useChatStore.setState({
           streams: {
             threadA: {
@@ -263,7 +263,7 @@ describe('useChatStreamEngine', () => {
           ],
           conversations: new Map([['threadA', []]]),
         })
-        result.current.beginAcc('streamA', 'threadA')
+        result.current.beginAcc('streamA', 'threadA', META)
         useChatStore.setState({
           streams: {
             threadA: {
@@ -306,7 +306,7 @@ describe('useChatStreamEngine', () => {
           ],
           conversations: new Map([['threadA', []]]),
         })
-        result.current.beginAcc('streamA', 'threadA')
+        result.current.beginAcc('streamA', 'threadA', META)
         useChatStore.setState({
           streams: {
             threadA: {
@@ -351,7 +351,7 @@ describe('useChatStreamEngine', () => {
           ],
           conversations: new Map([['threadA', []]]),
         })
-        result.current.beginAcc('streamA', 'threadA')
+        result.current.beginAcc('streamA', 'threadA', META)
         useChatStore.setState({
           streams: {
             threadA: {
@@ -396,7 +396,9 @@ describe('useChatStreamEngine', () => {
         })
       })
       act(() => {
-        result.current.commitAssistantMessage('threadA', 'mA', 'hello world', {finishReason: 'interrupted'})
+        result.current.commitAssistantMessage({threadId: 'threadA', ...META}, 'mA', 'hello world', {
+          finishReason: 'interrupted',
+        })
       })
       // appendMessage writes to the conversations Map, not threads[].messages
       const msgs = useChatStore.getState().conversations.get('threadA')
@@ -415,16 +417,8 @@ describe('useChatStreamEngine', () => {
       const docA = {id: 'flow-A', name: 'A', subflows: []} as unknown as FlowDocument
       const docB = {id: 'flow-B', name: 'B', subflows: []} as unknown as FlowDocument
 
-      const {result, rerender} = renderHook(
-        ({doc}: {doc: FlowDocument}) =>
-          useChatStreamEngine({
-            doc,
-            provider: 'claude' as never,
-            selectedModel: 'claude-sonnet-4',
-            getMessages: (threadId: string) => useChatStore.getState().conversations.get(threadId) ?? [],
-          }),
-        {initialProps: {doc: docA}},
-      )
+      useFlowStore.setState({document: docA})
+      const {result} = renderHook(() => useChatStreamEngine())
 
       act(() => {
         useChatStore.setState({
@@ -441,6 +435,7 @@ describe('useChatStreamEngine', () => {
             },
           ],
           conversations: new Map([['threadA', []]]),
+          historyStatus: {threadA: LOADED},
           streams: {
             threadA: {
               streamId: 'streamA',
@@ -454,14 +449,13 @@ describe('useChatStreamEngine', () => {
             },
           },
         })
-        result.current.beginAcc('streamA', 'threadA')
+        result.current.beginAcc('streamA', 'threadA', META)
         capturedHandler!.onChunk('hello from A', 'streamA')
       })
 
-      // User switches to doc B mid-stream. docRef.current updates to flow-B via
-      // the post-render effect.
+      // User switches to doc B mid-stream.
       act(() => {
-        rerender({doc: docB})
+        useFlowStore.setState({document: docB})
       })
 
       // Stream for threadA (flow-A) completes after the switch. The save must
@@ -485,15 +479,7 @@ describe('useChatStreamEngine', () => {
       const prevSettings = useSettingsStore.getState().settings
       useSettingsStore.setState({settings: {...prevSettings, ai: {...prevSettings.ai, saveConversationHistory: false}}})
       try {
-        const doc = {id: 'flow-A', name: 'A', subflows: []} as unknown as FlowDocument
-        const {result} = renderHook(() =>
-          useChatStreamEngine({
-            doc,
-            provider: 'claude' as never,
-            selectedModel: 'claude-sonnet-4',
-            getMessages: (threadId: string) => useChatStore.getState().conversations.get(threadId) ?? [],
-          }),
-        )
+        const {result} = renderHook(() => useChatStreamEngine())
         act(() => {
           useChatStore.setState({
             threads: [
@@ -522,7 +508,7 @@ describe('useChatStreamEngine', () => {
               },
             },
           })
-          result.current.beginAcc('streamA', 'threadA')
+          result.current.beginAcc('streamA', 'threadA', META)
           capturedHandler!.onChunk('not kept', 'streamA')
         })
         act(() => {
@@ -544,7 +530,7 @@ describe('useChatStreamEngine', () => {
     function setupFixStream() {
       const hook = renderEngine()
       act(() => {
-        hook.result.current.beginAcc('streamA', 'threadA')
+        hook.result.current.beginAcc('streamA', 'threadA', META)
         useChatStore.setState({
           threads: [
             {
@@ -820,7 +806,7 @@ describe('useChatStreamEngine', () => {
     function setupToolStream() {
       const hook = renderEngine()
       act(() => {
-        hook.result.current.beginAcc('streamA', 'threadA')
+        hook.result.current.beginAcc('streamA', 'threadA', META)
         useChatStore.setState({
           threads: [
             {
@@ -835,6 +821,7 @@ describe('useChatStreamEngine', () => {
             },
           ],
           conversations: new Map([['threadA', []]]),
+          historyStatus: {threadA: LOADED},
           streams: {
             threadA: {
               streamId: 'streamA',
@@ -889,7 +876,7 @@ describe('useChatStreamEngine', () => {
     it('a text chunk clears a stale toolStatus', () => {
       const {result} = renderEngine()
       act(() => {
-        result.current.beginAcc('streamA', 'threadA')
+        result.current.beginAcc('streamA', 'threadA', META)
         useChatStore.setState({
           streams: {
             threadA: {

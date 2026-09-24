@@ -968,6 +968,7 @@ type AppearanceSettings struct {
 	Density      string `json:"density"`
 	ReduceMotion bool   `json:"reduceMotion"`
 	HighContrast bool   `json:"highContrast"`
+	ChatTextSize string `json:"chatTextSize,omitempty"`
 }
 
 type LayoutSettings struct {
@@ -977,7 +978,6 @@ type LayoutSettings struct {
 	InspectorCollapsed     bool   `json:"inspectorCollapsed"`
 	LastActiveInspectorTab string `json:"lastActiveInspectorTab"`
 	LastViewMode           string `json:"lastViewMode"`
-	ChatPanelHeight        *int   `json:"chatPanelHeight,omitempty"`
 }
 
 type AIPromptsConfig struct {

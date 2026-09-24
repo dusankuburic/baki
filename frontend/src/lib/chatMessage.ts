@@ -137,3 +137,21 @@ export function parseChatMessages(raw: unknown): ChatMessage[] {
   }
   return out
 }
+
+// parseConversationPayload reads a /api/chat/get response. The backend returns
+// the message list as a bare array; the pre-thread `{messages: [...]}` file
+// shape is still accepted. Reading `.messages` off the array (what the client
+// used to do) silently restored nothing — and the next save then replaced the
+// server's history with only the new turn.
+//
+// A payload of any OTHER shape throws rather than returning [] on purpose: an
+// unreadable response must count as a failed load (the thread is then never
+// full-replace saved), not as "this conversation is empty".
+export function parseConversationPayload(raw: unknown): ChatMessage[] {
+  if (raw == null) return []
+  if (Array.isArray(raw)) return parseChatMessages(raw)
+  if (typeof raw === 'object' && Array.isArray((raw as {messages?: unknown}).messages)) {
+    return parseChatMessages((raw as {messages: unknown[]}).messages)
+  }
+  throw new Error('Unexpected conversation payload')
+}

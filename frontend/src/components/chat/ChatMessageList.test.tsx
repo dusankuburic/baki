@@ -1,5 +1,5 @@
 import type {ReactNode} from 'react'
-import {render, screen} from '@testing-library/react'
+import {render, screen, fireEvent} from '@testing-library/react'
 import {describe, it, expect, vi} from 'vitest'
 import ChatMessageList from './ChatMessageList'
 import type {ChatMessage} from '@/types'
@@ -12,26 +12,48 @@ import type {ChatMessage} from '@/types'
 // `context` is forwarded exactly as the real Virtuoso does: it is how the
 // per-render footer reaches a components object that must keep a stable
 // identity (rebuilding that object remounts the whole scroller).
-vi.mock('react-virtuoso', () => ({
-  Virtuoso: ({
-    data = [],
-    itemContent,
-    components,
-    context,
-  }: {
+// The mock hands the list a scroll container (via scrollerRef) that reports a
+// tall scrollable area sitting away from the bottom, so the scroll-to-bottom
+// button renders and its scroll call can be checked. Virtuoso's handle keeps
+// a scrollToIndex spy for the search-jump path.
+const scrollToIndexSpy = vi.hoisted(() => vi.fn())
+const scrollToSpy = vi.hoisted(() => vi.fn())
+vi.mock('react-virtuoso', async () => {
+  const React = await import('react')
+  interface MockProps {
     data?: unknown[]
     itemContent: (i: number, item: unknown) => ReactNode
     components?: {Footer?: (props: {context?: unknown}) => ReactNode}
     context?: unknown
-  }) => (
-    <div>
-      {data.map((item, i) => (
-        <div key={i}>{itemContent(i, item)}</div>
-      ))}
-      {components?.Footer ? <components.Footer context={context} /> : null}
-    </div>
-  ),
-}))
+    scrollerRef?: (el: HTMLElement | null) => void
+  }
+  const Virtuoso = React.forwardRef<unknown, MockProps>(function Virtuoso(
+    {data = [], itemContent, components, context, scrollerRef},
+    ref,
+  ) {
+    const scrollerEl = React.useRef<HTMLDivElement | null>(null)
+    React.useImperativeHandle(ref, () => ({scrollToIndex: scrollToIndexSpy}))
+    React.useEffect(() => {
+      const el = scrollerEl.current
+      if (!el) return
+      Object.defineProperty(el, 'scrollHeight', {value: 5000, configurable: true})
+      Object.defineProperty(el, 'clientHeight', {value: 600, configurable: true})
+      Object.defineProperty(el, 'scrollTop', {value: 0, writable: true, configurable: true})
+      el.scrollTo = scrollToSpy as unknown as typeof el.scrollTo
+      scrollerRef?.(el)
+      return () => scrollerRef?.(null)
+    }, [scrollerRef])
+    return (
+      <div ref={scrollerEl} data-testid="scroller">
+        {data.map((item, i) => (
+          <div key={i}>{itemContent(i, item)}</div>
+        ))}
+        {components?.Footer ? <components.Footer context={context} /> : null}
+      </div>
+    )
+  })
+  return {Virtuoso}
+})
 
 const msg = (id: string, content: string): ChatMessage =>
   ({id, role: 'user', content, timestamp: '2024-01-01T00:00:00Z'}) as ChatMessage
@@ -66,5 +88,28 @@ describe('ChatMessageList', () => {
   it('renders with no messages (welcome/state handled by the parent)', () => {
     renderList({messages: [], footer: undefined})
     expect(screen.queryByTestId('bubble-m1')).not.toBeInTheDocument()
+  })
+})
+
+describe('ChatMessageList scroll-to-bottom', () => {
+  it('scrolls the scroller itself to its full height, not a Virtuoso seek', () => {
+    scrollToSpy.mockClear()
+    scrollToIndexSpy.mockClear()
+    renderList()
+    fireEvent.click(screen.getByRole('button', {name: 'Scroll to bottom'}))
+    expect(scrollToSpy).toHaveBeenCalledWith({top: 5000, behavior: 'smooth'})
+    expect(scrollToIndexSpy).not.toHaveBeenCalled()
+  })
+
+  it('hides the button once the scroller reports it is at the bottom', () => {
+    renderList()
+    const scroller = screen.getByTestId('scroller')
+    expect(screen.getByRole('button', {name: 'Scroll to bottom'})).toBeInTheDocument()
+    ;(scroller as HTMLElement).scrollTop = 4400
+    fireEvent.scroll(scroller)
+    expect(screen.queryByRole('button', {name: 'Scroll to bottom'})).not.toBeInTheDocument()
+    ;(scroller as HTMLElement).scrollTop = 1000
+    fireEvent.scroll(scroller)
+    expect(screen.getByRole('button', {name: 'Scroll to bottom'})).toBeInTheDocument()
   })
 })

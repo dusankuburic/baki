@@ -1,5 +1,6 @@
 import {request} from './client'
-import type {ChatRequest, ChatMessage, ConversationFile, ContextPreview} from '@/types'
+import {parseConversationPayload} from '@/lib/chatMessage'
+import type {ChatRequest, ChatMessage, ContextPreview} from '@/types'
 
 // BeginStreamResult reports whether the stream is live (events arrive over
 // SSE) or already finished — a fail-fast pre-stream error emits its terminal
@@ -9,6 +10,8 @@ export interface BeginStreamResult {
   text?: string
   done?: boolean
   error?: string
+  // Machine-readable class of `error` (AI_BUDGET_EXCEEDED, …), when known.
+  errorCode?: string
   tokensIn?: number
   tokensOut?: number
 }
@@ -36,19 +39,27 @@ export const chatApi = {
     text: string
     done: boolean
     error: string
+    errorCode?: string
     tokensIn: number
     tokensOut: number
     events?: {type: string; data: Record<string, unknown>}[]
   }> => request('/api/chat/resume', {body: {id, from}}),
 
-  getConversation: (flowId: string, provider: string): Promise<ConversationFile> =>
-    request('/api/chat/get', {body: {flowId, provider}}),
+  // The conversation endpoints are keyed by (flowId, conversation key). The key
+  // travels in the wire field historically named `provider`; it is the
+  // thread's id (conversationKey), not a provider id.
+  //
+  // Resolves the validated message list; rejects when the response is not a
+  // conversation (see parseConversationPayload) so callers treat it as a
+  // failed load rather than an empty history.
+  getConversation: (flowId: string, conversationKey: string): Promise<ChatMessage[]> =>
+    request<unknown>('/api/chat/get', {body: {flowId, provider: conversationKey}}).then(parseConversationPayload),
 
-  saveConversation: (flowId: string, provider: string, messages: ChatMessage[]): Promise<void> =>
-    request('/api/chat/save', {body: {flowId, provider, messages}}),
+  saveConversation: (flowId: string, conversationKey: string, messages: ChatMessage[]): Promise<void> =>
+    request('/api/chat/save', {body: {flowId, provider: conversationKey, messages}}),
 
-  clearConversation: (flowId: string, provider: string): Promise<void> =>
-    request('/api/chat/clear', {body: {flowId, provider}}),
+  clearConversation: (flowId: string, conversationKey: string): Promise<void> =>
+    request('/api/chat/clear', {body: {flowId, provider: conversationKey}}),
 
   getSuggestedPrompts: (hasBlock: boolean, hasFindings?: boolean): Promise<string[]> =>
     request('/api/chat/suggested-prompts', {body: {hasBlock, hasFindings: hasFindings ?? false}}),

@@ -4,6 +4,7 @@ import {Plus, X, MessageSquare, Wrench, CircleCheck} from 'lucide-react'
 import {useState, useRef, useEffect, useMemo} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import type {ChatThread} from '@/stores/chatStore'
+import {isImeKeydown} from '@/lib/imeKey'
 
 interface Props {
   threads: ChatThread[]
@@ -44,10 +45,15 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
     const delta = e.key === 'ArrowRight' ? 1 : -1
     const nextIndex = (index + delta + threads.length) % threads.length
     onSelect(threads[nextIndex].id)
+    // Roving focus: move focus WITH the selection, or it stays on the tab
+    // that just became tabIndex -1 and the next arrow press goes nowhere.
+    requestAnimationFrame(() => {
+      scrollRef.current?.querySelectorAll<HTMLElement>('[role="tab"]')[nextIndex]?.focus()
+    })
   }
 
   return (
-    <div className="flex items-center gap-0 border-b border-border-subtle">
+    <div className="chat-bar flex items-center gap-0 border-b border-border-subtle">
       <div
         ref={scrollRef}
         // Overflow was completely invisible under no-scrollbar; the mask fades
@@ -173,8 +179,14 @@ function ThreadTab({
           onChange={e => setEditValue(e.target.value)}
           onBlur={commitEdit}
           onKeyDown={e => {
+            if (isImeKeydown(e)) return
             if (e.key === 'Enter') commitEdit()
-            if (e.key === 'Escape') setEditing(false)
+            if (e.key === 'Escape') {
+              // Claimed here so the chat's own Escape (stop the reply, leave
+              // focus mode) doesn't also fire.
+              e.preventDefault()
+              setEditing(false)
+            }
           }}
           onClick={e => e.stopPropagation()}
         />

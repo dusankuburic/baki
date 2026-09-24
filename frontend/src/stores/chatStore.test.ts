@@ -1,5 +1,6 @@
-import {describe, it, expect, beforeEach, vi} from 'vitest'
+import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
 import {useChatStore, MAX_CONCURRENT_STREAMS} from './chatStore'
+import {registerCurrentUserResolver} from './storeRegistry'
 import type {ChatMessage} from '@/types'
 
 function makeMessage(id: string, role: 'user' | 'assistant', content = 'hello'): ChatMessage {
@@ -447,11 +448,23 @@ describe('thread persistence', () => {
     removeItem: (k: string) => {
       delete stored[k]
     },
+    key: (i: number) => Object.keys(stored)[i] ?? null,
+    get length() {
+      return Object.keys(stored).length
+    },
   }
+  // In the web app thread lists are stored per signed-in user.
+  let userId: string | null = 'user-1'
+  const KEY = (flowId: string, uid = 'user-1') => `baki:chatThreads:v2:${uid}:${flowId}`
 
   beforeEach(() => {
     for (const k of Object.keys(stored)) delete stored[k]
     vi.stubGlobal('localStorage', fakeStorage)
+    userId = 'user-1'
+    registerCurrentUserResolver(() => userId)
+  })
+  afterEach(() => {
+    registerCurrentUserResolver(() => null)
   })
 
   it('restores a flow’s threads with the same ids so their conversations stay reachable', () => {
@@ -481,9 +494,7 @@ describe('thread persistence', () => {
 
   it('returns the existing ids without touching storage when threads are already loaded', () => {
     const a = useChatStore.getState().createThread('flow1')
-    stored['baki:chatThreads:v1:flow1'] = JSON.stringify([
-      {id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', flowId: 'flow1'},
-    ])
+    stored[KEY('flow1')] = JSON.stringify([{id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', flowId: 'flow1'}])
     expect(useChatStore.getState().hydrateThreads('flow1')).toEqual([a])
     expect(useChatStore.getState().threads).toHaveLength(1)
   })
@@ -492,7 +503,7 @@ describe('thread persistence', () => {
     const a = useChatStore.getState().createThread('flow1')
     const b = useChatStore.getState().createThread('flow1')
     useChatStore.getState().closeThread(a)
-    stored['baki:chatThreads:v1:flow2'] = JSON.stringify([{id: 'not-a-uuid', flowId: 'flow2'}, 'garbage', null])
+    stored[KEY('flow2')] = JSON.stringify([{id: 'not-a-uuid', flowId: 'flow2'}, 'garbage', null])
 
     useChatStore.setState({threads: [], activeThreadId: null, conversations: new Map()})
     expect(useChatStore.getState().hydrateThreads('flow1')).toEqual([b])
@@ -501,8 +512,199 @@ describe('thread persistence', () => {
 
   it('removes the key when the last thread of a flow is cleared', () => {
     useChatStore.getState().createThread('flow1')
-    expect(stored['baki:chatThreads:v1:flow1']).toBeDefined()
+    expect(stored[KEY('flow1')]).toBeDefined()
     useChatStore.getState().clearFlowThreads('flow1')
+    expect(stored[KEY('flow1')]).toBeUndefined()
+  })
+
+  // Shared browser: the next account to open the same flow must not get the
+  // previous account's thread ids — the server lets any flow viewer read a
+  // conversation by key, and the titles are the start of each first prompt.
+  it("keeps each user's threads apart", () => {
+    useChatStore.getState().createThread('flow1')
+    useChatStore.setState({threads: [], activeThreadId: null, conversations: new Map()})
+
+    userId = 'user-2'
+    expect(useChatStore.getState().hydrateThreads('flow1')).toEqual([])
+    expect(useChatStore.getState().threads).toHaveLength(0)
+  })
+
+  it('stores nothing while no one is signed in', () => {
+    userId = null
+    useChatStore.getState().createThread('flow1')
+    expect(Object.keys(stored)).toHaveLength(0)
+  })
+
+  it('drops the unscoped legacy lists in the web app', () => {
+    stored['baki:chatThreads:v1:flow1'] = JSON.stringify([
+      {id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', flowId: 'flow1'},
+    ])
+    // v1 lists record no owner, so they cannot be handed to whoever signs in.
+    expect(useChatStore.getState().hydrateThreads('flow1')).toEqual([])
     expect(stored['baki:chatThreads:v1:flow1']).toBeUndefined()
+  })
+
+  it('keeps the single-user v1 key in the desktop app', () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    try {
+      userId = null
+      useChatStore.getState().createThread('flow1')
+      expect(stored['baki:chatThreads:v1:flow1']).toBeDefined()
+    } finally {
+      delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
+    }
+  })
+})
+
+describe('history load state', () => {
+  const m = (id: string): ChatMessage => ({id, role: 'user', content: id, timestamp: 'x'})
+
+  it('treats a new thread as loaded (nothing to wait for)', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    expect(useChatStore.getState().isHistorySynced(id)).toBe(true)
+  })
+
+  it('merges loaded history before messages sent while it loaded', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    const token = useChatStore.getState().beginHistoryLoad(id)
+    useChatStore.getState().appendMessage(id, m('local'))
+    expect(useChatStore.getState().isHistorySynced(id)).toBe(false)
+
+    expect(useChatStore.getState().finishHistoryLoad(id, token, [m('old1'), m('old2'), m('local')])).toBe(true)
+    expect(
+      useChatStore
+        .getState()
+        .getMessages(id)
+        .map(x => x.id),
+    ).toEqual(['old1', 'old2', 'local'])
+    expect(useChatStore.getState().isHistorySynced(id)).toBe(true)
+  })
+
+  it('drops a load that resolves after the thread was cleared', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    const token = useChatStore.getState().beginHistoryLoad(id)
+    useChatStore.getState().clearThreadMessages(id)
+
+    expect(useChatStore.getState().finishHistoryLoad(id, token, [m('resurrected')])).toBe(false)
+    expect(useChatStore.getState().getMessages(id)).toHaveLength(0)
+  })
+
+  it('records a failed load, which blocks saves until a load succeeds', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    const token = useChatStore.getState().beginHistoryLoad(id)
+    useChatStore.getState().finishHistoryLoad(id, token, null)
+    expect(useChatStore.getState().historyStatus[id]?.state).toBe('error')
+    expect(useChatStore.getState().isHistorySynced(id)).toBe(false)
+  })
+})
+
+describe('threadForFlow', () => {
+  it("returns the flow's last active thread, else its newest", () => {
+    const a = useChatStore.getState().createThread('flow1')
+    const b = useChatStore.getState().createThread('flow1')
+    useChatStore.getState().createThread('flow2')
+    expect(useChatStore.getState().threadForFlow('flow1')).toBe(b)
+
+    useChatStore.getState().switchThread(a)
+    expect(useChatStore.getState().threadForFlow('flow1')).toBe(a)
+
+    useChatStore.getState().closeThread(a)
+    expect(useChatStore.getState().threadForFlow('flow1')).toBe(b)
+    expect(useChatStore.getState().threadForFlow('nope')).toBeNull()
+  })
+})
+
+// The thread that replaces a closed active thread must come from the SAME
+// flow: falling back to any remaining thread showed another flow's
+// conversation under the open one.
+describe('closing the active thread picks a replacement from its own flow', () => {
+  it('falls back to the newest remaining thread of that flow', () => {
+    useChatStore.getState().createThread('X')
+    const y1 = useChatStore.getState().createThread('Y')
+    const y2 = useChatStore.getState().createThread('Y')
+    useChatStore.getState().closeThread(y2)
+    expect(useChatStore.getState().activeThreadId).toBe(y1)
+  })
+
+  it("leaves no thread active rather than another flow's when the flow has none left", () => {
+    useChatStore.getState().createThread('X')
+    const y = useChatStore.getState().createThread('Y')
+    useChatStore.getState().closeThread(y)
+    expect(useChatStore.getState().activeThreadId).toBeNull()
+  })
+
+  it('clearFlowThreads never promotes a thread of another flow', () => {
+    useChatStore.getState().createThread('X')
+    useChatStore.getState().createThread('Y')
+    useChatStore.getState().clearFlowThreads('Y')
+    expect(useChatStore.getState().activeThreadId).toBeNull()
+  })
+})
+
+describe('finishHistoryLoad merge order', () => {
+  it('keeps a local-only message next to the loaded message it followed', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    const local = [
+      makeMessage('u1', 'user'),
+      {...makeMessage('err1', 'assistant'), finishReason: 'error'} as ChatMessage,
+      makeMessage('u2', 'user'),
+      makeMessage('a2', 'assistant'),
+    ]
+    for (const m of local) useChatStore.getState().appendMessage(id, m)
+    const token = useChatStore.getState().beginHistoryLoad(id)
+    useChatStore
+      .getState()
+      .finishHistoryLoad(id, token, [
+        makeMessage('u1', 'user'),
+        makeMessage('u2', 'user'),
+        makeMessage('a2', 'assistant'),
+      ])
+    // Not [u1, u2, a2, err1]: the old error bubble must not become the
+    // "last reply" a Retry acts on.
+    expect(
+      useChatStore
+        .getState()
+        .getMessages(id)
+        .map(m => m.id),
+    ).toEqual(['u1', 'err1', 'u2', 'a2'])
+  })
+
+  it('puts a message sent while the load ran after everything stored', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    useChatStore.getState().appendMessage(id, makeMessage('u9', 'user'))
+    const token = useChatStore.getState().beginHistoryLoad(id)
+    useChatStore.getState().finishHistoryLoad(id, token, [makeMessage('u1', 'user'), makeMessage('a1', 'assistant')])
+    expect(
+      useChatStore
+        .getState()
+        .getMessages(id)
+        .map(m => m.id),
+    ).toEqual(['u1', 'a1', 'u9'])
+  })
+})
+
+describe('clearThreadMessages / setThreadMessages', () => {
+  it('clearing a thread closed meanwhile does not bring it back', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    useChatStore.getState().appendMessage(id, makeMessage('u1', 'user'))
+    useChatStore.getState().closeThread(id)
+    useChatStore.getState().clearThreadMessages(id)
+    expect(useChatStore.getState().conversations.has(id)).toBe(false)
+    expect(useChatStore.getState().historyStatus[id]).toBeUndefined()
+  })
+
+  it('setThreadMessages replaces the list wholesale (and ignores closed threads)', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    useChatStore.getState().appendMessage(id, makeMessage('u1', 'user'))
+    useChatStore.getState().setThreadMessages(id, [makeMessage('u2', 'user'), makeMessage('a2', 'assistant')])
+    expect(
+      useChatStore
+        .getState()
+        .getMessages(id)
+        .map(m => m.id),
+    ).toEqual(['u2', 'a2'])
+    useChatStore.getState().closeThread(id)
+    useChatStore.getState().setThreadMessages(id, [makeMessage('u3', 'user')])
+    expect(useChatStore.getState().conversations.has(id)).toBe(false)
   })
 })

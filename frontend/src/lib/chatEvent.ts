@@ -13,7 +13,9 @@
 export type ChatEvent =
   | {kind: 'chunk'; content: string}
   | {kind: 'done'; tokensOut: number; tokensIn: number; chunks?: number}
-  | {kind: 'error'; message: string}
+  | {kind: 'error'; message: string; code?: string}
+  // Keepalive during a silent server phase; carries no data.
+  | {kind: 'heartbeat'}
   | {kind: 'tool'; label: string}
   | {kind: 'tool-result'; name: string; label: string; ok: boolean; durationMs: number; summary: string}
   | {kind: 'fix-proposal'; proposalId: string; items: FixProposalEventItem[]}
@@ -72,8 +74,12 @@ export function parseChatEvent(raw: unknown): ChatEvent | null {
         tokensIn: asNumber(data.tokensIn) ?? 0,
         chunks: asNumber(data.chunks) ?? undefined,
       }
-    case 'error':
-      return {kind: 'error', message: asString(data.message) ?? 'Unknown error'}
+    case 'error': {
+      const code = asString(data.code)
+      return {kind: 'error', message: asString(data.message) ?? 'Unknown error', ...(code ? {code} : {})}
+    }
+    case 'heartbeat':
+      return {kind: 'heartbeat'}
     case 'tool':
       return {kind: 'tool', label: asString(data.label) ?? asString(data.name) ?? 'Using tool'}
     case 'tool_result': {

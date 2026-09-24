@@ -17,6 +17,10 @@ interface FixProposalCardProps {
 // the window visible so the timeout isn't a surprise.
 const DECISION_WINDOW_S = FIX_DECISION_WINDOW_S
 
+function secondsLeft(startedAt: number): number {
+  return Math.max(0, DECISION_WINDOW_S - Math.floor((Date.now() - startedAt) / 1000))
+}
+
 // Status copy lives in chat:fixCard.status.* / chat:fixCard.itemStatus.*, keyed
 // by the same status strings the backend sends. Only tone stays here.
 
@@ -46,7 +50,13 @@ export default function FixProposalCard({proposal, onRespond}: FixProposalCardPr
   const statusText = t(`fixCard.status.${proposal.status}`, {defaultValue: ''})
   const batch = proposal.items.length > 1
   const cardRef = useRef<HTMLDivElement>(null)
-  const [remaining, setRemaining] = useState(DECISION_WINDOW_S)
+  // The countdown runs from when the proposal reached this client
+  // (receivedAt, stamped by the store), not from when this card mounted: the
+  // card remounts on thread switch-back and pop-out while the server's window
+  // keeps running, and a mount-based countdown restarted at the full minute.
+  // Mount time is only the fallback for a card that carries no stamp.
+  const [startedAt] = useState(() => proposal.receivedAt ?? Date.now())
+  const [remaining, setRemaining] = useState(() => secondsLeft(startedAt))
   // Deselected batch items (U4.1): default = everything checked. Only
   // meaningful while pending; frozen cards ignore it.
   const [excluded, setExcluded] = useState<Set<number>>(new Set())
@@ -57,19 +67,23 @@ export default function FixProposalCard({proposal, onRespond}: FixProposalCardPr
   // card flipped to "No response in time".
   useEffect(() => {
     if (!pending) return
-    const startedAt = Date.now()
-    const t = setInterval(() => {
-      const left = DECISION_WINDOW_S - Math.floor((Date.now() - startedAt) / 1000)
-      setRemaining(left > 0 ? left : 0)
-    }, 1000)
+    const t = setInterval(() => setRemaining(secondsLeft(startedAt)), 1000)
     return () => clearInterval(t)
-  }, [pending])
+  }, [pending, startedAt])
 
   // alertdialog contract: move focus to the dialog so screen readers announce
   // it and keyboard users land at the decision (the container, NOT Approve —
   // focusing a button invites accidental Enter-approval). Escape dismisses.
+  // Not while the user is typing, though: stealing focus from the composer
+  // dropped their keystrokes, and a reflex Escape then declined the fix.
   useEffect(() => {
-    if (pending) cardRef.current?.focus()
+    if (!pending) return
+    const active = document.activeElement
+    const typing =
+      active instanceof HTMLTextAreaElement ||
+      active instanceof HTMLInputElement ||
+      (active instanceof HTMLElement && active.isContentEditable)
+    if (!typing) cardRef.current?.focus()
   }, [pending])
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -84,22 +98,30 @@ export default function FixProposalCard({proposal, onRespond}: FixProposalCardPr
       ref={cardRef}
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      className="mx-3 my-2 rounded-lg border border-brand-500/40 bg-brand-500/5 p-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50"
+      className="my-2 rounded-lg border border-brand-500/40 bg-brand-500/5 p-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50"
       data-testid="fix-proposal-card"
       role="alertdialog"
       aria-label={
-        batch ? `Proposed ${proposal.items.length} fixes: approval needed` : `Proposed fix: ${proposal.fixType}`
+        batch ? t('fixCard.ariaBatch', {count: proposal.items.length}) : t('fixCard.aria', {fixType: proposal.fixType})
       }
     >
+      {/* Announced without moving focus: the card no longer takes focus while
+          the user is typing, and a screen-reader user still needs to hear that
+          a fix awaits their decision before the window runs out. */}
+      {pending && (
+        <span className="sr-only" role="status">
+          {batch ? t('fixCard.announceBatch', {count: proposal.items.length}) : t('fixCard.announce')}
+        </span>
+      )}
       <div className="flex items-center justify-between gap-2">
         <span className="text-2xs font-semibold uppercase tracking-wide text-brand-300">
-          {batch ? `Proposed ${proposal.items.length} fixes — approval needed` : 'Proposed fix — approval needed'}
+          {batch ? t('fixCard.headingBatch', {count: proposal.items.length}) : t('fixCard.heading')}
         </span>
         {batch ? (
           <span className="text-2xs text-text-tertiary">
             {pending && excluded.size > 0
-              ? `applying ${includedCount} of ${proposal.items.length}`
-              : 'select the fixes to apply'}
+              ? t('fixCard.applyingSubset', {included: includedCount, total: proposal.items.length})
+              : t('fixCard.selectHint')}
           </span>
         ) : (
           <code className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-2xs text-brand-300">
@@ -133,7 +155,9 @@ export default function FixProposalCard({proposal, onRespond}: FixProposalCardPr
                   )}
                   <span className="truncate text-xs text-text-secondary">
                     {item.blockLabel}
-                    {item.line > 0 && <span className="text-text-tertiary"> · line {item.line}</span>}
+                    {item.line > 0 && (
+                      <span className="text-text-tertiary"> · {t('fixCard.line', {line: item.line})}</span>
+                    )}
                   </span>
                 </span>
                 <code className="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 font-mono text-2xs text-brand-300">
@@ -157,8 +181,10 @@ export default function FixProposalCard({proposal, onRespond}: FixProposalCardPr
         <>
           <div className="mt-1 text-xs text-text-secondary">
             {proposal.blockLabel}
-            {proposal.line > 0 && <span className="text-text-tertiary"> · line {proposal.line}</span>}
-            <span className="text-text-tertiary"> · rule </span>
+            {proposal.line > 0 && (
+              <span className="text-text-tertiary"> · {t('fixCard.line', {line: proposal.line})}</span>
+            )}
+            <span className="text-text-tertiary"> · {t('fixCard.rule')} </span>
             <code className="font-mono text-2xs text-text-secondary">{proposal.ruleId}</code>
           </div>
           {proposal.summary && <PatchPreviewText text={proposal.summary} className="mt-2 max-h-40" />}

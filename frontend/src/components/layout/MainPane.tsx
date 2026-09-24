@@ -187,6 +187,7 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
           <Fragment key={`group-${gi}`}>
             {gi > 0 && (
               <PaneDivider
+                label={t('panes.resizeEditor')}
                 onDrag={delta => editor.handleColumnDrag(gi - 1, delta)}
                 onResizeEnd={() => editor.handleColumnResizeEnd()}
                 onDoubleClick={editor.handleResetDivider}

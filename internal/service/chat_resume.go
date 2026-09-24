@@ -43,9 +43,12 @@ const streamIdleTimeout = 90 * time.Second
 // recorded since the stream began — the reconnecting client rebuilds its tool
 // trail and any pending approval card from these instead of losing them.
 type ResumeResult struct {
-	Text      string         `json:"text"`
-	Done      bool           `json:"done"`
-	Error     string         `json:"error"`
+	Text  string `json:"text"`
+	Done  bool   `json:"done"`
+	Error string `json:"error"`
+	// ErrorCode is Error's machine-readable class (see chat_errors.go), so a
+	// client that missed the live error event still gets the same handling.
+	ErrorCode string         `json:"errorCode,omitempty"`
 	TokensIn  int            `json:"tokensIn"`
 	TokensOut int            `json:"tokensOut"`
 	Events    []journalEvent `json:"events,omitempty"`
@@ -60,6 +63,7 @@ type resumeSnapshot struct {
 	Text      string         `json:"text"`
 	Done      bool           `json:"done"`
 	Error     string         `json:"error"`
+	ErrorCode string         `json:"errorCode,omitempty"`
 	TokensIn  int            `json:"tokensIn"`
 	TokensOut int            `json:"tokensOut"`
 	Events    []journalEvent `json:"events,omitempty"`
@@ -271,7 +275,7 @@ func (s *ChatService) BeginStream(ctx context.Context, streamID string) *ResumeR
 		// later terminal event is emitted after this request arrived, i.e.
 		// after the client subscribed, so SSE delivery covers it.
 		if snap := ctl.snapshot(); snap.Done || snap.Error != "" {
-			return &ResumeResult{Text: snap.Text, Done: snap.Done, Error: snap.Error, TokensIn: snap.TokensIn, TokensOut: snap.TokensOut, Events: snap.Events}
+			return &ResumeResult{Text: snap.Text, Done: snap.Done, Error: snap.Error, ErrorCode: snap.ErrorCode, TokensIn: snap.TokensIn, TokensOut: snap.TokensOut, Events: snap.Events}
 		}
 		return nil
 	}
@@ -352,6 +356,7 @@ func (s *ChatService) ResumeStream(ctx context.Context, streamID string, from in
 		snap := &ResumeResult{
 			Done:      ctl.done,
 			Error:     ctl.errMsg,
+			ErrorCode: ctl.errCode,
 			TokensIn:  ctl.tokensIn,
 			TokensOut: ctl.tokensOut,
 			Events:    ctl.snapshotEvents(),
@@ -365,6 +370,7 @@ func (s *ChatService) ResumeStream(ctx context.Context, streamID string, from in
 			Text:      sliceFrom(snap.Text, from),
 			Done:      snap.Done,
 			Error:     snap.Error,
+			ErrorCode: snap.ErrorCode,
 			TokensIn:  snap.TokensIn,
 			TokensOut: snap.TokensOut,
 			Events:    snap.Events,

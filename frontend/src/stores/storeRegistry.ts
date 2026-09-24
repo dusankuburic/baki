@@ -24,6 +24,21 @@ export function registerStoreReset(handler: ResetHandler): void {
   handlers.add(handler)
 }
 
+// currentUserId resolves the signed-in user's id for stores that scope their
+// client-side persistence per user (chatStore's thread lists). authStore
+// registers the resolver at module init; resolving through here keeps those
+// stores free of an authStore import, whose own module init wires the API
+// client. Null until registered or while nobody is signed in.
+let userIdResolver: () => string | null = () => null
+
+export function registerCurrentUserResolver(resolver: () => string | null): void {
+  userIdResolver = resolver
+}
+
+export function currentUserId(): string | null {
+  return userIdResolver()
+}
+
 export async function resetAllStores(): Promise<void> {
   // Drop the API client's GET micro-cache first: cached responses belong to
   // the outgoing session and must never be served to the next account.

@@ -829,13 +829,13 @@ func (lsb *LocalStorageBackend) getDefaultSettings() *interfaces.AppSettings {
 			FirstRunCompleted: false,
 		},
 		Appearance: interfaces.AppearanceSettings{
-			Theme:   "dark",
-			Density: "comfortable",
+			Theme:        "dark",
+			Density:      "comfortable",
+			ChatTextSize: "md",
 		},
 		Layout: interfaces.LayoutSettings{
-			SidebarWidth:    280,
-			InspectorWidth:  320,
-			ChatPanelHeight: nil,
+			SidebarWidth:   280,
+			InspectorWidth: 320,
 		},
 		AI: interfaces.AISettings{
 			ActiveProvider: "claude",

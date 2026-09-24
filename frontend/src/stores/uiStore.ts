@@ -108,6 +108,10 @@ interface UiState {
   activeDiff: FlowDiff | null
   showSourceEditor: boolean
   showHelpOverlay: boolean
+  // chatFocus is the session-only full-window reading layout for the AI chat
+  // (desktop only). Not persisted: reopening the app inside an overlay would
+  // be a surprise.
+  chatFocus: boolean
 
   setResolvedTheme: (t: ResolvedTheme) => void
   setSidebarTab: (t: SidebarTab) => void
@@ -130,6 +134,8 @@ interface UiState {
   toggleComplexityMode: () => void
   toggleInspector: () => void
   toggleSettings: () => void
+  setChatFocus: (on: boolean) => void
+  toggleChatFocus: () => void
 }
 
 // isDesktopViewport mirrors useIsDesktop's breakpoint for the store's own
@@ -140,7 +146,7 @@ function isDesktopViewport(): boolean {
   return window.matchMedia('(min-width: 768px)').matches
 }
 
-export const useUIStore = create<UiState>(set => ({
+export const useUIStore = create<UiState>((set, get) => ({
   resolvedTheme: 'dark',
   sidebarTab: 'explorer',
   mainPaneView: 'home',
@@ -159,6 +165,7 @@ export const useUIStore = create<UiState>(set => ({
   activeDiff: null,
   showSourceEditor: false,
   showHelpOverlay: false,
+  chatFocus: false,
 
   setResolvedTheme: t => set({resolvedTheme: t}),
   setSidebarTab: t => set({sidebarTab: t}),
@@ -195,11 +202,28 @@ export const useUIStore = create<UiState>(set => ({
   toggleComplexityMode: () => set(s => ({complexityMode: !s.complexityMode})),
   toggleInspector: () =>
     set(s =>
-      isDesktopViewport()
-        ? {inspectorCollapsed: !s.inspectorCollapsed}
-        : {mobileDrawer: s.mobileDrawer === 'inspector' ? null : 'inspector'},
+      // In focus mode the chat IS the inspector's content: leave the overlay
+      // instead of unmounting the panel (and the chat) underneath it.
+      s.chatFocus
+        ? {chatFocus: false, inspectorTab: 'ai'}
+        : isDesktopViewport()
+          ? {inspectorCollapsed: !s.inspectorCollapsed}
+          : {mobileDrawer: s.mobileDrawer === 'inspector' ? null : 'inspector'},
     ),
   toggleSettings: () => set(s => ({settingsOpen: !s.settingsOpen})),
+  // Entering focus mode guarantees the chat is mounted (AI tab, inspector
+  // shown); leaving lands back on the AI tab so the conversation stays in view
+  // even if mod+1/3 switched the tab underneath the overlay. Desktop only —
+  // below md the inspector is a drawer.
+  setChatFocus: on =>
+    set(s => {
+      if (on) {
+        if (!isDesktopViewport()) return {}
+        return {chatFocus: true, inspectorTab: 'ai', inspectorCollapsed: false}
+      }
+      return s.chatFocus ? {chatFocus: false, inspectorTab: 'ai'} : {}
+    }),
+  toggleChatFocus: () => get().setChatFocus(!get().chatFocus),
 }))
 
 // Reset on logout (see storeRegistry). resolvedTheme is intentionally preserved
@@ -211,6 +235,7 @@ registerStoreReset(() =>
     inspectorTab: 'details',
     sidebarCollapsed: false,
     inspectorCollapsed: false,
+    chatFocus: false,
     commandPaletteOpen: false,
     globalSearchOpen: false,
     complexityMode: false,

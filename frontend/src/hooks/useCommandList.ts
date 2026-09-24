@@ -124,6 +124,13 @@ export function useCommandList(deps: {
         shortcut: ['mod', 'i'],
         onSelect: toggleInspector,
       },
+      {
+        id: 'ai.focus',
+        label: 'Focus AI Chat',
+        section: 'View',
+        shortcut: ['mod', '.'],
+        onSelect: () => useUIStore.getState().toggleChatFocus(),
+      },
       {id: 'view.block', label: 'Block View', section: 'View', onSelect: () => setMainPaneView('block')},
       {id: 'view.graph', label: 'Graph View', section: 'View', onSelect: () => setMainPaneView('graph')},
       {

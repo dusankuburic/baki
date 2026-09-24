@@ -17,19 +17,21 @@ import {
   FixProposalCard,
 } from '.'
 import {useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense} from 'react'
+import {AlertTriangle, RefreshCw} from 'lucide-react'
 import {useKeyboard} from '@/hooks/useKeyboard'
-import {useConfirm} from '@/components/shared'
+import {useConfirm, useToast, Spinner} from '@/components/shared'
+import {isImeKeydown} from '@/lib/imeKey'
 import {useChatStore} from '@/stores/chatStore'
 import {chatApi} from '@/api'
 import LiveToolTrail from './LiveToolTrail'
 import StreamingBubble from './StreamingBubble'
-import type {ProviderID} from '@/types'
+import type {ChatTextSize, ProviderID} from '@/types'
 import ChatHeader from './ChatHeader'
 import ChatContextBar from './ChatContextBar'
 import EmptyChatState from './EmptyChatState'
 import ChatErrorBoundary from './ChatErrorBoundary'
 import ChatSearchBar from './ChatSearchBar'
-import {useChatPanel} from './ResizableChatPanel'
+import {useChatPanel} from './ChatPanelShell'
 
 // Rarely-rendered overlays load on first open: the context-preview modal only
 // appears when the user confirms a context-heavy send, and the help popover
@@ -54,15 +56,27 @@ export default function AITab() {
     [_blockLookup, _selectedBlockId],
   )
   const aiSettings = useSettingsStore(s => s.settings.ai)
+  const chatTextSize = useSettingsStore(s => s.settings.appearance.chatTextSize)
+  const updateAppearance = useSettingsStore(s => s.updateAppearance)
   const provider = useChatStore(s => s.selectedProvider)
   const chatPanel = useChatPanel()
 
-  const {configured, providers, selectedModel, setSelectedModel, handleSetProvider, currentModels, currentModelDetail} =
-    useProviderSetup()
+  const {
+    configured,
+    providersError,
+    retryProviders,
+    providers,
+    selectedModel,
+    setSelectedModel,
+    handleSetProvider,
+    currentModels,
+    currentModelDetail,
+  } = useProviderSetup()
 
   const {
     doc,
     selectedBlockId,
+    readOnly,
     activeThreadId,
     activeThread,
     activeThreadMessages,
@@ -70,6 +84,8 @@ export default function AITab() {
     isCurrentThreadStreaming,
     showThinking,
     sourceFiles,
+    historyState,
+    retryHistoryLoad,
     contextPreview,
     pendingMessage,
     fixProposals,
@@ -123,33 +139,99 @@ export default function AITab() {
   // has no container to check and would claim these keys app-wide.
   const chatRootRef = useRef<HTMLDivElement>(null)
   const {confirm} = useConfirm()
+  const toast = useToast()
+  // Every clear path — Ctrl+L, the /clear command — asks first, like the
+  // header's Clear action: Ctrl+L is browser muscle memory (focus the address
+  // bar), and /clear used to fire straight from an autocomplete keypress.
+  const confirmClear = useCallback(() => {
+    // Nothing to confirm while the thread is generating: the clear would be
+    // refused anyway (handleClearThread), so the dialog used to ask and then
+    // do nothing.
+    if (isCurrentThreadStreaming) {
+      toast.warning(t('errors.busyTitle'), {description: t('errors.clearWhileStreaming')})
+      return
+    }
+    void confirm({
+      title: t('toolbar.confirmClearTitle'),
+      message: t('toolbar.confirmClear'),
+      confirmLabel: t('toolbar.clear'),
+      danger: true,
+    }).then(ok => {
+      if (ok) handleClearThread()
+    })
+  }, [confirm, t, handleClearThread, isCurrentThreadStreaming, toast])
+
+  // Closing a thread drops it from the thread list for good (its history is
+  // no longer reachable), so a thread with messages — or not yet loaded, or
+  // still generating — asks first. An empty thread closes straight away.
+  const confirmCloseThread = useCallback(
+    (threadId: string) => {
+      const st = useChatStore.getState()
+      const msgs = st.conversations.get(threadId)
+      // A draft counts: closeThread deletes it with the thread.
+      const worthAsking = msgs === undefined || msgs.length > 0 || !!st.streams[threadId] || !!st.drafts[threadId]
+      if (!worthAsking) {
+        handleCloseThread(threadId)
+        return
+      }
+      const title = st.threads.find(th => th.id === threadId)?.title || t('threads.untitled')
+      void confirm({
+        title: t('threads.confirmCloseTitle'),
+        message: t('threads.confirmClose', {name: title}),
+        confirmLabel: t('threads.close'),
+        danger: true,
+      }).then(ok => {
+        if (ok) handleCloseThread(threadId)
+      })
+    },
+    [confirm, t, handleCloseThread],
+  )
+
   useKeyboard({
     scope: 'chat',
     containerRef: chatRootRef,
-    enabled: configured,
+    enabled: configured === true,
     handlers: {
-      // Ctrl+L is browser muscle memory (focus the address bar), so a stray
-      // press must not silently wipe the thread: same confirm as the header's
-      // Clear action.
       'ai.clear.chat': () => {
-        void confirm({
-          title: t('toolbar.confirmClearTitle'),
-          message: t('toolbar.confirmClear'),
-          confirmLabel: t('toolbar.clear'),
-          danger: true,
-        }).then(ok => {
-          if (ok) handleClearThread()
-        })
+        if (!readOnly) confirmClear()
       },
       'ai.cancel.stream': e => {
-        // An open @/slash menu, the find bar or a fix-approval card handles
-        // Escape first; only a bare Escape stops the reply.
-        if (e.defaultPrevented || !isCurrentThreadStreaming) return
-        e.preventDefault()
-        handleCancelStream()
+        // An open @/slash menu or the find bar handles Escape first. Next a
+        // fix awaiting approval: it is declined and the reply itself goes on
+        // (the card no longer takes focus while the user types, so its own
+        // Escape handler is not in the path). A bare Escape stops the reply;
+        // with nothing streaming it leaves focus mode. Escapes inside the
+        // portaled dialogs (Compose editor, preview, confirm) never reach
+        // here: useKeyboard requires the focus to be inside the chat root.
+        if (e.defaultPrevented || isImeKeydown(e)) return
+        if (isCurrentThreadStreaming) {
+          e.preventDefault()
+          const pendingCard = fixProposals.find(c => c.status === 'pending')
+          if (pendingCard && activeThreadId) {
+            respondFixProposal(activeThreadId, false, pendingCard.proposalId)
+            return
+          }
+          handleCancelStream()
+          return
+        }
+        if (chatPanel?.isFocused) {
+          e.preventDefault()
+          chatPanel.toggleFocus()
+        }
+      },
+      'ai.focus': () => {
+        if (chatPanel?.canFocus) chatPanel.toggleFocus()
       },
     },
   })
+
+  // Text size cycles S → M → L from the header menu; Settings › Appearance
+  // offers the same three.
+  const cycleTextSize = useCallback(() => {
+    const order: ChatTextSize[] = ['sm', 'md', 'lg']
+    const next = order[(order.indexOf(chatTextSize) + 1) % order.length]
+    void updateAppearance({chatTextSize: next})
+  }, [chatTextSize, updateAppearance])
 
   const contextBlockId = activeThread?.contextBlockId ?? null
 
@@ -213,12 +295,13 @@ export default function AITab() {
 
   // Identify the regeneratable turn by message ID, not by index. Comparing a
   // render index against a position in the FILTERED array attached Regenerate
-  // to whichever message happened to sit last in the search results.
+  // to whichever message happened to sit last in the search results. Only
+  // the thread's LAST message qualifies: an assistant message with a newer
+  // user message after it is no turn Retry/Regenerate can act on (handleResend
+  // bails), so it must not offer a dead button.
   const lastAssistantId = useMemo(() => {
-    for (let i = activeThreadMessages.length - 1; i >= 0; i--) {
-      if (activeThreadMessages[i].role === 'assistant') return activeThreadMessages[i].id
-    }
-    return null
+    const last = activeThreadMessages[activeThreadMessages.length - 1]
+    return last?.role === 'assistant' ? last.id : null
   }, [activeThreadMessages])
 
   const clearBlockScope = useCallback(() => setThreadContextBlock(null), [setThreadContextBlock])
@@ -258,6 +341,33 @@ export default function AITab() {
     [showThinking, isCurrentThreadStreaming, fixProposals, activeThreadId, respondFixProposal],
   )
 
+  if (configured === null) {
+    // Still checking the providers — render nothing rather than flash the
+    // "add an API key" screen; a failed check gets a way to retry.
+    if (!providersError) {
+      return (
+        <div className="flex-1 flex items-center justify-center">
+          <Spinner />
+        </div>
+      )
+    }
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 p-6 text-center" role="alert">
+        <AlertTriangle size={20} className="text-semantic-warning" />
+        <div>
+          <p className="text-sm font-medium text-text-primary">{t('empty.providersFailedTitle')}</p>
+          <p className="text-xs text-text-tertiary mt-1">{t('empty.providersFailedBody')}</p>
+        </div>
+        <button
+          onClick={retryProviders}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-3 border border-border-default text-xs text-text-secondary hover:text-text-primary hover:bg-surface-4 transition-colors"
+        >
+          <RefreshCw size={12} />
+          {t('empty.retry')}
+        </button>
+      </div>
+    )
+  }
   if (!configured) {
     return <ApiKeyMissingState />
   }
@@ -266,14 +376,26 @@ export default function AITab() {
   const configuredProviders = providers.filter(p => p.configured)
   const showCost = aiSettings.showCostEstimates && currentModelDetail && currentModelDetail.inputCostPerM > 0
   const messages = activeThreadMessages
-  const showWelcome = messages.length === 0 && !isCurrentThreadStreaming
+  const historyLoading = historyState === 'loading' && messages.length === 0
+  const showWelcome = messages.length === 0 && !isCurrentThreadStreaming && !historyLoading
 
   return (
-    <ChatErrorBoundary key={activeThreadId ?? 'no-thread'}>
+    // The thread-keyed boundary wraps only the scroll region below: keying
+    // this outer one remounted the header, tab bar and composer on every
+    // thread switch, which threw keyboard focus off the thread tabs.
+    <ChatErrorBoundary>
       {/* chat-root establishes the container that every density rule below
-          keys off. The panel is 280-560px wide by drag, independent of the
-          viewport, so viewport breakpoints cannot describe it. */}
-      <div ref={chatRootRef} className="chat-root flex flex-col h-full min-h-0">
+          keys off. The panel is anywhere from 280px to most of the window by
+          drag (or the whole window in focus mode), independent of the
+          viewport, so viewport breakpoints cannot describe it. tabIndex: a
+          click on message text lands focus in the chat, so the chat-scoped
+          shortcuts (Escape, mod+l, mod+.) work after reading. */}
+      <div
+        ref={chatRootRef}
+        tabIndex={-1}
+        data-chat-text={chatTextSize}
+        className="chat-root flex flex-col h-full min-h-0 outline-none"
+      >
         <div className="flex-shrink-0">
           <ChatHeader
             providers={configuredProviders.map(p => ({
@@ -292,14 +414,16 @@ export default function AITab() {
             useTools={activeThread?.useTools ?? false}
             onToggleTools={toggleTools}
             onNewChat={handleCreateThread}
-            onClearContext={handleClearContext}
-            onCompact={handleCompact}
+            onClearContext={readOnly ? undefined : handleClearContext}
+            onCompact={readOnly ? undefined : handleCompact}
             onExport={handleExport}
             onToggleSearch={toggleSearch}
             searchActive={searchOpen}
             onShowHelp={showHelp}
-            isPoppedOut={chatPanel?.isPoppedOut}
-            onTogglePopOut={chatPanel?.togglePopOut}
+            isFocused={chatPanel?.isFocused}
+            onToggleFocus={chatPanel?.canFocus ? chatPanel.toggleFocus : undefined}
+            chatTextSize={chatTextSize}
+            onCycleTextSize={cycleTextSize}
           />
 
           <ChatThreadBar
@@ -307,7 +431,7 @@ export default function AITab() {
             activeThreadId={activeThreadId}
             onSelect={switchThread}
             onCreate={handleCreateThread}
-            onClose={handleCloseThread}
+            onClose={confirmCloseThread}
             onRename={handleRenameThread}
           />
 
@@ -338,50 +462,78 @@ export default function AITab() {
           )}
         </div>
 
+        {historyState === 'error' && (
+          <div
+            role="alert"
+            className="flex items-center gap-2 chat-gutter py-1.5 border-b border-border-subtle bg-semantic-warning/5 text-2xs text-text-secondary"
+          >
+            <AlertTriangle size={12} className="text-semantic-warning shrink-0" />
+            <span className="flex-1 min-w-0 truncate">{t('history.loadFailed')}</span>
+            <button
+              onClick={retryHistoryLoad}
+              className="shrink-0 font-medium text-brand-400 hover:text-brand-300 transition-colors"
+            >
+              {t('history.retry')}
+            </button>
+          </div>
+        )}
+
         {/* Scroll region — exactly one of welcome / messages / empty-state fills it
-          and owns its own scrolling. */}
-        <div className="flex-1 min-h-0 flex flex-col">
-          {doc && activeThread ? (
-            showWelcome ? (
-              <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
-                <div className="px-4 pt-4 pb-2">
-                  <p className="text-xs text-text-tertiary leading-relaxed">
-                    {t(`welcome.${provider}`, {defaultValue: t('welcome.fallback')})}
-                  </p>
-                </div>
-                <SuggestedPrompts prompts={suggestedPrompts} onSelect={onSelectPrompt} />
-                <PromptTemplates
-                  onSelect={onSelectPrompt}
-                  hasBlock={!!contextBlockId}
-                  flowName={doc?.name}
-                  blockName={selectedBlock?.name}
-                />
+          and owns its own scrolling. Its boundary resets per thread. */}
+        <ChatErrorBoundary key={activeThreadId ?? 'no-thread'}>
+          <div className="flex-1 min-h-0 flex flex-col">
+            {doc && activeThread && historyLoading ? (
+              <div className="flex-1 flex items-center justify-center gap-2 text-xs text-text-tertiary" role="status">
+                <Spinner size={14} />
+                {t('history.loading')}
               </div>
+            ) : doc && activeThread ? (
+              showWelcome ? (
+                <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+                  <div>
+                    <div className="chat-gutter pt-4 pb-2">
+                      <p className="text-xs text-text-tertiary leading-relaxed">
+                        {t(`welcome.${provider}`, {defaultValue: t('welcome.fallback')})}
+                      </p>
+                    </div>
+                    <SuggestedPrompts prompts={suggestedPrompts} onSelect={onSelectPrompt} />
+                    <PromptTemplates
+                      onSelect={onSelectPrompt}
+                      hasBlock={!!contextBlockId}
+                      flowName={doc?.name}
+                      blockName={selectedBlock?.name}
+                    />
+                  </div>
+                </div>
+              ) : (
+                // key = thread id: switching threads remounts the virtualized
+                // list so it opens at the new thread's bottom (initialTopMostItemIndex).
+                <ChatMessageList
+                  key={activeThread.id}
+                  messages={activeThreadMessages}
+                  renderMessage={(i, m) => (
+                    <MessageBubble
+                      message={m}
+                      isLastAssistant={m.id === lastAssistantId}
+                      onRegenerate={m.id === lastAssistantId ? handleResend : undefined}
+                      // Retry resends the LAST exchange, so only the last
+                      // reply may offer it: on an older error bubble it
+                      // deleted the latest answer and resent the wrong question.
+                      onRetry={m.finishReason === 'error' && m.id === lastAssistantId ? handleResend : undefined}
+                      highlight={searchQuery || undefined}
+                      isActiveMatch={i === activeMatchIndex}
+                    />
+                  )}
+                  footer={streamFooter}
+                  isStreaming={isCurrentThreadStreaming}
+                  scrollTo={scrollTo}
+                />
+              )
             ) : (
-              // key = thread id: switching threads remounts the virtualized
-              // list so it opens at the new thread's bottom (initialTopMostItemIndex).
-              <ChatMessageList
-                key={activeThread.id}
-                messages={activeThreadMessages}
-                renderMessage={(i, m) => (
-                  <MessageBubble
-                    message={m}
-                    isLastAssistant={m.id === lastAssistantId}
-                    onRegenerate={m.id === lastAssistantId ? handleResend : undefined}
-                    onRetry={m.finishReason === 'error' ? handleResend : undefined}
-                    highlight={searchQuery || undefined}
-                    isActiveMatch={i === activeMatchIndex}
-                  />
-                )}
-                footer={streamFooter}
-                isStreaming={isCurrentThreadStreaming}
-                scrollTo={scrollTo}
-              />
-            )
-          ) : (
-            <EmptyChatState hasDoc={!!doc} hasThread={!!activeThread} onCreateThread={handleCreateThread} />
-          )}
-        </div>
+              <EmptyChatState hasDoc={!!doc} hasThread={!!activeThread} onCreateThread={handleCreateThread} />
+            )}
+          </div>
+        </ChatErrorBoundary>
 
         {/* Pinned bottom — the composer, and nothing else. */}
         {doc && activeThread && (
@@ -390,7 +542,7 @@ export default function AITab() {
               onSend={handleSend}
               onPreview={handlePreviewContext}
               onCancel={handleCancelStream}
-              onClearThread={handleClearThread}
+              onClearThread={readOnly || isCurrentThreadStreaming ? undefined : confirmClear}
               onShowHelp={showHelp}
               onQueue={handleQueue}
               queued={queuedForActiveThread ?? null}
@@ -398,6 +550,7 @@ export default function AITab() {
               sourceFiles={sourceFiles}
               promptTokens={activeThread.tokensIn ?? 0}
               completionTokens={activeThread.tokensOut ?? 0}
+              contextLimit={currentModelDetail?.contextLimit || undefined}
               inputCostPerM={showCost ? currentModelDetail?.inputCostPerM : undefined}
               outputCostPerM={showCost ? currentModelDetail?.outputCostPerM : undefined}
             />

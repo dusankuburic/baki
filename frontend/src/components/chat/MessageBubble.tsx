@@ -13,6 +13,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import CodeBlock from './CodeBlock'
+import ThinkingIndicator from './ThinkingIndicator'
 import {ToolTrail, FixOutcomeStrip} from './ToolTrail'
 
 interface Props {
@@ -52,9 +53,9 @@ const MentionPill = ({path}: {path: string}) => {
       onClick={handleClick}
       title={i18n.t('chat:message.goTo', {name: filename})}
       aria-label={i18n.t('chat:message.goTo', {name: filename})}
-      className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-brand-500/10 text-brand-400 border border-brand-500/20 hover:bg-brand-500/20 font-medium text-[0.9em] mx-0.5 transition-colors"
+      className="inline-flex items-center max-w-full px-1.5 py-0.5 rounded-md bg-brand-500/10 text-brand-400 border border-brand-500/20 hover:bg-brand-500/20 font-medium text-[0.9em] mx-0.5 transition-colors"
     >
-      @{filename}
+      <span className="truncate">@{filename}</span>
     </button>
   )
 }
@@ -299,6 +300,15 @@ const markdownComponents = {
   a({href, children}: {href?: string; children?: React.ReactNode}) {
     return <BlockLink href={href}>{children}</BlockLink>
   },
+  // A GFM table gets a scroll container of its own: a wide one used to widen
+  // the whole conversation and scroll the entire list sideways.
+  table({node: _node, children, ...props}: React.TableHTMLAttributes<HTMLTableElement> & {node?: unknown}) {
+    return (
+      <div className="chat-table-wrap">
+        <table {...props}>{children}</table>
+      </div>
+    )
+  },
   // The elements rehypeChatText produced. `components` is keyed by element
   // name, which is why these work where a `text` key could not.
   [MENTION_TAG]({path, children}: {path?: string; children?: React.ReactNode}) {
@@ -363,14 +373,14 @@ export function splitOpenFence(content: string): {before: string; lang: string; 
 
 function renderContent(content: string, isUser: boolean, isStreaming?: boolean, highlight?: string) {
   if (isUser) {
-    return <div className="whitespace-pre-wrap break-words">{renderTextSegment(content, highlight)}</div>
+    return <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">{renderTextSegment(content, highlight)}</div>
   }
 
   if (isStreaming) {
     const open = splitOpenFence(content)
     if (open) {
       return (
-        <div className="prose-chat break-words is-streaming">
+        <div className="prose-chat is-streaming">
           {open.before !== '' && <StableMarkdown content={open.before} highlight={highlight} />}
           <CodeBlock language={open.lang} value={open.code} plain />
           <span className="streaming-cursor inline-block w-[3px] h-[1.2em] bg-brand-400 ml-0.5 align-text-bottom" />
@@ -379,7 +389,7 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean, 
     }
     const [head, tail] = splitStreamingContent(content)
     return (
-      <div className="prose-chat break-words is-streaming">
+      <div className="prose-chat is-streaming">
         {head !== '' && <StableMarkdown content={head} highlight={highlight} />}
         <ReactMarkdown
           remarkPlugins={markdownPlugins}
@@ -395,7 +405,7 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean, 
   }
 
   return (
-    <div className="prose-chat break-words">
+    <div className="prose-chat">
       <ReactMarkdown
         remarkPlugins={markdownPlugins}
         rehypePlugins={getRehypePlugins(highlight)}
@@ -430,32 +440,7 @@ function MessageBubble({
 
   const time = formatTime(message.timestamp)
 
-  if (isThinking) {
-    return (
-      <div className="flex flex-col items-start gap-1" role="status">
-        <div className="flex items-center gap-1.5 px-1">
-          <Bot size={11} className="text-text-tertiary" />
-          <span className="text-2xs font-medium text-text-tertiary">AI</span>
-        </div>
-        <div className="px-4 py-3 bg-surface-2 border border-border-subtle rounded-2xl rounded-tl-md">
-          <div className="flex items-center gap-2">
-            <div className="flex gap-1" aria-hidden="true">
-              <span className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary" style={{animationDelay: '0ms'}} />
-              <span
-                className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary"
-                style={{animationDelay: '150ms'}}
-              />
-              <span
-                className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary"
-                style={{animationDelay: '300ms'}}
-              />
-            </div>
-            <span className="text-xs text-text-tertiary">{t('message.thinking')}</span>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  if (isThinking) return <ThinkingIndicator />
 
   return (
     // No mount animation: inside a virtualized list, items mount whenever they
@@ -483,9 +468,9 @@ function MessageBubble({
           left accent so they still read as set apart. */}
       <div
         className={clsx(
-          'relative max-w-full text-sm leading-relaxed',
+          'relative max-w-full chat-text leading-relaxed',
           isUser
-            ? 'px-3 py-2.5 max-w-[85%] bg-brand-500/12 border border-brand-500/20 rounded-2xl rounded-tr-sm'
+            ? 'px-3 py-2.5 max-w-[85%] bg-brand-500/10 border border-brand-500/20 rounded-2xl rounded-tr-sm'
             : isError
               ? 'w-full py-1 pl-3 border-l-2 border-semantic-error/50 text-text-secondary'
               : 'w-full',

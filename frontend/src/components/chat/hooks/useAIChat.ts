@@ -1,40 +1,56 @@
 import {useTranslation} from 'react-i18next'
-import {useState, useCallback, useMemo, useRef, useEffect} from 'react'
-import {useChatStore, conversationKey, MAX_CONCURRENT_STREAMS} from '@/stores/chatStore'
+import {useState, useCallback, useMemo} from 'react'
+import {useChatStore, conversationKey, MAX_CONCURRENT_STREAMS, type FixProposalCard} from '@/stores/chatStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useSettingsStore} from '@/stores/settingsStore'
-import {chatApi, ApiError} from '@/api'
+import {chatApi} from '@/api'
 import {useToast} from '@/components/shared'
 import {logger} from '@/lib/logger'
-import {uuid} from '@/lib/uuid'
 import {conversationToMarkdown, downloadTextFile, safeFilename} from '@/lib/chatExport'
 import {useChatConversations} from './useChatConversations'
 import {useChatThreads} from './useChatThreads'
 import {useChatRequestBuilder} from './useChatRequestBuilder'
-import {useChatStreamEngine} from './useChatStreamEngine'
-import type {ChatMessage, ContextPreview, ChatRequest} from '@/types'
+import {useChatStream} from '../chatStreamContext'
+import type {ChatMessage, ContextPreview} from '@/types'
 
 interface UseAIChatOptions {
   selectedModel: string
 }
 
 const EMPTY_ARRAY: ChatMessage[] = []
+// Stable fallback for the fix-card selector: a fresh `[]` per call made the
+// selector's result differ on EVERY store update (Zustand compares with
+// Object.is), re-rendering the whole panel at 60fps while any other thread
+// streamed.
+const EMPTY_FIX_PROPOSALS: FixProposalCard[] = []
 
+interface PendingPreview {
+  // The thread the preview was built for: the user may switch threads while
+  // the dialog is open, and Send must still go where the preview said.
+  threadId: string
+  text: string
+  files: string[]
+  excludeContext?: boolean
+  // Resets the composer once the previewed message is actually sent.
+  onConfirmed?: () => void
+}
+
+// useAIChat is the chat PANEL's view of the conversation: the active thread,
+// its messages and stream state, and the actions the panel's controls call.
+// Sending, stopping and every stream callback live in the app-wide engine
+// (useChatStream) — the panel can mount and unmount without touching them.
 export function useAIChat({selectedModel}: UseAIChatOptions) {
   const {t} = useTranslation('chat')
   const doc = useFlowStore(s => s.document)
   const selectedBlockId = useFlowStore(s => s.selectedBlockId)
+  const readOnly = useFlowStore(s => s.readOnly)
 
   const provider = useChatStore(s => s.selectedProvider)
   const aiSettings = useSettingsStore(s => s.settings.ai)
 
   const getMessages = useChatStore(s => s.getMessages)
-  const appendMessage = useChatStore(s => s.appendMessage)
   const removeMessage = useChatStore(s => s.removeMessage)
   const clearThreadMessages = useChatStore(s => s.clearThreadMessages)
-  const updateThread = useChatStore(s => s.updateThread)
-  const startStream = useChatStore(s => s.startStream)
-  const endStream = useChatStore(s => s.endStream)
 
   const threads = useChatStore(s => s.threads)
   const activeThreadId = useChatStore(s => s.activeThreadId)
@@ -45,12 +61,11 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const flowThreads = useMemo(() => (doc ? threads.filter(t => t.flowId === doc.id) : []), [doc, threads])
   const activeThread = useMemo(() => threads.find(t => t.id === activeThreadId) ?? null, [threads, activeThreadId])
 
-  const {sourceFiles} = useChatConversations({doc, flowThreads, activeThreadId})
+  const {sourceFiles, historyState, retryHistoryLoad} = useChatConversations({doc, flowThreads, activeThreadId})
   const threadActions = useChatThreads({doc, activeThreadId, sourceFiles})
 
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null)
-  const [pendingMessage, setPendingMessage] = useState<string | null>(null)
-  const [pendingExcludeContext, setPendingExcludeContext] = useState<boolean | undefined>(undefined)
+  const [pendingPreview, setPendingPreview] = useState<PendingPreview | null>(null)
 
   // Streaming state is per-thread (chatStore.streams); this hook surfaces the
   // ACTIVE thread's slot. Narrow selectors keep per-chunk re-renders scoped:
@@ -59,248 +74,98 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const isCurrentThreadStreaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
   const showThinking = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]?.isThinking))
   const toolStatus = useChatStore(s => (s.activeThreadId ? (s.streams[s.activeThreadId]?.toolStatus ?? null) : null))
-  const fixProposals = useChatStore(s => (s.activeThreadId ? (s.streams[s.activeThreadId]?.fixProposals ?? []) : []))
-
-  const toast = useToast()
-
-  const {buildRequest} = useChatRequestBuilder({doc, activeThread, provider, selectedModel, aiSettings, getMessages})
-  const {registerStream, cancelStream, beginAcc, dropAcc, stopAndCommit, bumpGen, isCurrentGen, respondFixProposal} =
-    useChatStreamEngine({
-      doc,
-      provider,
-      selectedModel,
-      getMessages,
-    })
-
-  const executeSend = useCallback(
-    async (text: string, overrideFiles?: string[], excludeContext?: boolean, includeHistory = false) => {
-      if (!doc || !activeThread) return
-      // Per-thread guard: one stream per thread (enforced structurally by the
-      // store's streams map, but checked here to no-op a double-send race).
-      if (useChatStore.getState().streams[activeThread.id]) return
-      // Global cap (mirrors backend maxConcurrentStreamsPerScope): reject early
-      // with a toast so the user gets immediate feedback rather than a rejected
-      // POST after a round-trip.
-      if (!useChatStore.getState().canStartStream()) {
-        toast.warning(t('errors.busyTitle'), {
-          description: t('errors.busyBody', {count: MAX_CONCURRENT_STREAMS}),
-        })
-        return
-      }
-      const req = buildRequest(text, overrideFiles, excludeContext, includeHistory) as ChatRequest | null
-      if (!req) return
-
-      const isFirstMessage = getMessages(activeThread.id).length === 0
-
-      const userMsg: ChatMessage = {
-        id: uuid(),
-        role: 'user',
-        content: text,
-        timestamp: new Date().toISOString(),
-        contextBlockId: activeThread.contextBlockId ?? undefined,
-      }
-      appendMessage(activeThread.id, userMsg)
-      if (isFirstMessage && !activeThread.title && text.trim()) {
-        updateThread(activeThread.id, {title: text.replace(/\n+/g, ' ').trim().slice(0, 50)})
-      }
-      // No save-on-send — the backend reconstructs history; save-on-done
-      // persists the full user+assistant pair.
-
-      const msgId = uuid()
-      const threadId = activeThread.id
-      const myGen = bumpGen(threadId)
-      const sid = uuid()
-      startStream(threadId, sid, msgId)
-      beginAcc(sid, threadId)
-
-      try {
-        // Subscribe + wait for the SSE connection to be 'open' BEFORE creating
-        // the stream so no chunk is lost; registerStream returns false if the
-        // hook was unmounted mid-registration — then do NOT create the stream.
-        const registered = await registerStream(sid, /*begin*/ false)
-        if (!registered || !isCurrentGen(threadId, myGen)) {
-          dropAcc(sid)
-          cancelStream(sid)
-          endStream(threadId)
-          return
-        }
-        // Create the stream with the client-generated ID. The backend stores it
-        // and — because clientStreamId is set — closes ctl.started immediately,
-        // so the worker emits over SSE to the already-subscribed listener.
-        req.clientStreamId = sid
-        const returnedId = await chatApi.streamChatMessage(req)
-        if (!isCurrentGen(threadId, myGen)) {
-          // Cancelled while the create POST was in flight; tear down the stream
-          // the backend just recorded and clear the slot.
-          dropAcc(sid)
-          cancelStream(sid)
-          endStream(threadId)
-          return
-        }
-        if (!returnedId) {
-          dropAcc(sid)
-          cancelStream(sid)
-          endStream(threadId)
-          appendMessage(threadId, {
-            id: uuid(),
-            role: 'assistant',
-            content: t('errors.noStream'),
-            timestamp: new Date().toISOString(),
-            provider,
-            model: selectedModel,
-            finishReason: 'error',
-          } as ChatMessage)
-          return
-        }
-        // Stream is live; chunks (or a fail-fast error/done) arrive over SSE and
-        // are dispatched by the handlers registered in useChatStreamEngine.
-      } catch (e: unknown) {
-        if (!isCurrentGen(threadId, myGen)) return
-        const errMsg = e instanceof Error ? e.message : String(e) || t('errors.sendFailed')
-        // Classify by the envelope's machine-readable code first, falling back
-        // to the message regex for older backends. Capacity errors are
-        // transient — toast + clean up, no *Error* bubble in history.
-        const apiErr = e instanceof ApiError ? e : null
-        const capacityReached = apiErr?.code === 'CHAT_CAPACITY_REACHED' || errMsg.includes('too many chat responses')
-        const budgetExceeded =
-          apiErr?.code === 'AI_BUDGET_EXCEEDED' || (/budget/i.test(errMsg) && !/check unavailable/i.test(errMsg))
-        if (capacityReached) {
-          toast.warning(t('errors.busyTitle'), {
-            description: t('errors.busyBody', {count: MAX_CONCURRENT_STREAMS}),
-          })
-        } else if (budgetExceeded) {
-          // Daily AI budget hit: surface a dedicated, actionable message instead
-          // of a raw "Error: daily AI budget exceeded ($X / $Y)" bubble — the
-          // user needs to know it resets at midnight, not that something broke.
-          const amounts = errMsg.match(/\$[0-9.]+\s*\/\s*\$[0-9.]+/)
-          const detail = amounts ? ` (${amounts[0]})` : ''
-          toast.warning(t('errors.budgetTitle', {detail}), {
-            description: t('errors.budgetBody'),
-          })
-          appendMessage(threadId, {
-            id: uuid(),
-            role: 'assistant',
-            content: t('errors.budgetBubble', {detail}),
-            timestamp: new Date().toISOString(),
-            provider,
-            model: selectedModel,
-            finishReason: 'error',
-          } as ChatMessage)
-        } else {
-          // Surface any other create failure as an error bubble so the user
-          // knows their message didn't go through.
-          logger.warn('chat stream create failed', e)
-          appendMessage(threadId, {
-            id: uuid(),
-            role: 'assistant',
-            content: t('errors.generic', {message: errMsg}),
-            timestamp: new Date().toISOString(),
-            provider,
-            model: selectedModel,
-            finishReason: 'error',
-          } as ChatMessage)
-        }
-        // Tear down the SSE subscription we opened and cancel any backend stream
-        // that the create POST may have recorded before throwing.
-        dropAcc(sid)
-        cancelStream(sid)
-        endStream(threadId)
-      }
-    },
-    [
-      doc,
-      activeThread,
-      buildRequest,
-      appendMessage,
-      getMessages,
-      startStream,
-      endStream,
-      registerStream,
-      provider,
-      selectedModel,
-      toast,
-      bumpGen,
-      isCurrentGen,
-      updateThread,
-      dropAcc,
-      beginAcc,
-      cancelStream,
-      t,
-    ],
+  const fixProposals = useChatStore(s =>
+    s.activeThreadId ? (s.streams[s.activeThreadId]?.fixProposals ?? EMPTY_FIX_PROPOSALS) : EMPTY_FIX_PROPOSALS,
   )
 
-  // Queued follow-up drain (U1.6): when the ACTIVE thread's stream ends,
-  // auto-send the message composed while it was streaming. The edge detect
-  // (not a subscription) means switching threads mid-stream doesn't misfire.
-  const wasActiveStreaming = useRef(false)
-  useEffect(() => {
-    if (wasActiveStreaming.current && !isCurrentThreadStreaming) {
-      const tid = activeThread?.id
-      const st = useChatStore.getState()
-      const queued = tid ? st.queuedByThread[tid] : undefined
-      // Guard BEFORE take (F1.7): takeQueuedMessage deletes, so sending it
-      // into executeSend's early-returns (stream cap / no doc / empty request)
-      // silently lost the message. Blocked sends stay queued — the chip keeps
-      // its promise for the next drain.
-      const blocked = !queued || !tid || !doc || !!st.streams[tid] || !st.canStartStream()
-      if (!blocked) {
-        st.takeQueuedMessage(tid)
-        void executeSend(queued.text, queued.files.length ? queued.files : undefined, queued.excludeContext)
-      }
-    }
-    wasActiveStreaming.current = isCurrentThreadStreaming
-  }, [isCurrentThreadStreaming, activeThread, executeSend, doc])
+  const toast = useToast()
+  const engine = useChatStream()
 
+  const {buildRequest} = useChatRequestBuilder({doc, activeThread, provider, selectedModel, aiSettings, getMessages})
+
+  // executeSend runs a turn on the ACTIVE thread with the panel's current
+  // provider/model. Reports (synchronously) whether the message was accepted.
+  const executeSend = useCallback(
+    (text: string, overrideFiles?: string[], excludeContext?: boolean, includeHistory = false): boolean => {
+      if (!doc || !activeThread) return false
+      return engine.send(activeThread.id, text, {
+        provider,
+        model: selectedModel,
+        files: overrideFiles,
+        excludeContext,
+        includeHistory,
+      })
+    },
+    [doc, activeThread, engine, provider, selectedModel],
+  )
+
+  // @-mentioned files are a PER-MESSAGE override (the request builder's
+  // overrideFiles). They are not written into the thread's persistent
+  // selection: doing so replaced whatever the user had picked in the source
+  // file picker, and every later turn silently lost that context.
   const handleSend = useCallback(
     (text: string, files: string[], excludeContext?: boolean) => {
-      if (files.length > 0 && activeThreadId) {
-        updateThread(activeThreadId, {selectedSourceFiles: files})
-      }
-      void executeSend(text, files.length > 0 ? files : undefined, excludeContext)
+      executeSend(text, files.length > 0 ? files : undefined, excludeContext)
     },
-    [executeSend, activeThreadId, updateThread],
+    [executeSend],
   )
 
   // Queue a follow-up while this thread is streaming (U1.6). Replaces the
-  // previous queued message (one per thread) — the drain effect above sends
-  // it the moment the stream ends.
+  // previous queued message (one per thread); the stream host sends it the
+  // moment the thread is idle, with the provider/model chosen now.
   const handleQueue = useCallback(
     (text: string, files: string[], excludeContext?: boolean) => {
       if (!activeThreadId || !text.trim()) return
-      useChatStore.getState().queueMessage(activeThreadId, {text: text.trim(), files, excludeContext})
+      useChatStore
+        .getState()
+        .queueMessage(activeThreadId, {text: text.trim(), files, excludeContext, provider, model: selectedModel})
     },
-    [activeThreadId],
+    [activeThreadId, provider, selectedModel],
   )
   const cancelQueued = useCallback(() => {
     if (activeThreadId) useChatStore.getState().clearQueuedMessage(activeThreadId)
   }, [activeThreadId])
   const queuedForActiveThread = useChatStore(s => (s.activeThreadId ? s.queuedByThread[s.activeThreadId] : undefined))
 
+  // The preview is a consent step — "see exactly what goes to the AI
+  // provider" — so it fails CLOSED: a preview that can't be built or loaded
+  // tells the user and sends nothing (it used to send anyway).
   const handlePreviewContext = useCallback(
-    async (text: string, files: string[], excludeContext?: boolean) => {
-      if (files.length > 0 && activeThreadId) {
-        updateThread(activeThreadId, {selectedSourceFiles: files})
-      }
+    async (text: string, files: string[], excludeContext?: boolean, onConfirmed?: () => void) => {
+      if (!activeThread) return
+      const threadId = activeThread.id
       const req = buildRequest(text, files.length > 0 ? files : undefined, excludeContext)
       if (!req) return
       try {
-        const preview = (await chatApi.previewContext(req as ChatRequest)) as ContextPreview
+        const preview = (await chatApi.previewContext(req)) as ContextPreview
         setContextPreview(preview)
-        setPendingMessage(text)
-        setPendingExcludeContext(excludeContext)
-      } catch {
-        void executeSend(text, files.length > 0 ? files : undefined, excludeContext)
+        setPendingPreview({threadId, text, files, excludeContext, onConfirmed})
+      } catch (err) {
+        logger.warn('Context preview failed', err)
+        toast.error(t('errors.previewFailed'))
       }
     },
-    [buildRequest, executeSend, activeThreadId, updateThread],
+    [activeThread, buildRequest, toast, t],
   )
 
   const handleResend = useCallback(() => {
     if (!doc || !activeThread || isCurrentThreadStreaming) return
+    // Resend truncates the local history and sends it as the turn's history;
+    // with the server's copy not loaded, the local view is incomplete.
+    if (!useChatStore.getState().isHistorySynced(activeThread.id)) {
+      toast.warning(t('errors.historyNotReady'))
+      return
+    }
     const msgs = getMessages(activeThread.id)
     if (msgs.length < 2) return
     const lastMsg = msgs[msgs.length - 1]
     if (lastMsg.role !== 'assistant') return
+    if (!useChatStore.getState().canStartStream()) {
+      // Checked BEFORE the exchange is removed: removing it first and then
+      // hitting the concurrency cap lost it.
+      toast.warning(t('errors.busyTitle'), {description: t('errors.busyBody', {count: MAX_CONCURRENT_STREAMS})})
+      return
+    }
     let lastUserContent = ''
     for (let i = msgs.length - 2; i >= 0; i--) {
       if (msgs[i].role === 'user') {
@@ -312,8 +177,8 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     removeMessage(activeThread.id, lastMsg.id)
     // Resend truncated the local history; send it explicitly so the backend
     // uses the truncated view instead of its (still-complete) stored copy.
-    if (lastUserContent) void executeSend(lastUserContent, undefined, false, true)
-  }, [doc, activeThread, isCurrentThreadStreaming, getMessages, removeMessage, executeSend])
+    if (lastUserContent) executeSend(lastUserContent, undefined, false, true)
+  }, [doc, activeThread, isCurrentThreadStreaming, getMessages, removeMessage, executeSend, toast, t])
 
   const handleExport = useCallback(() => {
     if (!activeThread) return
@@ -323,51 +188,72 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     downloadTextFile(safeFilename(title), conversationToMarkdown(title, messages))
   }, [activeThread, getMessages, t])
 
-  // handleClearThread empties the active thread locally and on the backend,
-  // using the same (flowId, scope) key the save/get path uses. Backing the
-  // /clear slash command; a no-op if a stream is in flight.
+  // handleClearThread empties the active thread on the backend, then locally,
+  // using the same (flowId, conversation key) the save/get path uses. Backing
+  // the /clear slash command and Ctrl+L; a no-op while a stream is in flight.
+  // Server first: a failed clear used to empty the panel while the model kept
+  // answering from the stored history the user thought was deleted.
   const handleClearThread = useCallback(() => {
-    if (!doc || !activeThread || isCurrentThreadStreaming) return
-    clearThreadMessages(activeThread.id)
-    chatApi.clearConversation(doc.id, conversationKey(activeThread)).catch(err => {
-      logger.warn('Failed to clear conversation', err)
-    })
-  }, [doc, activeThread, isCurrentThreadStreaming, clearThreadMessages])
+    if (!doc || !activeThread || isCurrentThreadStreaming || readOnly) return
+    const threadId = activeThread.id
+    chatApi
+      .clearConversation(activeThread.flowId, conversationKey(activeThread))
+      .then(() => {
+        // Re-checked on return: a turn sent meanwhile must not be wiped, and a
+        // thread closed meanwhile must not come back.
+        const st = useChatStore.getState()
+        if (!st.threads.some(th => th.id === threadId) || st.streams[threadId]) return
+        clearThreadMessages(threadId)
+      })
+      .catch(err => {
+        logger.warn('Failed to clear conversation', err)
+        toast.error(t('errors.clearFailed'))
+      })
+  }, [doc, activeThread, isCurrentThreadStreaming, readOnly, clearThreadMessages, toast, t])
 
   const handleCancelStream = useCallback(() => {
     const tid = useChatStore.getState().activeThreadId
-    if (!tid) return
-    const slot = useChatStore.getState().streams[tid]
-    if (!slot) return
-    const sid = slot.streamId
-    // Bump the per-thread gen so any in-flight executeSend sees it's stale
-    // and self-cancels.
-    bumpGen(tid)
-    if (sid && sid !== 'pending') {
-      // stopAndCommit cancels the SSE sub + backend stream, keeping whatever
-      // text had streamed before the stop instead of discarding it.
-      stopAndCommit(sid, tid, slot.messageId)
-    }
-    endStream(tid)
-  }, [bumpGen, endStream, stopAndCommit])
+    if (tid) engine.stop(tid)
+  }, [engine])
 
-  // Tear down the SSE sub before delegating — closeThread only cancels the
-  // backend stream and clears the store slot.
+  // Drop the thread's in-flight reply (uncommitted) before closing it.
   const handleCloseThread = useCallback(
     (threadId: string) => {
-      const slot = useChatStore.getState().streams[threadId]
-      if (slot?.streamId && slot.streamId !== 'pending') {
-        dropAcc(slot.streamId)
-        cancelStream(slot.streamId)
-      }
+      engine.abandon(threadId)
       threadActions.handleCloseThread(threadId)
     },
-    [threadActions, dropAcc, cancelStream],
+    [engine, threadActions],
   )
+
+  const respondFixProposal = engine.respondFixProposal
+
+  const clearContextPreview = useCallback(() => {
+    setContextPreview(null)
+    setPendingPreview(null)
+  }, [])
+
+  const confirmContextPreview = useCallback(() => {
+    const pending = pendingPreview
+    setContextPreview(null)
+    setPendingPreview(null)
+    if (!pending) return
+    // Sent to the thread the preview was built for, and the composer reset as
+    // soon as the message is on screen — not after the network round-trips,
+    // during which Enter used to queue a duplicate — and only while the
+    // composer still shows that thread.
+    const accepted = engine.send(pending.threadId, pending.text, {
+      provider,
+      model: selectedModel,
+      files: pending.files.length > 0 ? pending.files : undefined,
+      excludeContext: pending.excludeContext,
+    })
+    if (accepted && useChatStore.getState().activeThreadId === pending.threadId) pending.onConfirmed?.()
+  }, [pendingPreview, engine, provider, selectedModel])
 
   return {
     doc,
     selectedBlockId,
+    readOnly,
     activeThreadId,
     activeThread,
     activeThreadMessages,
@@ -376,8 +262,10 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     isCurrentThreadStreaming,
     showThinking,
     sourceFiles,
+    historyState,
+    retryHistoryLoad,
     contextPreview,
-    pendingMessage,
+    pendingMessage: pendingPreview?.text ?? null,
     toolStatus,
     fixProposals,
     respondFixProposal,
@@ -392,18 +280,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     handleExport,
     handleClearThread,
     handleCancelStream,
-    clearContextPreview: () => {
-      setContextPreview(null)
-      setPendingMessage(null)
-      setPendingExcludeContext(undefined)
-    },
-    confirmContextPreview: () => {
-      const msg = pendingMessage
-      const exclude = pendingExcludeContext
-      setContextPreview(null)
-      setPendingMessage(null)
-      setPendingExcludeContext(undefined)
-      if (msg) void executeSend(msg, undefined, exclude)
-    },
+    clearContextPreview,
+    confirmContextPreview,
   }
 }

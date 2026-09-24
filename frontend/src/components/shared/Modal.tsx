@@ -1,6 +1,7 @@
 import {useTranslation} from 'react-i18next'
 import {useRef, useEffect} from 'react'
 import clsx from 'clsx'
+import {X} from 'lucide-react'
 import Portal from './Portal'
 import {useDialogFocus} from '@/hooks/useDialogFocus'
 
@@ -42,6 +43,9 @@ type ModalProps = {
   // When false, the body wrapper does not scroll or pad — the child owns the
   // full area and provides its own single scroll region. Defaults to true.
   bodyScroll?: boolean
+  // Focus this element on open instead of the first focusable one (which is
+  // the title bar's Close button when a title is shown).
+  initialFocusRef?: React.RefObject<HTMLElement | null>
   children: React.ReactNode
   footer?: React.ReactNode
 }
@@ -63,6 +67,7 @@ export default function Modal({
   closeOnEsc = true,
   height = 'auto',
   bodyScroll = true,
+  initialFocusRef,
   children,
   footer,
 }: ModalProps) {
@@ -71,7 +76,7 @@ export default function Modal({
 
   // Focus trap, Esc-to-close and focus restoration come from the shared hook —
   // <Modal> used to carry a byte-identical private copy of all three.
-  useDialogFocus({isOpen, onClose, closeOnEsc, containerRef: modalRef})
+  useDialogFocus({isOpen, onClose, closeOnEsc, containerRef: modalRef, initialFocusRef})
 
   useEffect(() => {
     if (!isOpen) return
@@ -111,7 +116,7 @@ export default function Modal({
                 className="w-7 h-7 flex items-center justify-center rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface-2 transition-colors duration-fast"
                 aria-label={t('close')}
               >
-                ✕
+                <X size={16} aria-hidden="true" />
               </button>
             </div>
           )}

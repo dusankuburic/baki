@@ -1,6 +1,7 @@
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {useSettingsStore} from '@/stores/settingsStore'
+import {useChatStore} from '@/stores/chatStore'
 import {useSystemStore} from '@/stores/systemStore'
 import Switch from '@/components/shared/Switch'
 import Input from '@/components/shared/Input'
@@ -34,7 +35,14 @@ export default function AIBehaviorPanel() {
           <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.activeAssistant')}</label>
           <SegmentedControl
             value={activeProvider}
-            onChange={v => updateAI({activeProvider: v})}
+            onChange={v => {
+              void updateAI({activeProvider: v})
+              // The chat reads its provider from the chat store, which was
+              // only seeded from settings at start-up: picking an assistant
+              // here did nothing until a reload (the Advanced block below then
+              // tuned a provider the chat wasn't using).
+              useChatStore.getState().setProvider(v)
+            }}
             options={PROVIDER_OPTIONS}
             className="flex-wrap"
           />
@@ -144,21 +152,22 @@ function CustomInstructionsInput() {
   const {t} = useTranslation('settings')
   const suffix = useSettingsStore(s => s.settings.ai.systemPromptSuffix ?? '')
   const updateAI = useSettingsStore(s => s.updateAI)
+  // A local draft keeps typing smooth; every change is written through (the
+  // store debounces the backend save). Saving only on blur lost the text when
+  // the dialog was closed with Escape: React fires no blur for an element that
+  // unmounts while focused.
   const [local, setLocal] = useState(suffix)
-
-  const handleBlur = () => {
-    if (local !== suffix) {
-      void updateAI({systemPromptSuffix: local})
-    }
-  }
 
   return (
     <textarea
       className="w-full h-24 px-3 py-2 text-sm bg-surface-2 border border-border-default rounded-md text-text-primary placeholder:text-text-tertiary resize-none focus:outline-none focus:ring-1 focus:ring-brand-500"
       placeholder={t('behavior.customInstructionsPlaceholder')}
+      aria-label={t('behavior.customInstructions')}
       value={local}
-      onChange={e => setLocal(e.target.value)}
-      onBlur={handleBlur}
+      onChange={e => {
+        setLocal(e.target.value)
+        void updateAI({systemPromptSuffix: e.target.value})
+      }}
     />
   )
 }

@@ -89,8 +89,10 @@ const NO_USER_FACING_COPY = new Set([
   // Data/state plumbing with no rendered copy.
   'src/components/chat/hooks/useChatConversations.ts',
   'src/components/chat/hooks/useChatRequestBuilder.ts',
-  'src/components/chat/hooks/useChatThreads.ts',
   'src/components/chat/hooks/useProviderSetup.ts',
+  // The app-wide stream host and its context: render only their children.
+  'src/components/chat/ChatStreamProvider.tsx',
+  'src/components/chat/chatStreamContext.ts',
 ])
 
 // Hook for function components; the i18next instance for class components

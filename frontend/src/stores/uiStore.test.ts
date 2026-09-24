@@ -106,3 +106,41 @@ describe('uiStore', () => {
     expect(s.resolvedTheme).toBe('dracula')
   })
 })
+
+describe('uiStore chat focus mode', () => {
+  beforeEach(() => {
+    useUIStore.setState({chatFocus: false, inspectorTab: 'details', inspectorCollapsed: true})
+  })
+
+  it('entering shows the AI tab and un-collapses the inspector', () => {
+    useUIStore.getState().setChatFocus(true)
+    const s = useUIStore.getState()
+    expect(s.chatFocus).toBe(true)
+    expect(s.inspectorTab).toBe('ai')
+    expect(s.inspectorCollapsed).toBe(false)
+  })
+
+  it('leaving lands back on the AI tab', () => {
+    useUIStore.getState().setChatFocus(true)
+    useUIStore.getState().setInspectorTab('findings')
+    useUIStore.getState().toggleChatFocus()
+    expect(useUIStore.getState().chatFocus).toBe(false)
+    expect(useUIStore.getState().inspectorTab).toBe('ai')
+  })
+
+  it('toggleInspector while focused only leaves focus mode', () => {
+    useUIStore.getState().setChatFocus(true)
+    useUIStore.getState().toggleInspector()
+    const s = useUIStore.getState()
+    expect(s.chatFocus).toBe(false)
+    expect(s.inspectorCollapsed).toBe(false)
+    useUIStore.getState().toggleInspector()
+    expect(useUIStore.getState().inspectorCollapsed).toBe(true)
+  })
+
+  it('resetAllStores clears focus mode', async () => {
+    useUIStore.getState().setChatFocus(true)
+    await resetAllStores()
+    expect(useUIStore.getState().chatFocus).toBe(false)
+  })
+})

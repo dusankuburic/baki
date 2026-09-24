@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,6 +36,21 @@ func (s *ChatService) reconstructHistory(ctx context.Context, doc *models.FlowDo
 		return nil, err
 	}
 	return loaded, nil
+}
+
+// clientMessageID returns the client-supplied id for a persisted turn when it
+// is a UUID (see ChatRequest.UserMessageID/AssistantMessageID), otherwise a
+// fresh server-minted one. Sharing the client's id is what lets a client that
+// reloads the conversation mid-turn dedupe the server's copy by id.
+func clientMessageID(id string) string {
+	// Canonical 8-4-4-4-12 form only: uuid.Parse also accepts braced, urn: and
+	// 32-hex spellings, which the client's own id comparison would not match.
+	if len(id) == 36 {
+		if u, err := uuid.Parse(id); err == nil && strings.EqualFold(u.String(), id) {
+			return id
+		}
+	}
+	return uuid.NewString()
 }
 
 // useBackendConversations reports whether conversations should persist through
@@ -164,16 +180,31 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 	// The stream's context is cancelled as the worker unwinds; this write must
 	// still land.
 	writeCtx := context.WithoutCancel(ctx)
+	// Same critical section as reconstruct + persist-user-turn: the next turn
+	// on this conversation may already be reading the history this replaces,
+	// and SaveConversation is a full-file replace.
+	mu := s.convMutexFor(doc.ID, convKey)
+	mu.Lock()
+	defer mu.Unlock()
 	history, err := s.GetConversation(writeCtx, doc, convKey)
 	if err != nil {
 		logger.Warn("chat: could not load conversation to store the answer", "error", err)
 		return
 	}
+	answerID := clientMessageID(req.AssistantMessageID)
+	// Already stored: a retry, or the client got there first. Matching by id
+	// anywhere in the history also covers the client's own interrupted partial
+	// for this turn (the user pressed Stop just as the stream finished) even
+	// once its next question has landed — appending the full answer then would
+	// show the reply twice, out of order.
+	if slices.ContainsFunc(history, func(m models.ChatMessage) bool { return m.ID == answerID }) {
+		return
+	}
 	if n := len(history); n > 0 && history[n-1].Role == "assistant" && history[n-1].Content == answer {
-		return // already stored (a retry, or the client got there first)
+		return
 	}
 	history = append(history, models.ChatMessage{
-		ID:        uuid.NewString(),
+		ID:        answerID,
 		Role:      "assistant",
 		Content:   answer,
 		Timestamp: time.Now(),

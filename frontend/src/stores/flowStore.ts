@@ -422,9 +422,12 @@ export function resetDerivedStateForFlow(doc: FlowDocument | null) {
   const firstId = doc?.subflows[0]?.id ?? null
   useSearchStore.getState().clear()
   clearAnalysisState(doc?.id ?? null)
-  // Clear the active chat thread so the new flow doesn't show the previous
-  // flow's conversation; useChatConversations auto-creates one on AITab mount.
-  useChatStore.setState({activeThreadId: null})
+  // Point the chat at THIS flow's thread (the one last active on it, if it is
+  // still open) so the new flow never shows the previous flow's conversation.
+  // A same-flow refresh (Findings fix, History restore, toolbar refresh) used
+  // to null it too, dropping the chat to its empty state mid-conversation.
+  // With no thread in memory yet, useChatConversations hydrates or creates one.
+  useChatStore.setState({activeThreadId: doc ? useChatStore.getState().threadForFlow(doc.id) : null})
   if (firstId) {
     // Drop tabs referencing subflows this document doesn't have (flow switch,
     // or a reparse that changed subflow ids) — otherwise old-flow tabs linger

@@ -1,39 +1,77 @@
 import i18n from '@/i18n'
 import {useCallback, useRef, useEffect, useMemo} from 'react'
-import {chatApi, flowApi, analysisApi} from '@/api'
-import {useChatStore, conversationKey, FixProposalCard, FixProposalItem} from '@/stores/chatStore'
+import {chatApi, flowApi, analysisApi, ApiError} from '@/api'
+import {
+  useChatStore,
+  conversationKey,
+  MAX_CONCURRENT_STREAMS,
+  FixProposalCard,
+  FixProposalItem,
+} from '@/stores/chatStore'
 import {useStreamingMessage} from '@/hooks/useStreamingMessage'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
+import {useSettingsStore} from '@/stores/settingsStore'
+import {useOptionalToast} from '@/components/shared/Toast'
 import {logger} from '@/lib/logger'
 import {uuid} from '@/lib/uuid'
 import {utf8ByteLength} from '@/lib/utf8'
+import {classifyChatFailure, budgetDetail} from '@/lib/chatErrors'
 import type {ChatEvent, FixProposalPayload, ToolResultPayload} from '@/lib/chatEvent'
-import type {ChatMessage, FlowDocument, ProviderID, ToolCallRecord} from '@/types'
+import type {ChatMessage, ProviderID, ToolCallRecord} from '@/types'
 import {conversationHistoryEnabled} from '@/lib/chatHistory'
+import {buildChatRequest} from './useChatRequestBuilder'
+
+// StreamMeta is what produced a stream: the provider and model it was sent
+// with. Captured at send time so the committed message is labelled with the
+// model that actually answered, even if the header selection changed since.
+export interface StreamMeta {
+  provider: ProviderID
+  model: string
+}
 
 // StreamAcc is one in-flight stream's local accumulation state: the growing
 // text plus the RAF batching bookkeeping. Keyed by streamId in a ref so
 // multiple threads can stream concurrently; the map entry doubles as the
 // stale-event guard — a late event whose streamId has no entry is ignored.
-interface StreamAcc {
+interface StreamAcc extends StreamMeta {
   threadId: string
   text: string
   raf: number | null
   first: boolean
+  // linked: the thread's store slot has been seen carrying this streamId.
+  // Only a linked acc whose slot later disappears is orphaned (see the store
+  // subscription below); before that, the slot may simply not exist yet.
+  linked: boolean
 }
 
-interface UseChatStreamEngineOptions {
-  doc: FlowDocument | null
-  provider: ProviderID
-  selectedModel: string
-  getMessages: (threadId: string) => readonly ChatMessage[]
+export interface SendOptions extends StreamMeta {
+  files?: string[]
+  excludeContext?: boolean
+  // Send the thread's (locally truncated) history instead of letting the
+  // server replay its stored copy — resend/regenerate.
+  includeHistory?: boolean
 }
 
-// useChatStreamEngine owns the per-stream text accumulator, the SSE handler
-// wiring (via useStreamingMessage), and the per-thread generation tokens used
-// to detect and discard stale sends.
-export function useChatStreamEngine({doc, provider, selectedModel, getMessages}: UseChatStreamEngineOptions) {
+type ToastApi = NonNullable<ReturnType<typeof useOptionalToast>>
+
+// useChatStreamEngine owns every chat stream: sending a turn, the per-stream
+// text accumulator, the SSE handler wiring (via useStreamingMessage), stop /
+// abandon, and the per-thread generation tokens used to discard stale sends.
+//
+// It is mounted ONCE, by ChatStreamProvider, at the app shell — never by the
+// chat panel. The panel mounts and unmounts (inspector collapse, mobile
+// drawer, pop-out, breakpoint change); owning the streams there meant every
+// unmount cancelled the replies in flight and left their threads stuck on
+// "Stop". Everything the engine needs therefore comes from the stores or from
+// the arguments of a send — nothing from the panel.
+export function useChatStreamEngine() {
+  const toast = useOptionalToast()
+  const toastRef = useRef<ToastApi | null>(toast)
+  useEffect(() => {
+    toastRef.current = toast
+  }, [toast])
+
   const appendMessage = useChatStore(s => s.appendMessage)
   const updateThread = useChatStore(s => s.updateThread)
   const updateStream = useChatStore(s => s.updateStream)
@@ -43,26 +81,14 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
   const patchFixProposal = useChatStore(s => s.patchFixProposal)
   const replaceStreamTools = useChatStore(s => s.replaceStreamTools)
   const replaceStreamFixes = useChatStore(s => s.replaceStreamFixes)
+  const startStream = useChatStore(s => s.startStream)
   const endStream = useChatStore(s => s.endStream)
-
-  // Refs mirror the latest doc/provider/selectedModel so the long-lived SSE
-  // handlers see current values; re-subscribing on change would drop streams.
-  const docRef = useRef(doc)
-  useEffect(() => {
-    docRef.current = doc
-  })
-  const providerRef = useRef(provider)
-  useEffect(() => {
-    providerRef.current = provider
-  })
-  const selectedModelRef = useRef(selectedModel)
-  useEffect(() => {
-    selectedModelRef.current = selectedModel
-  })
 
   const streamAccRef = useRef(new Map<string, StreamAcc>())
   const teardownRef = useRef<(streamId: string) => void>(() => {})
   const cancelRef = useRef<(streamId: string) => void>(() => {})
+  // Threads whose last save failed (one toast per thread until a save lands).
+  const saveFailedRef = useRef(new Set<string>())
 
   // Per-thread generation token: each send bumps it; a stale send detects
   // it's no longer current after an await and self-cancels.
@@ -157,6 +183,9 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
   // streamId — a thread closed mid-stream drops its slot, and its result is
   // then discarded rather than committed to a dead thread.
   const takeAcc = useCallback((streamId: string): StreamAcc | null => {
+    // Torn down even with no accumulator left: a subscription that registered
+    // after the acc was dropped (registerStream was mid-flight) must not linger.
+    teardownRef.current(streamId)
     const acc = streamAccRef.current.get(streamId)
     if (!acc) return null
     streamAccRef.current.delete(streamId)
@@ -164,7 +193,6 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
       cancelAnimationFrame(acc.raf)
       acc.raf = null
     }
-    teardownRef.current(streamId)
     const slot = useChatStore.getState().streams[acc.threadId]
     if (!slot || slot.streamId !== streamId) return null
     return acc
@@ -181,25 +209,67 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
     streamAccRef.current.delete(streamId)
   }, [])
 
+  // endStreamIfOwn clears a thread's slot only while it still belongs to this
+  // send. A send that lost its generation (Stop, the thread closed, logout)
+  // must not end whatever stream replaced it: a queued follow-up drains the
+  // instant Stop frees the thread, and the stale send's late cleanup used to
+  // delete the follow-up's slot — the engine then cancelled it as orphaned
+  // while the backend generated (and billed) a reply nobody was listening to.
+  const endStreamIfOwn = useCallback(
+    (threadId: string, streamId: string) => {
+      if (useChatStore.getState().streams[threadId]?.streamId === streamId) endStream(threadId)
+    },
+    [endStream],
+  )
+
   // beginAcc primes the accumulator for a stream that's about to start, so
   // the first chunk event finds its key.
-  const beginAcc = useCallback((streamId: string, threadId: string) => {
-    streamAccRef.current.set(streamId, {threadId, text: '', raf: null, first: false})
+  const beginAcc = useCallback((streamId: string, threadId: string, meta: StreamMeta) => {
+    const linked = useChatStore.getState().streams[threadId]?.streamId === streamId
+    streamAccRef.current.set(streamId, {threadId, text: '', raf: null, first: false, linked, ...meta})
+  }, [])
+
+  // persistThread full-replace saves a thread (transient error bubbles
+  // filtered out) — but only once its server history has loaded: saving a
+  // thread whose history never arrived would overwrite the stored
+  // conversation with just the turns on screen. The server persists each turn
+  // itself, so skipping is safe. History off: nothing is stored, and the
+  // request builder sends the thread's messages with each turn instead.
+  const persistThread = useCallback((threadId: string, flowId: string) => {
+    if (!conversationHistoryEnabled()) return
+    const st = useChatStore.getState()
+    const thread = st.threads.find(t => t.id === threadId)
+    if (!thread || !st.isHistorySynced(threadId)) return
+    const persistable = st.getMessages(threadId).filter(m => m.finishReason !== 'error')
+    chatApi
+      .saveConversation(flowId, conversationKey(thread), persistable)
+      .then(() => {
+        saveFailedRef.current.delete(threadId)
+      })
+      .catch(err => {
+        logger.warn('Failed to save conversation', err)
+        if (saveFailedRef.current.has(threadId)) return
+        saveFailedRef.current.add(threadId)
+        toastRef.current?.error(i18n.t('chat:errors.saveFailed'), {
+          description: i18n.t('chat:errors.saveFailedBody'),
+        })
+      })
   }, [])
 
   // commitAssistantMessage appends the streamed text as a permanent assistant
-  // message and persists the thread (transient error bubbles filtered out).
-  // Saves under the thread's own flowId — NOT docRef.current: a done event can
-  // land after the user switched documents. The stream slot's tool trail and
-  // fix-proposal outcome (if any) are pinned onto the message here — the slot
-  // dies with endStream, the message is what survives the reload.
+  // message and persists the thread. Saves under the thread's own flowId —
+  // never the open document's: a done event can land after the user switched
+  // documents. The stream slot's tool trail and fix-proposal outcome (if any)
+  // are pinned onto the message here — the slot dies with endStream, the
+  // message is what survives the reload.
   const commitAssistantMessage = useCallback(
     (
-      threadId: string,
+      acc: Pick<StreamAcc, 'threadId' | 'provider' | 'model'>,
       messageId: string | undefined,
       content: string,
       opts: {tokensIn?: number; tokensOut?: number; finishReason: ChatMessage['finishReason']},
     ) => {
+      const threadId = acc.threadId
       const thread = useChatStore.getState().threads.find(t => t.id === threadId)
       if (!thread) return
       const slot = useChatStore.getState().streams[threadId]
@@ -208,8 +278,8 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
         role: 'assistant',
         content,
         timestamp: new Date().toISOString(),
-        provider: providerRef.current,
-        model: selectedModelRef.current,
+        provider: acc.provider,
+        model: acc.model,
         tokensIn: opts.tokensIn,
         tokensOut: opts.tokensOut,
         finishReason: opts.finishReason,
@@ -243,14 +313,7 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
             (msg.fixProposals ?? []).some(p => p.status === 'applied' || p.status === 'applied-unresolved'),
         })
       }
-      // History off: nothing is stored, and the request builder sends the
-      // thread's messages with each turn instead of relying on the server copy.
-      if (conversationHistoryEnabled()) {
-        const persistable = (getMessages(threadId) as ChatMessage[]).filter(m => m.finishReason !== 'error')
-        chatApi.saveConversation(thread.flowId, conversationKey(thread), persistable).catch(err => {
-          logger.warn('Failed to save conversation', err)
-        })
-      }
+      persistThread(threadId, thread.flowId)
       if (opts.tokensIn != null || opts.tokensOut != null) {
         updateThread(threadId, {
           tokensIn: (thread.tokensIn ?? 0) + (opts.tokensIn ?? 0),
@@ -258,7 +321,7 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
         })
       }
     },
-    [appendMessage, getMessages, updateThread],
+    [appendMessage, persistThread, updateThread],
   )
 
   const onDone = useCallback(
@@ -266,26 +329,41 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
       const acc = takeAcc(streamId)
       if (!acc) return
       const slot = useChatStore.getState().streams[acc.threadId]
-      commitAssistantMessage(acc.threadId, slot?.messageId, acc.text, {tokensIn, tokensOut, finishReason: 'stop'})
+      commitAssistantMessage(acc, slot?.messageId, acc.text, {tokensIn, tokensOut, finishReason: 'stop'})
       endStream(acc.threadId)
     },
     [commitAssistantMessage, endStream, takeAcc],
   )
 
+  // notifyBudget shows the dedicated daily-budget notice: the user needs to
+  // know it resets at midnight, not that something broke.
+  const notifyBudget = useCallback((detail: string) => {
+    toastRef.current?.warning(i18n.t('chat:errors.budgetTitle', {detail}), {
+      description: i18n.t('chat:errors.budgetBody'),
+    })
+  }, [])
+
   const onError = useCallback(
-    (error: string, streamId: string) => {
+    (error: string, streamId: string, code?: string) => {
       const acc = takeAcc(streamId)
       if (!acc) return
       const slot = useChatStore.getState().streams[acc.threadId]
-      const errorLine = i18n.t('chat:errors.generic', {message: error})
+      let errorLine: string
+      if (classifyChatFailure(error, code) === 'budget') {
+        const detail = budgetDetail(error)
+        notifyBudget(detail)
+        errorLine = i18n.t('chat:errors.budgetBubble', {detail})
+      } else {
+        errorLine = i18n.t('chat:errors.generic', {message: error})
+      }
       const displayContent = acc.text ? acc.text + '\n\n---\n' + errorLine : errorLine
       const msg: ChatMessage = {
         id: slot?.messageId || uuid(),
         role: 'assistant',
         content: displayContent,
         timestamp: new Date().toISOString(),
-        provider: providerRef.current,
-        model: selectedModelRef.current,
+        provider: acc.provider,
+        model: acc.model,
         finishReason: 'error',
       }
       // U3: a loop that fails at iteration 5 still ran 4 tools — keep the
@@ -300,7 +378,7 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
       appendMessage(acc.threadId, msg)
       endStream(acc.threadId)
     },
-    [appendMessage, endStream, takeAcc],
+    [appendMessage, endStream, notifyBudget, takeAcc],
   )
 
   // onAppend adds a delta-resume tail to the stream's accumulated text and
@@ -337,7 +415,7 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
   const refreshAfterFix = useCallback((threadId: string) => {
     const thread = useChatStore.getState().threads.find(t => t.id === threadId)
     if (!thread) return
-    const curDoc = docRef.current
+    const curDoc = useFlowStore.getState().document
     analysisApi
       .analyzeFlowById(thread.flowId)
       .then(report => {
@@ -450,7 +528,7 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
       patchFixProposal(threadId, card.proposalId, {status: approved ? 'applying' : 'declined'})
       chatApi.respondFixDecision(slot.streamId, card.proposalId, approved, excludedItemIndices).catch(err => {
         logger.warn('Fix decision failed', err)
-        patchFixProposal(threadId, card.proposalId, {status: 'error', message: String(err)})
+        patchFixProposal(threadId, card.proposalId, {status: 'error', message: i18n.t('chat:fixCard.decisionFailed')})
       })
     },
     [patchFixProposal],
@@ -558,7 +636,7 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
         if (acc.raf !== null) cancelAnimationFrame(acc.raf)
         streamAccRef.current.delete(streamId)
         if (acc.text) {
-          commitAssistantMessage(threadId, messageId, acc.text, {finishReason: 'interrupted'})
+          commitAssistantMessage({...acc, threadId}, messageId, acc.text, {finishReason: 'interrupted'})
         }
       }
       cancelStream(streamId)
@@ -566,15 +644,288 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
     [commitAssistantMessage, cancelStream],
   )
 
-  return {
-    registerStream,
-    cancelStream,
-    beginAcc,
-    dropAcc,
-    stopAndCommit,
-    commitAssistantMessage,
-    bumpGen,
-    isCurrentGen,
-    respondFixProposal,
-  }
+  // send runs one turn on a thread: append the user message, open the
+  // stream's SSE listener, then create the backend stream. Reports
+  // SYNCHRONOUSLY whether the message was accepted (false = nothing was
+  // appended: unknown thread, already streaming, or the concurrency cap — the
+  // caller keeps its draft); the network work continues detached, so a caller
+  // can reset its composer the moment the message is on screen instead of
+  // after two round-trips.
+  const send = useCallback(
+    (threadId: string, text: string, opts: SendOptions): boolean => {
+      const st = useChatStore.getState()
+      const thread = st.threads.find(t => t.id === threadId)
+      if (!thread) return false
+      // Per-thread guard: one stream per thread (enforced structurally by the
+      // store's streams map, but checked here to no-op a double-send race).
+      if (st.streams[threadId]) return false
+      // Global cap (mirrors backend maxConcurrentStreamsPerScope): reject early
+      // with a toast so the user gets immediate feedback rather than a rejected
+      // POST after a round-trip.
+      if (!st.canStartStream()) {
+        toastRef.current?.warning(i18n.t('chat:errors.busyTitle'), {
+          description: i18n.t('chat:errors.busyBody', {count: MAX_CONCURRENT_STREAMS}),
+        })
+        return false
+      }
+
+      const meta: StreamMeta = {provider: opts.provider, model: opts.model}
+      const userMsg: ChatMessage = {
+        id: uuid(),
+        role: 'user',
+        content: text,
+        timestamp: new Date().toISOString(),
+        contextBlockId: thread.contextBlockId ?? undefined,
+      }
+      const msgId = uuid()
+      // Built BEFORE the user message is appended: when history travels with
+      // the request, the backend appends userMessage itself.
+      const req = buildChatRequest({
+        thread,
+        provider: opts.provider,
+        model: opts.model,
+        aiSettings: useSettingsStore.getState().settings.ai,
+        messages: st.getMessages(threadId),
+        text,
+        overrideFiles: opts.files,
+        excludeContext: opts.excludeContext,
+        includeHistory: opts.includeHistory,
+        userMessageId: userMsg.id,
+        assistantMessageId: msgId,
+      })
+
+      const isFirstMessage = st.getMessages(threadId).length === 0
+      // The store titles an untitled thread from the first user message it
+      // sees; remembered so a withdrawn message takes its title back with it.
+      const hadTitle = !!thread.title
+      appendMessage(threadId, userMsg)
+      if (isFirstMessage && !hadTitle && text.trim()) {
+        updateThread(threadId, {title: text.replace(/\n+/g, ' ').trim().slice(0, 50)})
+      }
+      // No save-on-send — the backend reconstructs history; save-on-done
+      // persists the full user+assistant pair.
+
+      const appendErrorBubble = (content: string) =>
+        appendMessage(threadId, {
+          id: uuid(),
+          role: 'assistant',
+          content,
+          timestamp: new Date().toISOString(),
+          provider: meta.provider,
+          model: meta.model,
+          finishReason: 'error',
+        })
+
+      // withdrawUserMessage takes back a message the backend never accepted:
+      // it must not sit on screen as a question with no answer (and be saved
+      // as one), so it returns to the composer — the thread's draft, plus the
+      // one-shot staged prompt an open composer consumes at once. @-files and
+      // the exclude flag are not carried back.
+      const withdrawUserMessage = () => {
+        const now = useChatStore.getState()
+        now.removeMessage(threadId, userMsg.id)
+        if (!hadTitle) updateThread(threadId, {title: ''})
+        now.setDraft(threadId, text)
+        now.setStagedPrompt({threadId, text})
+      }
+
+      const myGen = bumpGen(threadId)
+      const sid = uuid()
+      startStream(threadId, sid, msgId)
+      beginAcc(sid, threadId, meta)
+
+      const run = async () => {
+        try {
+          // Subscribe + wait for the SSE connection to be 'open' BEFORE creating
+          // the stream so no chunk is lost; registerStream returns false if the
+          // engine was unmounted mid-registration — then do NOT create the stream.
+          const registered = await registerStream(sid, /*begin*/ false)
+          if (!registered || !isCurrentGen(threadId, myGen)) {
+            dropAcc(sid)
+            cancelStream(sid)
+            endStreamIfOwn(threadId, sid)
+            return
+          }
+          // Create the stream with the client-generated ID. The backend stores it
+          // and — because clientStreamId is set — closes ctl.started immediately,
+          // so the worker emits over SSE to the already-subscribed listener.
+          req.clientStreamId = sid
+          const returnedId = await chatApi.streamChatMessage(req)
+          if (!isCurrentGen(threadId, myGen)) {
+            // Cancelled while the create POST was in flight; tear down the stream
+            // the backend just recorded. The slot is ended only if it is still
+            // this send's — Stop already freed it, and a queued follow-up may
+            // own it by now.
+            dropAcc(sid)
+            cancelStream(sid)
+            endStreamIfOwn(threadId, sid)
+            return
+          }
+          if (!returnedId) {
+            dropAcc(sid)
+            cancelStream(sid)
+            endStreamIfOwn(threadId, sid)
+            appendErrorBubble(i18n.t('chat:errors.noStream'))
+            return
+          }
+          // Stream is live; chunks (or a fail-fast error/done) arrive over SSE and
+          // are dispatched by the handlers above.
+        } catch (e: unknown) {
+          if (!isCurrentGen(threadId, myGen)) return
+          const errMsg = (e instanceof Error ? e.message : String(e)) || i18n.t('chat:errors.sendFailed')
+          // Classify by the envelope's machine-readable code first, falling back
+          // to the message for older backends.
+          const kind = classifyChatFailure(errMsg, e instanceof ApiError ? e.code : null)
+          // Tear down the SSE subscription we opened and cancel any backend stream
+          // that the create POST may have recorded before throwing.
+          dropAcc(sid)
+          cancelStream(sid)
+          endStreamIfOwn(threadId, sid)
+          if (kind === 'capacity') {
+            // The backend is at its per-caller cap — another tab or device, or
+            // a Stop it had not processed when a queued follow-up drained.
+            // Transient, so no *Error* bubble in history: the message goes back
+            // to the composer with the busy notice.
+            withdrawUserMessage()
+            toastRef.current?.warning(i18n.t('chat:errors.busyTitle'), {
+              description: i18n.t('chat:errors.busyBody', {count: MAX_CONCURRENT_STREAMS}),
+            })
+          } else if (kind === 'budget') {
+            const detail = budgetDetail(errMsg)
+            notifyBudget(detail)
+            appendErrorBubble(i18n.t('chat:errors.budgetBubble', {detail}))
+          } else {
+            // Surface any other create failure as an error bubble so the user
+            // knows their message didn't go through.
+            logger.warn('chat stream create failed', e)
+            appendErrorBubble(i18n.t('chat:errors.generic', {message: errMsg}))
+          }
+        }
+      }
+      void run()
+      return true
+    },
+    [
+      appendMessage,
+      beginAcc,
+      bumpGen,
+      cancelStream,
+      dropAcc,
+      endStreamIfOwn,
+      isCurrentGen,
+      notifyBudget,
+      registerStream,
+      startStream,
+      updateThread,
+    ],
+  )
+
+  // stop ends a thread's in-flight reply at the user's request, keeping the
+  // text generated so far as an 'interrupted' message.
+  const stop = useCallback(
+    (threadId: string) => {
+      const slot = useChatStore.getState().streams[threadId]
+      if (!slot) return
+      const sid = slot.streamId
+      // Bump the per-thread gen so any in-flight send sees it's stale and
+      // self-cancels.
+      bumpGen(threadId)
+      if (sid && sid !== 'pending') {
+        // stopAndCommit cancels the SSE sub + backend stream, keeping whatever
+        // text had streamed before the stop instead of discarding it.
+        stopAndCommit(sid, threadId, slot.messageId)
+      }
+      endStream(threadId)
+    },
+    [bumpGen, endStream, stopAndCommit],
+  )
+
+  // abandon drops a thread's in-flight reply without committing it (the
+  // thread is being closed) and cancels it on the backend.
+  const abandon = useCallback(
+    (threadId: string) => {
+      const slot = useChatStore.getState().streams[threadId]
+      if (!slot?.streamId || slot.streamId === 'pending') return
+      bumpGen(threadId)
+      dropAcc(slot.streamId)
+      cancelStream(slot.streamId)
+    },
+    [bumpGen, cancelStream, dropAcc],
+  )
+
+  // A slot can disappear without going through stop/abandon: the logout
+  // reset, clearFlowThreads, or a thread closed through the store directly.
+  // Its accumulator must go too, and the backend stream be cancelled — else
+  // the provider keeps generating (and billing) for a listener that is gone.
+  useEffect(
+    () =>
+      useChatStore.subscribe((state, prev) => {
+        if (state.streams === prev.streams) return
+        for (const [sid, acc] of streamAccRef.current) {
+          const slot = state.streams[acc.threadId]
+          if (slot && slot.streamId === sid) {
+            acc.linked = true
+            continue
+          }
+          if (!acc.linked) continue
+          // The stream went away from under an in-flight send (logout, the
+          // thread closed): invalidate that send too, or it goes on to create
+          // the backend stream for a slot that no longer exists.
+          bumpGen(acc.threadId)
+          dropAcc(sid)
+          cancelStream(sid)
+        }
+      }),
+    [bumpGen, cancelStream, dropAcc],
+  )
+
+  // The host unmounting (app teardown) must not leave slots claiming to
+  // stream: end every thread that still has an accumulator. The backend
+  // streams themselves are cancelled by useStreamingMessage's own cleanup.
+  useEffect(() => {
+    const accs = streamAccRef.current
+    return () => {
+      const threads = new Set<string>()
+      for (const acc of accs.values()) {
+        if (acc.raf !== null) cancelAnimationFrame(acc.raf)
+        threads.add(acc.threadId)
+      }
+      accs.clear()
+      for (const tid of threads) useChatStore.getState().endStream(tid)
+    }
+  }, [])
+
+  return useMemo(
+    () => ({
+      send,
+      stop,
+      abandon,
+      respondFixProposal,
+      // Lower-level pieces, exposed for tests and the resend path.
+      registerStream,
+      cancelStream,
+      beginAcc,
+      dropAcc,
+      stopAndCommit,
+      commitAssistantMessage,
+      bumpGen,
+      isCurrentGen,
+    }),
+    [
+      send,
+      stop,
+      abandon,
+      respondFixProposal,
+      registerStream,
+      cancelStream,
+      beginAcc,
+      dropAcc,
+      stopAndCommit,
+      commitAssistantMessage,
+      bumpGen,
+      isCurrentGen,
+    ],
+  )
 }
+
+export type ChatStreamEngine = ReturnType<typeof useChatStreamEngine>

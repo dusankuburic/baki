@@ -120,14 +120,17 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(239, 68, 68, 0.3);
 
   /* === SPACING SCALE (4px base) === */
+  /* Half steps use an underscore: a custom-property name cannot contain a
+     dot, so the dotted names were parse errors the browser dropped and every
+     utility reading them (p-1.5, gap-1.5, py-0.5, h-3.5) computed to 0. */
   --space-0: 0;
-  --space-0.5: 2px;
+  --space-0_5: 2px;
   --space-1: 4px;
-  --space-1.5: 6px;
+  --space-1_5: 6px;
   --space-2: 8px;
-  --space-2.5: 10px;
+  --space-2_5: 10px;
   --space-3: 12px;
-  --space-3.5: 14px;
+  --space-3_5: 14px;
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
@@ -1585,18 +1588,39 @@ textarea,
 }
 
 /* Enhanced typing indicator with ripple effect */
-@keyframes dot-ripple {
-  0% {
-    transform: scale(0.8);
-    opacity: 0.5;
+/* Thinking indicator: each dot rises and brightens in turn (a wave the eye
+   reads as travel, where the old scale ripple read as a static row), and
+   the label's highlight sweeps left to right. Both loops start and end in
+   the dim state, so the repeat has no visible seam. */
+@keyframes thinking-wave {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
   }
-  50% {
-    transform: scale(1.1);
+  30% {
+    transform: translateY(-3px);
     opacity: 1;
   }
+}
+
+@keyframes thinking-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+
+@keyframes thinking-pulse {
+  0%,
   100% {
-    transform: scale(0.8);
-    opacity: 0.5;
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
   }
 }
 
@@ -1739,6 +1763,11 @@ textarea,
   .animate-spin {
     animation-duration: 2s !important;
   }
+  /* The wait is essential feedback: the dots keep a slow opacity pulse
+     with no travel, and the label's shimmer simply stops. */
+  .thinking-dot {
+    animation: thinking-pulse 2s ease-in-out infinite !important;
+  }
 }
 
 /* === USER OPT-IN: REDUCE MOTION === */
@@ -1789,11 +1818,11 @@ textarea,
    Shrinks the var-based spacing scale ~20-25%. Also drops --text-sm 13px→12px,
    which currently only affects chat prose (.prose-chat), not Tailwind's text-sm. */
 [data-density='compact'] {
-  --space-1.5: 5px;
+  --space-1_5: 5px;
   --space-2: 6px;
-  --space-2.5: 8px;
+  --space-2_5: 8px;
   --space-3: 10px;
-  --space-3.5: 11px;
+  --space-3_5: 11px;
   --space-4: 12px;
   --space-5: 16px;
   --space-6: 20px;
@@ -1891,8 +1920,11 @@ pre,
 }
 
 /* Utility: styled scrollbar (explicit opt-in, mirrors global scrollbar styles) */
+/* scrollbar-width is not inherited: without it here Firefox draws its
+   full-size arrowed bar on every chat scroller. */
 .custom-scrollbar {
   scrollbar-color: var(--surface-4) transparent;
+  scrollbar-width: thin;
 }
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
@@ -1934,9 +1966,18 @@ pre,
 }
 
 .prose-chat {
-  font-size: var(--text-sm);
+  font-size: var(--chat-font-size, var(--text-sm));
   line-height: 1.6;
   color: var(--text-primary);
+  /* A URL, a path or a token with no break opportunity wraps instead of
+     widening the column: the conversation never scrolls sideways. */
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.prose-chat img {
+  max-width: 100%;
+  height: auto;
 }
 
 .prose-chat p {
@@ -2008,20 +2049,49 @@ pre,
 
 .prose-chat h1,
 .prose-chat h2,
-.prose-chat h3 {
+.prose-chat h3,
+.prose-chat h4,
+.prose-chat h5,
+.prose-chat h6 {
   font-weight: 600;
-  margin: 0.75em 0 0.25em;
+  line-height: 1.3;
+  margin: 1em 0 0.35em;
   color: var(--text-primary);
+}
+.prose-chat > :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
 }
 
 .prose-chat h1 {
-  font-size: 1.25em;
+  font-size: 1.35em;
 }
 .prose-chat h2 {
-  font-size: 1.125em;
+  font-size: 1.2em;
 }
 .prose-chat h3 {
+  font-size: 1.1em;
+}
+.prose-chat h4 {
   font-size: 1em;
+}
+.prose-chat h5 {
+  font-size: 0.95em;
+}
+.prose-chat h6 {
+  font-size: 0.9em;
+  color: var(--text-secondary);
+}
+
+/* Tables scroll inside their own box (see MessageBubble's `table`
+   override); before, a wide table scrolled the whole conversation. */
+.prose-chat .chat-table-wrap {
+  margin: 0.75em 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.prose-chat .chat-table-wrap table {
+  margin: 0;
 }
 
 .prose-chat table {
@@ -2031,11 +2101,15 @@ pre,
   font-size: 0.875em;
 }
 
+/* Cells wrap between words so a table fits the column wherever its words
+   do; one whose longest words cannot fit side by side scrolls inside its
+   own wrapper (above) rather than breaking "Column" into "Col/umn". */
 .prose-chat th,
 .prose-chat td {
   border: 1px solid var(--border-default);
   padding: 0.4em 0.6em;
   text-align: left;
+  overflow-wrap: break-word;
 }
 
 .prose-chat th {
@@ -2060,9 +2134,10 @@ pre,
 
 /* === CHAT MESSAGE BUBBLE STYLES === */
 
-/* Make the last paragraph inline during streaming so the cursor
-   appears on the same line as the text rather than below it. */
-.prose-chat.is-streaming > p:last-child {
+/* Make the last paragraph inline during streaming so the cursor appears on
+   the same line as the text rather than below it. The cursor span is always
+   the LAST child, so the paragraph before it is nth-last-child(2). */
+.prose-chat.is-streaming > p:nth-last-child(2) {
   display: inline;
 }
 
@@ -2072,8 +2147,45 @@ pre,
     cursor-wave 0.8s ease-in-out infinite;
 }
 
-.typing-dot {
-  animation: dot-ripple 1.2s ease-in-out infinite;
+/* === THINKING INDICATOR ===
+   Motion is transform, opacity and background-position only (no layout
+   work), so it stays smooth while a stream is parsed. The base declarations
+   are the calm state: under prefers-reduced-motion the global rule ends
+   every animation at once and these are what remain — three solid brand
+   dots and a plain tertiary label. */
+.thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--brand-400);
+  animation: thinking-wave 1.4s ease-in-out infinite;
+  /* backwards: the delayed dots hold the dim first keyframe until their
+     turn instead of flashing solid for a third of a second on mount. */
+  animation-fill-mode: backwards;
+}
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.32s;
+}
+/* The gradient is three times the label wide with the highlight in its
+   middle third; the sweep moves the window across it, so the text is plain
+   tertiary at both ends of the loop and at rest. */
+.thinking-label {
+  color: var(--text-tertiary);
+  background-image: linear-gradient(90deg, var(--text-tertiary) 40%, var(--text-primary) 50%, var(--text-tertiary) 60%);
+  background-size: 300% 100%;
+  background-position: 0 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: thinking-shimmer 2.4s linear infinite;
 }
 
 /* Search hit inside chat prose. Uses the brand tint rather than a UA yellow so
@@ -2097,14 +2209,56 @@ pre,
   container: chat / inline-size;
 }
 
+/* Chat text size (Settings › Appearance, or the chat menu), stamped on the
+   chat root as data-chat-text. Medium follows density; an explicit small or
+   large beats it. `.chat-text` is the user bubble, `.prose-chat` the answer. */
+.chat-root {
+  --chat-font-size: var(--text-sm);
+  --chat-code-size: 13px;
+}
+.chat-root[data-chat-text='sm'] {
+  --chat-font-size: 12px;
+  --chat-code-size: 12px;
+}
+.chat-root[data-chat-text='lg'] {
+  --chat-font-size: 15px;
+  --chat-code-size: 14px;
+}
+/* Focus mode reads two sizes up. */
+.chat-focus .chat-root {
+  --chat-font-size: calc(var(--text-sm) + 2px);
+  --chat-code-size: 14px;
+}
+.chat-focus .chat-root[data-chat-text='sm'] {
+  --chat-font-size: 14px;
+  --chat-code-size: 13px;
+}
+.chat-focus .chat-root[data-chat-text='lg'] {
+  --chat-font-size: 17px;
+  --chat-code-size: 15px;
+}
+.chat-text {
+  font-size: var(--chat-font-size, var(--text-sm));
+}
+
 /* Narrow (< 340px): the header chip only has room for the provider name, and
    the composer's context toggle relies on its checkbox alone. */
 @container chat (max-width: 339px) {
   .cq-model {
     display: none;
   }
+  /* Visually hidden, NOT display:none — the label is the checkbox's
+     accessible name, which display:none removed along with the text. */
   .cq-exclude-label {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
   .chat-thread-tab {
     max-width: 84px;
@@ -2124,15 +2278,59 @@ pre,
   .cq-usage-detail {
     display: none;
   }
+  /* The composer's @ / slash chips drop to icon-only. Visually hidden, not
+     display:none — the label is the button's accessible name. */
+  .cq-chip-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 }
 
-/* Wide (>= 700px) — popped out, or a wide inspector. Cap the measure so long
-   answers and code don't run to a fatiguing line length. */
-@container chat (min-width: 700px) {
-  .chat-msg-item {
-    max-width: 46rem;
-    margin-inline: auto;
+/* === CHAT GUTTERS ===
+
+   Everything in the chat is fluid: messages, the composer and the bars fill
+   whatever width the panel has (a drag, or the whole window in focus mode);
+   only the side gutter scales with it. One variable feeds them all, so the
+   message text, the composer's edge, the header's provider name and the
+   thread tabs line up on the same x. The queries set it on the root's
+   children — a container cannot query its own size. */
+.chat-root {
+  --chat-gutter: 12px;
+}
+@container chat (min-width: 460px) {
+  .chat-root > * {
+    --chat-gutter: 16px;
   }
+}
+@container chat (min-width: 700px) {
+  .chat-root > * {
+    --chat-gutter: 24px;
+  }
+}
+/* Content rows: the message column, the welcome block, the composer. */
+.chat-gutter,
+.chat-msg-item {
+  padding-inline: var(--chat-gutter);
+}
+/* Bars whose first control carries 8px of its own padding (the header's
+   provider button, the thread tabs, the context chips): inset by the gutter
+   minus that, so the control's text — not its box — sits on the gutter.
+   Never tighter than 8px, so the buttons at the right keep their room. */
+.chat-bar {
+  padding-inline: max(8px, calc(var(--chat-gutter) - 8px));
+}
+/* The composer grows with the draft up to a share of the window, so a long
+   prompt stays readable on a tall screen without swallowing the list.
+   ChatInput reads this back instead of hard-coding the cap. */
+.chat-composer-input {
+  max-height: clamp(120px, 30vh, 320px);
 }
 
 /* === AUTOFILL OVERRIDE === */

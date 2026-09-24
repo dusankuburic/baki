@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -87,7 +88,7 @@ func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string, in
 	}
 	usage, err := s.dailyUsage(ctx, scope, orgID)
 	if err != nil {
-		return fmt.Errorf("daily AI budget check unavailable: %w", err)
+		return budgetUnavailable(scope, err)
 	}
 	// Concurrent streams' in-flight spend (their spend so far plus one
 	// reserved maximum response each). Without this term N streams started
@@ -99,7 +100,10 @@ func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string, in
 		concurrent = orgOthers
 	}
 	if total := usage + inflight + concurrent; total >= settings.AI.DailyBudget {
-		return fmt.Errorf("daily AI budget exceeded ($%.2f / $%.2f, of which $%.2f is in flight on other streams)", total, settings.AI.DailyBudget, concurrent)
+		return &budgetError{
+			kind: ErrAIBudgetExceeded,
+			msg:  fmt.Sprintf("daily AI budget exceeded ($%.2f / $%.2f, of which $%.2f is in flight on other streams)", total, settings.AI.DailyBudget, concurrent),
+		}
 	}
 
 	// When org-scoped, also enforce a per-user sub-limit so one member can't
@@ -108,10 +112,13 @@ func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string, in
 	if orgID != "" && settings.AI.PerUserDailyBudget > 0 {
 		userUsage, err := s.dailyUsage(ctx, scope, "")
 		if err != nil {
-			return fmt.Errorf("per-user AI budget check unavailable: %w", err)
+			return budgetUnavailable(scope, err)
 		}
 		if total := userUsage + inflight + userOthers; total >= settings.AI.PerUserDailyBudget {
-			return fmt.Errorf("per-user daily AI budget exceeded ($%.2f / $%.2f, of which $%.2f is in flight on other streams)", total, settings.AI.PerUserDailyBudget, userOthers)
+			return &budgetError{
+				kind: ErrAIBudgetExceeded,
+				msg:  fmt.Sprintf("per-user daily AI budget exceeded ($%.2f / $%.2f, of which $%.2f is in flight on other streams)", total, settings.AI.PerUserDailyBudget, userOthers),
+			}
 		}
 	}
 	return nil
@@ -306,8 +313,12 @@ type ChatService struct {
 	// streamIdleTimeout in tests; 0 ⇒ defaults.
 	watchdogInterval time.Duration
 	idleTimeout      time.Duration
-	activeStreams    sync.Map   // map[streamID]*streamCtl — in-flight streams
-	streamCapMu      sync.Mutex // serializes the per-caller concurrency check + store
+	// heartbeatAfter / heartbeatTick override the client keepalive timing in
+	// tests (see heartbeatStream); 0 ⇒ defaults.
+	heartbeatAfter time.Duration
+	heartbeatTick  time.Duration
+	activeStreams  sync.Map   // map[streamID]*streamCtl — in-flight streams
+	streamCapMu    sync.Mutex // serializes the per-caller concurrency check + store
 	// finishedStreams holds recently-completed streams for a short grace period
 	// (resumeRetention) so a client that reconnects after a stream ended can
 	// still fetch its final buffer via ResumeStream.
@@ -454,7 +465,7 @@ func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models
 
 	provider, err := s.factory.For(scope, req.Provider)
 	if err != nil {
-		return turnSetup{}, err
+		return turnSetup{}, providerSetupError(scope, req.Provider, err)
 	}
 
 	// Org-scoped flows attribute usage and enforce the daily budget at the
@@ -483,8 +494,14 @@ func (s *ChatService) persistInitialUserTurn(ctx context.Context, doc *models.Fl
 		return
 	}
 	convKey := req.ConversationKey()
+	userID := clientMessageID(req.UserMessageID)
+	// A client id that already names a stored message (a resend reusing the
+	// id) gets a fresh one rather than a duplicate id in the history.
+	if slices.ContainsFunc(req.Messages, func(m models.ChatMessage) bool { return m.ID == userID }) {
+		userID = uuid.NewString()
+	}
 	userMsg := models.ChatMessage{
-		ID:             uuid.NewString(),
+		ID:             userID,
 		Role:           "user",
 		Content:        req.UserMessage,
 		Timestamp:      time.Now(),
@@ -622,6 +639,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxChatStreamDuration)
 	ctl := &streamCtl{cancel: cancel, started: make(chan struct{}), ownerID: scope, streamID: streamID}
 	ctl.touch() // pre-first-chunk work (context build, provider dial) counts as activity
+	ctl.lastEmit.Store(time.Now().UnixNano())
 	// Per-caller concurrency cap + stream-ID reservation, performed atomically
 	// so two concurrent requests can't both observe active < cap and both
 	// proceed, and can't both reserve the same client-provided stream ID.
@@ -662,6 +680,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		ctl.mu.Lock()
 		ctl.recordJournal(eventType, data)
 		ctl.mu.Unlock()
+		ctl.lastEmit.Store(time.Now().UnixNano())
 		s.notifier.EmitTo(scope, "chat:event",
 			map[string]interface{}{"streamId": streamID, "type": eventType, "data": data})
 	}
@@ -712,16 +731,25 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		// until begin or the 5-minute cap. The errMsg must be stored before the
 		// emit — BeginStream returns the stored state when the emit predated the
 		// client's SSE subscription.
-		fail := func(msg string) {
+		fail := func(code, msg string) {
 			msg = scrubber.ScrubText(msg) // provider strings can echo request content
-			ctl.setError(msg)
-			emit("error", map[string]interface{}{"message": msg})
+			ctl.setFailure(code, msg)
+			emit("error", errorEventData(code, msg))
 		}
+
+		// Client keepalive for silent phases (see heartbeatStream). Not joined
+		// on exit: in a microsecond window a heartbeat can trail the terminal
+		// event, and the client drops events for a stream it has already torn
+		// down — the deferred close is enough.
+		hbStop := make(chan struct{})
+		defer close(hbStop)
+		hbAfter, hbTick := s.heartbeatTiming()
+		go heartbeatStream(ctx, ctl, emit, hbStop, hbAfter, hbTick)
 
 		// C-3: RAG lookup, provider resolution and budget checks.
 		ts, err := s.prepareTurn(ctx, scope, doc, req)
 		if err != nil {
-			fail(err.Error())
+			fail(ctl.classifyFailure(ctx, err))
 			return
 		}
 
@@ -751,7 +779,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		aiReq, scrubbedDoc, ok, err := s.buildStreamRequest(ctx, ts, scope, doc, report, req)
 		if err != nil {
 			msg := "conversation is too long for this model's context window — start a new conversation or remove some history"
-			fail(msg)
+			fail(ChatErrContextLimit, msg)
 			return
 		}
 		if !ok {
@@ -818,9 +846,13 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			}
 			if chunk.Error != nil {
 				out.flush()
-				msg := scrubber.ScrubText(chunk.Error.Error())
-				ctl.setError(msg)
-				emit("error", map[string]interface{}{"message": msg})
+				// Same friendly mapping as a returned error: an in-stream
+				// provider failure (Claude "overloaded", a content filter)
+				// used to reach the user as the raw provider string.
+				code, msg := ctl.classifyFailure(ctx, chunk.Error)
+				msg = scrubber.ScrubText(msg)
+				ctl.setFailure(code, msg)
+				emit("error", errorEventData(code, msg))
 				return
 			}
 			if chunk.Done {
@@ -838,15 +870,16 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		})
 
 		if err != nil {
-			msg := ctl.failureMessage(ctx, err)
-			ctl.setError(msg)
+			code, msg := ctl.classifyFailure(ctx, err)
+			msg = scrubber.ScrubText(msg)
+			ctl.setFailure(code, msg)
 			if !awaitStart() {
 				return
 			}
 			// Deliver whatever the scrubber was still holding before reporting
 			// the failure, so the partial response isn't truncated client-side.
 			out.flush()
-			emit("error", map[string]interface{}{"message": msg})
+			emit("error", errorEventData(code, msg))
 		}
 	}()
 
@@ -892,11 +925,11 @@ func (s *ChatService) runToolLoop(
 		}
 		return started
 	}
-	fail := func(msg string) {
+	fail := func(code, msg string) {
 		msg = scrubber.ScrubText(msg) // provider strings can echo request content
-		ctl.setError(msg)
+		ctl.setFailure(code, msg)
 		if ensureStarted() {
-			emit("error", map[string]interface{}{"message": msg})
+			emit("error", errorEventData(code, msg))
 		}
 	}
 
@@ -919,10 +952,13 @@ func (s *ChatService) runToolLoop(
 		own := inFlightCost(provider, totalIn, totalOut)
 		ctl.setInflight(own + reserve)
 		if err := s.enforceBudget(ctx, scope, base.OrgID, own, ctl); err != nil {
-			// A mid-loop budget stop is the kind of error operators need
-			// aggregated: the turn already burned budget before being cut off.
-			errreport.CaptureError(ctx, "chat.tool_loop.budget", err, errreport.Attrs{"scope": scope, "provider": provider.ID()})
-			fail("response stopped: " + err.Error())
+			code, msg, report := loopBudgetFailure(ctx, ctl, err)
+			if report {
+				// A mid-loop budget stop is the kind of error operators need
+				// aggregated: the turn already burned budget before being cut off.
+				errreport.CaptureError(ctx, "chat.tool_loop.budget", err, errreport.Attrs{"scope": scope, "provider": provider.ID()})
+			}
+			fail(code, msg)
 			return
 		}
 		turn := base
@@ -933,7 +969,7 @@ func (s *ChatService) runToolLoop(
 		// iteration 4-6, surfacing as a raw provider 400. Truncating oldest
 		// history here keeps the loop within bounds.
 		if err := truncateForContextWindow(provider, &turn, ctxLimit); err != nil {
-			fail("conversation is too long for this model's context window — too many tool results, try a simpler question")
+			fail(ChatErrContextLimit, "conversation is too long for this model's context window — too many tool results, try a simpler question")
 			return
 		}
 		msgs = turn.Messages
@@ -985,7 +1021,7 @@ func (s *ChatService) runToolLoop(
 				i-- // don't consume an iteration for the degradation retry
 				continue
 			}
-			fail(ctl.failureMessage(ctx, streamErr))
+			fail(ctl.classifyFailure(ctx, streamErr))
 			return
 		}
 		if chunkErr != nil {
@@ -999,7 +1035,7 @@ func (s *ChatService) runToolLoop(
 				i--
 				continue
 			}
-			fail(chunkErr.Error())
+			fail(ctl.classifyFailure(ctx, chunkErr))
 			return
 		}
 		totalIn += turnIn
@@ -1025,7 +1061,7 @@ func (s *ChatService) runToolLoop(
 		}
 	}
 
-	fail(fmt.Sprintf("tool loop exceeded %d iterations without a final answer", maxToolIterations))
+	fail(ChatErrToolLoopLimit, fmt.Sprintf("tool loop exceeded %d iterations without a final answer", maxToolIterations))
 }
 
 // runPromptToolLoop is the prompt-based fallback for providers that don't
@@ -1074,11 +1110,11 @@ func (s *ChatService) runPromptToolLoop(
 		}
 		return started
 	}
-	fail := func(msg string) {
+	fail := func(code, msg string) {
 		msg = scrubber.ScrubText(msg) // provider strings can echo request content
-		ctl.setError(msg)
+		ctl.setFailure(code, msg)
 		if ensureStarted() {
-			emit("error", map[string]interface{}{"message": msg})
+			emit("error", errorEventData(code, msg))
 		}
 	}
 
@@ -1093,13 +1129,17 @@ func (s *ChatService) runPromptToolLoop(
 		own := inFlightCost(provider, totalIn, totalOut)
 		ctl.setInflight(own + reserve)
 		if err := s.enforceBudget(ctx, scope, base.OrgID, own, ctl); err != nil {
-			fail("response stopped: " + err.Error())
+			code, msg, report := loopBudgetFailure(ctx, ctl, err)
+			if report {
+				errreport.CaptureError(ctx, "chat.tool_loop.budget", err, errreport.Attrs{"scope": scope, "provider": provider.ID()})
+			}
+			fail(code, msg)
 			return
 		}
 		turn := base
 		turn.Messages = msgs
 		if err := truncateForContextWindow(provider, &turn, ctxLimit); err != nil {
-			fail("conversation is too long for this model's context window — too many tool results, try a simpler question")
+			fail(ChatErrContextLimit, "conversation is too long for this model's context window — too many tool results, try a simpler question")
 			return
 		}
 		msgs = turn.Messages
@@ -1129,11 +1169,11 @@ func (s *ChatService) runPromptToolLoop(
 			out.flush()
 		}
 		if streamErr != nil {
-			fail(ctl.failureMessage(ctx, streamErr))
+			fail(ctl.classifyFailure(ctx, streamErr))
 			return
 		}
 		if chunkErr != nil {
-			fail(chunkErr.Error())
+			fail(ctl.classifyFailure(ctx, chunkErr))
 			return
 		}
 		totalIn += turnIn
@@ -1189,7 +1229,7 @@ func (s *ChatService) runPromptToolLoop(
 		msgs = append(msgs, ai.Message{Role: "user", Content: results.String()})
 	}
 
-	fail(fmt.Sprintf("tool loop exceeded %d iterations without a final answer", maxToolIterations))
+	fail(ChatErrToolLoopLimit, fmt.Sprintf("tool loop exceeded %d iterations without a final answer", maxToolIterations))
 }
 
 // toolSummary derives the one-line transparency summary for a tool_result

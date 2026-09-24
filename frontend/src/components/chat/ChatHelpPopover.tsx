@@ -16,6 +16,7 @@ const SHORTCUTS = [
   {keys: 'Shift + Enter', descriptionKey: 'help.newLine'},
   {keys: 'Cmd/Ctrl + L', descriptionKey: 'help.clearChat'},
   {keys: 'Esc', descriptionKey: 'help.stopResponse'},
+  {keys: 'Cmd/Ctrl + .', descriptionKey: 'help.focusMode'},
   {keys: '↑ / ↓', descriptionKey: 'help.cycleHistory'},
   {keys: '@', descriptionKey: 'help.mentionFile'},
   {keys: '/', descriptionKey: 'help.openCommandMenu'},

@@ -99,6 +99,14 @@ type ChatRequest struct {
 	// Must be a single safe path/key segment (a UUID); the handler rejects
 	// anything else.
 	ConversationID string `json:"conversationId,omitempty"`
+	// UserMessageID / AssistantMessageID are the client's ids for this turn's
+	// two messages (UUIDs). The server persists its own copies of the turn
+	// (user turn at stream start, answer at the end) under these same ids, so a
+	// client that merges a reloaded conversation with the messages it already
+	// holds can dedupe by id instead of showing the turn twice. Anything that is
+	// not a UUID is ignored and the server mints its own id.
+	UserMessageID      string `json:"userMessageId,omitempty"`
+	AssistantMessageID string `json:"assistantMessageId,omitempty"`
 }
 
 // ConversationKey returns the key under which this turn's conversation is

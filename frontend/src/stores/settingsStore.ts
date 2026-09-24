@@ -35,6 +35,7 @@ export const defaultSettings: AppSettings = {
     density: 'comfortable',
     reduceMotion: false,
     highContrast: false,
+    chatTextSize: 'md',
   },
   layout: {
     sidebarWidth: 280,
@@ -43,7 +44,6 @@ export const defaultSettings: AppSettings = {
     inspectorCollapsed: false,
     lastActiveInspectorTab: 'details',
     lastViewMode: 'block',
-    // chatPanelHeight: undefined = auto-fill (default)
   },
   ai: {
     activeProvider: 'claude',
@@ -255,6 +255,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
               ...loaded.appearance,
               theme: loaded.appearance?.theme || defaultSettings.appearance.theme,
               density: loaded.appearance?.density || defaultSettings.appearance.density,
+              chatTextSize: loaded.appearance?.chatTextSize || defaultSettings.appearance.chatTextSize,
             },
             parser: {
               ...defaultSettings.parser,

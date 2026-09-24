@@ -50,6 +50,8 @@ type AppearanceSettings struct {
 	Density      string    `json:"density"`
 	ReduceMotion bool      `json:"reduceMotion"`
 	HighContrast bool      `json:"highContrast"`
+	// ChatTextSize is sm | md | lg for the AI chat's messages.
+	ChatTextSize string `json:"chatTextSize,omitempty"`
 }
 
 type LayoutSettings struct {
@@ -149,8 +151,9 @@ func DefaultSettings() *AppSettings {
 	return &AppSettings{
 		Version: 1,
 		Appearance: AppearanceSettings{
-			Theme:   ThemeDark,
-			Density: "comfortable",
+			Theme:        ThemeDark,
+			Density:      "comfortable",
+			ChatTextSize: "md",
 		},
 		Layout: LayoutSettings{
 			SidebarWidth:           280,

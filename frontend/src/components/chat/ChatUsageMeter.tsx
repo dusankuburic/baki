@@ -55,7 +55,7 @@ export default function ChatUsageMeter({promptTokens, completionTokens, inputCos
         <span className="w-10 h-0.5 rounded-full bg-surface-4 overflow-hidden shrink-0" aria-hidden="true">
           <span className="block w-1/3 h-full rounded-full bg-brand-400 animate-indeterminate" />
         </span>
-        <span className="text-[10px] text-text-tertiary tabular-nums truncate" title={t('tokens.streamingTitle')}>
+        <span className="text-2xs text-text-tertiary tabular-nums truncate" title={t('tokens.streamingTitle')}>
           {t('tokens.streamingSoFar', {count: live, formatted: formatCompact(live)})}
         </span>
       </div>
@@ -77,7 +77,7 @@ export default function ChatUsageMeter({promptTokens, completionTokens, inputCos
   }
 
   return (
-    <span className="text-[10px] text-text-tertiary tabular-nums truncate">
+    <span className="text-2xs text-text-tertiary tabular-nums truncate">
       {t('tokens.total', {formatted: formatCompact(total)})}
       {promptTokens > 0 && completionTokens > 0 && (
         <span className="cq-usage-detail text-text-tertiary/60">

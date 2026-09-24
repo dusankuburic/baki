@@ -7,6 +7,9 @@ type ButtonProps = {
   size?: 'sm' | 'md' | 'lg'
   loading?: boolean
   disabled?: boolean
+  // Icons go through `icon`, never as children: preflight makes every <svg>
+  // display:block, so an icon inside the label span lands on its own line
+  // above the text.
   icon?: LucideIcon
   iconPosition?: 'left' | 'right'
   fullWidth?: boolean
@@ -20,6 +23,11 @@ const variantClasses: Record<string, string> = {
   ghost: 'bg-transparent hover:bg-surface-2 text-text-secondary hover:text-text-primary',
   danger: 'bg-semantic-error/15 hover:bg-semantic-error/25 text-semantic-error border border-semantic-error/30',
 }
+
+// A disabled primary button is greyed out rather than a half-transparent
+// brand fill: at 50% opacity a tinted brand (Dracula's pink, Rose Pine's rose)
+// reads as a muddy but still-clickable button.
+const disabledPrimaryClasses = 'bg-surface-3 text-text-disabled shadow-none'
 
 const sizeClasses: Record<string, string> = {
   sm: 'h-7 px-[10px] text-xs gap-1',
@@ -41,6 +49,7 @@ export default function Button({
   ...rest
 }: ButtonProps) {
   const isDisabled = disabled || loading
+  const variantClass = isDisabled && variant === 'primary' ? disabledPrimaryClasses : variantClasses[variant]
 
   return (
     <button
@@ -48,10 +57,11 @@ export default function Button({
         'inline-flex items-center justify-center rounded-md font-medium transition-colors duration-fast select-none',
         'focus-visible:ring-2 focus-visible:ring-brand-500/40 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0',
         'active:shadow-[inset_0_1px_2px_rgba(0,0,0,0.1)]',
-        variantClasses[variant],
+        variantClass,
         sizeClasses[size],
         fullWidth && 'w-full',
-        isDisabled && 'opacity-50 cursor-not-allowed pointer-events-none',
+        isDisabled && 'cursor-not-allowed pointer-events-none',
+        isDisabled && variant !== 'primary' && 'opacity-50',
         className,
       )}
       disabled={isDisabled}

@@ -1,21 +1,25 @@
 import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
-import {Square, Eye, ArrowUp, Maximize2, FileText, X} from 'lucide-react'
+import {Eye, Maximize2, FileText, X, AtSign, Slash} from 'lucide-react'
 import {useRef, useEffect, useCallback, useState, useMemo} from 'react'
 import type {SourceFileInfo} from '@/types'
 import {useChatStore, MAX_CONCURRENT_STREAMS} from '@/stores/chatStore'
-import {useSettingsStore} from '@/stores/settingsStore'
+import {useOptionalToast} from '@/components/shared/Toast'
+import {isImeKeydown} from '@/lib/imeKey'
 import FileAutocomplete from './FileAutocomplete'
 import SlashCommandAutocomplete, {type SlashCommand} from './SlashCommandAutocomplete'
 import ExpandedChatInput from './ExpandedChatInput'
 import ChatUsageMeter from './ChatUsageMeter'
+import {ComposerChip, ComposerIconButton, ContextToggle, SendButton} from './ComposerControls'
 import {useKeyboard} from '@/hooks/useKeyboard'
 
 const EMPTY_SOURCE_FILES: SourceFileInfo[] = []
 
 interface Props {
   onSend: (text: string, files: string[], excludeContext?: boolean) => void
-  onPreview?: (text: string, files: string[], excludeContext?: boolean) => void
+  // onConfirmed runs once the previewed message is actually sent — the
+  // composer is only cleared then (a cancelled preview keeps the draft).
+  onPreview?: (text: string, files: string[], excludeContext?: boolean, onConfirmed?: () => void) => void
   onCancel?: () => void
   onClearThread?: () => void
   onShowHelp?: () => void
@@ -34,6 +38,8 @@ interface Props {
   completionTokens?: number
   inputCostPerM?: number
   outputCostPerM?: number
+  // The selected model's context window, for the prompt-size warning.
+  contextLimit?: number
 }
 
 export default function ChatInput({
@@ -52,6 +58,7 @@ export default function ChatInput({
   completionTokens = 0,
   inputCostPerM,
   outputCostPerM,
+  contextLimit,
 }: Props) {
   const [value, setValue] = useState('')
   const {t} = useTranslation('chat')
@@ -66,6 +73,10 @@ export default function ChatInput({
   const [isExpanded, setIsExpanded] = useState(false)
   const isExpandedRef = useRef(false)
   const [historyIndex, setHistoryIndex] = useState(-1)
+  // The in-progress draft, stashed when ArrowUp first steps into sent-message
+  // history and restored when ArrowDown steps back out — recalling history
+  // used to overwrite the draft for good.
+  const historyDraftRef = useRef<string | null>(null)
   const [excludeContext, setExcludeContext] = useState(false)
   const [taggedFiles, setTaggedFiles] = useState<string[]>([])
 
@@ -75,6 +86,12 @@ export default function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const expandedRef = useRef<HTMLTextAreaElement>(null)
   const activeTextarea = useCallback(() => (isExpandedRef.current ? expandedRef.current : textareaRef.current), [])
+  // The @/slash menus listen on window; they only act on keys typed here.
+  const isComposerTarget = useCallback(
+    (target: EventTarget | null) =>
+      target !== null && (target === textareaRef.current || target === expandedRef.current),
+    [],
+  )
   const valueRef = useRef(value)
   // Synced in a commit-phase effect rather than assigned during render:
   // mutating a ref while rendering is not safe under concurrent rendering
@@ -101,9 +118,23 @@ export default function ChatInput({
     // Seeds the composer from the persisted draft store when the thread changes.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setValue(useChatStore.getState().drafts[activeThreadId] ?? '')
+    // The composer stays mounted across thread switches, so everything else
+    // that belongs to the thread being left resets here: @-file chips, the
+    // history cursor and its stashed draft, the context toggle, open menus.
+    setTaggedFiles([])
+    setHistoryIndex(-1)
+    historyDraftRef.current = null
+    setExcludeContext(false)
+    setAutocompleteQuery(null)
+    setFileMatches(0)
+    setSlashQuery(null)
+    setSlashMatches(0)
     const threadId = activeThreadId
     return () => {
-      setDraft(threadId, valueRef.current)
+      // While the composer shows a RECALLED history entry, the draft is the
+      // stashed text, not the recalled message — saving the latter lost the
+      // draft to an ArrowUp pressed once too often before a thread switch.
+      setDraft(threadId, historyDraftRef.current ?? valueRef.current)
     }
   }, [activeThreadId, setDraft])
 
@@ -131,8 +162,7 @@ export default function ChatInput({
   // Global cap (mirrors backend): once MAX_CONCURRENT_STREAMS threads are
   // generating, disable Send across the board with a tooltip.
   const atCap = useChatStore(s => Object.keys(s.streams).length >= MAX_CONCURRENT_STREAMS)
-  const provider = useChatStore(s => s.selectedProvider)
-  const aiSettings = useSettingsStore(s => s.settings.ai)
+  const toast = useOptionalToast()
 
   // Track the active thread's user-message count reactively. getState() in the
   // history memo below is a non-reactive snapshot, so this count is what
@@ -186,41 +216,35 @@ export default function ChatInput({
     setSlashQuery(null)
     setSlashMatches(0)
   }, [])
+  // A menu left open after the composer lost focus kept intercepting keys
+  // (see isComposerTarget) — close both when focus leaves.
+  const closeMenus = useCallback(() => {
+    closeFileMenu()
+    closeSlashMenu()
+  }, [closeFileMenu, closeSlashMenu])
 
+  // The cap lives in CSS (.chat-composer-input: a share of the window, so it
+  // scales with the screen) and is read back here, so the two never disagree.
   const adjustHeight = useCallback(() => {
     const el = textareaRef.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+    const max = parseFloat(getComputedStyle(el).maxHeight) || 200
+    el.style.height = Math.min(el.scrollHeight, max) + 'px'
   }, [])
 
   useEffect(() => {
     adjustHeight()
   }, [value, adjustHeight])
 
-  const handleSend = useCallback(() => {
-    const trimmed = value.trim()
-    if (!trimmed && taggedFiles.length === 0) return
-    if (isDisabled) return
-    if (canQueue) {
-      onQueue?.(trimmed, taggedFiles, excludeContext)
-      // Reset the FULL composer like the send branch (F1.7): attachments
-      // left behind were double-represented (chip + queued payload) and
-      // silently re-attached to the next message.
-      setValue('')
-      if (activeThreadId) setDraft(activeThreadId, '')
-      setHistoryIndex(-1)
-      setTaggedFiles([])
-      setAutocompleteQuery(null)
-      setSlashQuery(null)
-      setFileMatches(0)
-      setSlashMatches(0)
-      return
-    }
-    onSend(trimmed, taggedFiles, excludeContext)
+  // resetComposer empties the FULL composer after a send, queue or confirmed
+  // preview (F1.7): attachments left behind were double-represented (chip +
+  // sent payload) and silently re-attached to the next message.
+  const resetComposer = useCallback(() => {
     setValue('')
     if (activeThreadId) setDraft(activeThreadId, '')
     setHistoryIndex(-1)
+    historyDraftRef.current = null
     setTaggedFiles([])
     setAutocompleteQuery(null)
     setSlashQuery(null)
@@ -231,7 +255,55 @@ export default function ChatInput({
         textareaRef.current.style.height = 'auto'
       }
     })
-  }, [value, taggedFiles, isDisabled, canQueue, onQueue, onSend, excludeContext, activeThreadId, setDraft])
+  }, [activeThreadId, setDraft])
+
+  // closeExpanded leaves the expanded editor the way its Send button does and
+  // hands focus back to the inline composer: the dialog's own restore lands
+  // on whatever opened it — the Expand button, so Enter reopened the editor.
+  const closeExpanded = useCallback(() => {
+    if (!isExpandedRef.current) return
+    setIsExpanded(false)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [])
+
+  // handleSend sends or queues the composer's content; true when it did.
+  const handleSend = useCallback((): boolean => {
+    const trimmed = value.trim()
+    if (!trimmed && taggedFiles.length === 0) return false
+    if (isDisabled) return false
+    if (canQueue) {
+      onQueue?.(trimmed, taggedFiles, excludeContext)
+      resetComposer()
+      closeExpanded()
+      return true
+    }
+    // At the concurrency cap the send is refused — keep the text instead of
+    // clearing a message that never went anywhere, and say why (the disabled
+    // Send button's tooltip is out of reach of an Enter press).
+    if (atCap) {
+      toast?.warning(t('errors.busyTitle'), {description: t('errors.busyBody', {count: MAX_CONCURRENT_STREAMS})})
+      return false
+    }
+    onSend(trimmed, taggedFiles, excludeContext)
+    resetComposer()
+    // Enter in the expanded editor sends like its Send button — which also
+    // closes it; it used to leave an empty editor open.
+    closeExpanded()
+    return true
+  }, [
+    value,
+    taggedFiles,
+    isDisabled,
+    canQueue,
+    atCap,
+    onQueue,
+    onSend,
+    excludeContext,
+    resetComposer,
+    closeExpanded,
+    toast,
+    t,
+  ])
 
   // mod+enter sends from either composer. The expanded editor renders in a
   // portal outside the chat panel, so this checks the event target instead of
@@ -241,7 +313,7 @@ export default function ChatInput({
     scope: 'chat',
     handlers: {
       'ai.send': e => {
-        if (e.defaultPrevented) return
+        if (e.defaultPrevented || isImeKeydown(e)) return
         if (e.target !== textareaRef.current && e.target !== expandedRef.current) return
         e.preventDefault()
         handleSend()
@@ -252,11 +324,14 @@ export default function ChatInput({
   const handlePreview = useCallback(() => {
     const trimmed = value.trim()
     if ((!trimmed && taggedFiles.length === 0) || isDisabled || !onPreview) return
-    onPreview(trimmed, taggedFiles, excludeContext)
-  }, [value, taggedFiles, isDisabled, onPreview, excludeContext])
+    onPreview(trimmed, taggedFiles, excludeContext, resetComposer)
+  }, [value, taggedFiles, isDisabled, onPreview, excludeContext, resetComposer])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // An IME is composing (CJK input): Enter confirms the candidate, it must
+      // not send the half-composed message.
+      if (isImeKeydown(e)) return
       // Autocomplete navigation is handled by the sub-components via window
       // event listeners — but only while they actually have matches to show.
       if ((autocompleteQuery !== null && fileMatches > 0) || (slashQuery !== null && slashMatches > 0)) {
@@ -272,16 +347,22 @@ export default function ChatInput({
       ) {
         // History Up
         if (historyIndex < history.length - 1) {
+          if (historyIndex === -1) historyDraftRef.current = value
           const next = historyIndex + 1
           setHistoryIndex(next)
           setValue(history[next])
           e.preventDefault()
         }
       } else if (e.key === 'ArrowDown' && historyIndex >= 0) {
-        // History Down
+        // History Down — past the newest entry, the stashed draft returns.
         const next = historyIndex - 1
         setHistoryIndex(next)
-        setValue(next >= 0 ? history[next] : '')
+        if (next >= 0) {
+          setValue(history[next])
+        } else {
+          setValue(historyDraftRef.current ?? '')
+          historyDraftRef.current = null
+        }
         e.preventDefault()
       }
     },
@@ -298,39 +379,69 @@ export default function ChatInput({
     ],
   )
 
-  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value
-    setValue(val)
-    setHistoryIndex(-1)
-
-    const pos = e.target.selectionStart
+  // syncMenus opens or closes the @ and / menus for the text before the
+  // caret — the same rule whether the trigger was typed or put there by a
+  // toolbar chip.
+  const syncMenus = useCallback((val: string, pos: number) => {
     const textBefore = val.slice(0, pos)
-
-    // Check for @ file mentions
-    const lastAt = textBefore.lastIndexOf('@')
     const lastSpace = textBefore.lastIndexOf(' ')
 
+    // @ file mentions
+    const lastAt = textBefore.lastIndexOf('@')
     if (lastAt !== -1 && lastAt > lastSpace) {
       setAutocompleteQuery(textBefore.slice(lastAt + 1))
       setSlashQuery(null)
       setSlashMatches(0)
+      return
     }
-    // Check for / slash commands
-    else {
-      const lastSlash = textBefore.lastIndexOf('/')
-      const lastSpace = textBefore.lastIndexOf(' ')
-      if (lastSlash !== -1 && (lastSlash === 0 || textBefore[lastSlash - 1] === ' ') && lastSlash > lastSpace) {
-        setSlashQuery(textBefore.slice(lastSlash + 1))
-        setAutocompleteQuery(null)
-        setFileMatches(0)
-      } else {
-        setAutocompleteQuery(null)
-        setSlashQuery(null)
-        setFileMatches(0)
-        setSlashMatches(0)
-      }
+    // / slash commands
+    const lastSlash = textBefore.lastIndexOf('/')
+    if (lastSlash !== -1 && (lastSlash === 0 || textBefore[lastSlash - 1] === ' ') && lastSlash > lastSpace) {
+      setSlashQuery(textBefore.slice(lastSlash + 1))
+      setAutocompleteQuery(null)
+      setFileMatches(0)
+      return
     }
+    setAutocompleteQuery(null)
+    setSlashQuery(null)
+    setFileMatches(0)
+    setSlashMatches(0)
+  }, [])
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value
+    setValue(val)
+    // Editing a recalled message makes it the draft.
+    setHistoryIndex(-1)
+    historyDraftRef.current = null
+    syncMenus(val, e.target.selectionStart)
   }
+
+  // insertTrigger puts "@" or "/" at the caret — with a separating space when
+  // it would otherwise glue onto a word — and opens the matching menu, exactly
+  // as typing the character does. Wired to the toolbar chips.
+  const insertTrigger = useCallback(
+    (char: '@' | '/') => {
+      const el = activeTextarea()
+      const start = el?.selectionStart ?? value.length
+      const end = el?.selectionEnd ?? start
+      const before = value.slice(0, start)
+      const inserted = (before.length > 0 && !/\s$/.test(before) ? ' ' : '') + char
+      const next = before + inserted + value.slice(end)
+      const caret = before.length + inserted.length
+      setValue(next)
+      setHistoryIndex(-1)
+      historyDraftRef.current = null
+      syncMenus(next, caret)
+      requestAnimationFrame(() => {
+        const target = activeTextarea()
+        if (!target) return
+        target.focus()
+        target.setSelectionRange(caret, caret)
+      })
+    },
+    [value, activeTextarea, syncMenus],
+  )
 
   const handleSelectFile = (filename: string) => {
     const pos = activeTextarea()?.selectionStart ?? value.length
@@ -389,6 +500,7 @@ export default function ChatInput({
           onSelect={handleSelectFile}
           onClose={closeFileMenu}
           onMatchCount={setFileMatches}
+          isOwnTarget={isComposerTarget}
         />
       )}
       {slashQuery !== null && (
@@ -397,6 +509,8 @@ export default function ChatInput({
           onSelect={handleSelectCommand}
           onClose={closeSlashMenu}
           onMatchCount={setSlashMatches}
+          isOwnTarget={isComposerTarget}
+          canClear={!!onClearThread}
         />
       )}
     </>
@@ -404,25 +518,25 @@ export default function ChatInput({
 
   const hasContent = value.trim().length > 0 || taggedFiles.length > 0
   const tokenEstimate = Math.ceil(value.length / 4)
-  const providerCfg = aiSettings.providers[provider as keyof typeof aiSettings.providers]
-  const maxTokens = (providerCfg as {maxTokens?: number} | undefined)?.maxTokens ?? 4096
-  const tokenPct = tokenEstimate / maxTokens
+  // Measured against the model's CONTEXT window; an unknown window (custom
+  // model, no metadata) means no warning at all. The reply cap (4096) used
+  // to stand in and turned the counter red at ~16k characters.
+  const tokenPct = contextLimit && contextLimit > 0 ? tokenEstimate / contextLimit : 0
   const tokenClass =
     tokenPct >= 0.95 ? 'text-semantic-error' : tokenPct >= 0.8 ? 'text-semantic-warning' : 'text-text-tertiary'
 
   return (
-    <div className="px-3 pb-3 pt-1">
+    <div className="chat-gutter pb-3 pt-1">
       <div
         className={clsx(
-          'relative flex flex-col bg-surface-2 border rounded-xl transition-all duration-200 shadow-sm',
-          hasContent && !isDisabled
-            ? 'border-brand-500/40 ring-1 ring-brand-500/10 shadow-lg shadow-brand-500/5'
-            : 'border-border-default hover:border-border-strong',
+          'relative flex flex-col bg-surface-2 border border-border-default rounded-xl shadow-sm',
+          'transition-[border-color,box-shadow] duration-fast hover:border-border-strong',
+          'focus-within:border-brand-500/60 focus-within:ring-2 focus-within:ring-brand-500/15',
         )}
       >
-        {/* Top Attached Files Area */}
+        {/* Attached files */}
         {taggedFiles.length > 0 && (
-          <div className="flex flex-wrap gap-2 px-3 pt-2">
+          <div className="flex flex-wrap gap-2 px-3 pt-2.5">
             {taggedFiles.map(file => {
               const parts = file.split(/[/\\]/)
               const name = parts[parts.length - 1]
@@ -438,6 +552,8 @@ export default function ChatInput({
                   <button
                     onClick={() => handleRemoveFile(file)}
                     className="p-0.5 -mr-1 hover:bg-surface-4 rounded hover:text-text-primary transition-colors"
+                    aria-label={t('composer.removeFile', {name})}
+                    title={t('composer.removeFile', {name})}
                   >
                     <X size={12} />
                   </button>
@@ -448,7 +564,7 @@ export default function ChatInput({
         )}
 
         {queued && (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-brand-500/5 border-t border-border-subtle/50 text-2xs text-text-secondary">
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-brand-500/5 border-b border-border-subtle/50 first:rounded-t-xl text-2xs text-text-secondary">
             <span className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-soft shrink-0" />
             <span className="truncate">
               {t('composer.queuedPrefix')} <span className="text-text-primary">{queued.text}</span>
@@ -465,85 +581,47 @@ export default function ChatInput({
           </div>
         )}
 
-        <div className="relative flex items-end gap-2 px-3 py-2">
-          <textarea
-            ref={textareaRef}
-            className="flex-1 bg-transparent border-none outline-none text-sm leading-relaxed text-text-primary placeholder:text-text-tertiary resize-none py-0 min-h-[20px] max-h-[200px] z-10 scrollbar-none font-sans"
-            aria-label={t('composer.inputAria')}
-            placeholder={canQueue ? t('composer.queuePlaceholder') : placeholder || t('composer.placeholder')}
-            value={value}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            disabled={isDisabled}
-            rows={1}
+        <textarea
+          ref={textareaRef}
+          data-chat-composer=""
+          className="w-full bg-transparent border-none outline-none text-sm leading-relaxed text-text-primary placeholder:text-text-tertiary resize-none px-3.5 pt-3 pb-1 min-h-[22px] chat-composer-input scrollbar-none font-sans"
+          aria-label={t('composer.inputAria')}
+          placeholder={canQueue ? t('composer.queuePlaceholder') : placeholder || t('composer.placeholder')}
+          value={value}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          onBlur={closeMenus}
+          disabled={isDisabled}
+          rows={1}
+        />
+
+        {/* Toolbar: ALWAYS rendered, at a fixed height. Gating rows on content
+            made the whole conversation jump on the first keystroke and again
+            on send. */}
+        <div className="flex items-center gap-1.5 px-2 pb-2 pt-1 min-w-0">
+          <ComposerChip
+            icon={AtSign}
+            label={t('composer.insertFile')}
+            hint={t('composer.insertFileHint')}
+            labelClass="cq-chip-label"
+            onClick={() => insertTrigger('@')}
           />
-
-          <div className="flex items-center gap-1.5 pb-0.5 z-10">
-            {onPreview && hasContent && !isDisabled && (
-              <button
-                onClick={handlePreview}
-                className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-3 transition-all"
-                title={t('composer.previewContext')}
-                aria-label={t('composer.previewContext')}
-              >
-                <Eye size={16} />
-              </button>
-            )}
-
-            <button
-              onClick={() => setIsExpanded(true)}
-              className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-3 transition-all"
-              title={t('composer.expandEditor')}
-              aria-label={t('composer.expandEditor')}
-            >
-              <Maximize2 size={16} />
-            </button>
-
-            {streaming ? (
-              <button
-                onClick={onCancel}
-                className="p-1.5 rounded-lg bg-semantic-error/10 text-semantic-error hover:bg-semantic-error/20 transition-all border border-semantic-error/20"
-                title={t('composer.stopGeneration')}
-                aria-label={t('composer.stopGeneration')}
-              >
-                <Square size={16} fill="currentColor" />
-              </button>
-            ) : (
-              <button
-                onClick={handleSend}
-                disabled={!hasContent || isDisabled || atCap}
-                title={capTooltip}
-                aria-label={t('composer.sendMessage')}
-                className={clsx(
-                  'p-1.5 rounded-lg transition-all',
-                  hasContent && !atCap
-                    ? 'bg-brand-500 text-brand-foreground shadow-lg shadow-brand-500/20 hover:bg-brand-600'
-                    : 'text-text-tertiary hover:bg-surface-3',
-                )}
-              >
-                <ArrowUp size={18} strokeWidth={2.5} />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Footer: ALWAYS rendered. Gating it on `hasContent` made the whole
-            conversation jump on the first keystroke and again on send. */}
-        <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-surface-3/50 rounded-b-xl border-t border-border-subtle/50">
-          <label className="flex items-center gap-1.5 cursor-pointer group shrink-0">
-            <input
-              type="checkbox"
-              className="w-3.5 h-3.5 rounded border-border-default bg-surface-2 text-brand-500 focus:ring-brand-500 focus:ring-offset-surface-2"
-              checked={excludeContext}
-              onChange={e => setExcludeContext(e.target.checked)}
-            />
-            <span className="cq-exclude-label text-[10px] font-medium text-text-tertiary group-hover:text-text-secondary transition-colors">
-              {t('composer.excludeContext')}
-            </span>
-          </label>
-          <div className="flex items-center gap-2 min-w-0">
+          <ComposerChip
+            icon={Slash}
+            label={t('composer.insertCommand')}
+            hint={t('composer.insertCommandHint')}
+            labelClass="cq-chip-label"
+            onClick={() => insertTrigger('/')}
+          />
+          <ContextToggle
+            checked={excludeContext}
+            onChange={setExcludeContext}
+            label={t('composer.excludeContext')}
+            labelClass="cq-exclude-label"
+          />
+          <div className="ml-auto flex items-center gap-1.5 min-w-0">
             {hasContent && (
-              <span className={clsx('text-[10px] tabular-nums shrink-0', tokenClass)}>
+              <span className={clsx('text-2xs tabular-nums truncate', tokenClass)}>
                 {t('composer.tokenEstimate', {count: tokenEstimate})}
               </span>
             )}
@@ -552,6 +630,20 @@ export default function ChatInput({
               completionTokens={completionTokens}
               inputCostPerM={inputCostPerM}
               outputCostPerM={outputCostPerM}
+            />
+            {onPreview && hasContent && !isDisabled && (
+              <ComposerIconButton icon={Eye} label={t('composer.previewContext')} onClick={handlePreview} />
+            )}
+            <ComposerIconButton
+              icon={Maximize2}
+              label={t('composer.expandEditor')}
+              onClick={() => setIsExpanded(true)}
+            />
+            <SendButton
+              mode={streaming ? 'stop' : 'send'}
+              disabled={!hasContent || isDisabled || atCap}
+              title={capTooltip}
+              onClick={streaming ? onCancel : handleSend}
             />
           </div>
         </div>
@@ -565,13 +657,17 @@ export default function ChatInput({
           textareaRef={expandedRef}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
+          onBlur={closeMenus}
           onSend={handleSend}
           onPreview={onPreview ? handlePreview : undefined}
           onClose={() => setIsExpanded(false)}
           excludeContext={excludeContext}
           onExcludeContextChange={setExcludeContext}
-          canSend={hasContent && !isDisabled}
+          canSend={hasContent && !isDisabled && (canQueue || !atCap)}
           menus={menus}
+          onInsertTrigger={insertTrigger}
+          tokenLabel={hasContent ? t('composer.tokenEstimate', {count: tokenEstimate}) : undefined}
+          tokenClass={tokenClass}
         />
       )}
     </div>

@@ -59,7 +59,10 @@ export interface ChatRequest {
   flowId: string
   provider: string
   model?: string
-  messages: ChatMessage[]
+  // Omitted on the normal path: the backend replays its stored conversation.
+  // Sent only when the client's (locally truncated) history must win —
+  // resend/regenerate — or when history saving is off.
+  messages?: ChatMessage[]
   userMessage: string
   contextBlockId?: string
   selectedSourceFiles?: string[]
@@ -76,6 +79,11 @@ export interface ChatRequest {
   // threads on the same flow keep separate histories (see ChatRequest
   // .ConversationKey on the backend).
   conversationId?: string
+  // The client's ids for this turn's two messages. The server stores its own
+  // copies of the turn under the same ids, so a reloaded conversation merged
+  // with the messages already on screen dedupes by id instead of doubling.
+  userMessageId?: string
+  assistantMessageId?: string
 }
 
 export interface ChatResponse {
@@ -96,12 +104,4 @@ export interface ContextPreview {
   userMessage: string
   estimatedTokens: number
   contextLimit: number
-}
-
-export interface ConversationFile {
-  version: number
-  flowKey: string
-  scope: string
-  updatedAt: string
-  messages: ChatMessage[]
 }

@@ -38,7 +38,9 @@ export interface StreamHandler {
   onChunk: (text: string, streamId: string) => void
   onReplace: (text: string, streamId: string) => void
   onDone: (tokensOut: number, tokensIn: number, streamId: string) => void
-  onError: (error: string, streamId: string) => void
+  // `code` is the failure's machine-readable class (AI_BUDGET_EXCEEDED, …)
+  // when the backend sent one — see internal/service/chat_errors.go.
+  onError: (error: string, streamId: string, code?: string) => void
   onToolStatus?: (label: string, streamId: string) => void
   // One finished tool execution (transparency trail record).
   onToolResult?: (record: ToolResultPayload, streamId: string) => void
@@ -141,7 +143,7 @@ export function useStreamingMessage(handler: StreamHandler) {
             handlerRef.current.onResumeState?.(parseResumeEvents(res.events), streamId)
           }
           if (res.error) {
-            handlerRef.current.onError(res.error, streamId)
+            handlerRef.current.onError(res.error, streamId, res.errorCode)
           } else if (res.done || finish) {
             handlerRef.current.onDone(
               res.tokensOut || finish?.tokensOut || 0,
@@ -214,7 +216,7 @@ export function useStreamingMessage(handler: StreamHandler) {
         .then(res => {
           if (!subsRef.current.has(streamId)) return
           if (res.error) {
-            handlerRef.current.onError(res.error, streamId)
+            handlerRef.current.onError(res.error, streamId, res.errorCode)
             return
           }
           if (res.text) handlerRef.current.onReplace(res.text, streamId)
@@ -304,7 +306,14 @@ export function useStreamingMessage(handler: StreamHandler) {
               clearTimeout(sub.stallTimer)
               sub.stallTimer = null
             }
-            handlerRef.current.onError(parsed.message, streamId)
+            handlerRef.current.onError(parsed.message, streamId, parsed.code)
+            break
+          case 'heartbeat':
+            // The server is alive but silent (awaiting a fix decision, running
+            // a slow tool or re-analysis, a model thinking before its first
+            // token). Not a chunk — it must not count toward `received`.
+            sub.probeMisses = 0
+            armStall(streamId)
             break
           case 'tool':
             sub.probeMisses = 0
@@ -390,7 +399,7 @@ export function useStreamingMessage(handler: StreamHandler) {
           handlerRef.current.onReplace(res.text, streamId)
         }
         if (res.error) {
-          handlerRef.current.onError(res.error, streamId)
+          handlerRef.current.onError(res.error, streamId, res.errorCode)
         } else if (res.done) {
           handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId)
         }

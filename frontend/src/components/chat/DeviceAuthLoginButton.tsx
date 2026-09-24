@@ -37,11 +37,20 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
   const [verificationURI, setVerificationURI] = useState('')
   const [username, setUsername] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
-  const [_deviceCode, setDeviceCode] = useState('')
-  const pollingRef = useRef(false)
+  const [starting, setStarting] = useState(false)
+  // attemptRef identifies the current sign-in attempt; every await and timer
+  // checks it, so a cancelled or superseded attempt can never touch state
+  // again. A shared "polling" flag used to let Cancel → Sign in revive the old
+  // attempt's poll loop, which then killed the new sign-in when its abandoned
+  // code expired.
+  const attemptRef = useRef(0)
+  const startingRef = useRef(false)
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>()
 
   useEffect(() => {
+    // The attempt counter (not a DOM node): bumping it on unmount/provider
+    // change invalidates any sign-in still in flight.
+    const attempts = attemptRef
     provider
       .getUser()
       .then(user => {
@@ -54,30 +63,44 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
         logger.warn('Failed to check existing auth', err)
       })
     return () => {
-      pollingRef.current = false
+      attempts.current++
       clearTimeout(timeoutRef.current)
     }
   }, [provider])
 
   const startAuth = useCallback(async () => {
+    // One sign-in at a time: a double-click started two device flows and
+    // opened two browser tabs.
+    if (startingRef.current) return
+    startingRef.current = true
+    setStarting(true)
+    clearTimeout(timeoutRef.current)
+    const attempt = ++attemptRef.current
     try {
       const resp = await provider.startAuth()
-      if (!resp) return
-      setDeviceCode(resp.device_code)
+      if (attempt !== attemptRef.current || !resp) return
       setUserCode(resp.user_code)
       setVerificationURI(resp.verification_uri)
       setState('authorizing')
       void createAdapter().openURL(resp.verification_uri)
 
-      pollingRef.current = true
       const interval = (resp.interval || 5) * 1000
+      // The device code is only valid for expires_in; polling past it can only
+      // fail, so stop and say so instead of spinning forever.
+      const expiresAt = Date.now() + (resp.expires_in > 0 ? resp.expires_in * 1000 : 15 * 60 * 1000)
 
       const poll = async () => {
-        if (!pollingRef.current) return
+        if (attempt !== attemptRef.current) return
+        if (Date.now() >= expiresAt) {
+          setState('error')
+          setErrorMsg(t('deviceAuth.expired'))
+          return
+        }
         try {
           const result = await provider.pollAuth(resp.device_code)
+          if (attempt !== attemptRef.current) return
           if (result.status === 'success') {
-            pollingRef.current = false
+            attemptRef.current++
             setState('configured')
             const user = await provider.getUser()
             if (user?.login) setUsername(user.login)
@@ -85,7 +108,6 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
             return
           }
           if (result.status === 'error') {
-            pollingRef.current = false
             setState('error')
             setErrorMsg(result.error || t('deviceAuth.authFailed'))
             return
@@ -93,22 +115,26 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
         } catch {
           /* polling error — retry on next interval */
         }
-        if (pollingRef.current) {
+        if (attempt === attemptRef.current) {
           timeoutRef.current = setTimeout(poll, interval)
         }
       }
       timeoutRef.current = setTimeout(poll, interval)
     } catch (e: unknown) {
+      if (attempt !== attemptRef.current) return
       setState('error')
-      setErrorMsg(e instanceof Error ? e.message : String(e) || t('deviceAuth.startFailed'))
+      setErrorMsg((e instanceof Error ? e.message : String(e)) || t('deviceAuth.startFailed'))
+    } finally {
+      startingRef.current = false
+      setStarting(false)
     }
   }, [provider, onAuthComplete, t])
 
   const cancel = useCallback(() => {
-    pollingRef.current = false
+    attemptRef.current++
+    clearTimeout(timeoutRef.current)
     setState('unconfigured')
     setUserCode('')
-    setDeviceCode('')
   }, [])
 
   const disconnect = useCallback(async () => {
@@ -125,10 +151,11 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
     case 'unconfigured':
       return (
         <button
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm transition-colors ${provider.buttonClassName}`}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm transition-colors disabled:opacity-60 ${provider.buttonClassName}`}
           onClick={startAuth}
+          disabled={starting}
         >
-          <Github size={16} />
+          {starting ? <Loader2 size={16} className="animate-spin" /> : <Github size={16} />}
           {provider.label}
         </button>
       )
@@ -163,9 +190,9 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
       return (
         <div className="flex items-center gap-2">
           <Check size={14} className="text-semantic-success" />
-          <span className="text-sm text-text-secondary">Connected as @{username}</span>
+          <span className="text-sm text-text-secondary">{t('deviceAuth.connectedAs', {username})}</span>
           <button className="text-xs text-text-tertiary hover:text-text-secondary ml-2" onClick={disconnect}>
-            Disconnect
+            {t('deviceAuth.disconnect')}
           </button>
         </div>
       )
@@ -174,8 +201,12 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
       return (
         <div className="space-y-2">
           <p className="text-sm text-semantic-error">{errorMsg}</p>
-          <button className="text-xs text-brand-400 hover:text-brand-300" onClick={startAuth}>
-            Retry
+          <button
+            className="text-xs text-brand-400 hover:text-brand-300 disabled:opacity-60"
+            onClick={startAuth}
+            disabled={starting}
+          >
+            {t('deviceAuth.retry')}
           </button>
         </div>
       )

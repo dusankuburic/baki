@@ -17,8 +17,11 @@ export function useDialogFocus(opts: {
   onClose: () => void
   closeOnEsc?: boolean
   containerRef: React.RefObject<HTMLElement | null>
+  // Element to focus on open instead of the first focusable one — e.g. an
+  // editor dialog whose first focusable element is its Close button.
+  initialFocusRef?: React.RefObject<HTMLElement | null>
 }) {
-  const {isOpen, onClose, closeOnEsc = true, containerRef} = opts
+  const {isOpen, onClose, closeOnEsc = true, containerRef, initialFocusRef} = opts
   const previousFocusRef = useRef<HTMLElement | null>(null)
 
   const handleKeyDown = useCallback(
@@ -60,7 +63,7 @@ export function useDialogFocus(opts: {
     if (!isOpen) return
     previousFocusRef.current = document.activeElement as HTMLElement
     const first = containerRef.current?.querySelector<HTMLElement>(FOCUSABLE)
-    const raf = requestAnimationFrame(() => first?.focus())
+    const raf = requestAnimationFrame(() => (initialFocusRef?.current ?? first)?.focus())
     return () => {
       cancelAnimationFrame(raf)
       // Restore from the CLEANUP rather than an `else` branch on isOpen. The
@@ -70,7 +73,7 @@ export function useDialogFocus(opts: {
       previousFocusRef.current?.focus()
       previousFocusRef.current = null
     }
-  }, [isOpen, containerRef])
+  }, [isOpen, containerRef, initialFocusRef])
 
   useEffect(() => {
     if (!isOpen) return

@@ -1,7 +1,8 @@
 import {create} from 'zustand'
-import {registerStoreReset} from './storeRegistry'
+import {registerStoreReset, currentUserId} from './storeRegistry'
 import {chatApi} from '@/api'
 import {uuid} from '@/lib/uuid'
+import {isTauri} from '@/platform/guards'
 import type {ChatMessage, ProviderID, ToolCallRecord} from '@/types'
 
 // Mirrors the backend per-caller concurrency cap in internal/service/chat.go
@@ -35,8 +36,41 @@ export const LEGACY_FLOW_SCOPE = 'flow'
 // reload minted a fresh thread id and the previous thread's history became
 // unreachable. Conversations themselves stay server-side; only the thread
 // metadata is stored here.
-const THREADS_KEY_PREFIX = 'baki:chatThreads:v1:'
+//
+// Keys are per USER in the web app: v2:<userId>:<flowId>. The v1 key was
+// per flow only, so on a shared browser the next account to open the same flow
+// hydrated the previous account's thread ids (and titles, i.e. the start of
+// each first prompt) — and the server lets any flow viewer read a
+// conversation by key. The desktop app is single-user and keeps its v1 key.
+const THREADS_KEY_V1 = 'baki:chatThreads:v1:'
+const THREADS_KEY_V2 = 'baki:chatThreads:v2:'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// threadsStorageKey returns where a flow's thread list lives, or null when it
+// must not be stored at all (web app with no signed-in user).
+function threadsStorageKey(flowId: string): string | null {
+  if (isTauri()) return THREADS_KEY_V1 + flowId
+  const userId = currentUserId()
+  return userId ? `${THREADS_KEY_V2}${userId}:${flowId}` : null
+}
+
+// purgeLegacyThreadKeys drops the unscoped v1 entries in the web app. They
+// record no owner, so they cannot be handed to whoever signs in next; their
+// conversations stay on the server. Runs on every thread-list read (a flow
+// open — a key scan is cheap) and on logout.
+function purgeLegacyThreadKeys(): void {
+  if (isTauri()) return
+  try {
+    const stale: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && k.startsWith(THREADS_KEY_V1)) stale.push(k)
+    }
+    for (const k of stale) localStorage.removeItem(k)
+  } catch {
+    // Storage unavailable: nothing to purge.
+  }
+}
 
 type StoredThread = Pick<
   ChatThread,
@@ -54,6 +88,8 @@ type StoredThread = Pick<
 >
 
 function persistFlowThreads(flowId: string, threads: ChatThread[]): void {
+  const key = threadsStorageKey(flowId)
+  if (!key) return
   const mine: StoredThread[] = threads
     .filter(t => t.flowId === flowId)
     .map(t => ({
@@ -70,17 +106,20 @@ function persistFlowThreads(flowId: string, threads: ChatThread[]): void {
       appliedFixes: t.appliedFixes,
     }))
   try {
-    if (mine.length === 0) localStorage.removeItem(THREADS_KEY_PREFIX + flowId)
-    else localStorage.setItem(THREADS_KEY_PREFIX + flowId, JSON.stringify(mine))
+    if (mine.length === 0) localStorage.removeItem(key)
+    else localStorage.setItem(key, JSON.stringify(mine))
   } catch {
     // Storage may be unavailable (private mode, quota); threads then last the session.
   }
 }
 
 function readStoredThreads(flowId: string): ChatThread[] {
+  purgeLegacyThreadKeys()
+  const key = threadsStorageKey(flowId)
+  if (!key) return []
   let parsed: unknown
   try {
-    const raw = localStorage.getItem(THREADS_KEY_PREFIX + flowId)
+    const raw = localStorage.getItem(key)
     if (!raw) return []
     parsed = JSON.parse(raw)
   } catch {
@@ -111,6 +150,53 @@ function readStoredThreads(flowId: string): ChatThread[] {
     if (out.length >= MAX_THREADS) break
   }
   return out
+}
+
+// mergeHistory lays the server's copy under the messages on screen: loaded
+// messages in their stored order, and each local-only message (an error
+// bubble, a turn sent while the load was in flight) right after the loaded
+// message that precedes it locally — not all shoved to the end, where an old
+// error bubble became the "last reply" Retry acted on. Local-only messages
+// with no loaded predecessor were sent while the load ran and are newer than
+// everything stored, so they trail it.
+function mergeHistory(loaded: ChatMessage[], local: readonly ChatMessage[]): ChatMessage[] {
+  const loadedIds = new Set(loaded.map(m => m.id))
+  const after = new Map<string, ChatMessage[]>()
+  const trailing: ChatMessage[] = []
+  let anchor: string | null = null
+  for (const m of local) {
+    if (loadedIds.has(m.id)) {
+      anchor = m.id
+      continue
+    }
+    if (anchor === null) {
+      trailing.push(m)
+      continue
+    }
+    const list = after.get(anchor) ?? []
+    list.push(m)
+    after.set(anchor, list)
+  }
+  const merged: ChatMessage[] = []
+  for (const m of loaded) {
+    merged.push(m)
+    const tail = after.get(m.id)
+    if (tail) merged.push(...tail)
+  }
+  merged.push(...trailing)
+  return merged
+}
+
+// nextThreadOfFlow picks the newest thread of a flow, or null when it has
+// none. The thread that replaces a closed active thread must come from the
+// SAME flow — falling back to any remaining thread showed another flow's
+// conversation under the open one.
+function nextThreadOfFlow(threads: readonly ChatThread[], flowId: string | undefined): string | null {
+  if (!flowId) return null
+  for (let i = threads.length - 1; i >= 0; i--) {
+    if (threads[i].flowId === flowId) return threads[i].id
+  }
+  return null
 }
 
 export interface ChatThread {
@@ -165,6 +251,11 @@ export interface FixProposalCard {
   blockLabel: string
   line: number
   summary: string
+  // When the proposal first reached this client (ms epoch). The approval
+  // countdown derives from it, so a card that remounts (thread switch,
+  // pop-out) keeps counting down instead of restarting at the full window
+  // while the server's timer runs on. Stamped by setFixProposal.
+  receivedAt?: number
 }
 
 // StreamSlot is one thread's in-flight AI response. Streams are per-thread so
@@ -188,6 +279,30 @@ export interface StreamSlot {
   fixProposals: FixProposalCard[]
 }
 
+// QueuedMessage is a follow-up composed while its thread was streaming, sent
+// automatically once the thread is idle. It carries the provider/model chosen
+// when it was queued so the always-mounted stream host can send it even while
+// the chat panel is hidden.
+export interface QueuedMessage {
+  text: string
+  files: string[]
+  excludeContext?: boolean
+  provider?: ProviderID
+  model?: string
+}
+
+// HistoryState tracks a thread's server-history load. Only a 'loaded' thread
+// may be full-replace saved (or compacted): saving one whose history never
+// arrived would overwrite the server copy with just the turns on screen.
+export type HistoryState = 'loading' | 'loaded' | 'error'
+interface HistoryStatus {
+  state: HistoryState
+  // Generation token: a load that resolves after the thread was cleared,
+  // reloaded or closed carries a stale token and is dropped.
+  token: number
+}
+let historyTokenSeq = 0
+
 interface ChatState {
   threads: ChatThread[]
   activeThreadId: string | null
@@ -204,21 +319,37 @@ interface ChatState {
   // half-typed message survives switching threads or closing/reopening the AI
   // tab. Session-only (never persisted to the backend conversation payload).
   drafts: Record<string, string>
+  // historyStatus: per-thread server-history load state (see HistoryState).
+  // Absent = never attempted (a thread hydrated from localStorage).
+  historyStatus: Record<string, HistoryStatus>
+  // beginHistoryLoad marks the thread 'loading' and returns the load's token.
+  beginHistoryLoad: (threadId: string) => number
+  // finishHistoryLoad applies a load result if its token is still current:
+  // loaded messages are MERGED BEFORE anything the user sent meanwhile
+  // (deduped by id); `null` records a failed load. Returns whether applied.
+  finishHistoryLoad: (threadId: string, token: number, loaded: ChatMessage[] | null) => boolean
+  // markHistoryLoaded declares the thread's local messages authoritative
+  // (a new thread, or one just cleared) and invalidates any load in flight.
+  markHistoryLoaded: (threadId: string) => void
+  isHistorySynced: (threadId: string) => boolean
 
   getMessages: (threadId: string) => readonly ChatMessage[]
   appendMessage: (threadId: string, message: ChatMessage) => void
   removeMessage: (threadId: string, messageId: string) => void
   clearThreadMessages: (threadId: string) => void
+  // setThreadMessages replaces a thread's messages wholesale — Compact applies
+  // the exact list it just persisted, so screen and server agree.
+  setThreadMessages: (threadId: string, messages: readonly ChatMessage[]) => void
   compactThread: (threadId: string, keepPairs: number) => void
   updateStreamingMessage: (threadId: string, text: string) => void
   startStream: (threadId: string, streamId: string, messageId: string) => void
   // Queued follow-up (U1.6): one per thread, sent automatically when the
   // thread's stream ends. Composing while streaming is the expected UX — the
   // queue replaces a dead textarea.
-  queuedByThread: Record<string, {text: string; files: string[]; excludeContext?: boolean}>
-  queueMessage: (threadId: string, msg: {text: string; files: string[]; excludeContext?: boolean}) => void
+  queuedByThread: Record<string, QueuedMessage>
+  queueMessage: (threadId: string, msg: QueuedMessage) => void
   clearQueuedMessage: (threadId: string) => void
-  takeQueuedMessage: (threadId: string) => {text: string; files: string[]; excludeContext?: boolean} | undefined
+  takeQueuedMessage: (threadId: string) => QueuedMessage | undefined
   // addToolCall appends a finished tool execution (tool_result event) to the
   // thread's live stream slot.
   addToolCall: (threadId: string, record: ToolCallRecord) => void
@@ -260,6 +391,13 @@ interface ChatState {
   // fetches each thread's history by its key on demand.
   hydrateThreads: (flowId: string) => string[]
   switchThread: (threadId: string) => void
+  // lastActiveByFlow remembers each flow's most recently active thread
+  // (session-only), so a flow that is re-opened or refreshed returns to the
+  // thread the user was in rather than merely the newest one.
+  lastActiveByFlow: Record<string, string>
+  // threadForFlow picks the thread to show for a flow: its last active thread
+  // if still open, else its newest thread, else null.
+  threadForFlow: (flowId: string) => string | null
   closeThread: (threadId: string) => void
   updateThread: (threadId: string, patch: Partial<ChatThread>) => void
   getActiveThread: () => ChatThread | null
@@ -284,6 +422,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
   providerEpoch: 0,
   stagedPrompt: null,
   drafts: {},
+  historyStatus: {},
+  lastActiveByFlow: {},
+
+  beginHistoryLoad: threadId => {
+    const token = ++historyTokenSeq
+    set(state => ({historyStatus: {...state.historyStatus, [threadId]: {state: 'loading', token}}}))
+    return token
+  },
+
+  finishHistoryLoad: (threadId, token, loaded) => {
+    const cur = get().historyStatus[threadId]
+    if (!cur || cur.token !== token || !get().threads.some(t => t.id === threadId)) return false
+    if (loaded === null) {
+      set(state => ({historyStatus: {...state.historyStatus, [threadId]: {state: 'error', token}}}))
+      return true
+    }
+    set(state => {
+      const local = state.conversations.get(threadId) ?? []
+      const next = new Map(state.conversations)
+      next.set(threadId, mergeHistory(loaded, local))
+      return {conversations: next, historyStatus: {...state.historyStatus, [threadId]: {state: 'loaded', token}}}
+    })
+    return true
+  },
+
+  markHistoryLoaded: threadId =>
+    set(state => ({
+      historyStatus: {...state.historyStatus, [threadId]: {state: 'loaded', token: ++historyTokenSeq}},
+    })),
+
+  isHistorySynced: threadId => get().historyStatus[threadId]?.state === 'loaded',
 
   getMessages: threadId => {
     // Defensive copy: without this, callers receive the live internal array
@@ -323,10 +492,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {conversations: next}
     }),
 
+  // Clearing makes the (now empty) local thread authoritative: an empty list
+  // is kept rather than deleted, and the history status moves to 'loaded' with
+  // a fresh token so a load still in flight cannot resurrect the old turns.
   clearThreadMessages: threadId =>
     set(state => {
+      // A thread closed while its clear request was in flight stays gone.
+      if (!state.threads.some(t => t.id === threadId)) return state
       const next = new Map(state.conversations)
-      next.delete(threadId)
+      next.set(threadId, [])
+      return {
+        conversations: next,
+        historyStatus: {...state.historyStatus, [threadId]: {state: 'loaded', token: ++historyTokenSeq}},
+      }
+    }),
+
+  setThreadMessages: (threadId, messages) =>
+    set(state => {
+      if (!state.threads.some(t => t.id === threadId)) return state
+      const next = new Map(state.conversations)
+      next.set(threadId, [...messages])
       return {conversations: next}
     }),
 
@@ -383,7 +568,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set(state => {
       const slot = state.streams[threadId]
       if (!slot) return state
-      return {streams: {...state.streams, [threadId]: {...slot, fixProposals: cards}}}
+      // A journal replay rebuilds the cards; keep each known card's arrival
+      // time so its countdown doesn't restart.
+      const seen = new Map(slot.fixProposals.map(c => [c.proposalId, c.receivedAt]))
+      const fixProposals = cards.map(c => ({...c, receivedAt: c.receivedAt ?? seen.get(c.proposalId) ?? Date.now()}))
+      return {streams: {...state.streams, [threadId]: {...slot, fixProposals}}}
     }),
 
   endStream: threadId =>
@@ -416,7 +605,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const slot = state.streams[threadId]
       if (!slot) return state
       if (slot.fixProposals.some(c => c.proposalId === card.proposalId)) return state
-      return {streams: {...state.streams, [threadId]: {...slot, fixProposals: [...slot.fixProposals, card]}}}
+      const stamped = {...card, receivedAt: card.receivedAt ?? Date.now()}
+      return {streams: {...state.streams, [threadId]: {...slot, fixProposals: [...slot.fixProposals, stamped]}}}
     }),
 
   // patchFixProposal merges a status/message update into the matching card
@@ -476,6 +666,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // the previous thread's conversation from disk (same 'flow' scope).
       const nextConversations = new Map(state.conversations)
       nextConversations.set(id, [])
+      // A brand-new thread has no server history to wait for.
+      const historyStatus: Record<string, HistoryStatus> = {
+        ...state.historyStatus,
+        [id]: {state: 'loaded', token: ++historyTokenSeq},
+      }
       let threads = [...state.threads, thread]
       // Evict the oldest inactive, non-streaming thread when the cap is
       // exceeded, so long sessions don't accumulate unbounded chat history.
@@ -488,10 +683,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
           if (victim.id in drafts) delete drafts[victim.id]
           const queuedByThread = victim.id in state.queuedByThread ? {...state.queuedByThread} : state.queuedByThread
           if (victim.id in queuedByThread) delete queuedByThread[victim.id]
-          return {threads, activeThreadId: id, conversations: nextConversations, drafts, queuedByThread}
+          delete historyStatus[victim.id]
+          return {
+            threads,
+            activeThreadId: id,
+            conversations: nextConversations,
+            drafts,
+            queuedByThread,
+            historyStatus,
+            lastActiveByFlow: {...state.lastActiveByFlow, [flowId]: id},
+          }
         }
       }
-      return {threads: [...state.threads, thread], activeThreadId: id, conversations: nextConversations}
+      return {
+        threads: [...state.threads, thread],
+        activeThreadId: id,
+        conversations: nextConversations,
+        historyStatus,
+        lastActiveByFlow: {...state.lastActiveByFlow, [flowId]: id},
+      }
     })
     persistFlowThreads(flowId, get().threads)
     return id
@@ -502,16 +712,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (existing.length > 0) return existing.map(t => t.id)
     const stored = readStoredThreads(flowId)
     if (stored.length === 0) return []
+    const active = stored[stored.length - 1].id
     set(state => ({
       threads: [...state.threads, ...stored],
-      activeThreadId: stored[stored.length - 1].id,
+      activeThreadId: active,
+      lastActiveByFlow: {...state.lastActiveByFlow, [flowId]: active},
     }))
     return stored.map(t => t.id)
   },
 
   switchThread: threadId => {
     const thread = get().threads.find(t => t.id === threadId)
-    if (thread) set({activeThreadId: threadId})
+    if (thread) {
+      set(state => ({
+        activeThreadId: threadId,
+        lastActiveByFlow: {...state.lastActiveByFlow, [thread.flowId]: threadId},
+      }))
+    }
+  },
+
+  threadForFlow: flowId => {
+    const {threads, lastActiveByFlow} = get()
+    const last = lastActiveByFlow[flowId]
+    if (last && threads.some(t => t.id === last && t.flowId === flowId)) return last
+    for (let i = threads.length - 1; i >= 0; i--) {
+      if (threads[i].flowId === flowId) return threads[i].id
+    }
+    return null
   },
 
   closeThread: threadId => {
@@ -537,13 +764,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // it behind kept an unsendable message in the store for the session.
       const queuedByThread = threadId in state.queuedByThread ? {...state.queuedByThread} : state.queuedByThread
       if (threadId in queuedByThread) delete queuedByThread[threadId]
+      const historyStatus = {...state.historyStatus}
+      delete historyStatus[threadId]
+      // The replacement is the flow's own newest thread; none left ⇒ null,
+      // and useChatConversations creates a fresh one for the flow.
       const activeThreadId =
-        state.activeThreadId === threadId
-          ? remaining.length > 0
-            ? remaining[remaining.length - 1].id
-            : null
-          : state.activeThreadId
-      return {threads: remaining, conversations: next, activeThreadId, streams, drafts, queuedByThread}
+        state.activeThreadId === threadId ? nextThreadOfFlow(remaining, closedFlowId) : state.activeThreadId
+      return {threads: remaining, conversations: next, activeThreadId, streams, drafts, queuedByThread, historyStatus}
     })
     if (closedFlowId) persistFlowThreads(closedFlowId, get().threads)
   },
@@ -571,23 +798,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const remaining = state.threads.filter(t => t.flowId !== flowId)
       const next = new Map(state.conversations)
       for (const id of toRemove) next.delete(id)
-      const activeThreadId = toRemove.includes(state.activeThreadId ?? '')
-        ? remaining.length > 0
-          ? remaining[remaining.length - 1].id
-          : null
-        : state.activeThreadId
+      // The flow keeps no thread to fall back to; another flow's must not be
+      // shown in its place.
+      const activeThreadId = toRemove.includes(state.activeThreadId ?? '') ? null : state.activeThreadId
       // Full per-thread cleanup (F1.7), mirroring closeThread: streams,
       // drafts, and queued follow-ups for removed threads must not linger
       // (a lingering stream would eat a concurrency-cap slot forever).
       const streams = {...state.streams}
       const drafts = {...state.drafts}
       const queuedByThread = {...state.queuedByThread}
+      const historyStatus = {...state.historyStatus}
       for (const id of toRemove) {
         delete streams[id]
         delete drafts[id]
         delete queuedByThread[id]
+        delete historyStatus[id]
       }
-      return {threads: remaining, conversations: next, activeThreadId, streams, drafts, queuedByThread}
+      return {threads: remaining, conversations: next, activeThreadId, streams, drafts, queuedByThread, historyStatus}
     })
     persistFlowThreads(flowId, get().threads)
   },
@@ -612,7 +839,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 }))
 
 // Reset on logout (see storeRegistry).
-registerStoreReset(() =>
+registerStoreReset(() => {
   useChatStore.setState({
     threads: [],
     activeThreadId: null,
@@ -625,5 +852,10 @@ registerStoreReset(() =>
     // Queued (unsent) follow-ups are session state — they must not survive
     // logout (F1.7).
     queuedByThread: {},
-  }),
-)
+    historyStatus: {},
+    lastActiveByFlow: {},
+  })
+  // Unscoped legacy thread lists must not outlive the session on a shared
+  // browser (per-user v2 lists stay — they only load for their owner).
+  purgeLegacyThreadKeys()
+})

@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {parseChatMessage, parseChatMessages} from './chatMessage'
+import {parseChatMessage, parseChatMessages, parseConversationPayload} from './chatMessage'
 import type {ChatMessage} from '@/types'
 
 describe('parseChatMessage', () => {
@@ -66,5 +66,28 @@ describe('parseChatMessages', () => {
     expect(parseChatMessages(undefined)).toEqual([])
     expect(parseChatMessages({messages: []})).toEqual([])
     expect(parseChatMessages(null)).toEqual([])
+  })
+})
+
+describe('parseConversationPayload', () => {
+  const m = {id: 'a', role: 'user', content: 'hi', timestamp: '2024-01-01T00:00:00Z'}
+
+  it('reads the bare array the endpoint returns', () => {
+    // Reading `.messages` off this array is what restored nothing (H1).
+    expect(parseConversationPayload([m])).toHaveLength(1)
+  })
+
+  it('still accepts the legacy {messages} file shape', () => {
+    expect(parseConversationPayload({messages: [m]})).toHaveLength(1)
+  })
+
+  it('treats no body as an empty conversation', () => {
+    expect(parseConversationPayload(null)).toEqual([])
+    expect(parseConversationPayload(undefined)).toEqual([])
+  })
+
+  it('rejects any other shape, so it counts as a failed load and never as "empty"', () => {
+    expect(() => parseConversationPayload({version: 1, threads: []})).toThrow()
+    expect(() => parseConversationPayload('oops')).toThrow()
   })
 })

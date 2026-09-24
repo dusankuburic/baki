@@ -2,13 +2,10 @@ package service
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"pad-analyzer/internal/ai"
 )
 
 // journalEvent is one recorded agentic stream event (tool / tool_result /
@@ -78,6 +75,7 @@ type streamCtl struct {
 	buffer    strings.Builder
 	done      bool   // stream finished successfully
 	errMsg    string // non-empty if the stream ended with an error
+	errCode   string // machine-readable class of errMsg ("" = unclassified); see chat_errors.go
 	tokensIn  int
 	tokensOut int
 	ownerID   string // caller identity (scope) that created this stream
@@ -98,9 +96,73 @@ type streamCtl struct {
 	// lastActivity is the UnixNano of the most recent provider chunk (any
 	// kind, before scrub holdback), read by the idle check in watchStream.
 	lastActivity atomic.Int64
+	// lastEmit is the UnixNano of the most recent event delivered to the
+	// client (any type). The heartbeat goroutine reads it to decide whether the
+	// client has heard nothing for long enough to need a keepalive. Distinct
+	// from lastActivity on purpose: a heartbeat must never reset the
+	// provider-idle watchdog.
+	lastEmit atomic.Int64
 	// journal records agentic events (tool/tool_result/fix_proposal/
 	// fix_decision) for replay on reconnect; guarded by mu. See journalEvent.
 	journal []journalEvent
+}
+
+// Client keepalive timing (see heartbeatStream). ChatService.heartbeatAfter /
+// heartbeatTick override them in tests; 0 ⇒ these defaults.
+const (
+	defaultHeartbeatAfter = 20 * time.Second
+	defaultHeartbeatTick  = 5 * time.Second
+)
+
+func (s *ChatService) heartbeatTiming() (after, tick time.Duration) {
+	after, tick = defaultHeartbeatAfter, defaultHeartbeatTick
+	if s.heartbeatAfter > 0 {
+		after = s.heartbeatAfter
+	}
+	if s.heartbeatTick > 0 {
+		tick = s.heartbeatTick
+	}
+	return after, tick
+}
+
+// heartbeatStream emits a "heartbeat" chat event whenever the client has heard
+// nothing from this stream for `after`. Several phases are silent by
+// design — the fix-approval wait (up to ai.FixDecisionTimeout), apply +
+// re-analysis, slow tools, reasoning models that think before their first
+// token — and without a signal the client's stall probe declared a healthy
+// stream dead after ~90s while the server went on to finish (and bill) it.
+//
+// The heartbeat is not a chunk (never counted in done.chunks), is not
+// journaled, and deliberately does NOT touch() the provider-idle watchdog: a
+// provider that has really stalled must still time out. It runs until stop is
+// closed, ctx ends, or the stream records a terminal state.
+func heartbeatStream(ctx context.Context, ctl *streamCtl, emit func(string, map[string]interface{}), stop <-chan struct{}, after, tick time.Duration) {
+	t := time.NewTicker(tick)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		select {
+		case <-ctl.started:
+		default:
+			continue // legacy begin handshake pending: nobody is subscribed yet
+		}
+		ctl.mu.Lock()
+		finished := ctl.done || ctl.errMsg != ""
+		ctl.mu.Unlock()
+		if finished {
+			return
+		}
+		if time.Since(time.Unix(0, ctl.lastEmit.Load())) < after {
+			continue
+		}
+		emit("heartbeat", map[string]interface{}{})
+	}
 }
 
 // touch records provider activity for the idle timeout.
@@ -131,12 +193,15 @@ func (c *streamCtl) cancelWithReason(reason string) {
 	c.cancel()
 }
 
-// setError records the stream's terminal error message under lock. Shared by
-// every failure path (pre-stream, mid-stream, tool-loop) so the buffer/errMsg
+// setFailure records the stream's terminal error message under lock, together
+// with its machine-readable code (see chat_errors.go) so resume/begin can hand
+// the code to a client that missed the live error event. Shared by every
+// failure path (pre-stream, mid-stream, tool-loop) so the buffer/errMsg
 // invariant (mutex-guarded, single writer at a time) has one implementation.
-func (c *streamCtl) setError(msg string) {
+func (c *streamCtl) setFailure(code, msg string) {
 	c.mu.Lock()
 	c.errMsg = msg
+	c.errCode = code
 	c.mu.Unlock()
 }
 
@@ -150,40 +215,11 @@ func (c *streamCtl) markDone(tokensIn, tokensOut int) {
 	c.mu.Unlock()
 }
 
-// failureMessage returns the client-facing message for a stream error. A
-// deliberate cancellation surfaces its stored reason, the stream-duration
-// timeout gets a readable message, and the common provider sentinels map to
-// actionable copy — a raw "rate limited" or "provider circuit open: too many
-// recent failures" told the user nothing they could act on.
+// failureMessage returns the client-facing message for a stream error (the
+// message half of classifyFailure, for callers that don't carry a code).
 func (c *streamCtl) failureMessage(ctx context.Context, err error) string {
-	c.mu.Lock()
-	reason := c.cancelReason
-	c.mu.Unlock()
-	if ctx.Err() != nil {
-		if reason != "" {
-			return reason
-		}
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return "response stopped: maximum response time reached"
-		}
-	}
-	switch {
-	case errors.Is(err, ai.ErrContextLimit):
-		return "conversation is too long for this model's context window — start a new conversation or remove some history"
-	case errors.Is(err, ai.ErrRateLimited):
-		return "the AI provider is rate-limiting requests — wait a moment and try again"
-	case errors.Is(err, ai.ErrCircuitOpen):
-		return "the AI provider is temporarily unavailable after repeated failures — wait a moment and try again"
-	case errors.Is(err, ai.ErrProviderDown):
-		return "the AI provider is temporarily unavailable — try again shortly"
-	case errors.Is(err, ai.ErrInsufficientBalance):
-		return "the AI provider account has insufficient balance — add credits or switch providers"
-	case errors.Is(err, ai.ErrApiKeyInvalid):
-		return "the API key for this provider is invalid — check it in Settings → AI Providers"
-	case isStreamTruncation(err):
-		return "the response was interrupted before it finished — try again"
-	}
-	return err.Error()
+	_, msg := c.classifyFailure(ctx, err)
+	return msg
 }
 
 // isStreamTruncation matches the stream-helpers' truncation/malformed errors
@@ -207,6 +243,7 @@ func (c *streamCtl) snapshot() resumeSnapshot {
 		Text:      c.buffer.String(),
 		Done:      c.done,
 		Error:     c.errMsg,
+		ErrorCode: c.errCode,
 		TokensIn:  c.tokensIn,
 		TokensOut: c.tokensOut,
 		Events:    c.snapshotEvents(),

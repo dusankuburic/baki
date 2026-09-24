@@ -2,7 +2,7 @@ import {create} from 'zustand'
 import {authApi, type AuthUser, type LoginRequest} from '@/api/auth'
 import {registerRefreshCallback, invalidateConfigCache, setSessionToken} from '@/api/client'
 import {decodeJwtPayload} from '@/lib/jwt'
-import {resetAllStores} from './storeRegistry'
+import {resetAllStores, registerCurrentUserResolver} from './storeRegistry'
 
 const REFRESH_TOKEN_KEY = 'auth_refresh_token'
 
@@ -279,6 +279,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   clearError: () => set({error: null}),
 }))
+
+// Stores that scope client-side persistence per user read the id from here.
+registerCurrentUserResolver(() => useAuthStore.getState().user?.id ?? null)
 
 // Register with the API client so it can transparently refresh expired tokens.
 registerRefreshCallback(async () => {

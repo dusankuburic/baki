@@ -60,6 +60,18 @@ describe('resetDerivedStateForFlow', () => {
     expect(useEditorStore.getState().groups[0].activeTabId).toBe('sf1')
   })
 
+  it("keeps the flow's own thread active on a same-flow refresh", () => {
+    // A Findings fix, History restore or toolbar refresh re-sets the SAME
+    // document; the chat used to drop to its empty state mid-conversation.
+    const t = useChatStore.getState().createThread('doc1')
+    useChatStore.getState().createThread('doc1')
+    useChatStore.getState().switchThread(t)
+
+    resetDerivedStateForFlow(makeDoc(makeSubflow('sf1')))
+
+    expect(useChatStore.getState().activeThreadId).toBe(t)
+  })
+
   it('with a null document clears derived state and empties editor groups', () => {
     useEditorStore.setState({groups: [{tabs: ['sf1'], activeTabId: 'sf1'}], focusedGroupIndex: 0})
     useChatStore.setState({activeThreadId: 't'})

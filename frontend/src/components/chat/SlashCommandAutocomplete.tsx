@@ -3,6 +3,7 @@ import clsx from 'clsx'
 import {Terminal, Info, Zap, Trash2, HelpCircle} from 'lucide-react'
 import {useEffect} from 'react'
 import {useListNavigation} from '@/hooks/useListNavigation'
+import {isImeKeydown} from '@/lib/imeKey'
 
 export interface SlashCommand {
   id: string
@@ -35,13 +36,28 @@ interface Props {
   // Reports how many entries the menu is showing so the composer knows whether
   // its keys belong to this menu — 0 means Enter must fall through and send.
   onMatchCount?: (n: number) => void
+  // Whether a keydown came from the composer this menu belongs to. The
+  // listener is window-level (capture): without this check, typing "/c" and
+  // then pressing Tab or Enter anywhere else in the app ran /clear.
+  isOwnTarget?: (target: EventTarget | null) => boolean
+  // /clear is only offered where the thread can be cleared (not read-only).
+  canClear?: boolean
 }
 
-export default function SlashCommandAutocomplete({query, onSelect, onClose, onMatchCount}: Props) {
+export default function SlashCommandAutocomplete({
+  query,
+  onSelect,
+  onClose,
+  onMatchCount,
+  isOwnTarget,
+  canClear = true,
+}: Props) {
   const {t} = useTranslation('chat')
   const q = query.toLowerCase()
   const filtered = COMMANDS.filter(
-    c => c.id.toLowerCase().includes(q) || t(`commands.labels.${c.copyKey}`).toLowerCase().includes(q),
+    c =>
+      (canClear || c.action !== 'clear') &&
+      (c.id.toLowerCase().includes(q) || t(`commands.labels.${c.copyKey}`).toLowerCase().includes(q)),
   )
 
   const {
@@ -70,14 +86,25 @@ export default function SlashCommandAutocomplete({query, onSelect, onClose, onMa
   // the menu renders nothing, so Enter belongs to the composer.
   useEffect(() => {
     if (filtered.length === 0) return
-    window.addEventListener('keydown', handleKeyDown as (e: KeyboardEvent) => void, true)
-    return () => window.removeEventListener('keydown', handleKeyDown as (e: KeyboardEvent) => void, true)
-  }, [handleKeyDown, filtered.length])
+    const onKey = (e: KeyboardEvent) => {
+      if (isOwnTarget && !isOwnTarget(e.target)) return
+      // Accepting an IME candidate must not pick an entry.
+      if (isImeKeydown(e)) return
+      handleKeyDown(e)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [handleKeyDown, filtered.length, isOwnTarget])
 
   if (filtered.length === 0) return null
 
   return (
-    <div className="absolute bottom-full left-0 mb-2 w-[min(16rem,100%)] bg-surface-2 border border-border-default rounded-lg shadow-xl overflow-hidden animate-slide-up">
+    <div
+      className="absolute bottom-full left-0 mb-2 w-[min(16rem,100%)] bg-surface-2 border border-border-default rounded-lg shadow-xl overflow-hidden animate-slide-up"
+      // Keep focus in the composer (a blur there closes the menu) wherever
+      // the menu is clicked — heading and padding included, not only items.
+      onMouseDown={e => e.preventDefault()}
+    >
       <div className="px-3 py-2 bg-surface-3 border-b border-border-subtle">
         <span className="text-2xs font-semibold text-text-tertiary uppercase tracking-wider">
           {t('commands.heading')}

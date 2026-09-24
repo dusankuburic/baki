@@ -95,8 +95,8 @@ export default function ApiKeyInput({provider, label, onConfigured}: Props) {
           <Button size="sm" variant="secondary" onClick={handleTest} disabled={testing}>
             {testing ? t('keys.testing') : t('keys.test')}
           </Button>
-          {testResult === 'valid' && <span className="text-xs text-green-400">Valid</span>}
-          {testResult === 'invalid' && <span className="text-xs text-red-400">Invalid</span>}
+          {testResult === 'valid' && <span className="text-xs text-green-400">{t('apiKey.valid')}</span>}
+          {testResult === 'invalid' && <span className="text-xs text-red-400">{t('apiKey.invalid')}</span>}
         </div>
       ) : (
         <div className="flex items-center gap-2">
@@ -107,12 +107,18 @@ export default function ApiKeyInput({provider, label, onConfigured}: Props) {
             placeholder={t('apiKey.placeholder')}
             aria-label={t('apiKey.aria')}
             className="flex-1"
+            // A secret: no autofill/suggestions, and no spellcheck — once shown
+            // as plain text, browser spellcheck services could receive it.
+            autoComplete="off"
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
           />
           <Button size="sm" variant="secondary" onClick={() => setShowKey(!showKey)}>
-            {showKey ? 'Hide' : 'Show'}
+            {showKey ? t('apiKey.hide') : t('apiKey.show')}
           </Button>
           <Button size="sm" onClick={handleSave} disabled={!key.trim() || saving}>
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? t('apiKey.saving') : t('apiKey.save')}
           </Button>
           {saveError && <span className="text-xs text-red-400">{t('apiKey.saveFailed')}</span>}
         </div>

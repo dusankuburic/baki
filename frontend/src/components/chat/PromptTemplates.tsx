@@ -22,8 +22,10 @@ export interface PromptTemplate {
 // Ids + category only. Labels and prompts resolve through
 // chat:templates.labels.<id> / chat:templates.prompts.<id>, so adding a locale
 // does not mean forking this table.
-const builtInTemplates: {id: TemplateId; category: PromptTemplate['category']}[] = [
-  {id: 't-explain-block', category: 'explain'},
+// requiresBlock: the template talks about "this block", so it is only offered
+// while a block is in scope — sent without one, the model had nothing to explain.
+const builtInTemplates: {id: TemplateId; category: PromptTemplate['category']; requiresBlock?: boolean}[] = [
+  {id: 't-explain-block', category: 'explain', requiresBlock: true},
   {id: 't-explain-flow', category: 'explain'},
   {id: 't-find-bugs', category: 'debug'},
   {id: 't-error-handling', category: 'debug'},
@@ -40,7 +42,7 @@ interface Props {
   blockName?: string
 }
 
-export default function PromptTemplates({onSelect, hasBlock: _hasBlock, flowName, blockName}: Props) {
+export default function PromptTemplates({onSelect, hasBlock, flowName, blockName}: Props) {
   const {t} = useTranslation('chat')
   const [expanded, setExpanded] = useState(false)
 
@@ -51,23 +53,25 @@ export default function PromptTemplates({onSelect, hasBlock: _hasBlock, flowName
     return result
   }
 
-  const grouped = builtInTemplates.reduce(
-    (acc, tpl) => {
-      const resolved: PromptTemplate = {
-        id: tpl.id,
-        category: tpl.category,
-        label: t(`templates.labels.${tpl.id}`),
-        prompt: t(`templates.prompts.${tpl.id}`),
-      }
-      if (!acc[tpl.category]) acc[tpl.category] = []
-      acc[tpl.category].push(resolved)
-      return acc
-    },
-    {} as Record<string, PromptTemplate[]>,
-  )
+  const grouped = builtInTemplates
+    .filter(tpl => hasBlock || !tpl.requiresBlock)
+    .reduce(
+      (acc, tpl) => {
+        const resolved: PromptTemplate = {
+          id: tpl.id,
+          category: tpl.category,
+          label: t(`templates.labels.${tpl.id}`),
+          prompt: t(`templates.prompts.${tpl.id}`),
+        }
+        if (!acc[tpl.category]) acc[tpl.category] = []
+        acc[tpl.category].push(resolved)
+        return acc
+      },
+      {} as Record<string, PromptTemplate[]>,
+    )
 
   return (
-    <div className="px-3">
+    <div className="chat-gutter">
       <button
         className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
         onClick={() => setExpanded(v => !v)}

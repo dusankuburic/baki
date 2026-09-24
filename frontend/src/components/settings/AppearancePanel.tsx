@@ -8,7 +8,7 @@ import {useTranslation} from 'react-i18next'
 
 export default function AppearancePanel() {
   const {t} = useTranslation('settings')
-  const {theme, density, reduceMotion, highContrast} = useSettingsStore(s => s.settings.appearance)
+  const {theme, density, reduceMotion, highContrast, chatTextSize} = useSettingsStore(s => s.settings.appearance)
   const updateAppearance = useSettingsStore(s => s.updateAppearance)
 
   return (
@@ -71,6 +71,28 @@ export default function AppearancePanel() {
               />
             </div>
             <p className="text-xs text-text-tertiary mt-2">{t('appearance.densityHint')}</p>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium text-text-primary block mb-3">{t('appearance.chatTextSize')}</label>
+            <div className="flex gap-2">
+              <DensityButton
+                label={t('appearance.chatTextSm')}
+                isActive={chatTextSize === 'sm'}
+                onClick={() => updateAppearance({chatTextSize: 'sm'})}
+              />
+              <DensityButton
+                label={t('appearance.chatTextMd')}
+                isActive={chatTextSize === 'md'}
+                onClick={() => updateAppearance({chatTextSize: 'md'})}
+              />
+              <DensityButton
+                label={t('appearance.chatTextLg')}
+                isActive={chatTextSize === 'lg'}
+                onClick={() => updateAppearance({chatTextSize: 'lg'})}
+              />
+            </div>
+            <p className="text-xs text-text-tertiary mt-2">{t('appearance.chatTextHint')}</p>
           </div>
 
           <div className="space-y-4">

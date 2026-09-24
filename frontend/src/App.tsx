@@ -26,7 +26,7 @@ import {useAutoAnalyze} from './hooks/useAutoAnalyze'
 import {useAppShortcuts} from './hooks/useAppShortcuts'
 import {useCommandList} from './hooks/useCommandList'
 import {useAppEvents} from './hooks/useAppEvents'
-import {usePaneResize} from './hooks/usePaneResize'
+import {usePaneResize, MIN_SIDEBAR, MAX_SIDEBAR, MIN_INSPECTOR} from './hooks/usePaneResize'
 import {useFileDrop} from './hooks/useFileDrop'
 import {useGlobalErrorHandler} from './hooks/useGlobalErrorHandler'
 import {useSettingsPersistence} from './hooks/useSettingsPersistence'
@@ -42,6 +42,9 @@ import StatusBar from './components/layout/StatusBar'
 import PaneDivider from './components/layout/PaneDivider'
 import WelcomeModal from './components/onboarding/WelcomeModal'
 import BackendCrashBanner from './components/layout/BackendCrashBanner'
+// By path, not through the components/chat barrel (which would pull
+// react-markdown into the entry chunk).
+import ChatStreamProvider from './components/chat/ChatStreamProvider'
 import {flowApi} from '@/api'
 import {isTauri} from '@/platform/guards'
 import {useFileWatcher} from '@/hooks/useFileWatcher'
@@ -53,6 +56,7 @@ function AppInner() {
   const inspectorCollapsed = useUIStore(s => s.inspectorCollapsed)
   const mobileDrawer = useUIStore(s => s.mobileDrawer)
   const closeMobileDrawer = useUIStore(s => s.closeMobileDrawer)
+  const setChatFocus = useUIStore(s => s.setChatFocus)
   const setCommandPaletteOpen = useUIStore(s => s.setCommandPaletteOpen)
   const globalSearchOpen = useUIStore(s => s.globalSearchOpen)
   const setGlobalSearchOpen = useUIStore(s => s.setGlobalSearchOpen)
@@ -85,7 +89,10 @@ function AppInner() {
   // drawer rather than have it reappear the next time the window narrows.
   useEffect(() => {
     if (isDesktop) closeMobileDrawer()
-  }, [isDesktop, closeMobileDrawer])
+    // Focus mode is a desktop overlay; a stale flag would otherwise render
+    // "focused" inside the transformed mobile drawer.
+    else setChatFocus(false)
+  }, [isDesktop, closeMobileDrawer, setChatFocus])
 
   // Onboarding: show the welcome tour only on first run (firstRunCompleted
   // is false in the default settings) — and only once settings have loaded
@@ -160,6 +167,9 @@ function AppInner() {
     handleInspectorDrag,
     handleInspectorResizeEnd,
     handleInspectorReset,
+    inspectorMax,
+    handleSidebarJump,
+    handleInspectorJump,
   } = usePaneResize()
   const {dragOver, handleDragOver, handleDragLeave, handleDrop} = useFileDrop(openDocument)
 
@@ -198,9 +208,14 @@ function AppInner() {
                 </ErrorBoundary>
               </div>
               <PaneDivider
+                label={t('panes.resizeSidebar')}
+                value={sidebarWidth}
+                min={MIN_SIDEBAR}
+                max={MAX_SIDEBAR}
                 onDrag={handleSidebarDrag}
                 onResizeEnd={handleSidebarResizeEnd}
                 onDoubleClick={handleSidebarReset}
+                onJump={handleSidebarJump}
               />
             </>
           )}
@@ -218,9 +233,14 @@ function AppInner() {
           {isDesktop && !inspectorCollapsed && (
             <>
               <PaneDivider
+                label={t('panes.resizeInspector')}
+                value={inspectorWidth}
+                min={MIN_INSPECTOR}
+                max={inspectorMax}
                 onDrag={handleInspectorDrag}
                 onResizeEnd={handleInspectorResizeEnd}
                 onDoubleClick={handleInspectorReset}
+                onJump={handleInspectorJump}
               />
               <div
                 ref={inspectorRef}
@@ -398,7 +418,12 @@ export default function App() {
     <ErrorBoundary>
       <ToastProvider>
         <ConfirmProvider>
-          <AppInner />
+          {/* Chat streams live for the whole session, above every pane that
+              can unmount the chat panel (inspector collapse, mobile drawer,
+              pop-out): hiding the chat no longer cancels a reply. */}
+          <ChatStreamProvider>
+            <AppInner />
+          </ChatStreamProvider>
           <SyncDropNotifier />
         </ConfirmProvider>
       </ToastProvider>

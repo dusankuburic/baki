@@ -29,7 +29,7 @@ export default function ChatSearchBar({query, onChange, current, total, onPrev, 
   const hasQuery = query.trim().length > 0
 
   return (
-    <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border-subtle bg-surface-2 flex-shrink-0">
+    <div className="chat-gutter flex items-center gap-1.5 py-1.5 border-b border-border-subtle bg-surface-2 flex-shrink-0">
       <Search size={12} className="text-text-disabled shrink-0" />
       <input
         ref={inputRef}

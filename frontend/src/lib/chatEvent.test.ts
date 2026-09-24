@@ -235,3 +235,22 @@ describe('chatEventStreamId', () => {
     expect(chatEventStreamId('s1')).toBeNull()
   })
 })
+
+describe('parseChatEvent failure codes and keepalives', () => {
+  it('carries the machine-readable code of an error event', () => {
+    expect(
+      parseChatEvent({streamId: 's1', type: 'error', data: {message: 'budget', code: 'AI_BUDGET_EXCEEDED'}}),
+    ).toEqual({kind: 'error', message: 'budget', code: 'AI_BUDGET_EXCEEDED'})
+  })
+
+  it('omits the code when the backend sent none', () => {
+    expect(parseChatEvent({streamId: 's1', type: 'error', data: {message: 'x'}})).toEqual({
+      kind: 'error',
+      message: 'x',
+    })
+  })
+
+  it('parses a heartbeat', () => {
+    expect(parseChatEvent({streamId: 's1', type: 'heartbeat', data: {}})).toEqual({kind: 'heartbeat'})
+  })
+})

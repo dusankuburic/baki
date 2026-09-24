@@ -144,12 +144,50 @@ describe('stall probe', () => {
       text: '',
       done: false,
       error: 'provider exploded',
+      errorCode: 'PROVIDER_UNAVAILABLE',
       tokensOut: 0,
       tokensIn: 0,
     })
     await vi.advanceTimersByTimeAsync(30_000)
 
-    expect(handler.onError).toHaveBeenCalledWith('provider exploded', 's1')
+    // The failure's code travels with it, so a recovered error gets the same
+    // handling as a live one.
+    expect(handler.onError).toHaveBeenCalledWith('provider exploded', 's1', 'PROVIDER_UNAVAILABLE')
+  })
+
+  it("passes a live error event's code to the handler", async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+
+    capturedCb!({
+      name: 'chat:event',
+      data: {
+        streamId: 's1',
+        type: 'error',
+        data: {message: 'daily AI budget exceeded ($1.02 / $1.00)', code: 'AI_BUDGET_EXCEEDED'},
+      },
+    })
+
+    expect(handler.onError).toHaveBeenCalledWith('daily AI budget exceeded ($1.02 / $1.00)', 's1', 'AI_BUDGET_EXCEEDED')
+  })
+
+  it('keeps a stream alive through heartbeats during a long silent phase', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+
+    // Five minutes of server-side silence (an approval wait, a slow
+    // re-analysis) with the backend's keepalive every 20s: never probed,
+    // never declared stalled, and a heartbeat is not text.
+    for (let i = 0; i < 15; i++) {
+      await vi.advanceTimersByTimeAsync(20_000)
+      capturedCb!({name: 'chat:event', data: {streamId: 's1', type: 'heartbeat', data: {}}})
+    }
+
+    expect(chatApi.resumeStream).not.toHaveBeenCalled()
+    expect(handler.onError).not.toHaveBeenCalled()
+    expect(handler.onChunk).not.toHaveBeenCalled()
   })
 
   it('gives up after repeated no-progress probes', async () => {

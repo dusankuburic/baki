@@ -55,7 +55,7 @@ export default function LiveToolTrail() {
 
   return (
     <div
-      className="px-3 pt-1.5 flex flex-col gap-0.5"
+      className="px-1 pt-1.5 flex flex-col gap-0.5"
       role="status"
       aria-label={t('a11y.toolActivity')}
       data-testid="live-tool-trail"

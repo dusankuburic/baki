@@ -6,19 +6,22 @@ import {
   ChevronDown,
   Download,
   HelpCircle,
-  Maximize2,
+  Maximize,
+  Minimize,
   Minimize2,
   MoreHorizontal,
   Plus,
   Search,
   Settings,
   Trash2,
+  Type,
   Wrench,
 } from 'lucide-react'
-import {Dropdown, useConfirm, type DropdownItem} from '@/components/shared'
+import {Dropdown, Tooltip, useConfirm, type DropdownItem} from '@/components/shared'
+import {shortcuts, formatShortcutParts} from '@/lib/shortcuts'
 import {useUIStore} from '@/stores/uiStore'
 import {subscribeConnectionState, getEventConnectionState, type EventConnectionState} from '@/api/client'
-import type {ModelDetail, ProviderID} from '@/types'
+import type {ChatTextSize, ModelDetail, ProviderID} from '@/types'
 
 interface ProviderSummary {
   id: ProviderID
@@ -39,14 +42,20 @@ interface Props {
   useTools: boolean
   onToggleTools?: () => void
   onNewChat: () => void
-  onClearContext: () => void
-  onCompact: () => void
+  // Clear / Compact rewrite the server's copy of the thread, which needs edit
+  // rights on the flow: omit them (read-only flow) and the actions are hidden.
+  onClearContext?: () => void
+  onCompact?: () => void
   onExport?: () => void
   onToggleSearch?: () => void
   searchActive?: boolean
   onShowHelp?: () => void
-  isPoppedOut?: boolean
-  onTogglePopOut?: () => void
+  // Focus mode (the full-window reading layout); omitted where it can't be
+  // offered (mobile drawer, standalone renders).
+  isFocused?: boolean
+  onToggleFocus?: () => void
+  chatTextSize?: ChatTextSize
+  onCycleTextSize?: () => void
 }
 
 type DisplayState = 'ready' | 'streaming' | 'connecting' | 'reconnecting'
@@ -102,10 +111,22 @@ export default function ChatHeader({
   onToggleSearch,
   searchActive,
   onShowHelp,
-  isPoppedOut,
-  onTogglePopOut,
+  isFocused,
+  onToggleFocus,
+  chatTextSize,
+  onCycleTextSize,
 }: Props) {
   const {t} = useTranslation('chat')
+  const focusLabel = isFocused ? t('panel.exitFocus') : t('panel.focus')
+  // The registry is the single source for the combo shown in the tooltip.
+  const focusShortcut = useMemo(() => {
+    const keys = shortcuts.find(s => s.id === 'ai.focus')?.keys
+    return keys
+      ? formatShortcutParts(keys)
+          .map(p => p.display)
+          .join('+')
+      : undefined
+  }, [])
   const setSettingsOpen = useUIStore(s => s.setSettingsOpen)
   const {confirm} = useConfirm()
   const [sseState, setSseState] = useState<EventConnectionState>(getEventConnectionState)
@@ -221,33 +242,48 @@ export default function ChatHeader({
         disabled: messageCount === 0,
       })
     }
-    if (onTogglePopOut) {
+    if (onToggleFocus) {
       items.push({
         type: 'item',
-        label: isPoppedOut ? t('panel.dock') : t('panel.popOut'),
-        icon: isPoppedOut ? Minimize2 : Maximize2,
-        onSelect: onTogglePopOut,
+        label: focusLabel,
+        icon: isFocused ? Minimize : Maximize,
+        shortcut: focusShortcut,
+        onSelect: onToggleFocus,
+      })
+    }
+    if (onCycleTextSize && chatTextSize) {
+      items.push({
+        type: 'item',
+        label: t('toolbar.textSize', {size: t(`textSize.${chatTextSize}`)}),
+        icon: Type,
+        onSelect: onCycleTextSize,
       })
     }
     if (onShowHelp) {
       items.push({type: 'item', label: t('toolbar.help'), icon: HelpCircle, onSelect: onShowHelp})
     }
-    items.push({type: 'separator'})
-    items.push({
-      type: 'item',
-      label: t('toolbar.compact'),
-      icon: Minimize2,
-      disabled: messageCount === 0,
-      onSelect: () => confirmThen('compact', onCompact),
-    })
-    items.push({
-      type: 'item',
-      label: t('toolbar.clear'),
-      icon: Trash2,
-      danger: true,
-      disabled: messageCount === 0,
-      onSelect: () => confirmThen('clear', onClearContext),
-    })
+    // Disabled while this thread streams: the reply in flight would land in
+    // a thread that was just cleared or compacted.
+    if (onCompact || onClearContext) items.push({type: 'separator'})
+    if (onCompact) {
+      items.push({
+        type: 'item',
+        label: t('toolbar.compact'),
+        icon: Minimize2,
+        disabled: messageCount === 0 || !!isStreaming,
+        onSelect: () => confirmThen('compact', onCompact),
+      })
+    }
+    if (onClearContext) {
+      items.push({
+        type: 'item',
+        label: t('toolbar.clear'),
+        icon: Trash2,
+        danger: true,
+        disabled: messageCount === 0 || !!isStreaming,
+        onSelect: () => confirmThen('clear', onClearContext),
+      })
+    }
     return items
   }, [
     t,
@@ -255,12 +291,17 @@ export default function ChatHeader({
     onToggleSearch,
     searchActive,
     messageCount,
+    isStreaming,
     onToggleTools,
     useTools,
     currentModel,
     onExport,
-    onTogglePopOut,
-    isPoppedOut,
+    onToggleFocus,
+    isFocused,
+    focusLabel,
+    focusShortcut,
+    chatTextSize,
+    onCycleTextSize,
     onShowHelp,
     confirmThen,
     onCompact,
@@ -268,7 +309,7 @@ export default function ChatHeader({
   ])
 
   return (
-    <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border-subtle">
+    <div className="chat-bar flex items-center gap-1 py-1.5 border-b border-border-subtle">
       <Dropdown
         className="min-w-0 flex-1"
         items={connectionItems}
@@ -294,6 +335,20 @@ export default function ChatHeader({
 
       {messageCount > 0 && (
         <span className="cq-count shrink-0 text-2xs text-text-tertiary/60 tabular-nums px-1">{messageCount}</span>
+      )}
+
+      {onToggleFocus && (
+        <Tooltip content={focusLabel} shortcut={focusShortcut}>
+          <button
+            type="button"
+            onClick={onToggleFocus}
+            aria-label={focusLabel}
+            aria-pressed={!!isFocused}
+            className="shrink-0 flex items-center justify-center w-6 h-6 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-surface-2 transition-colors"
+          >
+            {isFocused ? <Minimize size={14} /> : <Maximize size={14} />}
+          </button>
+        </Tooltip>
       )}
 
       <Dropdown

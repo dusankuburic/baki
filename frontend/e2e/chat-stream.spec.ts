@@ -36,7 +36,15 @@ async function stubChatBoot(page: Page) {
 
   const bootStubs: Record<string, unknown> = {
     '/api/local-config': {mode: 'cloud'},
-    '/api/system/info': {version: 'e2e', platform: 'linux', arch: 'x64', buildDate: '', gitCommit: ''},
+    // capabilities is read unguarded by the dashboard/router (`info?.capabilities.sessionAnalytics`).
+    '/api/system/info': {
+      version: 'e2e',
+      platform: 'linux',
+      arch: 'x64',
+      buildDate: '',
+      gitCommit: '',
+      capabilities: {sessionAnalytics: false},
+    },
     // Full AppSettings shape with first-run completed: the onboarding modal
     // would otherwise overlay the composer. (The helper stubs this too, but
     // this map is registered later and Playwright matches the last route
@@ -67,7 +75,7 @@ async function stubChatBoot(page: Page) {
         defaultModel: 'claude-haiku-4-5',
       },
     ],
-    '/api/chat/get': {version: 1, threads: []},
+    '/api/chat/get': [],
     '/api/chat/suggested-prompts': ['Summarize this flow'],
     '/api/flow/source-files': [],
     '/api/chat/begin': {status: 'ok'},
@@ -164,5 +172,30 @@ test.describe('Chat streaming', () => {
     // be the right home for that assertion.
     await expect(page.getByText('Summarize the findings').first()).toBeVisible({timeout: 10_000})
     await expect(page.getByRole('tab', {name: /Generating/})).toBeVisible({timeout: 10_000})
+
+    // The conversation never scrolls sideways (Virtuoso's viewport is
+    // absolutely positioned, so padding on the scroller used to overflow it),
+    // and the composer's card shares the message column's edges.
+    const log = page.getByRole('log')
+    await expect.poll(() => log.evaluate(el => el.scrollWidth - el.clientWidth)).toBe(0)
+    const edges = await page.evaluate(() => {
+      const bubble = document.querySelector('.chat-msg-item > *')!.getBoundingClientRect()
+      const card = document.querySelector('[data-chat-composer]')!.closest('.rounded-xl')!.getBoundingClientRect()
+      return [Math.round(bubble.left - card.left), Math.round(card.right - bubble.right)]
+    })
+    expect(edges).toEqual([0, 0])
+
+    // Focus mode: the whole chat becomes a full-window dialog. Escape stops
+    // the reply first (it is still generating), then leaves focus mode.
+    await page.getByRole('button', {name: 'Focus mode'}).click()
+    const focus = page.getByRole('dialog', {name: 'AI Chat'})
+    await expect(focus).toBeVisible()
+    await page.keyboard.press('Escape')
+    if (await focus.isVisible()) {
+      // The reply was still generating: that Escape stopped it; one more leaves.
+      await expect(page.getByRole('tab', {name: /Generating/})).toBeHidden({timeout: 10_000})
+      await page.keyboard.press('Escape')
+    }
+    await expect(focus).toBeHidden()
   })
 })

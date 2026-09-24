@@ -2,6 +2,7 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {renderHook, act} from '@testing-library/react'
 import {usePaneResize} from './usePaneResize'
 import {useSettingsStore} from '@/stores/settingsStore'
+import {useUIStore} from '@/stores/uiStore'
 
 vi.mock('@/api', () => ({
   settingsApi: {
@@ -96,5 +97,70 @@ describe('usePaneResize — DOM-mutation drag contract', () => {
       await vi.advanceTimersByTimeAsync(1000)
     })
     expect(useSettingsStore.getState().settings.layout.sidebarWidth).toBe(280)
+  })
+})
+
+describe('usePaneResize — inspector cap follows the window', () => {
+  const originalWidth = window.innerWidth
+  function setViewport(width: number) {
+    Object.defineProperty(window, 'innerWidth', {configurable: true, writable: true, value: width})
+  }
+  function mountInspector(width: number) {
+    const {result} = renderHook(() => usePaneResize())
+    const div = makeDiv(width)
+    act(() => {
+      result.current.inspectorRef.current = div
+    })
+    return {result, div}
+  }
+  afterEach(() => {
+    setViewport(originalWidth)
+    useUIStore.setState({sidebarCollapsed: false})
+  })
+
+  it('leaves the editor at least 480px on a 1600px window', () => {
+    setViewport(1600)
+    const {result, div} = mountInspector(320)
+    act(() => result.current.handleInspectorDrag(-10000))
+    expect(div.style.width).toBe('840px')
+    expect(result.current.inspectorMax).toBe(840)
+  })
+
+  it('never grows past 1000px', () => {
+    setViewport(3000)
+    const {result, div} = mountInspector(320)
+    act(() => result.current.handleInspectorDrag(-10000))
+    expect(div.style.width).toBe('1000px')
+  })
+
+  it('counts a collapsed sidebar as zero width', () => {
+    setViewport(1600)
+    useUIStore.setState({sidebarCollapsed: true})
+    const {result, div} = mountInspector(320)
+    act(() => result.current.handleInspectorDrag(-10000))
+    expect(div.style.width).toBe('1000px')
+  })
+
+  it('keeps the old 560px cap on a narrow window', () => {
+    setViewport(1024)
+    const {result, div} = mountInspector(320)
+    act(() => result.current.handleInspectorDrag(-10000))
+    expect(div.style.width).toBe('560px')
+  })
+
+  it('jumps to either limit and commits once', async () => {
+    setViewport(1600)
+    const {result, div} = mountInspector(320)
+    await act(async () => {
+      result.current.handleInspectorJump('max')
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(div.style.width).toBe('840px')
+    expect(useSettingsStore.getState().settings.layout.inspectorWidth).toBe(840)
+    await act(async () => {
+      result.current.handleInspectorJump('min')
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(useSettingsStore.getState().settings.layout.inspectorWidth).toBe(280)
   })
 })

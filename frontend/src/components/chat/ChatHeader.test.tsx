@@ -1,5 +1,5 @@
 import {describe, it, expect, vi} from 'vitest'
-import {render, screen} from '@testing-library/react'
+import {render, screen, fireEvent} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ChatHeader from './ChatHeader'
 import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
@@ -119,5 +119,30 @@ describe('ChatHeader', () => {
     for (const name of ['Clear', 'Compact', 'Export conversation', 'Search messages']) {
       expect(screen.getByRole('menuitem', {name})).toHaveAttribute('aria-disabled', 'true')
     }
+  })
+})
+
+describe('ChatHeader focus mode and text size', () => {
+  it('offers a focus toggle beside More actions', () => {
+    const onToggleFocus = vi.fn()
+    renderHeader({onToggleFocus})
+    fireEvent.click(screen.getByRole('button', {name: 'Focus mode'}))
+    expect(onToggleFocus).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', {name: 'More actions'})).toBeInTheDocument()
+  })
+
+  it('labels the toggle as the way out while focused', () => {
+    renderHeader({onToggleFocus: vi.fn(), isFocused: true})
+    expect(screen.getByRole('button', {name: 'Exit focus mode'})).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('lists focus mode and the text size in the overflow menu', async () => {
+    const user = userEvent.setup()
+    const onCycleTextSize = vi.fn()
+    renderHeader({onToggleFocus: vi.fn(), chatTextSize: 'md', onCycleTextSize})
+    await openOverflow(user)
+    expect(screen.getByRole('menuitem', {name: /Focus mode/})).toBeInTheDocument()
+    await user.click(screen.getByRole('menuitem', {name: 'Text size: Medium'}))
+    expect(onCycleTextSize).toHaveBeenCalledTimes(1)
   })
 })

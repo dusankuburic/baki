@@ -1,9 +1,8 @@
-import {useState, useEffect, useRef} from 'react'
+import {useState, useEffect, useRef, useCallback} from 'react'
 import {useChatStore, conversationKey, LEGACY_FLOW_SCOPE, type ChatThread} from '@/stores/chatStore'
 import {chatApi, flowApi} from '@/api'
 import {logger} from '@/lib/logger'
-import {parseChatMessages} from '@/lib/chatMessage'
-import type {SourceFileInfo, ConversationFile, FlowDocument} from '@/types'
+import type {SourceFileInfo, FlowDocument} from '@/types'
 import {conversationHistoryEnabled} from '@/lib/chatHistory'
 import {isTauri} from '@/platform/guards'
 
@@ -15,46 +14,106 @@ interface UseChatConversationsOptions {
   activeThreadId: string | null
 }
 
+// loadThreadHistory fetches a thread's server-side conversation under a
+// generation token (see chatStore.beginHistoryLoad): a result that lands after
+// the thread was cleared, reloaded or closed is dropped, and loaded messages
+// are merged BEFORE anything the user sent meanwhile. A failed load leaves the
+// thread in 'error', which blocks every full-replace save of it — the server
+// copy is never overwritten with just the turns on screen. AITab shows the
+// failure inline, with Retry.
+function loadThreadHistory(threadId: string): void {
+  const st = useChatStore.getState()
+  const thread = st.threads.find(t => t.id === threadId)
+  if (!thread) return
+  const token = st.beginHistoryLoad(threadId)
+  chatApi
+    .getConversation(thread.flowId, conversationKey(thread))
+    .then(messages => {
+      useChatStore.getState().finishHistoryLoad(threadId, token, messages)
+    })
+    .catch(err => {
+      logger.warn('Failed to load thread conversation', err)
+      useChatStore.getState().finishHistoryLoad(threadId, token, null)
+    })
+}
+
+// importLegacyConversation restores a flow's pre-thread history (stored under
+// the flow-wide LEGACY_FLOW_SCOPE key) into the thread just created for it,
+// then mirrors it under the thread's own key — the key the server reconstructs
+// history from on the next turn.
+//
+// Desktop only. In the web app conversations are not scoped per user on the
+// server and the legacy key is predictable, so importing it would hand one
+// user a collaborator's conversation.
+function importLegacyConversation(flowId: string, threadId: string): void {
+  const token = useChatStore.getState().beginHistoryLoad(threadId)
+  chatApi
+    .getConversation(flowId, LEGACY_FLOW_SCOPE)
+    .then(messages => {
+      if (!useChatStore.getState().finishHistoryLoad(threadId, token, messages)) return
+      // A turn already in flight saves the merged list itself on done.
+      if (messages.length === 0 || !conversationHistoryEnabled() || useChatStore.getState().streams[threadId]) return
+      const merged = useChatStore.getState().getMessages(threadId)
+      // Mirrored, then the legacy copy is cleared: it is imported once, not
+      // again into every thread created after the flow's last one is closed.
+      chatApi
+        .saveConversation(flowId, conversationKey({id: threadId}), [...merged])
+        .then(() => chatApi.clearConversation(flowId, LEGACY_FLOW_SCOPE))
+        .catch(err => {
+          logger.warn('Failed to migrate legacy conversation to thread key', err)
+        })
+    })
+    .catch(err => {
+      // Nothing to import is the common case (and not worth a toast): the
+      // thread just stays empty, and saves stay allowed.
+      logger.warn('Failed to load flow conversation', err)
+      if (useChatStore.getState().historyStatus[threadId]?.token === token) {
+        useChatStore.getState().markHistoryLoaded(threadId)
+      }
+    })
+}
+
 export function useChatConversations({doc, flowThreads, activeThreadId}: UseChatConversationsOptions) {
   const [sourceFiles, setSourceFiles] = useState<SourceFileInfo[]>(EMPTY_SOURCE_FILES)
 
-  const appendMessage = useChatStore(s => s.appendMessage)
   const createThread = useChatStore(s => s.createThread)
   const hydrateThreads = useChatStore(s => s.hydrateThreads)
   const updateThread = useChatStore(s => s.updateThread)
+  const historyState = useChatStore(s => (activeThreadId ? s.historyStatus[activeThreadId]?.state : undefined))
 
-  // sourceFilesRef mirrors sourceFiles so the thread-creation effect (which
-  // depends only on [doc?.id]) reads the CURRENT file list instead of the stale
-  // closure captured at mount — without this, an auto-created thread never
-  // received the asynchronously-loaded source files (a manual create did,
-  // because handleCreateThread reads live state).
+  const docId = doc?.id ?? null
+
+  // Source files are a local-filesystem (desktop) feature — the endpoint
+  // answers 403 in cloud mode by design, so it is only called in Tauri.
+  //
+  // sourcesForRef records which flow the current list belongs to, and
+  // pendingFilesThreadRef the thread auto-created before its flow's list
+  // arrived: that thread receives the list when the fetch resolves. Reading a
+  // ref at creation time instead handed the new thread an empty list (first
+  // flow) or the PREVIOUS flow's filenames (after a switch).
+  const sourcesForRef = useRef<string | null>(null)
+  const pendingFilesThreadRef = useRef<string | null>(null)
   const sourceFilesRef = useRef<SourceFileInfo[]>(EMPTY_SOURCE_FILES)
   useEffect(() => {
     sourceFilesRef.current = sourceFiles
   }, [sourceFiles])
 
-  // createdForDocRef guards the auto-create effect against React 18 StrictMode
-  // double-mount (mount → cleanup → remount fires the effect twice with the
-  // same empty flowThreads closure, creating two threads). The ref persists
-  // across the StrictMode remount, so the second invocation sees the doc was
-  // already handled and skips. Resets naturally on a doc change.
-  const createdForDocRef = useRef<string | null>(null)
-
   useEffect(() => {
-    if (!doc) {
-      // Clears the list when the document goes away; the async fetch owns the other branch.
+    if (!doc || !isTauri()) {
+      sourcesForRef.current = null
+      // Clears the list when there is no document / no local filesystem.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setSourceFiles(EMPTY_SOURCE_FILES)
       return
     }
-    // Source files are a local-filesystem (desktop) feature — the endpoint
-    // answers 403 in cloud mode by design, so calling it there on every doc
-    // load only produced a console error and an empty catch.
-    if (!isTauri()) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+    // A different flow: drop the previous flow's list right away rather than
+    // show its files until the new fetch lands. A same-flow refresh (reimport)
+    // keeps the list while it refetches.
+    if (sourcesForRef.current !== doc.id) {
+      sourcesForRef.current = null
       setSourceFiles(EMPTY_SOURCE_FILES)
-      return
     }
+    const flowId = doc.id
     let cancelled = false
     flowApi
       .getSourceFiles()
@@ -67,7 +126,15 @@ export function useChatConversations({doc, flowThreads, activeThreadId}: UseChat
           blockCount: f.blockCount || 0,
           lineCount: f.lineCount || 0,
         }))
+        sourcesForRef.current = flowId
         setSourceFiles(list)
+        const pending = pendingFilesThreadRef.current
+        pendingFilesThreadRef.current = null
+        if (!pending || list.length === 0) return
+        const thread = useChatStore.getState().threads.find(th => th.id === pending)
+        if (thread && thread.flowId === flowId && thread.selectedSourceFiles.length === 0) {
+          updateThread(pending, {selectedSourceFiles: list.map(f => f.filename)})
+        }
       })
       .catch(err => {
         if (!cancelled) logger.warn('Failed to load source files', err)
@@ -75,80 +142,58 @@ export function useChatConversations({doc, flowThreads, activeThreadId}: UseChat
     return () => {
       cancelled = true
     }
-  }, [doc])
+  }, [doc, updateThread])
 
+  // The open flow always has a thread to type into: one is created when none
+  // is in memory and none is stored — the first open, and again after the
+  // user closes the flow's last thread (or the flow is cleared). The guard
+  // reads the STORE, not a "done for this doc" ref: React 18 StrictMode's
+  // double-invoke then creates one thread (the second run sees the first's)
+  // without also suppressing the re-create.
   useEffect(() => {
-    if (!doc) return
-    // StrictMode-safe: only auto-create once per doc. Without this, the
-    // synchronous createThread fires twice (StrictMode remount) before the
-    // store updates, producing two empty threads.
-    if (createdForDocRef.current === doc.id) return
-    if (flowThreads.length > 0) {
-      createdForDocRef.current = doc.id
-      return
-    }
-    createdForDocRef.current = doc.id
+    if (!docId) return
+    if (useChatStore.getState().threads.some(th => th.flowId === docId)) return
     // Persisted threads come back with their ids, so their conversations are
     // reachable under the same keys; the active-thread effect below loads them.
-    if (hydrateThreads(doc.id).length > 0) return
-    const id = createThread(doc.id)
+    if (hydrateThreads(docId).length > 0) return
+    const id = createThread(docId)
     const files = sourceFilesRef.current
-    if (files.length > 0) {
+    if (sourcesForRef.current === docId && files.length > 0) {
       updateThread(id, {selectedSourceFiles: files.map(f => f.filename)})
+    } else if (isTauri()) {
+      pendingFilesThreadRef.current = id
     }
-    let cancelled = false
-    // No persisted threads: this flow's history (if any) still lives under the
-    // legacy flow-wide key. Load it into the new thread and mirror it under the
-    // thread's own key, which is what the server reconstructs from on the next
-    // turn — without the mirror the model would answer with no history while
-    // the panel showed the old messages.
-    chatApi
-      .getConversation(doc.id, LEGACY_FLOW_SCOPE)
-      .then((conv: ConversationFile) => {
-        if (cancelled) return
-        // Validate the backend payload at the boundary instead of trusting the
-        // shape (F5): malformed entries are dropped before reaching the store.
-        const restored = parseChatMessages(conv?.messages)
-        for (const m of restored) {
-          appendMessage(id, m)
-        }
-        if (restored.length > 0 && conversationHistoryEnabled()) {
-          chatApi.saveConversation(doc.id, conversationKey({id}), restored).catch(err => {
-            logger.warn('Failed to migrate legacy conversation to thread key', err)
-          })
-        }
-      })
-      .catch(err => {
-        if (!cancelled) logger.warn('Failed to load flow conversation', err)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [doc?.id, doc, flowThreads.length, createThread, hydrateThreads, updateThread, appendMessage])
+    // No persisted threads: this flow's pre-thread history (if any) still
+    // lives under the legacy flow-wide key.
+    if (isTauri()) importLegacyConversation(docId, id)
+  }, [docId, flowThreads.length, createThread, hydrateThreads, updateThread])
 
+  // Keep a thread selected for the open flow. setDocument clears the active
+  // thread on every load — including a SAME-flow refresh (Findings "Fix",
+  // History restore, toolbar refresh) and a switch back to a flow whose
+  // threads are still in memory — and nothing re-selected one, so the chat
+  // dropped to its empty state mid-conversation.
   useEffect(() => {
-    if (!activeThreadId || !doc?.id) return
-    const existing = useChatStore.getState().conversations.get(activeThreadId)
-    if (existing !== undefined) return
-    const thread = useChatStore.getState().threads.find(t => t.id === activeThreadId)
-    if (!thread) return
-    const scope = conversationKey(thread)
-    let cancelled = false
-    chatApi
-      .getConversation(doc.id, scope)
-      .then((conv: ConversationFile) => {
-        if (cancelled) return
-        for (const m of parseChatMessages(conv?.messages)) {
-          appendMessage(activeThreadId, m)
-        }
-      })
-      .catch(err => {
-        logger.warn('Failed to load thread conversation', err)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [activeThreadId, appendMessage, doc?.id])
+    if (!docId) return
+    const st = useChatStore.getState()
+    const active = st.threads.find(th => th.id === st.activeThreadId)
+    if (active && active.flowId === docId) return
+    const next = st.threadForFlow(docId)
+    if (next) st.switchThread(next)
+  }, [docId, activeThreadId, flowThreads.length])
 
-  return {sourceFiles}
+  // Load the active thread's server history once per thread. A thread whose
+  // last load failed is retried when it becomes active again.
+  useEffect(() => {
+    if (!activeThreadId || !docId) return
+    const status = useChatStore.getState().historyStatus[activeThreadId]
+    if (status && status.state !== 'error') return
+    loadThreadHistory(activeThreadId)
+  }, [activeThreadId, docId])
+
+  const retryHistoryLoad = useCallback(() => {
+    if (activeThreadId) loadThreadHistory(activeThreadId)
+  }, [activeThreadId])
+
+  return {sourceFiles, historyState, retryHistoryLoad}
 }
