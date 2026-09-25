@@ -1,81 +1,83 @@
-import {ScatterChart, Scatter, XAxis, YAxis, ZAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell} from 'recharts'
-import {CardShell, CardPlaceholder} from './CardShell'
-import {useChartColors, healthColor} from './useChartColors'
-import type {FlowComplexityPoint} from '@/types'
+import {useMemo} from 'react'
+import {useTranslation} from 'react-i18next'
+import {ChartCard, ScatterPlot, useChartTheme, type ScatterPoint, type ScatterGroup} from '@/components/charts'
+import {healthTier, type HealthTier} from '@/lib/scoring'
+import {DetailsAction} from './DetailsAction'
 
-export function FlowComplexityCard({data, className}: {data: FlowComplexityPoint[]; className?: string}) {
-  const colors = useChartColors()
-  const hasData = data.length > 0 && data.some(d => d.blockCount > 0)
+export interface ComplexityRow {
+  id: string
+  name: string
+  blocks: number
+  findings: number
+  health: number
+}
 
-  const chartData = data.map(d => ({
-    name: d.flowName,
-    blocks: d.blockCount,
-    findings: d.findingCount,
-    health: d.healthScore,
-  }))
-
-  const dotColor = (health: number) => healthColor(health, colors)
-
+// Blocks against findings, one point per flow, coloured by health tier. The
+// same figure serves Home (session or cloud) and the Analytics page.
+export function FlowComplexityCard({
+  rows,
+  title,
+  subtitle,
+  onDetails,
+  refetching,
+  className,
+}: {
+  rows: ComplexityRow[]
+  title?: string
+  subtitle?: string
+  onDetails?: () => void
+  refetching?: boolean
+  className?: string
+}) {
+  const {t} = useTranslation('dashboard')
+  const theme = useChartTheme()
+  const heading = title ?? t('home.complexity')
+  const points = useMemo<ScatterPoint[]>(
+    () =>
+      rows
+        .filter(r => r.blocks > 0)
+        .map(r => ({key: r.id, label: r.name, x: r.blocks, y: r.findings, group: healthTier(r.health).tier})),
+    [rows],
+  )
+  const groups = useMemo<ScatterGroup[]>(() => {
+    const colour: Record<HealthTier, string> = {
+      good: theme.status.success,
+      fair: theme.status.warning,
+      poor: theme.status.error,
+      critical: theme.status.error,
+    }
+    return (['good', 'fair', 'poor'] as const).map(tier => ({
+      key: tier,
+      label: t(`health.${tier}`),
+      color: colour[tier],
+    }))
+  }, [theme, t])
+  // Critical shares the poor colour; fold it into that legend entry.
+  const folded = useMemo(() => points.map(p => (p.group === 'critical' ? {...p, group: 'poor'} : p)), [points])
+  const tableRows = useMemo(() => rows.map(r => ({...r, tier: t(`health.${healthTier(r.health).tier}`)})), [rows, t])
   return (
-    <CardShell title="Flow Complexity" className={className}>
-      {!hasData ? (
-        <CardPlaceholder message="Complexity scatter appears after analyzing flows with block metadata." />
-      ) : (
-        <div className="h-48">
-          <ResponsiveContainer width="100%" height="100%">
-            <ScatterChart margin={{top: 10, right: 10, left: -20, bottom: 0}}>
-              <CartesianGrid strokeDasharray="3 3" stroke={colors.borderStrong} strokeOpacity={0.3} />
-              <XAxis
-                type="number"
-                dataKey="blocks"
-                name="Blocks"
-                stroke={colors.borderStrong}
-                tick={{fill: colors.textTertiary, fontSize: 11}}
-                tickFormatter={(v: number) => String(v)}
-              />
-              <YAxis
-                type="number"
-                dataKey="findings"
-                name="Findings"
-                stroke={colors.borderStrong}
-                tick={{fill: colors.textTertiary, fontSize: 11}}
-                width={36}
-              />
-              <ZAxis type="number" dataKey="health" name="Health" domain={[0, 100]} range={[60, 400]} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: 'var(--glass-bg)',
-                  borderColor: 'var(--border-subtle)',
-                  borderRadius: 8,
-                  backdropFilter: 'var(--glass-blur)',
-                  fontSize: 12,
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-                cursor={{strokeDasharray: '3 3', stroke: colors.textTertiary, strokeOpacity: 0.3}}
-                formatter={(v, name) => {
-                  if (name === 'Health') return [`${v}/100`, name]
-                  return [v, name]
-                }}
-                labelFormatter={(_value, payload) => {
-                  const item = payload[0]?.payload
-                  return item ? item.name : ''
-                }}
-              />
-              <Scatter data={chartData} isAnimationActive={false}>
-                {chartData.map((entry, i) => (
-                  <Cell
-                    key={`cell-${i}`}
-                    fill={dotColor(entry.health)}
-                    fillOpacity={0.6}
-                    strokeWidth={1}
-                    stroke={dotColor(entry.health)}
-                  />
-                ))}
-              </Scatter>
-            </ScatterChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-    </CardShell>
+    <ChartCard
+      title={heading}
+      subtitle={subtitle ?? t('home.complexitySub')}
+      actions={<DetailsAction title={heading} onClick={onDetails} />}
+      state={points.length > 0 ? 'ready' : 'empty'}
+      emptyMessage={t('home.complexityEmpty')}
+      refetching={refetching}
+      className={className}
+      table={{
+        caption: heading,
+        filename: 'flow-complexity.csv',
+        columns: [
+          {key: 'name', header: t('analytics.columns.flow')},
+          {key: 'blocks', header: t('home.blocks'), align: 'right'},
+          {key: 'findings', header: t('home.findings'), align: 'right'},
+          {key: 'health', header: t('analytics.columns.health'), align: 'right'},
+          {key: 'tier', header: t('analytics.columns.status')},
+        ],
+        rows: tableRows,
+      }}
+    >
+      <ScatterPlot points={folded} groups={groups} xName={t('home.blocks')} yName={t('home.findings')} height={220} />
+    </ChartCard>
   )
 }

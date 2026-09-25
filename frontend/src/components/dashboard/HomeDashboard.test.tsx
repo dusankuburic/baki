@@ -1,9 +1,11 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {render, screen, waitFor} from '@testing-library/react'
+import {render, screen, waitFor, fireEvent} from '@testing-library/react'
 import {ToastProvider} from '@/components/shared/Toast'
 import {useAnalysisStore} from '@/stores/analysisStore'
+import {useAnalyticsStore} from '@/stores/analyticsStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {useSystemStore} from '@/stores/systemStore'
+import {useUIStore} from '@/stores/uiStore'
 import HomeDashboard from './HomeDashboard'
 
 const getHome = vi.fn()
@@ -27,25 +29,6 @@ vi.mock('recharts', async importOriginal => {
   }
 })
 
-vi.mock('./home/useChartColors', () => ({
-  useChartColors: () => ({
-    success: '#22c55e',
-    warning: '#eab308',
-    error: '#ef4444',
-    brand400: '#818cf8',
-    brand500: '#5b61ef',
-    brand600: '#4f46d5',
-    surface3: '#26262d',
-    borderStrong: '#3f3f47',
-    textTertiary: '#71717a',
-  }),
-  healthColor: (score: number, c: Record<string, string>) => {
-    if (score >= 80) return c.success
-    if (score >= 50) return c.warning
-    return c.error
-  },
-}))
-
 const emptyData = {
   greeting: {userDisplayName: 'Tester'},
   overview: {avgHealthScore: 0, healthAvailable: false, totalFlows: 0, totalSubflows: 0},
@@ -58,7 +41,7 @@ const emptyData = {
   ruleFrequency: [],
   activity: [],
   complexity: [],
-  security: {available: true, failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0},
+  security: {available: true, failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0, admin: false},
   severityTrend: [],
   confidenceDist: {},
   healthBuckets: [],
@@ -78,8 +61,10 @@ beforeEach(() => {
   vi.clearAllMocks()
   getHome.mockResolvedValue(emptyData)
   useAnalysisStore.getState().reset()
+  useAnalyticsStore.getState().reset()
   useOrgStore.setState({organisations: [], activeOrgId: null})
   useSystemStore.setState({info: null, isLoaded: false})
+  useUIStore.setState({mainPaneView: 'home'})
 })
 
 describe('HomeDashboard', () => {
@@ -89,64 +74,51 @@ describe('HomeDashboard', () => {
     await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
   })
 
-  it('hides advanced cards in local mode (isCloud: false)', async () => {
+  it('hides the cloud-only cards in local mode (isCloud: false)', async () => {
     renderHome()
     await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
 
-    // Cards that should be hidden
-    expect(screen.queryByText(/Health Score Trend/)).toBeNull()
-    expect(screen.queryByText(/AI Cost by Provider/)).toBeNull()
-    expect(screen.queryByText(/AI Token Usage/)).toBeNull()
-    expect(screen.queryByText(/Recent Activity/)).toBeNull()
-    expect(screen.queryByText(/Security Posture/)).toBeNull()
+    expect(screen.queryByText('Health trend')).toBeNull()
+    expect(screen.queryByText('AI usage')).toBeNull()
+    expect(screen.queryByText('Recent activity')).toBeNull()
+    expect(screen.queryByText('Security posture')).toBeNull()
+    expect(screen.queryByText('Open analytics')).toBeNull()
 
-    // Cards that should still be visible
-    expect(screen.getByText(/Findings by Rule/)).toBeInTheDocument()
-    expect(screen.getByText(/Recent Flows/)).toBeInTheDocument()
+    expect(screen.getByText('Top rules')).toBeInTheDocument()
+    expect(screen.getByText('Recent flows')).toBeInTheDocument()
+    expect(screen.getByText('Health distribution')).toBeInTheDocument()
+    expect(screen.getByText('Flow complexity')).toBeInTheDocument()
   })
 
-  it('shows advanced cards in cloud mode (isCloud: true)', async () => {
+  it('shows the cloud cards and the analytics link in cloud mode (isCloud: true)', async () => {
     getHome.mockResolvedValue({
       ...emptyData,
       isCloud: true,
       healthTrend: [{date: '2023-01-01', avgHealth: 80, flowCount: 1}],
       costByProvider: [{provider: 'openai', cost: 1.0, tokensIn: 100, tokensOut: 100}],
       activity: [{action: 'auth.login', createdAt: new Date().toISOString()}],
-      security: {available: true, failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0},
     })
     renderHome()
     await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
 
-    expect(screen.getByText(/Health Score Trend/)).toBeInTheDocument()
-    expect(screen.getByText(/AI Cost by Provider/)).toBeInTheDocument()
-    expect(screen.getByText(/Recent Activity/)).toBeInTheDocument()
-    expect(screen.getByText(/Security Posture/)).toBeInTheDocument()
+    expect(screen.getByText('Health trend')).toBeInTheDocument()
+    expect(screen.getByText('AI usage')).toBeInTheDocument()
+    expect(screen.getByText('Recent activity')).toBeInTheDocument()
+    expect(screen.getByText('Security posture')).toBeInTheDocument()
+    expect(screen.getByText('Triage')).toBeInTheDocument()
+    expect(screen.getByText('Open analytics')).toBeInTheDocument()
   })
 
-  // "Details" opens the session analytics view, which only a backend with
-  // session analytics can fill — elsewhere it is a dead end that says "not
-  // available", so the link must not be offered.
-  it('offers the findings "Details" link only with session analytics', async () => {
+  // Every cloud card links into the section of the Analytics page that
+  // expands on it; the page picks the requested section up on mount.
+  it('"Details" opens the analytics page at the card\'s section', async () => {
     getHome.mockResolvedValue({...emptyData, isCloud: true})
-    const {unmount} = renderHome()
-    await waitFor(() => expect(screen.getByText(/Findings by Category/)).toBeInTheDocument())
-    expect(screen.queryByTitle('Open full analytics')).toBeNull()
-    unmount()
-
-    useSystemStore.setState({
-      info: {
-        version: 'dev',
-        platform: 'linux',
-        arch: 'amd64',
-        buildDate: '',
-        gitCommit: '',
-        capabilities: {sessionAnalytics: true},
-      },
-      isLoaded: true,
-    })
-    getHome.mockResolvedValue(emptyData)
     renderHome()
-    expect(await screen.findByTitle('Open full analytics')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('Health trend')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', {name: 'Open Health trend in analytics'}))
+    expect(useUIStore.getState().mainPaneView).toBe('dashboard')
+    expect(useAnalyticsStore.getState().pendingSection).toBe('analytics-trend')
   })
 
   it('shows skeleton while loading', () => {

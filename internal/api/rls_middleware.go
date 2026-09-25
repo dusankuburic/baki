@@ -43,7 +43,12 @@ var rlsStreamingPrefixes = []string{
 var rlsHeavyExactPaths = map[string]bool{
 	// Analysis of stored flows — resolve via GetAuthorized("viewer"), then
 	// seconds of parse/analyze/export CPU on the resolved document.
-	"/api/analysis/analyze":      true,
+	"/api/analysis/analyze": true,
+	// Six concurrent pool reads per request (snapshots, history, triage,
+	// usage, audit, security); each carries its own flow-id / user-id
+	// predicate, and the service resolves the flow set through the library
+	// scope checks first.
+	"/api/dashboard/analytics":   true,
 	"/api/analysis/lineage":      true,
 	"/api/analysis/graph":        true,
 	"/api/analysis/dataflow":     true,
@@ -84,11 +89,40 @@ var rlsHeavyExactPaths = map[string]bool{
 	"/api/dashboard/home": true,
 }
 
+// rlsBlobContentPath matches the dynamic library routes whose handlers stream
+// stored blobs (flow content, a stored version, or the two-blob diff). They
+// cannot appear in rlsHeavyExactPaths (exact match only, these carry path
+// IDs), and running them inside the request-long RLS transaction pinned a
+// pooled connection for the whole blob transfer — with MaxOpenConns 25, 25
+// concurrent content fetches froze the backend for up to the 45s blob cap
+// each, the same pool-exhaustion shape rls.go's withTx comment describes.
+// Every matched handler enforces Go-layer authz BEFORE the blob read
+// (GetLibraryFlowForUser / CheckFlowAccessForUser), so RLS here remains the
+// defense-in-depth layer it is everywhere else exempt.
+//
+// Read-shaped only: the /versions POST (save) and .../restore mutation keep
+// their RLS transaction — multi-step writes want its atomicity.
+func rlsBlobContentPath(path string) bool {
+	if !strings.HasPrefix(path, "/api/library/") {
+		return false
+	}
+	if strings.HasSuffix(path, "/content") {
+		return true
+	}
+	// /{id}/versions/{vn} (content) and /{id}/versions/{vn}/diff. The bare
+	// "/versions" collection and ".../restore" don't contain the trailing
+	// slash and stay transactional.
+	return strings.Contains(path, "/versions/") && !strings.HasSuffix(path, "/restore")
+}
+
 func rlsExemptPath(path string) bool {
 	for _, p := range rlsStreamingPrefixes {
 		if strings.HasPrefix(path, p) {
 			return true
 		}
+	}
+	if rlsBlobContentPath(path) {
+		return true
 	}
 	return rlsHeavyExactPaths[path]
 }

@@ -3454,6 +3454,118 @@
                 }
             }
         },
+        "/api/dashboard/analytics": {
+            "get": {
+                "description": "Every section is computed for the same scope and window. Findings filters (severity, category, rule) map each flow's per-rule counts through the current rule catalog.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "dashboard"
+                ],
+                "summary": "Filterable analytics for the Analytics page",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "7d, 30d, 90d or custom (default 30d)",
+                        "name": "range",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "YYYY-MM-DD, inclusive (range=custom)",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "YYYY-MM-DD, inclusive (range=custom)",
+                        "name": "to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "IANA time zone for day bucketing (default UTC)",
+                        "name": "tz",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "personal, org or all (default all)",
+                        "name": "scope",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "organisation id (scope=org)",
+                        "name": "orgId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "comma-separated flow ids (max 50)",
+                        "name": "flows",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "comma-separated: error, warning, info",
+                        "name": "severity",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "comma-separated categories (max 20)",
+                        "name": "category",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "comma-separated rule ids (max 50)",
+                        "name": "rule",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "1 (default) or 0: include the previous period",
+                        "name": "compare",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented (local mode)",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                }
+            }
+        },
         "/api/dashboard/home": {
             "get": {
                 "produces": [

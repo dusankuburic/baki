@@ -1,23 +1,6 @@
 import {describe, it, expect, vi} from 'vitest'
 import {render, screen} from '@testing-library/react'
 
-// Mock useChartColors so ComplexityScatter doesn't touch CSS vars in jsdom.
-vi.mock('../dashboard/home/useChartColors', () => ({
-  useChartColors: () => ({
-    success: '#22c55e',
-    warning: '#eab308',
-    error: '#ef4444',
-    info: '#3b82f6',
-    brand400: '#818cf8',
-    brand500: '#5b61ef',
-    brand600: '#4f46e5',
-    surface3: '#26262d',
-    borderStrong: '#3f3f47',
-    textSecondary: '#a1a1aa',
-    textTertiary: '#71717a',
-  }),
-}))
-
 // Mock recharts ResponsiveContainer to avoid jsdom sizing issues.
 vi.mock('recharts', async importOriginal => {
   const actual = await importOriginal<typeof import('recharts')>()
@@ -78,7 +61,9 @@ describe('ComplexityScatter', () => {
       />,
     )
     expect(screen.getByText('Complexity Map')).toBeTruthy()
-    expect(screen.getByRole('img', {name: /scatter plot of subflows/i})).toBeTruthy()
+    // The wrapper is a labelled group (Recharts' own accessibility layer
+    // keeps the svg keyboard-navigable inside it), not a flat image.
+    expect(screen.getByRole('group', {name: /scatter plot of subflows/i})).toBeTruthy()
   })
 })
 

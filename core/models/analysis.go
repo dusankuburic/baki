@@ -113,9 +113,15 @@ type AnalysisReport struct {
 	// duplicates were folded into it. Drives the UI's "N similar" affordance.
 	Groups       []FindingGroup `json:"groups,omitempty"`
 	Stats        AnalysisStats  `json:"stats"`
-	DurationMs   int            `json:"durationMs"`
-	Metrics      *FlowMetrics   `json:"metrics,omitempty"`
-	RuleProfiles []RuleProfile  `json:"ruleProfiles,omitempty"`
+	// ContentHash carries the FlowHash of the analyzed document, set by the
+	// analysis-cache path at the same moment it computes the cache key, so
+	// history recording reuses it instead of walking the document a second
+	// time. Not serialized: stored/cached reports already live under this
+	// hash elsewhere.
+	ContentHash  string        `json:"-"`
+	DurationMs   int           `json:"durationMs"`
+	Metrics      *FlowMetrics  `json:"metrics,omitempty"`
+	RuleProfiles []RuleProfile `json:"ruleProfiles,omitempty"`
 }
 
 type AnalysisStats struct {

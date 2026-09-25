@@ -5,6 +5,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +42,12 @@ type DashboardService struct {
 
 	dashMu    sync.Mutex
 	dashCache map[string]*dashCacheEntry
+	// anaCache holds analytics payloads keyed by user + canonical query
+	// (dashboard_analytics.go); it shares dashMu and the TTL, and empties for
+	// a user whenever their home entry does.
+	anaCache map[string]*anaCacheEntry
+	anaSF    singleflight.Group
+	scope    scopeResolver
 	// dashSF collapses concurrent cold-cache builds for the same user so a cache
 	// miss under load runs buildCloud once (not N×), avoiding a thundering herd
 	// of ~16 sequential DB queries per concurrent caller.
@@ -53,6 +60,7 @@ func NewDashboardService(backend storageif.DashboardStore, analysis *AnalysisSer
 		analysis:  analysis,
 		flowSvc:   flowSvc,
 		dashCache: make(map[string]*dashCacheEntry),
+		anaCache:  make(map[string]*anaCacheEntry),
 	}
 }
 
@@ -145,6 +153,12 @@ func (s *DashboardService) RecordAnalysis(ctx context.Context, doc *models.FlowD
 	if err := s.backend.SaveFlowAnalysis(ctx, fa); err != nil {
 		logger.Warn("dashboard: persist flow analysis failed", "flowId", doc.ID, "err", err)
 	}
+	// The analysis summaries this dashboard renders just changed for this
+	// owner — drop their cached payload so the next load reflects it instead
+	// of waiting out the TTL.
+	if doc.OwnerID != "" {
+		s.InvalidateDashboardCache(doc.OwnerID)
+	}
 }
 
 // BuildHome assembles the dashboard payload for userID. It never hard-fails: on
@@ -179,6 +193,16 @@ func (s *DashboardService) BuildHome(ctx context.Context, userID string) *models
 		// to serve for 30s and avoids hammering the DB on a transient error).
 		s.dashMu.Lock()
 		s.dashCache[userID] = &dashCacheEntry{data: out, fetchedAt: time.Now()}
+		// The TTL governs freshness, not lifetime — without this sweep the map
+		// grew with every distinct user forever (a slow leak bounded only by
+		// user count × payload size). Entries past the TTL are dead weight the
+		// hit check would skip anyway, so drop them at write time; the map then
+		// tracks only users active within the last TTL window.
+		for id, entry := range s.dashCache {
+			if time.Since(entry.fetchedAt) >= dashboardCacheTTL {
+				delete(s.dashCache, id)
+			}
+		}
 		s.dashMu.Unlock()
 		return out, nil
 	})
@@ -197,8 +221,17 @@ func (s *DashboardService) InvalidateDashboardCache(userID string) {
 	defer s.dashMu.Unlock()
 	if userID == "" {
 		s.dashCache = make(map[string]*dashCacheEntry)
+		s.anaCache = make(map[string]*anaCacheEntry)
 	} else {
 		delete(s.dashCache, userID)
+		// Every analytics view this user built (any scope or filter) is keyed
+		// under their id; other members' org-scoped views wait out the TTL.
+		prefix := userID + "\x00"
+		for k := range s.anaCache {
+			if strings.HasPrefix(k, prefix) {
+				delete(s.anaCache, k)
+			}
+		}
 	}
 }
 

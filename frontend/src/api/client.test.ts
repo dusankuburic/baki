@@ -487,3 +487,53 @@ describe('api/client', () => {
     })
   })
 })
+
+type Failure = Error & {code?: string | null; status?: number}
+
+async function failureOf(promise: Promise<unknown>): Promise<Failure> {
+  try {
+    await promise
+  } catch (e) {
+    return e as Failure
+  }
+  throw new Error('expected the request to reject')
+}
+
+describe('network failures', () => {
+  // A connection that is refused or reset never yields an HTTP response; the
+  // browser throws a bare TypeError("Failed to fetch"). Callers get a worded
+  // ApiError with a machine code instead of that string.
+  it('words a failed connection on a mutation without retrying it', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    const {request, ApiError, NETWORK_CODE} = await getClient()
+
+    const err = await failureOf(request('/api/chat/stream', {body: {userMessage: 'hi'}}))
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err.code).toBe(NETWORK_CODE)
+    expect(err.status).toBe(0)
+    expect(err.message).toMatch(/Couldn't reach the server/)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries a read, then words the failure', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    const {request, NETWORK_CODE} = await getClient()
+
+    const err = await failureOf(request('/api/flow/recent', {method: 'GET'}))
+    expect(err.code).toBe(NETWORK_CODE)
+    expect(fetchSpy.mock.calls.length).toBeGreaterThan(1)
+  })
+
+  it('leaves a consumer abort untouched', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    const {request, NETWORK_CODE} = await getClient()
+    const controller = new AbortController()
+    controller.abort()
+
+    const err = await failureOf(request('/api/test', {signal: controller.signal}))
+    // instanceof DOMException is cross-realm-fragile under jsdom; the name is
+    // what consumers check (DOMException.code is its legacy numeric code).
+    expect(err.name).toBe('AbortError')
+    expect(err.code).not.toBe(NETWORK_CODE)
+  })
+})

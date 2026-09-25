@@ -33,6 +33,11 @@ type CustomRule struct {
 	sev    models.Severity
 	nameRe *regexp.Regexp
 	rawRe  *regexp.Regexp
+	// Case-insensitive contains matching pre-lowers the PATTERNS once here
+	// instead of per property per block in Check; the value half still has
+	// to be lowered per look (it varies with every block).
+	propHasLower map[string]string
+	propNotLower map[string]string
 }
 
 // LoadCustomRules reads a custom-rules JSON file. Invalid entries are
@@ -133,6 +138,18 @@ func NewCustomRule(cfg CustomRuleConfig) (*CustomRule, error) {
 		}
 		r.rawRe = re
 	}
+	lower := func(m map[string]string) map[string]string {
+		if len(m) == 0 {
+			return nil
+		}
+		out := make(map[string]string, len(m))
+		for k, v := range m {
+			out[k] = strings.ToLower(v)
+		}
+		return out
+	}
+	r.propHasLower = lower(cfg.PropertyHas)
+	r.propNotLower = lower(cfg.PropertyNot)
 	if cfg.AutoFix != "" {
 		if !isValidFixType(cfg.AutoFix) {
 			return nil, fmt.Errorf("custom rule %q: unknown autoFix %q", cfg.ID, cfg.AutoFix)
@@ -162,22 +179,22 @@ func (r *CustomRule) Check(block *models.Block, ctx *RuleContext) []models.Findi
 		return nil
 	}
 
-	if r.config.PropertyHas != nil {
-		for key, pattern := range r.config.PropertyHas {
+	if r.propHasLower != nil {
+		for key, pattern := range r.propHasLower {
 			val, ok := block.Properties[key]
 			if !ok {
 				return nil
 			}
-			if !strings.Contains(strings.ToLower(val), strings.ToLower(pattern)) {
+			if !strings.Contains(strings.ToLower(val), pattern) {
 				return nil
 			}
 		}
 	}
 
-	if r.config.PropertyNot != nil {
-		for key, pattern := range r.config.PropertyNot {
+	if r.propNotLower != nil {
+		for key, pattern := range r.propNotLower {
 			val, ok := block.Properties[key]
-			if ok && strings.Contains(strings.ToLower(val), strings.ToLower(pattern)) {
+			if ok && strings.Contains(strings.ToLower(val), pattern) {
 				return nil
 			}
 		}

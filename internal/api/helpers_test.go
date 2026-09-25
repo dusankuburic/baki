@@ -154,6 +154,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	eventManager := NewEventManager(make(chan struct{}))
 
 	dashboardSvc := service.NewDashboardService(backend, analysisSvc, flowSvc)
+	dashboardSvc.SetScopeResolver(libSvc)
 	authSvc := service.NewAuthService(backend, mailer.NewService(config.EmailConfig{}, config.ModeLocal))
 	handlers := Handlers{
 		Sys:       NewSystemHandler(sysSvc, security, backend, nil, nil),

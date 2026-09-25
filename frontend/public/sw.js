@@ -91,12 +91,20 @@ function handleNavigation(req) {
     );
 }
 
-// Immutable hashed assets: cache-first; populate on miss.
+// Immutable hashed assets: cache-first; populate on miss. A miss while the
+// network is down is answered with a network-error response — the outcome
+// the page would get without a worker — instead of rejecting respondWith,
+// which Chrome logs as an uncaught promise rejection in the worker.
 function handleAsset(req) {
   return caches.open(ASSET_CACHE).then(async (cache) => {
     const cached = await cache.match(req);
     if (cached) return cached;
-    const res = await fetch(req);
+    let res;
+    try {
+      res = await fetch(req);
+    } catch {
+      return Response.error();
+    }
     if (res.ok) cache.put(req, res.clone()).catch(() => {});
     return res;
   });

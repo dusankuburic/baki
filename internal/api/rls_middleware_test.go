@@ -53,6 +53,7 @@ func TestRLSExemptPath_matching(t *testing.T) {
 		{"/api/chat/stream", true},
 		{"/api/analysis/analyze", true},
 		{"/api/analysis/analyze-raw", true},
+		{"/api/dashboard/analytics", true},
 		// NOT exempt: exact-match tree siblings.
 		{"/api/analysis/analyze-raw/extra", false},
 		{"/api/analysis/triage/set", false},
@@ -61,6 +62,17 @@ func TestRLSExemptPath_matching(t *testing.T) {
 		{"/api/analysis/baseline/set", false},
 		{"/api/flow/load-path", false},
 		{"/api/library", false},
+		// Blob-content library routes: exempt (blob transfer must not pin the
+		// RLS transaction's pooled connection).
+		{"/api/library/abc/content", true},
+		{"/api/library/abc/versions/3", true},
+		{"/api/library/abc/versions/3/diff", true},
+		// But the mutating version routes keep their RLS transaction.
+		{"/api/library/abc/versions", false},
+		{"/api/library/abc/versions/3/restore", false},
+		// And non-blob library routes stay transactional.
+		{"/api/library/abc", false},
+		{"/api/library/abc/tags", false},
 	}
 	for _, c := range cases {
 		if got := rlsExemptPath(c.path); got != c.exempt {

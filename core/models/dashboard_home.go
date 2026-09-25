@@ -116,7 +116,10 @@ type DashboardSecurityStub struct {
 	// dashboard query failed, or there is no persistent source at all in local
 	// mode). All-zero counts are then "unknown", not "no issues", and the UI
 	// must not render them as a clean bill of health.
-	Available          bool `json:"available"`
+	Available bool `json:"available"`
+	// Admin is set per request: LockedAccounts is an instance-wide count and
+	// is zeroed for everyone else.
+	Admin              bool `json:"admin"`
 	FailedLogins24h    int  `json:"failedLogins24h"`
 	CredentialFindings int  `json:"credentialFindings"`
 	// LockedAccounts is how many user accounts are currently locked by the

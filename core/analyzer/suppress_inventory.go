@@ -1,11 +1,46 @@
 package analyzer
 
 import (
+	"context"
 	"sort"
 	"strings"
 
+	"golang.org/x/sync/singleflight"
+
+	"pad-core/cache"
 	"pad-core/models"
 )
+
+// suppressInvCache memoizes inventories by the same content identity the
+// analysis cache uses (analyzer version + flow hash + settings/rules digests).
+// The inventory is a pure function of that identity, so entries never go
+// stale — the cache just saves re-running the ENTIRE rule set (a second full
+// analysis) on every governance view. Bounded like the sibling caches; the
+// shared slice is handed to callers read-only (handlers JSON-marshal it).
+var suppressInvCache, _ = cache.NewLRUCache(64) // size > 0 ⇒ error impossible
+var suppressInvSF singleflight.Group
+
+// SuppressionInventoryCached is SuppressionInventory behind the content-keyed
+// cache above, with singleflight collapsing concurrent cold builds (same
+// shape as CachedAnalysisCtx).
+func SuppressionInventoryCached(flow *models.FlowDocument, rules []Rule, settings *models.AppSettings) []SuppressionEntry {
+	if flow == nil {
+		return nil
+	}
+	key := "inv:" + analyzerVersion + ":" + FlowHash(flow) + ":" + settingsDigest(settings) + ":" + ruleSetDigest(rules)
+	if v, ok := suppressInvCache.Get(context.Background(), key); ok {
+		return v.([]SuppressionEntry)
+	}
+	v, _, _ := suppressInvSF.Do(key, func() (any, error) {
+		entries := SuppressionInventory(flow, rules, settings)
+		suppressInvCache.Set(context.Background(), key, entries, 0)
+		return entries, nil
+	})
+	if v == nil {
+		return SuppressionInventory(flow, rules, settings)
+	}
+	return v.([]SuppressionEntry)
+}
 
 // SuppressionEntry is one inline `# pad-ignore` directive in the flow source,
 // located and audited: Stale marks a directive whose rule no longer fires on

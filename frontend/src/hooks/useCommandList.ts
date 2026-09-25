@@ -249,7 +249,7 @@ export function useCommandList(deps: {
       },
       {
         id: 'view.dashboard',
-        label: 'Analysis Dashboard',
+        label: 'Analytics',
         section: 'Analysis',
         onSelect: () => setMainPaneView('dashboard'),
       },

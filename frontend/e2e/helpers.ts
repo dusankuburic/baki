@@ -24,7 +24,11 @@ export async function setupAuthenticatedPage(page: Page) {
     '/api/auth/refresh': {accessToken: 'fake-access-token', expiresAt: '2099-01-01T00:00:00Z'},
     '/api/auth/me': {id: 'user-1', email: 'tester@example.com', role: 'admin', displayName: 'Tester'},
     '/api/system/info': {
-      version: 'test', platform: 'linux', arch: 'x86', buildDate: '', gitCommit: '',
+      version: 'test',
+      platform: 'linux',
+      arch: 'x86',
+      buildDate: '',
+      gitCommit: '',
       capabilities: {sessionAnalytics: false},
     },
     // Full AppSettings shape (zod-validated on the client); firstRunCompleted
@@ -64,20 +68,62 @@ export function mockFlowDocument() {
     id: 'flow-1',
     name: 'Customer Data Sync (sample)',
     filePath: '',
-    subflows: [{
-      id: 'sf-main',
-      name: 'Main',
-      blocks: [
-        {id: 'b1', name: 'Variables.SetVariable', type: 'ACTION', rawType: 'ACTION', indent: 0, lineNumber: 2, children: [], properties: {Name: 'ApiKey', Value: "'AKIAIOSFODNN7EXAMPLE'"}, variables: ['ApiKey'], subflowId: 'sf-main'},
-        {id: 'b2', name: 'Variables.SetVariable', type: 'ACTION', rawType: 'ACTION', indent: 0, lineNumber: 3, children: [], properties: {Name: 'DebugFlag', Value: 'True'}, variables: ['DebugFlag'], subflowId: 'sf-main'},
-        {id: 'b3', name: 'HTTP.InvokeUrl', type: 'ACTION', rawType: 'ACTION', indent: 0, lineNumber: 4, children: [], properties: {Method: 'GET', Url: "'https://api.example.com/customers'"}, variables: ['Response'], subflowId: 'sf-main'},
-      ],
-      variables: [
-        {name: 'ApiKey', type: 'string', scope: 'flow'},
-        {name: 'DebugFlag', type: 'boolean', scope: 'flow'},
-      ],
-    }],
-    metadata: {blockCount: 3, subflowCount: 1, maxDepth: 1, parsedAt: new Date().toISOString(), fileSize: 500, rawLineCount: 10},
+    subflows: [
+      {
+        id: 'sf-main',
+        name: 'Main',
+        blocks: [
+          {
+            id: 'b1',
+            name: 'Variables.SetVariable',
+            type: 'ACTION',
+            rawType: 'ACTION',
+            indent: 0,
+            lineNumber: 2,
+            children: [],
+            properties: {Name: 'ApiKey', Value: "'AKIAIOSFODNN7EXAMPLE'"},
+            variables: ['ApiKey'],
+            subflowId: 'sf-main',
+          },
+          {
+            id: 'b2',
+            name: 'Variables.SetVariable',
+            type: 'ACTION',
+            rawType: 'ACTION',
+            indent: 0,
+            lineNumber: 3,
+            children: [],
+            properties: {Name: 'DebugFlag', Value: 'True'},
+            variables: ['DebugFlag'],
+            subflowId: 'sf-main',
+          },
+          {
+            id: 'b3',
+            name: 'HTTP.InvokeUrl',
+            type: 'ACTION',
+            rawType: 'ACTION',
+            indent: 0,
+            lineNumber: 4,
+            children: [],
+            properties: {Method: 'GET', Url: "'https://api.example.com/customers'"},
+            variables: ['Response'],
+            subflowId: 'sf-main',
+          },
+        ],
+        variables: [
+          {name: 'ApiKey', type: 'string', scope: 'flow'},
+          {name: 'DebugFlag', type: 'boolean', scope: 'flow'},
+        ],
+      },
+    ],
+    metadata: {
+      blockCount: 3,
+      subflowCount: 1,
+      maxDepth: 1,
+      parsedAt: new Date().toISOString(),
+      fileSize: 500,
+      rawLineCount: 10,
+    },
   }
 }
 
@@ -97,10 +143,58 @@ Text.WriteToFile TextToWrite: %Response% FilePath: 'C:\\Reports\\customers.txt' 
 
 export function mockFindings() {
   return [
-    {id: 'F-001', fingerprint: 'hardcoded-credential:b1', ruleId: 'hardcoded-credential', severity: 'error', confidence: 'high', title: 'Hardcoded credential', description: 'AWS access key detected in ApiKey variable', blockId: 'b1', subflowId: 'sf-main', category: 'Security', suggestion: 'Move the credential to a secure store'},
-    {id: 'F-002', fingerprint: 'unused-variable:b2', ruleId: 'unused-variable', severity: 'warning', confidence: 'high', title: 'Unused variable: DebugFlag', description: 'DebugFlag is set but never read', blockId: 'b2', subflowId: 'sf-main', category: 'Style', suggestion: 'Remove the variable if it is not needed'},
-    {id: 'F-003', fingerprint: 'unhandled-error:b3', ruleId: 'unhandled-error', severity: 'warning', confidence: 'high', title: 'Unhandled error on HTTP action', description: 'HTTP.InvokeUrl has no On Block Error handler', blockId: 'b3', subflowId: 'sf-main', category: 'Reliability', suggestion: 'Add an error handler', autoFix: 'wrap-error-handler'},
-    {id: 'F-004', fingerprint: 'missing-timeout:b3', ruleId: 'missing-timeout', severity: 'info', confidence: 'medium', title: 'Missing timeout', description: 'HTTP.InvokeUrl has no timeout configured', blockId: 'b3', subflowId: 'sf-main', category: 'Reliability'},
+    {
+      id: 'F-001',
+      fingerprint: 'hardcoded-credential:b1',
+      ruleId: 'hardcoded-credential',
+      severity: 'error',
+      confidence: 'high',
+      title: 'Hardcoded credential',
+      description: 'AWS access key detected in ApiKey variable',
+      blockId: 'b1',
+      subflowId: 'sf-main',
+      category: 'Security',
+      suggestion: 'Move the credential to a secure store',
+    },
+    {
+      id: 'F-002',
+      fingerprint: 'unused-variable:b2',
+      ruleId: 'unused-variable',
+      severity: 'warning',
+      confidence: 'high',
+      title: 'Unused variable: DebugFlag',
+      description: 'DebugFlag is set but never read',
+      blockId: 'b2',
+      subflowId: 'sf-main',
+      category: 'Style',
+      suggestion: 'Remove the variable if it is not needed',
+    },
+    {
+      id: 'F-003',
+      fingerprint: 'unhandled-error:b3',
+      ruleId: 'unhandled-error',
+      severity: 'warning',
+      confidence: 'high',
+      title: 'Unhandled error on HTTP action',
+      description: 'HTTP.InvokeUrl has no On Block Error handler',
+      blockId: 'b3',
+      subflowId: 'sf-main',
+      category: 'Reliability',
+      suggestion: 'Add an error handler',
+      autoFix: 'wrap-error-handler',
+    },
+    {
+      id: 'F-004',
+      fingerprint: 'missing-timeout:b3',
+      ruleId: 'missing-timeout',
+      severity: 'info',
+      confidence: 'medium',
+      title: 'Missing timeout',
+      description: 'HTTP.InvokeUrl has no timeout configured',
+      blockId: 'b3',
+      subflowId: 'sf-main',
+      category: 'Reliability',
+    },
   ]
 }
 
@@ -113,30 +207,61 @@ export function mockAnalysisReport() {
     stats: {errors: 1, warnings: 2, info: 1, blocksAnalyzed: 3, rulesRun: 29},
     findings: mockFindings(),
     metrics: {
-      subflows: [{subflowId: 'sf-main', subflowName: 'Main', blockCount: 3, cyclomaticComplexity: 2, cognitiveComplexity: 1, maxNestingDepth: 1, variableCount: 2, fanIn: 0, fanOut: 0}],
-      totalBlocks: 3, totalVariables: 2, maxCyclomatic: 2, avgCyclomatic: 2, maxCognitive: 1, avgCognitive: 1, healthScore: 65, variableDensity: 0.67, subflowCount: 1,
+      subflows: [
+        {
+          subflowId: 'sf-main',
+          subflowName: 'Main',
+          blockCount: 3,
+          cyclomaticComplexity: 2,
+          cognitiveComplexity: 1,
+          maxNestingDepth: 1,
+          variableCount: 2,
+          fanIn: 0,
+          fanOut: 0,
+        },
+      ],
+      totalBlocks: 3,
+      totalVariables: 2,
+      maxCyclomatic: 2,
+      avgCyclomatic: 2,
+      maxCognitive: 1,
+      avgCognitive: 1,
+      healthScore: 65,
+      variableDensity: 0.67,
+      subflowCount: 1,
     },
   }
 }
 
+// The real DashboardHomeData shape (frontend/src/types/dashboard.ts). The old
+// stub had a different shape, so the KPI strip threw and the main pane's
+// error boundary quietly swallowed the whole dashboard in every spec.
 export function mockDashboardHome() {
   return {
-    greeting: 'Welcome back',
-    overview: {totalFlows: 0, totalFindings: 0, avgHealth: 0, criticalFindings: 0},
+    greeting: {userDisplayName: 'Tester'},
+    overview: {avgHealthScore: 72, healthAvailable: true, totalFlows: 3, totalSubflows: 5},
     tokenUsage: [],
     recentFlows: [],
-    findings: {errors: 0, warnings: 0, info: 0},
+    findings: {
+      available: true,
+      bySeverity: {error: 1, warning: 2, info: 1},
+      byCategory: [
+        {category: 'Reliability', count: 2},
+        {category: 'Security', count: 1},
+        {category: 'Style', count: 1},
+      ],
+    },
     isCloud: true,
     healthTrend: [],
     costByProvider: [],
     ruleFrequency: [],
     activity: [],
     complexity: [],
-    security: {criticalIssues: 0, hardcodedCredentials: 0, exposedSecrets: 0},
+    security: {available: true, failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0, admin: false},
     severityTrend: [],
-    confidenceDist: [],
+    confidenceDist: {},
     healthBuckets: [],
-    fixability: {fixable: 0, unfixable: 0},
-    workflow: {automated: 0, manual: 0},
+    fixability: {available: 0, total: 0, autoFixableRules: 11, totalRules: 44},
+    workflow: {available: false, funnel: {}, mttrHours: 0, resolvedCount: 0, staleCount: 0},
   }
 }

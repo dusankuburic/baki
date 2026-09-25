@@ -36,7 +36,10 @@ func (s *AnalysisService) SuppressionInventory(ctx context.Context, doc *models.
 		return nil, fmt.Errorf("%w: no flow loaded", ErrInvalidInput)
 	}
 	settings, rules := s.ruleSetFor(ctx, doc)
-	entries := analyzer.SuppressionInventory(doc, rules, settings)
+	// Cached variant: the inventory is a pure function of (content, rule set,
+	// settings), so this is served from the analyzer's content-keyed cache on
+	// repeat views instead of re-running the entire rule set every time.
+	entries := analyzer.SuppressionInventoryCached(doc, rules, settings)
 	if entries == nil {
 		// Encode as [] so clients never have to special-case null.
 		entries = []analyzer.SuppressionEntry{}

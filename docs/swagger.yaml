@@ -2329,6 +2329,82 @@ paths:
       summary: Get suggested prompts
       tags:
       - chat
+  /api/dashboard/analytics:
+    get:
+      description: Every section is computed for the same scope and window. Findings
+        filters (severity, category, rule) map each flow's per-rule counts through
+        the current rule catalog.
+      parameters:
+      - description: 7d, 30d, 90d or custom (default 30d)
+        in: query
+        name: range
+        type: string
+      - description: YYYY-MM-DD, inclusive (range=custom)
+        in: query
+        name: from
+        type: string
+      - description: YYYY-MM-DD, inclusive (range=custom)
+        in: query
+        name: to
+        type: string
+      - description: IANA time zone for day bucketing (default UTC)
+        in: query
+        name: tz
+        type: string
+      - description: personal, org or all (default all)
+        in: query
+        name: scope
+        type: string
+      - description: organisation id (scope=org)
+        in: query
+        name: orgId
+        type: string
+      - description: comma-separated flow ids (max 50)
+        in: query
+        name: flows
+        type: string
+      - description: 'comma-separated: error, warning, info'
+        in: query
+        name: severity
+        type: string
+      - description: comma-separated categories (max 20)
+        in: query
+        name: category
+        type: string
+      - description: comma-separated rule ids (max 50)
+        in: query
+        name: rule
+        type: string
+      - description: '1 (default) or 0: include the previous period'
+        in: query
+        name: compare
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            type: object
+        "501":
+          description: Not Implemented (local mode)
+          schema:
+            type: object
+      summary: Filterable analytics for the Analytics page
+      tags:
+      - dashboard
   /api/dashboard/home:
     get:
       produces:

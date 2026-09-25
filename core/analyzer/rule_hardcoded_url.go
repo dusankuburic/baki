@@ -28,7 +28,10 @@ var (
 
 func (r *HardcodedURLRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	var findings []models.Finding
-	seen := make(map[string]bool)
+	// Lazily allocated dedup of URLs within this block: most blocks contain
+	// zero or one URL, and this Check runs for every (block, rule) pair.
+	// Reads on the nil map report "not seen", which is correct.
+	var seen map[string]bool
 
 	for key, val := range block.Properties {
 		if padVariableRef.MatchString(val) {
@@ -45,6 +48,9 @@ func (r *HardcodedURLRule) Check(block *models.Block, ctx *RuleContext) []models
 			strings.Contains(lowerKey, "connection") {
 			m := strings.TrimRight(urlPattern.FindString(val), ".")
 			if m != "" && !seen[m] {
+				if seen == nil {
+					seen = map[string]bool{}
+				}
 				seen[m] = true
 				findings = append(findings, models.Finding{
 					RuleID:      r.ID(),

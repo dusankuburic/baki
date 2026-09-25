@@ -240,6 +240,17 @@ const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD'])
 const MAX_RETRIES = 2
 const RETRY_BASE_MS = 200
 
+// A fetch that never got an HTTP response — the connection was refused or
+// reset, DNS failed, a proxy in between dropped it. The browser reports that
+// as a bare TypeError("Failed to fetch"), which is what every caller used to
+// show verbatim. Reads have exhausted their retries by the time this is thrown.
+export const NETWORK_CODE = 'NETWORK'
+const NETWORK_MESSAGE = "Couldn't reach the server — check your connection and try again."
+
+function networkFailure(): ApiError {
+  return new ApiError(NETWORK_MESSAGE, 0, NETWORK_CODE, null)
+}
+
 // Bounded retry (idempotent methods only) for transient failures.
 async function fetchWithRetry(
   path: string,
@@ -263,7 +274,8 @@ async function fetchWithRetry(
         await sleep(jitter(attempt))
         continue
       }
-      throw err
+      // Timeouts (a plain Error) and aborts (DOMException) pass through as is.
+      throw err instanceof TypeError ? networkFailure() : err
     }
   }
 }

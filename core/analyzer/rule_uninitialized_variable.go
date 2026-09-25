@@ -16,7 +16,10 @@ func (r *UninitializedVariableRule) DefaultSeverity() models.Severity { return m
 func (r *UninitializedVariableRule) Category() string                 { return "Logic" }
 
 func (r *UninitializedVariableRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	findings := []models.Finding{}
+	// nil until a finding is appended: most (block, rule) pairs produce none,
+	// and the empty non-nil literal allocated one anyway. Callers treat nil
+	// and empty identically (len/append).
+	var findings []models.Finding
 
 	// Variables used in this block (extracted by parser from %...%)
 	used := block.Variables

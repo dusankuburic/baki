@@ -30,6 +30,7 @@ import IconButton from '@/components/shared/IconButton'
 import {Dropdown, useConfirm, type DropdownItem} from '@/components/shared'
 import {useUIStore, isSystemView} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
+import {useSystemStore} from '@/stores/systemStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useFullscreen} from '@/hooks/useFullscreen'
@@ -39,13 +40,6 @@ import {useToast} from '@/components/shared/Toast'
 import type {FlowDiff, AnalysisReport} from '@/types'
 
 type SystemView = 'home' | 'dashboard' | 'library' | 'profile' | 'admin'
-const SYSTEM_VIEW_TITLES: Record<SystemView, string> = {
-  home: 'Welcome',
-  dashboard: 'Analysis Dashboard',
-  library: 'Cloud Library',
-  profile: 'User Profile',
-  admin: 'Admin',
-}
 
 type FlowView = 'block' | 'graph' | 'local-map' | 'map' | 'diff'
 // The raw-text editor is one more way of looking at the flow, so it sits in
@@ -102,8 +96,16 @@ export default function MainPaneToolbar() {
 
   const toast = useToast()
   const userRole = useAuthStore(s => s.user?.role)
+  const sessionAnalytics = useSystemStore(s => s.info?.capabilities.sessionAnalytics ?? false)
 
   if (isSystemView(mainPaneView)) {
+    const view = mainPaneView as SystemView
+    const title =
+      view === 'dashboard'
+        ? sessionAnalytics
+          ? t('titles.sessionDashboard')
+          : t('titles.dashboard')
+        : t(`titles.${view}`)
     const systemOptions: {value: SystemView; label: string; icon: typeof LayoutDashboard}[] = [
       {value: 'home', label: t('nav.home'), icon: LayoutDashboard},
       {value: 'dashboard', label: t('nav.analytics'), icon: BarChart3},
@@ -122,9 +124,7 @@ export default function MainPaneToolbar() {
           collapseLabels
         />
         <div className="flex-1 min-w-0 flex items-center">
-          <span className="text-sm font-medium text-text-primary truncate">
-            {SYSTEM_VIEW_TITLES[mainPaneView as SystemView]}
-          </span>
+          <span className="text-sm font-medium text-text-primary truncate">{title}</span>
         </div>
         <FullscreenButton />
       </div>

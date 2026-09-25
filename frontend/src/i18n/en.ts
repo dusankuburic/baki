@@ -140,7 +140,7 @@ export const shell = {
     analyzeFlow: 'Analyze flow',
     analyzing: 'Analyzing…',
     homeDashboard: 'Home Dashboard',
-    analyticsDashboard: 'Analytics Dashboard',
+    analyticsDashboard: 'Analytics',
     cloudLibrary: 'Cloud Library',
     userProfile: 'User Profile',
     adminDashboard: 'Admin Dashboard',
@@ -283,6 +283,16 @@ export const shell = {
     savePromptPlaceholder: 'Enter a name for the library flow',
     saved: 'Flow saved to library',
     saveFailed: 'Failed to save to library',
+  },
+  // The main-pane toolbar's title for each system view. `sessionDashboard`
+  // is the Analytics view on a backend with session analytics (local mode).
+  titles: {
+    home: 'Welcome',
+    dashboard: 'Analytics',
+    sessionDashboard: 'Analysis Dashboard',
+    library: 'Cloud Library',
+    profile: 'User Profile',
+    admin: 'Admin',
   },
   dropOverlay: 'Drop flow file to open',
 }

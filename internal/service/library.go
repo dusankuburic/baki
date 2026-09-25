@@ -190,6 +190,50 @@ func (s *LibraryService) buildLibraryFilter(ctx context.Context, userID, orgID s
 	}
 }
 
+// ScopeFlowIDs resolves the flow ids the caller may see under a scope, paged
+// through the storage layer (a single page is clamped to 500 rows, so a
+// bigger limit is asked for in pages), up to limit. The second result lists
+// the org ids that widened the scope (empty for personal): analytics reads
+// keyed by org (AI usage) use it.
+func (s *LibraryService) ScopeFlowIDs(ctx context.Context, userID, orgID string, scope LibraryScope, limit int) (ids []string, orgIDs []string, err error) {
+	defer logger.Guard("LibraryService.ScopeFlowIDs", &err)
+	ids, orgIDs = []string{}, []string{}
+	if s.mode == config.ModeLocal || s.storage == nil {
+		return ids, orgIDs, nil
+	}
+	if limit <= 0 {
+		limit = 5000
+	}
+	const page = 500
+	for offset := 0; len(ids) < limit; offset += page {
+		filter, ferr := s.buildLibraryFilter(ctx, userID, orgID, scope, "", storageif.FlowSortIDAsc, page, offset)
+		if ferr != nil {
+			return nil, nil, ferr
+		}
+		if offset == 0 {
+			if filter.OrganizationID != "" {
+				orgIDs = []string{filter.OrganizationID}
+			} else if len(filter.OrganizationIDs) > 0 {
+				orgIDs = append(orgIDs, filter.OrganizationIDs...)
+			}
+		}
+		docs, lerr := s.storage.ListFlows(ctx, filter)
+		if lerr != nil {
+			return nil, nil, lerr
+		}
+		for _, d := range docs {
+			ids = append(ids, d.ID)
+			if len(ids) >= limit {
+				break
+			}
+		}
+		if len(docs) < page {
+			break
+		}
+	}
+	return ids, orgIDs, nil
+}
+
 // ListLibraryFlows returns flows visible to the requesting user. When orgID
 // is set the caller must be a member of that org — otherwise any
 // authenticated user could enumerate another org's flows by guessing its ID.

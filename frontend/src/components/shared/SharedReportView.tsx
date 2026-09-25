@@ -2,6 +2,7 @@ import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import type {AnalysisReport, Severity} from '@/types'
 import {useAsync} from '@/hooks/useAsync'
+import {healthTier} from '@/lib/scoring'
 
 // SharedReportView is an UNAUTHENTICATED standalone page that renders a
 // read-only findings report via a share token. It bypasses the normal app
@@ -101,16 +102,7 @@ export default function SharedReportView() {
               {report.metrics?.healthScore !== undefined && (
                 <span className="text-text-tertiary ml-auto">
                   {t('sharedReport.health')}{' '}
-                  <span
-                    className={clsx(
-                      'font-medium',
-                      report.metrics.healthScore >= 80
-                        ? 'text-emerald-400'
-                        : report.metrics.healthScore >= 50
-                          ? 'text-amber-400'
-                          : 'text-red-400',
-                    )}
-                  >
+                  <span className={clsx('font-medium', healthTier(report.metrics.healthScore).text)}>
                     {report.metrics.healthScore}/100
                   </span>
                 </span>

@@ -84,6 +84,19 @@ export default {
           error: token('error'),
           info: token('info'),
         },
+        // Data-viz series slots and chart furniture (index.css "DATA VIZ").
+        viz: {
+          1: token('viz-1'),
+          2: token('viz-2'),
+          3: token('viz-3'),
+          4: token('viz-4'),
+          5: token('viz-5'),
+          6: token('viz-6'),
+          7: token('viz-7'),
+          8: token('viz-8'),
+          emphasis: token('viz-emphasis'),
+          muted: token('viz-muted'),
+        },
       },
       borderColor: {
         DEFAULT: 'var(--border-default)',

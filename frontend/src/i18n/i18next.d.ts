@@ -1,5 +1,6 @@
 import type {common, shell, findings, auth, chat} from './en'
 import type {enSettings} from './en.settings'
+import type {enDashboard} from './en.dashboard'
 
 // Module augmentation: `t('findings.search.placeholder')` and friends are
 // type-checked against the English source of truth — a typo'd key is a
@@ -14,6 +15,7 @@ declare module 'i18next' {
       auth: typeof auth
       chat: typeof chat
       settings: typeof enSettings
+      dashboard: typeof enDashboard
     }
   }
 }

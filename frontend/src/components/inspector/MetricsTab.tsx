@@ -2,7 +2,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {csvCell, downloadBlob} from '@/lib/csv'
 import {formatCount} from '@/lib/format'
-import {scoreColor, scoreBg, scoreLabel} from '@/lib/scoring'
+import {scoreColor, scoreBg, scoreLabel, healthTier} from '@/lib/scoring'
 import {BarChart3, RefreshCw, Download} from 'lucide-react'
 import clsx from 'clsx'
 import type {FlowMetrics} from '@/types'
@@ -91,7 +91,9 @@ export default function MetricsTab() {
             <div
               className={clsx(
                 'h-full rounded-full transition-all duration-fast',
-                scoreColor(metrics.healthScore).replace('text-', 'bg-'),
+                // A literal class: the old text-→bg- string replace produced
+                // names Tailwind never generated, so the bar had no fill.
+                healthTier(metrics.healthScore).fill,
               )}
               style={{width: `${metrics.healthScore}%`}}
             />

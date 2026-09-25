@@ -147,8 +147,18 @@ var ServiceModule = fx.Options(
 		// actually uses — Go allows the wider interface value through at this
 		// call site even though fx's reflection-based provider matching needs
 		// the concrete registration to bridge the two static types.
-		func(backend storageif.StorageBackend, analysis *service.AnalysisService, flowSvc *service.FlowService) *service.DashboardService {
-			return service.NewDashboardService(backend, analysis, flowSvc)
+		func(backend storageif.StorageBackend, analysis *service.AnalysisService, flowSvc *service.FlowService, lib *service.LibraryService) *service.DashboardService {
+			svc := service.NewDashboardService(backend, analysis, flowSvc)
+			// The analytics page resolves its flow set through the library's
+			// scope checks (owner / shared / org membership).
+			svc.SetScopeResolver(lib)
+			// Post-construction wiring, same pattern as ChatService's
+			// SetKnowledgeService below: the dashboard cache is user-keyed and
+			// must drop when the owner's flows change, but DashboardService
+			// already depends on FlowService, so the hook is registered here
+			// instead of being a constructor parameter (which would cycle).
+			flowSvc.SetCloudFlowMutationHook(svc.InvalidateDashboardCache)
+			return svc
 		},
 		service.NewExportService,
 		service.NewLibraryService,

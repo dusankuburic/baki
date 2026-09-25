@@ -39,10 +39,19 @@ func (h *HistoryStore) Record(flowID string, report *models.AnalysisReport, doc 
 		return
 	}
 
+	// Prefer the hash pinned on the report by the analysis-cache path — it is
+	// the FlowHash of exactly the document that produced this report, so
+	// recomputing it here walks the whole document a second time for nothing.
+	// Reports from non-cached paths (tests, direct runAnalysisCore callers)
+	// fall back to computing it.
+	contentHash := report.ContentHash
+	if contentHash == "" && doc != nil {
+		contentHash = FlowHash(doc)
+	}
 	snapshot := AnalysisSnapshot{
 		Timestamp:   time.Now().Format(time.RFC3339),
 		FlowID:      flowID,
-		Hash:        FlowHash(doc),
+		Hash:        contentHash,
 		Errors:      report.Stats.Errors,
 		Warnings:    report.Stats.Warnings,
 		Info:        report.Stats.Info,

@@ -4,6 +4,7 @@ import {libraryApi, type LibraryFlow, type LibraryFlowVersion} from '@/api/libra
 import {Button, Spinner, ErrorState} from '@/components/shared'
 import {logger} from '@/lib/logger'
 import {relativeTime, absoluteTime} from '@/lib/time'
+import {healthTier} from '@/lib/scoring'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAsync} from '@/hooks/useAsync'
 import {isTauri} from '@/platform/guards'
@@ -135,19 +136,7 @@ export default function LibraryDetailPanel({
             <Row
               icon={Activity}
               label="Health score"
-              value={
-                <span
-                  className={
-                    flow.healthScore >= 80
-                      ? 'text-semantic-success'
-                      : flow.healthScore >= 60
-                        ? 'text-amber-500'
-                        : 'text-semantic-error'
-                  }
-                >
-                  {flow.healthScore}%
-                </span>
-              }
+              value={<span className={healthTier(flow.healthScore).text}>{flow.healthScore}%</span>}
             />
             <Row icon={Activity} label="Errors" value={String(flow.errorCount ?? 0)} />
             <Row icon={Activity} label="Warnings" value={String(flow.warningCount ?? 0)} />

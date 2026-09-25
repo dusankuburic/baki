@@ -1147,6 +1147,32 @@ func (lsb *LocalStorageBackend) FlowDashboardAdvanced(ctx context.Context, owner
 	return &interfaces.DashboardAdvancedData{Security: interfaces.DashboardSecurity{}}, nil
 }
 
+// Analytics reads: local mode persists no analysis history, so every read is
+// empty (the analytics route is cloud-only anyway).
+func (lsb *LocalStorageBackend) LoadAnalysisSnapshots(ctx context.Context, flowIDs []string) ([]interfaces.AnalysisSnapshotRow, error) {
+	return []interfaces.AnalysisSnapshotRow{}, nil
+}
+
+func (lsb *LocalStorageBackend) LoadAnalysisHistory(ctx context.Context, w interfaces.AnalyticsWindow) (*interfaces.AnalysisHistoryRows, error) {
+	return &interfaces.AnalysisHistoryRows{}, nil
+}
+
+func (lsb *LocalStorageBackend) LoadTriageAnalytics(ctx context.Context, w interfaces.AnalyticsWindow) (*interfaces.TriageRows, error) {
+	return &interfaces.TriageRows{}, nil
+}
+
+func (lsb *LocalStorageBackend) LoadUsageAnalytics(ctx context.Context, userID string, orgIDs []string, mode string, w interfaces.AnalyticsWindow) (*interfaces.UsageRows, error) {
+	return &interfaces.UsageRows{}, nil
+}
+
+func (lsb *LocalStorageBackend) LoadActivityAnalytics(ctx context.Context, userID string, w interfaces.AnalyticsWindow, limit int) (*interfaces.ActivityRows, error) {
+	return &interfaces.ActivityRows{}, nil
+}
+
+func (lsb *LocalStorageBackend) LoadSecurityAnalytics(ctx context.Context, userID, email string, includeLocked bool) (*interfaces.SecurityRows, error) {
+	return &interfaces.SecurityRows{}, nil
+}
+
 // ---- Refresh token operations (local mode stubs) ----
 
 func (lsb *LocalStorageBackend) StoreRefreshToken(ctx context.Context, jti, userID string, expiresAt time.Time) error {

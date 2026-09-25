@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"pad-core/logger"
@@ -419,6 +421,17 @@ func buildContext(flow *models.FlowDocument, settings *models.AppSettings) *Rule
 		}
 	}
 
+	// Pre-fill every block's content signature. sigCache used to be the only
+	// RuleContext field mutated lazily during the rule walk ("safe as a plain
+	// map: the analysis walk is single-threaded") — the walk is now sharded
+	// across workers, and computing all signatures here makes every rule's
+	// ctx access a pure read. One signature is a property-key sort + MD5 per
+	// block, the same class of per-block work as the variable-extraction
+	// regex pass already running above.
+	for _, b := range ctx.AllBlocks {
+		ctx.blockSig(b)
+	}
+
 	return ctx
 }
 
@@ -643,65 +656,150 @@ func runAnalysisCore(gctx context.Context, flow *models.FlowDocument, rules []Ru
 		}
 	}
 
-	// Walk the block tree ONCE and dispatch every enabled rule per block,
-	// instead of doing a full traversal per rule (O(blocks) vs O(rules×blocks)).
-	// Findings are bucketed per rule and flattened in rule order afterwards, so
-	// the output order is byte-identical to the previous rule-major loop.
-	buckets := make([][]models.Finding, len(enabledRules))
-	ruleTimers := make([]int64, len(enabledRules))
-	ruleBlocks := make([]int, len(enabledRules))
-	rulesSkipped := 0
-
+	// Dispatch every enabled rule over every block, sharded across workers.
+	// This used to be one sequential walkBlocks pass (O(blocks×rules) on a
+	// single core); the ctx is read-only at this point (sigCache pre-filled
+	// in buildContext, rules are stateless package singletons already run
+	// concurrently by parallel HTTP analyses), so contiguous shards of the
+	// block list can run in parallel.
+	//
+	// Output order is preserved: shards cover contiguous ranges in document
+	// order, each shard keeps per-rule buckets, and the aggregation below
+	// concatenates shard buckets in shard order per rule — the same
+	// rule-major, document-order-minor sequence the sequential walk produced.
+	blocks := make([]*models.Block, 0, ctx.totalBlocks)
 	walkBlocks(flow, func(block *models.Block) {
-		if block.Type == models.BlockTypeEnd {
-			return
-		}
-		// Respect request cancellation: a pathological payload on the raw-analyze
-		// endpoint can keep the analyzer walking long after the client
-		// disconnected (or the per-request deadline elapsed). Skip the rule work
-		// for remaining blocks so the CPU burn stops; the partial report is
-		// discarded upstream (the cancelled response is never written).
-		if gctx != nil && gctx.Err() != nil {
-			return
-		}
-		for i, rule := range enabledRules {
-			counter++
-			if onProgress != nil && counter%50 == 0 {
-				onProgress(counter, total, rule.Name())
-			}
-
-			var t0 time.Time
-			if profile {
-				t0 = time.Now()
-			}
-			ruleFindings, skipped := safeCheck(rule, block, ctx)
-			if skipped {
-				rulesSkipped++
-			}
-			if profile {
-				ruleTimers[i] += time.Since(t0).Microseconds()
-			}
-			ruleBlocks[i]++
-
-			if ov := severityOverride[i]; ov != "" {
-				for j := range ruleFindings {
-					ruleFindings[j].Severity = ov
-				}
-			}
-			if rule.Category() != "" {
-				for j := range ruleFindings {
-					if ruleFindings[j].Category == "" {
-						ruleFindings[j].Category = rule.Category()
-					}
-				}
-			}
-			buckets[i] = append(buckets[i], ruleFindings...)
+		if block.Type != models.BlockTypeEnd {
+			blocks = append(blocks, block)
 		}
 	})
 
+	workers := runtime.GOMAXPROCS(0)
+	// Match the batch pool's ceiling: concurrent analyses each spawning a
+	// full GOMAXPROCS fan-out would oversubscribe a many-core box.
+	if workers > 8 {
+		workers = 8
+	}
+	if len(blocks) < 256 {
+		// Sharding overhead (goroutines + per-shard bucket headers) buys
+		// nothing on small flows; the sequential threshold keeps the tiny-flow
+		// latency identical to before.
+		workers = 1
+	}
+	if workers > len(blocks) {
+		workers = len(blocks)
+	}
+	if workers < 1 {
+		// Zero-block documents (nothing but END markers, or parse-failure
+		// docs): the shard loop below is a no-op, but the shardSize division
+		// needs a positive divisor.
+		workers = 1
+	}
+
+	type shardResult struct {
+		buckets      [][]models.Finding
+		ruleTimers   []int64
+		ruleBlocks   []int
+		rulesSkipped int
+		counter      int
+	}
+	// Allocated up front so the aggregation below is safe even when no shard
+	// runs (empty document, or every shard already cancelled).
+	results := make([]shardResult, workers)
+	for w := range results {
+		results[w].buckets = make([][]models.Finding, len(enabledRules))
+		results[w].ruleTimers = make([]int64, len(enabledRules))
+		results[w].ruleBlocks = make([]int, len(enabledRules))
+	}
+	// onProgress reaches the SSE emitter; workers must not interleave calls.
+	var progressMu sync.Mutex
+
+	runShard := func(res *shardResult, shardBlocks []*models.Block) {
+		for _, block := range shardBlocks {
+			// Respect request cancellation: a pathological payload on the
+			// raw-analyze endpoint can keep the analyzer walking long after the
+			// client disconnected (or the per-request deadline elapsed). Skip
+			// the remaining shard's rule work so the CPU burn stops; the
+			// partial report is discarded upstream (the cancelled response is
+			// never written).
+			if gctx != nil && gctx.Err() != nil {
+				return
+			}
+			for i, rule := range enabledRules {
+				res.counter++
+				if onProgress != nil && res.counter%50 == 0 {
+					progressMu.Lock()
+					onProgress(res.counter, total, rule.Name())
+					progressMu.Unlock()
+				}
+
+				var t0 time.Time
+				if profile {
+					t0 = time.Now()
+				}
+				ruleFindings, skipped := safeCheck(rule, block, ctx)
+				if skipped {
+					res.rulesSkipped++
+				}
+				if profile {
+					res.ruleTimers[i] += time.Since(t0).Microseconds()
+				}
+				res.ruleBlocks[i]++
+
+				if ov := severityOverride[i]; ov != "" {
+					for j := range ruleFindings {
+						ruleFindings[j].Severity = ov
+					}
+				}
+				if rule.Category() != "" {
+					for j := range ruleFindings {
+						if ruleFindings[j].Category == "" {
+							ruleFindings[j].Category = rule.Category()
+						}
+					}
+				}
+				res.buckets[i] = append(res.buckets[i], ruleFindings...)
+			}
+		}
+	}
+
+	shardSize := (len(blocks) + workers - 1) / workers
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		lo := w * shardSize
+		hi := lo + shardSize
+		if hi > len(blocks) {
+			hi = len(blocks)
+		}
+		if lo >= hi {
+			break
+		}
+		wg.Add(1)
+		go func(w int, shardBlocks []*models.Block) {
+			defer wg.Done()
+			runShard(&results[w], shardBlocks)
+		}(w, blocks[lo:hi])
+	}
+	wg.Wait()
+
+	// Aggregate rule-major: findings order = (rule, document order), timers
+	// and counters summed across shards.
 	var findings []models.Finding
-	for i := range buckets {
-		findings = append(findings, buckets[i]...)
+	ruleTimers := make([]int64, len(enabledRules))
+	ruleBlocks := make([]int, len(enabledRules))
+	ruleFindingCounts := make([]int, len(enabledRules))
+	rulesSkipped, counter := 0, 0
+	for i := range enabledRules {
+		for w := range results {
+			findings = append(findings, results[w].buckets[i]...)
+			ruleTimers[i] += results[w].ruleTimers[i]
+			ruleBlocks[i] += results[w].ruleBlocks[i]
+			ruleFindingCounts[i] += len(results[w].buckets[i])
+		}
+	}
+	for w := range results {
+		rulesSkipped += results[w].rulesSkipped
+		counter += results[w].counter
 	}
 	if onProgress != nil && len(enabledRules) > 0 {
 		onProgress(counter, total, enabledRules[len(enabledRules)-1].Name())
@@ -798,7 +896,7 @@ func runAnalysisCore(gctx context.Context, flow *models.FlowDocument, rules []Ru
 			RuleID:        rule.ID(),
 			RuleName:      rule.Name(),
 			DurationMs:    ruleTimers[i] / 1000,
-			FindingCount:  len(buckets[i]),
+			FindingCount:  ruleFindingCounts[i],
 			BlocksChecked: ruleBlocks[i],
 		}
 	}

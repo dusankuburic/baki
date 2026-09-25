@@ -1,9 +1,8 @@
-import {lazy, Suspense, useEffect} from 'react'
+import {lazy, Suspense} from 'react'
 import {Spinner} from '@/components/shared'
 import {UserProfile} from '@/components/auth/UserProfile'
 import {MainPaneToolbar} from '@/components/flow'
 import {useSystemStore} from '@/stores/systemStore'
-import {useUIStore} from '@/stores/uiStore'
 
 // GraphView pulls in cytoscape (~100KB+); keep it out of the entry chunk like
 // its lazy siblings below.
@@ -12,6 +11,7 @@ import {useUIStore} from '@/stores/uiStore'
 // lazy keeps it out of the entry chunk and only loads when the user opens it.
 // AdminDashboard is admin-only; lazy keeps it out of every non-admin's bundle.
 const AnalyticsDashboard = lazy(() => import('@/components/dashboard/AnalyticsDashboard'))
+const CloudAnalyticsPage = lazy(() => import('@/components/dashboard/analytics/CloudAnalyticsPage'))
 const HomeDashboard = lazy(() => import('@/components/dashboard/HomeDashboard'))
 const LibraryWorkspace = lazy(() => import('@/components/library/LibraryWorkspace'))
 const PortfolioView = lazy(() => import('@/components/dashboard/PortfolioView'))
@@ -28,18 +28,13 @@ const AdminDashboard = lazy(() => import('@/components/admin/AdminDashboard').th
 // Returns null for flow-editor views ('block', 'graph', 'map', 'local-map',
 // 'diff', '' …) so the caller knows to render the editor groups instead.
 export function SystemViewRouter({view}: {view: string}) {
-  const setMainPaneView = useUIStore(s => s.setMainPaneView)
-  // Session analytics are local-mode-only. The nav button is hidden in cloud
-  // mode (SidebarToolbar), but a persisted/stale UI state could still land on
-  // 'dashboard' — bounce it to Home, the cloud equivalent, instead of the
-  // view's dead "not available in this mode" notice.
+  // The Analytics tab: on a backend that keeps session analytics (local mode)
+  // it is the session dashboard; in cloud mode it is the filterable
+  // analytics page. Until the capabilities arrive nothing is guessed.
   const sessionAnalytics = useSystemStore(s => s.info?.capabilities.sessionAnalytics ?? false)
-  const effectiveView = view === 'dashboard' && !sessionAnalytics ? 'home' : view
-  useEffect(() => {
-    if (effectiveView !== view) setMainPaneView('home')
-  }, [effectiveView, view, setMainPaneView])
+  const capabilitiesLoaded = useSystemStore(s => s.isLoaded)
 
-  switch (effectiveView) {
+  switch (view) {
     case 'profile':
       return (
         <div className="flex flex-col h-full bg-surface-1">
@@ -64,11 +59,23 @@ export function SystemViewRouter({view}: {view: string}) {
       return (
         <div className="flex flex-col h-full bg-surface-1">
           <MainPaneToolbar />
-          <div className="flex-1 overflow-y-auto p-4">
-            <Suspense fallback={<Spinner />}>
-              <AnalyticsDashboard />
-            </Suspense>
-          </div>
+          {!capabilitiesLoaded ? (
+            <div className="flex-1 flex items-center justify-center">
+              <Spinner />
+            </div>
+          ) : sessionAnalytics ? (
+            <div className="flex-1 overflow-y-auto p-4">
+              <Suspense fallback={<Spinner />}>
+                <AnalyticsDashboard />
+              </Suspense>
+            </div>
+          ) : (
+            <div className="flex-1 overflow-hidden">
+              <Suspense fallback={<Spinner />}>
+                <CloudAnalyticsPage />
+              </Suspense>
+            </div>
+          )}
         </div>
       )
     case 'home':

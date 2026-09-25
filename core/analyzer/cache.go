@@ -349,7 +349,8 @@ func CachedAnalysis(doc *models.FlowDocument, rules []Rule, settings *models.App
 // per-request deadline (raw-analyze endpoint) stops burning CPU once it elapses.
 // Cache lookup/put are unaffected (they're cheap relative to the walk).
 func CachedAnalysisCtx(gctx context.Context, doc *models.FlowDocument, rules []Rule, settings *models.AppSettings, onProgress func(int, int, string)) *models.AnalysisReport {
-	hash := analyzerVersion + ":" + FlowHash(doc) + ":" + settingsDigest(settings) + ":" + ruleSetDigest(rules)
+	flowHash := FlowHash(doc)
+	hash := analyzerVersion + ":" + flowHash + ":" + settingsDigest(settings) + ":" + ruleSetDigest(rules)
 	id := StableFlowID(doc)
 	if cached := DefaultCache.Get(id, hash); cached != nil {
 		return cached
@@ -372,6 +373,12 @@ func CachedAnalysisCtx(gctx context.Context, doc *models.FlowDocument, rules []R
 		// are a dev diagnostic and not worth two time.Now() calls per
 		// (block, rule) here.
 		report := runAnalysisCore(gctx, doc, rules, settings, onProgress, false)
+		// Pin the content hash this report was produced under so downstream
+		// consumers (history recording) reuse it instead of re-walking the
+		// document for FlowHash a second time.
+		if report != nil && report.ContentHash == "" {
+			report.ContentHash = flowHash
+		}
 		DefaultCache.PutWithPath(id, doc.FilePath, hash, report)
 		return report, nil
 	})

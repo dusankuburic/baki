@@ -8,12 +8,11 @@ import {useOrgStore} from '@/stores/orgStore'
 import {logger} from '@/lib/logger'
 import {useAsync} from '@/hooks/useAsync'
 import {downloadBlob} from '@/lib/csv'
+import {healthTier} from '@/lib/scoring'
 
-// healthColor maps a 0–100 health score to a semantic text color.
+// healthColor maps a 0–100 health score to the app-wide tier colour.
 function healthColor(score: number): string {
-  if (score >= 80) return 'text-semantic-success'
-  if (score >= 50) return 'text-semantic-warning'
-  return 'text-semantic-error'
+  return healthTier(score).text
 }
 
 function Stat({label, value, accent}: {label: string; value: string | number; accent?: string}) {

@@ -242,6 +242,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 
 	// --- Welcome Dashboard (BFF) ---
 	r.Get("/api/dashboard/home", h.Dashboard.handleHome)
+	r.Get("/api/dashboard/analytics", h.Dashboard.handleAnalytics)
 
 	// --- Governance alerts inbox (notifications bell) ---
 	// Scanner-written drift/regression alerts; RLS-scoped to the caller's visible

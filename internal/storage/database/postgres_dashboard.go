@@ -223,13 +223,19 @@ func (b *PostgresStorageBackend) FlowDashboardData(ctx context.Context, ownerID 
 		return nil, fmt.Errorf("iterate confidence: %w", err)
 	}
 
-	// D. Recent flows with their latest health score (LEFT JOIN ⇒ nil when never analyzed).
+	// D. Recent flows with their latest health score (LEFT JOIN ⇒ nil when never
+	// analyzed). One row per name: every upload mints a new flow id, so the
+	// same flow re-uploaded three times used to fill three of the five slots.
 	recRows, err := b.query(ctx).QueryContext(ctx, `
-		SELECT f.id, f.name, f.updated_at, fa.health_score
-		FROM flows f
-		LEFT JOIN flow_analysis fa ON fa.flow_id = f.id
-		WHERE f.owner_id = $1
-		ORDER BY f.updated_at DESC
+		SELECT r.id, r.name, r.updated_at, r.health_score
+		FROM (
+		    SELECT DISTINCT ON (lower(f.name)) f.id, f.name, f.updated_at, fa.health_score
+		    FROM flows f
+		    LEFT JOIN flow_analysis fa ON fa.flow_id = f.id
+		    WHERE f.owner_id = $1
+		    ORDER BY lower(f.name), f.updated_at DESC
+		) r
+		ORDER BY r.updated_at DESC
 		LIMIT 5`, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("dashboard recent flows: %w", err)
@@ -297,7 +303,14 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 		Security: interfaces.DashboardSecurity{},
 	}
 
-	// A. Health score trend: daily avg from flow_analysis_history.
+	// A. Health score trend: daily avg from flow_analysis_history. The
+	// lateral joins flows BY OWNER first, so the planner walks
+	// flows(owner_id) → flow_analysis_history(flow_id, analyzed_at) instead
+	// of scanning every tenant's history rows in the time window and
+	// filtering with a per-row EXISTS (cross-tenant scan that grew with
+	// tenant count). DISTINCT ON takes the latest run per flow per day —
+	// same rationale as A2 below: history is append-only, so counting every
+	// re-analysis would double-weight flows analyzed N times in a day.
 	trendRows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT TO_CHAR(d.day, 'YYYY-MM-DD'),
 		       COALESCE(ROUND(AVG(h.health_score))::int, 0),
@@ -307,10 +320,14 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 		         date_trunc('day', NOW()),
 		         INTERVAL '1 day'
 		     ) AS d(day)
-		LEFT JOIN flow_analysis_history h
-		       ON h.analyzed_at >= d.day
+		LEFT JOIN LATERAL (
+		    SELECT DISTINCT ON (h.flow_id) h.health_score, h.id
+		    FROM flow_analysis_history h
+		    JOIN flows f ON f.id = h.flow_id AND f.owner_id = $1
+		    WHERE h.analyzed_at >= d.day
 		      AND h.analyzed_at <  d.day + INTERVAL '1 day'
-		      AND EXISTS (SELECT 1 FROM flows f WHERE f.id = h.flow_id AND f.owner_id = $1)
+		    ORDER BY h.flow_id, h.analyzed_at DESC
+		) h ON TRUE
 		GROUP BY d.day
 		ORDER BY d.day ASC`, ownerID, days)
 	if err != nil {
@@ -418,10 +435,14 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 		return nil, fmt.Errorf("iterate rule frequency: %w", err)
 	}
 
-	// D. Activity feed from audit_events.
+	// D. Activity feed from audit_events. Only a flow resource carries a name
+	// worth showing; anything else (a settings save, the user's own record)
+	// used to fall back to the raw resource id.
 	actRows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT action,
-		       COALESCE((SELECT name FROM flows WHERE id = resource_id LIMIT 1), resource_id, ''),
+		       CASE WHEN resource_type = 'flow'
+		            THEN COALESCE((SELECT name FROM flows WHERE id = resource_id LIMIT 1), meta->>'name', '')
+		            ELSE '' END,
 		       created_at
 		FROM audit_events
 		WHERE user_id = $1
@@ -473,9 +494,12 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 	// reported: a query that errors leaves its field at 0, and the card used to
 	// render three zeros as "no security issues detected".
 	securityOK := true
+	// Auth events are logged before there are claims: the user is in
+	// resource_id, and user_id is empty — the old user_id predicate never hit.
 	if err := b.query(ctx).QueryRowContext(ctx, `
 		SELECT COUNT(*)::int FROM audit_events
-		WHERE action = 'auth.login_failure' AND user_id = $1
+		WHERE action = 'auth.login_failure'
+		  AND (user_id = $1 OR (resource_type = 'user' AND resource_id = $1))
 		  AND created_at >= NOW() - INTERVAL '24 hours'`, ownerID,
 	).Scan(&out.Security.FailedLogins24h); err != nil {
 		logger.Warn("dashboard: failed-login count unavailable", "error", err)

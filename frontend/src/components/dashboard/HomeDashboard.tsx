@@ -1,33 +1,34 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
-import {RefreshCw, AlertTriangle} from 'lucide-react'
+import {useTranslation} from 'react-i18next'
+import {ArrowRight} from 'lucide-react'
 import {dashboardApi, libraryApi} from '@/api'
 import {logger} from '@/lib/logger'
-import {useToast} from '@/components/shared'
+import {useToast, ErrorState} from '@/components/shared'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore, beginDocLoad, isDocLoadCurrent} from '@/stores/flowStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
-import {useSystemStore} from '@/stores/systemStore'
+import {useAnalyticsStore} from '@/stores/analyticsStore'
 import type {DashboardHomeData, FlowDocument} from '@/types'
-import {KPIStripCard} from './home/KPIStripCard'
+import {HomeKpiRow} from './home/HomeKpiRow'
 import {HealthTrendCard} from './home/HealthTrendCard'
-import {CostBreakdownCard} from './home/CostBreakdownCard'
-import {HealthGaugeCard} from './home/HealthGaugeCard'
-import {AITokenUsageCard} from './home/AITokenUsageCard'
-import {FindingsChartCard} from './home/FindingsChartCard'
-import {RuleFrequencyCard} from './home/RuleFrequencyCard'
+import {FindingsByCategoryCard} from './home/FindingsByCategoryCard'
+import {FindingsByRuleCard} from './home/FindingsByRuleCard'
+import {TriageCard} from './home/TriageCard'
 import {RecentFlowsCard} from './home/RecentFlowsCard'
 import {ActivityFeedCard} from './home/ActivityFeedCard'
-import {FlowComplexityCard} from './home/FlowComplexityCard'
+import {AiUsageCard} from './home/AiUsageCard'
 import {SecurityPostureCard} from './home/SecurityPostureCard'
-import {SeverityTrendCard} from './home/SeverityTrendCard'
-import {ConfidenceDonutCard} from './home/ConfidenceDonutCard'
 import {HealthDistributionCard} from './home/HealthDistributionCard'
-import {FixabilityCard} from './home/FixabilityCard'
-import {WorkflowFunnelCard} from './home/WorkflowFunnelCard'
+import {FlowComplexityCard} from './home/FlowComplexityCard'
 import {SkeletonDashboard} from './home/SkeletonDashboard'
 
+// Home is the at-a-glance overview: the headline numbers and one card per
+// theme, each with a "Details" link into the section of the Analytics page
+// that expands on it. The layout answers to the main pane's width (the
+// `home` container in index.css), not the viewport's.
 export default function HomeDashboard() {
+  const {t} = useTranslation('dashboard')
   const [data, setData] = useState<DashboardHomeData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -42,10 +43,7 @@ export default function HomeDashboard() {
   const docId = useFlowStore(s => s.document?.id ?? null)
   const toast = useToast()
   const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
-  // The analytics view behind "Details" is session analytics; without them it
-  // only says "not available", so the link is not offered.
-  const sessionAnalytics = useSystemStore(s => s.info?.capabilities.sessionAnalytics ?? false)
-  const openAnalytics = sessionAnalytics ? () => setMainPaneView('dashboard') : undefined
+  const requestSection = useAnalyticsStore(s => s.requestSection)
 
   const loadIdRef = useRef(0)
   const hasDataRef = useRef(false)
@@ -70,17 +68,17 @@ export default function HomeDashboard() {
         if (myId !== loadIdRef.current) return
         logger.error('dashboard: load failed', e)
         if (hasDataRef.current) {
-          toastRef.current.error('Dashboard refresh failed', {
-            description: e instanceof Error ? e.message : 'Unknown error',
+          toastRef.current.error(t('home.refreshFailed'), {
+            description: e instanceof Error ? e.message : t('common.unknownError'),
           })
         } else {
-          setError(e instanceof Error ? e.message : 'Failed to load dashboard')
+          setError(e instanceof Error ? e.message : t('home.loadFailed'))
         }
       })
       .finally(() => {
         if (myId === loadIdRef.current) setLoading(false)
       })
-  }, [])
+  }, [t])
 
   const retry = useCallback(() => {
     setLoading(true)
@@ -124,17 +122,26 @@ export default function HomeDashboard() {
         setMainPaneView('block')
       } catch (e) {
         if (!isDocLoadCurrent(gen)) return
-        toastRef.current.error('Failed to open flow', {
-          description: e instanceof Error ? e.message : 'Unknown error',
+        toastRef.current.error(t('home.openFailed'), {
+          description: e instanceof Error ? e.message : t('common.unknownError'),
         })
       }
     },
-    [setDocument, setMainPaneView],
+    [setDocument, setMainPaneView, t],
+  )
+
+  // "Details" on a cloud card lands on that section of the Analytics page.
+  const details = useCallback(
+    (section: string) => () => {
+      requestSection(section)
+      setMainPaneView('dashboard')
+    },
+    [requestSection, setMainPaneView],
   )
 
   if (loading) {
     return (
-      <div className="w-full h-full p-6 overflow-y-auto bg-surface-1">
+      <div className="home-dashboard h-full w-full overflow-y-auto bg-surface-1">
         <SkeletonDashboard />
       </div>
     )
@@ -142,19 +149,14 @@ export default function HomeDashboard() {
 
   if (error || !data) {
     return (
-      <div className="w-full h-full p-6 overflow-y-auto bg-surface-1">
-        <div className="max-w-md mx-auto mt-20 flex flex-col items-center text-center gap-3">
-          <div className="w-14 h-14 rounded-full bg-red-500/10 flex items-center justify-center">
-            <AlertTriangle size={26} className="text-red-400" />
-          </div>
-          <div className="text-lg font-medium text-text-primary">Couldn't load your dashboard</div>
-          {error && <div className="text-sm text-text-tertiary break-words">{error}</div>}
-          <button
-            onClick={retry}
-            className="mt-1 inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-surface-2 border border-border-subtle text-text-primary hover:bg-surface-3 transition-colors"
-          >
-            <RefreshCw size={14} /> Retry
-          </button>
+      <div className="home-dashboard h-full w-full overflow-y-auto bg-surface-1">
+        <div className="home-layout">
+          <ErrorState
+            title={t('home.loadFailed')}
+            message={error ?? ''}
+            onRetry={retry}
+            retryLabel={t('common.retry')}
+          />
         </div>
       </div>
     )
@@ -174,124 +176,123 @@ export default function HomeDashboard() {
     complexity,
     security,
     severityTrend,
-    confidenceDist,
     healthBuckets,
     fixability,
     workflow,
   } = data
   const orgName = greeting.activeOrgName || activeOrg?.name
+  const cloudDetails = (section: string) => (isCloud ? details(section) : undefined)
 
   return (
-    <div className="w-full h-full p-6 overflow-y-auto bg-surface-1">
-      <div className="grid grid-cols-12 gap-4 max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="col-span-12 mb-1">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-text-primary">
-              {timeGreeting()}, {greeting.userDisplayName}
-            </h1>
-            {isAnalyzing && (
-              <span className="inline-flex items-center gap-1.5 text-xs text-brand-400 bg-brand-500/10 px-2 py-0.5 rounded-full animate-pulse">
-                <span className="w-1.5 h-1.5 rounded-full bg-brand-400" />
-                Analyzing…
-              </span>
-            )}
+    <div className="home-dashboard h-full w-full overflow-y-auto bg-surface-1">
+      <div className="home-layout">
+        <header className="home-header mb-5 flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-bold text-text-primary">
+                {t('home.greeting', {timeOfDay: t(`home.${timeOfDay()}`), name: greeting.userDisplayName})}
+              </h1>
+              {isAnalyzing && (
+                <span className="inline-flex animate-pulse items-center gap-1.5 rounded-full bg-brand-500/10 px-2 py-0.5 text-xs text-brand-400">
+                  <span className="h-1.5 w-1.5 rounded-full bg-brand-400" aria-hidden="true" />
+                  {t('common.analyzing')}
+                </span>
+              )}
+            </div>
+            <p className="mt-0.5 text-sm text-text-tertiary">
+              {orgName ? `${orgName} · ` : ''}
+              {t('home.subtitle')}
+              {!isCloud && ` ${t('home.subtitleLocal')}`}
+            </p>
           </div>
-          <p className="text-sm text-text-tertiary mt-0.5">
-            {orgName ? `${orgName} · ` : ''}Here's your workspace at a glance.
-            {!isCloud && ' Aggregates every flow analyzed this session — newest analysis per file.'}
-          </p>
-        </div>
+          {isCloud && (
+            <button
+              type="button"
+              onClick={details('analytics-overview')}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border-default bg-surface-2 px-3 py-1.5 text-sm text-text-primary transition-colors duration-fast hover:bg-surface-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+            >
+              {t('common.openAnalytics')}
+              <ArrowRight size={14} aria-hidden="true" />
+            </button>
+          )}
+        </header>
 
-        {/* Row 1: KPI Strip */}
-        <KPIStripCard
+        <HomeKpiRow
           overview={overview}
           findings={findings}
+          healthTrend={isCloud ? healthTrend : []}
+          severityTrend={isCloud ? severityTrend : []}
+          fixability={fixability}
           costByProvider={isCloud ? costByProvider : []}
-          className="col-span-12"
           // The portfolio is an org-wide governance view (cloud only, the
           // palette hides it the same way); on desktop the tile used to route
           // to a view backed by GET /api/library/portfolio, which 500'd there.
           onViewFindings={isCloud ? () => setMainPaneView('portfolio') : undefined}
           onViewFlows={isCloud ? () => setMainPaneView('library') : undefined}
+          className="mb-4"
         />
 
-        {isCloud ? (
-          <>
-            {/* Row 2: Health Trend + Cost Breakdown */}
-            <HealthTrendCard data={healthTrend} className="col-span-12 lg:col-span-8" />
-            <CostBreakdownCard data={costByProvider} className="col-span-12 lg:col-span-4" />
-
-            {/* Row 3: AI Token Usage + Health Gauge */}
-            <AITokenUsageCard data={tokenUsage} className="col-span-12 lg:col-span-8" />
-            <HealthGaugeCard
-              overview={overview}
-              bySeverity={findings.bySeverity}
-              className="col-span-12 lg:col-span-4"
-            />
-
-            {/* Row 4: Rule Frequency + Findings Radar */}
-            <RuleFrequencyCard data={ruleFrequency} className="col-span-12 lg:col-span-8" />
-            <FindingsChartCard
-              findings={findings}
-              onOpenAnalytics={openAnalytics}
-              className="col-span-12 lg:col-span-4"
-            />
-
-            {/* Row 5: Severity Trend + Confidence Donut (developer analytics) */}
-            <SeverityTrendCard data={severityTrend} className="col-span-12 lg:col-span-8" />
-            <ConfidenceDonutCard confidence={confidenceDist} className="col-span-12 lg:col-span-4" />
-
-            {/* Row 6: Recent Flows + Activity Feed */}
-            <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="col-span-12 lg:col-span-7" />
-            <ActivityFeedCard data={activity} className="col-span-12 lg:col-span-5" />
-
-            {/* Row 7: Flow Complexity + Security Posture */}
-            <FlowComplexityCard data={complexity} className="col-span-12 lg:col-span-7" />
-            <SecurityPostureCard data={security} className="col-span-12 lg:col-span-5" />
-
-            {/* Row 8: Health Distribution + Fix Availability (developer analytics) */}
-            <HealthDistributionCard data={healthBuckets} className="col-span-12 lg:col-span-6" />
-            <FixabilityCard data={fixability} className="col-span-12 lg:col-span-6" />
-
-            {/* Row 9: Triage Workflow (cloud-only team health) */}
-            <WorkflowFunnelCard data={workflow} className="col-span-12 lg:col-span-12" />
-          </>
-        ) : (
-          <>
-            {/* Row 2: Rule Frequency + Health Gauge */}
-            <RuleFrequencyCard data={ruleFrequency} className="col-span-12 lg:col-span-8" />
-            <HealthGaugeCard
-              overview={overview}
-              bySeverity={findings.bySeverity}
-              className="col-span-12 lg:col-span-4"
-            />
-
-            {/* Row 3: Confidence + Health Distribution + Fix Availability (developer analytics) */}
-            <ConfidenceDonutCard confidence={confidenceDist} className="col-span-12 lg:col-span-4" />
-            <HealthDistributionCard data={healthBuckets} className="col-span-12 lg:col-span-4" />
-            <FixabilityCard data={fixability} className="col-span-12 lg:col-span-4" />
-
-            {/* Row 4: Recent Flows + Findings Radar */}
-            <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="col-span-12 lg:col-span-7" />
-            <FindingsChartCard
-              findings={findings}
-              onOpenAnalytics={openAnalytics}
-              className="col-span-12 lg:col-span-5"
-            />
-
-            {/* Row 5: Flow Complexity */}
-            <FlowComplexityCard data={complexity} className="col-span-12" />
-          </>
-        )}
+        <div className="home-grid">
+          {isCloud ? (
+            <>
+              <HealthTrendCard data={healthTrend} onDetails={cloudDetails('analytics-trend')} className="home-span-8" />
+              <FindingsByCategoryCard
+                findings={findings}
+                onDetails={cloudDetails('analytics-findings')}
+                className="home-span-4"
+              />
+              <FindingsByRuleCard
+                data={ruleFrequency}
+                onDetails={cloudDetails('analytics-findings')}
+                className="home-span-7"
+              />
+              <TriageCard data={workflow} onDetails={cloudDetails('analytics-triage')} className="home-span-5" />
+              <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="home-span-7" />
+              <ActivityFeedCard
+                data={activity}
+                onDetails={cloudDetails('analytics-activity')}
+                className="home-span-5"
+              />
+              <AiUsageCard
+                tokens={tokenUsage}
+                cost={costByProvider}
+                isCloud
+                onDetails={cloudDetails('analytics-ai')}
+                className="home-span-8"
+              />
+              <SecurityPostureCard
+                data={security}
+                onDetails={cloudDetails('analytics-security')}
+                className="home-span-4"
+              />
+            </>
+          ) : (
+            <>
+              <FindingsByCategoryCard findings={findings} className="home-span-5" />
+              <FindingsByRuleCard data={ruleFrequency} className="home-span-7" />
+              <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="home-span-7" />
+              <HealthDistributionCard data={healthBuckets} className="home-span-5" />
+              <FlowComplexityCard
+                rows={complexity.map(c => ({
+                  id: c.flowId,
+                  name: c.flowName,
+                  blocks: c.blockCount,
+                  findings: c.findingCount,
+                  health: c.healthScore,
+                }))}
+                className="home-span-12"
+              />
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
 }
 
-function timeGreeting(): string {
+function timeOfDay(): 'morning' | 'afternoon' | 'evening' {
   const h = new Date().getHours()
-  if (h < 12) return 'Good morning'
-  if (h < 18) return 'Good afternoon'
-  return 'Good evening'
+  if (h < 12) return 'morning'
+  if (h < 18) return 'afternoon'
+  return 'evening'
 }

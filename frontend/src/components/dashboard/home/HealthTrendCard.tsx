@@ -1,61 +1,67 @@
-import {LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceArea} from 'recharts'
-import {CardShell, CardPlaceholder} from './CardShell'
-import {useChartColors} from './useChartColors'
+import {useMemo} from 'react'
+import {useTranslation} from 'react-i18next'
+import {ChartCard, LineTrendChart} from '@/components/charts'
+import {formatDateLong} from '@/lib/format'
+import {DetailsAction} from './DetailsAction'
 import type {DailyHealthPoint} from '@/types'
 
-export function HealthTrendCard({data, className}: {data: DailyHealthPoint[]; className?: string}) {
-  const colors = useChartColors()
-  const hasData = data.length > 0 && data.some(d => d.flowCount > 0)
+interface Row {
+  date: string
+  avgHealth: number | null
+  flowCount: number
+}
 
+// Average health over the last 30 days. A day with no analyzed flow is a gap
+// in the line, never a zero; hairlines mark the tier thresholds.
+export function HealthTrendCard({
+  data,
+  onDetails,
+  className,
+}: {
+  data: DailyHealthPoint[]
+  onDetails?: () => void
+  className?: string
+}) {
+  const {t} = useTranslation('dashboard')
+  const rows = useMemo<Row[]>(
+    () => data.map(d => ({date: d.date, avgHealth: d.flowCount > 0 ? d.avgHealth : null, flowCount: d.flowCount})),
+    [data],
+  )
+  const hasData = rows.some(r => r.avgHealth !== null)
+  const title = t('home.healthTrend')
   return (
-    <CardShell title="Health Score Trend · 30d" className={className}>
-      {!hasData ? (
-        <CardPlaceholder message="Health trend appears after you analyze flows across multiple sessions." />
-      ) : (
-        <div className="h-48">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data} margin={{top: 5, right: 10, left: -20, bottom: 0}}>
-              <CartesianGrid strokeDasharray="3 3" stroke={colors.borderStrong} strokeOpacity={0.3} vertical={false} />
-              <ReferenceArea y1={80} y2={100} fill={colors.success} fillOpacity={0.05} />
-              <ReferenceArea y1={50} y2={80} fill={colors.warning} fillOpacity={0.05} />
-              <ReferenceArea y1={0} y2={50} fill={colors.error} fillOpacity={0.05} />
-              <XAxis
-                dataKey="date"
-                stroke={colors.borderStrong}
-                tick={{fill: colors.textTertiary, fontSize: 11}}
-                tickFormatter={(d: string) => d.slice(5)}
-                minTickGap={20}
-              />
-              <YAxis
-                domain={[0, 100]}
-                stroke={colors.borderStrong}
-                tick={{fill: colors.textTertiary, fontSize: 11}}
-                width={36}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: 'var(--glass-bg)',
-                  borderColor: 'var(--border-subtle)',
-                  borderRadius: 8,
-                  backdropFilter: 'var(--glass-blur)',
-                  fontSize: 12,
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-                labelStyle={{color: 'var(--text-primary)'}}
-              />
-              <Line
-                type="monotone"
-                dataKey="avgHealth"
-                stroke={colors.brand500}
-                strokeWidth={2}
-                dot={data.length === 1}
-                isAnimationActive={false}
-                connectNulls
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-    </CardShell>
+    <ChartCard
+      title={title}
+      subtitle={t('home.healthTrendSub')}
+      actions={<DetailsAction title={title} onClick={onDetails} />}
+      state={hasData ? 'ready' : 'empty'}
+      emptyMessage={t('home.healthTrendEmpty')}
+      className={className}
+      table={{
+        caption: title,
+        filename: 'health-trend.csv',
+        columns: [
+          {key: 'date', header: t('analytics.columns.date'), render: r => formatDateLong(r.date)},
+          {
+            key: 'avgHealth',
+            header: t('analytics.columns.avgHealth'),
+            align: 'right',
+            render: r => (r.avgHealth === null ? '—' : r.avgHealth),
+            csv: r => (r.avgHealth === null ? '' : String(r.avgHealth)),
+          },
+          {key: 'flowCount', header: t('analytics.columns.flows'), align: 'right'},
+        ],
+        rows,
+      }}
+    >
+      <LineTrendChart
+        data={rows}
+        dataKey="avgHealth"
+        name={t('analytics.columns.avgHealth')}
+        domain={[0, 100]}
+        referenceLines={[80, 60, 40]}
+        height={200}
+      />
+    </ChartCard>
   )
 }

@@ -41,11 +41,32 @@ export function useActiveSection(ids: readonly string[]): {
     setActive(id)
     const reduceMotion =
       typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    el.scrollIntoView({behavior: reduceMotion ? 'auto' : 'smooth', block: 'start'})
+    const behavior: ScrollBehavior = reduceMotion ? 'auto' : 'smooth'
+    // Scroll the pane's own scroller only. scrollIntoView would also scroll
+    // every scrollable ancestor — the overflow-hidden <html> included, which
+    // it can move programmatically — and shift the whole shell up, leaving a
+    // blank band under it.
+    const scroller = scrollParent(el)
+    if (scroller && typeof scroller.scrollTo === 'function') {
+      const margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 0
+      const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - margin
+      scroller.scrollTo({top: Math.max(0, top), behavior})
+    } else {
+      el.scrollIntoView({behavior, block: 'start'})
+    }
     // Land focus on the heading so the next Tab continues from the section
     // the page scrolled to, not from the nav.
     el.querySelector<HTMLElement>('h2')?.focus({preventScroll: true})
   }, [])
 
   return {active, jumpTo}
+}
+
+// The nearest ancestor that actually scrolls vertically.
+function scrollParent(el: HTMLElement): HTMLElement | null {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const {overflowY} = getComputedStyle(node)
+    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) return node
+  }
+  return null
 }

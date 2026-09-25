@@ -21,6 +21,9 @@ const I18N_COMPLETE_DIRS = [
   'src/components/sidebar',
   'src/components/chat',
   'src/components/settings',
+  'src/components/charts',
+  'src/components/dashboard/home',
+  'src/components/dashboard/analytics',
 ]
 
 // Files with no user-facing copy: barrels, pure logic/data, and presentational
@@ -86,6 +89,35 @@ const NO_USER_FACING_COPY = new Set([
   'src/components/sidebar/TreeNode.tsx',
   // Pure search/filter logic, no rendered copy.
   'src/components/sidebar/hooks/useSidebarSearch.ts',
+
+  // --- src/components/charts ---
+  // The chart foundation renders only the names and values its callers pass
+  // in (already translated); the rest is theme, geometry and formatting.
+  'src/components/charts/index.ts',
+  'src/components/charts/chartTypes.ts',
+  'src/components/charts/axes.ts',
+  'src/components/charts/useChartTheme.ts',
+  'src/components/charts/useReducedMotion.ts',
+  'src/components/charts/ChartFigure.tsx',
+  'src/components/charts/ChartLegend.tsx',
+  'src/components/charts/ChartTooltip.tsx',
+  'src/components/charts/Sparkline.tsx',
+  'src/components/charts/Meter.tsx',
+  'src/components/charts/HBarChart.tsx',
+  'src/components/charts/ColumnChart.tsx',
+  'src/components/charts/StackedAreaChart.tsx',
+  'src/components/charts/LineTrendChart.tsx',
+  'src/components/charts/ScatterPlot.tsx',
+
+  // --- src/components/dashboard ---
+  // Icon lookup and id humanising for audit actions; the labels themselves
+  // come from the translated table the callers pass in.
+  'src/components/dashboard/home/activity.ts',
+  // Loading shapes with no copy.
+  'src/components/dashboard/home/SkeletonDashboard.tsx',
+  'src/components/dashboard/analytics/SkeletonAnalytics.tsx',
+  // Section chrome: renders only the copy its callers pass in.
+  'src/components/dashboard/analytics/ChartSection.tsx',
 
   // --- src/components/chat ---
   'src/components/chat/index.ts',

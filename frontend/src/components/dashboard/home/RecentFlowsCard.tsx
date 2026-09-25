@@ -1,12 +1,14 @@
+import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
-import {FileText} from 'lucide-react'
-import {CardShell, CardPlaceholder} from './CardShell'
-import type {RecentFlowStub} from '@/types'
+import {FileText, ArrowRight} from 'lucide-react'
+import {ChartCard} from '@/components/charts'
+import {healthTier} from '@/lib/scoring'
+import {relativeTimeText, absoluteTime} from '@/lib/time'
 import {useUIStore} from '@/stores/uiStore'
-import {relativeTime, absoluteTime} from '@/lib/time'
+import type {RecentFlowStub} from '@/types'
 
-// RecentFlowsCard lists the most recently updated flows with their latest health
-// score (or “—” when never analyzed). Rows open the flow.
+// The most recently updated flows with their latest health; a row opens the
+// flow. The server already keeps one row per flow name.
 export function RecentFlowsCard({
   flows,
   onOpen,
@@ -16,57 +18,69 @@ export function RecentFlowsCard({
   onOpen: (id: string) => void
   className?: string
 }) {
+  const {t} = useTranslation('dashboard')
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
-  const browseAction = (
-    <button
-      type="button"
-      onClick={() => setMainPaneView('library')}
-      className="text-2xs font-medium text-brand-400 hover:text-brand-300 transition-colors"
-    >
-      Browse all →
-    </button>
-  )
+  const title = t('home.recentFlows')
   return (
-    <CardShell title="Recent Flows" action={browseAction} className={className}>
-      {flows.length === 0 ? (
-        <CardPlaceholder message="No flows yet. Create or open one to get started." />
-      ) : (
-        <ul className="flex flex-col divide-y divide-border-subtle/60">
-          {flows.map(f => (
-            <li key={f.id}>
-              <button
-                onClick={() => onOpen(f.id)}
-                className="w-full flex items-center gap-3 py-2 px-1 text-left rounded-md hover:bg-surface-3/60 transition-colors"
-              >
-                <FileText size={15} className="text-text-tertiary shrink-0" />
-                <span title={f.name || 'Untitled flow'} className="flex-1 truncate text-sm text-text-primary">
-                  {f.name || 'Untitled flow'}
-                </span>
-                <span title={absoluteTime(f.updatedAt)} className="text-2xs text-text-tertiary tabular-nums shrink-0">
-                  {relativeTime(f.updatedAt)}
-                </span>
-                <HealthBadge score={f.healthScore} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </CardShell>
+    <ChartCard
+      title={title}
+      actions={
+        <button
+          type="button"
+          onClick={() => setMainPaneView('library')}
+          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs font-medium text-brand-400 transition-colors duration-fast hover:text-brand-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+        >
+          {t('common.browseAll')}
+          <ArrowRight size={11} aria-hidden="true" />
+        </button>
+      }
+      state={flows.length > 0 ? 'ready' : 'empty'}
+      emptyMessage={t('home.recentFlowsEmpty')}
+      className={className}
+    >
+      <ul className="flex flex-col divide-y divide-border-subtle/60">
+        {flows.map(f => (
+          <li key={f.id}>
+            <button
+              type="button"
+              onClick={() => onOpen(f.id)}
+              className="flex w-full items-center gap-3 rounded-md px-1 py-2 text-left transition-colors duration-fast hover:bg-surface-3/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+            >
+              <FileText size={15} className="shrink-0 text-text-tertiary" aria-hidden="true" />
+              <span title={f.name || t('home.untitled')} className="flex-1 truncate text-sm text-text-primary">
+                {f.name || t('home.untitled')}
+              </span>
+              <span title={absoluteTime(f.updatedAt)} className="shrink-0 text-2xs text-text-tertiary">
+                {relativeTimeText(f.updatedAt)}
+              </span>
+              <HealthBadge score={f.healthScore} />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </ChartCard>
   )
 }
 
-function HealthBadge({score}: {score: number | null}) {
+export function HealthBadge({score}: {score: number | null}) {
+  const {t} = useTranslation('dashboard')
   if (score == null) {
-    return <span className="w-9 text-center text-2xs font-mono text-text-tertiary shrink-0">—</span>
+    return (
+      <span className="w-9 shrink-0 text-center text-2xs text-text-tertiary" title={t('common.notAnalyzed')}>
+        —
+      </span>
+    )
   }
-  const tone =
-    score >= 80
-      ? 'text-emerald-400 bg-emerald-500/10'
-      : score >= 50
-        ? 'text-amber-400 bg-amber-500/10'
-        : 'text-red-400 bg-red-500/10'
+  const tier = healthTier(score)
   return (
-    <span className={clsx('w-9 text-center text-2xs font-mono font-semibold rounded px-1 py-0.5 shrink-0', tone)}>
+    <span
+      className={clsx(
+        'w-9 shrink-0 rounded px-1 py-0.5 text-center text-2xs font-semibold tabular-nums',
+        tier.bg,
+        tier.text,
+      )}
+      title={t(`health.${tier.tier}`)}
+    >
       {score}
     </span>
   )

@@ -55,12 +55,21 @@ var credentialActionProperties = map[string][]string{
 
 func (r *HardcodedCredentialRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	var findings []models.Finding
-	patternFlagged := make(map[string]bool)
+	// Lazily allocated: most blocks flag nothing, and this Check runs for
+	// every (block, rule) pair in the walk. Reads on the nil map are false,
+	// which is exactly the "not flagged yet" answer.
+	var patternFlagged map[string]bool
+	flag := func(key string) {
+		if patternFlagged == nil {
+			patternFlagged = map[string]bool{}
+		}
+		patternFlagged[key] = true
+	}
 
 	for key, val := range block.Properties {
 		for _, pat := range credentialPatterns {
 			if pat.MatchString(val) {
-				patternFlagged[key] = true
+				flag(key)
 				findings = append(findings, models.Finding{
 					RuleID:      r.ID(),
 					Severity:    r.DefaultSeverity(),
@@ -83,7 +92,7 @@ func (r *HardcodedCredentialRule) Check(block *models.Block, ctx *RuleContext) [
 		// although the replace-with-variable fixer for exactly this case has
 		// existed (and been tested) all along.
 		if !patternFlagged[key] && isCredentialProperty(block, key, val) {
-			patternFlagged[key] = true
+			flag(key)
 			findings = append(findings, models.Finding{
 				RuleID:   r.ID(),
 				Severity: r.DefaultSeverity(),

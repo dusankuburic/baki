@@ -321,6 +321,24 @@ func (m *FakeBackend) FlowDashboardData(_ context.Context, _ string, _ int) (*in
 func (m *FakeBackend) FlowDashboardAdvanced(_ context.Context, _ string, _ int) (*interfaces.DashboardAdvancedData, error) {
 	return &interfaces.DashboardAdvancedData{Security: interfaces.DashboardSecurity{}}, nil
 }
+func (m *FakeBackend) LoadAnalysisSnapshots(_ context.Context, _ []string) ([]interfaces.AnalysisSnapshotRow, error) {
+	return []interfaces.AnalysisSnapshotRow{}, nil
+}
+func (m *FakeBackend) LoadAnalysisHistory(_ context.Context, _ interfaces.AnalyticsWindow) (*interfaces.AnalysisHistoryRows, error) {
+	return &interfaces.AnalysisHistoryRows{}, nil
+}
+func (m *FakeBackend) LoadTriageAnalytics(_ context.Context, _ interfaces.AnalyticsWindow) (*interfaces.TriageRows, error) {
+	return &interfaces.TriageRows{}, nil
+}
+func (m *FakeBackend) LoadUsageAnalytics(_ context.Context, _ string, _ []string, _ string, _ interfaces.AnalyticsWindow) (*interfaces.UsageRows, error) {
+	return &interfaces.UsageRows{}, nil
+}
+func (m *FakeBackend) LoadActivityAnalytics(_ context.Context, _ string, _ interfaces.AnalyticsWindow, _ int) (*interfaces.ActivityRows, error) {
+	return &interfaces.ActivityRows{}, nil
+}
+func (m *FakeBackend) LoadSecurityAnalytics(_ context.Context, _, _ string, _ bool) (*interfaces.SecurityRows, error) {
+	return &interfaces.SecurityRows{}, nil
+}
 func (m *FakeBackend) StoreRefreshToken(_ context.Context, _ string, _ string, _ time.Time) error {
 	return nil
 }

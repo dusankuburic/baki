@@ -64,6 +64,13 @@ type FlowService struct {
 	invalidateMu  sync.Mutex
 	invalidateCbs []func(flowID string)
 
+	// onCloudFlowMutation is notified after cloud flow writes that other
+	// services' user-keyed caches key on (the dashboard's flow counts, recent
+	// flows and analysis rollups). Wired by DI after construction, mirroring
+	// SetRuleProfileResolver: DashboardService already depends on FlowService,
+	// so a constructor parameter would be a cycle.
+	onCloudFlowMutation func(ownerID string)
+
 	// patchLocks serializes read-modify-write patches to the same source file so
 	// two concurrent ApplyFix/SuppressFindingInSource calls on the same file
 	// can't silently clobber each other (one overwriting the other's change).
@@ -98,6 +105,21 @@ func NewFlowService(notifier EventNotifier, settings SettingsProvider, docProvid
 // same graph), exactly as on AnalysisService.
 func (s *FlowService) SetRuleProfileResolver(r *RuleProfileResolver) {
 	s.profiles = r
+}
+
+// SetCloudFlowMutationHook registers fn to be invoked (best-effort, after the
+// write committed) whenever a flow is uploaded, saved or patched in cloud
+// storage. See the onCloudFlowMutation field for why it is a setter rather
+// than a constructor parameter.
+func (s *FlowService) SetCloudFlowMutationHook(fn func(ownerID string)) {
+	s.onCloudFlowMutation = fn
+}
+
+// notifyCloudFlowMutation fires the hook if wired; nil-safe.
+func (s *FlowService) notifyCloudFlowMutation(ownerID string) {
+	if fn := s.onCloudFlowMutation; fn != nil && ownerID != "" {
+		fn(ownerID)
+	}
 }
 
 // fixOptions builds the fix loop's configuration for doc.
@@ -479,7 +501,11 @@ func (s *FlowService) SaveUploadedFlow(ctx context.Context, doc *models.FlowDocu
 		// Transient DB error — must not silently bypass OCC.
 		return fmt.Errorf("failed to check existing flow: %w", err)
 	}
-	return s.storage.SaveFlow(ctx, &libDoc)
+	if err := s.storage.SaveFlow(ctx, &libDoc); err != nil {
+		return err
+	}
+	s.notifyCloudFlowMutation(ownerID)
+	return nil
 }
 
 func (s *FlowService) RecentFiles() (files []models.RecentFile, err error) {
@@ -1393,6 +1419,7 @@ func (s *FlowService) persistCloudDoc(ctx context.Context, doc *models.FlowDocum
 		// context via the registered callbacks) so the next reader — the AI
 		// included — sees the post-edit flow.
 		s.InvalidateSearchIndex(doc.ID)
+		s.notifyCloudFlowMutation(doc.OwnerID)
 	}
 	return updated, nil
 }
