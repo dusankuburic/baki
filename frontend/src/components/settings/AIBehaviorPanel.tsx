@@ -7,6 +7,7 @@ import Switch from '@/components/shared/Switch'
 import Input from '@/components/shared/Input'
 import {NumberField} from '@/components/shared'
 import SegmentedControl from '@/components/shared/SegmentedControl'
+import SettingRow from './SettingRow'
 import {isTauri} from '@/platform/guards'
 import type {ProviderID, AIProviderConfig} from '@/types'
 import {PROVIDER_OPTIONS} from '@/types/providers'
@@ -26,96 +27,93 @@ export default function AIBehaviorPanel() {
   const localBackend = systemInfo ? systemInfo.capabilities.sessionAnalytics : isTauri()
 
   return (
-    <div>
-      <h2 className="text-xl font-semibold text-text-primary">{t('behavior.title')}</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-6">{t('behavior.subtitle')}</p>
+    <div className="space-y-8">
+      <div>
+        <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.activeAssistant')}</label>
+        <SegmentedControl
+          value={activeProvider}
+          onChange={v => {
+            void updateAI({activeProvider: v})
+            // The chat reads its provider from the chat store, which was
+            // only seeded from settings at start-up: picking an assistant
+            // here did nothing until a reload (the Advanced block below then
+            // tuned a provider the chat wasn't using).
+            useChatStore.getState().setProvider(v)
+          }}
+          options={PROVIDER_OPTIONS}
+          className="flex-wrap"
+        />
+        <p className="text-xs text-text-tertiary mt-2">{t('behavior.activeAssistantHint')}</p>
+      </div>
 
-      <div className="space-y-8">
-        <div>
-          <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.activeAssistant')}</label>
-          <SegmentedControl
-            value={activeProvider}
-            onChange={v => {
-              void updateAI({activeProvider: v})
-              // The chat reads its provider from the chat store, which was
-              // only seeded from settings at start-up: picking an assistant
-              // here did nothing until a reload (the Advanced block below then
-              // tuned a provider the chat wasn't using).
-              useChatStore.getState().setProvider(v)
-            }}
-            options={PROVIDER_OPTIONS}
-            className="flex-wrap"
-          />
-          <p className="text-xs text-text-tertiary mt-2">{t('behavior.activeAssistantHint')}</p>
-        </div>
+      <div>
+        <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.embeddingAssistant')}</label>
+        <SegmentedControl
+          value={ai.embeddingProvider}
+          onChange={v => updateAI({embeddingProvider: v as ProviderID})}
+          options={[
+            {value: 'openai', label: 'OpenAI'},
+            {value: 'gemini', label: 'Gemini'},
+            {value: 'glm', label: 'GLM'},
+            {value: 'github-models', label: 'GitHub Models'},
+          ]}
+        />
+        <p className="text-xs text-text-tertiary mt-2">{t('behavior.embeddingAssistantHint')}</p>
+      </div>
 
-        <div>
-          <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.embeddingAssistant')}</label>
-          <SegmentedControl
-            value={ai.embeddingProvider}
-            onChange={v => updateAI({embeddingProvider: v as ProviderID})}
-            options={[
-              {value: 'openai', label: 'OpenAI'},
-              {value: 'gemini', label: 'Gemini'},
-              {value: 'glm', label: 'GLM'},
-              {value: 'github-models', label: 'GitHub Models'},
-            ]}
-          />
-          <p className="text-xs text-text-tertiary mt-2">{t('behavior.embeddingAssistantHint')}</p>
-        </div>
-
-        <div>
-          <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.embeddingModel')}</label>
-          <Input
-            value={ai.embeddingModel ?? ''}
-            onChange={e => updateAI({embeddingModel: e.target.value})}
-            placeholder={t('behavior.embeddingModelPlaceholder')}
-          />
-          <p className="text-xs text-text-tertiary mt-2">
-            {/* Split-rendered so the model name keeps its inline <code> style
+      <div>
+        <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.embeddingModel')}</label>
+        <Input
+          value={ai.embeddingModel ?? ''}
+          onChange={e => updateAI({embeddingModel: e.target.value})}
+          placeholder={t('behavior.embeddingModelPlaceholder')}
+        />
+        <p className="text-xs text-text-tertiary mt-2">
+          {/* Split-rendered so the model name keeps its inline <code> style
                 without a Trans dependency (typed Trans + components is brittle). */}
-            {t('behavior.embeddingModelHintPrefix')} <code className="text-text-secondary">text-embedding-3-large</code>
-            {t('behavior.embeddingModelHintSuffix')}
-          </p>
-        </div>
+          {t('behavior.embeddingModelHintPrefix')} <code className="text-text-secondary">text-embedding-3-large</code>
+          {t('behavior.embeddingModelHintSuffix')}
+        </p>
+      </div>
 
-        <div className="space-y-4 pt-2">
-          <label className="text-sm font-medium text-text-primary block">{t('behavior.historyCosts')}</label>
+      <div className="space-y-4 pt-2">
+        <label className="text-sm font-medium text-text-primary block">{t('behavior.historyCosts')}</label>
 
-          <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
-            <div>
-              <span className="text-sm font-medium text-text-primary">{t('behavior.saveHistory')}</span>
-              <p className="text-xs text-text-tertiary mt-0.5">{t('behavior.saveHistoryHint')}</p>
-            </div>
+        <SettingRow
+          title={t('behavior.saveHistory')}
+          hint={t('behavior.saveHistoryHint')}
+          control={
             <Switch
               label={t('behavior.saveHistory')}
+              labelHidden
               checked={ai.saveConversationHistory}
               onChange={v => updateAI({saveConversationHistory: v})}
             />
-          </div>
+          }
+        />
 
-          <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
-            <div>
-              <span className="text-sm font-medium text-text-primary">{t('behavior.showCosts')}</span>
-              <p className="text-xs text-text-tertiary mt-0.5">{t('behavior.showCostsHint')}</p>
-            </div>
+        <SettingRow
+          title={t('behavior.showCosts')}
+          hint={t('behavior.showCostsHint')}
+          control={
             <Switch
               label={t('behavior.showCosts')}
+              labelHidden
               checked={ai.showCostEstimates}
               onChange={v => updateAI({showCostEstimates: v})}
             />
-          </div>
+          }
+        />
 
-          {/* Local mode has no usage store: the server's daily-spend read
+        {/* Local mode has no usage store: the server's daily-spend read
               returns 0 there, so a budget entered here was never enforced
               while looking exactly like the cloud setting. Hidden rather
               than shown inert. */}
-          {!localBackend && (
-            <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
-              <div className="flex-1">
-                <span className="text-sm font-medium text-text-primary">{t('behavior.dailyBudget')}</span>
-                <p className="text-xs text-text-tertiary mt-0.5">{t('behavior.dailyBudgetHint')}</p>
-              </div>
+        {!localBackend && (
+          <SettingRow
+            title={t('behavior.dailyBudget')}
+            hint={t('behavior.dailyBudgetHint')}
+            control={
               <div className="w-24">
                 <NumberField
                   step="0.5"
@@ -126,23 +124,23 @@ export default function AIBehaviorPanel() {
                   onCommit={v => updateAI({dailyBudget: v})}
                 />
               </div>
-            </div>
-          )}
-        </div>
-
-        <div className="pt-2">
-          <h3 className="text-base font-semibold text-text-primary mb-1">{t('behavior.customInstructions')}</h3>
-          <p className="text-xs text-text-tertiary mb-3">{t('behavior.customInstructionsHint')}</p>
-          <CustomInstructionsInput />
-        </div>
-
-        <div className="pt-2 space-y-6">
-          <h3 className="text-base font-semibold text-text-primary mb-1">{t('behavior.advanced')}</h3>
-          <ProviderAdvancedSettings
-            config={ai.providers[activeProvider]}
-            onUpdate={patch => updateProvider(activeProvider, patch)}
+            }
           />
-        </div>
+        )}
+      </div>
+
+      <div className="pt-2">
+        <h3 className="text-base font-semibold text-text-primary mb-1">{t('behavior.customInstructions')}</h3>
+        <p className="text-xs text-text-tertiary mb-3">{t('behavior.customInstructionsHint')}</p>
+        <CustomInstructionsInput />
+      </div>
+
+      <div className="pt-2 space-y-6">
+        <h3 className="text-base font-semibold text-text-primary mb-1">{t('behavior.advanced')}</h3>
+        <ProviderAdvancedSettings
+          config={ai.providers[activeProvider]}
+          onUpdate={patch => updateProvider(activeProvider, patch)}
+        />
       </div>
     </div>
   )
@@ -183,7 +181,7 @@ function ProviderAdvancedSettings({
   if (!config) return null
 
   return (
-    <div className="grid grid-cols-2 gap-6">
+    <div className="grid gap-6 grid-cols-[repeat(auto-fit,minmax(18rem,1fr))]">
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-text-secondary">
           {t('behavior.temperature', {value: config.temperature})}

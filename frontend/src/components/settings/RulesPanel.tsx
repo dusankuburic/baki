@@ -3,7 +3,7 @@ import {useTranslation} from 'react-i18next'
 import {analysisApi} from '@/api'
 import type {Rule, RuleConfig, Severity} from '@/types'
 import {Switch, NumberField} from '@/components/shared'
-import {Shield, AlertCircle, AlertTriangle, Info, Zap} from 'lucide-react'
+import {AlertCircle, AlertTriangle, Info, Zap} from 'lucide-react'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {useAuthStore, useOrgStore} from '@/stores'
@@ -163,12 +163,6 @@ export default function RulesPanel() {
   if (loadError)
     return (
       <div className="space-y-6">
-        <div>
-          <h2 className="text-xl font-semibold text-text-primary flex items-center gap-2">
-            <Shield size={20} className="text-brand-500" />
-            {t('rules.title')}
-          </h2>
-        </div>
         <div className="p-4 flex items-start gap-3 border border-red-500/30 bg-red-500/5 rounded-xl">
           <AlertCircle className="text-red-400 shrink-0 mt-0.5" size={18} />
           <div>
@@ -181,14 +175,6 @@ export default function RulesPanel() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold text-text-primary flex items-center gap-2">
-          <Shield size={20} className="text-brand-500" />
-          {t('rules.title')}
-        </h2>
-        <p className="text-sm text-text-secondary mt-1">{t('rules.subtitle')}</p>
-      </div>
-
       {(isSystemAdmin || adminOrgs.length > 0) && (
         <div className="p-4 border border-border-default rounded-xl bg-surface-1 space-y-2">
           <label htmlFor="rules-scope" className="text-sm font-bold text-text-primary">
@@ -208,14 +194,11 @@ export default function RulesPanel() {
             ))}
           </select>
           <p className="text-xs text-text-tertiary">
-            {isOrgScope
-              ? "Changes apply to this organisation's flows only. Rules you don't change stay at the deployment default."
-              : 'Changes apply to every organisation in this deployment.'}
+            {t(isOrgScope ? 'rules.scopeOrgHint' : 'rules.scopeDeploymentHint')}
           </p>
           {!canEdit && (
             <p role="status" className="text-xs text-semantic-warning">
-              You can view this configuration but not change it — that needs
-              {isOrgScope ? ' admin of this organisation.' : ' a system administrator.'}
+              {t(isOrgScope ? 'rules.scopeReadOnlyOrg' : 'rules.scopeReadOnlyDeployment')}
             </p>
           )}
         </div>
@@ -243,7 +226,7 @@ export default function RulesPanel() {
               key={rule.id}
               className={clsx(
                 'p-4 flex flex-col gap-3 transition-colors',
-                i !== rules.length - 1 && 'border-bottom border-border-subtle',
+                i !== rules.length - 1 && 'border-b border-border-subtle',
                 !eff.enabled && 'opacity-60 bg-surface-2/30',
               )}
             >

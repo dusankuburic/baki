@@ -16,43 +16,40 @@ export default function AIPromptsPanel() {
   const p = aiSettings.prompts ?? EMPTY_PROMPTS
 
   return (
-    <div>
-      <h2 className="text-xl font-semibold text-text-primary">{t('prompts.title')}</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-6">{t('prompts.subtitle')}</p>
+    // Two lists side by side once the column is wide enough (896px); one
+    // below that. Sized by the column, not the viewport.
+    <div className="grid gap-6 grid-cols-[repeat(auto-fill,minmax(24rem,1fr))]">
+      <PromptList
+        title={t('prompts.flowTitle')}
+        description={t('prompts.flowDescription')}
+        listKey="flow"
+        items={p.flow}
+        onChange={newItems => updateAI({prompts: {...p, flow: newItems}})}
+      />
 
-      <div className="space-y-8">
-        <PromptList
-          title={t('prompts.flowTitle')}
-          description={t('prompts.flowDescription')}
-          listKey="flow"
-          items={p.flow}
-          onChange={newItems => updateAI({prompts: {...p, flow: newItems}})}
-        />
+      <PromptList
+        title={t('prompts.blockTitle')}
+        description={t('prompts.blockDescription')}
+        listKey="block"
+        items={p.block}
+        onChange={newItems => updateAI({prompts: {...p, block: newItems}})}
+      />
 
-        <PromptList
-          title={t('prompts.blockTitle')}
-          description={t('prompts.blockDescription')}
-          listKey="block"
-          items={p.block}
-          onChange={newItems => updateAI({prompts: {...p, block: newItems}})}
-        />
+      <PromptList
+        title={t('prompts.findingTitle')}
+        description={t('prompts.findingDescription')}
+        listKey="finding"
+        items={p.finding}
+        onChange={newItems => updateAI({prompts: {...p, finding: newItems}})}
+      />
 
-        <PromptList
-          title={t('prompts.findingTitle')}
-          description={t('prompts.findingDescription')}
-          listKey="finding"
-          items={p.finding}
-          onChange={newItems => updateAI({prompts: {...p, finding: newItems}})}
-        />
-
-        <PromptList
-          title={t('prompts.blockWithFindingsTitle')}
-          description={t('prompts.blockWithFindingsDescription')}
-          listKey="blockWithFindings"
-          items={p.blockWithFindings}
-          onChange={newItems => updateAI({prompts: {...p, blockWithFindings: newItems}})}
-        />
-      </div>
+      <PromptList
+        title={t('prompts.blockWithFindingsTitle')}
+        description={t('prompts.blockWithFindingsDescription')}
+        listKey="blockWithFindings"
+        items={p.blockWithFindings}
+        onChange={newItems => updateAI({prompts: {...p, blockWithFindings: newItems}})}
+      />
     </div>
   )
 }

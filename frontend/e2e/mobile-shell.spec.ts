@@ -53,3 +53,44 @@ test.describe('Mobile shell @375px', () => {
     expect(overflow).toBeLessThanOrEqual(1)
   })
 })
+
+test.describe('Settings modal @375px', () => {
+  test.beforeEach(async ({page}) => {
+    await page.setViewportSize({width: 375, height: 667})
+    await setupAuthenticatedPage(page)
+    await page.route('**/api/dashboard/home', route => route.fulfill({status: 200, json: mockDashboardHome()}))
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+  })
+
+  test('fills the screen with a sideways-scrolling section strip', async ({page}) => {
+    await page.keyboard.press('ControlOrMeta+,')
+    const dialog = page.locator('[role="dialog"][aria-label="Settings"]')
+    await expect(dialog).toBeVisible({timeout: 5000})
+    await dialog.evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)))
+    const box = await dialog.boundingBox()
+    expect(box).toBeTruthy()
+    if (box) {
+      expect(Math.abs(box.width - 375)).toBeLessThanOrEqual(8)
+      expect(Math.abs(box.height - 667)).toBeLessThanOrEqual(8)
+    }
+
+    // The tab strip scrolls sideways instead of wrapping…
+    const strip = dialog.getByRole('tablist', {name: 'Settings sections'})
+    expect(await strip.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true)
+    await expect(dialog.getByRole('tab', {name: 'Appearance'})).toBeVisible()
+
+    // …and neither the page nor the content column gets wider than the phone.
+    const overflow = await page.evaluate(() => {
+      const body = document.getElementById('settings-panel')
+      return {
+        page: document.documentElement.scrollWidth - window.innerWidth,
+        body: body ? body.scrollWidth - body.clientWidth : 0,
+      }
+    })
+    expect(overflow.page).toBeLessThanOrEqual(0)
+    expect(overflow.body).toBeLessThanOrEqual(0)
+    await page.keyboard.press('Escape')
+    await expect(dialog).not.toBeVisible({timeout: 5000})
+  })
+})

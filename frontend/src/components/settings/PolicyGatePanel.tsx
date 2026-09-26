@@ -7,7 +7,7 @@ import type {Policy, PolicyResult, PolicyRule, Severity, Rule} from '@/types'
 import {useOrgStore} from '@/stores/orgStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useToast} from '@/components/shared/Toast'
-import {useConfirm} from '@/components/shared'
+import {Button, IconButton, useConfirm} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 
@@ -146,22 +146,10 @@ export default function PolicyGatePanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-text-primary flex items-center gap-2">
-            <Shield className="w-5 h-5 text-brand-500" />
-            {t('policy.title')}
-          </h2>
-          <p className="text-sm text-text-secondary mt-1">{t('policy.subtitle')}</p>
-        </div>
-        <button
-          onClick={handleCreate}
-          disabled={creating || !activeOrgId}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-40 transition-colors"
-        >
-          <Plus className="w-4 h-4" />
+      <div className="flex justify-end">
+        <Button variant="primary" icon={Plus} onClick={handleCreate} disabled={creating || !activeOrgId}>
           {t('policy.newPolicy')}
-        </button>
+        </Button>
       </div>
 
       {!activeOrgId && <div className="text-sm text-text-secondary italic">{t('policy.selectOrgHint')}</div>}
@@ -178,11 +166,16 @@ export default function PolicyGatePanel() {
           const enabledCount = policy.rules.filter(r => r.enabled).length
           return (
             <div key={policy.id} className="border border-border-default rounded-lg overflow-hidden">
-              <button
-                onClick={() => setExpandedId(isExpanded ? null : policy.id)}
-                className="w-full flex items-center justify-between px-4 py-3 hover:bg-surface-2 transition-colors"
-              >
-                <div className="flex items-center gap-3">
+              {/* The delete control is a SIBLING of the expand button: a
+                  button nested inside a button is invalid markup, and the
+                  click had to stop propagation to avoid toggling the row. */}
+              <div className="flex items-center gap-2 pr-2 hover:bg-surface-2 transition-colors">
+                <button
+                  type="button"
+                  aria-expanded={isExpanded}
+                  onClick={() => setExpandedId(isExpanded ? null : policy.id)}
+                  className="flex flex-1 items-center gap-3 px-4 py-3 text-left"
+                >
                   {isExpanded ? (
                     <ChevronDown className="w-4 h-4 text-text-secondary" />
                   ) : (
@@ -191,22 +184,18 @@ export default function PolicyGatePanel() {
                   <GateBadge severity={policy.gateSeverity} />
                   <span className="font-medium text-text-primary">{policy.name}</span>
                   <span className="text-xs text-text-secondary">{t('policy.rulesEnabled', {count: enabledCount})}</span>
-                </div>
-                <button
-                  onClick={e => {
-                    e.stopPropagation()
-                    void handleDelete(policy.id)
-                  }}
-                  className="p-1 text-text-secondary hover:text-red-500 transition-colors"
-                  aria-label={t('policy.deleteTitle')}
-                >
-                  <Trash2 className="w-4 h-4" />
                 </button>
-              </button>
+                <IconButton
+                  icon={Trash2}
+                  size="sm"
+                  label={t('policy.deleteTitle')}
+                  onClick={() => void handleDelete(policy.id)}
+                />
+              </div>
 
               {isExpanded && (
                 <div className="px-4 py-4 border-t border-border-default space-y-4 bg-surface-1">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(14rem,1fr))]">
                     <label className="block">
                       <span className="text-xs font-medium text-text-secondary">{t('policy.nameLabel')}</span>
                       <input

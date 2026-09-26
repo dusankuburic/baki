@@ -177,12 +177,10 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
           <span className="text-xs text-text-secondary">No AI provider connected yet.</span>
           <button
             onClick={() => {
-              const ui = useUIStore.getState()
-              // 'accounts' is the AI Providers section id (see
-              // SettingsModal); 'providers' does not exist and silently
-              // landed on General.
-              ui.setSettingsSection('accounts')
-              ui.setSettingsOpen(true)
+              // 'accounts' is the AI Accounts section id (see
+              // settings/sections.ts); 'providers' does not exist and
+              // silently landed on General.
+              useUIStore.getState().openSettings('accounts')
               complete()
             }}
             className="flex items-center gap-1 text-xs font-medium text-brand-400 hover:text-brand-300"

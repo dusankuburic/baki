@@ -6,8 +6,6 @@ export const enSettings = {
     connectedAs: 'Connected as',
     copilotSubscriptionLink: 'Copilot subscription',
     orUsePat: 'Or use a Personal Access Token',
-    title: 'AI Providers',
-    subtitle: 'Configure API keys for AI-powered analysis and chat.',
     anthropicKey: 'Anthropic API Key',
     openaiKey: 'OpenAI API Key',
     googleKey: 'Google AI API Key',
@@ -16,7 +14,9 @@ export const enSettings = {
     githubPat: 'GitHub Token (PAT)',
   },
   knowledge: {
-    title: 'Knowledge Base (RAG)',
+    orgLabel: 'Organization:',
+    intro:
+      'Upload organizational guidelines, SOPs, or coding standards. The AI will use these to contextualize its analysis.',
     selectOrgFirst: "Please select an organization in the 'Organizations' tab first to manage its knowledge base.",
     embeddingNoticePrefix: 'Requires an embedding provider.',
     embeddingNoticeSuffix:
@@ -33,7 +33,6 @@ export const enSettings = {
     deleteMessage: 'Delete this document?',
   },
   general: {
-    subtitle: 'Basic application settings and behavior.',
     updatesHeading: 'Updates',
     updatesBody: 'PAD Analyzer is under active development. Check the releases page for the latest version.',
     viewReleases: 'View releases →',
@@ -53,7 +52,6 @@ export const enSettings = {
     saving: 'Saving…',
   },
   appearance: {
-    subtitle: 'Customize the look and feel of PAD Analyzer.',
     colorTheme: 'Color Theme',
     darkThemes: 'Dark Themes',
     lightThemes: 'Light Themes',
@@ -68,6 +66,7 @@ export const enSettings = {
     chatTextMd: 'Medium',
     chatTextLg: 'Large',
     chatTextHint: 'Size of messages in the AI chat. Focus mode reads one step larger.',
+    accessibility: 'Accessibility',
   },
   keys: {
     configuredLocal: 'API key configured (saved in your OS keychain)',
@@ -77,13 +76,13 @@ export const enSettings = {
     testing: 'Testing…',
   },
   parser: {
-    subtitle: 'Configure how Power Automate Desktop flows are parsed.',
     maxFileSize: 'Maximum File Size (MB)',
     maxFileSizeHint: 'Larger flows require more memory and processing time.',
   },
   privacy: {
-    subtitle: 'Control how PAD Analyzer handles your data.',
     aiDataTitle: 'Data sent to AI providers',
+    aiDataBody:
+      'Before any flow content is sent to an AI provider, known credential fields, secret-shaped patterns (tokens, connection strings), and high-entropy strings are automatically redacted.',
     apiKeysTitle: 'API Keys',
     apiKeysLocal:
       "All API keys are stored securely in your operating system's keychain. They are never sent to any server other than the respective AI provider.",
@@ -94,20 +93,18 @@ export const enSettings = {
     productName: 'PAD Analyzer',
     versionLabel: 'Version',
     platformLabel: 'Platform',
-    title: 'About PAD Analyzer',
-    subtitle: 'Power Automate Desktop flow analysis tool.',
     builtWith: 'Built with Tauri, Go, React, and TypeScript.',
+    blurb:
+      'PAD Analyzer helps you understand, analyze, and improve your Power Automate Desktop flows with static analysis rules and AI-powered insights.',
   },
   shortcuts: {
-    searchPlaceholder: 'Search shortcuts…',
-    searchAria: 'Search shortcuts',
-    title: 'Keyboard Shortcuts',
-    subtitle: 'Reference of all available keyboard shortcuts.',
+    // "Filter", not "Search": the sidebar's "Search settings" box sits right
+    // next to this one.
+    searchPlaceholder: 'Filter shortcuts…',
+    searchAria: 'Filter shortcuts',
   },
   rules: {
     appliesTo: 'Applies to',
-    title: 'Analysis Rules',
-    subtitle: 'Configure which static analysis rules are active and their reporting severity.',
     loading: 'Loading rules...',
     loadFailed: 'Failed to load rules',
     updateFailed: 'Failed to update rule: {{message}}',
@@ -129,7 +126,6 @@ export const enSettings = {
     // `severity` above is the one nested object and adding a second sibling
     // object next to string leaves is what the README warns about (the type
     // flattener silently drops the nested keys).
-    scopeLabel: 'Applies to',
     scopeDeployment: 'Whole deployment (all organisations)',
     scopeOrgHint:
       "Changes apply to this organisation's flows only. Rules you don't change stay at the deployment default.",
@@ -237,8 +233,6 @@ export const enSettings = {
     cancel: 'Cancel',
   },
   orgs: {
-    title: 'Organizations',
-    subtitle: 'Group flows and share them with teammates. Roles control who can view or edit.',
     empty: 'No organizations yet.',
     inviteLinkBody:
       'Invite created for {{email}}. If email delivery is not configured, copy this link and send it yourself — it is shown only once.',
@@ -289,8 +283,6 @@ export const enSettings = {
     expired: 'Expired {{date}}',
   },
   prompts: {
-    title: 'Suggested Prompts',
-    subtitle: 'Customize the quick-action prompts that appear above the chat input in different contexts.',
     flowTitle: 'Flow Context',
     flowDescription: 'Shown when analyzing the entire flow without a specific block selected.',
     blockTitle: 'Block Context',
@@ -306,28 +298,103 @@ export const enSettings = {
     moveUp: 'Move up',
     moveDown: 'Move down',
   },
+  // The Settings modal shell. Every child of `modal` is an object (see the
+  // en.ts rule about mixed levels). One `sections.<id>` block per section:
+  // `label` is the sidebar entry and the content heading, `description` the
+  // line under the heading, `keywords` what the search box matches besides
+  // those two (never rendered). Adding a section = one block here + one
+  // registry entry in components/settings/sections.ts.
   modal: {
-    title: 'Settings',
-    sections: {
-      general: 'General',
-      parser: 'Parser',
-      accounts: 'AI Accounts',
-      behavior: 'AI Behavior',
-      prompts: 'AI Prompts',
-      appearance: 'Appearance',
+    ui: {
+      title: 'Settings',
+      nav: 'Settings sections',
+      search: 'Search settings',
+      clearSearch: 'Clear search',
+      noResults: 'No settings match "{{query}}"',
+      close: 'Close settings',
+      loading: 'Loading section…',
+      version: 'v{{version}}',
+    },
+    groups: {
+      application: 'Application',
       analysis: 'Analysis',
-      policies: 'Policy Gates',
-      orgs: 'Organizations',
-      knowledge: 'Knowledge Base',
-      tokens: 'API Tokens',
-      shortcuts: 'Shortcuts',
-      privacy: 'Privacy',
-      about: 'About',
+      ai: 'AI',
+      workspace: 'Workspace',
+    },
+    sections: {
+      general: {
+        label: 'General',
+        description: 'Basic application settings and behavior.',
+        keywords: 'updates releases onboarding tour welcome replay',
+      },
+      appearance: {
+        label: 'Appearance',
+        description: 'Customize the look and feel of PAD Analyzer.',
+        keywords: 'theme dark light color density compact comfortable text size font contrast motion accessibility',
+      },
+      shortcuts: {
+        label: 'Shortcuts',
+        description: 'Reference of all available keyboard shortcuts.',
+        keywords: 'keyboard keys hotkeys bindings',
+      },
+      privacy: {
+        label: 'Privacy',
+        description: 'Control how PAD Analyzer handles your data.',
+        keywords: 'data keychain api keys secrets redaction telemetry',
+      },
+      parser: {
+        label: 'Parser',
+        description: 'Configure how Power Automate Desktop flows are parsed.',
+        keywords: 'file size limit parse',
+      },
+      analysis: {
+        label: 'Rules',
+        description: 'Configure which static analysis rules are active and their reporting severity.',
+        keywords: 'analysis rules severity thresholds auto-analyze lint',
+      },
+      policies: {
+        label: 'Policy Gates',
+        description: 'Define quality gates that fail when findings exceed a severity threshold.',
+        keywords: 'policy gate quality ci fail threshold',
+      },
+      accounts: {
+        label: 'AI Accounts',
+        description: 'Configure API keys for AI-powered analysis and chat.',
+        keywords: 'api key provider anthropic claude openai gemini xai grok glm github copilot connect',
+      },
+      behavior: {
+        label: 'AI Behavior',
+        description: 'Configure how AI assistants interact with your flows.',
+        keywords: 'assistant provider model embedding temperature max tokens budget cost history custom instructions',
+      },
+      prompts: {
+        label: 'AI Prompts',
+        description: 'Customize the quick-action prompts that appear above the chat input in different contexts.',
+        keywords: 'suggested prompts quick actions chat context',
+      },
+      orgs: {
+        label: 'Organizations',
+        description: 'Group flows and share them with teammates. Roles control who can view or edit.',
+        keywords: 'organization team members invite roles owner channels webhook custom rules',
+      },
+      knowledge: {
+        label: 'Knowledge Base',
+        description: "Documents the AI can cite when analyzing this organization's flows.",
+        keywords: 'knowledge base rag documents sop upload index embedding',
+      },
+      tokens: {
+        label: 'API Tokens',
+        description: 'Personal access tokens for CI and automation.',
+        keywords: 'api token personal access pat ci automation scopes',
+      },
+      about: {
+        label: 'About',
+        description: 'Version, platform and build information.',
+        keywords: 'version platform build info',
+      },
     },
   },
   behavior: {
-    title: 'AI Behavior',
-    subtitle: 'Configure how AI assistants interact with your flows.',
     activeAssistant: 'Active Assistant',
     activeAssistantHint: 'Select the primary AI provider to use for chat and analysis.',
     embeddingAssistant: 'Embedding Assistant',
@@ -360,8 +427,6 @@ export const enSettings = {
     defaultModelPlaceholder: 'e.g. gpt-4o',
   },
   policy: {
-    title: 'Policy Gates',
-    subtitle: 'Define quality gates that fail when findings exceed a severity threshold.',
     selectOrgFirst: 'Select an organization first',
     newPolicy: 'New Policy',
     selectOrgHint: 'Select an organization to manage its policies.',
@@ -397,7 +462,6 @@ export const enSettings = {
     },
   },
   tokens: {
-    title: 'API Tokens',
     subtitlePrefix: 'Personal access tokens let CI and automation call the API as you, without a login. Send them as',
     subtitleSuffix: '.',
     createTitle: 'Create a token',

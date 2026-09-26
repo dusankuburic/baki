@@ -48,6 +48,10 @@ const NO_USER_FACING_COPY = new Set([
   // --- src/components/settings ---
   // Re-export barrel; no rendered copy of its own.
   'src/components/settings/index.ts',
+  // Section registry: ids, icons, lazy loaders and pure search matching.
+  'src/components/settings/sections.ts',
+  // Settings-row chrome: renders only the copy its callers pass in.
+  'src/components/settings/SettingRow.tsx',
 
   // --- src/components/shared ---
   // Presentational primitives: every string they render is passed in by the

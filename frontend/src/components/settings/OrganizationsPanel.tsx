@@ -18,7 +18,7 @@ import {
 import clsx from 'clsx'
 import {useOrgStore, type Organisation, type OrgRole} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
-import {useConfirm} from '@/components/shared'
+import {Button, useConfirm} from '@/components/shared'
 import OrgChannelsSection from './OrgChannelsSection'
 import OrgCustomRulesSection from './OrgCustomRulesSection'
 import {useAsync} from '@/hooks/useAsync'
@@ -206,24 +206,13 @@ export default function OrganizationsPanel() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold text-text-primary flex items-center gap-2">
-            <Building2 size={20} className="text-brand-500" />
-            {t('orgs.title')}
-          </h2>
-          <p className="text-sm text-text-secondary mt-1">{t('orgs.subtitle')}</p>
-        </div>
-        {!creating && (
-          <button
-            onClick={() => setCreating(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-brand-foreground text-sm font-medium transition-colors shrink-0"
-          >
-            <Plus size={14} />
+      {!creating && (
+        <div className="flex justify-end">
+          <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>
             {t('orgs.newOrg')}
-          </button>
-        )}
-      </div>
+          </Button>
+        </div>
+      )}
 
       {error && (
         <div

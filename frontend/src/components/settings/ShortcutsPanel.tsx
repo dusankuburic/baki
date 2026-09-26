@@ -1,5 +1,6 @@
 import {useState, useMemo} from 'react'
 import {useTranslation} from 'react-i18next'
+import {Search} from 'lucide-react'
 import Input from '@/components/shared/Input'
 import {shortcuts, formatShortcutParts} from '@/lib/shortcuts'
 
@@ -26,10 +27,8 @@ export default function ShortcutsPanel() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-text-primary">{t('shortcuts.title')}</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-4">{t('shortcuts.subtitle')}</p>
-
       <Input
+        icon={Search}
         value={search}
         onChange={e => setSearch((e.target as HTMLInputElement).value)}
         placeholder={t('shortcuts.searchPlaceholder')}
@@ -37,13 +36,22 @@ export default function ShortcutsPanel() {
         className="mb-4"
       />
 
-      <div className="columns-1 sm:columns-2 gap-x-8">
+      {/* As many 15rem columns as the panel fits (three at the full width).
+          Groups may continue in the next column so the columns stay level
+          (View and Navigation alone are taller than a column); a row never
+          splits and a heading never ends a column on its own. */}
+      <div className="columns-[15rem] gap-x-8">
         {Array.from(grouped.entries()).map(([category, items]) => (
-          <div key={category} className="break-inside-avoid mb-6">
-            <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-2">{category}</h3>
+          <div key={category} className="mb-6">
+            <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-2 break-after-avoid">
+              {category}
+            </h3>
             <div className="space-y-1">
               {items.map(s => (
-                <div key={s.id} className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-surface-2">
+                <div
+                  key={s.id}
+                  className="break-inside-avoid flex items-center justify-between py-1.5 px-2 rounded hover:bg-surface-2"
+                >
                   <span className="text-sm text-text-primary">{s.description}</span>
                   <div className="flex items-center gap-1">
                     {formatShortcutParts(s.keys).map((part, pi) => (

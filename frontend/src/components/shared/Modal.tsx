@@ -33,13 +33,18 @@ type ModalProps = {
   // Accessible name when title isn't rendered (title bar hidden). Provide
   // title OR ariaLabel so screen readers always announce the dialog.
   ariaLabel?: string
-  size?: 'sm' | 'md' | 'lg' | 'xl'
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
   closeOnBackdrop?: boolean
   closeOnEsc?: boolean
   // 'tall' makes the panel a fixed-height flex column so its size stays
   // constant regardless of content (avoids the window resizing per tab).
+  // 'fill' is the same idea for a large multi-section dialog (Settings): the
+  // frame fills the viewport minus a 1.5rem margin, capped at 60rem tall.
   // Defaults to 'auto' (height driven by content, capped at 70vh).
-  height?: 'auto' | 'tall'
+  height?: 'auto' | 'tall' | 'fill'
+  // Extra classes for the panel element itself (e.g. a hook class whose
+  // responsive rules live in index.css). Applied after the size/height ones.
+  className?: string
   // When false, the body wrapper does not scroll or pad — the child owns the
   // full area and provides its own single scroll region. Defaults to true.
   bodyScroll?: boolean
@@ -59,6 +64,7 @@ const sizeClasses: Record<string, string> = {
   md: 'max-w-lg',
   lg: 'max-w-2xl',
   xl: 'max-w-4xl',
+  '2xl': 'max-w-[75rem]',
 }
 
 export default function Modal({
@@ -73,6 +79,7 @@ export default function Modal({
   bodyScroll = true,
   initialFocusRef,
   viewTransitionName,
+  className,
   children,
   footer,
 }: ModalProps) {
@@ -108,6 +115,8 @@ export default function Modal({
             'relative w-full mx-4 bg-surface-1 border border-border-default rounded-xl shadow-xl animate-modal',
             sizeClasses[size],
             height === 'tall' && 'flex flex-col h-[80vh] max-h-[820px]',
+            height === 'fill' && 'flex flex-col h-[min(60rem,calc(100vh-3rem))]',
+            className,
           )}
           style={viewTransitionName ? {viewTransitionName} : undefined}
           role="dialog"
@@ -129,7 +138,7 @@ export default function Modal({
           <div
             className={clsx(
               bodyScroll
-                ? height === 'tall'
+                ? height !== 'auto'
                   ? 'px-6 py-4 overflow-y-auto flex-1 min-h-0'
                   : 'px-6 py-4 overflow-y-auto max-h-[70vh]'
                 : 'flex-1 min-h-0 overflow-hidden',

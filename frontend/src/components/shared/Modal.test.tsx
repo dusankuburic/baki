@@ -145,3 +145,17 @@ describe('Modal view transition name', () => {
     expect(screen.getByRole('dialog').style.viewTransitionName ?? '').toBe('')
   })
 })
+
+describe('Modal size and frame variants', () => {
+  it('applies the 2xl width, the fill frame and a caller class to the dialog', () => {
+    render(
+      <Modal isOpen onClose={noopOuter} ariaLabel="Big" size="2xl" height="fill" className="settings-dialog">
+        <p>body</p>
+      </Modal>,
+    )
+    const dialog = screen.getByRole('dialog', {name: 'Big'})
+    expect(dialog).toHaveClass('max-w-[75rem]')
+    expect(dialog).toHaveClass('h-[min(60rem,calc(100vh-3rem))]')
+    expect(dialog).toHaveClass('settings-dialog')
+  })
+})

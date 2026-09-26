@@ -144,3 +144,43 @@ describe('uiStore chat focus mode', () => {
     expect(useUIStore.getState().chatFocus).toBe(false)
   })
 })
+
+describe('uiStore settings modal', () => {
+  beforeEach(() => {
+    useUIStore.setState({settingsOpen: false, settingsSection: null, lastSettingsSection: null})
+  })
+
+  it('openSettings deep-links a section and closeSettings drops it', () => {
+    useUIStore.getState().openSettings('accounts')
+    expect(useUIStore.getState().settingsOpen).toBe(true)
+    expect(useUIStore.getState().settingsSection).toBe('accounts')
+    useUIStore.getState().closeSettings()
+    expect(useUIStore.getState().settingsOpen).toBe(false)
+    expect(useUIStore.getState().settingsSection).toBeNull()
+  })
+
+  it('opens without a section when none is given', () => {
+    useUIStore.getState().openSettings()
+    expect(useUIStore.getState().settingsOpen).toBe(true)
+    expect(useUIStore.getState().settingsSection).toBeNull()
+  })
+
+  // Regression: Ctrl+, closes through the toggle, which used to leave the
+  // consumed deep link behind, so the next plain open landed on it again.
+  it('toggleSettings clears a consumed deep link when it closes', () => {
+    useUIStore.getState().openSettings('orgs')
+    useUIStore.getState().toggleSettings()
+    expect(useUIStore.getState().settingsOpen).toBe(false)
+    expect(useUIStore.getState().settingsSection).toBeNull()
+    useUIStore.getState().toggleSettings()
+    expect(useUIStore.getState().settingsOpen).toBe(true)
+    expect(useUIStore.getState().settingsSection).toBeNull()
+  })
+
+  it('remembers the last section until the stores reset', async () => {
+    useUIStore.getState().setLastSettingsSection('shortcuts')
+    expect(useUIStore.getState().lastSettingsSection).toBe('shortcuts')
+    await resetAllStores()
+    expect(useUIStore.getState().lastSettingsSection).toBeNull()
+  })
+})

@@ -4,11 +4,21 @@ type SwitchProps = {
   checked: boolean
   onChange: (checked: boolean) => void
   label?: string
+  // Keep the label for the accessible name only (a row that already shows the
+  // title next to the switch would otherwise read it twice).
+  labelHidden?: boolean
   disabled?: boolean
   className?: string
 }
 
-export default function Switch({checked, onChange, label, disabled = false, className}: SwitchProps) {
+export default function Switch({
+  checked,
+  onChange,
+  label,
+  labelHidden = false,
+  disabled = false,
+  className,
+}: SwitchProps) {
   return (
     <label
       className={clsx(
@@ -18,6 +28,7 @@ export default function Switch({checked, onChange, label, disabled = false, clas
       )}
     >
       <button
+        type="button"
         role="switch"
         aria-checked={checked}
         disabled={disabled}
@@ -34,7 +45,7 @@ export default function Switch({checked, onChange, label, disabled = false, clas
           )}
         />
       </button>
-      {label && <span className="text-sm text-text-primary">{label}</span>}
+      {label && <span className={labelHidden ? 'sr-only' : 'text-sm text-text-primary'}>{label}</span>}
     </label>
   )
 }

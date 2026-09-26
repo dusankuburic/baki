@@ -69,15 +69,16 @@ export default function OrgCustomRulesSection({orgId, isAdmin}: {orgId: string; 
     [orgId, refetch, t, toast],
   )
 
-  if (isLoading) return <div className="text-2xs text-muted">{t('customRules.loading')}</div>
-  if (error) return <div className="text-2xs text-error">{t('customRules.loadFailed', {message: String(error)})}</div>
+  if (isLoading) return <div className="text-2xs text-text-tertiary">{t('customRules.loading')}</div>
+  if (error)
+    return <div className="text-2xs text-semantic-error">{t('customRules.loadFailed', {message: String(error)})}</div>
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div>
           <h4 className="text-sm font-medium">{t('customRules.title')}</h4>
-          <p className="text-2xs text-muted">{t('customRules.subtitle')}</p>
+          <p className="text-2xs text-text-tertiary">{t('customRules.subtitle')}</p>
         </div>
         {isAdmin && (
           <Button size="sm" onClick={() => setDraft({config: emptyRule()})} disabled={!!draft}>
@@ -87,7 +88,7 @@ export default function OrgCustomRulesSection({orgId, isAdmin}: {orgId: string; 
       </div>
 
       {rules.length === 0 && !draft && (
-        <p className="text-2xs text-muted">
+        <p className="text-2xs text-text-tertiary">
           {t('customRules.none')}
           {isAdmin ? ` ${t('customRules.noneAdminHint')}` : ''}
         </p>
@@ -114,7 +115,7 @@ export default function OrgCustomRulesSection({orgId, isAdmin}: {orgId: string; 
                     {rule.config.severity}
                   </span>
                 </div>
-                <div className="mt-0.5 truncate text-2xs text-muted">
+                <div className="mt-0.5 truncate text-2xs text-text-tertiary">
                   <code>{rule.ruleId}</code>
                   {rule.config.rawTypeMatch
                     ? ` · ${t('customRules.matchesAction', {pattern: rule.config.rawTypeMatch})}`
@@ -147,7 +148,7 @@ export default function OrgCustomRulesSection({orgId, isAdmin}: {orgId: string; 
                     aria-label={t('customRules.deleteAria')}
                     onClick={() => handleDelete(rule)}
                   >
-                    <Trash2 className="size-3.5 text-error" />
+                    <Trash2 className="size-3.5 text-semantic-error" />
                   </Button>
                 </div>
               )}
@@ -262,19 +263,19 @@ function RuleEditor({
 
   const field = (label: string, key: keyof OrgCustomRuleConfig, placeholder: string, hint?: string) => (
     <label className="block">
-      <span className="text-2xs text-muted">{label}</span>
+      <span className="text-2xs text-text-tertiary">{label}</span>
       <input
-        className="mt-0.5 w-full rounded border border-border-subtle bg-surface px-2 py-1 text-sm"
+        className="mt-0.5 w-full rounded border border-border-subtle bg-surface-1 px-2 py-1 text-sm"
         value={(cfg[key] as string) ?? ''}
         placeholder={placeholder}
         onChange={e => set(key, e.target.value as OrgCustomRuleConfig[typeof key])}
       />
-      {hint && <span className="mt-0.5 block text-3xs text-muted">{hint}</span>}
+      {hint && <span className="mt-0.5 block text-2xs text-text-tertiary">{hint}</span>}
     </label>
   )
 
   return (
-    <div className="space-y-2.5 rounded border border-border-subtle bg-surface-raised p-3">
+    <div className="space-y-2.5 rounded border border-border-subtle bg-surface-2 p-3">
       <div className="grid gap-2.5 sm:grid-cols-2">
         {field(t('customRules.fieldId'), 'id', t('customRules.fieldIdPlaceholder'), t('customRules.fieldIdHint'))}
         {field(t('customRules.fieldName'), 'name', t('customRules.fieldNamePlaceholder'))}
@@ -297,7 +298,7 @@ function RuleEditor({
       {field(t('customRules.fieldSuggestion'), 'suggestion', t('customRules.fieldSuggestionPlaceholder'))}
 
       <label className="block">
-        <span className="text-2xs text-muted">{t('customRules.severityLabel')}</span>
+        <span className="text-2xs text-text-tertiary">{t('customRules.severityLabel')}</span>
         <div className="mt-0.5 flex gap-1.5">
           {SEVERITIES.map(sev => (
             <button
@@ -319,11 +320,14 @@ function RuleEditor({
       </label>
 
       {validation && !validation.valid && (
-        <div role="alert" className="rounded border border-error/40 bg-error/10 p-2 text-2xs text-error">
+        <div
+          role="alert"
+          className="rounded border border-semantic-error/40 bg-semantic-error/10 p-2 text-2xs text-semantic-error"
+        >
           {validation.errors.length > 0 ? validation.errors.join('; ') : t('customRules.invalid')}
         </div>
       )}
-      {validation?.valid && <div className="text-2xs text-success">{t('customRules.valid')}</div>}
+      {validation?.valid && <div className="text-2xs text-semantic-success">{t('customRules.valid')}</div>}
 
       {/* Try it against a real flow. The validate call above only proves the
           rule COMPILES; a rule that compiles and matches nothing is the failure
@@ -331,9 +335,9 @@ function RuleEditor({
       {(flows?.length ?? 0) > 0 && (
         <div className="flex flex-wrap items-end gap-2 border-t border-border-subtle pt-2.5">
           <label className="min-w-0 flex-1">
-            <span className="text-2xs text-muted">{t('customRules.tryOn')}</span>
+            <span className="text-2xs text-text-tertiary">{t('customRules.tryOn')}</span>
             <select
-              className="mt-0.5 w-full rounded border border-border-subtle bg-surface px-2 py-1 text-sm"
+              className="mt-0.5 w-full rounded border border-border-subtle bg-surface-1 px-2 py-1 text-sm"
               value={testFlowId}
               onChange={e => {
                 setTestFlowId(e.target.value)
@@ -353,7 +357,7 @@ function RuleEditor({
           </Button>
           {testResult && (
             <p
-              className={clsx('text-2xs', testResult.matches > 0 ? 'text-success' : 'text-semantic-warning')}
+              className={clsx('text-2xs', testResult.matches > 0 ? 'text-semantic-success' : 'text-semantic-warning')}
               role="status"
             >
               {testResult.matches > 0

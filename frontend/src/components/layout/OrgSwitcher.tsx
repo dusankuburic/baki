@@ -18,7 +18,7 @@ export default function OrgSwitcher() {
   const activeOrgId = useOrgStore(s => s.activeOrgId)
   const setActiveOrg = useOrgStore(s => s.setActiveOrg)
   const isAuthenticated = useAuthStore(s => s.isAuthenticated)
-  const toggleSettings = useUIStore(s => s.toggleSettings)
+  const openSettings = useUIStore(s => s.openSettings)
 
   if (isTauri() || !isAuthenticated) return null
 
@@ -39,7 +39,9 @@ export default function OrgSwitcher() {
     {
       type: 'item',
       label: t('org.manage'),
-      onSelect: () => toggleSettings(),
+      // Straight to the Organizations section, not to whatever Settings
+      // showed last.
+      onSelect: () => openSettings('orgs'),
     },
   ]
 

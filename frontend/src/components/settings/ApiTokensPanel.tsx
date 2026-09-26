@@ -1,6 +1,6 @@
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {KeyRound, Plus, Trash2, Copy, Check, AlertCircle, AlertTriangle} from 'lucide-react'
+import {Plus, Trash2, Copy, Check, AlertCircle, AlertTriangle} from 'lucide-react'
 import {authApi, API_TOKEN_SCOPES, type ApiToken, type ApiTokenScope, type CreatedApiToken} from '@/api/auth'
 import {writeClipboard} from '@/lib/clipboard'
 import {Button, Input, Spinner, useToast, useConfirm} from '@/components/shared'
@@ -107,16 +107,10 @@ export default function ApiTokensPanel() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold text-text-primary flex items-center gap-2">
-          <KeyRound size={20} className="text-brand-500" />
-          {t('tokens.title')}
-        </h2>
-        <p className="text-sm text-text-secondary mt-1">
-          {t('tokens.subtitlePrefix')} <code className="text-brand-400">{'Authorization: Bearer pad_pat_…'}</code>
-          {t('tokens.subtitleSuffix')}
-        </p>
-      </div>
+      <p className="text-sm text-text-secondary">
+        {t('tokens.subtitlePrefix')} <code className="text-brand-400">{'Authorization: Bearer pad_pat_…'}</code>
+        {t('tokens.subtitleSuffix')}
+      </p>
 
       {/* One-time secret reveal */}
       {created && (

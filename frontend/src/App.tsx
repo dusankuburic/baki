@@ -65,7 +65,7 @@ function AppInner() {
   const toggleSettings = useUIStore(s => s.toggleSettings)
   const commandPaletteOpen = useUIStore(s => s.commandPaletteOpen)
   const settingsOpen = useUIStore(s => s.settingsOpen)
-  const setSettingsOpen = useUIStore(s => s.setSettingsOpen)
+  const closeSettings = useUIStore(s => s.closeSettings)
   const {t} = useTranslation('shell')
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const setDocument = useFlowStore(s => s.setDocument)
@@ -77,7 +77,6 @@ function AppInner() {
   // actually render it).
   const documentId = useFlowStore(s => s.document?.id ?? null)
   const settingsSection = useUIStore(s => s.settingsSection)
-  const setSettingsSection = useUIStore(s => s.setSettingsSection)
   const isAuthenticated = useAuthStore(s => s.isAuthenticated)
   const requestSearchFocus = useSearchStore(s => s.requestFocus)
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
@@ -308,21 +307,12 @@ function AppInner() {
       <ErrorBoundary>
         <Suspense
           fallback={
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="fixed inset-0 z-modal flex items-center justify-center bg-surface-overlay">
               <Spinner size={24} />
             </div>
           }
         >
-          {settingsOpen && (
-            <SettingsModal
-              isOpen
-              initialSection={settingsSection}
-              onClose={() => {
-                setSettingsOpen(false)
-                if (settingsSection) setSettingsSection(null)
-              }}
-            />
-          )}
+          {settingsOpen && <SettingsModal isOpen initialSection={settingsSection} onClose={closeSettings} />}
         </Suspense>
       </ErrorBoundary>
       <ErrorBoundary>

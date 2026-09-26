@@ -10,12 +10,8 @@ import {SectionCard} from './SectionCard'
 // modal, so the profile links there instead of hosting a second copy.
 export const ApiTokensSection: React.FC = () => {
   const {t} = useTranslation('auth')
-  const setSettingsSection = useUIStore(s => s.setSettingsSection)
-  const setSettingsOpen = useUIStore(s => s.setSettingsOpen)
-  const openTokens = () => {
-    setSettingsSection('tokens')
-    setSettingsOpen(true)
-  }
+  const openSettings = useUIStore(s => s.openSettings)
+  const openTokens = () => openSettings('tokens')
   return (
     <SectionCard
       id="profile-tokens"

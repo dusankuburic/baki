@@ -127,7 +127,7 @@ export default function ChatHeader({
           .join('+')
       : undefined
   }, [])
-  const setSettingsOpen = useUIStore(s => s.setSettingsOpen)
+  const openSettings = useUIStore(s => s.openSettings)
   const {confirm} = useConfirm()
   const [sseState, setSseState] = useState<EventConnectionState>(getEventConnectionState)
 
@@ -166,7 +166,7 @@ export default function ChatHeader({
           icon: p.id === selectedProvider && p.configured ? Check : undefined,
           onSelect: () => {
             if (p.configured) onSelectProvider(p.id)
-            else setSettingsOpen(true)
+            else openSettings('accounts')
           },
         })),
       },
@@ -192,7 +192,7 @@ export default function ChatHeader({
       type: 'item',
       label: t('provider.manage', {connected: connectedCount, total: providers.length}),
       icon: Settings,
-      onSelect: () => setSettingsOpen(true),
+      onSelect: () => openSettings('accounts'),
     })
     return items
   }, [
@@ -203,7 +203,7 @@ export default function ChatHeader({
     selectedModel,
     onSelectModel,
     connectedCount,
-    setSettingsOpen,
+    openSettings,
     t,
   ])
 

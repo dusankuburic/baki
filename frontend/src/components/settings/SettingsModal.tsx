@@ -1,55 +1,18 @@
-import {useState, lazy, Suspense} from 'react'
+import {Suspense, useEffect, useMemo, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import clsx from 'clsx'
+import {X} from 'lucide-react'
 import Modal from '@/components/shared/Modal'
-import Spinner from '@/components/shared/Spinner'
-import {isTauri} from '@/platform/guards'
-import type {SettingsSection} from '@/stores/uiStore'
+import IconButton from '@/components/shared/IconButton'
+import Skeleton from '@/components/shared/Skeleton'
+import ErrorBoundary from '@/components/shared/ErrorBoundary'
+import {useUIStore, type SettingsSection} from '@/stores/uiStore'
+import SettingsNav from './SettingsNav'
+import {SETTINGS_PANELS, isCloudRuntime, visibleFooterSections, visibleGroups, visibleSectionIds} from './sections'
 
-// Each panel is lazy: only one is visible at a time, so the settings chunk
-// fetches a panel on first open of that section instead of shipping all 14
-// (including ~46 kB of cloud-only panels a desktop user can never open) with
-// the modal. The barrel (./index) stays for typed external re-exports.
-const GeneralPanel = lazy(() => import('./GeneralPanel'))
-const ParserPanel = lazy(() => import('./ParserPanel'))
-const ProvidersPanel = lazy(() => import('./ProvidersPanel'))
-const AIBehaviorPanel = lazy(() => import('./AIBehaviorPanel'))
-const AIPromptsPanel = lazy(() => import('./AIPromptsPanel'))
-const AppearancePanel = lazy(() => import('./AppearancePanel'))
-const RulesPanel = lazy(() => import('./RulesPanel'))
-const PolicyGatePanel = lazy(() => import('./PolicyGatePanel'))
-const OrganizationsPanel = lazy(() => import('./OrganizationsPanel'))
-const KnowledgeBasePanel = lazy(() => import('./KnowledgeBasePanel'))
-const ApiTokensPanel = lazy(() => import('./ApiTokensPanel'))
-const ShortcutsPanel = lazy(() => import('./ShortcutsPanel'))
-const PrivacyPanel = lazy(() => import('./PrivacyPanel'))
-const AboutPanel = lazy(() => import('./AboutPanel'))
-
-// Organisations are a cloud-mode (multi-user) concept; the desktop app is
-// single-user and has no notion of orgs, so hide that entry there.
-const isCloud = !isTauri()
-
-// Section labels resolve at render time (not module init) so they re-resolve
-// on language change; the module-level constant only carries the ids.
-const CLOUD_SECTION_IDS = ['policies', 'orgs', 'knowledge', 'tokens'] as const
-const SECTION_IDS = [
-  'general',
-  'parser',
-  'accounts',
-  'behavior',
-  'prompts',
-  'appearance',
-  'analysis',
-  ...(isCloud ? CLOUD_SECTION_IDS : []),
-  'shortcuts',
-  'privacy',
-  'about',
-] as const
-
-function useSections(): {id: SettingsSection; label: string}[] {
-  const {t} = useTranslation('settings')
-  return SECTION_IDS.map(id => ({id, label: t(`modal.sections.${id}`)}))
-}
+// The Settings dialog: a fixed 1200×960 frame (viewport-capped, see
+// index.css "SETTINGS MODAL") with the section sidebar on the left and, on
+// the right, a header naming the active section above the one scroll region
+// that holds its panel. Sections, groups and panels come from ./sections.
 
 export default function SettingsModal({
   isOpen,
@@ -58,72 +21,99 @@ export default function SettingsModal({
 }: {
   isOpen: boolean
   onClose: () => void
-  // initialSection selects the opening tab (deep-link from onboarding /
-  // missing-key states); falls back to 'general' when unknown.
+  // Deep link (onboarding, missing-key states, profile links). Wins over the
+  // remembered section; an unknown or hidden id falls back to General.
   initialSection?: SettingsSection | null
 }) {
   const {t} = useTranslation('settings')
-  const sections = useSections()
-  const validInitial = initialSection && sections.some(s => s.id === initialSection) ? initialSection : 'general'
-  const [activeSection, setActiveSection] = useState<SettingsSection>(validInitial)
+  const cloud = isCloudRuntime()
+  const groups = useMemo(() => visibleGroups(cloud), [cloud])
+  const footer = useMemo(() => visibleFooterSections(cloud), [cloud])
+  const ids = useMemo(() => visibleSectionIds(cloud), [cloud])
+
+  const [active, setActive] = useState<SettingsSection>(() => {
+    const remembered = useUIStore.getState().lastSettingsSection
+    return [initialSection, remembered].find((s): s is SettingsSection => !!s && ids.includes(s)) ?? 'general'
+  })
+  const setLastSettingsSection = useUIStore(s => s.setLastSettingsSection)
+  useEffect(() => setLastSettingsSection(active), [active, setLastSettingsSection])
+
+  const [query, setQuery] = useState('')
+  const selectedTabRef = useRef<HTMLButtonElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  // The scroll container outlives the panels, so a new section would
+  // otherwise open at the previous one's scroll offset.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
+  }, [active])
+
+  const Panel = SETTINGS_PANELS[active]
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={t('modal.title')}
-      size="xl"
-      height="tall"
+      ariaLabel={t('modal.ui.title')}
+      size="2xl"
+      height="fill"
       bodyScroll={false}
+      className="settings-dialog"
       viewTransitionName="settings"
+      initialFocusRef={selectedTabRef}
     >
-      <div className="flex h-full">
-        {/* Sidebar */}
-        <div className="w-48 border-r border-border-default px-4 py-3 overflow-y-auto shrink-0">
-          <nav className="space-y-0.5">
-            {sections.map(s => (
-              <button
-                key={s.id}
-                onClick={() => setActiveSection(s.id)}
-                className={clsx(
-                  'w-full text-left px-3 py-2 rounded-md text-sm font-medium transition-colors',
-                  activeSection === s.id
-                    ? 'bg-brand-500/10 text-brand-500'
-                    : 'text-text-secondary hover:bg-surface-3 hover:text-text-primary',
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
-          </nav>
-        </div>
-
-        {/* Content — the single scroll region */}
-        <div className="flex-1 p-6 overflow-y-auto min-h-0">
-          <Suspense
-            fallback={
-              <div className="flex items-center justify-center py-16">
-                <Spinner size={20} />
-              </div>
-            }
+      <div className="settings-shell">
+        <SettingsNav
+          groups={groups}
+          footer={footer}
+          active={active}
+          onSelect={setActive}
+          query={query}
+          onQueryChange={setQuery}
+          selectedTabRef={selectedTabRef}
+        />
+        <section className="settings-content">
+          {/* Named from the registry, so the heading is there before the
+              panel chunk has arrived. */}
+          <header className="settings-content-header flex items-start gap-4 border-b border-border-subtle px-8 pb-4 pt-5">
+            <div className="min-w-0 flex-1">
+              <h2 id="settings-heading" className="truncate text-xl font-semibold text-text-primary">
+                {t(`modal.sections.${active}.label`)}
+              </h2>
+              <p className="mt-1 text-sm text-text-secondary">{t(`modal.sections.${active}.description`)}</p>
+            </div>
+            <IconButton icon={X} label={t('modal.ui.close')} onClick={onClose} />
+          </header>
+          <div
+            ref={scrollRef}
+            id="settings-panel"
+            role="tabpanel"
+            aria-labelledby="settings-heading"
+            tabIndex={0}
+            className="settings-content-body px-8 pb-10 pt-6"
           >
-            {activeSection === 'general' && <GeneralPanel />}
-            {activeSection === 'parser' && <ParserPanel />}
-            {activeSection === 'accounts' && <ProvidersPanel />}
-            {activeSection === 'behavior' && <AIBehaviorPanel />}
-            {activeSection === 'prompts' && <AIPromptsPanel />}
-            {activeSection === 'appearance' && <AppearancePanel />}
-            {activeSection === 'analysis' && <RulesPanel />}
-            {activeSection === 'policies' && isCloud && <PolicyGatePanel />}
-            {activeSection === 'orgs' && isCloud && <OrganizationsPanel />}
-            {activeSection === 'knowledge' && isCloud && <KnowledgeBasePanel />}
-            {activeSection === 'tokens' && isCloud && <ApiTokensPanel />}
-            {activeSection === 'shortcuts' && <ShortcutsPanel />}
-            {activeSection === 'privacy' && <PrivacyPanel />}
-            {activeSection === 'about' && <AboutPanel />}
-          </Suspense>
-        </div>
+            {/* Keyed on the section so a panel that threw is retried fresh
+                when the user moves on; the boundary keeps the failure inside
+                the body instead of unmounting the whole dialog. */}
+            <ErrorBoundary key={active}>
+              <Suspense fallback={<PanelFallback label={t('modal.ui.loading')} />}>
+                <Panel />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
+        </section>
       </div>
     </Modal>
+  )
+}
+
+// Shaped like a typical panel (a text block and two cards) so the body does
+// not jump when the real one arrives; the frame itself never moves.
+function PanelFallback({label}: {label: string}) {
+  return (
+    <div role="status" aria-label={label} className="space-y-6">
+      <Skeleton lines={2} className="max-w-md" />
+      <div className="h-28 rounded-lg bg-surface-2 animate-pulse-soft" />
+      <div className="h-28 rounded-lg bg-surface-2 animate-pulse-soft" />
+    </div>
   )
 }

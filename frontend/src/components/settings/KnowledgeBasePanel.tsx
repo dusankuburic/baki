@@ -159,12 +159,9 @@ export default function KnowledgeBasePanel() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-text-primary">{t('knowledge.title')}</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-6">
-        Organization: <span className="font-medium text-text-primary">{activeOrg?.name}</span>
-        <br />
-        Upload organizational guidelines, SOPs, or coding standards. The AI will use these to contextualize its
-        analysis.
+      <p className="text-sm text-text-secondary">{t('knowledge.intro')}</p>
+      <p className="text-xs text-text-tertiary mt-1 mb-6">
+        {t('knowledge.orgLabel')} <span className="font-medium text-text-primary">{activeOrg?.name}</span>
       </p>
 
       <div className="bg-brand-500/5 border border-brand-500/20 rounded-lg p-3 mb-6 text-xs text-text-secondary">

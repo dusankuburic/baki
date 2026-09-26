@@ -4,6 +4,7 @@
 import {useTranslation} from 'react-i18next'
 import {useSystemStore} from '@/stores/systemStore'
 import {isTauri} from '@/platform/guards'
+import SettingRow from './SettingRow'
 
 export default function PrivacyPanel() {
   const {t} = useTranslation('settings')
@@ -15,26 +16,12 @@ export default function PrivacyPanel() {
   const systemInfo = useSystemStore(s => s.info)
   const localBackend = systemInfo ? systemInfo.capabilities.sessionAnalytics : isTauri()
   return (
-    <div>
-      <h2 className="text-xl font-semibold text-text-primary">Privacy</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-6">{t('privacy.subtitle')}</p>
-
-      <div className="space-y-4">
-        <div className="py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
-          <span className="text-sm font-medium text-text-primary">{t('privacy.apiKeysTitle')}</span>
-          <p className="text-xs text-text-tertiary mt-0.5">
-            {localBackend ? t('privacy.apiKeysLocal') : t('privacy.apiKeysServer')}
-          </p>
-        </div>
-
-        <div className="py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
-          <span className="text-sm font-medium text-text-primary">{t('privacy.aiDataTitle')}</span>
-          <p className="text-xs text-text-tertiary mt-0.5">
-            Before any flow content is sent to an AI provider, known credential fields, secret-shaped patterns (tokens,
-            connection strings), and high-entropy strings are automatically redacted.
-          </p>
-        </div>
-      </div>
+    <div className="space-y-4">
+      <SettingRow
+        title={t('privacy.apiKeysTitle')}
+        hint={localBackend ? t('privacy.apiKeysLocal') : t('privacy.apiKeysServer')}
+      />
+      <SettingRow title={t('privacy.aiDataTitle')} hint={t('privacy.aiDataBody')} />
     </div>
   )
 }

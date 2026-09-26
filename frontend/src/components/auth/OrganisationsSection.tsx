@@ -12,14 +12,10 @@ export const OrganisationsSection: React.FC<{
   loading?: boolean
 }> = ({organisations, userId, loading = false}) => {
   const {t} = useTranslation('auth')
-  const setSettingsSection = useUIStore(s => s.setSettingsSection)
-  const setSettingsOpen = useUIStore(s => s.setSettingsOpen)
+  const openSettings = useUIStore(s => s.openSettings)
   // Creating, renaming and inviting live in Settings → Organisations; the
   // profile only reads memberships, so it links there instead of duplicating.
-  const openOrgSettings = () => {
-    setSettingsSection('orgs')
-    setSettingsOpen(true)
-  }
+  const openOrgSettings = () => openSettings('orgs')
 
   return (
     <SectionCard
