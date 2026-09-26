@@ -48,7 +48,7 @@ export function SystemViewRouter({view}: {view: string}) {
       return (
         <div className="flex flex-col h-full bg-surface-1">
           <MainPaneToolbar />
-          <div className="flex-1 overflow-y-auto p-4">
+          <div className="flex-1 overflow-hidden">
             <Suspense fallback={<Spinner />}>
               <AdminDashboard />
             </Suspense>

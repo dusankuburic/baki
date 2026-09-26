@@ -10,6 +10,59 @@ import type {DependencyAnalysis} from '@/types'
 
 cytoscape.use(dagre)
 
+// The theme-derived stylesheet, read from the CSS variables on <html> at the
+// time of the call.
+function buildStyle(): cytoscape.StylesheetJson {
+  const cs = getComputedStyle(document.documentElement)
+  const cssVar = (v: string) => cs.getPropertyValue(v).trim()
+  return [
+    {
+      selector: 'node',
+      style: {
+        shape: 'round-rectangle',
+        width: '180px',
+        height: '44px',
+        'background-color': cssVar('--surface-2'),
+        'border-width': 1.5,
+        'border-color': cssVar('--border-strong'),
+        label: 'data(label)',
+        color: cssVar('--text-primary'),
+        'font-size': '11px',
+        'font-family': 'var(--font-mono)',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'text-wrap': 'ellipsis',
+        padding: '6px',
+      },
+    },
+    {
+      selector: 'edge',
+      style: {
+        width: 1.5,
+        'line-color': cssVar('--border-strong'),
+        'target-arrow-color': cssVar('--border-strong'),
+        'target-arrow-shape': 'triangle',
+        'curve-style': 'bezier',
+        label: 'data(reason)',
+        'font-size': '9px',
+        color: cssVar('--text-tertiary'),
+        'text-background-color': cssVar('--surface-1'),
+        'text-background-padding': '2px',
+        'text-background-opacity': 0.9,
+        'text-rotation': 'autorotate',
+      },
+    },
+    {
+      selector: 'node:selected',
+      style: {'border-color': cssVar('--brand-500'), 'border-width': 3},
+    },
+    {
+      selector: '.cycle-node',
+      style: {'border-color': cssVar('--error'), 'border-width': 2.5},
+    },
+  ]
+}
+
 // RelatedRulesResponse is the dependencies payload plus the provenance fields
 // the backend now sends. Kept local: the shared DependencyAnalysis type is
 // unchanged, and the fields are optional so an older backend still renders.
@@ -37,12 +90,6 @@ export default function RuleDependencyView() {
   const [selected, setSelected] = useState<string | null>(null)
   const resolvedTheme = useUIStore(s => s.resolvedTheme)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
-
-  // The map is static (editorial content, not flow-specific), so keep the
-  // last fetch in a ref: theme-driven instance rebuilds re-render from it
-  // instead of re-hitting the API. The Refresh button remains the explicit
-  // re-fetch path.
-  const dataRef = useRef<RelatedRulesResponse | null>(null)
 
   // renderGraph paints a fetched map into the current cytoscape instance.
   const renderGraph = (dep: DependencyAnalysis) => {
@@ -92,7 +139,6 @@ export default function RuleDependencyView() {
     try {
       const dep: RelatedRulesResponse = await analysisApi.getDependencies()
       setData(dep)
-      dataRef.current = dep
       if (cyRef.current && cyRef.current === inst) renderGraph(dep)
     } catch (err) {
       if (cyRef.current === inst) {
@@ -104,62 +150,14 @@ export default function RuleDependencyView() {
     }
   }
 
-  // Build the cytoscape instance. Recreated on theme change so the CSS-var-
-  // derived colors track the active theme (same approach as the other graph
-  // views); the initial fetch runs once the instance is ready.
+  // Build the cytoscape instance once per mount; the initial fetch runs once
+  // the instance is ready. Theme changes restyle it in place (below).
   useEffect(() => {
     if (!containerRef.current) return
-    const cs = getComputedStyle(document.documentElement)
-    const cssVar = (v: string) => cs.getPropertyValue(v).trim()
 
     const instance = cytoscape({
       container: containerRef.current,
-      style: [
-        {
-          selector: 'node',
-          style: {
-            shape: 'round-rectangle',
-            width: '180px',
-            height: '44px',
-            'background-color': cssVar('--surface-2'),
-            'border-width': 1.5,
-            'border-color': cssVar('--border-strong'),
-            label: 'data(label)',
-            color: cssVar('--text-primary'),
-            'font-size': '11px',
-            'font-family': 'var(--font-mono)',
-            'text-valign': 'center',
-            'text-halign': 'center',
-            'text-wrap': 'ellipsis',
-            padding: '6px',
-          },
-        },
-        {
-          selector: 'edge',
-          style: {
-            width: 1.5,
-            'line-color': cssVar('--border-strong'),
-            'target-arrow-color': cssVar('--border-strong'),
-            'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
-            label: 'data(reason)',
-            'font-size': '9px',
-            color: cssVar('--text-tertiary'),
-            'text-background-color': cssVar('--surface-1'),
-            'text-background-padding': '2px',
-            'text-background-opacity': 0.9,
-            'text-rotation': 'autorotate',
-          },
-        },
-        {
-          selector: 'node:selected',
-          style: {'border-color': cssVar('--brand-500'), 'border-width': 3},
-        },
-        {
-          selector: '.cycle-node',
-          style: {'border-color': cssVar('--error'), 'border-width': 2.5},
-        },
-      ],
+      style: buildStyle(),
       minZoom: 0.3,
       maxZoom: 2.5,
     })
@@ -173,21 +171,24 @@ export default function RuleDependencyView() {
     })
 
     cyRef.current = instance
-    // First mount fetches; theme rebuilds re-render the cached map without a
-    // redundant HTTP round trip (the data doesn't change with theme).
-    if (dataRef.current) {
-      renderGraph(dataRef.current)
-    } else {
-      void load()
-    }
+    void load()
     return () => {
       instance.destroy()
       cyRef.current = null
     }
     // `load` is a plain function redeclared each render; listing it would tear
-    // down and rebuild the cytoscape instance every render. Theme is the only
-    // real input.
+    // down and rebuild the cytoscape instance every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // The stylesheet is derived from the theme's CSS vars: a theme change
+  // restyles the instance in place (same nodes, same layout) instead of
+  // rebuilding it, which re-ran the layout animation.
+  const styledFor = useRef(resolvedTheme)
+  useEffect(() => {
+    if (styledFor.current === resolvedTheme) return
+    styledFor.current = resolvedTheme
+    cyRef.current?.style().fromJson(buildStyle()).update()
   }, [resolvedTheme])
 
   const selectedDeps =

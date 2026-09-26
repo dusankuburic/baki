@@ -68,7 +68,15 @@ export default function SettingsModal({
   const [activeSection, setActiveSection] = useState<SettingsSection>(validInitial)
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={t('modal.title')} size="xl" height="tall" bodyScroll={false}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={t('modal.title')}
+      size="xl"
+      height="tall"
+      bodyScroll={false}
+      viewTransitionName="settings"
+    >
       <div className="flex h-full">
         {/* Sidebar */}
         <div className="w-48 border-r border-border-default px-4 py-3 overflow-y-auto shrink-0">

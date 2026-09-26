@@ -1004,6 +1004,26 @@ func (lsb *LocalStorageBackend) UpdateUserRole(ctx context.Context, id string, r
 	return interfaces.ErrNotFound
 }
 
+func (lsb *LocalStorageBackend) QueryUsers(ctx context.Context, q interfaces.UserQuery) ([]*interfaces.User, int, error) {
+	// ListUsers already hands out copies in the shared order.
+	all, err := lsb.ListUsers(ctx, 0, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	page, total := q.Apply(all)
+	return page, total, nil
+}
+
+func (lsb *LocalStorageBackend) LoadUserStats(ctx context.Context) (*interfaces.UserStats, error) {
+	lsb.mu.RLock()
+	defer lsb.mu.RUnlock()
+	users := make([]*interfaces.User, 0, len(lsb.users))
+	for _, u := range lsb.users {
+		users = append(users, u)
+	}
+	return interfaces.UserStatsOf(users, time.Now().UTC()), nil
+}
+
 func (lsb *LocalStorageBackend) UpdateUserPassword(ctx context.Context, id string, passwordHash string) error {
 	lsb.mu.Lock()
 	defer lsb.mu.Unlock()

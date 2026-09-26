@@ -46,6 +46,10 @@ type ModalProps = {
   // Focus this element on open instead of the first focusable one (which is
   // the title bar's Close button when a title is shown).
   initialFocusRef?: React.RefObject<HTMLElement | null>
+  // Names the dialog for the View Transitions API so a page-wide transition
+  // (a theme switch, see useTheme) captures it as its own group; index.css
+  // decides how that group animates.
+  viewTransitionName?: string
   children: React.ReactNode
   footer?: React.ReactNode
 }
@@ -68,6 +72,7 @@ export default function Modal({
   height = 'auto',
   bodyScroll = true,
   initialFocusRef,
+  viewTransitionName,
   children,
   footer,
 }: ModalProps) {
@@ -104,6 +109,7 @@ export default function Modal({
             sizeClasses[size],
             height === 'tall' && 'flex flex-col h-[80vh] max-h-[820px]',
           )}
+          style={viewTransitionName ? {viewTransitionName} : undefined}
           role="dialog"
           aria-modal="true"
           aria-label={title ?? ariaLabel}

@@ -234,6 +234,14 @@ type UserStore interface {
 	// callers that only need to check for emptiness, e.g. first-admin bootstrap).
 	ListUsers(ctx context.Context, limit, offset int) ([]*User, error)
 	ListAdmins(ctx context.Context) ([]*User, error)
+	// QueryUsers returns one page of the admin user list — the users matching
+	// q's filters, ordered by created_at descending then id, sliced by
+	// q.Offset/q.Limit — together with the number of matching users. The page
+	// is never nil.
+	QueryUsers(ctx context.Context, q UserQuery) ([]*User, int, error)
+	// LoadUserStats counts the whole user table by role and state for the
+	// admin overview.
+	LoadUserStats(ctx context.Context) (*UserStats, error)
 	UpdateUserRole(ctx context.Context, id string, role auth.Role) error
 	UpdateUserPassword(ctx context.Context, id string, passwordHash string) error
 	// UpdateUserProfile updates the user's display name and avatar URL. Either
@@ -1202,6 +1210,12 @@ type AuditFilter struct {
 	Limit  int
 	Offset int
 	Since  *time.Time
+	// IncludeSubject also matches events whose subject is UserID (resource_type
+	// "user" and resource_id UserID): sign-ins, failed sign-ins, lockouts,
+	// registration and SSO logins carry no actor, so a plain UserID filter
+	// misses them. The admin audit log sets it; the GDPR export must not, so a
+	// user's export never carries the IP of whoever failed to sign in as them.
+	IncludeSubject bool
 }
 
 // FlowVersion stores a snapshot of a flow at a point in time.

@@ -90,6 +90,16 @@ const mockCy = {
   _elements: [] as MockElement[],
   _added: null as unknown,
   _destroyed: false,
+  _restyled: 0,
+  style() {
+    return {
+      fromJson: (_json: unknown) => ({
+        update: () => {
+          mockCy._restyled += 1
+        },
+      }),
+    }
+  },
 }
 
 const cytoscapeFactory = vi.fn((..._args: unknown[]) => mockCy)
@@ -144,9 +154,10 @@ beforeEach(() => {
   mockCy._elements = []
   mockCy._added = null
   mockCy._destroyed = false
+  mockCy._restyled = 0
   useFlowStore.setState({document: {id: 'flow-1', name: 'F'} as never})
   useAnalysisStore.setState({reports: new Map()})
-  useUIStore.setState({graphZoom: 1})
+  useUIStore.setState({graphZoom: 1, resolvedTheme: 'dark'})
   // The hook needs a real DOM node for containerRef; renderHook mounts a div.
 })
 
@@ -164,6 +175,21 @@ describe('useCytoscapeGraph', () => {
 
     unmount()
     expect(mockCy._destroyed).toBe(true)
+  })
+
+  it('restyles the existing instance on a theme change instead of rebuilding it', async () => {
+    getExecutionGraph.mockResolvedValue(graph([{id: 'sf1', label: 'Main'}]))
+    mount()
+    await waitFor(() => expect(cytoscapeFactory).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockCy._added).not.toBeNull())
+    const fetches = getExecutionGraph.mock.calls.length
+
+    act(() => useUIStore.setState({resolvedTheme: 'nord'}))
+
+    expect(cytoscapeFactory).toHaveBeenCalledTimes(1)
+    expect(mockCy._destroyed).toBe(false)
+    expect(mockCy._restyled).toBe(1)
+    expect(getExecutionGraph.mock.calls.length).toBe(fetches)
   })
 
   it('loads nodes and edges into the instance', async () => {

@@ -1,8 +1,8 @@
 import type {ReactNode} from 'react'
 
-// The chart palette as concrete colour strings (hex), resolved from the CSS
-// tokens once per theme by useChartTheme. Recharts paints SVG presentation
-// attributes, where `var(--token)` is not reliably resolved.
+// The chart palette as CSS colour values — `var(--token)` references that SVG
+// presentation attributes resolve like any stylesheet, so charts follow a theme
+// change without re-rendering (see useChartTheme).
 export interface ChartTheme {
   /** Categorical slots 1–8 in the validated fixed order: assign in sequence, never cycle. */
   series: readonly string[]
@@ -24,8 +24,6 @@ export interface ChartTheme {
   tooltip: {bg: string; border: string}
   fontSans: string
   fontMono: string
-  isDark: boolean
-  highContrast: boolean
 }
 
 export interface LegendItem {

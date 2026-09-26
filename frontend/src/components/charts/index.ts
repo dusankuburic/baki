@@ -1,5 +1,5 @@
 export type {ChartTheme, LegendItem, TableColumn, TableSpec} from './chartTypes'
-export {useChartTheme, readChartTheme} from './useChartTheme'
+export {useChartTheme, CHART_THEME} from './useChartTheme'
 export {useReducedMotion} from './useReducedMotion'
 export {ChartCard, ChartPlaceholder} from './ChartCard'
 export type {ChartCardState} from './ChartCard'

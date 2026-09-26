@@ -24,6 +24,7 @@ const I18N_COMPLETE_DIRS = [
   'src/components/charts',
   'src/components/dashboard/home',
   'src/components/dashboard/analytics',
+  'src/components/admin',
 ]
 
 // Files with no user-facing copy: barrels, pure logic/data, and presentational
@@ -118,6 +119,19 @@ const NO_USER_FACING_COPY = new Set([
   'src/components/dashboard/analytics/SkeletonAnalytics.tsx',
   // Section chrome: renders only the copy its callers pass in.
   'src/components/dashboard/analytics/ChartSection.tsx',
+
+  // --- src/components/admin ---
+  // Section chrome and skeleton rows: render only the copy their callers pass in.
+  'src/components/admin/AdminSection.tsx',
+  // Pure grouping/tone helpers for audit action ids; the labels come from
+  // the caller's translated table.
+  'src/components/admin/auditActions.ts',
+  // Role constants and a label lookup that takes the caller's `t`.
+  'src/components/admin/roles.ts',
+  // Data plumbing with no rendered copy (the hooks that toast use i18n).
+  'src/components/admin/hooks/useAdminQuery.ts',
+  'src/components/admin/hooks/useUserStats.ts',
+  'src/components/admin/hooks/useAuditActions.ts',
 
   // --- src/components/chat ---
   'src/components/chat/index.ts',

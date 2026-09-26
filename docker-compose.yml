@@ -35,7 +35,10 @@ services:
       # base file at a real database, drop this line and use sslmode=require.
       - PAD_DB_REQUIRE_SSL=false
       - PAD_AUTH_SECRET=${PAD_AUTH_SECRET:?PAD_AUTH_SECRET must be set}
-      - PAD_ALLOWED_ORIGINS=${PAD_ALLOWED_ORIGINS:-http://localhost:8080}
+      # Both loopback spellings: on Windows, `localhost` resolves to ::1 first,
+      # and browsers reach the container through WSL's relay there (which can
+      # stall); http://127.0.0.1:8080 goes through Docker's own forwarder.
+      - PAD_ALLOWED_ORIGINS=${PAD_ALLOWED_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
       # GLM provider base URL. The default targets z.ai's pay-as-you-go
       # endpoint; a GLM Coding Plan key is only entitled to the coding
       # endpoint and gets rejected there (surfacing as an "insufficient

@@ -59,6 +59,15 @@ export default defineConfig({
     // to users), but the maps can be uploaded to an error-tracking service
     // to symbolicate production stack traces.
     sourcemap: 'hidden',
+    // No <link rel="modulepreload"> hints (neither in index.html nor the
+    // runtime preload of a dynamic import's dependencies). The service worker
+    // serves /assets/* cache-first, and recent Chrome refuses to reuse a
+    // preload answered by a service worker for the module request that
+    // follows ("cross-world service worker resource mismatch"): the hint is
+    // discarded, the chunk is fetched twice, and every load logs a warning
+    // per chunk. Once the worker is installed the chunks come from Cache
+    // Storage anyway, so the hint bought nothing there.
+    modulePreload: false,
     rollupOptions: {
       output: {
         manualChunks: vendorChunk,

@@ -125,3 +125,23 @@ describe('Modal focus restoration', () => {
     trigger.remove()
   })
 })
+
+describe('Modal view transition name', () => {
+  it('names the dialog for the View Transitions API when asked', () => {
+    render(
+      <Modal isOpen onClose={noopOuter} title="Settings" viewTransitionName="settings">
+        <p>body</p>
+      </Modal>,
+    )
+    expect(screen.getByRole('dialog').style.viewTransitionName).toBe('settings')
+  })
+
+  it('leaves the dialog unnamed by default', () => {
+    render(
+      <Modal isOpen onClose={noopOuter} title="Plain">
+        <p>body</p>
+      </Modal>,
+    )
+    expect(screen.getByRole('dialog').style.viewTransitionName ?? '').toBe('')
+  })
+})

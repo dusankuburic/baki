@@ -27,7 +27,7 @@
                     },
                     {
                         "type": "string",
-                        "description": "Only events by this user ID",
+                        "description": "Only events by this user ID, or whose subject is this user (sign-ins, failed sign-ins, lockouts)",
                         "name": "userId",
                         "in": "query"
                     },
@@ -279,22 +279,53 @@
         },
         "/api/admin/users/list": {
             "get": {
-                "description": "Returns a list of all registered users. Only available to system admins.",
+                "description": "Returns one page of registered users, newest first, with the number of users matching the filters (total). Only available to system admins.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "admin"
                 ],
-                "summary": "List all users",
+                "summary": "List users",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 50, max 100)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Rows to skip",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Case-insensitive substring of the email or display name",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only this role: admin, member, viewer, guest, or none (accounts without a valid role)",
+                        "name": "role",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "One page of users",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": true
+                            "$ref": "#/definitions/render.PagedResponse-interfaces_User"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid limit, offset, q or role",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
                             }
                         }
                     },
@@ -318,6 +349,71 @@
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "No storage backend (local mode)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/admin/users/stats": {
+            "get": {
+                "description": "Counts every registered user by role (admin, member, viewer, guest, none) and by state (unverified email, locked out) for the admin overview. Only available to system admins.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "User statistics",
+                "responses": {
+                    "200": {
+                        "description": "Counts",
+                        "schema": {
+                            "$ref": "#/definitions/api.userStatsView"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "No storage backend (local mode)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -8020,6 +8116,107 @@
                 },
                 "provider": {
                     "type": "string"
+                }
+            }
+        },
+        "api.roleCounts": {
+            "type": "object",
+            "properties": {
+                "admin": {
+                    "type": "integer"
+                },
+                "guest": {
+                    "type": "integer"
+                },
+                "member": {
+                    "type": "integer"
+                },
+                "none": {
+                    "type": "integer"
+                },
+                "viewer": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.userStatsView": {
+            "type": "object",
+            "properties": {
+                "byRole": {
+                    "$ref": "#/definitions/api.roleCounts"
+                },
+                "locked": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "unverified": {
+                    "type": "integer"
+                }
+            }
+        },
+        "auth.Role": {
+            "type": "string",
+            "enum": [
+                "admin",
+                "member",
+                "viewer",
+                "guest"
+            ],
+            "x-enum-varnames": [
+                "RoleAdmin",
+                "RoleMember",
+                "RoleViewer",
+                "RoleGuest"
+            ]
+        },
+        "interfaces.User": {
+            "type": "object",
+            "properties": {
+                "avatarUrl": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "displayName": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "emailVerified": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "role": {
+                    "$ref": "#/definitions/auth.Role"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "render.PagedResponse-interfaces_User": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/interfaces.User"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         }

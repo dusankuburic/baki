@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -69,14 +70,24 @@ func NewAdminHandler(
 	}
 }
 
-// @Summary      List all users
-// @Description  Returns a list of all registered users. Only available to system admins.
+// maxUserSearchLen bounds the free-text user filter so a pathological query
+// string never reaches the SQL planner.
+const maxUserSearchLen = 200
+
+// @Summary      List users
+// @Description  Returns one page of registered users, newest first, with the number of users matching the filters (total). Only available to system admins.
 // @Tags         admin
 // @Produce      json
-// @Success      200 {object} []map[string]interface{} "OK"
+// @Param        limit  query int    false "Page size (default 50, max 100)"
+// @Param        offset query int    false "Rows to skip"
+// @Param        q      query string false "Case-insensitive substring of the email or display name"
+// @Param        role   query string false "Only this role: admin, member, viewer, guest, or none (accounts without a valid role)"
+// @Success      200 {object} render.PagedResponse[storageif.User] "One page of users"
+// @Failure      400 {object} map[string]string "Invalid limit, offset, q or role"
 // @Failure      401 {object} map[string]string "Unauthorized"
 // @Failure      403 {object} map[string]string "Forbidden"
 // @Failure      500 {object} map[string]string "Internal Server Error"
+// @Failure      503 {object} map[string]string "No storage backend (local mode)"
 // @Router       /api/admin/users/list [get]
 func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
@@ -105,17 +116,25 @@ func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Reques
 	if offset < 0 {
 		offset = 0
 	}
+	search := strings.TrimSpace(q.Get("q"))
+	if len(search) > maxUserSearchLen {
+		render.Error(w, fmt.Errorf("invalid %q parameter: at most %d characters", "q", maxUserSearchLen), http.StatusBadRequest)
+		return
+	}
+	role := q.Get("role")
+	if role != "" && role != storageif.UserRoleNone && !auth.Role(role).IsValid() {
+		render.Error(w, fmt.Errorf("invalid role filter: %s", role), http.StatusBadRequest)
+		return
+	}
 
-	users, err := h.backend.ListUsers(r.Context(), limit, offset)
+	users, total, err := h.backend.QueryUsers(r.Context(), storageif.UserQuery{Q: search, Role: role, Limit: limit, Offset: offset})
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-
-	// Fall back to a page-size approximation when a count query is unavailable.
-	total, err := h.backend.CountUsers(r.Context())
-	if err != nil {
-		total = offset + len(users)
+	if users == nil {
+		// An empty page is [] on the wire, never null: the admin table maps it.
+		users = []*storageif.User{}
 	}
 
 	render.JSON(w, render.PagedResponse[*storageif.User]{
@@ -124,6 +143,65 @@ func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Reques
 		Offset: offset,
 		Limit:  limit,
 	})
+}
+
+// roleCounts is the per-role breakdown of userStatsView; "none" counts the
+// accounts whose stored role is not one of the four valid roles.
+type roleCounts struct {
+	Admin  int `json:"admin"`
+	Member int `json:"member"`
+	Viewer int `json:"viewer"`
+	Guest  int `json:"guest"`
+	None   int `json:"none"`
+}
+
+// userStatsView is the wire shape of GET /api/admin/users/stats.
+type userStatsView struct {
+	Total      int        `json:"total"`
+	ByRole     roleCounts `json:"byRole"`
+	Unverified int        `json:"unverified"`
+	Locked     int        `json:"locked"`
+}
+
+func toUserStatsView(s *storageif.UserStats) userStatsView {
+	return userStatsView{
+		Total: s.Total,
+		ByRole: roleCounts{
+			Admin:  s.ByRole[string(auth.RoleAdmin)],
+			Member: s.ByRole[string(auth.RoleMember)],
+			Viewer: s.ByRole[string(auth.RoleViewer)],
+			Guest:  s.ByRole[string(auth.RoleGuest)],
+			None:   s.ByRole[storageif.UserRoleNone],
+		},
+		Unverified: s.Unverified,
+		Locked:     s.Locked,
+	}
+}
+
+// @Summary      User statistics
+// @Description  Counts every registered user by role (admin, member, viewer, guest, none) and by state (unverified email, locked out) for the admin overview. Only available to system admins.
+// @Tags         admin
+// @Produce      json
+// @Success      200 {object} userStatsView "Counts"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Failure      503 {object} map[string]string "No storage backend (local mode)"
+// @Router       /api/admin/users/stats [get]
+func (h *AdminHandler) handleAdminUserStats(w http.ResponseWriter, r *http.Request) {
+	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
+		return
+	}
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
+		return
+	}
+	stats, err := h.backend.LoadUserStats(r.Context())
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, toUserStatsView(stats))
 }
 
 // @Summary      Set a user role
@@ -238,7 +316,7 @@ func toAuditEventViews(events []*storageif.AuditEvent) []auditEventView {
 // @Tags         admin
 // @Produce      json
 // @Param        action query string false "Only this action (e.g. auth.login)"
-// @Param        userId query string false "Only events by this user ID"
+// @Param        userId query string false "Only events by this user ID, or whose subject is this user (sign-ins, failed sign-ins, lockouts)"
 // @Param        limit query int false "Page size"
 // @Param        offset query int false "Rows to skip"
 // @Success      200 {array} map[string]interface{} "Audit entries"
@@ -269,6 +347,9 @@ func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Reque
 		Action: q.Get("action"),
 		Limit:  limit,
 		Offset: offset,
+		// The operator asking "what happened to this account" wants the
+		// sign-ins and lockouts too, which carry the user as the subject.
+		IncludeSubject: true,
 	}
 
 	events, err := h.backend.ListAuditEvents(r.Context(), filter)

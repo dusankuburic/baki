@@ -29,6 +29,31 @@ func TestAuditEventView_UsesTheKeysClientsRead(t *testing.T) {
 	}
 }
 
+// TestUserStatsView_UsesTheKeysTheOverviewReads pins the admin overview's
+// stats payload, including the "none" bucket for accounts without a valid role.
+func TestUserStatsView_UsesTheKeysTheOverviewReads(t *testing.T) {
+	out := marshalToMap(t, toUserStatsView(&storageif.UserStats{
+		Total:      7,
+		ByRole:     map[string]int{"admin": 1, "member": 4, "viewer": 1, "guest": 0, storageif.UserRoleNone: 1},
+		Unverified: 2,
+		Locked:     1,
+	}))
+	for _, key := range []string{"total", "byRole", "unverified", "locked"} {
+		if _, ok := out[key]; !ok {
+			t.Errorf("stats view is missing %q: got %v", key, keysOf(out))
+		}
+	}
+	byRole, _ := out["byRole"].(map[string]any)
+	for _, key := range []string{"admin", "member", "viewer", "guest", "none"} {
+		if _, ok := byRole[key]; !ok {
+			t.Errorf("byRole is missing %q: got %v", key, byRole)
+		}
+	}
+	if byRole["none"] != float64(1) {
+		t.Errorf("none must carry the roleless count, got %v", byRole["none"])
+	}
+}
+
 // TestFlowVersionView_UsesTheKeysThePanelReads: version history rendered
 // "v undefined" and "No comment" for every snapshot for the same reason.
 func TestFlowVersionView_UsesTheKeysThePanelReads(t *testing.T) {

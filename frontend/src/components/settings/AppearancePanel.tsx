@@ -141,7 +141,9 @@ function ThemeCard({
     <button
       onClick={onClick}
       className={clsx(
-        'group relative flex flex-col text-left rounded-xl border-2 transition-all duration-fast overflow-hidden bg-surface-1',
+        // Only the hover background eases: the selection (border, ring and
+        // check) moves at once, as one unit.
+        'group relative flex flex-col text-left rounded-xl border-2 transition-[background-color] duration-fast overflow-hidden bg-surface-1',
         isSelected
           ? 'border-brand-500 ring-4 ring-brand-500/10'
           : 'border-border-default hover:border-border-strong hover:bg-surface-2',

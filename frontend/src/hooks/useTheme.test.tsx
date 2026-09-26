@@ -115,25 +115,62 @@ describe('useTheme', () => {
     expect(useSettingsStore.getState().settings.appearance.theme).toBe('dark')
   })
 
-  it('adds theme-transitioning class during a theme switch then removes it', async () => {
-    render(<Probe />)
-    // Initial render should NOT add the transitioning class
-    expect(document.documentElement.classList.contains('theme-transitioning')).toBe(false)
-
-    // Switch theme → class appears (act flushes the effect synchronously)
-    act(() => {
-      void useSettingsStore.getState().updateAppearance({theme: 'nord'})
+  it('cross-fades a theme switch through a view transition, not the initial mount', () => {
+    const startViewTransition = vi.fn((update: () => void) => {
+      update()
+      return {} as ViewTransition
     })
-    expect(document.documentElement.classList.contains('theme-transitioning')).toBe(true)
+    Object.defineProperty(document, 'startViewTransition', {value: startViewTransition, configurable: true})
+    try {
+      render(<Probe />)
+      expect(startViewTransition).not.toHaveBeenCalled()
 
-    // After the transition timeout, class is removed
-    await vi.advanceTimersByTimeAsync(300)
-    expect(document.documentElement.classList.contains('theme-transitioning')).toBe(false)
+      act(() => {
+        void useSettingsStore.getState().updateAppearance({theme: 'nord'})
+      })
+      expect(startViewTransition).toHaveBeenCalledTimes(1)
+      expect(document.documentElement.dataset.theme).toBe('nord')
+      expect(useUIStore.getState().resolvedTheme).toBe('nord')
+    } finally {
+      delete (document as {startViewTransition?: unknown}).startViewTransition
+    }
   })
 
-  it('does not add theme-transitioning on initial mount', async () => {
-    render(<Probe />)
-    expect(document.documentElement.classList.contains('theme-transitioning')).toBe(false)
+  it('switches instantly, without a view transition, when motion is reduced', () => {
+    const startViewTransition = vi.fn((update: () => void) => {
+      update()
+      return {} as ViewTransition
+    })
+    Object.defineProperty(document, 'startViewTransition', {value: startViewTransition, configurable: true})
+    try {
+      render(<Probe />)
+      act(() => {
+        void useSettingsStore.getState().updateAppearance({reduceMotion: true})
+      })
+      act(() => {
+        void useSettingsStore.getState().updateAppearance({theme: 'nord'})
+      })
+      expect(startViewTransition).not.toHaveBeenCalled()
+      expect(document.documentElement.dataset.theme).toBe('nord')
+    } finally {
+      delete (document as {startViewTransition?: unknown}).startViewTransition
+    }
+  })
+
+  it('does not re-render its caller on a theme change', () => {
+    let renders = 0
+    function Counter() {
+      useTheme()
+      renders++
+      return null
+    }
+    render(<Counter />)
+    const before = renders
+    act(() => {
+      void useSettingsStore.getState().updateAppearance({theme: 'dracula'})
+    })
+    expect(renders).toBe(before)
+    expect(document.documentElement.dataset.theme).toBe('dracula')
   })
 
   it('stores the preference ("system") not the resolved value in localStorage', async () => {

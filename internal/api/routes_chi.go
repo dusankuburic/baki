@@ -373,6 +373,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 	// --- Admin ---
 	r.Route("/api/admin", func(r chi.Router) {
 		r.Get("/users/list", h.Admin.handleAdminUserList)
+		r.Get("/users/stats", h.Admin.handleAdminUserStats)
 		r.Put("/users/{id}/role", h.Admin.handleAdminUserRole)
 		r.Post("/migration/start", h.Admin.handleMigrationStart)
 		r.Get("/migration/status", h.Admin.handleMigrationStatus)

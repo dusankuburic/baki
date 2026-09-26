@@ -146,6 +146,12 @@ export const enDashboard = {
     admin_role_change: 'Changed a user role',
     admin_migration_start: 'Started a migration',
     admin_scan_now: 'Ran a scan',
+    governance_alert_dismiss: 'Dismissed a governance alert',
+    governance_alert_clear: 'Cleared governance alerts',
+    org_channel_save: 'Saved a notification channel',
+    org_channel_delete: 'Deleted a notification channel',
+    org_rule_save: 'Saved a custom rule',
+    org_rule_delete: 'Deleted a custom rule',
   },
   home: {
     morning: 'Good morning',

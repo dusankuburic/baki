@@ -91,17 +91,37 @@ function handleNavigation(req) {
     );
 }
 
-// Immutable hashed assets: cache-first; populate on miss. A miss while the
-// network is down is answered with a network-error response — the outcome
-// the page would get without a worker — instead of rejecting respondWith,
-// which Chrome logs as an uncaught promise rejection in the worker.
+// A network failure (a dropped keep-alive connection, a proxy or port-forward
+// blip, a server restart) is retried before the page sees it. For a module
+// chunk one lost request is expensive: the browser keeps the failed module for
+// the life of the document and never requests it again, so every lazy view
+// that imports the chunk stays broken until a reload. HTTP errors (a 404 for a
+// chunk a redeploy removed) are answered as they are, never retried.
+const ASSET_RETRY_DELAYS_MS = [250, 1000];
+
+async function fetchAsset(req) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetch(req);
+    } catch (err) {
+      if (attempt >= ASSET_RETRY_DELAYS_MS.length || (req.signal && req.signal.aborted)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, ASSET_RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
+// Immutable hashed assets: cache-first; populate on miss. A miss the network
+// cannot serve even after the retries is answered with a network-error
+// response — the outcome the page would get without a worker — instead of
+// rejecting respondWith, which Chrome logs as an uncaught promise rejection in
+// the worker.
 function handleAsset(req) {
   return caches.open(ASSET_CACHE).then(async (cache) => {
     const cached = await cache.match(req);
     if (cached) return cached;
     let res;
     try {
-      res = await fetch(req);
+      res = await fetchAsset(req);
     } catch {
       return Response.error();
     }
@@ -125,7 +145,9 @@ function handleStatic(req) {
         if (res.ok) cache.put(req, res.clone()).catch(() => {});
         return res;
       })
-      .catch(() => cached);
+      // Offline with nothing cached: a network error rather than
+      // respondWith(undefined), which Chrome rejects as a non-Response value.
+      .catch(() => cached || Response.error());
     return cached || fetchPromise;
   });
 }

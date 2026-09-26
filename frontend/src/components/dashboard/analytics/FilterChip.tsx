@@ -9,6 +9,7 @@ export function FilterChip({
   pressed,
   tone,
   disabled,
+  ariaLabel,
   onClick,
 }: {
   label: string
@@ -16,6 +17,8 @@ export function FilterChip({
   pressed: boolean
   tone?: {bg: string; text: string}
   disabled?: boolean
+  /** The accessible name when the count is not a number of findings. */
+  ariaLabel?: string
   onClick: () => void
 }) {
   const {t} = useTranslation('dashboard')
@@ -24,7 +27,7 @@ export function FilterChip({
     <button
       type="button"
       aria-pressed={pressed}
-      aria-label={count === undefined ? label : t('analytics.filters.chipAria', {label, count})}
+      aria-label={ariaLabel ?? (count === undefined ? label : t('analytics.filters.chipAria', {label, count}))}
       disabled={disabled}
       onClick={onClick}
       className={clsx(

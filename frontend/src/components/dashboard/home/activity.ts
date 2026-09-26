@@ -55,6 +55,7 @@ const BY_PREFIX: Record<string, LucideIcon> = {
   org: Users,
   admin: ShieldAlert,
   policy: ClipboardCheck,
+  governance: ShieldAlert,
 }
 
 export function actionIcon(action: string): LucideIcon {

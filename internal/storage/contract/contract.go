@@ -300,6 +300,118 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 	})
 
+	t.Run("QueryUsers_filters_pages_and_counts", func(t *testing.T) {
+		// Every seeded email and one display name carry the run id, so the
+		// assertions hold on a shared database with other users in it.
+		mark := "cq-" + runID
+		seed := []*interfaces.User{
+			{ID: "contract-q-a-" + runID, Email: "alpha-" + mark + "@example.com", Password: "hash", DisplayName: "Ada " + mark, Role: auth.RoleMember, EmailVerified: true},
+			{ID: "contract-q-b-" + runID, Email: "bravo-" + mark + "@example.com", Password: "hash", DisplayName: "Brian", Role: auth.RoleViewer},
+			// No role: the admin list shows this account as unassigned.
+			{ID: "contract-q-c-" + runID, Email: "charlie-" + mark + "@example.com", Password: "hash"},
+		}
+		for _, u := range seed {
+			if err := b.SaveUser(ctx, u); err != nil {
+				t.Fatalf("SaveUser %s: %v", u.ID, err)
+			}
+			id := u.ID
+			t.Cleanup(func() { _ = b.DeleteUser(context.Background(), id) })
+		}
+
+		page, total, err := b.QueryUsers(ctx, interfaces.UserQuery{Q: mark, Limit: 10})
+		if err != nil {
+			t.Fatalf("QueryUsers: %v", err)
+		}
+		if total != 3 || len(page) != 3 {
+			t.Errorf("Q=%q: expected 3 of 3, got %d of %d", mark, len(page), total)
+		}
+
+		// Case-insensitive, and the display name counts as much as the email.
+		page, total, err = b.QueryUsers(ctx, interfaces.UserQuery{Q: strings.ToUpper("ada " + mark), Limit: 10})
+		if err != nil {
+			t.Fatalf("QueryUsers by display name: %v", err)
+		}
+		if total != 1 || len(page) != 1 || page[0].ID != seed[0].ID {
+			t.Errorf("display-name search: expected only %s, got %d rows (total %d)", seed[0].ID, len(page), total)
+		}
+		if len(page) == 1 && page[0].DisplayName != seed[0].DisplayName {
+			t.Errorf("display name not returned with the page: got %q", page[0].DisplayName)
+		}
+
+		for _, tc := range []struct {
+			role string
+			want string
+		}{
+			{string(auth.RoleMember), seed[0].ID},
+			{string(auth.RoleViewer), seed[1].ID},
+			{interfaces.UserRoleNone, seed[2].ID},
+		} {
+			page, total, err := b.QueryUsers(ctx, interfaces.UserQuery{Q: mark, Role: tc.role, Limit: 10})
+			if err != nil {
+				t.Fatalf("QueryUsers role=%s: %v", tc.role, err)
+			}
+			if total != 1 || len(page) != 1 || page[0].ID != tc.want {
+				t.Errorf("role=%s: expected only %s, got %d rows (total %d)", tc.role, tc.want, len(page), total)
+			}
+		}
+
+		// Paging: the total is the match count, not the page size; the pages
+		// do not overlap; a page past the end is empty but never nil.
+		first, total, err := b.QueryUsers(ctx, interfaces.UserQuery{Q: mark, Limit: 2})
+		if err != nil {
+			t.Fatalf("QueryUsers page 1: %v", err)
+		}
+		second, _, err := b.QueryUsers(ctx, interfaces.UserQuery{Q: mark, Limit: 2, Offset: 2})
+		if err != nil {
+			t.Fatalf("QueryUsers page 2: %v", err)
+		}
+		if total != 3 || len(first) != 2 || len(second) != 1 {
+			t.Errorf("paging: expected 2 + 1 of 3, got %d + %d of %d", len(first), len(second), total)
+		}
+		seen := map[string]bool{}
+		for _, u := range append(first, second...) {
+			if seen[u.ID] {
+				t.Errorf("paging: %s appeared on both pages", u.ID)
+			}
+			seen[u.ID] = true
+		}
+		empty, total, err := b.QueryUsers(ctx, interfaces.UserQuery{Q: mark, Limit: 2, Offset: 10})
+		if err != nil {
+			t.Fatalf("QueryUsers past the end: %v", err)
+		}
+		if empty == nil || len(empty) != 0 || total != 3 {
+			t.Errorf("past the end: expected a non-nil empty page with total 3, got %v (total %d)", empty, total)
+		}
+	})
+
+	t.Run("LoadUserStats_adds_up", func(t *testing.T) {
+		stats, err := b.LoadUserStats(ctx)
+		if err != nil {
+			t.Fatalf("LoadUserStats: %v", err)
+		}
+		sum := 0
+		for _, role := range []string{"admin", "member", "viewer", "guest", interfaces.UserRoleNone} {
+			n, ok := stats.ByRole[role]
+			if !ok {
+				t.Errorf("ByRole is missing %q: %v", role, stats.ByRole)
+			}
+			sum += n
+		}
+		if sum != stats.Total {
+			t.Errorf("the role buckets add up to %d, the total is %d", sum, stats.Total)
+		}
+		if stats.Unverified > stats.Total || stats.Locked > stats.Total {
+			t.Errorf("state counts exceed the total: %+v", stats)
+		}
+	})
+
+	t.Run("UpdateUserRole_missing_returns_ErrNotFound", func(t *testing.T) {
+		err := b.UpdateUserRole(ctx, "contract-missing-user-"+runID, auth.RoleMember)
+		if !errors.Is(err, interfaces.ErrNotFound) {
+			t.Errorf("unknown user: expected ErrNotFound, got %v", err)
+		}
+	})
+
 	t.Run("ListFlows_MetadataOnly_omits_content_keeps_metadata", func(t *testing.T) {
 		owner := "contract-owner-" + runID
 		flow := &interfaces.FlowDocument{

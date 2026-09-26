@@ -3,6 +3,7 @@ import React from 'react'
 // the same note in shared/ErrorBoundary).
 import i18n from '@/i18n'
 import {AlertTriangle, RefreshCw} from 'lucide-react'
+import {isChunkLoadError, reloadForChunkError, reloadPage} from '@/lib/chunkLoad'
 import {logger} from '@/lib/logger'
 
 interface State {
@@ -17,24 +18,32 @@ export default class ChatErrorBoundary extends React.Component<{children: React.
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // A lazy chunk that failed to download (the help popover, the context
+    // preview) recovers only with a reload; see shared/ErrorBoundary.
+    if (isChunkLoadError(error) && reloadForChunkError()) return
     logger.error('ChatErrorBoundary', {message: error.message, componentStack: info.componentStack})
   }
 
   render() {
     if (this.state.error) {
+      const chunkFailed = isChunkLoadError(this.state.error)
       return (
         <div className="flex flex-col items-center justify-center h-full gap-3 p-6 text-center">
           <AlertTriangle size={20} className="text-semantic-warning" />
           <div>
-            <p className="text-sm font-medium text-text-primary">{i18n.t('chat:errorBoundary.title')}</p>
-            <p className="text-xs text-text-tertiary mt-1">{i18n.t('chat:errorBoundary.body')}</p>
+            <p className="text-sm font-medium text-text-primary">
+              {chunkFailed ? i18n.t('common:chunkError.title') : i18n.t('chat:errorBoundary.title')}
+            </p>
+            <p className="text-xs text-text-tertiary mt-1">
+              {chunkFailed ? i18n.t('common:chunkError.body') : i18n.t('chat:errorBoundary.body')}
+            </p>
           </div>
           <button
-            onClick={() => this.setState({error: null})}
+            onClick={chunkFailed ? reloadPage : () => this.setState({error: null})}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-3 border border-border-default text-xs text-text-secondary hover:text-text-primary hover:bg-surface-4 transition-colors"
           >
             <RefreshCw size={12} />
-            {i18n.t('chat:errorBoundary.retry')}
+            {chunkFailed ? i18n.t('common:chunkError.reload') : i18n.t('chat:errorBoundary.retry')}
           </button>
         </div>
       )

@@ -8,8 +8,27 @@ import {
   parseDay,
   formatDateTick,
   formatDateLong,
+  formatDateTime,
+  formatTimeOfDay,
   formatDelta,
 } from './format'
+
+describe('formatDateTime / formatTimeOfDay', () => {
+  it('renders an absolute timestamp and a time of day in the given locale', () => {
+    const iso = '2026-09-25T21:04:01Z'
+    const expectedDateTime = new Intl.DateTimeFormat('en-US', {dateStyle: 'medium', timeStyle: 'short'}).format(
+      new Date(iso),
+    )
+    expect(formatDateTime(iso, 'en-US')).toBe(expectedDateTime)
+    expect(formatDateTime(iso, 'en-US')).toMatch(/^Sep 2[56], 2026, \d{1,2}:\d{2}/)
+    expect(formatTimeOfDay(new Date(iso).getTime(), 'en-US')).toMatch(/^\d{1,2}:\d{2}/)
+  })
+
+  it('shows an unparseable value as given', () => {
+    expect(formatDateTime('not a date')).toBe('not a date')
+    expect(formatTimeOfDay('nope')).toBe('nope')
+  })
+})
 
 describe('formatCompact', () => {
   it('renders numbers under 1000 as-is', () => {

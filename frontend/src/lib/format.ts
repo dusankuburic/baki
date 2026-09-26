@@ -59,6 +59,21 @@ export function formatDateLong(value: string, locale?: string): string {
     : value
 }
 
+// "Sep 25, 2026, 11:04 PM" — an absolute timestamp for audit rows; a value
+// that does not parse is shown as given.
+export function formatDateTime(value: string, locale?: string): string {
+  const d = new Date(value)
+  return Number.isNaN(d.getTime())
+    ? value
+    : new Intl.DateTimeFormat(locale, {dateStyle: 'medium', timeStyle: 'short'}).format(d)
+}
+
+// "11:04 PM" — the time of day for an "updated at" line.
+export function formatTimeOfDay(value: number | string, locale?: string): string {
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? String(value) : new Intl.DateTimeFormat(locale, {timeStyle: 'short'}).format(d)
+}
+
 export type DeltaDirection = 'up' | 'down' | 'flat' | 'none'
 
 // formatDelta renders a change against a prior value: signed percent when the

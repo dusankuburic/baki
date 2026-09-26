@@ -5,6 +5,7 @@ import {systemApi} from '@/api'
 // trade-off is that this fallback does not re-render on a language change —
 // acceptable for an error screen the user is about to dismiss.
 import i18n from '@/i18n'
+import {isChunkLoadError, reloadForChunkError, reloadPage} from '@/lib/chunkLoad'
 import {logger} from '@/lib/logger'
 
 type ErrorBoundaryProps = {
@@ -26,24 +27,13 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    // A dynamic import that 404s means this tab predates the currently
-    // deployed bundle — the hashed chunk filenames it references no longer
-    // exist (e.g. a redeploy happened while the tab stayed open). Retrying
-    // in-page can't help because the old index.html still points at the old
-    // chunk names; the only fix is reloading the document. Guarded by
-    // sessionStorage so a chunk that is genuinely broken in the NEW build
-    // cannot reload-loop the page.
-    if (this.isStaleChunkError(error)) {
-      try {
-        if (!sessionStorage.getItem('baki.stale-chunk-reloaded')) {
-          sessionStorage.setItem('baki.stale-chunk-reloaded', '1')
-          window.location.reload()
-          return
-        }
-      } catch {
-        // sessionStorage unavailable — fall through to normal error handling
-      }
-    }
+    // A lazy chunk that failed to download (a network drop, or a redeploy that
+    // removed the hashed file this tab still points at) only recovers with a
+    // reload: retrying in place re-throws the failure that the browser and
+    // React.lazy both keep (see lib/chunkLoad). One automatic reload per
+    // window, so a chunk broken in the deployed build cannot reload-loop the
+    // page; after that the fallback offers the reload as a button.
+    if (isChunkLoadError(error) && reloadForChunkError()) return
     logger.error('ErrorBoundary caught:', error, info)
     try {
       // .catch() on the promise itself, not just this try/catch: the try only
@@ -74,27 +64,25 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
 
   private retry = () => this.setState({hasError: false, error: null})
 
-  // Vite's lazy chunks fail with these messages when the file is gone from
-  // the server (Chromium, Firefox, older Safari phrasings respectively).
-  private isStaleChunkError(error: Error): boolean {
-    return (
-      /Failed to fetch dynamically imported module/i.test(error.message) ||
-      /Importing a module script failed/i.test(error.message) ||
-      /error loading dynamically imported module/i.test(error.message)
-    )
-  }
-
   render() {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback
+      // "Try again" re-renders the same rejected lazy import, so a failed
+      // chunk gets the reload that actually fixes it.
+      const chunkFailed = isChunkLoadError(this.state.error)
       return (
         <div className="flex flex-col items-center justify-center p-8">
           <div className="text-semantic-error text-sm font-medium mb-2">
-            {this.props.fallbackMessage ?? i18n.t('common:error')}
+            {chunkFailed ? i18n.t('common:chunkError.title') : (this.props.fallbackMessage ?? i18n.t('common:error'))}
           </div>
-          <div className="text-xs text-text-tertiary max-w-md text-center">{this.state.error?.message}</div>
-          <button onClick={this.retry} className="mt-4 text-xs text-brand-400 hover:text-brand-300">
-            {i18n.t('common:tryAgain')}
+          <div className="text-xs text-text-tertiary max-w-md text-center">
+            {chunkFailed ? i18n.t('common:chunkError.body') : this.state.error?.message}
+          </div>
+          <button
+            onClick={chunkFailed ? reloadPage : this.retry}
+            className="mt-4 text-xs text-brand-400 hover:text-brand-300"
+          >
+            {chunkFailed ? i18n.t('common:chunkError.reload') : i18n.t('common:tryAgain')}
           </button>
         </div>
       )

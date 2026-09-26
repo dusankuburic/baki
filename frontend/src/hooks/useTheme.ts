@@ -1,91 +1,118 @@
-import {useCallback, useEffect, useRef} from 'react'
+import {useCallback, useEffect} from 'react'
+import {flushSync} from 'react-dom'
 import {useSettingsStore} from '@/stores/settingsStore'
-import {useUIStore} from '@/stores/uiStore'
-import type {ThemeMode} from '@/types'
+import {useUIStore, type ResolvedTheme} from '@/stores/uiStore'
+import type {AppearanceSettings, ThemeMode} from '@/types'
 
-const TRANSITION_MS = 250
-
+// Mirrors the appearance settings onto <html> (data-theme, data-density,
+// data-reduce-motion, data-high-contrast), keeps `pad-theme` in localStorage
+// for the pre-React boot script in index.html, follows the OS when the theme
+// is "system", and exposes toggleTheme for the shortcut and the desktop menu.
+//
+// The hook subscribes to the settings store directly rather than through
+// React state: App calls it, and a React subscription there re-rendered the
+// whole shell on every theme change. A switch is now the attribute write and
+// one style recalc; only the components that resolve chart colours re-render,
+// through uiStore.resolvedTheme.
 export function useTheme() {
-  const theme = useSettingsStore(s => s.settings.appearance.theme)
-  const density = useSettingsStore(s => s.settings.appearance.density)
-  const reduceMotion = useSettingsStore(s => s.settings.appearance.reduceMotion)
-  const highContrast = useSettingsStore(s => s.settings.appearance.highContrast)
-  const resolvedTheme = useUIStore(s => s.resolvedTheme)
-  const setResolvedTheme = useUIStore(s => s.setResolvedTheme)
-  const updateAppearance = useSettingsStore(s => s.updateAppearance)
-
-  const prevTheme = useRef<ThemeMode | null>(null)
-
   useEffect(() => {
-    const resolved = resolveTheme(theme)
     const root = document.documentElement
-    const isThemeChange = prevTheme.current !== null && prevTheme.current !== theme
-    if (isThemeChange) {
-      root.classList.add('theme-transitioning')
-    }
-    prevTheme.current = theme
-    root.dataset.theme = resolved
-    if (resolved !== 'system') setResolvedTheme(resolved)
-    try {
-      localStorage.setItem('pad-theme', theme)
-    } catch {
-      /* localStorage unavailable */
-    }
-    if (!isThemeChange) return
-    const t = window.setTimeout(() => root.classList.remove('theme-transitioning'), TRANSITION_MS)
-    return () => window.clearTimeout(t)
-  }, [theme, setResolvedTheme])
+    let current: AppearanceSettings | null = null
+    let system: {mq: MediaQueryList; onChange: () => void} | null = null
 
-  useEffect(() => {
-    if (theme !== 'system') return
-    const mq = window.matchMedia('(prefers-color-scheme: light)')
-    let transitionTimer: number | undefined
-    const handler = () => {
-      const resolved = mq.matches ? 'light' : 'dark'
-      const root = document.documentElement
-      root.classList.add('theme-transitioning')
-      root.dataset.theme = resolved
-      setResolvedTheme(resolved)
-      window.clearTimeout(transitionTimer)
-      transitionTimer = window.setTimeout(() => root.classList.remove('theme-transitioning'), TRANSITION_MS)
+    const followSystem = (on: boolean) => {
+      if (system) {
+        system.mq.removeEventListener('change', system.onChange)
+        system = null
+      }
+      if (!on) return
+      const mq = window.matchMedia('(prefers-color-scheme: light)')
+      const onChange = () => applyTheme(mq.matches ? 'light' : 'dark', true)
+      mq.addEventListener('change', onChange)
+      system = {mq, onChange}
     }
-    mq.addEventListener('change', handler)
+
+    const sync = (next: AppearanceSettings) => {
+      const prev = current
+      current = next
+      if (!prev || prev.theme !== next.theme) {
+        // The initial sync is not a switch: nothing to cross-fade from.
+        applyTheme(resolveTheme(next.theme), prev !== null)
+        try {
+          localStorage.setItem('pad-theme', next.theme)
+        } catch {
+          /* localStorage unavailable */
+        }
+        followSystem(next.theme === 'system')
+      }
+      if (!prev || prev.density !== next.density) root.dataset.density = next.density
+      if (!prev || prev.reduceMotion !== next.reduceMotion) {
+        root.dataset.reduceMotion = next.reduceMotion ? 'true' : 'false'
+      }
+      if (!prev || prev.highContrast !== next.highContrast) {
+        root.dataset.highContrast = next.highContrast ? 'true' : 'false'
+      }
+    }
+
+    sync(useSettingsStore.getState().settings.appearance)
+    const unsubscribe = useSettingsStore.subscribe(state => sync(state.settings.appearance))
     return () => {
-      mq.removeEventListener('change', handler)
-      window.clearTimeout(transitionTimer)
-      document.documentElement.classList.remove('theme-transitioning')
+      unsubscribe()
+      followSystem(false)
     }
-  }, [theme, setResolvedTheme])
-
-  useEffect(() => {
-    document.documentElement.dataset.density = density
-  }, [density])
-
-  useEffect(() => {
-    document.documentElement.dataset.reduceMotion = reduceMotion ? 'true' : 'false'
-  }, [reduceMotion])
-
-  useEffect(() => {
-    document.documentElement.dataset.highContrast = highContrast ? 'true' : 'false'
-  }, [highContrast])
-
-  // Sync <meta name="theme-color"> with the active theme's surface-0 so the
-  // mobile browser address bar / PWA title bar matches the app background.
-  useEffect(() => {
-    const surface = getComputedStyle(document.documentElement).getPropertyValue('--surface-0').trim()
-    const meta = document.querySelector('meta[name="theme-color"]')
-    if (meta && surface) meta.setAttribute('content', surface)
-  }, [resolvedTheme])
+  }, [])
 
   const toggleTheme = useCallback(() => {
-    const next: ThemeMode = resolvedTheme === 'light' ? 'dark' : 'light'
-    void updateAppearance({theme: next})
-  }, [resolvedTheme, updateAppearance])
+    const next: ThemeMode = useUIStore.getState().resolvedTheme === 'light' ? 'dark' : 'light'
+    void useSettingsStore.getState().updateAppearance({theme: next})
+  }, [])
 
-  return {theme, resolvedTheme, toggleTheme}
+  return {toggleTheme}
 }
 
-function resolveTheme(theme: ThemeMode): ThemeMode {
+// Applies a resolved theme: the data-theme write, the resolvedTheme store
+// update (chart colours are read from the computed style at render time, so
+// their consumers must render after the attribute is in place) and the
+// <meta name="theme-color"> sync.
+//
+// `animate` cross-fades the switch through the View Transitions API when the
+// platform has it and motion is not reduced. The browser blends two snapshots
+// on the compositor: the page itself restyles exactly once, with no
+// per-element transitions (a `transition` on every element made the recalc an
+// order of magnitude slower and blocked the main thread for seconds on large
+// views).
+function applyTheme(resolved: ResolvedTheme, animate: boolean) {
+  const swap = () => {
+    document.documentElement.dataset.theme = resolved
+    useUIStore.getState().setResolvedTheme(resolved)
+    syncThemeColorMeta()
+  }
+  if (animate && !motionReduced() && typeof document.startViewTransition === 'function') {
+    document.startViewTransition(() => {
+      // The new snapshot is taken right after this callback: render the
+      // chart consumers now rather than on React's next flush.
+      flushSync(swap)
+    })
+    return
+  }
+  swap()
+}
+
+function motionReduced(): boolean {
+  if (useSettingsStore.getState().settings.appearance.reduceMotion) return true
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+// Keeps the mobile browser address bar / PWA title bar on the active theme's
+// surface-0 (index.html does the same before React mounts).
+function syncThemeColorMeta() {
+  const meta = document.querySelector('meta[name="theme-color"]')
+  if (!meta) return
+  const surface = getComputedStyle(document.documentElement).getPropertyValue('--surface-0').trim()
+  if (surface) meta.setAttribute('content', surface)
+}
+
+function resolveTheme(theme: ThemeMode): ResolvedTheme {
   if (theme === 'system') return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
   return theme
 }

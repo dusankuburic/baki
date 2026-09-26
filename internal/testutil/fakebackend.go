@@ -231,6 +231,27 @@ func (m *FakeBackend) UpdateUserRole(_ context.Context, _ string, _ auth.Role) e
 	return nil
 }
 
+// QueryUsers and LoadUserStats read the seeded Users map (the same set
+// DeleteUser/ExportUserData use) so admin-list tests can run on the fake.
+func (m *FakeBackend) QueryUsers(_ context.Context, q interfaces.UserQuery) ([]*interfaces.User, int, error) {
+	page, total := q.Apply(m.userSlice())
+	return page, total, nil
+}
+
+func (m *FakeBackend) LoadUserStats(_ context.Context) (*interfaces.UserStats, error) {
+	return interfaces.UserStatsOf(m.userSlice(), time.Now()), nil
+}
+
+// userSlice copies the seeded users so a caller cannot mutate the fake's state.
+func (m *FakeBackend) userSlice() []*interfaces.User {
+	users := make([]*interfaces.User, 0, len(m.Users))
+	for _, u := range m.Users {
+		cp := *u
+		users = append(users, &cp)
+	}
+	return users
+}
+
 func (m *FakeBackend) DeleteUser(_ context.Context, id string) error {
 	if m.Users == nil {
 		m.Users = make(map[string]*interfaces.User)

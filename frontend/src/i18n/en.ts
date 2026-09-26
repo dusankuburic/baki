@@ -27,6 +27,12 @@ export const common = {
   dismiss: 'Dismiss',
   notifications: 'Notifications',
   contextMenu: 'Context menu',
+  // Error boundaries, when a lazy chunk of the app failed to download.
+  chunkError: {
+    title: "This part of the app didn't load",
+    body: 'Part of the app could not be downloaded, usually after a brief network drop or a new deployment. Reloading the page fixes it.',
+    reload: 'Reload page',
+  },
   offline: {
     banner: "You're offline — saves are disabled until you reconnect. Cached data is still shown.",
   },
@@ -34,6 +40,16 @@ export const common = {
     title: '{{count}} cursor/presence update(s) not synced',
     expired: 'You were offline past the 60s sync window. Recent positions are kept; stale ones were discarded.',
     overflow: 'The pending-change buffer was full; oldest entries were discarded to keep the latest state.',
+  },
+  // The pagination footer shared by server-paged tables (shared/Pager).
+  pager: {
+    label: 'Pagination',
+    previous: 'Previous page',
+    next: 'Next page',
+    showingOf: 'Showing {{from}}–{{to}} of {{total}}',
+    showing: 'Showing {{from}}–{{to}}',
+    empty: 'No rows',
+    pageSize: 'Rows per page',
   },
   sharedReport: {
     expiredHint: 'The link may have expired or been revoked. Contact the flow owner for a new link.',

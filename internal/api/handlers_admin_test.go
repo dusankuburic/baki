@@ -2,12 +2,142 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"pad-analyzer/internal/auth"
 )
+
+// TestAdminUserList_FiltersAndPages pins the paged envelope the admin table
+// reads: limit/offset page the list, total counts the users the filters match
+// (not the page), q searches email and display name, role narrows to one
+// role, and an empty page is [] rather than null.
+func TestAdminUserList_FiltersAndPages(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
+	for i := range 11 {
+		seedUserWithRole(t, rt, fmt.Sprintf("user-%02d", i), fmt.Sprintf("user-%02d@example.com", i), auth.RoleMember)
+	}
+	bearer := jwtBearer(t, rt, "admin-1", "admin@example.com")
+
+	type page struct {
+		Items  []map[string]any `json:"items"`
+		Total  int              `json:"total"`
+		Offset int              `json:"offset"`
+		Limit  int              `json:"limit"`
+	}
+	get := func(query string) (page, *httptest.ResponseRecorder) {
+		t.Helper()
+		rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/admin/users/list"+query, bearer, nil)
+		var p page
+		if rr.Code == http.StatusOK {
+			decodeJSON(t, rr, &p)
+		}
+		return p, rr
+	}
+
+	p, rr := get("?limit=10&offset=0")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list: expected 200, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+	if len(p.Items) != 10 || p.Total != 12 || p.Limit != 10 || p.Offset != 0 {
+		t.Errorf("page 1: expected 10 of 12 (limit 10), got %d of %d (limit %d, offset %d)", len(p.Items), p.Total, p.Limit, p.Offset)
+	}
+	p, _ = get("?limit=10&offset=10")
+	if len(p.Items) != 2 || p.Total != 12 {
+		t.Errorf("page 2: expected 2 of 12, got %d of %d", len(p.Items), p.Total)
+	}
+
+	// Past the end: [] on the wire, never null (read raw, before any decode).
+	rr = doRequestWithAuth(t, rt, http.MethodGet, "/api/admin/users/list?limit=10&offset=100", bearer, nil)
+	if !strings.Contains(rr.Body.String(), `"items":[]`) {
+		t.Errorf("empty page: expected \"items\":[] in %s", rr.Body.String())
+	}
+
+	p, _ = get("?q=USER-03")
+	if p.Total != 1 || len(p.Items) != 1 || p.Items[0]["email"] != "user-03@example.com" {
+		t.Errorf("q=USER-03: expected only user-03@example.com, got %v (total %d)", p.Items, p.Total)
+	}
+	p, _ = get("?role=member")
+	if p.Total != 11 {
+		t.Errorf("role=member: expected total 11, got %d", p.Total)
+	}
+	p, _ = get("?role=admin&limit=5")
+	if p.Total != 1 || len(p.Items) != 1 {
+		t.Errorf("role=admin: expected 1 of 1, got %d of %d", len(p.Items), p.Total)
+	}
+	p, _ = get("?limit=1000")
+	if p.Limit != 100 {
+		t.Errorf("limit=1000: expected the limit clamped to 100, got %d", p.Limit)
+	}
+
+	if _, rr := get("?role=bogus"); rr.Code != http.StatusBadRequest {
+		t.Errorf("role=bogus: expected 400, got %d", rr.Code)
+	}
+	if _, rr := get("?q=" + strings.Repeat("a", 201)); rr.Code != http.StatusBadRequest {
+		t.Errorf("q of 201 characters: expected 400, got %d", rr.Code)
+	}
+}
+
+// TestAdminUserStats counts the whole table by role and state, including
+// accounts with no valid role ("none"), and is admin-only.
+func TestAdminUserStats(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
+	seedUserWithRole(t, rt, "member-1", "m1@example.com", auth.RoleMember)
+	seedUserWithRole(t, rt, "member-2", "m2@example.com", auth.RoleMember)
+	seedUserWithRole(t, rt, "viewer-1", "v1@example.com", auth.RoleViewer)
+	seedUserWithRole(t, rt, "roleless-1", "none@example.com", "")
+	bearer := jwtBearer(t, rt, "admin-1", "admin@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/admin/users/stats", bearer, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("stats: expected 200, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+	var stats struct {
+		Total  int `json:"total"`
+		ByRole struct {
+			Admin, Member, Viewer, Guest, None int
+		} `json:"byRole"`
+		Unverified int `json:"unverified"`
+		Locked     int `json:"locked"`
+	}
+	decodeJSON(t, rr, &stats) // encoding/json matches the lowercase keys case-insensitively
+	if stats.Total != 5 || stats.ByRole.Admin != 1 || stats.ByRole.Member != 2 || stats.ByRole.Viewer != 1 ||
+		stats.ByRole.Guest != 0 || stats.ByRole.None != 1 {
+		t.Errorf("unexpected counts: %+v", stats)
+	}
+	if stats.Unverified != 5 || stats.Locked != 0 {
+		t.Errorf("seeded users are unverified and unlocked: got unverified %d, locked %d", stats.Unverified, stats.Locked)
+	}
+
+	memberPair, err := rt.security.AuthMgr.Issue("member-1", "m1@example.com", auth.RoleMember)
+	if err != nil {
+		t.Fatalf("issue member jwt: %v", err)
+	}
+	rr = doRequestWithAuth(t, rt, http.MethodGet, "/api/admin/users/stats", "Bearer "+memberPair.AccessToken, nil)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("stats as member: expected 403, got %d", rr.Code)
+	}
+}
+
+// TestAdminUserRole_UnknownUser_Returns404: a role change for an id that does
+// not exist is reported, not silently acknowledged (and audited).
+func TestAdminUserRole_UnknownUser_Returns404(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
+	bearer := jwtBearer(t, rt, "admin-1", "admin@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPut, "/api/admin/users/nobody/role", bearer,
+		map[string]any{"role": string(auth.RoleMember)})
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for an unknown user, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
 
 // TestAdminUserRole_DemotingLastAdmin_Returns409 verifies the N-5 safeguard:
 // when an admin tries to demote themselves (or any admin) while they are the

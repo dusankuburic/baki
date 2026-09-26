@@ -219,7 +219,7 @@ func (b *PostgresStorageBackend) ListUsers(ctx context.Context, limit, offset in
 	// orders tied rows arbitrarily, so without this the same walk can order a
 	// tied group differently per page and drop or repeat users across the
 	// boundary.
-	rows, err := b.db.QueryContext(ctx, `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users ORDER BY created_at DESC, id ASC LIMIT $1 OFFSET $2`, limit, offset)
+	rows, err := b.db.QueryContext(ctx, `SELECT `+listedUserColumns+` FROM users ORDER BY created_at DESC, id ASC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -227,19 +227,17 @@ func (b *PostgresStorageBackend) ListUsers(ctx context.Context, limit, offset in
 
 	var users []*interfaces.User
 	for rows.Next() {
-		var u interfaces.User
-		var roleStr string
-		if err := rows.Scan(&u.ID, &u.Email, &roleStr, &u.EmailVerified, &u.FailedLoginAttempts, &u.LockedUntil, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		u, err := scanListedUser(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
-		u.Role = auth.Role(roleStr)
-		users = append(users, &u)
+		users = append(users, u)
 	}
 	return users, rows.Err()
 }
 
 func (b *PostgresStorageBackend) ListAdmins(ctx context.Context) ([]*interfaces.User, error) {
-	rows, err := b.db.QueryContext(ctx, `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users WHERE role = 'admin'`)
+	rows, err := b.db.QueryContext(ctx, `SELECT `+listedUserColumns+` FROM users WHERE role = 'admin'`)
 	if err != nil {
 		return nil, fmt.Errorf("list admins: %w", err)
 	}
@@ -247,20 +245,145 @@ func (b *PostgresStorageBackend) ListAdmins(ctx context.Context) ([]*interfaces.
 
 	var users []*interfaces.User
 	for rows.Next() {
-		var u interfaces.User
-		var roleStr string
-		if err := rows.Scan(&u.ID, &u.Email, &roleStr, &u.EmailVerified, &u.FailedLoginAttempts, &u.LockedUntil, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		u, err := scanListedUser(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan admin: %w", err)
 		}
-		u.Role = auth.Role(roleStr)
-		users = append(users, &u)
+		users = append(users, u)
 	}
 	return users, rows.Err()
 }
 
+// listedUserColumns is the projection every list-style user read shares
+// (display name and avatar included — the admin table shows them);
+// scanListedUser reads one row of it.
+const listedUserColumns = `id, email, role, email_verified, failed_login_attempts, locked_until, display_name, avatar_url, created_at, updated_at`
+
+func scanListedUser(rows *sql.Rows) (*interfaces.User, error) {
+	var u interfaces.User
+	var roleStr string
+	if err := rows.Scan(&u.ID, &u.Email, &roleStr, &u.EmailVerified, &u.FailedLoginAttempts, &u.LockedUntil, &u.DisplayName, &u.AvatarURL, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		return nil, err
+	}
+	u.Role = auth.Role(roleStr)
+	return &u, nil
+}
+
+// validRolesSQL is the role set QueryUsers treats as assigned; any other
+// stored value counts as interfaces.UserRoleNone.
+const validRolesSQL = `('admin', 'member', 'viewer', 'guest')`
+
+// QueryUsers backs the admin user list: one filtered, ordered page plus the
+// number of users the filters match. Both statements run on the request's
+// RLS executor (users has no policies, but this keeps an admin request on one
+// pooled connection).
+func (b *PostgresStorageBackend) QueryUsers(ctx context.Context, q interfaces.UserQuery) ([]*interfaces.User, int, error) {
+	// A cap clamps DOWN to the maximum (see ListAuditEvents).
+	const (
+		defaultUserLimit = 100
+		maxUserLimit     = 500
+	)
+	limit := q.Limit
+	switch {
+	case limit <= 0:
+		limit = defaultUserLimit
+	case limit > maxUserLimit:
+		limit = maxUserLimit
+	}
+	offset := max(q.Offset, 0)
+
+	args := []any{}
+	where := []string{}
+	if needle := strings.ToLower(strings.TrimSpace(q.Q)); needle != "" {
+		// strpos rather than LIKE: the needle is data, so nothing to escape.
+		args = append(args, needle)
+		n := len(args)
+		where = append(where, fmt.Sprintf("(strpos(lower(email), $%d) > 0 OR strpos(lower(display_name), $%d) > 0)", n, n))
+	}
+	switch q.Role {
+	case "":
+	case interfaces.UserRoleNone:
+		where = append(where, "role NOT IN "+validRolesSQL)
+	default:
+		args = append(args, q.Role)
+		where = append(where, fmt.Sprintf("role = $%d", len(args)))
+	}
+	clause := ""
+	if len(where) > 0 {
+		clause = " WHERE " + strings.Join(where, " AND ")
+	}
+
+	db := b.query(ctx)
+	var total int
+	// #nosec G202 -- only generated "$N" placeholders and constants are concatenated; all values are parameterized args.
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`+clause, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count users: %w", err)
+	}
+	pageArgs := append(append([]any{}, args...), limit, offset)
+	// #nosec G202 -- see above.
+	rows, err := db.QueryContext(ctx,
+		`SELECT `+listedUserColumns+` FROM users`+clause+
+			fmt.Sprintf(" ORDER BY created_at DESC, id ASC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2),
+		pageArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query users: %w", err)
+	}
+	defer rows.Close()
+
+	// Never nil: an empty page is [] on the wire.
+	users := []*interfaces.User{}
+	for rows.Next() {
+		u, err := scanListedUser(rows)
+		if err != nil {
+			return nil, 0, fmt.Errorf("scan user: %w", err)
+		}
+		users = append(users, u)
+	}
+	return users, total, rows.Err()
+}
+
+// LoadUserStats counts the whole user table in one statement; "none" is what
+// the four valid roles leave over.
+func (b *PostgresStorageBackend) LoadUserStats(ctx context.Context) (*interfaces.UserStats, error) {
+	var s interfaces.UserStats
+	var admin, member, viewer, guest int
+	err := b.query(ctx).QueryRowContext(ctx, `SELECT COUNT(*),
+		COUNT(*) FILTER (WHERE role = 'admin'),
+		COUNT(*) FILTER (WHERE role = 'member'),
+		COUNT(*) FILTER (WHERE role = 'viewer'),
+		COUNT(*) FILTER (WHERE role = 'guest'),
+		COUNT(*) FILTER (WHERE NOT email_verified),
+		COUNT(*) FILTER (WHERE locked_until IS NOT NULL AND locked_until > NOW())
+		FROM users`).Scan(&s.Total, &admin, &member, &viewer, &guest, &s.Unverified, &s.Locked)
+	if err != nil {
+		return nil, fmt.Errorf("user stats: %w", err)
+	}
+	s.ByRole = map[string]int{
+		string(auth.RoleAdmin):  admin,
+		string(auth.RoleMember): member,
+		string(auth.RoleViewer): viewer,
+		string(auth.RoleGuest):  guest,
+		interfaces.UserRoleNone: s.Total - admin - member - viewer - guest,
+	}
+	return &s, nil
+}
+
+// UpdateUserRole reports an unknown id as ErrNotFound, as the filesystem
+// backend does, instead of a silent no-op the admin endpoint answered with
+// 200 (and audited).
 func (b *PostgresStorageBackend) UpdateUserRole(ctx context.Context, id string, role auth.Role) error {
-	_, err := b.db.ExecContext(ctx, `UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, string(role), id)
-	return err
+	res, err := b.db.ExecContext(ctx, `UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, string(role), id)
+	if err != nil {
+		return fmt.Errorf("update user role: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update user role rows affected: %w", err)
+	}
+	if n == 0 {
+		return interfaces.ErrNotFound
+	}
+	return nil
 }
 
 func (b *PostgresStorageBackend) UpdateUserPassword(ctx context.Context, id string, passwordHash string) error {
@@ -551,7 +674,14 @@ func (b *PostgresStorageBackend) ListAuditEvents(ctx context.Context, filter int
 	where := []string{}
 	i := 1
 	if filter.UserID != "" {
-		where = append(where, fmt.Sprintf("user_id = $%d", i))
+		if filter.IncludeSubject {
+			// Pre-auth events (sign-in, failed sign-in, lockout, registration,
+			// SSO) carry no actor: their subject is the user in resource_type /
+			// resource_id, so a plain user_id match would miss them.
+			where = append(where, fmt.Sprintf("(user_id = $%d OR (resource_type = 'user' AND resource_id = $%d))", i, i))
+		} else {
+			where = append(where, fmt.Sprintf("user_id = $%d", i))
+		}
 		args = append(args, filter.UserID)
 		i++
 	}

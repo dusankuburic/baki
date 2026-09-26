@@ -1,62 +1,69 @@
-import {describe, it, expect, vi, afterEach} from 'vitest'
+import {describe, it, expect, afterEach} from 'vitest'
 import {renderHook, act} from '@testing-library/react'
-import {readChartTheme, useChartTheme} from './useChartTheme'
+import {CHART_THEME, useChartTheme} from './useChartTheme'
 import {useUIStore} from '@/stores/uiStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 
-function stubComputedStyle(vars: Record<string, string>) {
-  return vi.spyOn(window, 'getComputedStyle').mockReturnValue({
-    getPropertyValue: (name: string) => vars[name] ?? '',
-  } as unknown as CSSStyleDeclaration)
-}
+const settingsInitial = useSettingsStore.getState()
 
 afterEach(() => {
-  vi.restoreAllMocks()
   useUIStore.setState({resolvedTheme: 'dark'})
+  useSettingsStore.setState(settingsInitial, true)
 })
 
-describe('readChartTheme', () => {
-  it('falls back to the Deep Dark palette when no token is computed (jsdom)', () => {
-    stubComputedStyle({})
-    const t = readChartTheme('dark', false)
+describe('CHART_THEME', () => {
+  it('references the CSS tokens so the browser restyles charts with the page', () => {
+    const t = CHART_THEME
     expect(t.series).toHaveLength(8)
     expect(t.seq).toHaveLength(4)
-    for (const c of [...t.series, ...t.seq, t.emphasis, t.grid, t.surface]) expect(c).toMatch(/^#[0-9a-f]{6}$/i)
-    expect(t.isDark).toBe(true)
-    expect(t.highContrast).toBe(false)
-  })
-
-  it('reads the CSS tokens as they are computed on the root element', () => {
-    stubComputedStyle({'--viz-1': '#123456', '--viz-seq-2': '#abcdef', '--success': '#00aa00', '--viz-grid': '#333333'})
-    const t = readChartTheme('light', true)
-    expect(t.series[0]).toBe('#123456')
-    expect(t.series[1]).toMatch(/^#/) // fallback for the unset slot
-    expect(t.seq[1]).toBe('#abcdef')
-    expect(t.status.success).toBe('#00aa00')
-    expect(t.grid).toBe('#333333')
-    expect(t.isDark).toBe(false)
-    expect(t.highContrast).toBe(true)
+    expect(t.series[0]).toBe('var(--viz-1)')
+    expect(t.series[7]).toBe('var(--viz-8)')
+    expect(t.seq[0]).toBe('var(--viz-seq-1)')
+    expect(t.seq[3]).toBe('var(--viz-seq-4)')
+    expect(t.status).toEqual({
+      success: 'var(--success)',
+      warning: 'var(--warning)',
+      error: 'var(--error)',
+      info: 'var(--info)',
+    })
+    expect(t.emphasis).toBe('var(--viz-emphasis)')
+    expect(t.surface).toBe('var(--surface-2)')
+    const every = [
+      ...t.series,
+      ...t.seq,
+      t.emphasis,
+      t.muted,
+      t.grid,
+      t.axis,
+      t.tick,
+      t.crosshair,
+      t.surface,
+      t.tooltip.bg,
+      t.tooltip.border,
+      t.text.primary,
+      t.text.secondary,
+      t.text.tertiary,
+      t.fontSans,
+      t.fontMono,
+    ]
+    for (const c of every) expect(c).toMatch(/^var\(--[a-z0-9-]+\)$/)
   })
 })
 
 describe('useChartTheme', () => {
-  it('re-resolves when the theme or the high-contrast setting changes', () => {
-    stubComputedStyle({})
+  it('hands out the same palette across theme and high-contrast changes (no re-render needed)', () => {
     const {result} = renderHook(() => useChartTheme())
     const first = result.current
-    expect(first.isDark).toBe(true)
+    expect(first).toBe(CHART_THEME)
 
     act(() => useUIStore.setState({resolvedTheme: 'light'}))
-    expect(result.current).not.toBe(first)
-    expect(result.current.isDark).toBe(false)
+    expect(result.current).toBe(first)
 
-    const before = result.current
     act(() =>
       useSettingsStore.setState(s => ({
         settings: {...s.settings, appearance: {...s.settings.appearance, highContrast: true}},
       })),
     )
-    expect(result.current).not.toBe(before)
-    expect(result.current.highContrast).toBe(true)
+    expect(result.current).toBe(first)
   })
 })

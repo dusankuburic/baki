@@ -1,141 +1,195 @@
-import React, {useState} from 'react'
-import {ScrollText, Filter, ChevronLeft, ChevronRight} from 'lucide-react'
+import {useMemo, useState} from 'react'
+import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
-import {type AuditEvent} from '@/api/admin'
+import {Filter, RotateCcw, ScrollText, X} from 'lucide-react'
+import {Button, EmptyState, Input, Pager} from '@/components/shared'
+import {SectionNotice} from '@/components/auth/SectionCard'
+import {actionLabel} from '@/components/dashboard/home/activity'
+import {useDebouncedSearch} from '@/hooks/useDebouncedSearch'
+import {SEARCH_DEBOUNCE_MS} from '@/lib/constants'
+import {AUDIT_PAGE_SIZES, useAdminStore} from '@/stores/adminStore'
+import {AdminSection, SkeletonRows} from './AdminSection'
+import {AuditRow} from './AuditRow'
+import {groupActions} from './auditActions'
+import {useAuditActions} from './hooks/useAuditActions'
+import {useAuditLog} from './hooks/useAuditLog'
 
-// The action list comes from GET /api/admin/audit/actions (the server's closed
-// set) instead of a hand-maintained <option> list: the old list offered 7 of
-// 35 actions, leaving token minting, account deletion, failed logins and every
-// org.* event unfilterable. Paging and the user filter map onto the backend's
-// existing offset/limit/userId query parameters.
-export const AuditLogSection: React.FC<{
-  events: AuditEvent[]
-  action: string
-  userId: string
-  actions: string[]
-  offset: number
-  pageSize: number
-  onFilterChange: (action: string, userId?: string) => void
-  onPage: (direction: 'prev' | 'next') => void
-}> = ({events, action, userId, actions, offset, pageSize, onFilterChange, onPage}) => {
-  const [userDraft, setUserDraft] = useState(userId)
-  const page = Math.floor(offset / pageSize) + 1
-  // The list endpoint has no total; a full page is the only "there may be
-  // more" signal, so Next stays enabled exactly when this page is full.
-  const hasNext = events.length >= pageSize
+// The audit log: the action filter grouped by area with human labels, a user
+// filter (also set by a row's user cell and by a user row's "View activity"),
+// fifteen rows a page, and a details row per event for its metadata.
+export function AuditLogSection() {
+  const {t} = useTranslation(['admin', 'dashboard', 'common'])
+  const filter = useAdminStore(s => s.audit)
+  const setAuditAction = useAdminStore(s => s.setAuditAction)
+  const setAuditUserId = useAdminStore(s => s.setAuditUserId)
+  const setAuditPage = useAdminStore(s => s.setAuditPage)
+  const setAuditPageSize = useAdminStore(s => s.setAuditPageSize)
+  const clearAuditFilters = useAdminStore(s => s.clearAuditFilters)
+  const {events, hasMore, error, isLoading, isRefetching, retry} = useAuditLog()
+  const actions = useAuditActions()
+  const labels = t('dashboard:actions', {returnObjects: true}) as Record<string, string>
+  const groups = useMemo(
+    () => groupActions(actions.data ?? (filter.action ? [filter.action] : [])),
+    [actions.data, filter.action],
+  )
+
+  // The user box is local until the debounce (or Enter) commits it; a filter
+  // set elsewhere lands in the box too, adjusted during render.
+  const [userDraft, setUserDraft] = useState(filter.userId)
+  const [lastUserId, setLastUserId] = useState(filter.userId)
+  if (filter.userId !== lastUserId) {
+    setLastUserId(filter.userId)
+    setUserDraft(filter.userId)
+  }
+  const {search} = useDebouncedSearch({delay: SEARCH_DEBOUNCE_MS, onSearch: setAuditUserId})
+  const filtersActive = filter.action !== '' || filter.userId !== ''
 
   return (
-    <section className="bg-surface-2 border border-border-default rounded-xl overflow-hidden">
-      <div className="px-5 py-3 border-b border-border-subtle flex flex-wrap items-center gap-2">
-        <ScrollText size={14} className="text-text-tertiary" />
-        <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">Audit Log</h2>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Filter size={11} className="text-text-tertiary" />
+    <AdminSection id="admin-audit" title={t('sections.audit')} description={t('sectionSub.audit')}>
+      <div className="overflow-hidden rounded-xl border border-border-default bg-surface-2">
+        <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-3">
+          <Filter size={12} className="text-text-tertiary" aria-hidden="true" />
           <select
-            value={action}
-            onChange={e => onFilterChange(e.target.value)}
-            aria-label="Filter by action"
-            className="bg-surface-3 border border-border-default rounded text-text-primary text-xs px-2 py-1 focus:outline-none"
+            value={filter.action}
+            onChange={e => setAuditAction(e.target.value)}
+            aria-label={t('audit.filterAction')}
+            className="h-9 max-w-[16rem] rounded-md border border-border-default bg-surface-2 px-2 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-brand-500/20"
           >
-            <option value="">All actions</option>
-            {actions.map(a => (
-              <option key={a} value={a}>
-                {a}
-              </option>
+            <option value="">{t('audit.allActions')}</option>
+            {groups.map(g => (
+              <optgroup key={g.group} label={t(`audit.groups.${g.group}`)}>
+                {g.actions.map(a => (
+                  <option key={a} value={a}>
+                    {actionLabel(labels, a)}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
-          <input
-            type="text"
+          <Input
             value={userDraft}
-            onChange={e => setUserDraft(e.target.value)}
-            onBlur={() => {
-              if (userDraft !== userId) onFilterChange(action, userDraft.trim())
+            onChange={e => {
+              setUserDraft(e.target.value)
+              search(e.target.value)
             }}
             onKeyDown={e => {
-              if (e.key === 'Enter') onFilterChange(action, userDraft.trim())
+              if (e.key === 'Enter') setAuditUserId(userDraft.trim())
             }}
-            placeholder="User ID"
-            aria-label="Filter by user ID"
-            className="w-36 bg-surface-3 border border-border-default rounded text-text-primary text-xs px-2 py-1 focus:outline-none"
+            placeholder={t('audit.userPlaceholder')}
+            aria-label={t('audit.filterUser')}
+            trailingIcon={userDraft ? X : undefined}
+            trailingLabel={userDraft ? t('audit.clearUser') : undefined}
+            onTrailingClick={() => {
+              setUserDraft('')
+              setAuditUserId('')
+            }}
+            className="w-48 font-mono"
           />
+          {filtersActive && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={RotateCcw}
+              onClick={() => {
+                setUserDraft('')
+                clearAuditFilters()
+              }}
+            >
+              {t('audit.clearFilters')}
+            </Button>
+          )}
         </div>
-      </div>
-      <div className="overflow-x-auto">
-        {events.length === 0 ? (
-          <div className="px-5 py-8 text-center text-text-tertiary text-sm">
-            {offset > 0 ? 'No more audit events.' : 'No audit events recorded yet.'}
+
+        {error && !events && (
+          <div className="px-4 pt-3">
+            <SectionNotice
+              message={t('audit.loadFailed')}
+              action={
+                <Button size="sm" variant="ghost" onClick={retry}>
+                  {t('common:retry')}
+                </Button>
+              }
+            />
           </div>
-        ) : (
-          <table className="min-w-full divide-y divide-border-subtle">
-            <thead className="bg-surface-3">
-              <tr>
-                {['Time', 'User', 'Action', 'Resource', 'IP'].map(h => (
-                  <th
-                    key={h}
-                    className="px-4 py-2 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider"
-                  >
-                    {h}
-                  </th>
-                ))}
+        )}
+
+        {/* relative: contains the absolutely positioned sr-only cells so the scroll wrapper clips them */}
+        <div className="relative overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="bg-surface-3 text-left text-2xs font-semibold uppercase tracking-wide text-text-tertiary">
+                <th scope="col" className="px-4 py-2">
+                  {t('audit.columns.time')}
+                </th>
+                <th scope="col" className="px-4 py-2">
+                  {t('audit.columns.user')}
+                </th>
+                <th scope="col" className="px-4 py-2">
+                  {t('audit.columns.action')}
+                </th>
+                <th scope="col" className="px-4 py-2">
+                  {t('audit.columns.resource')}
+                </th>
+                <th scope="col" className="px-4 py-2">
+                  {t('audit.columns.ip')}
+                </th>
+                <th scope="col" className="px-2 py-2">
+                  <span className="sr-only">{t('audit.columns.details')}</span>
+                </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border-subtle">
-              {events.map(ev => (
-                <tr key={ev.id} className="bg-surface-2 hover:bg-surface-3 transition-colors">
-                  <td className="px-4 py-2 text-xs text-text-tertiary font-mono whitespace-nowrap">
-                    {new Date(ev.createdAt).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-2 text-xs text-text-primary whitespace-nowrap">{ev.email || ev.userId}</td>
-                  <td className="px-4 py-2 whitespace-nowrap">
-                    <span
-                      className={clsx(
-                        'text-2xs font-mono px-1.5 py-0.5 rounded',
-                        ev.action.startsWith('auth.')
-                          ? 'bg-blue-500/10 text-blue-400'
-                          : ev.action.startsWith('admin.')
-                            ? 'bg-red-500/10 text-red-400'
-                            : 'bg-surface-3 text-text-secondary',
-                      )}
-                    >
-                      {ev.action}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2 text-xs text-text-tertiary font-mono whitespace-nowrap">
-                    {ev.resourceType ? `${ev.resourceType}/${ev.resourceId.slice(0, 8)}` : '—'}
-                  </td>
-                  <td className="px-4 py-2 text-xs text-text-tertiary font-mono whitespace-nowrap">{ev.ip || '—'}</td>
-                </tr>
-              ))}
+            <tbody
+              className={clsx(
+                'divide-y divide-border-subtle transition-opacity duration-normal',
+                isRefetching && 'opacity-60',
+              )}
+              aria-busy={isRefetching || undefined}
+            >
+              {isLoading ? (
+                <SkeletonRows rows={Math.min(filter.pageSize, 10)} cols={6} />
+              ) : (
+                events?.map(ev => <AuditRow key={ev.id} event={ev} labels={labels} onFilterUser={setAuditUserId} />)
+              )}
             </tbody>
           </table>
+          {events && events.length === 0 && (
+            <EmptyState
+              icon={ScrollText}
+              title={filtersActive ? t('audit.noMatchTitle') : t('audit.emptyTitle')}
+              description={filtersActive ? t('audit.noMatchBody') : t('audit.emptyBody')}
+              action={
+                filtersActive ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      setUserDraft('')
+                      clearAuditFilters()
+                    }}
+                  >
+                    {t('audit.clearFilters')}
+                  </Button>
+                ) : undefined
+              }
+            />
+          )}
+        </div>
+
+        {events && (
+          <div className="border-t border-border-subtle px-4 py-2">
+            <Pager
+              page={filter.page}
+              pageSize={filter.pageSize}
+              count={events.length}
+              hasMore={hasMore}
+              onPageChange={setAuditPage}
+              pageSizeOptions={AUDIT_PAGE_SIZES}
+              onPageSizeChange={setAuditPageSize}
+              label={t('audit.pager')}
+            />
+          </div>
         )}
       </div>
-      <div className="px-5 py-2 border-t border-border-subtle flex items-center justify-between text-xs text-text-tertiary">
-        <span>
-          Page {page}
-          {events.length > 0 ? ` · rows ${offset + 1}–${offset + events.length}` : ''}
-        </span>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => onPage('prev')}
-            disabled={offset === 0}
-            aria-label="Previous page"
-            className="p-1 rounded hover:bg-surface-3 disabled:opacity-30 transition-colors"
-          >
-            <ChevronLeft size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={() => onPage('next')}
-            disabled={!hasNext}
-            aria-label="Next page"
-            className="p-1 rounded hover:bg-surface-3 disabled:opacity-30 transition-colors"
-          >
-            <ChevronRight size={14} />
-          </button>
-        </div>
-      </div>
-    </section>
+    </AdminSection>
   )
 }

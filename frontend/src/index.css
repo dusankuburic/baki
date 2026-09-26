@@ -1884,35 +1884,47 @@ textarea,
   --text-sm: 12px;
 }
 
-/* === THEME COLOR TRANSITION === */
-/* Briefly applied to <html> during theme switches for a smooth color crossfade.
-   Suppressed for users who prefer reduced motion (OS-level or user opt-in). */
-.theme-transitioning *,
-.theme-transitioning *::before,
-.theme-transitioning *::after {
-  transition:
-    background-color 200ms var(--ease-out),
-    border-color 200ms var(--ease-out),
-    color 200ms var(--ease-out),
-    fill 200ms var(--ease-out),
-    stroke 200ms var(--ease-out),
-    box-shadow 200ms var(--ease-out),
-    outline-color 200ms var(--ease-out),
-    caret-color 200ms var(--ease-out) !important;
+/* === THEME SWITCH === */
+/* A theme switch is one attribute write on <html>. Every theme redefines
+   ~60 custom properties, so every element restyles once (about 50ms for a
+   3,000-element view). The cross-fade comes from the View Transitions API
+   (useTheme.ts): the browser blends a snapshot of the old page into the new
+   one on the compositor. The previous `.theme-transitioning *` rule put a
+   transition on every element and pseudo-element instead, which made that
+   restyle ~13x slower and then ran thousands of animations for the next few
+   frames — over two seconds of blocked main thread on the analytics page. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 160ms;
+  animation-timing-function: var(--ease-out);
+}
+
+/* The page stays interactive while the snapshots fade. */
+::view-transition {
+  pointer-events: none;
+}
+
+/* The settings dialog (view-transition-name: settings, SettingsModal) is
+   where a theme is picked, so it switches at once: its old snapshot is
+   dropped and the new one shows without a fade, and the selection ring,
+   check and dialog colours move together. Only the page behind it
+   cross-fades. (Blending the two snapshots showed the previous card's ring
+   fading out next to the new one — a double border for a few frames.) */
+::view-transition-group(settings),
+::view-transition-new(settings) {
+  animation: none;
+}
+
+::view-transition-old(settings) {
+  animation: none;
+  opacity: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .theme-transitioning *,
-  .theme-transitioning *::before,
-  .theme-transitioning *::after {
-    transition-duration: 0.01ms !important;
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
   }
-}
-
-[data-reduce-motion='true'].theme-transitioning *,
-[data-reduce-motion='true'].theme-transitioning *::before,
-[data-reduce-motion='true'].theme-transitioning *::after {
-  transition-duration: 0.01ms !important;
 }
 
 /* === BASE RESET === */
@@ -2683,6 +2695,93 @@ pre,
   }
 }
 
+/* === ADMIN DASHBOARD ===
+
+   The Profile layout again: the section nav is a sticky chip row in a
+   narrow pane and a sticky rail beside the content from 880px, and the
+   tables drop their optional columns (joined, id) below 640px so a row
+   never forces sideways scrolling. The tiles grid and the refetch bar are
+   the analytics rules (.admin-tiles and .admin-progress share their
+   selectors). */
+.admin-page {
+  position: relative;
+  container: admin / inline-size;
+}
+.admin-layout {
+  max-width: 80rem;
+  margin-inline: auto;
+  padding: 1.25rem 1rem 3rem;
+}
+.admin-body {
+  margin-top: 1rem;
+}
+.admin-nav {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+  position: sticky;
+  top: 0;
+  z-index: var(--z-raised);
+  margin: 0 -1rem 1.25rem;
+  padding: 0.5rem 1rem;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.admin-nav::-webkit-scrollbar {
+  display: none;
+}
+.admin-nav-item {
+  flex: none;
+  white-space: nowrap;
+}
+/* Room for the sticky chip row when a section scrolls to the top. */
+.admin-section {
+  scroll-margin-top: 3.5rem;
+}
+.admin-section + .admin-section {
+  margin-top: 2.5rem;
+}
+.admin-col-optional {
+  display: none;
+}
+@container admin (min-width: 640px) {
+  .admin-layout {
+    padding: 2rem 2rem 4rem;
+  }
+  .admin-nav {
+    margin-inline: -2rem;
+    padding-inline: 2rem;
+  }
+  .admin-col-optional {
+    display: table-cell;
+  }
+}
+@container admin (min-width: 880px) {
+  .admin-body {
+    display: grid;
+    grid-template-columns: 11rem minmax(0, 1fr);
+    column-gap: 2rem;
+    align-items: start;
+  }
+  .admin-nav {
+    flex-direction: column;
+    overflow: visible;
+    top: 1rem;
+    margin: 0;
+    padding: 0;
+    background: none;
+    border-bottom: 0;
+  }
+  .admin-nav-item {
+    white-space: normal;
+    text-align: left;
+  }
+  .admin-section {
+    scroll-margin-top: 1rem;
+  }
+}
+
 /* === CHARTS ===
 
    Shared chrome for the chart cards (src/components/charts). The card's
@@ -2806,7 +2905,8 @@ pre,
 }
 /* A 2px indeterminate bar under the filters while a refetch is in flight;
    the charts stay on screen at reduced opacity meanwhile. */
-.analytics-progress {
+.analytics-progress,
+.admin-progress {
   position: relative;
   height: 2px;
   margin: 0.5rem 0 1rem;
@@ -2814,10 +2914,12 @@ pre,
   border-radius: 1px;
   background: transparent;
 }
-.analytics-progress.is-active {
+.analytics-progress.is-active,
+.admin-progress.is-active {
   background: color-mix(in srgb, var(--brand-500) 20%, transparent);
 }
-.analytics-progress.is-active::after {
+.analytics-progress.is-active::after,
+.admin-progress.is-active::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -2834,7 +2936,8 @@ pre,
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .analytics-progress.is-active::after {
+  .analytics-progress.is-active::after,
+  .admin-progress.is-active::after {
     width: 100%;
     animation: none;
   }
@@ -2865,7 +2968,8 @@ pre,
 .analytics-section + .analytics-section {
   margin-top: 2.5rem;
 }
-.analytics-tiles {
+.analytics-tiles,
+.admin-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(10rem, 100%), 1fr));
   gap: 0.75rem;

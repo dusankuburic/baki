@@ -9,6 +9,90 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 
 cytoscape.use(dagre)
 
+// The theme-derived stylesheet, read from the CSS variables on <html> at the
+// time of the call.
+function buildStyle(): cytoscape.StylesheetJson {
+  const cs = getComputedStyle(document.documentElement)
+  const cssVar = (v: string) => cs.getPropertyValue(v).trim()
+  return [
+    {
+      selector: 'node',
+      style: {
+        shape: 'round-rectangle',
+        width: '220px',
+        height: '80px',
+        'background-color': cssVar('--surface-2'),
+        'border-width': 2,
+        'border-color': cssVar('--border-strong'),
+        label: 'data(label)',
+        color: cssVar('--text-primary'),
+        'font-size': '14px',
+        'font-weight': 'bold',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'text-margin-y': -10,
+        padding: '10px',
+      },
+    },
+    {
+      selector: 'node[isCenter = "true"]',
+      style: {
+        'border-color': cssVar('--brand-500'),
+        'border-width': 3,
+        'background-color': cssVar('--surface-3'),
+      },
+    },
+    {
+      selector: 'edge',
+      style: {
+        width: 2,
+        'line-color': cssVar('--border-strong'),
+        'target-arrow-color': cssVar('--border-strong'),
+        'target-arrow-shape': 'triangle',
+        'curve-style': 'bezier',
+      },
+    },
+    {
+      selector: 'node:selected',
+      style: {
+        'border-color': cssVar('--brand-500'),
+        'border-width': 3,
+      },
+    },
+    // Error indicator
+    {
+      selector: 'node[errorCount > 0]',
+      style: {
+        'border-color': cssVar('--error'),
+        'border-width': 2,
+      },
+    },
+    // Warning indicator
+    {
+      selector: 'node[warnCount > 0][errorCount = 0]',
+      style: {
+        'border-color': cssVar('--warning'),
+        'border-width': 2,
+      },
+    },
+    // Search highlight + dim
+    {
+      selector: 'node.search-match',
+      style: {
+        'border-color': cssVar('--brand-500'),
+        'border-width': 4,
+        'background-color': cssVar('--surface-3'),
+      },
+    },
+    {
+      selector: '.search-dim',
+      style: {
+        opacity: 0.2,
+      },
+    },
+  ]
+}
+
 // useCytoscapeGraph owns the Cytoscape instance lifecycle (create/destroy,
 // theme-derived styling), data loading (execution-graph fetch, element
 // swap, layout), zoom sync with the toolbar, the window "graph:fit" event,
@@ -98,88 +182,9 @@ export function useCytoscapeGraph(subflowId?: string) {
   useEffect(() => {
     if (!containerRef.current) return
 
-    const cs = getComputedStyle(document.documentElement)
-    const cssVar = (v: string) => cs.getPropertyValue(v).trim()
-
     const instance = cytoscape({
       container: containerRef.current,
-      style: [
-        {
-          selector: 'node',
-          style: {
-            shape: 'round-rectangle',
-            width: '220px',
-            height: '80px',
-            'background-color': cssVar('--surface-2'),
-            'border-width': 2,
-            'border-color': cssVar('--border-strong'),
-            label: 'data(label)',
-            color: cssVar('--text-primary'),
-            'font-size': '14px',
-            'font-weight': 'bold',
-            'text-valign': 'center',
-            'text-halign': 'center',
-            'text-margin-y': -10,
-            padding: '10px',
-          },
-        },
-        {
-          selector: 'node[isCenter = "true"]',
-          style: {
-            'border-color': cssVar('--brand-500'),
-            'border-width': 3,
-            'background-color': cssVar('--surface-3'),
-          },
-        },
-        {
-          selector: 'edge',
-          style: {
-            width: 2,
-            'line-color': cssVar('--border-strong'),
-            'target-arrow-color': cssVar('--border-strong'),
-            'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
-          },
-        },
-        {
-          selector: 'node:selected',
-          style: {
-            'border-color': cssVar('--brand-500'),
-            'border-width': 3,
-          },
-        },
-        // Error indicator
-        {
-          selector: 'node[errorCount > 0]',
-          style: {
-            'border-color': cssVar('--error'),
-            'border-width': 2,
-          },
-        },
-        // Warning indicator
-        {
-          selector: 'node[warnCount > 0][errorCount = 0]',
-          style: {
-            'border-color': cssVar('--warning'),
-            'border-width': 2,
-          },
-        },
-        // Search highlight + dim
-        {
-          selector: 'node.search-match',
-          style: {
-            'border-color': cssVar('--brand-500'),
-            'border-width': 4,
-            'background-color': cssVar('--surface-3'),
-          },
-        },
-        {
-          selector: '.search-dim',
-          style: {
-            opacity: 0.2,
-          },
-        },
-      ],
+      style: buildStyle(),
       minZoom: 0.1,
       maxZoom: 2,
     })
@@ -193,17 +198,26 @@ export function useCytoscapeGraph(subflowId?: string) {
     })
 
     cyRef.current = instance
-    void loadGraph()
 
     return () => {
       instance.destroy()
       cyRef.current = null
     }
-  }, [resolvedTheme]) // eslint-disable-line react-hooks/exhaustive-deps
-  // ↑ The Cytoscape instance and its style are derived only from the theme's
-  // CSS vars (getComputedStyle), so it is created once per theme change rather
-  // than recreated on every subflow switch. The loadGraph effect below handles
-  // subflowId changes by swapping elements on the reused instance.
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // ↑ One instance per mount. The loadGraph effect below runs the initial
+  // load and handles document, report and subflow changes by swapping
+  // elements on the reused instance.
+
+  // The stylesheet is derived from the theme's CSS vars, so a theme change
+  // restyles the instance in place — same elements, same layout, new colours.
+  // Recreating it (the previous approach) re-fetched the graph and re-ran the
+  // layout animation on every theme switch.
+  const styledFor = useRef(resolvedTheme)
+  useEffect(() => {
+    if (styledFor.current === resolvedTheme) return
+    styledFor.current = resolvedTheme
+    cyRef.current?.style().fromJson(buildStyle()).update()
+  }, [resolvedTheme])
 
   // Sync zoom from toolbar
   useEffect(() => {
