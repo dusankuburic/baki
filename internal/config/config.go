@@ -263,6 +263,18 @@ type RuntimeConfig struct {
 	RetryBaseDelay         string
 	OTLPEndpoint           string
 	RequestTimeout         string
+	// AzureFoundryAllowedHosts extends the hosts a user may configure as an
+	// Azure AI Foundry endpoint beyond Microsoft's own suffixes
+	// (*.openai.azure.com, *.services.ai.azure.com, …): exact hosts or
+	// "*.suffix" globs, for API Management fronts and private DNS zones
+	// (PAD_AZURE_FOUNDRY_ALLOWED_HOSTS).
+	AzureFoundryAllowedHosts []string
+	// AIAllowPrivateEgress disables the cloud-mode dial-time guard that
+	// refuses AI endpoints resolving to private/loopback addresses
+	// (PAD_AI_ALLOW_PRIVATE_EGRESS). Only for private-link resources, whose
+	// hosts resolve to RFC 1918 addresses by design; the endpoint allow-list
+	// still applies.
+	AIAllowPrivateEgress bool
 }
 
 func DefaultRuntimeConfig() RuntimeConfig {

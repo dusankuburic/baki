@@ -15,6 +15,11 @@ func AvailableProviders() []ProviderMetadata {
 		{ID: "glm", Name: "GLM (z.ai)", AuthType: "api_key"},
 		{ID: "github-models", Name: "GitHub Models", AuthType: "oauth"},
 		{ID: "copilot", Name: "GitHub Copilot", AuthType: "oauth"},
+		// Configured with an endpoint + credential document rather than a bare
+		// key (see AzureFoundryConfig); AuthType stays "api_key" because the
+		// UI's auth-type union has no third value and the document is still
+		// user-entered, not an OAuth flow.
+		{ID: "azure-foundry", Name: "Azure AI Foundry", AuthType: "api_key"},
 	}
 }
 
@@ -29,13 +34,14 @@ var embeddingCapable = map[string]bool{
 	"gemini":        true,
 	"glm":           true,
 	"github-models": true,
+	"azure-foundry": true,
 }
 
 // embeddingFallbackOrder is the deterministic priority in which callers scan
 // for an alternate embedding provider when the configured one has no key.
 // Determinism matters: iterating the settings' provider map (Go map order is
 // random) would pick a different fallback per call.
-var embeddingFallbackOrder = []string{"openai", "gemini", "glm", "github-models"}
+var embeddingFallbackOrder = []string{"openai", "gemini", "glm", "github-models", "azure-foundry"}
 
 // SupportsEmbeddings reports whether the provider ID can serve embedding
 // requests. Unknown IDs report false.

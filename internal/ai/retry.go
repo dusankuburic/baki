@@ -204,7 +204,9 @@ func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk fun
 				heldErr = c.Error
 				return
 			}
-			if c.Text != "" || c.Done || len(c.ToolCalls) > 0 {
+			// A hosted tool step (ToolEvent) also counts: the provider already
+			// ran something server-side, so the turn cannot be replayed.
+			if c.Text != "" || c.Done || len(c.ToolCalls) > 0 || c.ToolEvent != nil {
 				delivered = true
 			}
 			onChunk(c)

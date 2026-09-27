@@ -51,12 +51,15 @@ export default function AIBehaviorPanel() {
         <SegmentedControl
           value={ai.embeddingProvider}
           onChange={v => updateAI({embeddingProvider: v as ProviderID})}
+          label={t('behavior.embeddingAssistant')}
           options={[
             {value: 'openai', label: 'OpenAI'},
             {value: 'gemini', label: 'Gemini'},
             {value: 'glm', label: 'GLM'},
             {value: 'github-models', label: 'GitHub Models'},
+            {value: 'azure-foundry', label: 'Azure AI Foundry'},
           ]}
+          className="flex-wrap"
         />
         <p className="text-xs text-text-tertiary mt-2">{t('behavior.embeddingAssistantHint')}</p>
       </div>

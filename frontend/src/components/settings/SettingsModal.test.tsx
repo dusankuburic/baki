@@ -113,4 +113,11 @@ describe('SettingsModal', () => {
     fireEvent.keyDown(search, {key: 'Escape'})
     expect(onClose).toHaveBeenCalledTimes(1)
   })
+  it('finds the AI Accounts section when searching for the Azure AI Foundry provider', async () => {
+    render(<SettingsModal isOpen onClose={noop} />)
+    fireEvent.change(screen.getByRole('textbox', {name: 'Search settings'}), {target: {value: 'foundry'}})
+    expect(screen.getAllByRole('tab')).toHaveLength(1)
+    expect(tab('AI Accounts')).toBeInTheDocument()
+    await screen.findByText('Updates')
+  })
 })

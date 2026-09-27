@@ -10,6 +10,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/mail"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/service"
@@ -102,6 +103,22 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 		}
 	}
 	factory := ai.NewProviderFactory(keys.Get, copilotAuth, recorder, &cfg.Runtime)
+	// Embeddings come back at the knowledge base's vector width where the
+	// model supports it (text-embedding-3-*), so they are always indexable.
+	factory.SetEmbeddingDimensions(cfg.Storage.EmbeddingDim)
+	// Azure AI Foundry endpoints are user-supplied. In cloud mode every
+	// request to one goes through the dial-time private-address guard (the
+	// operator can lift it for private-link resources); the desktop/local
+	// single-user app talks to its owner's own network and needs none.
+	policy := egress.AllowLoopback
+	if cfg.Mode == config.ModeCloud {
+		policy = egress.BlockInternal
+	}
+	ai.ConfigureAzureFoundry(ai.AzureFoundryOptions{
+		Egress:             policy,
+		ExtraAllowedHosts:  cfg.Runtime.AzureFoundryAllowedHosts,
+		AllowPrivateEgress: cfg.Runtime.AIAllowPrivateEgress,
+	})
 	auth := ai.NewGitHubAuth()
 	return auth, copilotAuth, factory
 }

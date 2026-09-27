@@ -12,6 +12,44 @@ export const enSettings = {
     xaiKey: 'xAI API Key',
     zaiKey: 'z.ai API Key',
     githubPat: 'GitHub Token (PAT)',
+    // Azure AI Foundry section (flat leaves only — this object must not mix
+    // strings with nested objects).
+    azureEndpoint: 'Azure endpoint',
+    azureEndpointPlaceholder: 'https://my-resource.openai.azure.com',
+    azureEndpointHint: 'The resource endpoint from the Foundry portal (Keys and Endpoint).',
+    azureAuthMode: 'Authentication',
+    azureAuthApiKey: 'API key',
+    azureAuthEntra: 'Microsoft Entra ID',
+    azureApiKey: 'API key',
+    azureTenantId: 'Tenant ID',
+    azureClientId: 'Client ID',
+    azureClientSecret: 'Client secret',
+    azureSecretUnchanged: 'Leave blank to keep the stored secret',
+    azureProjectEndpoint: 'Project endpoint (optional)',
+    azureProjectEndpointPlaceholder: 'https://my-resource.services.ai.azure.com/api/projects/my-project',
+    azureProjectEndpointHint:
+      'Needed to list and chat with Foundry agents. Agents require Microsoft Entra ID authentication (an app registration with the Foundry User role).',
+    azureChatDeployment: 'Default chat deployment (optional)',
+    azureEmbeddingDeployment: 'Embedding deployment (optional)',
+    azureDeploymentPlaceholder: 'e.g. gpt-4.1',
+    azureEmbeddingDeploymentPlaceholder: 'e.g. text-embedding-3-small',
+    azureSave: 'Save',
+    azureSaving: 'Saving…',
+    azureCancel: 'Cancel',
+    azureEdit: 'Edit',
+    azureSaveFailed: 'Failed to save the Azure AI Foundry settings',
+    azureHostRejected:
+      'The endpoint host is not an Azure AI Foundry endpoint. Use https://<resource>.openai.azure.com or https://<resource>.services.ai.azure.com, or ask the operator to allow-list a custom host.',
+    azureConfiguredEndpoint: 'Endpoint',
+    azureConfiguredAuth: 'Auth',
+    azureConfiguredProject: 'Project',
+    azureConfiguredChatDeployment: 'Chat deployment',
+    azureConfiguredEmbeddingDeployment: 'Embedding deployment',
+    azureAgentsHint:
+      'Foundry agents appear in the chat model picker as "Agent · name" once a project endpoint and Entra ID credentials are saved.',
+    azureEndpointAria: 'Azure endpoint',
+    azureApiKeyAria: 'Azure API key',
+    azureClientSecretAria: 'Azure client secret',
   },
   knowledge: {
     orgLabel: 'Organization:',
@@ -20,7 +58,11 @@ export const enSettings = {
     selectOrgFirst: "Please select an organization in the 'Organizations' tab first to manage its knowledge base.",
     embeddingNoticePrefix: 'Requires an embedding provider.',
     embeddingNoticeSuffix:
-      "Indexing needs a configured OpenAI, Gemini, GLM, or GitHub Models key (set under AI Behavior → Embedding Assistant). Claude, Copilot, and xAI don't support embeddings, so a Claude-only setup can't use the Knowledge Base.",
+      "Indexing needs a configured OpenAI, Gemini, GLM, GitHub Models, or Azure AI Foundry key (set under AI Behavior → Embedding Assistant). Claude, Copilot, and xAI don't support embeddings, so a Claude-only setup can't use the Knowledge Base.",
+    embeddingMissingUpload:
+      'Indexing requires an embedding-capable provider key (OpenAI, Gemini, GLM, GitHub Models, or Azure AI Foundry). Configure one under AI Behavior → Embedding Assistant.',
+    embeddingMissingReindex:
+      'Re-index needs an embedding-capable provider key (OpenAI, Gemini, GLM, GitHub Models, or Azure AI Foundry)',
     uploadTitle: 'Upload SOP',
     uploadHint: 'Currently supports .txt and .md files up to 1MB.',
     reindexTitle:
@@ -360,7 +402,8 @@ export const enSettings = {
       accounts: {
         label: 'AI Accounts',
         description: 'Configure API keys for AI-powered analysis and chat.',
-        keywords: 'api key provider anthropic claude openai gemini xai grok glm github copilot connect',
+        keywords:
+          'api key provider anthropic claude openai gemini xai grok glm github copilot connect azure foundry microsoft entra deployment agent',
       },
       behavior: {
         label: 'AI Behavior',

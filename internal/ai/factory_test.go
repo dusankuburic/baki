@@ -43,7 +43,7 @@ func TestProviderFactory_For_KeyLookupError(t *testing.T) {
 
 func TestProviderFactory_For_AllKnownProviders(t *testing.T) {
 	f := NewProviderFactory(func(_, _ string) (string, error) { return "test-key", nil }, nil, nil, nil)
-	knownProviders := []string{"claude", "openai", "gemini", "xai", "glm", "github-models"}
+	knownProviders := []string{"claude", "openai", "gemini", "xai", "glm", "github-models", "azure-foundry"}
 
 	for _, id := range knownProviders {
 		p, err := f.For("", id)

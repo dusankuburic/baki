@@ -1,5 +1,10 @@
 package ai
 
+import (
+	"regexp"
+	"strings"
+)
+
 // modelCatalog is the single source of truth for the models each provider
 // serves, with their pricing and limits. This is the data that drifts as vendors
 // ship new models and change prices; centralizing it here keeps it in one
@@ -55,6 +60,93 @@ var modelCatalog = map[string][]ModelInfo{
 		{ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", ContextLimit: 128000, Pricing: Pricing{InputCostPerM: 0, OutputCostPerM: 0}},
 		{ID: "claude-3.5-sonnet", DisplayName: "Claude 3.5 Sonnet", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 0, OutputCostPerM: 0}},
 	},
+	// Azure AI Foundry serves whatever the user DEPLOYED, under a name the
+	// user chose, so this list is not what the provider offers — it is the
+	// reference table the served-model name (response "model") is priced and
+	// sized against: Azure global-standard list prices (USD per 1M tokens,
+	// 2026-09) and the models' context windows. The unconfigured (metadata)
+	// provider also advertises it so the UI has something to show before the
+	// first deployment listing.
+	"azure-foundry": {
+		{ID: "gpt-4.1", DisplayName: "GPT-4.1", ContextLimit: 1047576, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 8.0}},
+		{ID: "gpt-4.1-mini", DisplayName: "GPT-4.1 Mini", ContextLimit: 1047576, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 0.4, OutputCostPerM: 1.6}},
+		{ID: "gpt-4.1-nano", DisplayName: "GPT-4.1 Nano", ContextLimit: 1047576, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 0.1, OutputCostPerM: 0.4}},
+		{ID: "gpt-4o", DisplayName: "GPT-4o", ContextLimit: 128000, MaxOutputTokens: 16384, Pricing: Pricing{InputCostPerM: 2.5, OutputCostPerM: 10.0}},
+		{ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", ContextLimit: 128000, MaxOutputTokens: 16384, Pricing: Pricing{InputCostPerM: 0.15, OutputCostPerM: 0.6}},
+		{ID: "gpt-5", DisplayName: "GPT-5", ContextLimit: 400000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 1.25, OutputCostPerM: 10.0}},
+		{ID: "gpt-5-mini", DisplayName: "GPT-5 Mini", ContextLimit: 400000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 0.25, OutputCostPerM: 2.0}},
+		{ID: "gpt-5-nano", DisplayName: "GPT-5 Nano", ContextLimit: 400000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 0.05, OutputCostPerM: 0.4}},
+		{ID: "gpt-5-chat", DisplayName: "GPT-5 Chat", ContextLimit: 128000, MaxOutputTokens: 16384, Pricing: Pricing{InputCostPerM: 1.25, OutputCostPerM: 10.0}},
+		{ID: "o3", DisplayName: "o3", ContextLimit: 200000, MaxOutputTokens: 100000, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 8.0}},
+		{ID: "o4-mini", DisplayName: "o4-mini", ContextLimit: 200000, MaxOutputTokens: 100000, Pricing: Pricing{InputCostPerM: 1.1, OutputCostPerM: 4.4}},
+		{ID: "gpt-oss-120b", DisplayName: "gpt-oss 120B", ContextLimit: 131072, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 0.15, OutputCostPerM: 0.6}},
+		// model-router bills by the model it routes to; that model is what the
+		// response reports, so the router entry itself carries no price.
+		{ID: "model-router", DisplayName: "Model router", ContextLimit: 128000, Pricing: Pricing{}},
+		{ID: "DeepSeek-V3-0324", DisplayName: "DeepSeek V3", ContextLimit: 131072, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 1.14, OutputCostPerM: 4.56}},
+		{ID: "DeepSeek-V3.1", DisplayName: "DeepSeek V3.1", ContextLimit: 131072, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 1.14, OutputCostPerM: 4.56}},
+		{ID: "DeepSeek-R1-0528", DisplayName: "DeepSeek R1", ContextLimit: 131072, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 1.35, OutputCostPerM: 5.4}},
+		{ID: "Llama-4-Maverick-17B-128E-Instruct-FP8", DisplayName: "Llama 4 Maverick", ContextLimit: 1000000, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 0.25, OutputCostPerM: 0.97}},
+		{ID: "grok-3", DisplayName: "Grok 3", ContextLimit: 131072, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}},
+		{ID: "grok-3-mini", DisplayName: "Grok 3 Mini", ContextLimit: 131072, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 0.25, OutputCostPerM: 1.27}},
+		{ID: "grok-4", DisplayName: "Grok 4", ContextLimit: 256000, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}},
+		{ID: "Phi-4", DisplayName: "Phi-4", ContextLimit: 16384, MaxOutputTokens: 8192, Pricing: Pricing{InputCostPerM: 0.125, OutputCostPerM: 0.5}},
+		{ID: "text-embedding-3-small", DisplayName: "text-embedding-3-small", ContextLimit: 8191, Pricing: Pricing{InputCostPerM: 0.02, OutputCostPerM: 0}},
+		{ID: "text-embedding-3-large", DisplayName: "text-embedding-3-large", ContextLimit: 8191, Pricing: Pricing{InputCostPerM: 0.13, OutputCostPerM: 0}},
+		{ID: "text-embedding-ada-002", DisplayName: "text-embedding-ada-002", ContextLimit: 8191, Pricing: Pricing{InputCostPerM: 0.1, OutputCostPerM: 0}},
+	},
+}
+
+// servedModelDateSuffix strips the version date OpenAI-compatible responses
+// append to the model name ("gpt-4o-2024-11-20" → "gpt-4o").
+var servedModelDateSuffix = regexp.MustCompile(`-\d{4}-\d{2}-\d{2}$`)
+
+// normalizeServedModel canonicalises a response "model" value for catalogue
+// lookup: lower-cased, trimmed, version date removed.
+func normalizeServedModel(served string) string {
+	s := strings.ToLower(strings.TrimSpace(served))
+	return servedModelDateSuffix.ReplaceAllString(s, "")
+}
+
+// catalogEntryFor finds the catalogue entry describing the model a provider
+// reported serving. The match is exact on the normalised name, or — for
+// names that only add a numeric/date version to a catalogued ID
+// ("gpt-4.1-2025-04-14", "deepseek-v3-0324-2") — the longest catalogued ID the
+// name extends. Anything else (a sibling model such as "gpt-5-mini" when only
+// "gpt-5" is catalogued) is NOT matched: mispricing silently would be worse
+// than the explicit fallback.
+func catalogEntryFor(providerID, served string) (ModelInfo, bool) {
+	norm := normalizeServedModel(served)
+	if norm == "" {
+		return ModelInfo{}, false
+	}
+	var best ModelInfo
+	bestLen := 0
+	for _, m := range modelCatalog[providerID] {
+		id := strings.ToLower(m.ID)
+		if id == norm {
+			return m, true
+		}
+		if strings.HasPrefix(norm, id+"-") && len(id) > bestLen && versionOnlyRemainder(norm[len(id)+1:]) {
+			best, bestLen = m, len(id)
+		}
+	}
+	return best, bestLen > 0
+}
+
+// versionOnlyRemainder reports whether what follows a catalogued ID is only a
+// version marker (digits and dashes: "2025-04-14", "0324", "2"), never a
+// model-family suffix like "mini".
+func versionOnlyRemainder(rest string) bool {
+	if rest == "" {
+		return false
+	}
+	for _, r := range rest {
+		if (r < '0' || r > '9') && r != '-' && r != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 // catalogModels returns a fresh copy of a provider's catalogued models so callers

@@ -54,7 +54,7 @@ const STEPS: StepDef[] = [
     // The provider-configured flag arrives live; the copy degrades gracefully
     // while the check is in flight.
     body: () =>
-      'Connect an AI provider key (Settings → AI Providers) to explain findings, fix with AI, and chat about your flows. Analysis and auto-fix work without one.',
+      'Connect an AI provider key (Settings → AI Accounts) to explain findings, fix with AI, and chat about your flows. Analysis and auto-fix work without one.',
   },
 ]
 

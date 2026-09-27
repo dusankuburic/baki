@@ -254,6 +254,9 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 		tokensOut    int
 		parseErrors  int
 		finishReason string
+		// servedModel is the concrete model name the chunks report ("model"),
+		// carried onto the Done chunk so deployment aliases can be priced.
+		servedModel string
 		// toolBlocks accumulates streamed function calls keyed by their position
 		// in the tool_calls array; finalized onto the Done chunk.
 		toolBlocks = map[int]*pendingToolCall{}
@@ -274,6 +277,7 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 			TokensOut:    tokensOut,
 			ToolCalls:    assembleToolCalls(toolBlocks),
 			FinishReason: finishReason,
+			ServedModel:  servedModel,
 		})
 	}
 
@@ -291,6 +295,7 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 		}
 
 		var parsed struct {
+			Model   string `json:"model"`
 			Choices []struct {
 				Delta struct {
 					Content   string `json:"content"`
@@ -320,6 +325,9 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 			tokensIn = parsed.Usage.PromptTokens
 			tokensOut = parsed.Usage.CompletionTokens
 		}
+		if parsed.Model != "" {
+			servedModel = parsed.Model
+		}
 
 		for _, choice := range parsed.Choices {
 			if choice.Delta.Content != "" {
@@ -342,6 +350,16 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 				p.args.WriteString(tc.Function.Arguments)
 			}
 			if choice.FinishReason != nil && *choice.FinishReason != "" {
+				// Azure OpenAI / Foundry end a stream whose completion the
+				// content filter cut with finish_reason "content_filter" — a
+				// deliberate stop, not a truncation, but the text so far is
+				// not the answer. Surface it as an error chunk (the Gemini
+				// SAFETY path does the same) so the client explains the block
+				// instead of presenting a half answer as complete.
+				if *choice.FinishReason == "content_filter" {
+					onChunk(Chunk{Error: fmt.Errorf("%w: the response was stopped by the content filter", ErrContentFiltered)})
+					return nil
+				}
 				sawTerminal = true
 				finishReason = *choice.FinishReason
 			}

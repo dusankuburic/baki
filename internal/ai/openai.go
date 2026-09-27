@@ -20,6 +20,11 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 			providerLabel:         "openai",
 			embeddingModel:        "text-embedding-3-small",
 			embeddingModelDefault: "text-embedding-3-small",
+			// OpenAI's reasoning models (o-series, GPT-5) reject max_tokens;
+			// every current OpenAI model accepts the successor parameter. An
+			// OPENAI_API_URL proxy that only knows the old name is handled by
+			// send()'s one-shot parameter swap.
+			maxTokensParam: maxTokensParamCompletion,
 		},
 	}
 }
@@ -57,9 +62,14 @@ func (o *OpenAIProvider) Embed(ctx context.Context, text []string) ([][]float32,
 }
 
 type openAIRequest struct {
-	Model         string          `json:"model"`
-	MaxTokens     int             `json:"max_tokens,omitempty"`
-	Temperature   float64         `json:"temperature,omitempty"`
+	Model     string `json:"model"`
+	MaxTokens int    `json:"max_tokens,omitempty"`
+	// MaxCompletionTokens is the successor of max_tokens: OpenAI's reasoning
+	// models (o-series, GPT-5) and Azure AI Foundry deployments of them reject
+	// max_tokens outright. openaiBase.maxTokensParam decides which of the two
+	// a provider sends; exactly one is set per request.
+	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
+	Temperature         float64         `json:"temperature,omitempty"`
 	Messages      []openAIMessage `json:"messages"`
 	Tools         []openAITool    `json:"tools,omitempty"`
 	Stream        bool            `json:"stream,omitempty"`
@@ -100,7 +110,11 @@ type openAIMessage struct {
 }
 
 type openAIResponse struct {
-	ID      string `json:"id"`
+	ID string `json:"id"`
+	// Model is the concrete model that served the request (a versioned name
+	// such as "gpt-4o-2024-11-20", or the routed model behind an Azure
+	// model-router deployment). Carried to Response.ServedModel for pricing.
+	Model   string `json:"model"`
 	Choices []struct {
 		Message      openAIMessage `json:"message"`
 		FinishReason string        `json:"finish_reason"`
@@ -117,6 +131,9 @@ type openAIErrorResp struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 		Code    string `json:"code"`
+		// Param names the offending request field on unsupported_parameter /
+		// unsupported_value rejections ("max_tokens", "temperature").
+		Param string `json:"param"`
 	} `json:"error"`
 }
 

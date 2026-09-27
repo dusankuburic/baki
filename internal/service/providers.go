@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,8 +31,11 @@ type ProviderService struct {
 }
 
 type modelCacheEntry struct {
-	models    []ai.ModelInfo
-	expiresAt time.Time
+	models []ai.ModelInfo
+	// defaultModel is the CONFIGURED provider's default (a user's Azure
+	// deployment name), which can differ from the metadata provider's.
+	defaultModel string
+	expiresAt    time.Time
 }
 
 func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory, secrets KeyStore) *ProviderService {
@@ -47,28 +51,105 @@ func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factor
 // dynamicModels returns the configured provider's live model list, cached for
 // dynamicModelTTL per (scope, provider). Static metadata providers are cheap
 // (no network) and are NOT cached.
-func (s *ProviderService) dynamicModels(ctx context.Context, scope, providerID string) ([]ai.ModelInfo, bool) {
+func (s *ProviderService) dynamicModels(ctx context.Context, scope, providerID string) (models []ai.ModelInfo, defaultModel string, ok bool) {
 	key := scope + "\x00" + providerID
 	s.modelMu.Lock()
 	if e, ok := s.modelCache[key]; ok && time.Now().Before(e.expiresAt) {
 		s.modelMu.Unlock()
-		return e.models, true
+		return e.models, e.defaultModel, true
 	}
 	s.modelMu.Unlock()
 
 	realProvider, err := s.factory.For(scope, providerID)
 	if err != nil {
-		return nil, false
+		return nil, "", false
 	}
-	models, err := realProvider.Models(ctx)
+	models, err = realProvider.Models(ctx)
 	if err != nil {
 		logger.Warn("list dynamic provider models", "provider", providerID, "error", err)
-		return nil, false
+		return nil, "", false
 	}
+	defaultModel = realProvider.DefaultModel()
 	s.modelMu.Lock()
-	s.modelCache[key] = modelCacheEntry{models: models, expiresAt: time.Now().Add(dynamicModelTTL)}
+	s.modelCache[key] = modelCacheEntry{models: models, defaultModel: defaultModel, expiresAt: time.Now().Add(dynamicModelTTL)}
 	s.modelMu.Unlock()
-	return models, true
+	return models, defaultModel, true
+}
+
+// InvalidateModels drops the cached live listing for one (scope, provider) so
+// a configuration change (new Azure deployment names, rotated credential)
+// shows up on the next listing instead of after dynamicModelTTL.
+func (s *ProviderService) InvalidateModels(scope, providerID string) {
+	s.modelMu.Lock()
+	delete(s.modelCache, scope+"\x00"+providerID)
+	s.modelMu.Unlock()
+}
+
+// chooseDefaultModel picks the model the UI preselects for a configured
+// provider: the provider's own default when the live listing has it, else the
+// metadata fallback when it has that, else the first chat-capable entry
+// (skipping agents and embedding deployments). A user-named Azure AI Foundry
+// resource rarely has a deployment called "gpt-4.1".
+func chooseDefaultModel(preferred string, models []ai.ModelInfo, fallback string) string {
+	has := func(id string) bool {
+		for _, m := range models {
+			if m.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+	if preferred != "" && has(preferred) {
+		return preferred
+	}
+	if fallback != "" && has(fallback) {
+		return fallback
+	}
+	for _, m := range models {
+		if !ai.IsAgentModel(m.ID) && !isEmbeddingModelID(m.ID) {
+			return m.ID
+		}
+	}
+	if len(models) > 0 {
+		return models[0].ID
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return preferred
+}
+
+// isEmbeddingModelID is the heuristic that keeps an embedding deployment from
+// being offered as the chat default.
+func isEmbeddingModelID(id string) bool {
+	return strings.Contains(strings.ToLower(id), "embed")
+}
+
+// connectionTestModels lists the models the connection test tries: the
+// provider's default and free model — but when the live listing (5 s budget)
+// does not contain the default, the first chat-capable listed model goes
+// first, so a resource whose deployments carry custom names still passes.
+func (s *ProviderService) connectionTestModels(ctx context.Context, provider ai.Provider) []string {
+	def := provider.DefaultModel()
+	candidates := []string{def}
+	if fm := provider.FreeModel(); fm != "" && fm != def {
+		candidates = append(candidates, fm)
+	}
+	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	live, err := provider.Models(lctx)
+	if err != nil || len(live) == 0 {
+		return candidates
+	}
+	for _, m := range live {
+		if m.ID == def {
+			return candidates
+		}
+	}
+	if pick := chooseDefaultModel("", live, ""); pick != "" && pick != def {
+		return append([]string{pick}, candidates...)
+	}
+	return candidates
 }
 
 func (s *ProviderService) ListProviders(ctx context.Context, scope string) (providers []models.ProviderInfo, err error) {
@@ -100,9 +181,14 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope string) (prov
 		if mErr != nil {
 			logger.Warn("list provider models", "provider", meta.ID, "error", mErr)
 		}
+		defaultModel := p.DefaultModel()
 		if configured {
-			if dynamicModels, ok := s.dynamicModels(ctx, scope, meta.ID); ok {
+			if dynamicModels, liveDefault, ok := s.dynamicModels(ctx, scope, meta.ID); ok {
 				modelInfos = dynamicModels
+				// The metadata provider's default is a catalogue name; for a
+				// provider whose models are the user's own deployments (Azure
+				// AI Foundry) the default must be one the listing really has.
+				defaultModel = chooseDefaultModel(liveDefault, dynamicModels, defaultModel)
 			}
 		}
 
@@ -123,7 +209,7 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope string) (prov
 			Name:         meta.Name,
 			Configured:   configured,
 			Models:       modelDetails,
-			DefaultModel: p.DefaultModel(),
+			DefaultModel: defaultModel,
 			ContextLimit: p.ContextLimit(),
 			AuthType:     meta.AuthType,
 		})
@@ -144,10 +230,7 @@ func (s *ProviderService) TestProviderConnection(ctx context.Context, scope, pro
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	testModels := []string{provider.DefaultModel()}
-	if fm := provider.FreeModel(); fm != "" && fm != provider.DefaultModel() {
-		testModels = append(testModels, fm)
-	}
+	testModels := s.connectionTestModels(ctx, provider)
 
 	var chatErr error
 	for _, model := range testModels {
@@ -294,4 +377,57 @@ func (s *ProviderService) GetCopilotUser(ctx context.Context, scope string) (use
 		return nil, nil
 	}
 	return s.auth.GetUser(ctx, token)
+}
+
+// --- Azure AI Foundry configuration ---
+
+// GetAzureFoundryConfig returns the caller's stored Azure AI Foundry document
+// with the secrets removed. A missing or unreadable document reads as
+// unconfigured (the user re-enters it).
+func (s *ProviderService) GetAzureFoundryConfig(scope string) (cfg ai.AzureFoundryPublicConfig, err error) {
+	defer logger.Guard("App.GetAzureFoundryConfig", &err)
+	raw, getErr := s.secrets.Get(scope, ai.AzureFoundryProviderID)
+	if getErr != nil || raw == "" {
+		return ai.AzureFoundryPublicConfig{}, nil
+	}
+	parsed, parseErr := ai.ParseAzureFoundryConfig(raw)
+	if parseErr != nil {
+		logger.Warn("azure ai foundry: stored configuration unreadable", "error", parseErr)
+		return ai.AzureFoundryPublicConfig{}, nil
+	}
+	return parsed.Public(), nil
+}
+
+// SaveAzureFoundryConfig validates and stores the document. A request that
+// omits the secret keeps the stored one (same auth mode), so editing the
+// endpoint or a deployment name never asks the user to re-enter a key.
+// Validation failures are *ai.AzureConfigError values carrying a client code.
+func (s *ProviderService) SaveAzureFoundryConfig(scope string, cfg ai.AzureFoundryConfig) (err error) {
+	defer logger.Guard("App.SaveAzureFoundryConfig", &err)
+	cfg.Normalize()
+	if !cfg.HasSecret() {
+		if raw, getErr := s.secrets.Get(scope, ai.AzureFoundryProviderID); getErr == nil && raw != "" {
+			if prev, parseErr := ai.ParseAzureFoundryConfig(raw); parseErr == nil && prev.Auth.Mode == cfg.Auth.Mode {
+				switch cfg.Auth.Mode {
+				case ai.AzureAuthModeAPIKey:
+					cfg.Auth.Key = prev.Auth.Key
+				case ai.AzureAuthModeEntra:
+					cfg.Auth.ClientSecret = prev.Auth.ClientSecret
+				}
+			}
+		}
+	}
+	if err := ai.ValidateAzureFoundryConfig(cfg); err != nil {
+		return err
+	}
+	raw, err := cfg.Encode()
+	if err != nil {
+		return err
+	}
+	if err := s.secrets.Save(scope, ai.AzureFoundryProviderID, raw); err != nil {
+		return err
+	}
+	s.InvalidateModels(scope, ai.AzureFoundryProviderID)
+	ai.InvalidateAzureFoundryModels(cfg)
+	return nil
 }

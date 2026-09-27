@@ -279,6 +279,12 @@ func registerRoutes(rt *Router, r chi.Router) {
 			r.Post("/revoke", h.Provider.handleRevokeCopilotAuth)
 			r.Get("/user", h.Provider.handleGetCopilotUser)
 		})
+		// Azure AI Foundry: an endpoint + credential document instead of a
+		// bare key (see ai.AzureFoundryConfig). has/delete use /api/keys.
+		r.Route("/azure-foundry", func(r chi.Router) {
+			r.Get("/config", h.Provider.handleGetAzureFoundryConfig)
+			r.Post("/config", h.Provider.handleSaveAzureFoundryConfig)
+		})
 	})
 
 	r.Route("/api/auth", func(r chi.Router) {

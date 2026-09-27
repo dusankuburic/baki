@@ -808,7 +808,11 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		// post-fix document mid-stream (A1) so follow-up tool calls in the
 		// SAME stream see the fixed flow — the re-parse mints new block IDs,
 		// and the pre-fix snapshot would mis-answer every later tool.
-		if req.UseTools {
+		// A Foundry agent (model id "agent:<name>") always runs through the
+		// tool loop regardless of the per-thread toggle: the agent's own
+		// definition decides whether it calls baki's flow tools, and a
+		// function call it does make must be answered or the run stalls.
+		if req.UseTools || ai.IsAgentModel(req.Model) {
 			tctx := ai.ToolContext{
 				Ctx:      ctx,
 				Doc:      scrubbedDoc,
@@ -853,6 +857,11 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 				msg = scrubber.ScrubText(msg)
 				ctl.setFailure(code, msg)
 				emit("error", errorEventData(code, msg))
+				return
+			}
+			if chunk.ToolEvent != nil {
+				out.flush()
+				emitToolEvent(emit, chunk.ToolEvent)
 				return
 			}
 			if chunk.Done {
@@ -988,6 +997,14 @@ func (s *ChatService) runToolLoop(
 			switch {
 			case c.Error != nil:
 				chunkErr = c.Error
+			case c.ToolEvent != nil:
+				// A tool the provider ran server-side (a Foundry agent's web
+				// search, MCP call, …): forward it to the trail in order.
+				if !ensureStarted() {
+					return
+				}
+				out.flush()
+				emitToolEvent(emit, c.ToolEvent)
 			case c.Done:
 				turnIn = c.TokensIn
 				turnOut = c.TokensOut
@@ -1253,6 +1270,27 @@ func toolSummary(result string) string {
 		line = line[:cut] + "…"
 	}
 	return line
+}
+
+// emitToolEvent forwards a tool step the PROVIDER ran server-side (a Foundry
+// agent's hosted web search, file search, MCP or code-interpreter call) as
+// the same "tool" / "tool_result" events the local tool loop emits, so the
+// client's trail shows hosted work without a new event type.
+func emitToolEvent(emit func(string, map[string]interface{}), ev *ai.ToolEvent) {
+	if ev == nil {
+		return
+	}
+	if !ev.Done {
+		emit("tool", map[string]interface{}{"name": ev.Name, "label": ev.Label})
+		return
+	}
+	emit("tool_result", map[string]interface{}{
+		"name":       ev.Name,
+		"label":      ev.Label,
+		"ok":         ev.OK,
+		"durationMs": ev.DurationMs,
+		"summary":    ev.Summary,
+	})
 }
 
 // emitToolResult reports a finished tool execution on the stream so the client

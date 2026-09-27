@@ -18,7 +18,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,6 +25,7 @@ import (
 
 	"pad-core/logger"
 
+	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/errreport"
 )
 
@@ -76,8 +76,8 @@ func BuildChannelNotifier(kind, rawURL, secret string, policy TargetPolicy) (Ale
 	}
 	client := &http.Client{
 		Timeout:       defaultTimeout,
-		Transport:     guardedTransport(policy),
-		CheckRedirect: noRedirects,
+		Transport:     egress.GuardedTransport(policy),
+		CheckRedirect: egress.NoRedirects,
 	}
 	switch kind {
 	case "webhook":
@@ -173,6 +173,37 @@ type Dispatcher struct {
 	timeout   time.Duration
 }
 
+// TargetPolicy decides whether a notification target may point at the machine
+// (or the private network) the server itself runs on. It is an alias of
+// egress.Policy: the guard itself lives in package egress (the single
+// definition of "an address the outside world must not make this server
+// reach") so the AI provider layer applies the very same rules to
+// user-supplied endpoints, and the alias keeps this package's API unchanged
+// for its callers (main.go, api, scanner).
+//
+// It exists because the "http://localhost for dev" escape hatch was
+// unconditional. In a multi-tenant deployment ANY authenticated user can create
+// an org and become its admin (handleOrgCreate takes no role), add a webhook
+// channel, and hit the synchronous test endpoint — whose response distinguishes
+// connection-refused from non-2xx from 2xx. That is a loopback port scanner
+// plus the ability to POST attacker-influenced JSON at internal listeners.
+type TargetPolicy = egress.Policy
+
+const (
+	// BlockInternalTargets refuses loopback, private, link-local and unspecified
+	// addresses, and refuses plaintext http:// entirely.
+	//
+	// This is the ZERO VALUE on purpose: a caller that forgets to pass a policy
+	// gets the safe one. Opting into the permissive behaviour has to be typed
+	// out, which is also why the tests that need a loopback httptest server say
+	// so explicitly.
+	BlockInternalTargets = egress.BlockInternal
+	// AllowLoopbackTargets additionally permits http:// to loopback. DESKTOP AND
+	// LOCAL MODE ONLY — there the "org" is the single user running the app, so a
+	// webhook pointing at their own machine is exactly what they meant.
+	AllowLoopbackTargets = egress.AllowLoopback
+)
+
 // validateAlertURL enforces HTTPS for outbound governance alert URLs. The
 // payload carries flow names and finding counts (internal details an attacker
 // couldn't otherwise enumerate); sending it over plaintext HTTP would expose
@@ -185,103 +216,12 @@ type Dispatcher struct {
 // oracle — so DNS-resolved targets on loopback / link-local / private /
 // unassigned ranges are rejected unless the host is an explicit loopback NAME
 // (the documented dev escape hatch). Literal-IP hosts skip resolution.
-// TargetPolicy decides whether a notification target may point at the machine
-// (or the private network) the server itself runs on.
 //
-// It exists because the "http://localhost for dev" escape hatch was
-// unconditional. In a multi-tenant deployment ANY authenticated user can create
-// an org and become its admin (handleOrgCreate takes no role), add a webhook
-// channel, and hit the synchronous test endpoint — whose response distinguishes
-// connection-refused from non-2xx from 2xx. That is a loopback port scanner
-// plus the ability to POST attacker-influenced JSON at internal listeners.
-type TargetPolicy int
-
-const (
-	// BlockInternalTargets refuses loopback, private, link-local and unspecified
-	// addresses, and refuses plaintext http:// entirely.
-	//
-	// This is the ZERO VALUE on purpose: a caller that forgets to pass a policy
-	// gets the safe one. Opting into the permissive behaviour has to be typed
-	// out, which is also why the tests that need a loopback httptest server say
-	// so explicitly.
-	BlockInternalTargets TargetPolicy = iota
-	// AllowLoopbackTargets additionally permits http:// to loopback. DESKTOP AND
-	// LOCAL MODE ONLY — there the "org" is the single user running the app, so a
-	// webhook pointing at their own machine is exactly what they meant.
-	AllowLoopbackTargets
-)
-
-// isInternalIP is the single definition of "an address the outside world should
-// not be able to make this server reach". Both layers (URL validation and the
-// dial guard) use it, so they cannot drift — previously the dial guard omitted
-// IsLoopback while the resolver check included it, which is precisely how a
-// literal http://127.0.0.1 passed both.
-func isInternalIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsPrivate() || ip.IsUnspecified()
-}
-
-// isLoopbackHost reports whether host names the local machine, by literal IP or
-// by the conventional name. Used only to honour AllowLoopbackTargets.
-func isLoopbackHost(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
-}
-
-// noRedirects refuses to follow 3xx on notification deliveries.
-//
-// Only the CONFIGURED url passes through validateAlertURL; a redirect target
-// never did, and 307/308 replay the method AND body — so a perfectly legitimate
-// https://attacker.example/hook could answer "307 -> http://127.0.0.1:2379/..."
-// and have the signed governance payload delivered there instead. A webhook
-// endpoint that redirects is already misconfigured, so returning the 3xx as the
-// final response (where it fails the 2xx check with a clear status) is both
-// safer and more debuggable than following it.
-func noRedirects(_ *http.Request, _ []*http.Request) error {
-	return http.ErrUseLastResponse
-}
-
-// guardedTransport blocks connections to link-local/private IPs at DIAL
-// time (B1.9): validateAlertURL's resolution check alone is vulnerable to
-// DNS rebinding between validation and request. Loopback is deliberately
-// ALLOWED here — it's the documented dev escape hatch (http://localhost) and
-// the test harness — while validateAlertURL still rejects literal loopback
-// https targets; the material SSRF surfaces (cloud metadata 169.254.0.0/16,
-// RFC1918 services) are blocked on both layers.
-func guardedTransport(policy TargetPolicy) *http.Transport {
-	base := http.DefaultTransport.(*http.Transport).Clone()
-	dial := base.DialContext
-	base.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			host = addr
-		}
-		// The ONLY bypass, and it is explicit. The previous code skipped the
-		// whole check whenever the host was literally "localhost", and its IP
-		// test omitted IsLoopback — so "127.0.0.1" was not skipped but passed
-		// anyway. Both holes are closed: under BlockInternalTargets nothing is
-		// skipped, and isInternalIP covers loopback.
-		if policy == AllowLoopbackTargets && isLoopbackHost(host) {
-			return dial(ctx, network, addr)
-		}
-		if ips, lerr := net.LookupIP(host); lerr == nil {
-			for _, ip := range ips {
-				if isInternalIP(ip) {
-					return nil, fmt.Errorf("notify: refusing connection to internal address %s", ip)
-				}
-			}
-		}
-		// Resolution failure falls through to the real dialer's error path.
-		return dial(ctx, network, addr)
-	}
-	return base
-}
-
+// This is only the validation-time half: the dial-time half, which closes the
+// DNS-rebinding window between validation and request, is
+// egress.GuardedTransport on every client built here, and egress.NoRedirects
+// keeps a policy-passing endpoint from steering the signed payload somewhere
+// that never passed validation.
 func validateAlertURL(raw string, policy TargetPolicy) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -294,7 +234,7 @@ func validateAlertURL(raw string, policy TargetPolicy) (string, error) {
 		}
 		return raw, nil
 	}
-	if u.Scheme == "http" && policy == AllowLoopbackTargets && isLoopbackHost(host) {
+	if u.Scheme == "http" && policy == AllowLoopbackTargets && egress.IsLoopbackHost(host) {
 		return raw, nil
 	}
 	return "", fmt.Errorf("alert URL %q must use https; governance payloads carry internal flow details and must not be sent in plaintext (http:// to localhost is accepted only in local/desktop mode)", raw)
@@ -302,22 +242,14 @@ func validateAlertURL(raw string, policy TargetPolicy) (string, error) {
 
 // rejectPrivateTarget resolves host (skipping resolution for IPs and the
 // loopback dev names) and refuses RFC1918/loopback/link-local/unique-local
-// addresses (B1.9).
+// addresses (B1.9). The check is egress.RejectPrivateHost; this wrapper keeps
+// the "alert URL ..." wording that the channel endpoints surface to org admins.
 func rejectPrivateTarget(host string, policy TargetPolicy) error {
 	if host == "" {
 		return fmt.Errorf("alert URL has no host")
 	}
-	if policy == AllowLoopbackTargets && isLoopbackHost(host) {
-		return nil // desktop/local escape hatch, opted into explicitly
-	}
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return fmt.Errorf("alert URL host %q does not resolve: %w", host, err)
-	}
-	for _, ip := range ips {
-		if isInternalIP(ip) {
-			return fmt.Errorf("alert URL host %q resolves to a private/loopback address (%s) — internal targets are not allowed", host, ip)
-		}
+	if err := egress.RejectPrivateHost(host, policy); err != nil {
+		return fmt.Errorf("alert URL %w", err)
 	}
 	return nil
 }
@@ -334,8 +266,8 @@ func New(cfg Config) (*Dispatcher, error) {
 	}
 	client := &http.Client{
 		Timeout:       timeout,
-		Transport:     guardedTransport(cfg.Policy),
-		CheckRedirect: noRedirects,
+		Transport:     egress.GuardedTransport(cfg.Policy),
+		CheckRedirect: egress.NoRedirects,
 	}
 
 	var notifiers []AlertNotifier

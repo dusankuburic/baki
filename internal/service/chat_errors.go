@@ -25,6 +25,7 @@ const (
 	ChatErrTimeout               = "STREAM_TIMEOUT"
 	ChatErrInterrupted           = "STREAM_INTERRUPTED"
 	ChatErrToolLoopLimit         = "TOOL_LOOP_LIMIT"
+	ChatErrContentFiltered       = "PROVIDER_CONTENT_FILTERED"
 )
 
 // ErrAIBudgetExceeded / ErrAIBudgetUnavailable classify enforceBudget
@@ -141,6 +142,10 @@ func (c *streamCtl) classifyFailure(ctx context.Context, err error) (code, msg s
 		return ChatErrProviderUnavailable, "the AI provider is temporarily unavailable — try again shortly"
 	case errors.Is(err, ai.ErrInsufficientBalance):
 		return ChatErrProviderBalance, "the AI provider account has insufficient balance — add credits or switch providers"
+	case errors.Is(err, ai.ErrContentFiltered):
+		return ChatErrContentFiltered, "the provider's content filter blocked this request or response — rephrase and try again"
+	case errors.Is(err, ai.ErrProviderConfigInvalid):
+		return ChatErrProviderNotConfigured, "this provider's configuration is invalid — open Settings → AI Accounts and save it again"
 	case errors.Is(err, ai.ErrApiKeyInvalid):
 		return ChatErrProviderAuth, "the API key for this provider is invalid — check it in Settings → AI Providers"
 	case errors.Is(err, ai.ErrKeyNotConfigured):

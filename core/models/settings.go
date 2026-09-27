@@ -196,6 +196,13 @@ func DefaultSettings() *AppSettings {
 					MaxTokens:          4096,
 					ContextTokenBudget: 4000,
 				},
+				// No DefaultModel: Azure AI Foundry models are the user's own
+				// deployments, so the server-reported deployment is the default.
+				"azure-foundry": {
+					Temperature:        0.3,
+					MaxTokens:          4096,
+					ContextTokenBudget: 4000,
+				},
 			},
 			ShowCostEstimates:       true,
 			SaveConversationHistory: true,

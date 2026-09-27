@@ -61,6 +61,10 @@ services:
       # Dedicated at-rest key for the provider-key store. Unset, the keystore
       # falls back to PAD_AUTH_SECRET, so rotating the JWT secret would make
       # every stored AI provider key undecryptable.
+      # Azure AI Foundry endpoint allow-list extras and the private-egress
+      # override (see .env.example). Empty = defaults.
+      - PAD_AZURE_FOUNDRY_ALLOWED_HOSTS=${PAD_AZURE_FOUNDRY_ALLOWED_HOSTS:-}
+      - PAD_AI_ALLOW_PRIVATE_EGRESS=${PAD_AI_ALLOW_PRIVATE_EGRESS:-}
       - PAD_ENCRYPTION_KEY=${PAD_ENCRYPTION_KEY:?PAD_ENCRYPTION_KEY must be set (a different value from PAD_AUTH_SECRET)}
       - PAD_BEHIND_PROXY=true
       # WITHOUT THIS, EVERY CLIENT SHARES ONE RATE-LIMIT BUCKET. The app trusts

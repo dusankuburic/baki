@@ -81,17 +81,15 @@ export default function KnowledgeBasePanel() {
       loadDocs()
     } catch (e) {
       // The most common failure is a missing/unconfigured embedding-provider
-      // key (only OpenAI/Gemini/GLM/GitHub Models support embeddings; a
-      // Claude-only setup can't index). Surface that root cause with clear
-      // guidance instead of a generic "Upload failed". Classify by the
-      // envelope's machine-readable code first (stable across message
+      // key (only OpenAI/Gemini/GLM/GitHub Models/Azure AI Foundry support
+      // embeddings; a Claude-only setup can't index). Surface that root cause
+      // with clear guidance instead of a generic "Upload failed". Classify by
+      // the envelope's machine-readable code first (stable across message
       // rewording), with the message regex as a fallback for older backends.
       const embeddingMissing =
         (e instanceof ApiError && e.code === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
       if (embeddingMissing) {
-        setUploadError(
-          'Indexing requires an embedding-capable provider key (OpenAI, Gemini, GLM, or GitHub Models). Configure one under AI Behavior → Embedding Assistant.',
-        )
+        setUploadError(t('knowledge.embeddingMissingUpload'))
       } else {
         setUploadError('Upload failed: ' + String(e))
         toastError('Upload failed')
@@ -143,7 +141,7 @@ export default function KnowledgeBasePanel() {
       logger.warn(e)
       const embeddingMissing =
         (e instanceof ApiError && e.code === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
-      toastError(embeddingMissing ? 'Re-index needs an embedding-capable provider key' : 'Re-index failed')
+      toastError(embeddingMissing ? t('knowledge.embeddingMissingReindex') : 'Re-index failed')
     } finally {
       setReindexing(false)
     }

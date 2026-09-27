@@ -98,6 +98,15 @@ export const defaultSettings: AppSettings = {
         maxTokens: 4096,
         contextTokenBudget: 4000,
       },
+      // Empty defaultModel on purpose: deployments are user-named, so the
+      // server-reported default (the saved chat deployment) wins.
+      'azure-foundry': {
+        enabled: false,
+        defaultModel: '',
+        temperature: 0.3,
+        maxTokens: 4096,
+        contextTokenBudget: 4000,
+      },
     },
     showCostEstimates: true,
     saveConversationHistory: true,

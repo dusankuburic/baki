@@ -1,5 +1,6 @@
 import {useState, useEffect, useCallback} from 'react'
 import ApiKeyInput from './ApiKeyInput'
+import AzureFoundrySection from './AzureFoundrySection'
 import GitHubLoginButton from '@/components/chat/GitHubLoginButton'
 import CopilotLoginButton from '@/components/chat/CopilotLoginButton'
 import {providersApi} from '@/api'
@@ -98,6 +99,10 @@ export default function ProvidersPanel() {
 
       <ProviderSection name="GLM (z.ai)" color="#06b6d4">
         <ApiKeyInput provider="glm" label={t('providers.zaiKey')} onConfigured={refresh} />
+      </ProviderSection>
+
+      <ProviderSection name="Azure AI Foundry" color="#0078d4">
+        <AzureFoundrySection onConfigured={refresh} />
       </ProviderSection>
 
       <ProviderSection name="GitHub Models" color="#8b5cf6">

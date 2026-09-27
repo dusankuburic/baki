@@ -44,6 +44,10 @@ services:
       # endpoint and gets rejected there (surfacing as an "insufficient
       # balance" chat error). See GLM_API_URL in .env.
       - GLM_API_URL=${GLM_API_URL:-}
+      # Azure AI Foundry endpoint allow-list extras and the private-egress
+      # override (see .env.example). Empty = defaults.
+      - PAD_AZURE_FOUNDRY_ALLOWED_HOSTS=${PAD_AZURE_FOUNDRY_ALLOWED_HOSTS:-}
+      - PAD_AI_ALLOW_PRIVATE_EGRESS=${PAD_AI_ALLOW_PRIVATE_EGRESS:-}
       # General per-IP rate budget. The code defaults (1 rps, burst 20) are
       # tuned for public multi-tenant deployments; behind Docker NAT every
       # request — browser and CLI alike — arrives from the single gateway IP,

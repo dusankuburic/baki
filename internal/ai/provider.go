@@ -43,6 +43,11 @@ type ModelInfo struct {
 	// real output ceiling so the request doesn't 400.
 	MaxOutputTokens int     `json:"maxOutputTokens,omitempty"`
 	Pricing         Pricing `json:"pricing"`
+	// ServedModel is the underlying model that actually answers requests sent
+	// to this entry when the entry's ID is only an alias for it — an Azure AI
+	// Foundry deployment name, a model-router deployment. Empty for catalogue
+	// models, whose ID is the model.
+	ServedModel string `json:"servedModel,omitempty"`
 }
 
 type Pricing struct {
@@ -85,6 +90,12 @@ type Response struct {
 	// ToolCalls is non-empty when the model requested tool execution instead of
 	// returning a final answer; the chat service runs them and continues the loop.
 	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
+	// ServedModel is the model name the provider reported in its response
+	// (OpenAI-compatible APIs echo the concrete version, e.g.
+	// "gpt-4o-2024-11-20"; an Azure model-router deployment reports the model
+	// it routed to). Used to price usage when the request model is a
+	// deployment alias the catalogue cannot know. Empty when not reported.
+	ServedModel string `json:"servedModel,omitempty"`
 }
 
 // ToolDefinition describes a tool offered to the model. InputSchema is a JSON
@@ -115,6 +126,28 @@ type Chunk struct {
 	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
 	// FinishReason mirrors the provider stop reason on the Done chunk (optional).
 	FinishReason string `json:"finishReason,omitempty"`
+	// ServedModel mirrors Response.ServedModel on the Done chunk (optional).
+	ServedModel string `json:"servedModel,omitempty"`
+	// ToolEvent reports a tool the PROVIDER ran server-side (an Azure AI
+	// Foundry agent's web search, file search, MCP or code-interpreter call):
+	// one chunk when the step starts (Done=false) and one when it ends
+	// (Done=true). Nothing for the chat service to execute — it forwards the
+	// step to the client's tool trail so hosted work is visible.
+	ToolEvent *ToolEvent `json:"toolEvent,omitempty"`
+}
+
+// ToolEvent describes one server-side tool step of a hosted agent run.
+type ToolEvent struct {
+	// Name is the provider's item type (web_search_call, mcp_call, …).
+	Name string `json:"name"`
+	// Label is the human-readable trail entry ("Agent · web search").
+	Label string `json:"label"`
+	// Done is false for the start notification, true for the completion.
+	Done bool `json:"done"`
+	// OK, DurationMs and Summary are only meaningful when Done is true.
+	OK         bool   `json:"ok"`
+	DurationMs int64  `json:"durationMs"`
+	Summary    string `json:"summary,omitempty"`
 }
 
 var (
@@ -132,6 +165,17 @@ var (
 	// tool loop catches it and degrades gracefully to a no-tools answer
 	// instead of failing the turn.
 	ErrToolsUnsupported = errors.New("model does not support tools")
+	// ErrContentFiltered marks a request or response the provider's content
+	// filter blocked (Azure OpenAI / Foundry: an HTTP 400 with code
+	// "content_filter" for a blocked prompt, finish_reason "content_filter" for
+	// a blocked completion). Deterministic on the input, so it is never retried
+	// and never trips the circuit breaker; the chat service explains it.
+	ErrContentFiltered = errors.New("blocked by the provider's content filter")
+	// ErrProviderConfigInvalid marks a provider whose stored configuration
+	// document (Azure AI Foundry's endpoint + credential JSON) failed to parse
+	// or validate. Surfaced instead of a network error so the user is told to
+	// re-save the provider settings rather than to check connectivity.
+	ErrProviderConfigInvalid = errors.New("provider configuration is invalid")
 )
 
 // detectContextLimitError checks whether a provider 400 response is a
@@ -197,6 +241,13 @@ func rateLimitErr(resp *http.Response) error {
 func parseRetryAfter(resp *http.Response) time.Duration {
 	if resp == nil {
 		return 0
+	}
+	// Azure OpenAI / Foundry send the precise hint in milliseconds
+	// (retry-after-ms) next to a coarse whole-second Retry-After; prefer it.
+	if ms := resp.Header.Get("retry-after-ms"); ms != "" {
+		if n, err := strconv.Atoi(ms); err == nil && n > 0 {
+			return time.Duration(n) * time.Millisecond
+		}
 	}
 	v := resp.Header.Get("Retry-After")
 	if v == "" {

@@ -60,7 +60,8 @@ func (p *auditedProvider) Chat(ctx context.Context, req Request) (*Response, err
 	}
 	if resp != nil {
 		metrics.RecordAITokens(p.providerID, resp.TokensIn, resp.TokensOut)
-		p.record(ctx, req.Model, req.OrgID, resp.TokensIn, resp.TokensOut)
+		recordServedModel(p.scope, p.providerID, req.Model, resp.ServedModel)
+		p.record(ctx, req.Model, resp.ServedModel, req.OrgID, resp.TokensIn, resp.TokensOut)
 	}
 	return resp, err
 }
@@ -70,6 +71,7 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 	var tokensIn, tokensOut int
 	var sawChunkErr, sawDone bool
 	var streamed strings.Builder
+	var servedModel string
 
 	wrappedOnChunk := func(c Chunk) {
 		if c.TokensIn > 0 {
@@ -78,12 +80,16 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 		if c.TokensOut > 0 {
 			tokensOut = c.TokensOut
 		}
+		if c.ServedModel != "" {
+			servedModel = c.ServedModel
+		}
 		if c.Error != nil {
 			sawChunkErr = true
 		}
 		streamed.WriteString(c.Text)
 		if c.Done {
 			sawDone = true
+			recordServedModel(p.scope, p.providerID, req.Model, servedModel)
 			// Compat servers that ignore stream_options (older vLLM/Ollama/
 			// proxies — reachable because base URLs are env-overridable) end
 			// with Done(0,0): without this fallback every such stream billed
@@ -94,7 +100,7 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 				tokensIn = p.estimateRequestTokens(req)
 			}
 			metrics.RecordAITokens(p.providerID, tokensIn, tokensOut)
-			p.record(ctx, req.Model, req.OrgID, tokensIn, tokensOut)
+			p.record(ctx, req.Model, servedModel, req.OrgID, tokensIn, tokensOut)
 		}
 		onChunk(c)
 	}
@@ -120,7 +126,7 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 			tokensIn = p.estimateRequestTokens(req)
 		}
 		metrics.RecordAITokens(p.providerID, tokensIn, tokensOut)
-		p.record(ctx, req.Model, req.OrgID, tokensIn, tokensOut)
+		p.record(ctx, req.Model, servedModel, req.OrgID, tokensIn, tokensOut)
 	}
 	return err
 }
@@ -139,7 +145,7 @@ func (p *auditedProvider) estimateRequestTokens(req Request) int {
 	return total
 }
 
-func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tokensIn, tokensOut int) {
+func (p *auditedProvider) record(ctx context.Context, modelID, servedModel, orgID string, tokensIn, tokensOut int) {
 	if p.recorder == nil || (tokensIn == 0 && tokensOut == 0) {
 		return
 	}
@@ -151,21 +157,33 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 	// that model. The fallback is logged so the catalog gap is visible.
 	// p.Models (the memoised wrapper) keeps repeated records on one request
 	// from each hitting the inner provider's Models().
+	//
+	// Resolution order: the concrete model the provider REPORTED serving
+	// (when it is a catalogue model — an Azure AI Foundry deployment name or
+	// model-router alias is priced by what actually answered), then the
+	// request model's own entry, then the provider-wide fallback.
 	pricing, found := Pricing{}, false
-	models, err := p.Models(ctx)
-	if err == nil {
-		for _, m := range models {
-			if m.ID == modelID {
-				pricing, found = m.Pricing, true
-				break
+	if servedModel != "" {
+		if entry, ok := catalogEntryFor(p.providerID, servedModel); ok {
+			pricing, found = entry.Pricing, true
+		}
+	}
+	if !found {
+		models, err := p.Models(ctx)
+		if err == nil {
+			for _, m := range models {
+				if m.ID == modelID {
+					pricing, found = m.Pricing, true
+					break
+				}
 			}
 		}
 	}
 	if !found {
 		pricing = p.inner.PricePerMillionTokens()
-		metrics.RecordPricingFallback(p.providerID, modelID)
+		metrics.RecordPricingFallback(p.providerID, pricingMetricModel(p.providerID, modelID))
 		logger.Warn("AI usage priced from provider default — model not in catalog",
-			"provider", p.providerID, "model", modelID)
+			"provider", p.providerID, "model", modelID, "servedModel", servedModel)
 	}
 	inputCost := (float64(tokensIn) / 1000000.0) * pricing.InputCostPerM
 	outputCost := (float64(tokensOut) / 1000000.0) * pricing.OutputCostPerM
@@ -278,7 +296,7 @@ func (p *auditedProvider) Embed(ctx context.Context, text []string) ([][]float32
 			model = p.inner.DefaultModel()
 		}
 		metrics.RecordAITokens(p.providerID, tokensIn, 0)
-		p.record(ctx, model, "", tokensIn, 0)
+		p.record(ctx, model, "", "", tokensIn, 0)
 	}
 	return res, err
 }
@@ -286,6 +304,11 @@ func (p *auditedProvider) EstimateTokens(t string) int { return p.inner.Estimate
 func (p *auditedProvider) Models(ctx context.Context) ([]ModelInfo, error) {
 	p.modelsOnce.Do(func() {
 		p.models, p.modelsErr = p.inner.Models(ctx)
+		if p.modelsErr == nil {
+			// Deployment aliases (Azure AI Foundry) learn their pricing and
+			// context window from the model that served them last.
+			p.models = enrichServedModels(p.scope, p.providerID, p.models)
+		}
 	})
 	return p.models, p.modelsErr
 }

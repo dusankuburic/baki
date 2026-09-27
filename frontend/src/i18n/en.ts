@@ -1072,6 +1072,7 @@ export const chat = {
     claude: 'Claude is ready to help you analyze and debug your PAD flow.',
     openai: 'GPT is ready — ask questions about your flow or request analysis.',
     gemini: 'Gemini is ready to help you explore your PAD flow.',
+    'azure-foundry': 'Azure AI Foundry is ready — ask about your flow, request analysis, or explore findings.',
     fallback: 'AI assistant is ready — ask about your flow, request analysis, or explore findings.',
   },
   errors: {

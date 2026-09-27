@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -28,6 +29,7 @@ var validProviders = map[string]bool{
 	"glm":           true,
 	"github-models": true,
 	"copilot":       true,
+	"azure-foundry": true,
 }
 
 // readinessFailureThreshold is the number of consecutive failed readiness
@@ -266,6 +268,13 @@ func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request)
 	}
 	if req.Provider == "" || !validProviders[req.Provider] {
 		render.Error(w, fmt.Errorf("invalid or unsupported provider: %q", req.Provider), http.StatusBadRequest)
+		return
+	}
+	// Azure AI Foundry stores a validated configuration document, not a bare
+	// key; accepting raw text here would let an unvalidated endpoint bypass
+	// the host allow-list. has/delete keep working for it.
+	if req.Provider == ai.AzureFoundryProviderID {
+		render.ErrorWithCode(w, fmt.Errorf("this provider is configured through /api/providers/azure-foundry/config"), http.StatusBadRequest, "USE_PROVIDER_CONFIG")
 		return
 	}
 	if err := h.sysSvc.SaveApiKey(h.security.KeyScope(r), req.Provider, req.Key); err != nil {

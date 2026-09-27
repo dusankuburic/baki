@@ -5047,6 +5047,64 @@ paths:
       summary: Export an org's analysis configuration for CI
       tags:
       - org
+  /api/providers/azure-foundry/config:
+    get:
+      description: Returns the caller's Azure AI Foundry settings (endpoint, auth
+        mode, project endpoint, deployments) without any secret.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get Azure AI Foundry configuration
+      tags:
+      - providers
+    post:
+      consumes:
+      - application/json
+      description: Validates and stores the caller's Azure AI Foundry endpoint, credential
+        (API key or Microsoft Entra ID service principal), optional project endpoint
+        and deployment names. An omitted secret keeps the stored one.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Save Azure AI Foundry configuration
+      tags:
+      - providers
   /api/providers/copilot/poll:
     post:
       consumes:

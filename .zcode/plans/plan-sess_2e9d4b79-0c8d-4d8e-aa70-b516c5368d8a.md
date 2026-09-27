@@ -1,19 +1,17 @@
-Deep-dive findings delivered (report above). If you want implementation, proceed in this order:
+Remove dependabot[bot] as a contributor by reassigning its 14 commits (all on remote dependabot/* branches; none on master) to Dusan Kuburic. Master's 85 commits are already authored by you and will keep their exact hashes — no force-push of master, no clone invalidation for anyone working off master.
 
-**Batch 1 — bug-risk fixes (highest value-per-effort)**
-1. Bound the dashboard cache and wire InvalidateDashboardCache into flow-save/settings paths (internal/service/dashboard.go — currently zero callers, map never evicts).
-2. Stop pinning RLS transactions across blob downloads: prefix-exempt /api/library content routes or move the blob fetch post-commit (rls_middleware.go + handlers_library.go).
-3. Rewrite the health-trend query to resolve owner flow IDs before joining flow_analysis_history (postgres_dashboard.go:301) — kills the cross-tenant scan.
+**Step 0 — Precondition: deal with the 60 staged changes.** The working tree has staged work from earlier sessions; a filter-repo run requires a clean tree. Commit it as one WIP commit on master (content untouched).
 
-**Batch 2 — analyzer performance (benchmarked, incremental)**
-4. Memoize FlowHash on the immutable FlowDocument (cache.go:48, computed twice per analysis today).
-5. Parallelize the sequential 45-rule dispatch: precompute sigCache in collectBlocks, shard the block walk (engine.go:646-700) — gate on BenchmarkRunAnalysisLarge + adversarial benchmarks.
-6. Cache SuppressionInventory (full uncached re-analysis today).
-7. Trim per-Check allocations (patternFlagged/seen maps, ToLower in CustomRule, taint DFS memoization, dedup finding copies).
+**Step 1 — Safety backup.** `git bundle create ../baki-pre-rewrite.bundle --all` — a single-file copy of the entire pre-rewrite history. Everything is recoverable from it (and from origin) until GitHub garbage-collects.
 
-**Batch 3 — architecture refactors (no behavior change)**
-8. Extract the fix engine (~700 lines) from service/flow.go into its own type.
-9. Service-ify triage/comments/sharing (business logic out of handlers).
-10. Adopt narrow role interfaces in the 8 services taking fat StorageBackend; split postgres_flows.go per domain.
+**Step 2 — Install git-filter-repo** (`pip install git-filter-repo`) — the officially recommended rewrite tool (fast, refuses unsafe runs). Not currently installed.
 
-Each batch ships with its tests; existing benchmarks and contract suites act as regression gates. Leave all documented trade-offs (RLS design, rate limiting, provider embedding) untouched.
+**Step 3 — Authorship rewrite via mailmap.** Create a mailmap mapping `dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>` → `Dusan Kuburic <dusan.kuburic@outlook.com>`, then run `git filter-repo --mailmap <file>` across all refs. Commits whose identity doesn't match the mailmap (all of master) come out byte-identical with unchanged hashes; only the 14 dependabot commits get new authors and new hashes. Committer identity of those commits (currently `GitHub <noreply@github.com>`) is also normalized to you so no GitHub-bot identity remains.
+
+**Step 4 — Push.** filter-repo removes the origin remote as a safety measure; re-add it, then force-push only the rewritten `dependabot/*` branches. Master is NOT force-pushed (hashes unchanged). The 14 open Dependabot PRs on GitHub will re-attach to the rewritten branches and display you as author.
+
+**Step 5 — Verify.** `git shortlog -sne --all` shows a single contributor locally; after GitHub refreshes (can take up to ~24h for the contributors cache), the repo's contributor list shows only you.
+
+**Important caveat — Dependabot will come back.** As long as `.github/dependabot.yml` is active, future Dependabot runs create NEW branches/PRs authored by dependabot[bot] and it reappears as a contributor. Options (your choice, can be done after): merge or close the 14 rewritten PRs, and/or disable Dependabot by removing/commenting `dependabot.yml`. I'll flag this at execution and you tell me which way to go.
+
+Risks covered: full bundle backup before any rewrite; no master force-push; no tags exist (nothing else to rewrite); local repo is the only clone we know of (the user's GitHub remote keeps pre-rewrite commits until GC, so a window exists to undo).

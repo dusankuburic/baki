@@ -242,6 +242,7 @@ var envBindings = []envBinding{
 	durEnv("PAD_RETRY_BASE_DELAY", func(c *Config, d string) { c.Runtime.RetryBaseDelay = d }),
 	strEnv("PAD_OTLP_ENDPOINT", func(c *Config, v string) { c.Runtime.OTLPEndpoint = v }),
 	durEnv("PAD_REQUEST_TIMEOUT", func(c *Config, d string) { c.Runtime.RequestTimeout = d }),
+	boolEnv("PAD_AI_ALLOW_PRIVATE_EGRESS", func(c *Config, b bool) { c.Runtime.AIAllowPrivateEgress = b }),
 
 	// Feature flags — env-sourced, read-only product gates.
 	boolEnv("PAD_FEATURE_DISABLE_SIGNUP", func(c *Config, b bool) { c.Features.DisableSignUp = b }),
@@ -262,6 +263,7 @@ func applyEnvVars(cfg *Config) error {
 	// Comma-separated lists: appended (not replaced) after trimming blanks.
 	applyListEnv("PAD_ALLOWED_ORIGINS", &cfg.Server.AllowedOrigins)
 	applyListEnv("PAD_TRUSTED_PROXIES", &cfg.Server.TrustedProxies)
+	applyListEnv("PAD_AZURE_FOUNDRY_ALLOWED_HOSTS", &cfg.Runtime.AzureFoundryAllowedHosts)
 
 	if err := applyStorageBackendEnv(cfg); err != nil {
 		return err

@@ -20,6 +20,11 @@ type ProviderFactory struct {
 	copilotAuth *CopilotAuth
 	recorder    UsageRecorder
 	rtCfg       *config.RuntimeConfig
+	// embeddingDims is the knowledge base's vector width (PAD_EMBEDDING_DIM).
+	// ForEmbedding hands it to providers whose embedding model can shorten
+	// its vectors (OpenAI text-embedding-3-*, natively or on Azure) so the
+	// chunks they produce are always pgvector-indexable. 0 = don't ask.
+	embeddingDims int
 }
 
 func NewProviderFactory(getKey func(scope, provider string) (string, error), copilotAuth *CopilotAuth, recorder UsageRecorder, rtCfg *config.RuntimeConfig) *ProviderFactory {
@@ -36,6 +41,8 @@ var providerCtors = map[string]func(key string) Provider{
 	"xai":           func(k string) Provider { return NewXAIProvider(k) },
 	"glm":           func(k string) Provider { return NewGLMProvider(k) },
 	"github-models": func(k string) Provider { return NewGitHubModelsProvider(k) },
+	// The "key" is the JSON configuration document (endpoint + credential).
+	"azure-foundry": func(k string) Provider { return NewAzureFoundryProvider(k) },
 }
 
 // storageKey returns the keyring key name for a provider ID.
@@ -101,6 +108,21 @@ func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 	return f.wrapChain(ctor(key), scope, providerID), nil
 }
 
+// SetEmbeddingDimensions records the vector width ForEmbedding requests from
+// providers that support Matryoshka-style truncation (embedDimensionSetter).
+func (f *ProviderFactory) SetEmbeddingDimensions(n int) {
+	if n > 0 {
+		f.embeddingDims = n
+	}
+}
+
+// embedDimensionSetter is implemented by providers that can ask their
+// embedding endpoint for a specific vector width (the OpenAI-compatible
+// family sends `dimensions` for text-embedding-3-* models).
+type embedDimensionSetter interface {
+	setEmbeddingDimensions(n int)
+}
+
 // embedModelSetter is implemented by providers whose embedding model name can be
 // overridden at construction (the OpenAI-compatible family via openaiBase, plus
 // Gemini). The factory's ForEmbedding applies a deployer-chosen model so RAG can
@@ -135,6 +157,11 @@ func (f *ProviderFactory) ForEmbedding(scope, providerID, embeddingModel string)
 	if embeddingModel != "" {
 		if setter, ok := p.(embedModelSetter); ok {
 			setter.setEmbeddingModel(embeddingModel)
+		}
+	}
+	if f.embeddingDims > 0 {
+		if setter, ok := p.(embedDimensionSetter); ok {
+			setter.setEmbeddingDimensions(f.embeddingDims)
 		}
 	}
 	return f.wrapChain(p, scope, providerID), nil
