@@ -71,16 +71,26 @@ export interface StreamHandler {
   getAccLength?: (streamId: string) => number
 }
 
+// A rate from a resume/begin response: that body is not validated like a
+// done event (lib/chatEvent), so only a finite number counts.
+function rateOf(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+
 // doneArg builds onDone's optional meta argument from a done event's fields
-// (`src` — or a resume/begin result, which types only servedModel) plus a
-// served model reported by the resume that finished the stream. Undefined
-// when nothing was reported, so a plain done stays a three-argument call.
-function doneArg(src: DoneMeta, servedModel?: string): DoneMeta | undefined {
+// (`src` — or a resume/begin result) plus what the resume that finished the
+// stream reported (`resumed`: its served model and billed rates win when
+// present). Undefined when nothing was reported, so a plain done stays a
+// three-argument call.
+function doneArg(src: DoneMeta, resumed?: DoneMeta): DoneMeta | undefined {
   const meta: DoneMeta = {}
-  if (src.servedModel) meta.servedModel = src.servedModel
-  if (src.inputCostPerM !== undefined) meta.inputCostPerM = src.inputCostPerM
-  if (src.outputCostPerM !== undefined) meta.outputCostPerM = src.outputCostPerM
-  if (servedModel) meta.servedModel = servedModel
+  for (const from of resumed ? [src, resumed] : [src]) {
+    if (typeof from.servedModel === 'string' && from.servedModel) meta.servedModel = from.servedModel
+    const inRate = rateOf(from.inputCostPerM)
+    if (inRate !== undefined) meta.inputCostPerM = inRate
+    const outRate = rateOf(from.outputCostPerM)
+    if (outRate !== undefined) meta.outputCostPerM = outRate
+  }
   return Object.keys(meta).length > 0 ? meta : undefined
 }
 
@@ -168,7 +178,7 @@ export function useStreamingMessage(handler: StreamHandler) {
               res.tokensOut || finish?.tokensOut || 0,
               res.tokensIn || finish?.tokensIn || 0,
               streamId,
-              doneArg(finish?.meta ?? {}, res.servedModel),
+              doneArg(finish?.meta ?? {}, res),
             )
           } else {
             armStall(streamId)

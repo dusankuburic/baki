@@ -332,6 +332,10 @@ export default function ChatHeader({
             {currentProvider?.shared && (
               <span
                 className="shrink-0 px-1 py-px rounded text-2xs font-semibold uppercase tracking-wider bg-brand-500/15 text-brand-400"
+                // The tooltip is mouse-only; the name carries the meaning
+                // ("using your organisation's credentials") to screen readers.
+                role="img"
+                aria-label={t('provider.sharedTitle')}
                 title={t('provider.sharedTitle')}
               >
                 {t('provider.shared')}

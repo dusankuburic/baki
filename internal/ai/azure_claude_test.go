@@ -97,8 +97,8 @@ func TestAzureClaude_ChatOnTheAnthropicRouteWithAPIKey(t *testing.T) {
 	if got.Headers.Get("x-api-key") != "secret-key" || got.Headers.Get("anthropic-version") != claudeAPIVersion {
 		t.Errorf("headers = %v, want x-api-key and anthropic-version", got.Headers)
 	}
-	if got.Headers.Get("api-key") != "" || got.Headers.Get("Authorization") != "" {
-		t.Errorf("API-key mode must send only x-api-key on the Anthropic route, got %v", got.Headers)
+	if got.Headers.Get("api-key") != "secret-key" || got.Headers.Get("Authorization") != "" {
+		t.Errorf("API-key mode must send the key as api-key and x-api-key (no bearer) on the Anthropic route, got %v", got.Headers)
 	}
 	if got.Body["model"] != "my-claude" {
 		t.Errorf("model = %v, want the deployment name without the claude: prefix", got.Body["model"])
@@ -355,7 +355,7 @@ func TestAzureClaude_ModelsListClaudeDeployments(t *testing.T) {
 	if got := strings.Join(ids, ","); got != "gpt-4o,claude:claude-sonnet-4-6,claude:my-claude,claude:claude-opus-4-8-20260901,emb" {
 		t.Errorf("listing = %s", got)
 	}
-	if m := byID["claude:claude-sonnet-4-6"]; m.DisplayName != "claude-sonnet-4-6 · Claude" || m.ContextLimit != 200000 ||
+	if m := byID["claude:claude-sonnet-4-6"]; m.DisplayName != "claude-sonnet-4-6 · Claude" || m.ContextLimit != 1000000 ||
 		m.MaxOutputTokens != 64000 || m.Pricing != (Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}) || m.Embedding {
 		t.Errorf("catalogued Claude deployment = %+v", m)
 	}
@@ -413,7 +413,7 @@ func TestAzureClaude_ProjectListingDiscoversAnthropicDeployments(t *testing.T) {
 	if got := strings.Join(ids, ","); got != "chat1,claude:sonnet,claude:my-claude,claude:opus" {
 		t.Errorf("listing = %s", got)
 	}
-	if m := byID["claude:sonnet"]; m.ServedModel != "claude-sonnet-4-6" || m.Pricing.InputCostPerM != 3.0 || m.ContextLimit != 200000 ||
+	if m := byID["claude:sonnet"]; m.ServedModel != "claude-sonnet-4-6" || m.Pricing.InputCostPerM != 3.0 || m.ContextLimit != 1000000 ||
 		m.MaxOutputTokens != 64000 || m.DisplayName != "sonnet · Claude" || m.Embedding {
 		t.Errorf("re-listed Anthropic deployment = %+v", m)
 	}
@@ -521,7 +521,7 @@ func TestAzureClaude_AuditedPricingAndMemo(t *testing.T) {
 	ctx := context.Background()
 
 	want := AliasClaudeCeiling(azureFoundryProviderID)
-	if want != (Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}) {
+	if want != (Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}) {
 		t.Fatalf("AliasClaudeCeiling = %+v, want the most expensive Claude rate", want)
 	}
 	if AliasClaudeCeiling("openai") != (Pricing{}) {
@@ -542,7 +542,7 @@ func TestAzureClaude_AuditedPricingAndMemo(t *testing.T) {
 	if m := ap.usageMetric(ctx, "claude:my-claude", "claude-sonnet-4-6-20260301", "", 1_000_000, 0); m.EstimatedCost != 3.0 {
 		t.Errorf("usage metric cost = %v, want Sonnet's input rate", m.EstimatedCost)
 	}
-	if m := ap.usageMetric(ctx, "claude:my-claude", "", "", 1_000_000, 0); m.EstimatedCost != 5.0 {
+	if m := ap.usageMetric(ctx, "claude:my-claude", "", "", 1_000_000, 0); m.EstimatedCost != 10.0 {
 		t.Errorf("unknown-model usage metric cost = %v, want the Claude ceiling", m.EstimatedCost)
 	}
 	// A model router that routed to Claude is priced by the Claude catalogue too.
@@ -570,7 +570,7 @@ func TestAzureClaude_AuditedPricingAndMemo(t *testing.T) {
 			continue
 		}
 		found = true
-		if m.ServedModel != "claude-sonnet-4-6-20260301" || m.Pricing.InputCostPerM != 3.0 || m.MaxOutputTokens != 64000 || m.ContextLimit != 200000 {
+		if m.ServedModel != "claude-sonnet-4-6-20260301" || m.Pricing.InputCostPerM != 3.0 || m.MaxOutputTokens != 64000 || m.ContextLimit != 1000000 {
 			t.Errorf("memo-enriched Claude entry = %+v", m)
 		}
 	}

@@ -224,8 +224,10 @@ func (e *permissionDeniedError) Unwrap() []error {
 // context-length-exceeded error and returns ErrContextLimit if so. Providers
 // use different message wording, so we match on common substrings (case-
 // insensitive). When the message states the window ("This model's maximum
-// context length is 16384 tokens" — OpenAI, Azure OpenAI / Foundry, vLLM),
-// the error is a *ContextLimitError carrying it, which still satisfies
+// context length is 16384 tokens" — OpenAI, Azure OpenAI / Foundry, vLLM; Anthropic's
+// "prompt is too long: 250000 tokens > 200000 maximum" and "input length and
+// `max_tokens` exceed context limit: 180000 + 32000 > 200000"), the error is
+// a *ContextLimitError carrying it, which still satisfies
 // errors.Is(err, ErrContextLimit). Returns nil when the response is not a
 // context-limit error.
 func detectContextLimitError(statusCode int, message string) error {
@@ -235,11 +237,13 @@ func detectContextLimitError(statusCode int, message string) error {
 	lower := strings.ToLower(message)
 	// Gemini's wording ("The input token count (N) exceeds the maximum number
 	// of tokens allowed (M).") matches none of the OpenAI/Claude phrasings.
-	for _, hint := range []string{"context length", "context window", "too long", "maximum context", "token limit", "prompt is too long", "exceeds the maximum number of tokens"} {
+	for _, hint := range []string{"context length", "context window", "context limit", "too long", "maximum context", "token limit", "prompt is too long", "exceeds the maximum number of tokens"} {
 		if strings.Contains(lower, hint) {
-			if m := contextWindowRe.FindStringSubmatch(message); m != nil {
-				if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
-					return &ContextLimitError{Limit: n}
+			for _, re := range contextWindowRes {
+				if m := re.FindStringSubmatch(message); m != nil {
+					if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+						return &ContextLimitError{Limit: n}
+					}
 				}
 			}
 			return ErrContextLimit
@@ -248,8 +252,14 @@ func detectContextLimitError(statusCode int, message string) error {
 	return nil
 }
 
-// contextWindowRe extracts the window a context-length rejection states.
-var contextWindowRe = regexp.MustCompile(`(?i)maximum context length is (\d+)`)
+// contextWindowRes extract the window a context-length rejection states:
+// OpenAI-compatible "maximum context length is N", Anthropic's "prompt is
+// too long: N tokens > L maximum" and "exceed context limit: N + M > L".
+var contextWindowRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)maximum context length is (\d+)`),
+	regexp.MustCompile(`(?i)prompt is too long:\s*\d+\s*tokens?\s*>\s*(\d+)\s*maximum`),
+	regexp.MustCompile(`(?i)context limit:\s*\d+\s*\+\s*\d+\s*>\s*(\d+)`),
+}
 
 // ContextLimitError is a context-length rejection whose message stated the
 // model's real window. It unwraps to ErrContextLimit so every errors.Is

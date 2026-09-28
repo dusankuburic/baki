@@ -48,8 +48,9 @@ func (f *ProviderFactory) SetOrgKeyLookup(getOrgKey func(orgID, provider string)
 // the provider service's live listings are then shared by the org's members
 // and invalidated together (ProviderService.InvalidateScope), instead of
 // being learned once per member for the same resource. It is NOT the usage
-// scope — usage stays attributed to the member (and to the org through the
-// request's OrgID) — and cannot collide with a user id.
+// scope — usage rows name the member, and the org through the request's
+// OrgID or, for a call that carries none, the chain's usageOrg — and cannot
+// collide with a user id.
 func OrgScope(orgID string) string { return "org:" + orgID }
 
 // resolveKey applies the member-first rule: the caller's own key when they
@@ -124,14 +125,28 @@ func storageKey(providerID string) string {
 }
 
 func (f *ProviderFactory) wrapChain(p Provider, scope, providerID string) Provider {
-	return f.wrapChainScoped(p, scope, scope, providerID)
+	return f.wrapChainScoped(p, scope, scope, "", providerID)
+}
+
+// credentialOrg is the organisation whose shared credential a chain resolved
+// to memoScope runs on: orgID when memoScope is OrgScope(orgID), else "" (the
+// caller's own credential).
+func credentialOrg(orgID, memoScope string) string {
+	if orgID != "" && memoScope == OrgScope(orgID) {
+		return orgID
+	}
+	return ""
 }
 
 // wrapChainScoped is wrapChain with the memo scope named separately: scope
 // attributes usage (the member), memoScope keys the served-model memo and
 // learned windows (OrgScope for a provider built from an org's shared
 // credential, so the org's members share what one of them learned).
-func (f *ProviderFactory) wrapChainScoped(p Provider, scope, memoScope, providerID string) Provider {
+// usageOrg is that organisation ("" for the caller's own credential): every
+// usage row the chain records without an org of its own (embeddings, the
+// admin's connection test) is attributed to it, so spend on an org's
+// credential always lands on the org's daily budget.
+func (f *ProviderFactory) wrapChainScoped(p Provider, scope, memoScope, usageOrg, providerID string) Provider {
 	var cb Provider
 	var rp Provider
 
@@ -162,6 +177,7 @@ func (f *ProviderFactory) wrapChainScoped(p Provider, scope, memoScope, provider
 
 	ap := newAuditedProvider(NewTracedProvider(rp), f.recorder, scope, providerID)
 	ap.memoScope = memoScope
+	ap.usageOrg = usageOrg
 	// The wrappers above hide the raw provider's optional methods; the
 	// audited wrapper reads what it needs from p before they do.
 	ap.adoptRawHints(p)
@@ -185,13 +201,23 @@ func (f *ProviderFactory) ForOrg(scope, orgID, providerID string) (Provider, err
 	if err != nil {
 		return nil, err
 	}
-	return f.wrapChainScoped(ctor(key), scope, memoScope, providerID), nil
+	return f.wrapChainScoped(ctor(key), scope, memoScope, credentialOrg(orgID, memoScope), providerID), nil
+}
+
+// UsedOrgCredential reports whether p — a chain the factory built — runs on
+// an organisation's shared credential rather than the caller's own, so the
+// chat service can tell the member that a rejected credential is the org
+// admin's to fix. false for anything else (a bare provider, a test double).
+func UsedOrgCredential(p Provider) bool {
+	ap, ok := p.(*auditedProvider)
+	return ok && ap.usageOrg != ""
 }
 
 // ForOrgCredential builds a provider from the organisation's shared
 // credential ONLY — never the caller's own — for an admin's connection test
-// of what the members will run on. scope attributes the test call's usage
-// to the caller; memos run in OrgScope. Copilot is never shared.
+// of what the members will run on. scope names the caller on the test call's
+// usage row, which is attributed to the org (its credential, its budget);
+// memos run in OrgScope. Copilot is never shared.
 func (f *ProviderFactory) ForOrgCredential(scope, orgID, providerID string) (Provider, error) {
 	if providerID == "copilot" {
 		return nil, fmt.Errorf("copilot: %w", ErrKeyNotConfigured)
@@ -210,7 +236,7 @@ func (f *ProviderFactory) ForOrgCredential(scope, orgID, providerID string) (Pro
 	if key == "" {
 		return nil, fmt.Errorf("%s: %w", providerID, ErrKeyNotConfigured)
 	}
-	return f.wrapChainScoped(ctor(key), scope, OrgScope(orgID), providerID), nil
+	return f.wrapChainScoped(ctor(key), scope, OrgScope(orgID), orgID, providerID), nil
 }
 
 // ForEmbeddingOrg is ForEmbedding with the organisation's shared credential
@@ -233,7 +259,7 @@ func (f *ProviderFactory) ForEmbeddingOrg(scope, orgID, providerID, embeddingMod
 	if err != nil {
 		return nil, err
 	}
-	return f.wrapChainScoped(p, scope, memoScope, providerID), nil
+	return f.wrapChainScoped(p, scope, memoScope, credentialOrg(orgID, memoScope), providerID), nil
 }
 
 func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {

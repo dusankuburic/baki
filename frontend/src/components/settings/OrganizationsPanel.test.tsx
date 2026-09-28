@@ -1,10 +1,12 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {describe, it, expect, vi, beforeEach, onTestFinished} from 'vitest'
 import {render, screen, fireEvent, waitFor} from '@testing-library/react'
 import OrganizationsPanel from './OrganizationsPanel'
 import {useOrgStore, type Organisation} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
 import {ToastProvider, ConfirmProvider} from '@/components/shared'
 import {providersApi} from '@/api'
+import {ApiError, PermissionDeniedError} from '@/api/client'
+import {useChatStore} from '@/stores/chatStore'
 
 // The active org's shared Azure AI Foundry section reads the org route on
 // mount; without a mock the real client would fail the GET and render its
@@ -121,7 +123,7 @@ describe('OrganizationsPanel', () => {
     fireEvent.change(await screen.findByPlaceholderText('teammate@example.com'), {
       target: {value: 'carol@acme.io'},
     })
-    fireEvent.change(screen.getAllByDisplayValue('member').at(-1)!, {target: {value: 'viewer'}})
+    fireEvent.change(screen.getAllByDisplayValue('Member').at(-1)!, {target: {value: 'viewer'}})
     fireEvent.click(screen.getByRole('button', {name: /invite/i}))
 
     await waitFor(() => expect(inviteMember).toHaveBeenCalledWith('org-1', 'carol@acme.io', 'viewer'))
@@ -129,9 +131,9 @@ describe('OrganizationsPanel', () => {
 
   it('changes a member role via the role select', async () => {
     renderPanel()
-    // Selects showing 'member': [0] = Bob's role select, [1] = the invite form's
-    // role picker. The owner's select shows 'admin' and is disabled anyway.
-    const bobRoleSelect = (await screen.findAllByDisplayValue('member')).at(0)!
+    // Selects showing 'Member': [0] = Bob's role select, [1] = the invite form's
+    // role picker. The owner's select shows 'Admin' and is disabled anyway.
+    const bobRoleSelect = (await screen.findAllByDisplayValue('Member')).at(0)!
     fireEvent.change(bobRoleSelect, {target: {value: 'viewer'}})
 
     await waitFor(() => expect(setMemberRole).toHaveBeenCalledWith('org-1', 'u-2', 'viewer'))
@@ -196,6 +198,95 @@ describe('OrganizationsPanel', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Save'}))
     await waitFor(() => expect(screen.queryByLabelText('New organization name')).not.toBeInTheDocument())
     expect(renameOrg).not.toHaveBeenCalled()
+  })
+
+  // R-16: a save or removal of the org's shared credentials changes what the
+  // chat picker lists, so the panel bumps the provider epoch.
+  it('refetches the chat providers after the shared configuration is saved', async () => {
+    const original = useChatStore.getState().bumpProviderEpoch
+    const bumpProviderEpoch = vi.fn()
+    useChatStore.setState({bumpProviderEpoch})
+    onTestFinished(() => useChatStore.setState({bumpProviderEpoch: original}))
+    azureApi.getOrgAzureFoundryConfig.mockResolvedValue({configured: false})
+    azureApi.saveOrgAzureFoundryConfig.mockResolvedValue(undefined)
+    renderPanel()
+    fireEvent.change(await screen.findByRole('textbox', {name: 'Azure endpoint'}), {
+      target: {value: 'https://acme.openai.azure.com'},
+    })
+    fireEvent.change(screen.getByLabelText('Azure API key'), {target: {value: 'sk-org'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Default chat deployment'}), {target: {value: 'gpt-4.1'}})
+    // The panel has its own Save (rename is closed); the section's is the
+    // primary one inside the Azure block.
+    const saves = screen.getAllByRole('button', {name: 'Save'})
+    fireEvent.click(saves[saves.length - 1])
+    await waitFor(() => expect(bumpProviderEpoch).toHaveBeenCalledTimes(1))
+  })
+
+  it('hides the shared Azure AI Foundry block when the deployment has no org keystore', async () => {
+    azureApi.getOrgAzureFoundryConfig.mockRejectedValue(
+      new ApiError('no org keystore', 404, 'ORG_KEYSTORE_UNAVAILABLE'),
+    )
+    renderPanel()
+    await waitFor(() => expect(azureApi.getOrgAzureFoundryConfig).toHaveBeenCalled())
+    await waitFor(() => expect(screen.queryByText('Shared Azure AI Foundry')).toBeNull())
+    expect(screen.queryByText(/own Azure AI Foundry credentials take precedence/)).toBeNull()
+    // The rest of the org stays.
+    expect(screen.getByText('bob@acme.io')).toBeInTheDocument()
+  })
+
+  it('shows localized permission copy when an org action answers 403', async () => {
+    setMemberRole.mockImplementationOnce(async () => {
+      // The store records the raw server message before rethrowing.
+      useOrgStore.setState({error: 'forbidden'} as never)
+      throw new PermissionDeniedError('forbidden')
+    })
+    renderPanel()
+    const bobRoleSelect = (await screen.findAllByDisplayValue('Member')).at(0)!
+    fireEvent.change(bobRoleSelect, {target: {value: 'viewer'}})
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/You don't have permission to do that in this organisation/)
+    expect(screen.queryByText('forbidden')).toBeNull()
+    fireEvent.click(screen.getByRole('button', {name: 'Dismiss'}))
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+  })
+
+  it('labels roles through i18n', async () => {
+    renderPanel()
+    await screen.findByText('Acme')
+    expect(screen.getAllByRole('option', {name: 'Viewer'}).length).toBeGreaterThan(0)
+    expect(screen.getByText('Owner')).toBeInTheDocument()
+  })
+
+  // R-15: the server gates org management on the admin ROLE only; an owner
+  // whose role is no longer admin must not see controls that can only 403.
+  describe('as an owner whose admin role was changed', () => {
+    beforeEach(() => {
+      useOrgStore.setState({
+        organisations: [
+          {
+            ...org,
+            members: [{...org.members[0], role: 'member'}, org.members[1]],
+          },
+        ],
+      } as never)
+    })
+
+    it('offers no management controls and a read-only shared section', async () => {
+      azureApi.getOrgAzureFoundryConfig.mockResolvedValue({configured: false})
+      renderPanel()
+      await screen.findByText('Acme')
+      expect(screen.queryByRole('button', {name: 'Rename organization'})).toBeNull()
+      expect(screen.queryByLabelText('Remove member')).toBeNull()
+      expect(screen.queryByPlaceholderText('teammate@example.com')).toBeNull()
+      expect(
+        await screen.findByText('Your organisation has not set up a shared Azure AI Foundry resource.'),
+      ).toBeInTheDocument()
+      expect(screen.queryByRole('textbox', {name: 'Azure endpoint'})).toBeNull()
+      // Ownership still shows, and deleting stays an owner action.
+      expect(screen.getByText('Owner')).toBeInTheDocument()
+      expect(screen.getByRole('button', {name: 'Delete organization'})).toBeInTheDocument()
+    })
   })
 
   describe('as a non-admin member', () => {

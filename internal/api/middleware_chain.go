@@ -245,7 +245,7 @@ func rateLimitGroup(method, path string) string {
 		// as a chat turn, so it rides the tight chat bucket, not general.
 		// The other provider routes (list, the OAuth device flow) cost no
 		// model tokens and stay on general.
-		if path == "/api/providers/test" {
+		if path == "/api/providers/test" || isOrgProviderTestPath(path) {
 			return rlGroupChat
 		}
 		if path == "/api/flow/upload" {
@@ -253,6 +253,20 @@ func rateLimitGroup(method, path string) string {
 		}
 	}
 	return rlGroupGeneral
+}
+
+// isOrgProviderTestPath matches an org admin's connection test of the
+// organisation's shared credential, /api/orgs/{id}/providers/azure-foundry/test
+// (path already canonical): the same billed chat completions as
+// /api/providers/test, so it shares that route's chat bucket and its
+// exemption from the request-long RLS transaction (rlsExemptPath).
+func isOrgProviderTestPath(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/api/orgs/")
+	if !ok {
+		return false
+	}
+	orgID, tail, ok := strings.Cut(rest, "/")
+	return ok && orgID != "" && tail == "providers/azure-foundry/test"
 }
 
 // staticRoutePatterns returns the set of registered route patterns that carry

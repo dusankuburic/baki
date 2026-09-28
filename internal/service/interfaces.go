@@ -49,4 +49,7 @@ type OrgKeyStore interface {
 	HasOrg(orgID, provider string) (bool, error)
 	DeleteOrg(orgID, provider string) error
 	OrgKeyMeta(orgID, provider string) (updatedBy string, updatedAt time.Time, ok bool, err error)
+	SaveOrgIfUnchanged(orgID, provider, key, updatedBy string, expected time.Time) (updatedAt time.Time, ok bool, err error)
+	DeleteOrgIfUpdatedBy(orgID, provider, updatedBy string) (deleted bool, err error)
+	OrgsWithKeyUpdatedBy(provider, updatedBy string) ([]string, error)
 }

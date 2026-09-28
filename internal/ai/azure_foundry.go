@@ -41,9 +41,6 @@ type AzureFoundryProvider struct {
 	// tokens is the Entra ID token source (AzureAuthModeEntra), nil for keys.
 	tokens *entraTokenSource
 
-	mu        sync.Mutex
-	lastToken string
-
 	// claude is the Anthropic-wire provider for the resource's Claude
 	// deployments ("claude:<name>" ids), built on first use (claudeProvider).
 	claudeOnce sync.Once
@@ -109,17 +106,54 @@ func newAzureFoundryProvider(cfg AzureFoundryConfig, cfgErr error, client *http.
 	return p
 }
 
-// entraToken is the openaiBase tokenFn: it also remembers the token used so a
-// 401 can invalidate exactly that one.
+// entraToken is the openaiBase tokenFn: it also records the token on the
+// call's entraTokenUse (withEntraTokenUse), so a 401 can invalidate exactly
+// the token THAT call sent.
 func (p *AzureFoundryProvider) entraToken(ctx context.Context) (string, error) {
 	tok, err := p.tokens.Token(ctx)
 	if err != nil {
 		return "", err
 	}
-	p.mu.Lock()
-	p.lastToken = tok
-	p.mu.Unlock()
+	if use, _ := ctx.Value(entraTokenUseKey{}).(*entraTokenUse); use != nil {
+		use.set(tok)
+	}
 	return tok, nil
+}
+
+// entraTokenUse records the Entra ID token one call sent. It replaces a
+// provider-wide "last token": the detached project listing (Models' flight)
+// and a chat call share one provider, and a token the listing fetched in
+// between was invalidated instead of the one the service refused — a
+// harmless-looking cached token was dropped and the refused one kept.
+type entraTokenUse struct {
+	mu  sync.Mutex
+	tok string
+}
+
+func (u *entraTokenUse) set(tok string) {
+	u.mu.Lock()
+	u.tok = tok
+	u.mu.Unlock()
+}
+
+func (u *entraTokenUse) get() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.tok
+}
+
+type entraTokenUseKey struct{}
+
+// withEntraTokenUse returns ctx carrying a fresh recorder for one call.
+func withEntraTokenUse(ctx context.Context) (context.Context, *entraTokenUse) {
+	use := &entraTokenUse{}
+	return context.WithValue(ctx, entraTokenUseKey{}, use), use
+}
+
+// withoutEntraTokenUse detaches ctx from a caller's recorder (the shared
+// listing flight must not record into the chat call that started it).
+func withoutEntraTokenUse(ctx context.Context) context.Context {
+	return context.WithValue(ctx, entraTokenUseKey{}, (*entraTokenUse)(nil))
 }
 
 // withTokenRetry runs fn and, when the service rejected an Entra ID token
@@ -136,22 +170,29 @@ func (p *AzureFoundryProvider) entraToken(ctx context.Context) (string, error) {
 // (errEntraToken — Entra ID refused the credentials; asking again costs
 // another failing sign-in), and a principal the service accepted but denied
 // (ErrProviderPermissionDenied — a new token cannot grant a missing role).
-func (p *AzureFoundryProvider) withTokenRetry(ctx context.Context, fn func() error) error {
-	err := fn()
+//
+// fn receives the context to use: it carries this call's token recorder
+// (withEntraTokenUse), so the token invalidated is the one fn sent, never one
+// a concurrent listing or chat on the same provider fetched meanwhile.
+func (p *AzureFoundryProvider) withTokenRetry(ctx context.Context, fn func(ctx context.Context) error) error {
+	callCtx, use := withEntraTokenUse(ctx)
+	err := fn(callCtx)
 	if err == nil || p.tokens == nil || !errors.Is(err, ErrApiKeyInvalid) ||
 		errors.Is(err, errEntraToken) || errors.Is(err, ErrProviderPermissionDenied) {
 		return err
 	}
-	p.mu.Lock()
-	failed := p.lastToken
-	p.mu.Unlock()
+	failed := use.get()
+	if failed == "" {
+		return err // no token was sent: nothing to replace
+	}
 	p.tokens.Invalidate(failed)
 	fresh, ferr := p.tokens.Token(ctx)
 	if ferr != nil || fresh == failed {
 		return err
 	}
 	logger.Warn("azure ai foundry rejected a cached entra id token; retrying with a fresh one")
-	return fn()
+	retryCtx, _ := withEntraTokenUse(ctx)
+	return fn(retryCtx)
 }
 
 // authorize sets the auth headers on a request outside openaiBase (model and
@@ -272,6 +313,11 @@ func (p *AzureFoundryProvider) DefaultModel() string {
 		return "gpt-4.1"
 	}
 	if names := p.cfg.chatDeployments(); len(names) > 0 {
+		// The project listing may have re-listed it as a Claude deployment
+		// ("claude:<name>"), which /openai/v1 cannot serve.
+		if id, ok := p.relistedClaude(names[0]); ok {
+			return id
+		}
 		return names[0]
 	}
 	if names := p.cfg.ClaudeDeployments; len(names) > 0 {
@@ -299,12 +345,13 @@ func (p *AzureFoundryProvider) Chat(ctx context.Context, req Request) (*Response
 	}
 	// Claude deployments answer on the Anthropic Messages route, never on
 	// /openai/v1 (see azure_claude.go).
-	if IsClaudeModel(req.Model) {
+	if id, ok := p.claudeRoute(req.Model); ok {
+		req.Model = id
 		return p.claudeChat(ctx, req)
 	}
 	if IsAgentModel(req.Model) {
 		var resp *Response
-		err := p.withTokenRetry(ctx, func() error {
+		err := p.withTokenRetry(ctx, func(ctx context.Context) error {
 			var err error
 			resp, err = p.agentChat(ctx, req)
 			return err
@@ -312,7 +359,7 @@ func (p *AzureFoundryProvider) Chat(ctx context.Context, req Request) (*Response
 		return resp, err
 	}
 	var resp *Response
-	err := p.withTokenRetry(ctx, func() error {
+	err := p.withTokenRetry(ctx, func(ctx context.Context) error {
 		var err error
 		resp, err = p.chat(ctx, req)
 		return err
@@ -324,15 +371,81 @@ func (p *AzureFoundryProvider) Stream(ctx context.Context, req Request, onChunk 
 	if p.configErr != nil {
 		return p.configErr
 	}
-	if IsClaudeModel(req.Model) {
+	if id, ok := p.claudeRoute(req.Model); ok {
+		req.Model = id
 		return p.claudeStream(ctx, req, onChunk)
 	}
 	if IsAgentModel(req.Model) {
-		return p.withTokenRetry(ctx, func() error { return p.agentStream(ctx, req, onChunk) })
+		return p.withTokenRetry(ctx, func(ctx context.Context) error { return p.agentStream(ctx, req, onChunk) })
 	}
 	// A 401 arrives as the HTTP status, before any chunk, so a retry never
 	// replays a partially delivered stream.
-	return p.withTokenRetry(ctx, func() error { return p.stream(ctx, req, onChunk) })
+	return p.withTokenRetry(ctx, func(ctx context.Context) error { return p.stream(ctx, req, onChunk) })
+}
+
+// claudeRoute reports whether model is served on the Anthropic Messages
+// route and the "claude:<name>" id to call it by: a "claude:" id, or a bare
+// deployment name the cached project listing re-listed as a Claude
+// deployment (a document that named it as a chat deployment — the default
+// model, or a client that kept the bare id) — /openai/v1 would answer 404.
+func (p *AzureFoundryProvider) claudeRoute(model string) (string, bool) {
+	if IsClaudeModel(model) {
+		return model, true
+	}
+	return p.relistedClaude(model)
+}
+
+// cachedListing is this document's cached project listing while one is live
+// (Entra ID + project endpoint). It never fetches: the chat path consults it
+// for routing and the sampling policy without paying for a listing.
+func (p *AzureFoundryProvider) cachedListing() ([]ModelInfo, bool) {
+	if p.configErr != nil || !p.cfg.Configured() || !p.cfg.listsProjectDeployments() {
+		return nil, false
+	}
+	return cachedAzureModels(azureModelsCacheKey(p.cfg))
+}
+
+// relistedClaude reports whether the cached listing offers the bare
+// deployment name only as a Claude deployment, and the id it lists.
+func (p *AzureFoundryProvider) relistedClaude(name string) (string, bool) {
+	if name == "" || IsAgentModel(name) || IsClaudeModel(name) {
+		return "", false
+	}
+	models, ok := p.cachedListing()
+	if !ok {
+		return "", false
+	}
+	relisted := ""
+	for _, m := range models {
+		switch {
+		case strings.EqualFold(m.ID, name):
+			return "", false // still listed as a chat deployment
+		case relisted == "" && IsClaudeModel(m.ID) && strings.EqualFold(claudeDeploymentName(m.ID), name):
+			relisted = m.ID
+		}
+	}
+	return relisted, relisted != ""
+}
+
+// claudeServedModel names the model behind a Claude deployment for the
+// sampling policy: the cached project listing's modelName, else the model
+// the deployment last answered with on this resource (served-model memo); ""
+// when neither knows.
+func (p *AzureFoundryProvider) claudeServedModel(deployment string) string {
+	id := claudeModelPrefix + deployment
+	if models, ok := p.cachedListing(); ok {
+		for _, m := range models {
+			if strings.EqualFold(m.ID, id) && m.ServedModel != "" {
+				return m.ServedModel
+			}
+		}
+	}
+	for _, requested := range []string{id, deployment} {
+		if served, ok := lookupServedModelForResource(p.servedMemoResource(), azureFoundryProviderID, requested); ok {
+			return served
+		}
+	}
+	return ""
 }
 
 // ErrEmbeddingDeploymentMissing reports an Azure AI Foundry configuration
@@ -382,7 +495,7 @@ func (p *AzureFoundryProvider) Embed(ctx context.Context, text []string) ([][]fl
 		return nil, err
 	}
 	var vecs [][]float32
-	err := p.withTokenRetry(ctx, func() error {
+	err := p.withTokenRetry(ctx, func(ctx context.Context) error {
 		var err error
 		vecs, err = p.embed(ctx, text)
 		return err
@@ -544,7 +657,7 @@ func (p *AzureFoundryProvider) Models(ctx context.Context) ([]ModelInfo, error) 
 	// the agents for the full TTL, and never re-fetched on every turn. An
 	// empty listing is not cached.
 	ch := azureModelsFlight.DoChan(key, func() (any, error) {
-		listed, complete := p.projectListing(context.WithoutCancel(ctx), p.configuredDeployments())
+		listed, complete := p.projectListing(withoutEntraTokenUse(context.WithoutCancel(ctx)), p.configuredDeployments())
 		if len(listed) > 0 {
 			ttl := azureModelsCacheTTL
 			if !complete {

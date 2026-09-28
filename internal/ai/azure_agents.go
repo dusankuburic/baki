@@ -256,7 +256,7 @@ func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]p
 			}
 			seen[strings.ToLower(name)] = true
 			modelName := strings.TrimSpace(d.ModelName)
-			claude := strings.EqualFold(strings.TrimSpace(d.ModelPublisher), anthropicModelPublisher)
+			claude := p.isClaudeDeployment(name, modelName, d.ModelPublisher)
 			embedding := !claude && (isEmbeddingModelName(modelName) ||
 				(capabilityTrue(d.Capabilities, "embeddings") && !capabilityTrue(d.Capabilities, "chat_completion")))
 			out = append(out, projectDeployment{name: name, modelName: modelName, embedding: embedding, claude: claude})
@@ -271,6 +271,22 @@ func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]p
 			"pages", azureProjectMaxPages, "listed", len(out))
 	}
 	return out, nil
+}
+
+// isClaudeDeployment reports whether a listed project deployment is a Claude
+// deployment (served on the Anthropic Messages route): published by
+// Anthropic, a model named "claude…" (a listing that omits or misspells the
+// publisher), or a name the document itself lists as a Claude deployment.
+func (p *AzureFoundryProvider) isClaudeDeployment(name, modelName, publisher string) bool {
+	if strings.EqualFold(strings.TrimSpace(publisher), anthropicModelPublisher) || isClaudeModelName(modelName) {
+		return true
+	}
+	for _, d := range p.cfg.ClaudeDeployments {
+		if strings.EqualFold(d, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // isEmbeddingModelName reports whether a model name denotes an embedding
@@ -522,22 +538,24 @@ func (p *AzureFoundryProvider) sameProjectHost(link string) string {
 // *azureProjectStatusError that still unwraps to ErrApiKeyInvalid, so the
 // listing without project data is cached instead of re-asked every turn.
 func (p *AzureFoundryProvider) projectGET(ctx context.Context, rawURL string) ([]byte, error) {
-	body, err := p.projectGETOnce(ctx, rawURL)
+	// The two listings run concurrently on one provider: each call records
+	// the token IT sent, so a 401 invalidates that one (see entraTokenUse).
+	callCtx, use := withEntraTokenUse(ctx)
+	body, err := p.projectGETOnce(callCtx, rawURL)
 	// A token Entra ID refused to issue (errEntraToken, also ErrApiKeyInvalid)
 	// is not the project rejecting one: asking again is another failed sign-in.
 	if err == nil || p.tokens == nil || !errors.Is(err, ErrApiKeyInvalid) || errors.Is(err, errEntraToken) {
 		return body, err
 	}
-	p.mu.Lock()
-	failed := p.lastToken
-	p.mu.Unlock()
+	failed := use.get()
 	p.tokens.Invalidate(failed)
-	fresh, terr := p.entraToken(ctx)
+	retryCtx, _ := withEntraTokenUse(ctx)
+	fresh, terr := p.entraToken(retryCtx)
 	if terr != nil {
 		return nil, terr
 	}
 	if fresh != failed {
-		if body, err = p.projectGETOnce(ctx, rawURL); !errors.Is(err, ErrApiKeyInvalid) {
+		if body, err = p.projectGETOnce(retryCtx, rawURL); !errors.Is(err, ErrApiKeyInvalid) {
 			return body, err
 		}
 	}

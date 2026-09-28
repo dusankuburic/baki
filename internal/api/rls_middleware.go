@@ -146,7 +146,37 @@ func rlsExemptPath(path string) bool {
 	if rlsBlobContentPath(path) {
 		return true
 	}
+	// The org admin's connection test of the shared credential dials the
+	// upstream for up to 15 s like /api/providers/test below; its org
+	// lookups are Go-layer authz (requireAdmin) and the credential comes
+	// through the keystore's own connection.
+	if isOrgProviderTestPath(path) {
+		return true
+	}
+	// The knowledge-base re-index walks up to 10 000 chunks through the
+	// embedding provider (minutes) and must commit page by page — inside
+	// the request transaction a failure on page 3 rolled back the paid-for
+	// pages 1-2 and a large corpus pinned a pooled connection for the whole
+	// walk. Each page's UpdateKnowledgeChunkEmbeddings opens its own short
+	// RLS transaction as the caller instead (so the knowledge_chunks
+	// policies still apply to the writes); the reads carry explicit org_id
+	// predicates and the handler's requireAdmin is the access control.
+	if isKnowledgeReindexPath(path) {
+		return true
+	}
 	return rlsHeavyExactPaths[path]
+}
+
+// isKnowledgeReindexPath matches POST /api/orgs/{id}/knowledge/reindex
+// (path already canonical — the /api/v1 alias is stripped before this
+// middleware runs).
+func isKnowledgeReindexPath(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/api/orgs/")
+	if !ok {
+		return false
+	}
+	orgID, tail, ok := strings.Cut(rest, "/")
+	return ok && orgID != "" && tail == "knowledge/reindex"
 }
 
 // rlsMiddleware sets the Postgres session variable app.current_user_id for

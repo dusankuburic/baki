@@ -1,4 +1,4 @@
-import {useState, useCallback, useEffect, useId} from 'react'
+import {useState, useCallback, useEffect, useId, useRef} from 'react'
 import {useTranslation} from 'react-i18next'
 import Input from '@/components/shared/Input'
 import Button from '@/components/shared/Button'
@@ -14,7 +14,7 @@ import type {
   AzureFoundryPublicConfig,
   ProviderTestResult,
 } from '@/types'
-import {formatCount} from '@/lib/format'
+import {formatCount, formatDateTime} from '@/lib/format'
 import {logger} from '@/lib/logger'
 import {useSystemStore} from '@/stores/systemStore'
 import {isTauri} from '@/platform/guards'
@@ -55,7 +55,19 @@ const USER_SCOPE: AzureFoundryScope = {kind: 'user'}
 interface Props {
   onConfigured?: () => void
   scope?: AzureFoundryScope
+  /**
+   * Org scope: the deployment has no org keystore (404
+   * ORG_KEYSTORE_UNAVAILABLE), so the section renders nothing and the host
+   * should hide its heading too.
+   */
+  onUnavailable?: () => void
 }
+
+// Why the view could not be loaded. `unreadable`: the org's stored credential
+// exists but cannot be decrypted or read (ORG_CREDENTIAL_UNREADABLE) — never
+// shown as "not configured". `forbidden`: the caller's org role may not see
+// it (403) — a note, not a retry that can only fail again.
+type LoadErrorKind = 'failed' | 'unreadable' | 'forbidden'
 
 interface FormState {
   endpoint: string
@@ -126,6 +138,25 @@ function parseDeployments(text: string): string[] {
   return out
 }
 
+// Claude deployment names that are already listed as the chat, embedding or
+// an additional deployment. One deployment answers on one route, so the
+// server drops them from the Claude list; the client drops them before
+// sending and says so, instead of letting them vanish on save.
+function claudeDuplicates(form: FormState): string[] {
+  const taken = new Set(
+    [form.chatDeployment.trim(), form.embeddingDeployment.trim(), ...parseDeployments(form.deployments)]
+      .filter(Boolean)
+      .map(n => n.toLowerCase()),
+  )
+  return parseDeployments(form.claudeDeployments).filter(n => taken.has(n.toLowerCase()))
+}
+
+// The Claude deployments to send: the typed list minus claudeDuplicates.
+function claudeTargets(form: FormState): string[] {
+  const dupes = new Set(claudeDuplicates(form).map(n => n.toLowerCase()))
+  return parseDeployments(form.claudeDeployments).filter(n => !dupes.has(n.toLowerCase()))
+}
+
 // An API key cannot list the resource's deployments, so a chat deployment
 // must be named — unless Entra ID with a project endpoint lists them
 // (mirrors the server's MISSING_DEPLOYMENT rule). A Claude deployment is a
@@ -134,7 +165,7 @@ function hasChatTarget(form: FormState): boolean {
   return (
     !!form.chatDeployment.trim() ||
     parseDeployments(form.deployments).length > 0 ||
-    parseDeployments(form.claudeDeployments).length > 0 ||
+    claudeTargets(form).length > 0 ||
     (form.authMode === 'entra' && !!form.projectEndpoint.trim())
   )
 }
@@ -190,12 +221,12 @@ function toInput(form: FormState): AzureFoundryConfigInput {
   if (form.embeddingDeployment.trim()) body.embeddingDeployment = form.embeddingDeployment.trim()
   const deployments = parseDeployments(form.deployments)
   if (deployments.length > 0) body.deployments = deployments
-  const claudeDeployments = parseDeployments(form.claudeDeployments)
+  const claudeDeployments = claudeTargets(form)
   if (claudeDeployments.length > 0) body.claudeDeployments = claudeDeployments
   return body
 }
 
-export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: Props) {
+export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE, onUnavailable}: Props) {
   const {t} = useTranslation('settings')
   const {confirm} = useConfirm()
   // The org routes take over for an org scope; everything else (form,
@@ -204,7 +235,22 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
   const canEdit = scope.kind === 'org' ? scope.canEdit : true
   // null while the first GET is in flight.
   const [config, setConfig] = useState<AzureFoundryPublicConfig | null>(null)
-  const [loadFailed, setLoadFailed] = useState(false)
+  const [loadError, setLoadError] = useState<LoadErrorKind | null>(null)
+  const loadFailed = loadError !== null
+  // The org keystore does not exist in this deployment: render nothing.
+  const [unavailable, setUnavailable] = useState(false)
+  // A save or remove succeeded but the reload of the view failed: say so
+  // (with a retry) instead of showing the pre-change view — or, on a first
+  // configure, the empty form that invites saving again.
+  const [changedButStale, setChangedButStale] = useState(false)
+  // Org scope: another admin saved between our read and our save (409).
+  const [conflict, setConflict] = useState(false)
+  // Read through a ref so a host's inline callback cannot change `load`'s
+  // identity and re-run the load effect on every render.
+  const onUnavailableRef = useRef(onUnavailable)
+  useEffect(() => {
+    onUnavailableRef.current = onUnavailable
+  })
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [showSecret, setShowSecret] = useState(false)
@@ -225,19 +271,38 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
   const systemInfo = useSystemStore(s => s.info)
   const localBackend = systemInfo ? systemInfo.capabilities.sessionAnalytics : isTauri()
 
+  // Resolves true when the view was (re)loaded.
   const load = useCallback(
-    () =>
+    (): Promise<boolean> =>
       (orgId ? providersApi.getOrgAzureFoundryConfig(orgId) : providersApi.getAzureFoundryConfig())
         .then(cfg => {
           setConfig(cfg)
-          setLoadFailed(false)
+          setLoadError(null)
+          setChangedButStale(false)
+          return true
         })
         .catch(err => {
           // A failed GET must not render as "not configured": the empty
           // form invites saving over the stored credentials. A distinct
           // error row with a retry shows instead.
           logger.warn('Failed to load Azure AI Foundry config', err)
-          setLoadFailed(true)
+          if (orgId && err instanceof ApiError) {
+            if (err.code === 'ORG_KEYSTORE_UNAVAILABLE') {
+              setUnavailable(true)
+              onUnavailableRef.current?.()
+              return false
+            }
+            if (err.status === 403) {
+              setLoadError('forbidden')
+              return false
+            }
+            if (err.code === 'ORG_CREDENTIAL_UNREADABLE') {
+              setLoadError('unreadable')
+              return false
+            }
+          }
+          setLoadError('failed')
+          return false
         }),
     [orgId],
   )
@@ -258,6 +323,7 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
   const secret = form.authMode === 'api_key' ? form.apiKey : form.clientSecret
   const entraIdsMissing = form.authMode === 'entra' && (!form.tenantId.trim() || !form.clientId.trim())
   const chatTargetMissing = !hasChatTarget(form)
+  const claudeDupes = claudeDuplicates(form)
   const endpointErr: AzureFieldErrorKey | null = endpointErrorKey(form.endpoint)
   const tenantErr: AzureFieldErrorKey | null = form.authMode === 'entra' ? guidErrorKey(form.tenantId) : null
   const clientErr: AzureFieldErrorKey | null = form.authMode === 'entra' ? guidErrorKey(form.clientId) : null
@@ -279,6 +345,7 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
     setForm(EMPTY_FORM)
     setShowSecret(false)
     setSaveError(null)
+    setConflict(false)
     setTouched(new Set())
   }, [])
 
@@ -310,18 +377,32 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
   const handleSave = useCallback(async () => {
     setSaving(true)
     setSaveError(null)
+    setConflict(false)
     try {
       const body = toInput(form)
-      await (orgId ? providersApi.saveOrgAzureFoundryConfig(orgId, body) : providersApi.saveAzureFoundryConfig(body))
+      if (orgId) {
+        // Compare-and-swap: the server refuses the save (409) when another
+        // admin changed the shared document since this view was read.
+        const updatedAt = config?.configured ? config.updatedAt : undefined
+        await providersApi.saveOrgAzureFoundryConfig(orgId, updatedAt ? {...body, updatedAt} : body)
+      } else {
+        await providersApi.saveAzureFoundryConfig(body)
+      }
       setEditing(false)
       resetFormState()
       setTestResult(null)
       setRefreshing(true)
-      await load()
+      const reloaded = await load()
       setRefreshing(false)
+      if (!reloaded) setChangedButStale(true)
       onConfigured?.()
     } catch (err) {
-      if (err instanceof ApiError) {
+      if (orgId && err instanceof ApiError && err.status === 409) {
+        setConflict(true)
+      } else if (orgId && err instanceof ApiError && err.status === 403) {
+        // The caller's admin role went away since the panel rendered.
+        setSaveError(t('providers.azureOrgReadOnly'))
+      } else if (err instanceof ApiError) {
         // Validation codes carry an actionable server message. Two get local
         // copy: HOST_NOT_ALLOWED is the RESOURCE endpoint's allow-list verdict
         // (the copy names the accepted hosts) and MISSING_DEPLOYMENT explains
@@ -348,7 +429,18 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
     } finally {
       setSaving(false)
     }
-  }, [form, load, onConfigured, orgId, resetFormState, t])
+  }, [config, form, load, onConfigured, orgId, resetFormState, t])
+
+  // The conflict notice's action: drop the edit and show the configuration
+  // the other admin saved.
+  const reloadAfterConflict = useCallback(async () => {
+    setConflict(false)
+    setEditing(false)
+    resetFormState()
+    setRefreshing(true)
+    await load()
+    setRefreshing(false)
+  }, [load, resetFormState])
 
   const handleRemove = useCallback(async () => {
     const ok = await confirm({
@@ -364,13 +456,18 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
       await (orgId ? providersApi.deleteOrgAzureFoundryConfig(orgId) : providersApi.deleteApiKey(PROVIDER_ID))
       setTestResult(null)
       setRefreshing(true)
-      await load()
+      const reloaded = await load()
       setRefreshing(false)
+      if (!reloaded) setChangedButStale(true)
       onConfigured?.()
     } catch (err) {
       logger.warn('Remove Azure AI Foundry config failed:', err)
       setRemoveError(
-        err instanceof ApiError ? err.message || t('providers.azureRemoveFailed') : t('providers.azureRemoveFailed'),
+        orgId && err instanceof ApiError && err.status === 403
+          ? t('providers.azureOrgReadOnly')
+          : err instanceof ApiError
+            ? err.message || t('providers.azureRemoveFailed')
+            : t('providers.azureRemoveFailed'),
       )
     } finally {
       setRemoving(false)
@@ -394,7 +491,15 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
         setTestResult({ok: false, error: result?.error || t('providers.azureTestFailed')})
       }
     } catch (err) {
-      setTestResult({ok: false, error: err instanceof Error ? err.message : t('providers.azureTestFailed')})
+      setTestResult({
+        ok: false,
+        error:
+          orgId && err instanceof ApiError && err.status === 403
+            ? t('providers.azureOrgReadOnly')
+            : err instanceof Error
+              ? err.message
+              : t('providers.azureTestFailed'),
+      })
     } finally {
       setTesting(false)
     }
@@ -414,28 +519,66 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
     claudeDeployments: `${uid}-claude-deployments`,
   }
 
+  if (unavailable) return null
+
   if (config === null && !loadFailed) {
     return <Skeleton lines={2} className="max-w-md" />
   }
 
+  // The caller's org role may not see the shared configuration: a note — a
+  // retry could only fail the same way.
+  if (loadError === 'forbidden') {
+    return <p className="text-sm text-text-secondary">{t('providers.azureOrgNoAccess')}</p>
+  }
+
   // A failed load is never "not configured": an error row with a retry, and
   // (when some earlier view exists) that view underneath it — never the
-  // empty form that saving would overwrite the stored credentials from.
+  // empty form that saving would overwrite the stored credentials from. An
+  // unreadable org credential says so, and lets an admin replace it.
   const loadErrorRow = (
     <div role="alert" className="flex items-center gap-2 flex-wrap">
-      <span className="text-xs text-red-400">{t('providers.azureLoadFailed')}</span>
+      <span className="text-xs text-red-400">
+        {loadError === 'unreadable' ? t('providers.azureOrgUnreadable') : t('providers.azureLoadFailed')}
+      </span>
       <Button size="sm" variant="secondary" onClick={() => void load()}>
         {t('providers.azureRetry')}
       </Button>
+      {loadError === 'unreadable' && canEdit && (
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => {
+            // Replacing is the fix: an empty form whose save overwrites the
+            // unreadable document.
+            setLoadError(null)
+            setConfig({configured: false})
+          }}
+        >
+          {t('providers.azureOrgReplace')}
+        </Button>
+      )}
     </div>
   )
-  if (config === null) {
+  if (config === null && !refreshing) {
     return <div className="space-y-3 max-w-2xl">{loadErrorRow}</div>
   }
 
   // Save/remove just succeeded: hold a skeleton until the fresh view lands.
-  if (refreshing) {
+  if (refreshing || config === null) {
     return <Skeleton lines={2} className="max-w-md" />
+  }
+
+  // Saved (or removed), but the fresh view did not load: neither the old view
+  // nor an empty form may stand in for it.
+  if (changedButStale) {
+    return (
+      <div role="status" className="flex items-center gap-2 flex-wrap max-w-2xl">
+        <span className="text-xs text-text-secondary">{t('providers.azureSavedRefreshFailed')}</span>
+        <Button size="sm" variant="secondary" onClick={() => void load()}>
+          {t('providers.azureRetry')}
+        </Button>
+      </div>
+    )
   }
 
   // A member of the org (no edit rights) never sees the form: a one-line
@@ -514,9 +657,19 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
         </dl>
         {scope.kind === 'org' && (
           <p className="text-xs text-text-tertiary">
-            {config.updatedBy
-              ? t('providers.azureOrgSharedBy', {name: config.updatedBy})
-              : t('providers.azureOrgShared')}
+            <span>
+              {config.updatedBy
+                ? t('providers.azureOrgSharedBy', {name: config.updatedBy})
+                : t('providers.azureOrgShared')}
+            </span>
+            {config.updatedAt && (
+              <>
+                {' · '}
+                <time dateTime={config.updatedAt}>
+                  {t('providers.azureOrgUpdatedAt', {date: formatDateTime(config.updatedAt)})}
+                </time>
+              </>
+            )}
           </p>
         )}
         {!canEdit && <p className="text-xs text-text-tertiary">{t('providers.azureOrgReadOnly')}</p>}
@@ -532,23 +685,21 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
             <Button size="sm" variant="secondary" onClick={handleTest} disabled={testing || removing}>
               {testing ? t('keys.testing') : t('keys.test')}
             </Button>
-            {/* Announced to assistive technology. The wrappers are
-              display:contents so the row's flex layout is unchanged; the
-              status region stays mounted so a pass is read out politely,
-              and "Invalid" plus the server's reason form one alert. */}
-            <span role="status" className="contents">
-              {testResult?.ok && (
-                <span className="text-xs text-green-400">
-                  {typeof testResult.latencyMs === 'number' && Number.isFinite(testResult.latencyMs)
-                    ? t('apiKey.validLatency', {ms: formatCount(testResult.latencyMs)})
-                    : t('apiKey.valid')}
-                </span>
-              )}
+            {/* Announced to assistive technology. The regions are real boxes
+              (display:contents drops the element — and with it the role — in
+              some browser/screen-reader pairs); the status region stays
+              mounted so a pass is read out politely, and "Invalid" plus the
+              server's reason form one alert. */}
+            <span role="status" className="inline-flex items-center text-xs text-green-400">
+              {testResult?.ok &&
+                (typeof testResult.latencyMs === 'number' && Number.isFinite(testResult.latencyMs)
+                  ? t('apiKey.validLatency', {ms: formatCount(testResult.latencyMs)})
+                  : t('apiKey.valid'))}
             </span>
             {testResult && !testResult.ok && (
-              <span role="alert" className="contents">
-                <span className="text-xs text-red-400">{t('apiKey.invalid')}</span>
-                {testResult.error && <span className="text-xs text-red-400">{testResult.error}</span>}
+              <span role="alert" className="inline-flex items-center gap-2 flex-wrap text-xs text-red-400">
+                <span>{t('apiKey.invalid')}</span>
+                {testResult.error && <span>{testResult.error}</span>}
               </span>
             )}
             {removeError && (
@@ -566,9 +717,11 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
   // Shared by whichever secret field is on screen (only one at a time).
   const secretInputProps = {
     type: showSecret ? 'text' : 'password',
-    // A secret: no autofill/suggestions, and no spellcheck — once shown as
-    // plain text, browser spellcheck services could receive it.
-    autoComplete: 'off',
+    // A secret: no autofill/suggestions ("new-password" — password managers
+    // ignore "off" on password fields and would fill the user's saved site
+    // password), and no spellcheck — once shown as plain text, browser
+    // spellcheck services could receive it.
+    autoComplete: 'new-password',
     spellCheck: false,
     autoCapitalize: 'off',
     autoCorrect: 'off',
@@ -621,9 +774,7 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
               placeholder={secretPlaceholder ?? t('apiKey.placeholder')}
               aria-label={t('providers.azureApiKeyAria')}
             />
-            <Button size="sm" variant="secondary" onClick={() => setShowSecret(!showSecret)}>
-              {showSecret ? t('apiKey.hide') : t('apiKey.show')}
-            </Button>
+            <SecretToggle shown={showSecret} field={t('providers.azureApiKey')} onToggle={setShowSecret} />
           </div>
         </Field>
       ) : (
@@ -660,9 +811,7 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
                 placeholder={secretPlaceholder}
                 aria-label={t('providers.azureClientSecretAria')}
               />
-              <Button size="sm" variant="secondary" onClick={() => setShowSecret(!showSecret)}>
-                {showSecret ? t('apiKey.hide') : t('apiKey.show')}
-              </Button>
+              <SecretToggle shown={showSecret} field={t('providers.azureClientSecret')} onToggle={setShowSecret} />
             </div>
           </Field>
         </>
@@ -727,6 +876,12 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
         />
       </Field>
 
+      {claudeDupes.length > 0 && (
+        <p className="text-xs text-text-secondary">
+          {t('providers.azureClaudeDuplicates', {count: claudeDupes.length, names: claudeDupes.join(', ')})}
+        </p>
+      )}
+
       {form.endpoint.trim() && chatTargetMissing && (
         <p className="text-xs text-text-secondary">{t('providers.azureMissingDeployment')}</p>
       )}
@@ -748,7 +903,33 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE}: 
           </span>
         )}
       </div>
+      {conflict && (
+        <div role="alert" className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-red-400">{t('providers.azureOrgConflict')}</span>
+          <Button size="sm" variant="secondary" onClick={() => void reloadAfterConflict()}>
+            {t('providers.azureOrgReload')}
+          </Button>
+        </div>
+      )}
     </div>
+  )
+}
+
+// Show/Hide for a secret field: a toggle button (aria-pressed) whose name
+// includes the field it reveals — two bare "Show" buttons were
+// indistinguishable in a screen reader's button list.
+function SecretToggle({shown, field, onToggle}: {shown: boolean; field: string; onToggle: (next: boolean) => void}) {
+  const {t} = useTranslation('settings')
+  return (
+    <Button
+      size="sm"
+      variant="secondary"
+      onClick={() => onToggle(!shown)}
+      aria-pressed={shown}
+      aria-label={shown ? t('providers.azureHideSecretAria', {field}) : t('providers.azureShowSecretAria', {field})}
+    >
+      {shown ? t('apiKey.hide') : t('apiKey.show')}
+    </Button>
   )
 }
 

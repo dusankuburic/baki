@@ -1188,5 +1188,38 @@ describe('useChatStreamEngine', () => {
       // The rates still land on the messages either way.
       expect(useChatStore.getState().conversations.get('threadB')![0]).toMatchObject(RATES)
     })
+
+    it('titles a provider failure, keeps the server detail, tags the code and refetches on auth/not-configured', () => {
+      const {result} = renderEngine()
+      const epoch0 = useChatStore.getState().providerEpoch
+      act(() => {
+        result.current.beginAcc('streamA', 'threadA', seedThread('threadA', 'streamA', 'azure-foundry'))
+        capturedHandler!.onError('no Azure credentials for this flow', 'streamA', 'PROVIDER_NOT_CONFIGURED')
+      })
+      const msg = useChatStore.getState().conversations.get('threadA')![0]
+      expect(msg.finishReason).toBe('error')
+      expect(msg.errorCode).toBe('PROVIDER_NOT_CONFIGURED')
+      expect(msg.content).toBe('**This provider is not set up here** — no Azure credentials for this flow')
+      expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
+
+      // A permission failure: same bubble shape, but the listing is not stale.
+      act(() => {
+        result.current.beginAcc('streamB', 'threadB', seedThread('threadB', 'streamB', 'azure-foundry'))
+        capturedHandler!.onError('missing Foundry User role', 'streamB', 'PROVIDER_PERMISSION')
+      })
+      expect(useChatStore.getState().conversations.get('threadB')![0].errorCode).toBe('PROVIDER_PERMISSION')
+      expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
+    })
+
+    it('keeps the generic bubble (and no code) for other failures', () => {
+      const {result} = renderEngine()
+      act(() => {
+        result.current.beginAcc('streamA', 'threadA', seedThread('threadA', 'streamA', 'azure-foundry'))
+        capturedHandler!.onError('timed out', 'streamA', 'STREAM_TIMEOUT')
+      })
+      const msg = useChatStore.getState().conversations.get('threadA')![0]
+      expect(msg.content).toBe('*Error: timed out*')
+      expect(msg.errorCode).toBeUndefined()
+    })
   })
 })

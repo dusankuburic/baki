@@ -140,9 +140,12 @@ describe('KnowledgeBasePanel', () => {
 
   // Routes the mocked API by URL: the document list, then the re-index /
   // upload responses the case under test scripts.
-  function routeRequests(handlers: {reindex?: (body: unknown) => unknown; upload?: () => unknown}) {
-    requestMock.mockImplementation((url: string, opts?: {body?: unknown}) => {
-      if (url.endsWith('/knowledge/reindex') && handlers.reindex) return handlers.reindex(opts?.body)
+  function routeRequests(handlers: {
+    reindex?: (body: unknown, signal?: AbortSignal) => unknown
+    upload?: () => unknown
+  }) {
+    requestMock.mockImplementation((url: string, opts?: {body?: unknown; signal?: AbortSignal}) => {
+      if (url.endsWith('/knowledge/reindex') && handlers.reindex) return handlers.reindex(opts?.body, opts?.signal)
       if (url.endsWith('/knowledge/upload') && handlers.upload) return handlers.upload()
       return Promise.resolve([
         {id: 'd1', filename: 'guide.md', createdAt: new Date().toISOString(), chunkCount: 2, vectorIndexed: 2},
@@ -302,5 +305,107 @@ describe('KnowledgeBasePanel', () => {
       const call = requestMock.mock.calls.find(c => String(c[0]).endsWith(suffix))!
       expect((call[1] as {timeoutMs?: number}).timeoutMs).toBeGreaterThanOrEqual(5 * 60_000)
     }
+  })
+
+  // R-7: a resumable server answers one committed page at a time with a
+  // cursor for the next; the panel keeps posting (with the same force) until
+  // no cursor comes back, then reports the total.
+  it('follows nextCursor across pages and reports the total', async () => {
+    seedStore('admin')
+    const pages = [
+      {chunks: 4000, docs: 3, nextCursor: {docId: 'd2', ordinal: 7}},
+      {chunks: 4000, docs: 2, nextCursor: {docId: 'd5', ordinal: 1}},
+      {chunks: 1500, docs: 1},
+    ]
+    let i = 0
+    routeRequests({reindex: () => Promise.resolve(pages[i++])})
+    renderPanel()
+    await confirmFirstReindexDialog()
+
+    expect(await screen.findByText('Re-indexed 9500 chunks')).toBeInTheDocument()
+    const bodies = requestMock.mock.calls
+      .filter(c => String(c[0]).endsWith('/reindex'))
+      .map(c => (c[1] as {body: unknown}).body)
+    expect(bodies).toEqual([{}, {cursor: {docId: 'd2', ordinal: 7}}, {cursor: {docId: 'd5', ordinal: 1}}])
+  })
+
+  it('keeps force on every page after the model-change confirmation', async () => {
+    seedStore('admin')
+    routeRequests({
+      reindex: body => {
+        const b = body as {force?: boolean; cursor?: unknown}
+        if (!b.force) return modelChanged()
+        return Promise.resolve(b.cursor ? {chunks: 1, docs: 1} : {chunks: 2, docs: 1, nextCursor: {docId: 'd1'}})
+      },
+    })
+    renderPanel()
+    await confirmFirstReindexDialog()
+    await screen.findByText(/switch the embedding model/i)
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', {name: 'Re-index with my model'}))
+
+    expect(await screen.findByText('Re-indexed 3 chunks')).toBeInTheDocument()
+    const bodies = requestMock.mock.calls
+      .filter(c => String(c[0]).endsWith('/reindex'))
+      .map(c => (c[1] as {body: unknown}).body)
+    expect(bodies).toEqual([{}, {force: true}, {force: true, cursor: {docId: 'd1'}}])
+  })
+
+  it('shows progress between pages and stops on request', async () => {
+    seedStore('admin')
+    let call = 0
+    routeRequests({
+      reindex: (_body, signal) => {
+        call++
+        if (call === 1) return Promise.resolve({chunks: 250, docs: 2, nextCursor: {docId: 'd2'}})
+        // The second page hangs until the admin stops it.
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        })
+      },
+    })
+    renderPanel()
+    await confirmFirstReindexDialog()
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Re-indexed 250 chunks so far…')
+    fireEvent.click(screen.getByRole('button', {name: 'Stop'}))
+
+    expect(await screen.findByText(/Re-index stopped after 250 chunks/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('button', {name: 'Stop'})).toBeNull())
+    expect(screen.queryByText('Re-index failed')).toBeNull()
+  })
+
+  it("shows the budget message verbatim when the organisation's AI budget is spent", async () => {
+    seedStore('admin')
+    routeRequests({
+      reindex: () => Promise.reject(new ApiError('daily AI budget exceeded ($5.00 / $5.00)', 429, 'BUDGET_EXCEEDED')),
+    })
+    renderPanel()
+    await confirmFirstReindexDialog()
+    expect(await screen.findByText('daily AI budget exceeded ($5.00 / $5.00)')).toBeInTheDocument()
+  })
+
+  it('explains a server timeout before any page committed', async () => {
+    seedStore('admin')
+    routeRequests({reindex: () => Promise.reject(new ApiError('context deadline exceeded', 504, 'KNOWLEDGE_TIMEOUT'))})
+    renderPanel()
+    await confirmFirstReindexDialog()
+    expect(
+      await screen.findByText('The server ran out of time before anything was indexed — try again'),
+    ).toBeInTheDocument()
+  })
+
+  it('explains a model change refused on a later page instead of a bare failure', async () => {
+    seedStore('admin')
+    let call = 0
+    routeRequests({
+      reindex: () =>
+        ++call === 1
+          ? Promise.resolve({chunks: 500, docs: 1, nextCursor: {docId: 'd1', id: 'c500'}})
+          : Promise.reject(new ApiError('embedding model changed', 409, 'EMBEDDING_MODEL_CHANGED')),
+    })
+    renderPanel()
+    await confirmFirstReindexDialog()
+    expect(await screen.findByText(/Your embedding model changed while the re-index was running/)).toBeInTheDocument()
+    expect(call).toBe(2)
   })
 })

@@ -257,6 +257,7 @@ func TestAuditedProvider_AliasPricingNeverUsesAStaleOrZeroListingPrice(t *testin
 	resetServedModels()
 	nano, _ := catalogEntryFor("azure-foundry", "gpt-5-nano")
 	ceiling := AliasReservationCeiling("azure-foundry")
+	router := AliasRouterCeiling("azure-foundry") // routers may route to Claude
 
 	// A router alias: turn 1 was routed to gpt-5-nano; turn 2 to a model the
 	// catalogue does not know.
@@ -272,7 +273,7 @@ func TestAuditedProvider_AliasPricingNeverUsesAStaleOrZeroListingPrice(t *testin
 	if _, err := ap.Chat(context.Background(), Request{Model: "router"}); err != nil {
 		t.Fatal(err)
 	}
-	assertCost(t, "router served by an uncatalogued model", sink.next(t).EstimatedCost, costOf(100, 50, ceiling))
+	assertCost(t, "router served by an uncatalogued model", sink.next(t).EstimatedCost, costOf(100, 50, router))
 	if after := countPricingFallback(t, "azure-foundry", "deployment"); after != before+1 {
 		t.Errorf("pricing-fallback metric %v → %v, want +1", before, after)
 	}
@@ -285,7 +286,7 @@ func TestAuditedProvider_AliasPricingNeverUsesAStaleOrZeroListingPrice(t *testin
 	if _, err := ap.Chat(context.Background(), Request{Model: "router"}); err != nil {
 		t.Fatal(err)
 	}
-	assertCost(t, "varied alias without a served model", sink.next(t).EstimatedCost, costOf(100, 50, ceiling))
+	assertCost(t, "varied alias without a served model", sink.next(t).EstimatedCost, costOf(100, 50, router))
 
 	// Named "model-router": treated as a router from the first call.
 	recordServedModel("u1", "azure-foundry", "model-router", "gpt-5-nano-2025-08-07")
@@ -295,7 +296,7 @@ func TestAuditedProvider_AliasPricingNeverUsesAStaleOrZeroListingPrice(t *testin
 	if _, err := ap.Chat(context.Background(), Request{Model: "model-router"}); err != nil {
 		t.Fatal(err)
 	}
-	assertCost(t, "model-router without a served model", sink.next(t).EstimatedCost, costOf(100, 50, ceiling))
+	assertCost(t, "model-router without a served model", sink.next(t).EstimatedCost, costOf(100, 50, router))
 
 	// A zero-priced deployment whose served model is unknown: priced at the
 	// reservation ceiling by the counted fallback, never $0.

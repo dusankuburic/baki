@@ -29,7 +29,7 @@ func NewChatHandler(chatSvc *service.ChatService, flowSvc *service.FlowService, 
 }
 
 // @Summary      Stream chat message
-// @Description  Initiates a streaming chat session with an AI provider.
+// @Description  Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token rates the turn was billed at). An error payload carries message and, when classified, code (AI_BUDGET_EXCEEDED, PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, …).
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
@@ -96,18 +96,36 @@ func (h *ChatHandler) handleBeginStream(w http.ResponseWriter, r *http.Request) 
 	// return that state in the begin response so the client isn't left waiting
 	// for events that will never arrive.
 	if res := h.chatSvc.BeginStream(r.Context(), req.ID); res != nil {
-		render.JSON(w, map[string]any{
-			"status":    "finished",
-			"text":      res.Text,
-			"done":      res.Done,
-			"error":     res.Error,
-			"errorCode": res.ErrorCode,
-			"tokensIn":  res.TokensIn,
-			"tokensOut": res.TokensOut,
-		})
+		render.JSON(w, beginFinishedBody(res))
 		return
 	}
 	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// beginFinishedBody is the begin answer for a stream that already finished:
+// its final state, including — when reported — the served model and the
+// rates the turn was billed at (the frontend's BeginStreamResult), which the
+// client missed with the done event.
+func beginFinishedBody(res *service.ResumeResult) map[string]any {
+	body := map[string]any{
+		"status":    "finished",
+		"text":      res.Text,
+		"done":      res.Done,
+		"error":     res.Error,
+		"errorCode": res.ErrorCode,
+		"tokensIn":  res.TokensIn,
+		"tokensOut": res.TokensOut,
+	}
+	if res.ServedModel != "" {
+		body["servedModel"] = res.ServedModel
+	}
+	if res.InputCostPerM != 0 {
+		body["inputCostPerM"] = res.InputCostPerM
+	}
+	if res.OutputCostPerM != 0 {
+		body["outputCostPerM"] = res.OutputCostPerM
+	}
+	return body
 }
 
 // @Summary      Cancel stream

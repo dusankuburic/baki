@@ -122,6 +122,7 @@ export const enDashboard = {
     finding_comment_delete: 'Deleted a comment',
     chat_stream: 'AI chat',
     keys_save: 'Updated API key',
+    providers_test: 'Tested an AI provider connection',
     settings_change: 'Changed settings',
     settings_update: 'Updated settings',
     user_profile_update: 'Updated profile',

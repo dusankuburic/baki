@@ -14,8 +14,9 @@ import (
 //
 //	POST {endpoint}/anthropic/v1/messages
 //
-// with the header anthropic-version: 2023-06-01 and either x-api-key: <key>
-// (API-key mode) or Authorization: Bearer <Entra ID token> (scope
+// with the header anthropic-version: 2023-06-01 and either api-key / x-api-key:
+// <key> (API-key mode; both are accepted, both are sent) or
+// Authorization: Bearer <Entra ID token> (scope
 // https://ai.azure.com/.default; the Mythos tier is Entra ID only), `model`
 // being the DEPLOYMENT name; standard Anthropic streaming, tools, adaptive
 // thinking and error envelopes; 429 with retry-after. The route is documented
@@ -40,10 +41,12 @@ func IsClaudeModel(id string) bool { return strings.HasPrefix(id, claudeModelPre
 func claudeDeploymentName(id string) string { return strings.TrimPrefix(id, claudeModelPrefix) }
 
 const (
-	// claudeOnFoundryContextLimit is the context window every Claude 4.x
-	// deployment is sized at: 200k is what all of them accept; the larger
-	// windows some models offer on api.anthropic.com are not verified on
-	// Foundry, and a rejection teaches the learned window anyway.
+	// claudeOnFoundryContextLimit is the context window of a Claude
+	// deployment whose model the catalogue does not know yet: 200k is what
+	// every Claude model on Foundry accepts. Catalogued models use their own
+	// window — Anthropic's Foundry page lists 1M for Opus/Sonnet 4.6+ and the
+	// 5.x models and 200k for the others (Sonnet 4.5, Haiku 4.5), matching
+	// the catalogue.
 	claudeOnFoundryContextLimit = 200000
 	// claudeOnFoundryDefaultOutput is the output cap of a Claude deployment
 	// whose model the catalogue does not know (a custom-named deployment
@@ -57,25 +60,33 @@ const (
 // newClaudeOnFoundry builds the Anthropic-wire provider for the resource's
 // Claude deployments: the Messages route on the document's endpoint, the
 // document's credential (tokenFn in Entra ID mode — the Azure provider's
-// entraToken, which remembers the token so withTokenRetry can invalidate
-// exactly that one), and the guarded Azure client. Only Chat and Stream are
-// used; the Azure provider keeps its own identity, listing and pricing.
-func newClaudeOnFoundry(cfg AzureFoundryConfig, client *http.Client, tokenFn func(ctx context.Context) (string, error)) *ClaudeProvider {
+// entraToken, which records the token on the call's context so
+// withTokenRetry can invalidate exactly that one), the guarded Azure client,
+// and servedModelFor, which names the model behind a deployment for the
+// sampling policy. Only Chat and Stream are used; the Azure provider keeps
+// its own identity, listing and pricing.
+func newClaudeOnFoundry(cfg AzureFoundryConfig, client *http.Client, tokenFn func(ctx context.Context) (string, error), servedModelFor func(string) string) *ClaudeProvider {
 	p := &ClaudeProvider{
-		client:      client,
-		messagesURL: cfg.Endpoint + "/anthropic/v1/messages",
+		client:         client,
+		messagesURL:    cfg.Endpoint + "/anthropic/v1/messages",
+		servedModelFor: servedModelFor,
+		label:          "azure ai foundry (claude)",
 	}
 	switch cfg.Auth.Mode {
 	case AzureAuthModeAPIKey:
 		key := cfg.Auth.Key
 		p.authorize = func(_ context.Context, req *http.Request) error {
+			// Foundry documents both headers for the Anthropic route; send
+			// both, as the OpenAI route does, so a gateway (API Management)
+			// that inspects only one of them still sees the key.
+			req.Header.Set("api-key", key)
 			req.Header.Set("x-api-key", key)
 			return nil
 		}
 		// API-key mode keeps the bare invalid-key classification (a
-		// PermissionDenied code keeps its own path), as openaiBase does.
+		// permission denial keeps its own path), as openaiBase does.
 		p.unauthorized = func(_ int, body []byte) error {
-			return unauthorizedError(decodeAzureError(body))
+			return claudeUnauthorized(decodeAzureError(body), body)
 		}
 	case AzureAuthModeEntra:
 		p.authorize = func(ctx context.Context, req *http.Request) error {
@@ -95,10 +106,24 @@ func newClaudeOnFoundry(cfg AzureFoundryConfig, client *http.Client, tokenFn fun
 			if err := entraUnauthorized(apiErr, body); err != nil {
 				return err
 			}
-			return unauthorizedError(apiErr)
+			return claudeUnauthorized(apiErr, body)
 		}
 	}
 	return p
+}
+
+// claudeUnauthorized classifies a 401/403 of the Anthropic route that is not
+// a rejected Entra ID token: an Anthropic permission_error (the credential
+// was accepted, the identity may not use the deployment) or Azure's
+// PermissionDenied code keeps the service's explanation on the
+// permission-denied path (ErrProviderPermissionDenied — no token replay, the
+// chat copy names a missing role); anything else, an Anthropic
+// authentication_error included, is an invalid credential.
+func claudeUnauthorized(apiErr openAIErrorResp, body []byte) error {
+	if strings.EqualFold(apiErr.Error.Type, "permission_error") {
+		return &permissionDeniedError{msg: permissionDeniedMessage(azureAuthMessage(apiErr, body))}
+	}
+	return unauthorizedError(apiErr)
 }
 
 // decodeAzureError reads the error envelope of an Anthropic-format response
@@ -126,6 +151,9 @@ func claudeDeploymentEntry(name string) ModelInfo {
 	}
 	if entry, ok := catalogEntryFor("claude", name); ok {
 		m.Pricing = entry.Pricing
+		if entry.ContextLimit > 0 {
+			m.ContextLimit = entry.ContextLimit
+		}
 		if entry.MaxOutputTokens > 0 {
 			m.MaxOutputTokens = entry.MaxOutputTokens
 		}
@@ -147,7 +175,7 @@ func claudeDeploymentRequest(req Request) Request {
 // client), so a provider configured after construction (tests) is honoured.
 func (p *AzureFoundryProvider) claudeProvider() *ClaudeProvider {
 	p.claudeOnce.Do(func() {
-		p.claude = newClaudeOnFoundry(p.cfg, p.client, p.entraToken)
+		p.claude = newClaudeOnFoundry(p.cfg, p.client, p.entraToken, p.claudeServedModel)
 	})
 	return p.claude
 }
@@ -156,7 +184,7 @@ func (p *AzureFoundryProvider) claudeProvider() *ClaudeProvider {
 // token retry.
 func (p *AzureFoundryProvider) claudeChat(ctx context.Context, req Request) (*Response, error) {
 	var resp *Response
-	err := p.withTokenRetry(ctx, func() error {
+	err := p.withTokenRetry(ctx, func(ctx context.Context) error {
 		var err error
 		resp, err = p.claudeProvider().Chat(ctx, claudeDeploymentRequest(req))
 		return err
@@ -168,7 +196,7 @@ func (p *AzureFoundryProvider) claudeChat(ctx context.Context, req Request) (*Re
 // token retry. A 401 arrives as the HTTP status, before any chunk, so a
 // retry never replays a partially delivered stream.
 func (p *AzureFoundryProvider) claudeStream(ctx context.Context, req Request, onChunk func(Chunk)) error {
-	return p.withTokenRetry(ctx, func() error {
+	return p.withTokenRetry(ctx, func(ctx context.Context) error {
 		return p.claudeProvider().Stream(ctx, claudeDeploymentRequest(req), onChunk)
 	})
 }

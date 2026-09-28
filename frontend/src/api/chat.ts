@@ -14,9 +14,12 @@ export interface BeginStreamResult {
   errorCode?: string
   tokensIn?: number
   tokensOut?: number
-  // The model that answered, when the provider resolved an alias (see
-  // DoneMeta in lib/chatEvent).
+  // The model that answered, when the provider resolved an alias, and the
+  // USD per 1M token rates the turn was billed at (see DoneMeta in
+  // lib/chatEvent). Optional: older servers send only servedModel.
   servedModel?: string
+  inputCostPerM?: number
+  outputCostPerM?: number
 }
 
 export const chatApi = {
@@ -45,7 +48,11 @@ export const chatApi = {
     errorCode?: string
     tokensIn: number
     tokensOut: number
+    // Same as BeginStreamResult: the served model and billed rates of a
+    // finished turn, when known.
     servedModel?: string
+    inputCostPerM?: number
+    outputCostPerM?: number
     events?: {type: string; data: Record<string, unknown>}[]
   }> => request('/api/chat/resume', {body: {id, from}}),
 

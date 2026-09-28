@@ -92,6 +92,15 @@ func TestRLSExemptPath_matching(t *testing.T) {
 		// And non-blob library routes stay transactional.
 		{"/api/library/abc", false},
 		{"/api/library/abc/tags", false},
+		// The knowledge re-index commits page by page (R-7): outside the
+		// request transaction. Its siblings keep theirs — an upload is one
+		// atomic document write.
+		{"/api/orgs/org-1/knowledge/reindex", true},
+		{"/api/orgs/org-1/knowledge/upload", false},
+		{"/api/orgs/org-1/knowledge", false},
+		{"/api/orgs/org-1/knowledge/doc-1", false},
+		{"/api/orgs//knowledge/reindex", false},
+		{"/api/orgs/org-1/x/knowledge/reindex", false},
 	}
 	for _, c := range cases {
 		if got := rlsExemptPath(c.path); got != c.exempt {

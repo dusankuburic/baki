@@ -52,11 +52,15 @@ func azureAuthMessage(apiErr openAIErrorResp, body []byte) string {
 
 // entraUnauthorized is openaiBase's handle401 hook in Entra ID mode (set by
 // the Azure provider only, so OpenAI, xAI, GLM, GitHub Models, Copilot and
-// API-key Azure keep the bare invalid-key classification): PermissionDenied
-// keeps its own path (nil → unauthorizedError); every other 401/403 is a
-// rejected token carrying Azure's explanation.
+// API-key Azure keep the bare invalid-key classification): a permission
+// denial — Azure's PermissionDenied code, or the Anthropic route's
+// permission_error type (Claude deployments) — keeps its own path (nil →
+// unauthorizedError / claudeUnauthorized): the token was accepted and a fresh
+// one cannot grant the missing role. Every other 401/403, an Anthropic
+// authentication_error included, is a rejected token carrying Azure's
+// explanation.
 func entraUnauthorized(apiErr openAIErrorResp, body []byte) error {
-	if strings.EqualFold(apiErr.Error.Code, "PermissionDenied") {
+	if strings.EqualFold(apiErr.Error.Code, "PermissionDenied") || strings.EqualFold(apiErr.Error.Type, "permission_error") {
 		return nil
 	}
 	return &entraTokenRejectedError{msg: azureAuthMessage(apiErr, body)}

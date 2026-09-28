@@ -58,9 +58,12 @@ type ResumeResult struct {
 	TokensIn  int    `json:"tokensIn"`
 	TokensOut int    `json:"tokensOut"`
 	// ServedModel is the model that answered (alias providers), so a client
-	// that missed the live done event still learns it.
-	ServedModel string         `json:"servedModel,omitempty"`
-	Events      []journalEvent `json:"events,omitempty"`
+	// that missed the live done event still learns it — and with it the USD
+	// per 1M token rates the turn was billed at (omitted when not reported).
+	ServedModel    string         `json:"servedModel,omitempty"`
+	InputCostPerM  float64        `json:"inputCostPerM,omitempty"`
+	OutputCostPerM float64        `json:"outputCostPerM,omitempty"`
+	Events         []journalEvent `json:"events,omitempty"`
 }
 
 // resumeSnapshot is the cross-replica-persistable form of a stream's resumable
@@ -68,15 +71,17 @@ type ResumeResult struct {
 // request that lands on a different replica can be authorized. It is written to
 // the backplane so a client that reconnects to any replica can fetch the buffer.
 type resumeSnapshot struct {
-	Owner       string         `json:"owner"`
-	Text        string         `json:"text"`
-	Done        bool           `json:"done"`
-	Error       string         `json:"error"`
-	ErrorCode   string         `json:"errorCode,omitempty"`
-	TokensIn    int            `json:"tokensIn"`
-	TokensOut   int            `json:"tokensOut"`
-	ServedModel string         `json:"servedModel,omitempty"`
-	Events      []journalEvent `json:"events,omitempty"`
+	Owner          string         `json:"owner"`
+	Text           string         `json:"text"`
+	Done           bool           `json:"done"`
+	Error          string         `json:"error"`
+	ErrorCode      string         `json:"errorCode,omitempty"`
+	TokensIn       int            `json:"tokensIn"`
+	TokensOut      int            `json:"tokensOut"`
+	ServedModel    string         `json:"servedModel,omitempty"`
+	InputCostPerM  float64        `json:"inputCostPerM,omitempty"`
+	OutputCostPerM float64        `json:"outputCostPerM,omitempty"`
+	Events         []journalEvent `json:"events,omitempty"`
 }
 
 // resumeStore is the pluggable backing for chat-stream resume. The no-op impl
@@ -311,7 +316,7 @@ func (s *ChatService) BeginStream(ctx context.Context, streamID string) *ResumeR
 		// later terminal event is emitted after this request arrived, i.e.
 		// after the client subscribed, so SSE delivery covers it.
 		if snap := ctl.snapshot(); snap.Done || snap.Error != "" {
-			return &ResumeResult{Text: snap.Text, Done: snap.Done, Error: snap.Error, ErrorCode: snap.ErrorCode, TokensIn: snap.TokensIn, TokensOut: snap.TokensOut, ServedModel: snap.ServedModel, Events: snap.Events}
+			return snap.result(snap.Text)
 		}
 		return nil
 	}
@@ -390,29 +395,39 @@ func (s *ChatService) ResumeStream(ctx context.Context, streamID string, from in
 		// emission for the duration of a full-buffer copy on long streams.
 		buf := ctl.buffer.String()
 		snap := &ResumeResult{
-			Done:        ctl.done,
-			Error:       ctl.errMsg,
-			ErrorCode:   ctl.errCode,
-			TokensIn:    ctl.tokensIn,
-			TokensOut:   ctl.tokensOut,
-			ServedModel: ctl.servedModel,
-			Events:      ctl.snapshotEvents(),
+			Done:           ctl.done,
+			Error:          ctl.errMsg,
+			ErrorCode:      ctl.errCode,
+			TokensIn:       ctl.tokensIn,
+			TokensOut:      ctl.tokensOut,
+			ServedModel:    ctl.servedModel,
+			InputCostPerM:  ctl.inputCostPerM,
+			OutputCostPerM: ctl.outputCostPerM,
+			Events:         ctl.snapshotEvents(),
 		}
 		ctl.mu.Unlock()
 		snap.Text = sliceFrom(buf, from)
 		return snap, nil
 	}
 	if snap, ok := s.resumeBackplane().Load(ctx, streamID); ok {
-		return &ResumeResult{
-			Text:        sliceFrom(snap.Text, from),
-			Done:        snap.Done,
-			Error:       snap.Error,
-			ErrorCode:   snap.ErrorCode,
-			TokensIn:    snap.TokensIn,
-			TokensOut:   snap.TokensOut,
-			ServedModel: snap.ServedModel,
-			Events:      snap.Events,
-		}, nil
+		return snap.result(sliceFrom(snap.Text, from)), nil
 	}
 	return nil, fmt.Errorf("stream not found or already completed")
+}
+
+// result is the ResumeResult a snapshot answers with, its text replaced by
+// text (the delta-resume tail, or the whole buffer).
+func (snap resumeSnapshot) result(text string) *ResumeResult {
+	return &ResumeResult{
+		Text:           text,
+		Done:           snap.Done,
+		Error:          snap.Error,
+		ErrorCode:      snap.ErrorCode,
+		TokensIn:       snap.TokensIn,
+		TokensOut:      snap.TokensOut,
+		ServedModel:    snap.ServedModel,
+		InputCostPerM:  snap.InputCostPerM,
+		OutputCostPerM: snap.OutputCostPerM,
+		Events:         snap.Events,
+	}
 }

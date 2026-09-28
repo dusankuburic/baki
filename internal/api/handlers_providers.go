@@ -25,7 +25,7 @@ func NewProviderHandler(providerSvc *service.ProviderService, security *Security
 }
 
 // @Summary      List AI providers
-// @Description  Returns a list of supported AI providers and their current status. With orgId, a provider the caller has not configured but that organisation has (a shared credential) is listed as configured and shared; the parameter is ignored unless the caller is a member of that org.
+// @Description  Returns a list of supported AI providers and their current status. With orgId, a provider the caller has not configured but that organisation has (a shared credential) is listed as configured and shared; the parameter is ignored unless the caller is an admin or member of that org (viewers, guests and non-members need a credential of their own).
 // @Tags         providers
 // @Param        orgId query string false "Organisation whose shared credentials to include"
 // @Produce      json
@@ -42,15 +42,18 @@ func (h *ProviderHandler) handleListProviders(w http.ResponseWriter, r *http.Req
 }
 
 // listingOrg returns the ?orgId= the caller may list shared credentials for:
-// the parameter when the caller is a member of that organisation, else ""
-// (listed without an org — a non-member learns nothing, not even that the
-// org exists).
+// the parameter when the caller's role in that organisation may run on its
+// shared credential (admin or member, service.OrgRoleUsesSharedCredential —
+// the rule the chat turn applies), else "" (listed without an org: a
+// non-member learns nothing, not even that the org exists, and a viewer or
+// guest is not offered a provider their turns could not use).
 func (h *ProviderHandler) listingOrg(r *http.Request) string {
 	orgID := r.URL.Query().Get("orgId")
 	if orgID == "" || h.security.OrgSvc == nil {
 		return ""
 	}
-	if !h.security.OrgSvc.IsMember(r.Context(), orgID, h.security.CallerID(r)) {
+	role, err := h.security.OrgSvc.MemberRole(r.Context(), orgID, h.security.CallerID(r))
+	if err != nil || !service.OrgRoleUsesSharedCredential(role) {
 		return ""
 	}
 	return orgID

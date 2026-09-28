@@ -300,7 +300,7 @@ func TestOrgAzureFoundryConfig_NoOrgKeystore(t *testing.T) {
 // member and is silently ignored for a non-member.
 func TestListProviders_OrgIdOnlyForMembers(t *testing.T) {
 	f := newOrgProvidersFixture(t, true)
-	if err := f.svc.SaveOrgAzureFoundryConfig(f.orgID, "u-admin", ai.AzureFoundryConfig{
+	if _, err := f.svc.SaveOrgAzureFoundryConfig(f.orgID, "u-admin", "", ai.AzureFoundryConfig{
 		Endpoint: "https://unit-test.invalid", Auth: ai.AzureFoundryAuth{Mode: "api_key", Key: "k"}, ChatDeployment: "org-chat"}); err != nil {
 		t.Fatal(err)
 	}

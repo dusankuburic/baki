@@ -60,16 +60,18 @@ const (
 	sameModelMinCosine = 0.95
 )
 
-// Re-index paging (ReindexOrg). One page is five embed batches; the ceiling
-// bounds one request's embedding bill and how long it holds the request's
-// RLS transaction. The walk is keyset-ordered, so nothing is re-embedded
-// twice within one request; the cursor lives only inside that request, so
-// a corpus beyond the ceiling reports Truncated (the most one request
-// converts) rather than silently leaving a tail. maxReindexChunks is a var
-// so tests can lower it.
-const reindexPageSize = 500
-
-var maxReindexChunks = 10000
+// Re-index paging (ReindexOrg). One page is five embed batches and commits
+// on its own (the re-index route runs outside the request-long RLS
+// transaction, so UpdateKnowledgeChunkEmbeddings opens a short RLS
+// transaction per page): a failure keeps every page already converted. The
+// ceiling bounds one request's embedding bill and duration; a corpus beyond
+// it answers with NextCursor and the client resumes from there in a new
+// request. The walk is keyset-ordered, so nothing is re-embedded twice.
+// Both are vars so tests can lower them.
+var (
+	reindexPageSize  = 500
+	maxReindexChunks = 10000
+)
 
 // SettingsProvider returns the current application settings.
 type SettingsProvider interface {
@@ -107,6 +109,29 @@ type KnowledgeService struct {
 	embedOverride ai.Provider
 	// orgLocks serialises corpus mutations per org (lockOrg): orgID → *sync.Mutex.
 	orgLocks sync.Map
+	// budget gates the billed embedding runs (upload, re-index) on the daily
+	// AI budget; nil = unlimited (local mode, tests). See SetBudgetChecker.
+	budget BudgetChecker
+}
+
+// BudgetChecker is the daily AI budget gate the knowledge base consults
+// before a billed embedding run (the chat service's rule, wired in di):
+// an error — matching the chat service's budget sentinels — refuses it.
+type BudgetChecker interface {
+	CheckBudget(ctx context.Context, scope, orgID string) error
+}
+
+// SetBudgetChecker wires the daily budget gate. Set once at boot, before
+// requests are served.
+func (s *KnowledgeService) SetBudgetChecker(b BudgetChecker) { s.budget = b }
+
+// checkBudget refuses a billed embedding run once the org's (and the
+// caller's) daily AI budget is spent; the error is the checker's own.
+func (s *KnowledgeService) checkBudget(ctx context.Context, scope, orgID string) error {
+	if s.budget == nil {
+		return nil
+	}
+	return s.budget.CheckBudget(ctx, scope, orgID)
 }
 
 // Option configures a KnowledgeService at construction.
@@ -261,6 +286,14 @@ func (s *KnowledgeService) checkCorpusModel(ctx context.Context, provider ai.Pro
 	if err != nil {
 		return corpusEmpty, fmt.Errorf("sample indexed chunks: %w", err)
 	}
+	return compareSamples(ctx, provider, orgID, samples)
+}
+
+// compareSamples re-embeds the sampled chunks' text with provider and
+// classifies the result against their stored vectors (checkCorpusModel's
+// rule: the worst same-width pair decides; no same-width pair is
+// corpusOtherWidth; nothing comparable is corpusEmpty).
+func compareSamples(ctx context.Context, provider ai.Provider, orgID string, samples []interfaces.KnowledgeChunk) (corpusVerdict, error) {
 	texts := make([]string, 0, len(samples))
 	stored := make([][]float32, 0, len(samples))
 	for _, c := range samples {
@@ -359,6 +392,9 @@ func cosineSimilarity(a, b []float32) (float64, bool) {
 func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filename, content string) error {
 	if strings.TrimSpace(content) == "" {
 		return fmt.Errorf("document is empty")
+	}
+	if err := s.checkBudget(ctx, scope, orgID); err != nil {
+		return err
 	}
 
 	provider, err := s.embedder(scope, orgID)
@@ -567,24 +603,31 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 	return sb.String(), nil
 }
 
-// ReindexResult reports what a re-index did. Truncated is set when the
-// per-request ceiling (maxReindexChunks) was reached with chunks still
-// unconverted, so the admin knows the corpus is larger than one request
-// converts instead of believing it recovered.
+// ReindexResult reports what ONE re-index request did. NextCursor is set
+// when chunks remain after this request (the per-request ceiling,
+// maxReindexChunks, was reached, or the request's deadline stopped the walk
+// after a page had committed): the client posts again with it as "cursor"
+// and the walk continues after the last committed chunk. Truncated mirrors
+// NextCursor != nil for clients that predate the cursor (they tell the
+// admin to run it again). Chunks and Docs count this request only.
 type ReindexResult struct {
-	Chunks    int  `json:"chunks"`
-	Docs      int  `json:"docs"`
-	Truncated bool `json:"truncated,omitempty"`
+	Chunks     int                              `json:"chunks"`
+	Docs       int                              `json:"docs"`
+	Truncated  bool                             `json:"truncated,omitempty"`
+	NextCursor *interfaces.KnowledgeChunkCursor `json:"nextCursor,omitempty"`
 }
 
 // ReindexOrg re-embeds an org's whole corpus with the CURRENT embedding
 // provider — the recovery path for an embedding-provider/model switch, which
 // strands every existing chunk at the old dimension (searches silently return
 // nothing). The chunk TEXT is still the source of truth, so no re-chunking
-// happens: contents are walked page by page in (doc_id, id) order, each page
-// re-embedded in provider-safe batches and its embeddings updated in place,
-// up to maxReindexChunks per request (Truncated reports a remainder). Docs
-// in the result is the number of distinct DocIDs among the walked chunks.
+// happens: contents are walked page by page in (doc_id, id) order starting
+// strictly after the cursor `after` (zero = the beginning), each page
+// re-embedded in provider-safe batches and its embeddings updated — and
+// committed — in place, up to maxReindexChunks per request; NextCursor
+// reports a remainder and resumes it. Docs in the result is the number of
+// distinct DocIDs among this request's chunks. The per-org lock is held for
+// one request, not across a resumed run.
 //
 // Re-indexing switches the WHOLE org corpus to the caller's embedding model,
 // and members whose embedder is another model stop retrieving it. Unless
@@ -592,10 +635,14 @@ type ReindexResult struct {
 // therefore refused with ErrEmbeddingModelChanged (checkCorpusModel), and so
 // is one indexed at another width while it is still in the vector index; a
 // width change against a corpus with NOTHING in the vector index is the
-// stranded-corpus recovery and proceeds unforced.
-func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, force bool) (ReindexResult, error) {
+// stranded-corpus recovery and proceeds unforced. Only the first request
+// of a run is judged this way; see reindexGuard for a resumed one.
+func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, force bool, after interfaces.KnowledgeChunkCursor) (ReindexResult, error) {
 	if s.store == nil {
 		return ReindexResult{}, fmt.Errorf("knowledge service has no storage backend (cloud mode required)")
+	}
+	if err := s.checkBudget(ctx, scope, orgID); err != nil {
+		return ReindexResult{}, err
 	}
 	provider, err := s.embedder(scope, orgID)
 	if err != nil {
@@ -606,14 +653,8 @@ func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, 
 		return ReindexResult{}, err
 	}
 	defer unlock()
-	if !force {
-		verdict, err := s.checkCorpusModel(ctx, provider, orgID)
-		if err != nil {
-			return ReindexResult{}, err
-		}
-		if verdict == corpusOtherModel || (verdict == corpusOtherWidth && !s.corpusStranded(ctx, orgID)) {
-			return ReindexResult{}, ErrEmbeddingModelChanged
-		}
+	if err := s.reindexGuard(ctx, provider, orgID, force, after); err != nil {
+		return ReindexResult{}, err
 	}
 
 	userID := ""
@@ -623,13 +664,29 @@ func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, 
 	var (
 		res    ReindexResult
 		docs   = map[string]bool{}
-		cursor interfaces.KnowledgeChunkCursor
+		cursor = after
 	)
+	// stopped ends the walk on a failure. Pages already committed stay
+	// converted either way; when the request's own deadline (or the client
+	// going away) stopped it after at least one page, the progress is
+	// reported with a NextCursor instead of an error, so the client resumes
+	// from the last committed chunk rather than paying for it again.
+	stopped := func(err error) (ReindexResult, error) {
+		if ctx.Err() == nil || res.Chunks == 0 {
+			return ReindexResult{}, err
+		}
+		logger.Warn("knowledge base re-index stopped by the request deadline; resumable",
+			"org_id", orgID, "chunks", res.Chunks, "error", err)
+		res.Docs = len(docs)
+		next := cursor
+		res.NextCursor, res.Truncated = &next, true
+		return res, nil
+	}
 	for res.Chunks < maxReindexChunks {
 		want := min(reindexPageSize, maxReindexChunks-res.Chunks)
 		page, err := s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, want)
 		if err != nil {
-			return ReindexResult{}, fmt.Errorf("load chunk contents: %w", err)
+			return stopped(fmt.Errorf("load chunk contents: %w", err))
 		}
 		if len(page) == 0 {
 			break
@@ -640,17 +697,20 @@ func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, 
 		}
 		embeddings, err := embedBatched(ctx, provider, texts)
 		if err != nil {
-			return ReindexResult{}, fmt.Errorf("%w: %w", ErrEmbeddingFailed, ai.EmbeddingFailureCause(err))
+			return stopped(fmt.Errorf("%w: %w", ErrEmbeddingFailed, ai.EmbeddingFailureCause(err)))
 		}
 		if len(embeddings) != len(page) {
 			return ReindexResult{}, fmt.Errorf("embedding count mismatch: got %d for %d chunks", len(embeddings), len(page))
 		}
 		for i := range page {
 			page[i].Embedding = embeddings[i]
-			docs[page[i].DocID] = true
 		}
+		// Commits this page on its own (see reindexPageSize).
 		if err := s.store.UpdateKnowledgeChunkEmbeddings(ctx, userID, page); err != nil {
-			return ReindexResult{}, fmt.Errorf("update embeddings: %w", err)
+			return stopped(fmt.Errorf("update embeddings: %w", err))
+		}
+		for i := range page {
+			docs[page[i].DocID] = true
 		}
 		res.Chunks += len(page)
 		last := page[len(page)-1]
@@ -661,16 +721,69 @@ func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, 
 	}
 	res.Docs = len(docs)
 	if res.Chunks >= maxReindexChunks {
-		// At the ceiling: Truncated only when something is actually left
-		// (a corpus of exactly maxReindexChunks chunks is complete).
-		rest, err := s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, 1)
-		res.Truncated = err != nil || len(rest) > 0
+		// At the ceiling: resumable only when something is actually left (a
+		// corpus of exactly the ceiling is complete). A probe that fails
+		// hands out the cursor anyway — the next request finds out.
+		if rest, err := s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, 1); err != nil || len(rest) > 0 {
+			next := cursor
+			res.NextCursor, res.Truncated = &next, true
+		}
 	}
 	if res.Chunks == 0 {
-		return ReindexResult{}, nil // nothing indexed — nothing to re-index
+		return ReindexResult{}, nil // nothing (left) to re-index
 	}
-	logger.Info("knowledge base re-indexed", "org_id", orgID, "chunks", res.Chunks, "docs", res.Docs, "truncated", res.Truncated)
+	logger.Info("knowledge base re-indexed", "org_id", orgID, "chunks", res.Chunks, "docs", res.Docs,
+		"resumed", !after.IsZero(), "more", res.NextCursor != nil)
 	return res, nil
+}
+
+// reindexGuard is the embedding-model mismatch guard of one re-index
+// request. The FIRST request (zero cursor) runs checkCorpusModel unless
+// forced — the admin's decision to switch the corpus to their model.
+//
+// A resumed request (non-zero cursor) must not re-run that guard: the corpus
+// is now deliberately mixed (converted up to the cursor, the old model
+// after it), so the worst-pair rule would refuse every continuation, and
+// honouring force alone would let a caller on yet another model continue a
+// switch it did not start, leaving the converted part on a model nobody
+// uses. Instead it asks the question that matters for a continuation: did
+// the caller's model produce the chunks the previous request converted?
+// The nearest chunks at or before the cursor are re-embedded and compared
+// (compareSamples). Same model: continue — the first request's decision
+// (forced or not) carries over. Another model or width: refuse with
+// ErrEmbeddingModelChanged whatever force says; a forced switch to that
+// model restarts from the top without a cursor. When nothing converted is
+// left to compare (the documents were deleted in between, or only
+// undefined all-zero vectors remain) the continuation is judged like a
+// first request.
+func (s *KnowledgeService) reindexGuard(ctx context.Context, provider ai.Provider, orgID string, force bool, after interfaces.KnowledgeChunkCursor) error {
+	if !after.IsZero() {
+		samples, err := s.store.SampleKnowledgeChunkEmbeddingsUpTo(ctx, orgID, after, corpusSampleSize)
+		if err != nil {
+			return fmt.Errorf("sample re-indexed chunks: %w", err)
+		}
+		verdict, err := compareSamples(ctx, provider, orgID, samples)
+		if err != nil {
+			return err
+		}
+		switch verdict {
+		case corpusSameModel:
+			return nil
+		case corpusOtherModel, corpusOtherWidth:
+			return ErrEmbeddingModelChanged
+		}
+	}
+	if force {
+		return nil
+	}
+	verdict, err := s.checkCorpusModel(ctx, provider, orgID)
+	if err != nil {
+		return err
+	}
+	if verdict == corpusOtherModel || (verdict == corpusOtherWidth && !s.corpusStranded(ctx, orgID)) {
+		return ErrEmbeddingModelChanged
+	}
+	return nil
 }
 
 // assembleGuidelines renders the retrieved chunks as the guidelines block

@@ -358,6 +358,48 @@ describe('done meta (served model + billed rates)', () => {
     expect(handler.onReplace).toHaveBeenCalledWith('done already', 's1')
     expect(handler.onDone).toHaveBeenCalledWith(2, 1, 's1', {servedModel: 'gpt-4o'})
   })
+
+  // R-3: resume and /begin now carry the billed rates like the done event.
+  it('takes the billed rates a finished /begin reports', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    vi.mocked(chatApi.beginStream).mockResolvedValue({
+      status: 'finished',
+      text: 'done already',
+      done: true,
+      tokensOut: 2,
+      tokensIn: 1,
+      servedModel: 'gpt-4o',
+      ...RATES,
+    })
+
+    await result.current.registerStream('s1', true)
+
+    expect(handler.onDone).toHaveBeenCalledWith(2, 1, 's1', {servedModel: 'gpt-4o', ...RATES})
+  })
+
+  it('lets a finishing resume supply the rates, and ignores non-numeric ones', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+    capturedCb!(chunkEvent('s1', 'hi'))
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'hi there',
+      done: true,
+      error: '',
+      tokensOut: 3,
+      tokensIn: 1,
+      servedModel: 'gpt-4o',
+      inputCostPerM: 3,
+      outputCostPerM: 'x' as unknown as number,
+    })
+
+    // The done event carried no rates; the resume that finishes it does.
+    capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 2}))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {servedModel: 'gpt-4o', inputCostPerM: 3})
+  })
 })
 
 describe('fix_decision dispatch', () => {

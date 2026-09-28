@@ -8,7 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
+
+	"pad-core/logger"
 )
 
 var claudeAPIURL = providerURL("CLAUDE_API_URL", "https://api.anthropic.com/v1/messages")
@@ -32,6 +37,13 @@ type ClaudeProvider struct {
 	// Azure's explanation); nil keeps the plain mapping (401 → ErrApiKeyInvalid,
 	// 403 → the service's message).
 	unauthorized func(status int, body []byte) error
+	// servedModelFor, when set, names the model a deployment serves (Azure
+	// AI Foundry: the project listing's modelName, else the served-model
+	// memo), "" when unknown. The sampling policy is decided from it: a
+	// deployment name such as "prod-claude" says nothing about the model.
+	servedModelFor func(deployment string) string
+	// label names the route in logs; "" is "claude".
+	label string
 }
 
 func NewClaudeProvider(apiKey string) *ClaudeProvider {
@@ -89,8 +101,18 @@ func (c *ClaudeProvider) EstimateTokens(text string) int {
 	return EstimateTokensClaude(text)
 }
 
+// Models is the Claude catalogue without the invite-only models
+// (claudeInviteOnly): those stay in the catalogue so a Foundry deployment of
+// one is priced, but are not offered in the direct provider's picker.
 func (c *ClaudeProvider) Models(_ context.Context) ([]ModelInfo, error) {
-	return catalogModels("claude"), nil
+	models := catalogModels("claude")
+	out := models[:0]
+	for _, m := range models {
+		if !claudeInviteOnly[m.ID] {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
 
 type claudeRequest struct {
@@ -261,11 +283,51 @@ func toClaudeTools(tools []ToolDefinition) []claudeTool {
 	return out
 }
 
+// claudeModelVersionRe finds the family and version in a Claude model or
+// deployment name ("claude-opus-4-7", "prod-claude-sonnet-5-20260801"): the
+// major version and an optional one- or two-digit minor version (a longer
+// number is a snapshot date: "claude-opus-4-20250514" is Opus 4).
+var claudeModelVersionRe = regexp.MustCompile(`(opus|sonnet|haiku|fable|mythos)-(\d{1,2})(?:[-.](\d{1,2}))?(?:[^0-9]|$)`)
+
 // claudeRemovesSampling reports whether a model rejects temperature/top_p/top_k
-// (Opus 4.7 and later return 400). For those we omit sampling params and enable
-// adaptive thinking instead — the supported, higher-quality reasoning mode.
+// with a 400: Opus 4.7 and later, every model of generation 5 and later
+// (Sonnet 5 and 5.5 reject non-default values too) and the Fable and Mythos
+// families. For those we omit sampling params and enable adaptive thinking
+// instead — the supported, higher-quality reasoning mode. Matched
+// case-insensitively; callers pass the SERVED model when it is known
+// (policyModel), else the deployment name. A name that reveals nothing keeps
+// temperature, and send repairs a rejection of it once.
 func claudeRemovesSampling(model string) bool {
-	return strings.Contains(model, "opus-4-7") || strings.Contains(model, "opus-4-8")
+	m := claudeModelVersionRe.FindStringSubmatch(strings.ToLower(model))
+	if m == nil {
+		return false
+	}
+	major, _ := strconv.Atoi(m[2])
+	minor := 0
+	if m[3] != "" {
+		minor, _ = strconv.Atoi(m[3])
+	}
+	switch {
+	case m[1] == "fable" || m[1] == "mythos":
+		return true
+	case major >= 5:
+		return true
+	case m[1] == "opus" && major == 4 && minor >= 7:
+		return true
+	}
+	return false
+}
+
+// policyModel is the lower-cased name the sampling policy is decided from:
+// the model the deployment serves when known (servedModelFor), else the
+// requested model / deployment name.
+func (c *ClaudeProvider) policyModel(model string) string {
+	if c.servedModelFor != nil {
+		if served := strings.TrimSpace(c.servedModelFor(model)); served != "" {
+			return strings.ToLower(served)
+		}
+	}
+	return strings.ToLower(model)
 }
 
 // buildClaudeSystem wraps the system prompt in a single cached text block.
@@ -291,7 +353,7 @@ func (c *ClaudeProvider) buildBody(req Request, stream bool) claudeRequest {
 		Tools:     toClaudeTools(req.Tools),
 		Stream:    stream,
 	}
-	if claudeRemovesSampling(req.Model) {
+	if claudeRemovesSampling(c.policyModel(req.Model)) {
 		// Opus 4.7+ rejects temperature/top_p/top_k entirely — omit them.
 		// Enable adaptive thinking only when there are no tools: with tool use
 		// the API requires preserving thinking blocks (with signatures) across
@@ -307,60 +369,224 @@ func (c *ClaudeProvider) buildBody(req Request, stream bool) claudeRequest {
 	return body
 }
 
-func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, error) {
-	body := c.buildBody(req, false)
+// claudeErrorMessageMax bounds the service text kept on an error.
+const claudeErrorMessageMax = 500
+
+// post sends one Messages request (the body already carries the stream flag).
+func (c *ClaudeProvider) post(ctx context.Context, body claudeRequest) (*http.Response, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint(), bytes.NewReader(jsonBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(), bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-
 	if err := c.auth(ctx, httpReq); err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("anthropic-version", claudeAPIVersion)
-
+	if body.Stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
+	}
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("claude API request: %w", err)
 	}
+	return resp, nil
+}
+
+// claudeSamplingParam is the learnedRepairs entry of a deployment that
+// rejects temperature: later requests go out without it.
+const claudeSamplingParam = "temperature"
+
+// send posts the request and returns a 200 response with its body unread, or
+// the rejection with its body read (and closed). A 400 that names
+// `temperature` or `top_p` while the request carries a temperature is
+// repaired ONCE: the request is sent again without it, and the repair a 200
+// confirmed is remembered per endpoint and deployment (learnedRepairs, shared
+// with the OpenAI-compatible route) so the next turn does not pay the
+// rejection round trip again. The name-based sampling policy
+// (claudeRemovesSampling) cannot know every model behind a custom deployment
+// name; this is the safety net.
+func (c *ClaudeProvider) send(ctx context.Context, body claudeRequest) (*http.Response, []byte, error) {
+	memoKey := c.endpoint() + "\x00" + body.Model
+	if body.Temperature != 0 && slices.Contains(repairsFor(memoKey), claudeSamplingParam) {
+		body.Temperature = 0 // omitted (omitempty)
+	}
+	repaired := false
+	for {
+		resp, err := c.post(ctx, body)
+		if err != nil {
+			return nil, nil, err
+		}
+		if resp.StatusCode == http.StatusOK {
+			if repaired {
+				rememberRepairs(memoKey, map[string]bool{claudeSamplingParam: true})
+			}
+			return resp, nil, nil
+		}
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+		resp.Body.Close()
+		c.logUpstreamRejection(resp, body.Model)
+		if !repaired && body.Temperature != 0 && claudeSamplingRejected(resp.StatusCode, errBody) {
+			logger.Debug("Claude rejected the sampling parameters — retrying without temperature",
+				"provider", c.logLabel(), "model", body.Model)
+			body.Temperature = 0
+			repaired = true
+			continue
+		}
+		return resp, errBody, nil
+	}
+}
+
+// claudeSamplingRejected reports whether a rejection is the model refusing
+// sampling parameters: an invalid-request 400 whose message names
+// `temperature` or `top_p` ("temperature is deprecated for this model",
+// "`temperature` and `top_p` cannot both be specified").
+func claudeSamplingRejected(status int, body []byte) bool {
+	if status != http.StatusBadRequest {
+		return false
+	}
+	var apiErr claudeErrorResp
+	if json.Unmarshal(body, &apiErr) != nil {
+		return false
+	}
+	if t := apiErr.Error.Type; t != "" && t != "invalid_request_error" {
+		return false
+	}
+	msg := strings.ToLower(apiErr.Error.Message)
+	return strings.Contains(msg, "temperature") || strings.Contains(msg, "top_p")
+}
+
+// logLabel names the route in logs.
+func (c *ClaudeProvider) logLabel() string {
+	if c.label != "" {
+		return c.label
+	}
+	return "claude"
+}
+
+// claudeRequestID is the correlation id of a Messages response: the gateway's
+// (apim-request-id on Azure AI Foundry, see upstreamRequestID), else
+// Anthropic's own request-id. Support asks for both; one is enough to search.
+func claudeRequestID(resp *http.Response) string {
+	if rid := upstreamRequestID(resp); rid != "" {
+		return rid
+	}
+	if resp == nil {
+		return ""
+	}
+	return resp.Header.Get("request-id")
+}
+
+// logUpstreamRejection records a non-200's status and request id (as the
+// OpenAI-compatible route does): a parameter rejection may still be repaired
+// by send, so it logs at debug.
+func (c *ClaudeProvider) logUpstreamRejection(resp *http.Response, model string) {
+	rid := claudeRequestID(resp)
+	if rid == "" {
+		return
+	}
+	if parameterRejectionStatus(resp.StatusCode) {
+		logger.Debug("AI upstream rejection", "provider", c.logLabel(), "model", model, "status", resp.StatusCode, "requestId", rid)
+		return
+	}
+	logger.Warn("AI upstream error", "provider", c.logLabel(), "model", model, "status", resp.StatusCode, "requestId", rid)
+}
+
+// permissionDeniedMessage is the explanation kept on a permission-denied
+// error, with a fallback when the service sent none.
+func permissionDeniedMessage(msg string) string {
+	if msg = oneLine(strings.Join(strings.Fields(msg), " "), claudeErrorMessageMax); msg != "" {
+		return msg
+	}
+	return "the credential is not allowed to use this model"
+}
+
+// classifyError maps a non-200 Messages response onto the shared errors.
+// STATUS first, the JSON envelope only enriching the message (as
+// openaiBase.handleChatError): a gateway 502/503 with an HTML or empty body
+// is still ErrProviderDown (retried, counted by the breaker), a 429 without
+// a body is still rate-limited with its Retry-After. 401/403 go to the
+// unauthorized hook (Azure AI Foundry); otherwise an Anthropic
+// permission_error is a permission denial and every other 401/403 an invalid
+// credential. Residual errors carry the upstream request id.
+func (c *ClaudeProvider) classifyError(resp *http.Response, body []byte, stream bool) error {
+	status := resp.StatusCode
+	var apiErr claudeErrorResp
+	_ = json.Unmarshal(body, &apiErr)
+	msg := oneLine(strings.Join(strings.Fields(apiErr.Error.Message), " "), claudeErrorMessageMax)
+	suffix := ""
+	if rid := claudeRequestID(resp); rid != "" {
+		suffix = ", request id " + rid
+	}
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		if err := c.classifyUnauthorized(status, body); err != nil {
+			return err
+		}
+		if apiErr.Error.Type == "permission_error" {
+			return &permissionDeniedError{msg: permissionDeniedMessage(msg)}
+		}
+		return ErrApiKeyInvalid
+	case status == http.StatusTooManyRequests:
+		return rateLimitErr(resp)
+	case status >= 500:
+		if msg != "" {
+			return fmt.Errorf("%w: %s (status %d%s)", ErrProviderDown, msg, status, suffix)
+		}
+		return fmt.Errorf("%w (status %d%s)", ErrProviderDown, status, suffix)
+	}
+	if msg != "" {
+		if err := detectContextLimitError(status, apiErr.Error.Message); err != nil {
+			return err
+		}
+		if err := detectToolsUnsupportedError(status, apiErr.Error.Message); err != nil {
+			return err
+		}
+		if stream {
+			return fmt.Errorf("claude stream error (status %d%s): %s", status, suffix, msg)
+		}
+		return fmt.Errorf("claude API: %s (status %d%s)", msg, status, suffix)
+	}
+	if stream {
+		return fmt.Errorf("claude stream error (status %d%s)", status, suffix)
+	}
+	return fmt.Errorf("claude API error (status %d%s)", status, suffix)
+}
+
+// claudeRefusalError is a response Claude ended with stop_reason "refusal"
+// (its safety classifiers declined the request). Deterministic on the input
+// like a content-filter block, so it is ErrContentFiltered: never retried,
+// never a breaker failure, and explained by the chat service instead of
+// presenting whatever text arrived as a complete answer.
+func claudeRefusalError() error {
+	return fmt.Errorf("%w: the model declined to respond (stop_reason refusal)", ErrContentFiltered)
+}
+
+func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, error) {
+	resp, errBody, err := c.send(ctx, c.buildBody(req, false))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.classifyError(resp, errBody, false)
+	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-
-	if resp.StatusCode != http.StatusOK {
-		if err := c.classifyUnauthorized(resp.StatusCode, respBody); err != nil {
-			return nil, err
-		}
-		var apiErr claudeErrorResp
-		if err := json.Unmarshal(respBody, &apiErr); err == nil {
-			switch {
-			case resp.StatusCode == 401:
-				return nil, ErrApiKeyInvalid
-			case resp.StatusCode == 429:
-				return nil, rateLimitErr(resp)
-			case resp.StatusCode >= 500:
-				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
-			}
-			if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
-				return nil, err
-			}
-			if err := detectToolsUnsupportedError(resp.StatusCode, apiErr.Error.Message); err != nil {
-				return nil, err
-			}
-			return nil, fmt.Errorf("claude API: %s", apiErr.Error.Message)
-		}
-		return nil, fmt.Errorf("claude API error (status %d)", resp.StatusCode)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read claude response: %w", err)
 	}
 
 	var parsed claudeResponse
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return nil, fmt.Errorf("parse claude response: %w", err)
+	}
+	if parsed.StopReason == "refusal" {
+		return nil, claudeRefusalError()
 	}
 	if len(parsed.Content) == 0 {
 		return nil, errors.New("claude returned no content")
@@ -391,58 +617,13 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 }
 
 func (c *ClaudeProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
-	body := c.buildBody(req, true)
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint(), bytes.NewReader(jsonBody))
+	resp, errBody, err := c.send(ctx, c.buildBody(req, true))
 	if err != nil {
 		return err
 	}
-
-	if err := c.auth(ctx, httpReq); err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("anthropic-version", claudeAPIVersion)
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return err
+	if resp.StatusCode != http.StatusOK {
+		return c.classifyError(resp, errBody, true)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-		if err := c.classifyUnauthorized(resp.StatusCode, body); err != nil {
-			return err
-		}
-		var apiErr claudeErrorResp
-		if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error.Message != "" {
-			switch {
-			case resp.StatusCode == 401:
-				return ErrApiKeyInvalid
-			case resp.StatusCode == 429:
-				return rateLimitErr(resp)
-			case resp.StatusCode >= 500:
-				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
-			}
-			if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
-				return err
-			}
-			if err := detectToolsUnsupportedError(resp.StatusCode, apiErr.Error.Message); err != nil {
-				return err
-			}
-			return fmt.Errorf("claude stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
-		}
-		if resp.StatusCode >= 500 {
-			return fmt.Errorf("%w (status %d)", ErrProviderDown, resp.StatusCode)
-		}
-		return fmt.Errorf("claude stream error (status %d)", resp.StatusCode)
-	}
-
 	return parseClaudeSSE(resp.Body, onChunk)
 }

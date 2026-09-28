@@ -490,6 +490,12 @@ type KnowledgeStore interface {
 	// model produced the corpus (embedding-model mismatch guard). Chunks
 	// without an embedding are skipped.
 	SampleKnowledgeChunkEmbeddings(ctx context.Context, orgID string, n int) ([]KnowledgeChunk, error)
+	// SampleKnowledgeChunkEmbeddingsUpTo returns up to n of the org's chunks
+	// at or before the cursor in (doc_id, id) order, NEAREST first, WITH
+	// their stored embeddings (chunks without one are skipped). A resumed
+	// re-index compares them — the chunks the previous request converted —
+	// with the caller's model before continuing (rag.ReindexOrg).
+	SampleKnowledgeChunkEmbeddingsUpTo(ctx context.Context, orgID string, upTo KnowledgeChunkCursor, n int) ([]KnowledgeChunk, error)
 	// UpdateKnowledgeChunkEmbeddings replaces chunk embeddings in place
 	// (RLS-scoped to userID like SaveKnowledgeChunks) and refreshes the
 	// pgvector column for same-dimension vectors.
@@ -1018,8 +1024,16 @@ type KnowledgeChunk struct {
 
 // KnowledgeChunkCursor is a keyset position in an org's chunks ordered by
 // (doc_id, id); the zero value starts from the beginning. Both columns are
-// TEXT, so "" sorts before every real value.
-type KnowledgeChunkCursor struct{ DocID, ID string }
+// TEXT, so "" sorts before every real value. It is also the re-index
+// resume token (rag.ReindexResult.NextCursor, the re-index body's
+// "cursor"), hence the JSON tags; clients treat it as opaque.
+type KnowledgeChunkCursor struct {
+	DocID string `json:"docId"`
+	ID    string `json:"id"`
+}
+
+// IsZero reports whether c is the start-of-corpus cursor.
+func (c KnowledgeChunkCursor) IsZero() bool { return c.DocID == "" && c.ID == "" }
 
 // FlowDocument represents a flow document
 type FlowDocument struct {
@@ -1117,6 +1131,9 @@ type FixProposalSnapshot struct {
 	Items      []FixItemSnapshot `json:"items,omitempty"`
 }
 
+// ChatMessage mirrors models.ChatMessage for backend persistence (the
+// service bridges them field by field). ServedModel and the billed rates
+// ride inside the conversation's messages JSON — no column of their own.
 type ChatMessage struct {
 	ID               string                `json:"id"`
 	Role             string                `json:"role"`
@@ -1128,6 +1145,9 @@ type ChatMessage struct {
 	TokensOut        int                   `json:"tokensOut,omitempty"`
 	Provider         string                `json:"provider,omitempty"`
 	Model            string                `json:"model,omitempty"`
+	ServedModel      string                `json:"servedModel,omitempty"`
+	InputCostPerM    float64               `json:"inputCostPerM,omitempty"`
+	OutputCostPerM   float64               `json:"outputCostPerM,omitempty"`
 	FinishReason     string                `json:"finishReason,omitempty"`
 	ToolCalls        []ToolCallRecord      `json:"toolCalls,omitempty"`
 	FixProposal      *FixProposalSnapshot  `json:"fixProposal,omitempty"` // legacy singular

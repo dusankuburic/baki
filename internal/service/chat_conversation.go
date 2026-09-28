@@ -181,6 +181,8 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 	ctl.mu.Lock()
 	answer := ctl.buffer.String()
 	done, errMsg := ctl.done, ctl.errMsg
+	tokensIn, tokensOut := ctl.tokensIn, ctl.tokensOut
+	served, inRate, outRate := ctl.servedModel, ctl.inputCostPerM, ctl.outputCostPerM
 	ctl.mu.Unlock()
 	if !done || errMsg != "" || strings.TrimSpace(answer) == "" {
 		return
@@ -214,13 +216,21 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 	if n := len(history); n > 0 && history[n-1].Role == "assistant" && history[n-1].Content == answer {
 		return
 	}
+	// Usage, served model and billed rates as the client saves them on
+	// done, so a reload after a disconnected turn keeps the tag and prices
+	// the turn at what it cost.
 	history = append(history, models.ChatMessage{
-		ID:        answerID,
-		Role:      "assistant",
-		Content:   answer,
-		Timestamp: time.Now(),
-		Provider:  req.Provider,
-		Model:     req.Model,
+		ID:             answerID,
+		Role:           "assistant",
+		Content:        answer,
+		Timestamp:      time.Now(),
+		Provider:       req.Provider,
+		Model:          req.Model,
+		TokensIn:       tokensIn,
+		TokensOut:      tokensOut,
+		ServedModel:    served,
+		InputCostPerM:  inRate,
+		OutputCostPerM: outRate,
 	})
 	if err := s.SaveConversation(writeCtx, doc, convKey, history); err != nil {
 		logger.Warn("chat: failed to store the finished answer", "error", err)

@@ -135,7 +135,8 @@ func TestOrgAzureFoundryConfig_SaveMergeKeepsSecret_DeleteForgets(t *testing.T) 
 	}
 
 	cfg := ai.AzureFoundryConfig{Endpoint: "https://" + azureTestHost, Auth: ai.AzureFoundryAuth{Mode: "api_key", Key: "k1"}, ChatDeployment: "chat1"}
-	if err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-1", cfg); err != nil {
+	at1, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-1", "", cfg)
+	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	pub, err = svc.GetOrgAzureFoundryConfig("org-1")
@@ -150,7 +151,8 @@ func TestOrgAzureFoundryConfig_SaveMergeKeepsSecret_DeleteForgets(t *testing.T) 
 
 	// Editing a deployment name without re-entering the key keeps it.
 	edit := ai.AzureFoundryConfig{Endpoint: "https://" + azureTestHost, Auth: ai.AzureFoundryAuth{Mode: "api_key"}, ChatDeployment: "chat2"}
-	if err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-2", edit); err != nil {
+	at2, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-2", at1, edit)
+	if err != nil {
 		t.Fatalf("edit: %v", err)
 	}
 	raw, _ = orgKeys.GetOrg("org-1", "azure-foundry")
@@ -165,7 +167,7 @@ func TestOrgAzureFoundryConfig_SaveMergeKeepsSecret_DeleteForgets(t *testing.T) 
 	// Validation failures never overwrite the stored document.
 	var cfgErr *ai.AzureConfigError
 	bad := ai.AzureFoundryConfig{Endpoint: "https://evil.example", Auth: ai.AzureFoundryAuth{Mode: "api_key", Key: "k9"}}
-	if err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-2", bad); !errors.As(err, &cfgErr) || cfgErr.Code != ai.AzureCfgErrHostNotAllowed {
+	if _, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-2", at2, bad); !errors.As(err, &cfgErr) || cfgErr.Code != ai.AzureCfgErrHostNotAllowed {
 		t.Errorf("host not allowed: %v", err)
 	}
 	raw, _ = orgKeys.GetOrg("org-1", "azure-foundry")
@@ -176,7 +178,7 @@ func TestOrgAzureFoundryConfig_SaveMergeKeepsSecret_DeleteForgets(t *testing.T) 
 	// A save invalidates the org's cached listings (every member's).
 	svc.modelCache[ai.OrgScope("org-1")+"\x00glm"] = modelCacheEntry{}
 	rotated := ai.AzureFoundryConfig{Endpoint: "https://" + azureTestHost, Auth: ai.AzureFoundryAuth{Mode: "api_key", Key: "k2"}, ChatDeployment: "chat2"}
-	if err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-2", rotated); err != nil {
+	if _, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-2", at2, rotated); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if _, cached := svc.modelCache[ai.OrgScope("org-1")+"\x00glm"]; cached {
@@ -215,7 +217,7 @@ func TestOrgAzureFoundryConfig_NoOrgStore(t *testing.T) {
 	if _, err := svc.GetOrgAzureFoundryConfig("org-1"); !errors.Is(err, ErrOrgKeyStoreUnavailable) {
 		t.Errorf("get: %v", err)
 	}
-	if err := svc.SaveOrgAzureFoundryConfig("org-1", "a", ai.AzureFoundryConfig{}); !errors.Is(err, ErrOrgKeyStoreUnavailable) {
+	if _, err := svc.SaveOrgAzureFoundryConfig("org-1", "a", "", ai.AzureFoundryConfig{}); !errors.Is(err, ErrOrgKeyStoreUnavailable) {
 		t.Errorf("save: %v", err)
 	}
 	if err := svc.DeleteOrgAzureFoundryConfig("org-1"); !errors.Is(err, ErrOrgKeyStoreUnavailable) {

@@ -3,12 +3,13 @@ import {useTranslation} from 'react-i18next'
 // so its copy goes through the i18next instance rather than the hook.
 import i18n from '@/i18n'
 import clsx from 'clsx'
-import {Copy, Check, RefreshCw, RotateCcw, Bot, User, CircleSlash} from 'lucide-react'
+import {Copy, Check, RefreshCw, RotateCcw, Bot, User, CircleSlash, Settings} from 'lucide-react'
 import {useCallback, memo} from 'react'
 import ReactMarkdown, {defaultUrlTransform} from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {ChatMessage as ChatMessageType} from '@/types'
 import {useCopy} from '@/hooks/useCopy'
+import {providerErrorInfo} from '@/lib/chatErrors'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
@@ -432,6 +433,8 @@ function MessageBubble({
   const isUser = message.role === 'user'
   const isError = message.finishReason === 'error'
   const isInterrupted = message.finishReason === 'interrupted'
+  const providerError = isError ? providerErrorInfo(message.errorCode) : null
+  const openSettings = useUIStore(s => s.openSettings)
   const {copied, copy} = useCopy()
 
   const handleCopy = useCallback(() => {
@@ -461,7 +464,12 @@ function MessageBubble({
         {/* The model that actually answered, when the provider resolved the
             selected one (a deployment, model-router, an agent) to another. */}
         {message.servedModel && !isUser && message.servedModel !== message.model && (
-          <span className="text-2xs text-text-tertiary/60" title={t('message.servedBy', {model: message.servedModel})}>
+          <span
+            className="text-2xs text-text-tertiary/60"
+            role="img"
+            aria-label={t('message.servedBy', {model: message.servedModel})}
+            title={t('message.servedBy', {model: message.servedModel})}
+          >
             · {message.servedModel}
           </span>
         )}
@@ -485,6 +493,18 @@ function MessageBubble({
       >
         {renderContent(message.content, isUser, isStreaming, highlight)}
       </div>
+
+      {isError && providerError && (
+        // Always visible (not in the hover row): the fix lives in Settings.
+        <button
+          type="button"
+          className="flex items-center gap-1 px-1 text-2xs text-brand-400 hover:text-brand-300 transition-colors"
+          onClick={() => openSettings(providerError.settingsSection)}
+        >
+          <Settings size={11} />
+          <span>{t('errors.openSettings')}</span>
+        </button>
+      )}
 
       {!isUser &&
         (message.fixProposals ?? (message.fixProposal ? [message.fixProposal] : [])).map(snap => (
@@ -555,6 +575,11 @@ export default memo(MessageBubble, (prevProps, nextProps) => {
     prevProps.message.id === nextProps.message.id &&
     prevProps.message.content === nextProps.message.content &&
     prevProps.message.finishReason === nextProps.message.finishReason &&
+    prevProps.message.errorCode === nextProps.message.errorCode &&
+    // The header names the model and the one that actually answered.
+    prevProps.message.model === nextProps.message.model &&
+    prevProps.message.servedModel === nextProps.message.servedModel &&
+    prevProps.message.timestamp === nextProps.message.timestamp &&
     prevProps.message.toolCalls === nextProps.message.toolCalls &&
     prevProps.message.fixProposal === nextProps.message.fixProposal &&
     prevProps.message.fixProposals === nextProps.message.fixProposals &&

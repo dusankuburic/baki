@@ -59,17 +59,17 @@ func seedManyChunks(store *testutil.FakeBackend, docs, n int) {
 // every document counted, and nothing reported as truncated.
 func TestReindexOrg_WalksEveryPage(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
-	const docs, n = 3, reindexPageSize + 1
+	docs, n := 3, reindexPageSize+1
 	seedManyChunks(store, docs, n)
 	emb := &countingEmbedder{}
 	svc := guardService(store, emb)
 
-	res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true)
+	res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{})
 	if err != nil {
 		t.Fatalf("ReindexOrg: %v", err)
 	}
-	if res.Chunks != n || res.Docs != docs || res.Truncated {
-		t.Errorf("result = %+v, want %d chunks in %d docs, not truncated", res, n, docs)
+	if res.Chunks != n || res.Docs != docs || res.Truncated || res.NextCursor != nil {
+		t.Errorf("result = %+v, want %d chunks in %d docs, complete (no cursor)", res, n, docs)
 	}
 	if len(emb.inputs) != n {
 		t.Errorf("embedded %d inputs for %d chunks — a chunk was skipped or embedded twice", len(emb.inputs), n)
@@ -118,12 +118,12 @@ func TestReindexOrg_TruncatedBeyondCeiling(t *testing.T) {
 	seedManyChunks(store, 2, maxReindexChunks+1)
 	svc := guardService(store, &countingEmbedder{})
 
-	res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true)
+	res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{})
 	if err != nil {
 		t.Fatalf("ReindexOrg: %v", err)
 	}
-	if res.Chunks != maxReindexChunks || !res.Truncated {
-		t.Errorf("result = %+v, want %d chunks and Truncated", res, maxReindexChunks)
+	if res.Chunks != maxReindexChunks || !res.Truncated || res.NextCursor == nil {
+		t.Errorf("result = %+v, want %d chunks, Truncated and a NextCursor", res, maxReindexChunks)
 	}
 	// Walk order is (DocID, ID): doc-00's chunks first, then doc-01's; the
 	// one chunk beyond the ceiling is doc-01's last.
@@ -140,10 +140,10 @@ func TestReindexOrg_TruncatedBeyondCeiling(t *testing.T) {
 		t.Errorf("converted %d chunks, untouched %v; want %d converted and doc-01's last chunk untouched", converted, untouched, maxReindexChunks)
 	}
 
-	// The cursor lives inside one request: a re-run walks from the start
-	// again (same ceiling, same remainder), so Truncated is what tells the
-	// admin the corpus is above what one request converts.
-	res, err = svc.ReindexOrg(context.Background(), "scope", "org-1", true)
+	// A re-run WITHOUT the cursor walks from the start again (same
+	// ceiling, same remainder) — a client that predates the cursor sees
+	// Truncated; resuming is TestReindexOrg_ResumesAcrossRequests.
+	res, err = svc.ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{})
 	if err != nil || res.Chunks != maxReindexChunks || !res.Truncated {
 		t.Errorf("second run = %+v, %v; want the same ceiling and Truncated again", res, err)
 	}
@@ -151,7 +151,7 @@ func TestReindexOrg_TruncatedBeyondCeiling(t *testing.T) {
 	// Exactly the ceiling: complete, not truncated.
 	exact := &testutil.FakeBackend{EmbeddingDim: 1}
 	seedManyChunks(exact, 2, maxReindexChunks)
-	if res, err := guardService(exact, &countingEmbedder{}).ReindexOrg(context.Background(), "scope", "org-1", true); err != nil || res.Chunks != maxReindexChunks || res.Truncated {
+	if res, err := guardService(exact, &countingEmbedder{}).ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{}); err != nil || res.Chunks != maxReindexChunks || res.Truncated || res.NextCursor != nil {
 		t.Errorf("corpus of exactly the ceiling = %+v, %v; want complete and not truncated", res, err)
 	}
 }
@@ -202,7 +202,7 @@ func TestAddDocument_RefusedWhileReindexing(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true)
+		res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{})
 		done <- result{res, err}
 	}()
 	select {
@@ -218,7 +218,7 @@ func TestAddDocument_RefusedWhileReindexing(t *testing.T) {
 	if len(store.KnowledgeDocs) != 2 || !sameEmbeddings(before, storedEmbeddings(store)) {
 		t.Error("the refused upload wrote to the store")
 	}
-	if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true); !errors.Is(err, ErrKnowledgeBusy) {
+	if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{}); !errors.Is(err, ErrKnowledgeBusy) {
 		t.Errorf("second re-index during re-index: err = %v, want ErrKnowledgeBusy", err)
 	}
 	// Other orgs are independent (their own lock).
@@ -266,9 +266,15 @@ func TestEmbeddingFailed_WrapsProviderCause(t *testing.T) {
 	seedCorpus(store, []float32{1, 0}, "alpha rule")
 	svc := guardService(store, failingEmbedder{err: cause})
 	for name, err := range map[string]error{
-		"upload (sample)":    svc.AddDocument(context.Background(), "scope", "org-1", "new.md", "text"),
-		"re-index (sample)":  func() error { _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false); return err }(),
-		"re-index (forced)":  func() error { _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true); return err }(),
+		"upload (sample)": svc.AddDocument(context.Background(), "scope", "org-1", "new.md", "text"),
+		"re-index (sample)": func() error {
+			_, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false, interfaces.KnowledgeChunkCursor{})
+			return err
+		}(),
+		"re-index (forced)": func() error {
+			_, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{})
+			return err
+		}(),
 		"upload (empty org)": svc.AddDocument(context.Background(), "scope", "org-empty", "new.md", "text"),
 	} {
 		if !errors.Is(err, ErrEmbeddingFailed) || !errors.Is(err, ai.ErrRateLimited) {

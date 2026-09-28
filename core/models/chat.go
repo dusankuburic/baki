@@ -53,7 +53,17 @@ type ChatMessage struct {
 	TokensOut        int       `json:"tokensOut,omitempty"`
 	Provider         string    `json:"provider,omitempty"`
 	Model            string    `json:"model,omitempty"`
-	FinishReason     string    `json:"finishReason,omitempty"`
+	// ServedModel is the model that actually answered when Model is an
+	// alias the provider resolves (an Azure AI Foundry deployment,
+	// model-router, an agent); InputCostPerM / OutputCostPerM are the USD
+	// per 1M token rates the turn was billed at. All three come from the
+	// stream's done event and are saved with the message so a reloaded
+	// conversation keeps its served-model tag and prices the turn at what it
+	// cost, not at the current listing. Zero/empty = not reported.
+	ServedModel    string  `json:"servedModel,omitempty"`
+	InputCostPerM  float64 `json:"inputCostPerM,omitempty"`
+	OutputCostPerM float64 `json:"outputCostPerM,omitempty"`
+	FinishReason   string  `json:"finishReason,omitempty"`
 	// ToolCalls records the tool invocations behind this assistant message.
 	ToolCalls []ToolCallRecord `json:"toolCalls,omitempty"`
 	// FixProposal snapshots the (single) apply_fix approval record, if any.

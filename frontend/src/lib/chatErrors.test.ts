@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {classifyChatFailure, budgetDetail} from './chatErrors'
+import {classifyChatFailure, budgetDetail, providerErrorInfo} from './chatErrors'
 
 describe('classifyChatFailure', () => {
   it('trusts the machine-readable code first', () => {
@@ -29,5 +29,30 @@ describe('budgetDetail', () => {
 
   it('is empty when there are no figures', () => {
     expect(budgetDetail('budget exceeded')).toBe('')
+  })
+})
+
+describe('providerErrorInfo', () => {
+  it('maps the provider codes to a title, a settings section and a refresh flag', () => {
+    expect(providerErrorInfo('PROVIDER_AUTH')).toEqual({
+      titleKey: 'errors.providerAuthTitle',
+      settingsSection: 'accounts',
+      refreshProviders: true,
+    })
+    expect(providerErrorInfo('PROVIDER_NOT_CONFIGURED')?.refreshProviders).toBe(true)
+    expect(providerErrorInfo('PROVIDER_PERMISSION')?.refreshProviders).toBe(false)
+    // The Max tokens fix lives in AI Behavior.
+    expect(providerErrorInfo('PROVIDER_OUTPUT_LIMIT')?.settingsSection).toBe('behavior')
+    for (const code of ['PROVIDER_UNAVAILABLE', 'PROVIDER_CONTENT_FILTERED', 'PROVIDER_BALANCE']) {
+      expect(providerErrorInfo(code)).not.toBeNull()
+    }
+  })
+
+  it('is null for other or missing codes', () => {
+    expect(providerErrorInfo('AI_BUDGET_EXCEEDED')).toBeNull()
+    expect(providerErrorInfo('PROVIDER_RATE_LIMITED')).toBeNull()
+    expect(providerErrorInfo('toString')).toBeNull()
+    expect(providerErrorInfo(undefined)).toBeNull()
+    expect(providerErrorInfo(null)).toBeNull()
   })
 })

@@ -12,9 +12,30 @@ import (
 // model refresh is a one-file edit. TestProviderCatalogConsistency validates that
 // each provider's DefaultModel/FreeModel resolve against these entries.
 var modelCatalog = map[string][]ModelInfo{
+	// Claude: the Claude API models that Microsoft Foundry also sells (its
+	// "API model IDs and deployments" table), so a Foundry Claude deployment
+	// is priced by the model that answers. Base input/output USD per 1M
+	// tokens, context window and synchronous max output as published on
+	// platform.claude.com (about-claude/pricing and each models/<id>/overview
+	// page), checked 2026-09-28; Foundry bills the same per-model rates in
+	// Claude Consumption Units. Claude Opus 4.1 ($15/$75) is retired except on
+	// Bedrock and Google Cloud — neither the Claude API nor Foundry serves it —
+	// so it is not listed.
 	"claude": {
+		{ID: "claude-fable-5-1", DisplayName: "Claude Fable 5.1", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
+		{ID: "claude-fable-5", DisplayName: "Claude Fable 5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
+		{ID: "claude-mythos-5-1", DisplayName: "Claude Mythos 5.1", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
+		{ID: "claude-mythos-5", DisplayName: "Claude Mythos 5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
+		{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 4.0, OutputCostPerM: 20.0}},
+		{ID: "claude-opus-5", DisplayName: "Claude Opus 5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},
 		{ID: "claude-opus-4-8", DisplayName: "Claude Opus 4.8", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},
+		{ID: "claude-opus-4-7", DisplayName: "Claude Opus 4.7", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},
+		{ID: "claude-opus-4-6", DisplayName: "Claude Opus 4.6", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},
+		{ID: "claude-opus-4-5", DisplayName: "Claude Opus 4.5", ContextLimit: 200000, MaxOutputTokens: 64000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},
+		{ID: "claude-sonnet-5-5", DisplayName: "Claude Sonnet 5.5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 10.0}},
+		{ID: "claude-sonnet-5", DisplayName: "Claude Sonnet 5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 10.0}},
 		{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6", ContextLimit: 1000000, MaxOutputTokens: 64000, Pricing: Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}},
+		{ID: "claude-sonnet-4-5", DisplayName: "Claude Sonnet 4.5", ContextLimit: 200000, MaxOutputTokens: 64000, Pricing: Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}},
 		{ID: "claude-haiku-4-5", DisplayName: "Claude Haiku 4.5", ContextLimit: 200000, MaxOutputTokens: 64000, Pricing: Pricing{InputCostPerM: 1.0, OutputCostPerM: 5.0}},
 	},
 	"openai": {
@@ -98,6 +119,21 @@ var modelCatalog = map[string][]ModelInfo{
 		{ID: "text-embedding-3-large", DisplayName: "text-embedding-3-large", ContextLimit: 8191, Pricing: Pricing{InputCostPerM: 0.13, OutputCostPerM: 0}},
 		{ID: "text-embedding-ada-002", DisplayName: "text-embedding-ada-002", ContextLimit: 8191, Pricing: Pricing{InputCostPerM: 0.1, OutputCostPerM: 0}},
 	},
+}
+
+// claudeInviteOnly lists catalogued Claude models offered by invitation only
+// (Project Glasswing): kept in the catalogue so a Foundry deployment of one
+// is priced and sized, but not offered in the direct provider's picker
+// (ClaudeProvider.Models), where almost every key would be refused.
+var claudeInviteOnly = map[string]bool{
+	"claude-mythos-5-1": true,
+	"claude-mythos-5":   true,
+}
+
+// isClaudeModelName reports whether a model name (a served model, a project
+// listing's modelName) is a Claude model.
+func isClaudeModelName(name string) bool {
+	return strings.HasPrefix(normalizeServedModel(name), "claude")
 }
 
 // servedModelDateSuffix strips the version date OpenAI-compatible responses

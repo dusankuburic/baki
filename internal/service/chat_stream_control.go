@@ -36,8 +36,12 @@ const maxJournalEvents = 100
 
 // recordJournal appends an event when its type is journaled. Called on the
 // stream's base emit path, under the ctl mutex (same lock as the buffer —
-// emits and snapshots serialize).
+// emits and snapshots serialize). It also keeps the billed rates the done
+// event carries (doneEventData) for resume/begin (noteDoneRates).
 func (c *streamCtl) recordJournal(eventType string, data map[string]interface{}) {
+	if eventType == "done" {
+		c.noteDoneRates(data)
+	}
 	if !journaledEventTypes[eventType] {
 		return
 	}
@@ -46,6 +50,21 @@ func (c *streamCtl) recordJournal(eventType string, data map[string]interface{})
 		c.journal = c.journal[maxJournalEvents/2:]
 	}
 	c.journal = append(c.journal, journalEvent{Type: eventType, Data: data})
+}
+
+// noteDoneRates records the USD per 1M token rates a done event's payload
+// carries (inputCostPerM / outputCostPerM, set by doneEventData when the
+// provider can price the turn), so a client that missed the live done event
+// gets them from ResumeStream / BeginStream like the served model. Absent
+// or non-numeric values leave the rates at zero (= not reported). Caller
+// holds c.mu.
+func (c *streamCtl) noteDoneRates(data map[string]interface{}) {
+	if v, ok := data["inputCostPerM"].(float64); ok {
+		c.inputCostPerM = v
+	}
+	if v, ok := data["outputCostPerM"].(float64); ok {
+		c.outputCostPerM = v
+	}
 }
 
 // snapshotEvents returns a copy of the journal for inclusion in a snapshot or
@@ -88,6 +107,11 @@ type streamCtl struct {
 	// underlying model, from the provider's terminal chunk); "" when the
 	// provider named none. Guarded by mu; carried on done/resume payloads.
 	servedModel string
+	// inputCostPerM / outputCostPerM are the rates the finished turn was
+	// billed at, taken from the done event (noteDoneRates); 0 = not
+	// reported. Guarded by mu; carried on resume/begin payloads.
+	inputCostPerM  float64
+	outputCostPerM float64
 	// ownerID, orgID and streamID are IMMUTABLE after publication: the control
 	// is stored in activeStreams (tryStartStream) before the worker exists, and
 	// othersInFlight reads ownerID/orgID from every other stream lock-free, so
@@ -96,6 +120,11 @@ type streamCtl struct {
 	// construction.
 	ownerID string // caller identity (scope) that created this stream
 	orgID   string
+	// sharedCredential records that the turn's provider runs on the org's
+	// shared credential (ai.UsedOrgCredential), set by prepareTurn: an auth
+	// or permission failure is then the org admin's to fix, and
+	// classifyFailure says so.
+	sharedCredential atomic.Bool
 	// inflightCost is what THIS stream has spent so far plus one more maximum
 	// response it may still produce, in dollars, for OTHER streams' budget
 	// checks. The daily budget used to be read-then-act against the store
@@ -334,14 +363,16 @@ func (c *streamCtl) snapshot() resumeSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return resumeSnapshot{
-		Owner:       c.ownerID,
-		Text:        c.buffer.String(),
-		Done:        c.done,
-		Error:       c.errMsg,
-		ErrorCode:   c.errCode,
-		TokensIn:    c.tokensIn,
-		TokensOut:   c.tokensOut,
-		ServedModel: c.servedModel,
-		Events:      c.snapshotEvents(),
+		Owner:          c.ownerID,
+		Text:           c.buffer.String(),
+		Done:           c.done,
+		Error:          c.errMsg,
+		ErrorCode:      c.errCode,
+		TokensIn:       c.tokensIn,
+		TokensOut:      c.tokensOut,
+		ServedModel:    c.servedModel,
+		InputCostPerM:  c.inputCostPerM,
+		OutputCostPerM: c.outputCostPerM,
+		Events:         c.snapshotEvents(),
 	}
 }

@@ -146,7 +146,39 @@ func errorEventData(code, msg string) map[string]interface{} {
 // timeout gets a readable message, and the common provider sentinels map to
 // actionable copy — a raw "rate limited" or "provider circuit open: too many
 // recent failures" told the user nothing they could act on.
+//
+// A turn on the organisation's shared credential (sharedCredential) that the
+// provider refused — rejected credentials, a missing role, an unreadable
+// document — gets copy pointing at the org admin: the member cannot fix the
+// org's configuration in their own Settings.
 func (c *streamCtl) classifyFailure(ctx context.Context, err error) (code, msg string) {
+	code, msg = c.classifyFailureBase(ctx, err)
+	if c.sharedCredential.Load() {
+		if shared, ok := sharedCredentialFailureMsg(code, err); ok {
+			msg = shared
+		}
+	}
+	return code, msg
+}
+
+// sharedCredentialFailureMsg is the copy for a credential failure on the
+// organisation's shared Azure AI Foundry configuration, keyed by the code
+// classifyFailureBase chose; ok is false for every other failure.
+func sharedCredentialFailureMsg(code string, err error) (string, bool) {
+	const ask = "ask your organisation admin to update the shared Azure AI Foundry configuration"
+	switch {
+	case code == ChatErrProviderPermission:
+		return "the provider accepted your organisation's shared credentials, but its service principal lacks permission for this model or agent — " + ask + " (or add your own in Settings → AI Accounts)", true
+	case code == ChatErrProviderAuth:
+		return "the provider rejected your organisation's shared credentials — " + ask + " (or add your own in Settings → AI Accounts)", true
+	case code == ChatErrProviderNotConfigured && errors.Is(err, ai.ErrProviderConfigInvalid):
+		return "your organisation's shared provider configuration is invalid — " + ask, true
+	}
+	return "", false
+}
+
+// classifyFailureBase is classifyFailure without the shared-credential copy.
+func (c *streamCtl) classifyFailureBase(ctx context.Context, err error) (code, msg string) {
 	c.mu.Lock()
 	reason := c.cancelReason
 	c.mu.Unlock()

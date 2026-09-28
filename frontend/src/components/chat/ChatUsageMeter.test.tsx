@@ -1,6 +1,6 @@
 import {describe, it, expect, beforeEach} from 'vitest'
 import {render, screen} from '@testing-library/react'
-import ChatUsageMeter, {threadCost} from './ChatUsageMeter'
+import ChatUsageMeter, {threadCost, threadCostEstimate} from './ChatUsageMeter'
 import {useChatStore} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import type {ChatMessage} from '@/types'
@@ -47,6 +47,22 @@ describe('threadCost', () => {
   })
 })
 
+describe('threadCostEstimate', () => {
+  const rated = assistant({id: 'a1', tokensIn: 1000, tokensOut: 0, inputCostPerM: 1, outputCostPerM: 1})
+  it('is exact when every token is priced', () => {
+    expect(threadCostEstimate([rated], 1000, 0, 0, 0)?.lowerBound).toBe(false)
+    // The listing prices the remainder.
+    expect(threadCostEstimate([rated], 5000, 0, 1, 1)?.lowerBound).toBe(false)
+  })
+
+  it('is a lower bound when unrated tokens exist and the listing is $0', () => {
+    expect(threadCostEstimate([rated, assistant({id: 'a2', tokensIn: 10})], 1010, 0, 0, 0)).toEqual({
+      cost: 0.001,
+      lowerBound: true,
+    })
+  })
+})
+
 describe('ChatUsageMeter', () => {
   it('shows the cost from the listing price', () => {
     render(<ChatUsageMeter promptTokens={1000} completionTokens={500} inputCostPerM={2} outputCostPerM={10} />)
@@ -63,6 +79,16 @@ describe('ChatUsageMeter', () => {
     seed([assistant({tokensIn: 1000, tokensOut: 500, inputCostPerM: 20, outputCostPerM: 100})])
     render(<ChatUsageMeter promptTokens={1000} completionTokens={500} />)
     expect(screen.getByText(/· \$0\.070/)).toBeInTheDocument()
+  })
+
+  it('marks the cost as a lower bound when some turns have no known price and the listing is $0', () => {
+    seed([
+      assistant({id: 'a1', tokensIn: 1000, tokensOut: 500, inputCostPerM: 20, outputCostPerM: 100}),
+      assistant({id: 'a2', tokensIn: 1000, tokensOut: 500}),
+    ])
+    render(<ChatUsageMeter promptTokens={2000} completionTokens={1000} inputCostPerM={0} outputCostPerM={0} />)
+    expect(screen.getByText(/≥ \$0\.070/)).toBeInTheDocument()
+    expect(screen.getByTitle(/At least this much/)).toBeInTheDocument()
   })
 
   it('hides the cost when no rate is known, or when cost estimates are off', () => {

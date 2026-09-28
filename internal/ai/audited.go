@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
@@ -27,6 +28,12 @@ type auditedProvider struct {
 	// the resource, so a new resource's same-named deployment never inherits
 	// the old resource's mapping. UsageMetric.UserID stays scope.
 	memoScope string
+	// usageOrg is the organisation whose SHARED credential this chain runs
+	// on ("" = the caller's own; set by ProviderFactory.wrapChainScoped). A
+	// usage row without an org of its own — an embedding (Embed carries no
+	// Request), the admin's connection test — is attributed to it, so every
+	// call on an org's credential is capped by that org's daily budget.
+	usageOrg string
 	// embedNamer names the embedding model for usage records. The resilience
 	// and tracing wrappers hide the raw provider's EmbeddingModel method, so
 	// the factory hands it over for alias providers (adoptRawHints); nil falls
@@ -381,14 +388,10 @@ func (p *auditedProvider) usageMetric(ctx context.Context, modelID, servedModel,
 	inputCost := (float64(tokensIn) / 1000000.0) * pricing.InputCostPerM
 	outputCost := (float64(tokensOut) / 1000000.0) * pricing.OutputCostPerM
 
-	// The row keeps what the caller asked for (modelID — for an alias
-	// provider a deployment name, a "claude:<deployment>" id or a Foundry
-	// agent) AND what answered, so analytics can group by the billed model.
-	// Same comparison as recordServedModel: blank when the provider did not
-	// report one or the id already IS the model.
-	served := strings.TrimSpace(servedModel)
-	if strings.EqualFold(served, strings.TrimSpace(modelID)) {
-		served = ""
+	if orgID == "" {
+		// A chain built from an org's shared credential bills the org even
+		// when the call carried no org (embeddings, the connection test).
+		orgID = p.usageOrg
 	}
 
 	metric := interfaces.UsageMetric{
@@ -398,10 +401,11 @@ func (p *auditedProvider) usageMetric(ctx context.Context, modelID, servedModel,
 		// OrganizationID) rather than fixed at construction time, so the same
 		// audited provider can attribute org-scoped and personal usage correctly.
 		// This is what lets GetDailyUsage enforce org-wide daily budgets.
-		OrgID:            orgID,
-		Provider:         p.providerID,
-		Model:            modelID,
-		ServedModel:      served,
+		OrgID:    orgID,
+		Provider: p.providerID,
+		Model:    modelID,
+		// What answered, next to what was asked for (see usageServedModel).
+		ServedModel:      usageServedModel(p.providerID, modelID, servedModel),
 		PromptTokens:     tokensIn,
 		CompletionTokens: tokensOut,
 		EstimatedCost:    inputCost + outputCost,
@@ -413,6 +417,38 @@ func (p *auditedProvider) usageMetric(ctx context.Context, modelID, servedModel,
 	// with it (see the metric's definition).
 	metrics.RecordAIUsageCost(inputCost + outputCost)
 	return metric
+}
+
+// maxUsageServedModel caps the served model stored on a usage row: it is
+// whatever the upstream's "model" field said (an operator-allow-listed host
+// can answer anything), and the column feeds analytics grouping.
+const maxUsageServedModel = 128
+
+// usageServedModel is the served model a usage row records next to the
+// requested one, so analytics can group by the billed model. Only alias
+// providers (Azure AI Foundry: a deployment name, a "claude:<deployment>" id
+// or an agent) record one — for every other provider the id already names
+// the model, and a dated answer ("gpt-4o-2024-08-06" for "gpt-4o") only
+// split analytics into two series for one model. Blank when the provider
+// named none or the answer normalises to the requested id
+// (normalizeServedModel: case, whitespace, version date); capped at
+// maxUsageServedModel bytes on a rune boundary.
+func usageServedModel(providerID, modelID, servedModel string) string {
+	if !UsesModelAliases(providerID) {
+		return ""
+	}
+	served := strings.TrimSpace(servedModel)
+	if served == "" || normalizeServedModel(served) == normalizeServedModel(modelID) {
+		return ""
+	}
+	if len(served) > maxUsageServedModel {
+		cut := maxUsageServedModel
+		for cut > 0 && !utf8.RuneStart(served[cut]) {
+			cut--
+		}
+		served = served[:cut]
+	}
+	return served
 }
 
 // aliasCeiling is the worst-case rate an alias provider's unknown model is
@@ -429,14 +465,19 @@ func (p *auditedProvider) aliasCeiling(ctx context.Context, modelID string) Pric
 	if p.isEmbeddingAlias(ctx, modelID) {
 		return AliasEmbeddingCeiling(p.providerID)
 	}
-	return AliasReservationCeiling(p.providerID)
+	return p.aliasChatCeiling(modelID)
 }
 
 // aliasChatCeiling is the reservation ceiling for a chat alias: the Claude
-// ceiling for a Claude deployment, else the provider's catalogue ceiling.
+// ceiling for a Claude deployment, the router ceiling (own table and Claude)
+// for a model router or any alias whose served model has varied, else the
+// provider's own catalogue ceiling.
 func (p *auditedProvider) aliasChatCeiling(modelID string) Pricing {
 	if IsClaudeModel(modelID) {
 		return AliasClaudeCeiling(p.providerID)
+	}
+	if isModelRouterAlias(modelID) || servedModelVaries(p.memoScope, p.providerID, modelID) {
+		return AliasRouterCeiling(p.providerID)
 	}
 	return AliasReservationCeiling(p.providerID)
 }
@@ -589,8 +630,10 @@ func (p *auditedProvider) Embed(ctx context.Context, text []string) ([][]float32
 	// budget entirely. Embedding APIs bill per INPUT token (no output), so
 	// estimate the batch's input tokens and record with the embedding model's
 	// name for pricing (falling back to provider-wide pricing when unknown).
-	// Embed carries no Request, so OrgID is empty: embedding spend attributes
-	// to the user (personal budget), never an org the caller may not be in.
+	// Embed carries no Request, so no org rides on the call: embedding spend
+	// on the caller's own credential attributes to the user (personal
+	// budget), never an org the caller may not be in; on an org's shared
+	// credential it is attributed to that org (usageMetric, usageOrg).
 	if len(text) > 0 {
 		tokensIn := 0
 		for _, t := range text {

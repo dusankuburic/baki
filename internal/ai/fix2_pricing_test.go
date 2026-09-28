@@ -49,7 +49,7 @@ func TestAuditedReservationPricing_RouterReservesAtCeiling(t *testing.T) {
 	t.Cleanup(resetServedModels)
 	az := azureFoundryProviderID
 	nano, _ := catalogEntryFor(az, "gpt-5-nano")
-	ceiling := AliasReservationCeiling(az)
+	ceiling := AliasRouterCeiling(az) // routers may route to Claude
 
 	recordServedModel("u1", az, "model-router", "gpt-5-nano-2025-08-07")
 	recordServedModel("u1", az, "smart", "gpt-5-nano-2025-08-07")
@@ -79,8 +79,8 @@ func TestAuditedReservationPricing_RouterReservesAtCeiling(t *testing.T) {
 	if got := rp.ReservationPricing(ctx, "stable"); got != nano.Pricing {
 		t.Errorf("a stable alias reserves at %+v, want its listing price %+v", got, nano.Pricing)
 	}
-	if got := rp.ReservationPricing(ctx, ""); got != ceiling {
-		t.Errorf("an unknown default deployment reserves at %+v, want the ceiling", got)
+	if got := rp.ReservationPricing(ctx, ""); got != AliasReservationCeiling(az) {
+		t.Errorf("an unknown plain default deployment reserves at %+v, want the Azure (non-router) ceiling", got)
 	}
 
 	other := NewAuditedProvider(&auditStub{price: Pricing{InputCostPerM: 1, OutputCostPerM: 2}}, nil, "u1", "stub").(ReservationPricer)

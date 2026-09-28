@@ -34,6 +34,20 @@ export function threadCost(
   listInputPerM: number,
   listOutputPerM: number,
 ): number | null {
+  return threadCostEstimate(messages, promptTokens, completionTokens, listInputPerM, listOutputPerM)?.cost ?? null
+}
+
+// threadCostEstimate is threadCost plus whether the figure is only a lower
+// bound: some of the thread's tokens came from turns that reported no rates
+// and the current listing price is 0 (an Azure deployment lists at $0 — its
+// price follows the served model), so those tokens are not in the figure.
+export function threadCostEstimate(
+  messages: readonly ChatMessage[],
+  promptTokens: number,
+  completionTokens: number,
+  listInputPerM: number,
+  listOutputPerM: number,
+): {cost: number; lowerBound: boolean} | null {
   let cost = 0
   let priced = false
   let ratedIn = 0
@@ -50,13 +64,13 @@ export function threadCost(
     ratedOut += tokensOut
     priced = true
   }
+  const restIn = Math.max(0, promptTokens - ratedIn)
+  const restOut = Math.max(0, completionTokens - ratedOut)
   if (listInputPerM > 0 || listOutputPerM > 0) {
-    const restIn = Math.max(0, promptTokens - ratedIn)
-    const restOut = Math.max(0, completionTokens - ratedOut)
     cost += (restIn * listInputPerM + restOut * listOutputPerM) / 1_000_000
-    priced = true
+    return {cost, lowerBound: false}
   }
-  return priced ? cost : null
+  return priced ? {cost, lowerBound: restIn + restOut > 0} : null
 }
 
 // ChatUsageMeter is the composer's single always-present usage line. It merges
@@ -118,10 +132,12 @@ export default function ChatUsageMeter({promptTokens, completionTokens, inputCos
     return <span className="block h-3.5" aria-hidden="true" />
   }
 
-  const cost = showCost
-    ? threadCost(messages, promptTokens, completionTokens, inputCostPerM ?? 0, outputCostPerM ?? 0)
+  const estimate = showCost
+    ? threadCostEstimate(messages, promptTokens, completionTokens, inputCostPerM ?? 0, outputCostPerM ?? 0)
     : null
-  const costStr = cost === null ? '' : cost < 0.001 ? '<$0.001' : `$${cost.toFixed(3)}`
+  const amount = estimate === null ? '' : estimate.cost < 0.001 ? '<$0.001' : `$${estimate.cost.toFixed(3)}`
+  // Some turns have no known price: the real spend is at least this much.
+  const costStr = estimate?.lowerBound && estimate.cost >= 0.001 ? t('tokens.costAtLeast', {cost: amount}) : amount
 
   return (
     <span className="text-2xs text-text-tertiary tabular-nums truncate">
@@ -132,7 +148,12 @@ export default function ChatUsageMeter({promptTokens, completionTokens, inputCos
           ({formatCompact(promptTokens)}/{formatCompact(completionTokens)})
         </span>
       )}
-      {costStr && <span className="text-text-tertiary/60"> · {costStr}</span>}
+      {costStr && (
+        <span className="text-text-tertiary/60" title={estimate?.lowerBound ? t('tokens.costAtLeastTitle') : undefined}>
+          {' · '}
+          {costStr}
+        </span>
+      )}
     </span>
   )
 }

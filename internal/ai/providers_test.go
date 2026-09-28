@@ -29,8 +29,14 @@ func TestClaudeProvider_Models(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Models() error: %v", err)
 	}
-	if len(models) != 3 {
-		t.Fatalf("expected 3 models, got %d", len(models))
+	// The Claude catalogue without the invite-only Mythos models.
+	if want := len(modelCatalog["claude"]) - len(claudeInviteOnly); len(models) != want {
+		t.Fatalf("expected %d models, got %d", want, len(models))
+	}
+	for _, m := range models {
+		if claudeInviteOnly[m.ID] {
+			t.Errorf("invite-only %s must not be offered by the direct provider", m.ID)
+		}
 	}
 	found := false
 	for _, m := range models {

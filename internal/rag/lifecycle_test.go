@@ -113,7 +113,7 @@ func TestReindexOrg_ReembedsCorpus(t *testing.T) {
 	// No force: a width change (3 → 1) against a corpus with nothing in the
 	// vector index is the stranded-corpus recovery and passes the
 	// embedding-model mismatch guard.
-	res, err := svc.ReindexOrg(ctx, "scope", "org-1", false)
+	res, err := svc.ReindexOrg(ctx, "scope", "org-1", false, interfaces.KnowledgeChunkCursor{})
 	if err != nil {
 		t.Fatalf("ReindexOrg: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestReindexOrg_ReembedsCorpus(t *testing.T) {
 		}
 	}
 	// Idempotent on empty orgs: no corpus, no work, no error.
-	empty, err := svc.ReindexOrg(ctx, "scope", "org-empty", false)
+	empty, err := svc.ReindexOrg(ctx, "scope", "org-empty", false, interfaces.KnowledgeChunkCursor{})
 	if err != nil || empty.Chunks != 0 {
 		t.Errorf("empty org re-index: %+v, %v", empty, err)
 	}
@@ -139,7 +139,7 @@ func TestReindexOrg_ReembedsCorpus(t *testing.T) {
 // admin clicked re-index on a deployment with no embedding key.
 func TestReindexOrg_NoProvider(t *testing.T) {
 	svc := NewKnowledgeService(&testutil.FakeBackend{}, nil, nil)
-	if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false); err == nil ||
+	if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false, interfaces.KnowledgeChunkCursor{}); err == nil ||
 		!strings.Contains(err.Error(), "embedding provider") {
 		t.Fatalf("want embedding-provider error, got %v", err)
 	}

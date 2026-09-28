@@ -25,4 +25,14 @@ type OrgSecretStore interface {
 	// OrgKeyMeta reports who last wrote the credential and when; ok is false
 	// when the org has none.
 	OrgKeyMeta(orgID, provider string) (updatedBy string, updatedAt time.Time, ok bool, err error)
+	// SaveOrgIfUnchanged is SaveOrg with compare-and-swap on the stored
+	// updated_at (a zero expected = only when the org has no row); ok is
+	// false, nothing written, when the row changed or appeared meanwhile.
+	SaveOrgIfUnchanged(orgID, provider, key, updatedBy string, expected time.Time) (updatedAt time.Time, ok bool, err error)
+	// DeleteOrgIfUpdatedBy deletes the credential only while updatedBy is
+	// still the admin who last wrote it (disabling a departed lender's key).
+	DeleteOrgIfUpdatedBy(orgID, provider, updatedBy string) (deleted bool, err error)
+	// OrgsWithKeyUpdatedBy lists the orgs whose credential for provider
+	// updatedBy last wrote.
+	OrgsWithKeyUpdatedBy(provider, updatedBy string) ([]string, error)
 }

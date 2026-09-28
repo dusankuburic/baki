@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,7 +155,7 @@ func TestSaveAzureFoundryConfig_SecretCarryOver(t *testing.T) {
 		})
 	}
 
-	t.Run("api key keeps carrying on mode alone", func(t *testing.T) {
+	t.Run("api key carries on the same endpoint only", func(t *testing.T) {
 		secrets := testutil.NewFakeSecretStore()
 		svc := newProviderServiceWithFakeSecrets(t, secrets)
 		if err := svc.SaveAzureFoundryConfig("u1", ai.AzureFoundryConfig{
@@ -164,16 +165,27 @@ func TestSaveAzureFoundryConfig_SecretCarryOver(t *testing.T) {
 			t.Fatal(err)
 		}
 		edited := ai.AzureFoundryConfig{
-			Endpoint: "https://my-other-res.openai.azure.com", ChatDeployment: "chat2",
+			Endpoint: "https://my-res.openai.azure.com", ChatDeployment: "chat2",
 			Auth: ai.AzureFoundryAuth{Mode: ai.AzureAuthModeAPIKey},
 		}
 		if err := svc.SaveAzureFoundryConfig("u1", edited); err != nil {
-			t.Fatalf("blank api key must carry over: %v", err)
+			t.Fatalf("blank api key on the same endpoint must carry over: %v", err)
 		}
 		raw, _ := secrets.Get("u1", ai.AzureFoundryProviderID)
 		parsed, err := ai.ParseAzureFoundryConfig(raw)
-		if err != nil || parsed.Auth.Key != "k1" || parsed.Endpoint != edited.Endpoint {
-			t.Errorf("stored document = %+v (%v), want the carried key on the new endpoint", parsed, err)
+		if err != nil || parsed.Auth.Key != "k1" || parsed.ChatDeployment != "chat2" {
+			t.Errorf("stored document = %+v (%v), want the carried key and the new deployment", parsed, err)
+		}
+		// R-8: pointing the stored key at another host needs it re-entered.
+		moved := edited
+		moved.Endpoint = "https://my-other-res.openai.azure.com"
+		err = svc.SaveAzureFoundryConfig("u1", moved)
+		if code := azureCfgErrCode(t, err); code != ai.AzureCfgErrMissingSecret || !strings.Contains(err.Error(), "endpoint changed") {
+			t.Errorf("blank api key on another endpoint: code %q (%v), want MISSING_SECRET explaining why", code, err)
+		}
+		raw, _ = secrets.Get("u1", ai.AzureFoundryProviderID)
+		if parsed, _ = ai.ParseAzureFoundryConfig(raw); parsed.Endpoint != edited.Endpoint {
+			t.Errorf("a refused save moved the stored document: %+v", parsed)
 		}
 	})
 }

@@ -93,15 +93,20 @@ describe('AzureFoundrySection', () => {
     expect(screen.getByRole('radio', {name: 'API key'})).toHaveAttribute('aria-checked', 'true')
     const secret = screen.getByLabelText('Azure API key')
     expect(secret).toHaveAttribute('type', 'password')
-    expect(secret).toHaveAttribute('autocomplete', 'off')
+    // "off" is ignored on password fields by password managers.
+    expect(secret).toHaveAttribute('autocomplete', 'new-password')
     expect(secret).toHaveAttribute('spellcheck', 'false')
     expect(screen.queryByRole('textbox', {name: 'Tenant ID'})).toBeNull()
     expect(saveButton()).toBeDisabled()
     expect(screen.queryByRole('button', {name: 'Cancel'})).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', {name: 'Show'}))
+    // A toggle whose name says which secret it reveals.
+    const show = screen.getByRole('button', {name: 'Show API key'})
+    expect(show).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(show)
     expect(screen.getByLabelText('Azure API key')).toHaveAttribute('type', 'text')
-    fireEvent.click(screen.getByRole('button', {name: 'Hide'}))
+    expect(screen.getByRole('button', {name: 'Hide API key'})).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('button', {name: 'Hide API key'}))
     expect(screen.getByLabelText('Azure API key')).toHaveAttribute('type', 'password')
   })
 
@@ -683,6 +688,38 @@ describe('AzureFoundrySection', () => {
       })
     })
 
+    it('drops Claude names already listed as another deployment, and says so', async () => {
+      await fillRequired()
+      fireEvent.change(screen.getByRole('textbox', {name: 'Additional deployments (optional)'}), {
+        target: {value: 'gpt-4o-mini'},
+      })
+      fireEvent.change(claudeField(), {target: {value: 'GPT-4.1, claude-sonnet-4-6, gpt-4o-mini'}})
+      expect(
+        screen.getByText(/GPT-4\.1, gpt-4o-mini are already listed as chat, embedding or additional deployments/),
+      ).toBeInTheDocument()
+      fireEvent.click(saveButton())
+      await waitFor(() => expect(api.saveAzureFoundryConfig).toHaveBeenCalledTimes(1))
+      expect(api.saveAzureFoundryConfig.mock.calls[0][0]).toStrictEqual({
+        endpoint: 'https://my-res.services.ai.azure.com',
+        auth: {mode: 'api_key', key: 'sk-test'},
+        chatDeployment: 'gpt-4.1',
+        deployments: ['gpt-4o-mini'],
+        claudeDeployments: ['claude-sonnet-4-6'],
+      })
+    })
+
+    it('does not count a duplicated Claude name as the chat target', async () => {
+      await renderUnconfigured()
+      fireEvent.change(endpointField(), {target: {value: 'https://my-res.services.ai.azure.com'}})
+      fireEvent.change(screen.getByLabelText('Azure API key'), {target: {value: 'sk-test'}})
+      fireEvent.change(screen.getByRole('textbox', {name: 'Embedding deployment (optional)'}), {
+        target: {value: 'text-embedding-3-small'},
+      })
+      fireEvent.change(claudeField(), {target: {value: 'text-embedding-3-small'}})
+      expect(screen.getByText(/is already listed as a chat, embedding or additional deployment/)).toBeInTheDocument()
+      expect(saveButton()).toBeDisabled()
+    })
+
     it('lists, prefills and re-sends the stored Claude deployments', async () => {
       api.getAzureFoundryConfig.mockResolvedValue({
         ...apiKeyConfig,
@@ -789,5 +826,114 @@ describe('AzureFoundrySection', () => {
       ).toBeInTheDocument()
       expect(api.getOrgAzureFoundryConfig).toHaveBeenCalledTimes(2)
     })
+
+    it('sends the updatedAt it read as a compare-and-swap guard, and shows when it was updated', async () => {
+      api.getOrgAzureFoundryConfig.mockResolvedValue(sharedConfig)
+      render(<AzureFoundrySection scope={admin} />)
+      const updated = await screen.findByText(/^updated /)
+      expect(updated.tagName).toBe('TIME')
+      expect(updated).toHaveAttribute('dateTime', '2026-09-28T10:00:00Z')
+
+      fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
+      fireEvent.click(saveButton())
+      await waitFor(() => expect(api.saveOrgAzureFoundryConfig).toHaveBeenCalledTimes(1))
+      expect(api.saveOrgAzureFoundryConfig).toHaveBeenCalledWith('org-1', {
+        endpoint: 'https://my-res.openai.azure.com',
+        auth: {mode: 'api_key'},
+        chatDeployment: 'gpt-4.1',
+        updatedAt: '2026-09-28T10:00:00Z',
+      })
+    })
+
+    it("explains a concurrent change (409) and reloads the other admin's version on request", async () => {
+      api.getOrgAzureFoundryConfig.mockResolvedValue(sharedConfig)
+      api.saveOrgAzureFoundryConfig.mockRejectedValue(new ApiError('changed', 409, 'CONFLICT'))
+      render(<AzureFoundrySection scope={admin} />)
+      fireEvent.click(await screen.findByRole('button', {name: 'Edit'}))
+      fireEvent.click(saveButton())
+      const alert = await screen.findByText(/Someone else changed the shared configuration/)
+      expect(alert.closest('[role="alert"]')).not.toBeNull()
+
+      api.getOrgAzureFoundryConfig.mockResolvedValue({...sharedConfig, chatDeployment: 'gpt-5', updatedBy: 'Bo'})
+      fireEvent.click(screen.getByRole('button', {name: 'Reload'}))
+      expect(await screen.findByText('gpt-5')).toBeInTheDocument()
+      expect(screen.getByText('Shared by your organisation · set by Bo')).toBeInTheDocument()
+      expect(screen.queryByRole('textbox', {name: 'Azure endpoint'})).toBeNull()
+    })
+
+    it('uses permission copy for a 403 on save, remove and test', async () => {
+      const forbidden = new ApiError('forbidden', 403, null)
+      api.getOrgAzureFoundryConfig.mockResolvedValue(sharedConfig)
+      api.testOrgAzureFoundryConnection.mockRejectedValue(forbidden)
+      api.deleteOrgAzureFoundryConfig.mockRejectedValue(forbidden)
+      api.saveOrgAzureFoundryConfig.mockRejectedValue(forbidden)
+      render(<AzureFoundrySection scope={admin} />)
+      const readOnly = 'Only organisation admins can change the shared configuration.'
+
+      fireEvent.click(await screen.findByRole('button', {name: 'Test'}))
+      expect(await screen.findByText(readOnly)).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', {name: 'Remove'}))
+      await waitFor(() => expect(screen.getAllByText(readOnly)).toHaveLength(2))
+      expect(screen.queryByText('forbidden')).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
+      fireEvent.click(saveButton())
+      expect(await screen.findByRole('alert')).toHaveTextContent(readOnly)
+    })
+
+    it('shows a note, not a dead Retry, when the caller may not read the shared configuration', async () => {
+      api.getOrgAzureFoundryConfig.mockRejectedValue(new ApiError('forbidden', 403, null))
+      render(<AzureFoundrySection scope={member} />)
+      expect(await screen.findByText(/Only organisation admins and members can use/)).toBeInTheDocument()
+      expect(screen.queryByRole('button', {name: 'Retry'})).toBeNull()
+    })
+
+    it('renders nothing and tells the host when the deployment has no org keystore', async () => {
+      const onUnavailable = vi.fn()
+      api.getOrgAzureFoundryConfig.mockRejectedValue(new ApiError('no keystore', 404, 'ORG_KEYSTORE_UNAVAILABLE'))
+      const {container} = render(<AzureFoundrySection scope={admin} onUnavailable={onUnavailable} />)
+      await waitFor(() => expect(onUnavailable).toHaveBeenCalledTimes(1))
+      expect(container).toBeEmptyDOMElement()
+    })
+
+    it('says an unreadable stored credential is unreadable, and lets an admin enter it again', async () => {
+      api.getOrgAzureFoundryConfig.mockRejectedValue(new ApiError('decrypt', 500, 'ORG_CREDENTIAL_UNREADABLE'))
+      render(<AzureFoundrySection scope={admin} />)
+      expect(await screen.findByRole('alert')).toHaveTextContent(/stored but could not be read/)
+      expect(screen.getByRole('button', {name: 'Retry'})).toBeInTheDocument()
+      expect(screen.queryByRole('textbox', {name: 'Azure endpoint'})).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', {name: 'Enter again'}))
+      expect(await screen.findByRole('textbox', {name: 'Azure endpoint'})).toHaveValue('')
+      expect(screen.queryByRole('alert')).toBeNull()
+    })
+
+    it('never offers a member the replace action for an unreadable credential', async () => {
+      api.getOrgAzureFoundryConfig.mockRejectedValue(new ApiError('decrypt', 500, 'ORG_CREDENTIAL_UNREADABLE'))
+      render(<AzureFoundrySection scope={member} />)
+      expect(await screen.findByRole('alert')).toHaveTextContent(/stored but could not be read/)
+      expect(screen.queryByRole('button', {name: 'Enter again'})).toBeNull()
+    })
+  })
+
+  it('keeps a "saved, refresh failed" state instead of the empty form when the reload fails', async () => {
+    const onConfigured = vi.fn()
+    await renderUnconfigured(onConfigured)
+    fireEvent.change(endpointField(), {target: {value: 'https://my-res.openai.azure.com'}})
+    fireEvent.change(screen.getByLabelText('Azure API key'), {target: {value: 'sk-test'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Default chat deployment'}), {target: {value: 'gpt-4.1'}})
+    api.getAzureFoundryConfig.mockRejectedValueOnce(new Error('network'))
+    fireEvent.click(saveButton())
+
+    expect(
+      await screen.findByText("Your change was saved, but the configuration couldn't be reloaded."),
+    ).toBeInTheDocument()
+    expect(onConfigured).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('textbox', {name: 'Azure endpoint'})).toBeNull()
+
+    api.getAzureFoundryConfig.mockResolvedValue(apiKeyConfig)
+    fireEvent.click(screen.getByRole('button', {name: 'Retry'}))
+    expect(await screen.findByText('https://my-res.openai.azure.com')).toBeInTheDocument()
+    expect(screen.queryByText(/couldn't be reloaded/)).toBeNull()
   })
 })

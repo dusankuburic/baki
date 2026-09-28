@@ -58,6 +58,10 @@ export interface ChatMessage {
   inputCostPerM?: number
   outputCostPerM?: number
   finishReason?: 'stop' | 'interrupted' | 'error'
+  // An error bubble's machine-readable failure class (PROVIDER_AUTH, …), when
+  // the backend sent one; drives the bubble's "Open settings" action. Error
+  // bubbles are never persisted, so this never reaches the server.
+  errorCode?: string
   toolCalls?: ToolCallRecord[]
   fixProposal?: FixProposalSnapshot
   fixProposals?: FixProposalSnapshot[]

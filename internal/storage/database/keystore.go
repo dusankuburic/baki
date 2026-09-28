@@ -227,6 +227,89 @@ func (s *EncryptedKeyStore) SaveOrg(orgID, provider, key, updatedBy string) erro
 	return nil
 }
 
+// SaveOrgIfUnchanged is SaveOrg with compare-and-swap on updated_at: it
+// writes only when the stored row's updated_at still equals expected — or,
+// with a zero expected, only when the org has no row yet — and returns the
+// new updated_at. ok is false (nothing written) when another save or a
+// delete got there first. An admin's edit made from a stale read therefore
+// cannot silently overwrite another admin's newer configuration.
+func (s *EncryptedKeyStore) SaveOrgIfUnchanged(orgID, provider, key, updatedBy string, expected time.Time) (updatedAt time.Time, ok bool, err error) {
+	ct, err := s.encrypt(key, orgKeyAAD(orgID, provider))
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	defer cancel()
+	if expected.IsZero() {
+		err = s.db.QueryRowContext(ctx,
+			`INSERT INTO org_provider_keys (org_id, provider, ciphertext, updated_by, updated_at)
+			 VALUES ($1, $2, $3, $4, NOW())
+			 ON CONFLICT (org_id, provider) DO NOTHING
+			 RETURNING updated_at`,
+			orgID, provider, ct, updatedBy,
+		).Scan(&updatedAt)
+	} else {
+		err = s.db.QueryRowContext(ctx,
+			`UPDATE org_provider_keys
+			    SET ciphertext = $3, updated_by = $4, updated_at = NOW()
+			  WHERE org_id = $1 AND provider = $2 AND updated_at = $5
+			 RETURNING updated_at`,
+			orgID, provider, ct, updatedBy, expected,
+		).Scan(&updatedAt)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("keystore: save org: %w", err)
+	}
+	return updatedAt, true, nil
+}
+
+// DeleteOrgIfUpdatedBy removes the org's shared key only while updatedBy is
+// still the admin who last wrote it — atomically, so a newer save by another
+// admin is never deleted in its place. deleted is false when there was no
+// such row.
+func (s *EncryptedKeyStore) DeleteOrgIfUpdatedBy(orgID, provider, updatedBy string) (deleted bool, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	defer cancel()
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM org_provider_keys WHERE org_id = $1 AND provider = $2 AND updated_by = $3`, orgID, provider, updatedBy)
+	if err != nil {
+		return false, fmt.Errorf("keystore: delete org: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("keystore: delete org: %w", err)
+	}
+	return n > 0, nil
+}
+
+// OrgsWithKeyUpdatedBy lists the organisations whose shared key for provider
+// was last written by updatedBy (account erasure disables them).
+func (s *EncryptedKeyStore) OrgsWithKeyUpdatedBy(provider, updatedBy string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT org_id FROM org_provider_keys WHERE provider = $1 AND updated_by = $2 ORDER BY org_id`, provider, updatedBy)
+	if err != nil {
+		return nil, fmt.Errorf("keystore: org keys by updater: %w", err)
+	}
+	defer rows.Close()
+	var orgIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("keystore: org keys by updater: %w", err)
+		}
+		orgIDs = append(orgIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("keystore: org keys by updater: %w", err)
+	}
+	return orgIDs, nil
+}
+
 // GetOrg returns the decrypted shared key, storage.ErrSecretNotFound when
 // the org has none, or storage.ErrSecretDecryptFailed when the row cannot be
 // decrypted with the current deployment key (see Get).

@@ -16,11 +16,18 @@ import {useOptionalToast} from '@/components/shared/Toast'
 import {logger} from '@/lib/logger'
 import {uuid} from '@/lib/uuid'
 import {utf8ByteLength} from '@/lib/utf8'
-import {classifyChatFailure, budgetDetail} from '@/lib/chatErrors'
+import {classifyChatFailure, budgetDetail, providerErrorInfo, type ProviderErrorInfo} from '@/lib/chatErrors'
 import type {ChatEvent, DoneMeta, FixProposalPayload, ToolResultPayload} from '@/lib/chatEvent'
 import type {ChatMessage, ProviderID, ToolCallRecord} from '@/types'
 import {conversationHistoryEnabled} from '@/lib/chatHistory'
 import {buildChatRequest} from './useChatRequestBuilder'
+
+// providerErrorLine is the error bubble's text for a provider failure: the
+// localized title, then the server's message (which names the deployment,
+// role or limit at fault) as the detail.
+function providerErrorLine(info: ProviderErrorInfo, message: string): string {
+  return i18n.t('chat:errors.providerBubble', {title: i18n.t(`chat:${info.titleKey}`), message})
+}
 
 // StreamMeta is what produced a stream: the provider and model it was sent
 // with. Captured at send time so the committed message is labelled with the
@@ -345,7 +352,9 @@ export function useChatStreamEngine() {
       commitAssistantMessage(acc, slot?.messageId, acc.text, {tokensIn, tokensOut, finishReason: 'stop', meta})
       endStream(acc.threadId)
       // An alias provider just revealed which model answers this thread:
-      // refetch the listing so the header can name it ("dep · gpt-4o").
+      // refetch the listing so the header can name it ("dep · gpt-4o"). The
+      // epoch bump makes useProviderSetup refetch past the GET micro-cache,
+      // which would otherwise replay the listing from before this turn.
       if (meta?.servedModel && ALIAS_PROVIDERS.has(acc.provider) && !servedModelSeenRef.current.has(acc.threadId)) {
         servedModelSeenRef.current.add(acc.threadId)
         bumpProviderEpoch()
@@ -368,10 +377,14 @@ export function useChatStreamEngine() {
       if (!acc) return
       const slot = useChatStore.getState().streams[acc.threadId]
       let errorLine: string
+      const providerError = providerErrorInfo(code)
       if (classifyChatFailure(error, code) === 'budget') {
         const detail = budgetDetail(error)
         notifyBudget(detail)
         errorLine = i18n.t('chat:errors.budgetBubble', {detail})
+      } else if (providerError) {
+        errorLine = providerErrorLine(providerError, error)
+        if (providerError.refreshProviders) bumpProviderEpoch()
       } else {
         errorLine = i18n.t('chat:errors.generic', {message: error})
       }
@@ -384,6 +397,7 @@ export function useChatStreamEngine() {
         provider: acc.provider,
         model: acc.model,
         finishReason: 'error',
+        ...(providerError && code ? {errorCode: code} : {}),
       }
       // U3: a loop that fails at iteration 5 still ran 4 tools — keep the
       // trail on the error bubble so the user sees what happened before the
@@ -397,7 +411,7 @@ export function useChatStreamEngine() {
       appendMessage(acc.threadId, msg)
       endStream(acc.threadId)
     },
-    [appendMessage, endStream, notifyBudget, takeAcc],
+    [appendMessage, bumpProviderEpoch, endStream, notifyBudget, takeAcc],
   )
 
   // onAppend adds a delta-resume tail to the stream's accumulated text and
@@ -724,7 +738,7 @@ export function useChatStreamEngine() {
       // No save-on-send — the backend reconstructs history; save-on-done
       // persists the full user+assistant pair.
 
-      const appendErrorBubble = (content: string) =>
+      const appendErrorBubble = (content: string, errorCode?: string) =>
         appendMessage(threadId, {
           id: uuid(),
           role: 'assistant',
@@ -733,6 +747,7 @@ export function useChatStreamEngine() {
           provider: meta.provider,
           model: meta.model,
           finishReason: 'error',
+          ...(errorCode ? {errorCode} : {}),
         })
 
       // withdrawUserMessage takes back a message the backend never accepted:
@@ -813,6 +828,13 @@ export function useChatStreamEngine() {
             const detail = budgetDetail(errMsg)
             notifyBudget(detail)
             appendErrorBubble(i18n.t('chat:errors.budgetBubble', {detail}))
+          } else if (e instanceof ApiError && providerErrorInfo(e.code)) {
+            // A provider failure the create POST already knew about (no
+            // credentials for this provider in the flow's scope): same
+            // bubble as the stream's error event.
+            const info = providerErrorInfo(e.code)!
+            if (info.refreshProviders) useChatStore.getState().bumpProviderEpoch()
+            appendErrorBubble(providerErrorLine(info, errMsg), e.code ?? undefined)
           } else {
             // Surface any other create failure as an error bubble so the user
             // knows their message didn't go through.

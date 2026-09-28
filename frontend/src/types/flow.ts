@@ -75,6 +75,12 @@ export interface FlowDocument {
   isFolder?: boolean
   /** Per-line issues the parser recovered from (backend: parseErrors,omitempty). */
   parseErrors?: ParseError[]
+  /**
+   * The organisation that owns a cloud flow (backend: orgId,omitempty); absent
+   * for a personal or local flow. Chat turns on the flow resolve shared
+   * provider credentials through this org, not the active one.
+   */
+  orgId?: string
 }
 
 export interface FlowMetadata {

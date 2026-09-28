@@ -760,6 +760,9 @@ export const chat = {
     streamingSoFar: '{{formatted}} tokens so far',
     streamingAria: 'Generating answer — {{count}} output tokens so far',
     total: '{{formatted}} tokens',
+    // The estimate misses turns whose price is unknown: a lower bound.
+    costAtLeast: '≥ {{cost}}',
+    costAtLeastTitle: 'At least this much: some replies came from a model whose price is unknown.',
   },
   files: {
     heading: 'Select a file',
@@ -1092,6 +1095,16 @@ export const chat = {
     budgetBubble:
       '🛑 **Daily AI budget reached{{detail}}.** It resets at midnight UTC. Contact an admin to adjust the limit.',
     generic: '*Error: {{message}}*',
+    // Provider failures: a localized title, then the server's detail.
+    providerBubble: '**{{title}}** — {{message}}',
+    providerAuthTitle: 'The provider rejected the credentials',
+    providerPermissionTitle: 'The credentials lack access to this model',
+    providerNotConfiguredTitle: 'This provider is not set up here',
+    providerUnavailableTitle: 'The provider is unavailable',
+    providerContentFilteredTitle: "The provider's content filter blocked this reply",
+    providerOutputLimitTitle: 'The reply hit the Max tokens limit',
+    providerBalanceTitle: 'The provider account is out of credit',
+    openSettings: 'Open settings',
     stalled: 'The response stalled — the connection to the backend may have been lost.',
     cannotConnect: 'Could not connect to the event stream — the backend may still be starting. Please try again.',
     previewFailed: "Couldn't load the context preview — your message wasn't sent.",

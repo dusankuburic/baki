@@ -82,7 +82,7 @@ func TestReindexOrg_ModelChangedRefusedUnlessForced(t *testing.T) {
 	emb := &fixedEmbedder{vec: []float32{0, 1}}
 	svc := guardService(store, emb)
 
-	_, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false)
+	_, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false, interfaces.KnowledgeChunkCursor{})
 	if !errors.Is(err, ErrEmbeddingModelChanged) {
 		t.Fatalf("err = %v, want ErrEmbeddingModelChanged", err)
 	}
@@ -93,7 +93,7 @@ func TestReindexOrg_ModelChangedRefusedUnlessForced(t *testing.T) {
 		t.Errorf("embed calls = %d, want 1 (the sample only, not the corpus)", emb.calls)
 	}
 
-	res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true)
+	res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{})
 	if err != nil {
 		t.Fatalf("forced re-index: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestReindexOrg_ModelChangedRefusedUnlessForced(t *testing.T) {
 		}
 	}
 	// The corpus now matches the caller: an unforced re-index passes.
-	if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false); err != nil {
+	if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false, interfaces.KnowledgeChunkCursor{}); err != nil {
 		t.Errorf("re-index after the switch: %v", err)
 	}
 }
@@ -118,7 +118,7 @@ func TestReindexOrg_SameModelPasses(t *testing.T) {
 	seedCorpus(store, []float32{1, 0}, "alpha rule", "beta rule")
 	svc := guardService(store, &fixedEmbedder{vec: []float32{0.999, 0.02}})
 
-	res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false)
+	res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false, interfaces.KnowledgeChunkCursor{})
 	if err != nil {
 		t.Fatalf("same-model re-index refused: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestReindexOrg_WidthChangePassesWithoutForce(t *testing.T) {
 	seedCorpus(store, []float32{1, 0}, "alpha rule", "beta rule")
 	svc := guardService(store, &fixedEmbedder{vec: []float32{0, 0, 1}})
 
-	if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false); err != nil {
+	if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false, interfaces.KnowledgeChunkCursor{}); err != nil {
 		t.Fatalf("width-change re-index refused: %v", err)
 	}
 	for id, v := range storedEmbeddings(store) {
@@ -246,10 +246,10 @@ func TestCheckCorpusModel_MixedCorpusRefusesBothModels(t *testing.T) {
 		if err := svc.AddDocument(context.Background(), "scope", "org-1", "c.md", "gamma"); !errors.Is(err, ErrEmbeddingModelChanged) {
 			t.Errorf("caller %v: upload into a mixed corpus: err = %v, want ErrEmbeddingModelChanged", caller, err)
 		}
-		if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false); !errors.Is(err, ErrEmbeddingModelChanged) {
+		if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false, interfaces.KnowledgeChunkCursor{}); !errors.Is(err, ErrEmbeddingModelChanged) {
 			t.Errorf("caller %v: unforced re-index of a mixed corpus: err = %v, want ErrEmbeddingModelChanged", caller, err)
 		}
-		res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true)
+		res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{})
 		if err != nil || res.Chunks != 4 || res.Docs != 2 {
 			t.Fatalf("caller %v: forced re-index = %+v, %v; want 4 chunks in 2 docs", caller, res, err)
 		}
@@ -300,7 +300,7 @@ func TestReindexOrg_WidthChangeRefusedWhenCorpusIndexed(t *testing.T) {
 	emb := &fixedEmbedder{vec: []float32{0, 0, 1}}
 	svc := guardService(store, emb)
 
-	_, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false)
+	_, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false, interfaces.KnowledgeChunkCursor{})
 	if !errors.Is(err, ErrEmbeddingModelChanged) {
 		t.Fatalf("unforced: err = %v, want ErrEmbeddingModelChanged", err)
 	}
@@ -311,7 +311,7 @@ func TestReindexOrg_WidthChangeRefusedWhenCorpusIndexed(t *testing.T) {
 		t.Errorf("embed calls = %d, want 1 (the sample only)", emb.calls)
 	}
 
-	res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true)
+	res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{})
 	if err != nil || res.Chunks != 2 || res.Docs != 1 {
 		t.Fatalf("forced: %+v, %v; want 2 chunks in 1 doc", res, err)
 	}

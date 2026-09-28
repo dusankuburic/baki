@@ -1,8 +1,8 @@
-import {useState, useMemo} from 'react'
+import {useState, useMemo, useRef, useEffect} from 'react'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
 import {request, ApiError} from '@/api/client'
-import {Trash2, FileText, Loader2, Upload, RefreshCw} from 'lucide-react'
+import {Trash2, FileText, Loader2, Upload, RefreshCw, Square} from 'lucide-react'
 import Button from '@/components/shared/Button'
 import {useConfirm, useToast, ErrorState} from '@/components/shared'
 import {logger} from '@/lib/logger'
@@ -20,11 +20,18 @@ interface KnowledgeDoc {
 
 // POST /api/orgs/{id}/knowledge/reindex. `truncated`: the request exhausted
 // its chunk budget (10 000) with documents still waiting; the admin runs it
-// again to continue.
+// again to continue. `nextCursor` (resumable servers): each request commits
+// one page and names where the next starts — the client posts again with
+// `{force, cursor: nextCursor}` until it is absent. Opaque to the client.
 interface ReindexResult {
   chunks: number
   docs: number
   truncated?: boolean
+  nextCursor?: Record<string, unknown> | null
+}
+
+function isAbortError(e: unknown): boolean {
+  return (e instanceof DOMException || e instanceof Error) && e.name === 'AbortError'
 }
 
 // Upload and re-index failures whose server message is the thing to show:
@@ -43,6 +50,11 @@ const VERBATIM_ERROR_CODES = new Set([
   'EMBEDDING_PERMISSION_DENIED',
   'EMBEDDING_AUTH_FAILED',
   'EMBEDDING_PROVIDER_REJECTED',
+  // The organisation's daily AI budget is spent (429); the message carries
+  // the figures.
+  'BUDGET_EXCEEDED',
+  // The budget could not be checked (503); the server message says why.
+  'BUDGET_UNAVAILABLE',
 ])
 
 export default function KnowledgeBasePanel() {
@@ -67,8 +79,15 @@ export default function KnowledgeBasePanel() {
   // client check and then 413 at the server.
   const MAX_UPLOAD_BYTES = 1024 * 1024
   const [reindexing, setReindexing] = useState(false)
+  // Chunks re-indexed so far by a multi-request (cursor) re-index; null
+  // before the first page lands.
+  const [reindexProgress, setReindexProgress] = useState<number | null>(null)
+  // Stops a running re-index: aborts the in-flight page, and with it the
+  // loop. Pages already answered stay committed server-side.
+  const reindexAbortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => reindexAbortRef.current?.abort(), [])
   const {confirm} = useConfirm()
-  const {success: toastSuccess, error: toastError} = useToast()
+  const {success: toastSuccess, error: toastError, info: toastInfo} = useToast()
 
   const {
     data,
@@ -85,7 +104,7 @@ export default function KnowledgeBasePanel() {
       })
   }, [activeOrgId])
   const docs = data ?? []
-  const loadError = fetchError ? 'Failed to load documents' : null
+  const loadError = fetchError ? t('knowledge.loadFailed') : null
 
   // providerVerdict maps an upload/re-index failure to the text to show, or
   // null when it is not one of the embedding-provider outcomes both share.
@@ -93,6 +112,8 @@ export default function KnowledgeBasePanel() {
     if (!(e instanceof ApiError) || !e.code) return null
     if (VERBATIM_ERROR_CODES.has(e.code)) return e.message
     if (e.code === 'EMBEDDING_PROVIDER_UNAVAILABLE') return t('knowledge.embeddingUnavailable')
+    // 504: the request hit the server's deadline before any page committed.
+    if (e.code === 'KNOWLEDGE_TIMEOUT') return t('knowledge.timeout')
     return null
   }
 
@@ -100,7 +121,7 @@ export default function KnowledgeBasePanel() {
     if (!activeOrgId || !selectedFile) return
     setUploadError(null)
     if (selectedFile.size > MAX_UPLOAD_BYTES) {
-      setUploadError(`File is ${(selectedFile.size / 1024 / 1024).toFixed(1)}MB — limit is 1MB`)
+      setUploadError(t('knowledge.fileTooLarge', {size: (selectedFile.size / 1024 / 1024).toFixed(1)}))
       return
     }
     setUploading(true)
@@ -114,7 +135,7 @@ export default function KnowledgeBasePanel() {
         timeoutMs: KNOWLEDGE_BULK_TIMEOUT_MS,
       })
       setSelectedFile(null)
-      toastSuccess('Document added')
+      toastSuccess(t('knowledge.uploaded'))
       loadDocs()
     } catch (e) {
       // The most common failure is a missing/unconfigured embedding-provider
@@ -137,8 +158,8 @@ export default function KnowledgeBasePanel() {
         // them would make the document unfindable for everyone else.
         setUploadError(t('knowledge.modelChangedUpload'))
       } else {
-        setUploadError('Upload failed: ' + String(e))
-        toastError('Upload failed')
+        setUploadError(t('knowledge.uploadFailedDetail', {message: String(e)}))
+        toastError(t('knowledge.uploadFailed'))
       }
     } finally {
       setUploading(false)
@@ -152,16 +173,16 @@ export default function KnowledgeBasePanel() {
       title: t('knowledge.deleteTitle'),
       message: filename ? t('knowledge.deleteNamedMessage', {filename}) : t('knowledge.deleteMessage'),
       danger: true,
-      confirmLabel: 'Delete',
+      confirmLabel: t('knowledge.deleteConfirm'),
     })
     if (!ok) return
     try {
       await request(`/api/orgs/${activeOrgId}/knowledge/${docId}`, {body: {}, method: 'DELETE'})
-      toastSuccess('Document deleted')
+      toastSuccess(t('knowledge.deleted'))
       loadDocs()
     } catch (e) {
       logger.warn(e)
-      toastError('Failed to delete document')
+      toastError(t('knowledge.deleteFailed'))
     }
   }
 
@@ -173,13 +194,23 @@ export default function KnowledgeBasePanel() {
       confirmLabel: t('knowledge.reindexConfirmLabel'),
     })
     if (!ok) return
-    const reindex = (force: boolean) =>
+    const controller = new AbortController()
+    reindexAbortRef.current = controller
+    const reindex = (force: boolean, cursor?: Record<string, unknown>) =>
       request<ReindexResult>(`/api/orgs/${activeOrgId}/knowledge/reindex`, {
-        body: force ? {force: true} : {},
+        body: {...(force ? {force: true} : {}), ...(cursor ? {cursor} : {})},
         timeoutMs: KNOWLEDGE_BULK_TIMEOUT_MS,
+        signal: controller.signal,
       })
     setReindexing(true)
+    setReindexProgress(null)
+    // Totals across the pages of a resumable re-index. A document can span
+    // pages, so only the chunk total is summed; the document count is shown
+    // for a single-request run only.
+    let chunks = 0
+    let pages = 0
     try {
+      let force = false
       let res: ReindexResult
       try {
         res = await reindex(false)
@@ -189,7 +220,7 @@ export default function KnowledgeBasePanel() {
         // so it takes a second, explicit confirmation before resending with
         // force.
         if (!(e instanceof ApiError && e.code === 'EMBEDDING_MODEL_CHANGED')) throw e
-        const force = await confirm({
+        force = await confirm({
           title: t('knowledge.reindexModelChangedTitle'),
           message: t('knowledge.reindexModelChanged'),
           confirmLabel: t('knowledge.reindexForceLabel'),
@@ -198,25 +229,52 @@ export default function KnowledgeBasePanel() {
         if (!force) return
         res = await reindex(true)
       }
+      chunks += res?.chunks ?? 0
+      pages++
+      // Resumable server: each answer committed its page; keep going from
+      // where it stopped until no cursor comes back.
+      while (res?.nextCursor) {
+        setReindexProgress(chunks)
+        res = await reindex(force, res.nextCursor)
+        chunks += res?.chunks ?? 0
+        pages++
+      }
       if (res?.truncated) {
         // Not a success: documents are still waiting on the next run.
-        toastError(t('knowledge.reindexTruncated', {chunks: res.chunks}))
+        toastError(t('knowledge.reindexTruncated', {chunks}))
+      } else if (chunks === 0) {
+        toastSuccess(t('knowledge.reindexNothing'))
       } else {
         toastSuccess(
-          res && res.chunks > 0
-            ? t('knowledge.reindexDone', {chunks: res.chunks, docs: res.docs})
-            : t('knowledge.reindexNothing'),
+          pages === 1
+            ? t('knowledge.reindexDone', {chunks, docs: res?.docs ?? 0})
+            : t('knowledge.reindexDoneChunks', {count: chunks}),
         )
       }
       loadDocs()
     } catch (e) {
+      if (isAbortError(e)) {
+        // Stopped by the admin (or the panel closed): the pages that were
+        // answered stay re-indexed; a new run starts over from the top.
+        toastInfo(t('knowledge.reindexStopped', {count: chunks}))
+        loadDocs()
+        return
+      }
       logger.warn(e)
-      const verdict = providerVerdict(e)
+      // A later page refused because the admin's embedding model is not the one
+      // that converted the earlier pages (the model changed mid-run): the run
+      // has to start over, so say that instead of a bare failure.
+      const midRunModelChange = pages > 0 && e instanceof ApiError && e.code === 'EMBEDDING_MODEL_CHANGED'
+      const verdict = midRunModelChange ? t('knowledge.reindexModelChangedMidRun') : providerVerdict(e)
       const embeddingMissing =
         (e instanceof ApiError && e.code === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
       toastError(verdict ?? (embeddingMissing ? t('knowledge.embeddingMissingReindex') : t('knowledge.reindexFailed')))
+      // Earlier pages of a resumable run were committed before the failure.
+      if (pages > 0) loadDocs()
     } finally {
+      if (reindexAbortRef.current === controller) reindexAbortRef.current = null
       setReindexing(false)
+      setReindexProgress(null)
     }
   }
 
@@ -247,7 +305,7 @@ export default function KnowledgeBasePanel() {
             <label className="flex-1 flex items-center gap-2 px-3 py-2 bg-surface-3 border border-border-default rounded-md cursor-pointer hover:bg-surface-4 transition-colors overflow-hidden">
               <Upload className="w-4 h-4 text-text-secondary shrink-0" />
               <span className="text-sm text-text-primary truncate">
-                {selectedFile ? selectedFile.name : 'Select text or markdown file...'}
+                {selectedFile ? selectedFile.name : t('knowledge.selectFile')}
               </span>
               <input
                 type="file"
@@ -260,11 +318,15 @@ export default function KnowledgeBasePanel() {
               />
             </label>
             <Button variant="primary" disabled={!selectedFile || uploading} onClick={handleUpload}>
-              {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Index Document'}
+              {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('knowledge.indexDocument')}
             </Button>
           </div>
           <p className="text-2xs text-text-tertiary mt-2">{t('knowledge.uploadHint')}</p>
-          {uploadError && <p className="text-xs text-red-400 mt-2">{uploadError}</p>}
+          {uploadError && (
+            <p role="alert" className="text-xs text-red-400 mt-2">
+              {uploadError}
+            </p>
+          )}
         </div>
       )}
 
@@ -272,17 +334,34 @@ export default function KnowledgeBasePanel() {
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-medium text-text-primary">{t('knowledge.indexedTitle')}</h3>
           {canManage && docs.length > 0 && (
-            <button
-              onClick={handleReindex}
-              disabled={reindexing}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-secondary hover:text-brand-400 border border-border-default hover:border-brand-500/50 rounded-md transition-colors disabled:opacity-50"
-              title={t('knowledge.reindexTitle')}
-            >
-              {reindexing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-              {reindexing ? 'Re-indexing…' : 'Re-index'}
-            </button>
+            <div className="flex items-center gap-2">
+              {reindexing && (
+                <button
+                  onClick={() => reindexAbortRef.current?.abort()}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-secondary hover:text-red-400 border border-border-default hover:border-red-400/50 rounded-md transition-colors"
+                  title={t('knowledge.reindexStopTitle')}
+                >
+                  <Square className="w-3 h-3" />
+                  {t('knowledge.reindexStop')}
+                </button>
+              )}
+              <button
+                onClick={handleReindex}
+                disabled={reindexing}
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-secondary hover:text-brand-400 border border-border-default hover:border-brand-500/50 rounded-md transition-colors disabled:opacity-50"
+                title={t('knowledge.reindexTitle')}
+              >
+                {reindexing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                {reindexing ? t('knowledge.reindexing') : t('knowledge.reindex')}
+              </button>
+            </div>
           )}
         </div>
+        {reindexProgress !== null && (
+          <p role="status" className="text-xs text-text-secondary">
+            {t('knowledge.reindexProgress', {count: reindexProgress})}
+          </p>
+        )}
         {loading ? (
           <div className="flex justify-center p-8">
             <Loader2 className="w-6 h-6 animate-spin text-brand-500" />
@@ -309,11 +388,13 @@ export default function KnowledgeBasePanel() {
                       {doc.filename}
                     </div>
                     <div className="text-xs text-text-tertiary" title={absoluteTime(doc.createdAt)}>
-                      Indexed {relativeTime(doc.createdAt)}
+                      {t('knowledge.indexedAgo', {when: relativeTime(doc.createdAt)})}
                       {doc.chunkCount != null && doc.chunkCount > 0 && (
                         <>
-                          {' '}
-                          · {doc.chunkCount} chunks{doc.vectorIndexed != null && ` (${doc.vectorIndexed} searchable)`}
+                          {' · '}
+                          {doc.vectorIndexed != null
+                            ? t('knowledge.chunksSearchable', {count: doc.chunkCount, searchable: doc.vectorIndexed})
+                            : t('knowledge.chunks', {count: doc.chunkCount})}
                         </>
                       )}
                     </div>
@@ -325,7 +406,9 @@ export default function KnowledgeBasePanel() {
                 {canManage && (
                   <button
                     onClick={() => handleDelete(doc.id)}
-                    className="p-2 text-text-tertiary hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                    aria-label={t('knowledge.deleteAria', {filename: doc.filename})}
+                    title={t('knowledge.deleteAria', {filename: doc.filename})}
+                    className="p-2 text-text-tertiary hover:text-red-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>

@@ -421,6 +421,9 @@ func (m *Migrator) migrateOneConversation(ctx context.Context, path string) erro
 			TokensOut:        msg.TokensOut,
 			Provider:         msg.Provider,
 			Model:            msg.Model,
+			ServedModel:      msg.ServedModel,
+			InputCostPerM:    msg.InputCostPerM,
+			OutputCostPerM:   msg.OutputCostPerM,
 			FinishReason:     msg.FinishReason,
 		}
 	}

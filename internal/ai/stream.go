@@ -246,17 +246,158 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 	var doneSent bool
 	var parseErrors int
 	// tokensIn is captured from the message_start event and carried onto the
-	// Done chunk. Claude emits input_tokens on a separate metadata chunk (not
-	// on message_delta), so without this the Done chunk carries TokensIn=0 and
-	// the client-visible token accounting is wrong.
+	// Done chunk (and an error chunk). Claude emits input_tokens on a separate
+	// metadata chunk (not on message_delta), so without this the Done chunk
+	// carries TokensIn=0 and the client-visible token accounting is wrong.
 	var tokensIn int
-	// servedModel is the model named by message_start ("model"), carried
-	// onto the Done chunk: a Claude deployment on Azure AI Foundry is called
-	// by its deployment name and priced by the model that answered.
+	// servedModel is the model named by message_start ("model"), carried on
+	// every chunk after it — text, keepalives, Done and error chunks: a
+	// Claude deployment on Azure AI Foundry is called by its deployment name
+	// and priced by the model that answered, also when the stream fails or
+	// is stopped mid-way.
 	var servedModel string
 	// toolBlocks accumulates streamed tool_use blocks keyed by their content
 	// block index; finalized onto the Done chunk at message_delta.
 	toolBlocks := map[int]*pendingToolCall{}
+
+	// emitted records whether the current event delivered a chunk (see the
+	// keepalive below).
+	var emitted bool
+	emit := func(c Chunk) {
+		emitted = true
+		if c.ServedModel == "" {
+			c.ServedModel = servedModel
+		}
+		onChunk(c)
+	}
+
+	// handle processes one data line of eventType; true ends the stream (a
+	// mid-stream error or a refusal, whose chunk was delivered).
+	handle := func(data string) bool {
+		switch eventType {
+		case "message_start":
+			var parsed struct {
+				Message struct {
+					Model string `json:"model"`
+					Usage struct {
+						InputTokens              int `json:"input_tokens"`
+						CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+						CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+				parseErrors++
+				return false
+			}
+			// Cache tokens are billed separately (reads ~0.1×, writes ~1.25×)
+			// and are EXCLUDED from input_tokens — not counting them made
+			// prompt-cached tool loops (the norm on long conversations)
+			// systematically understate usage against the daily budget.
+			// Counting both at full rate errs toward overstatement, the safe
+			// direction for a spend cap.
+			if m := strings.TrimSpace(parsed.Message.Model); m != "" {
+				servedModel = m
+			}
+			u := parsed.Message.Usage
+			if total := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens; total > 0 {
+				tokensIn = total
+				emit(Chunk{TokensIn: tokensIn})
+			}
+
+		case "content_block_start":
+			// A tool_use block opens here with its id+name; its JSON arguments
+			// arrive as input_json_delta fragments on subsequent deltas.
+			var parsed struct {
+				Index        int `json:"index"`
+				ContentBlock struct {
+					Type string `json:"type"`
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"content_block"`
+			}
+			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+				parseErrors++
+				return false
+			}
+			if parsed.ContentBlock.Type == "tool_use" {
+				toolBlocks[parsed.Index] = &pendingToolCall{
+					id:   parsed.ContentBlock.ID,
+					name: parsed.ContentBlock.Name,
+				}
+			}
+
+		case "content_block_delta":
+			var parsed struct {
+				Index int `json:"index"`
+				Delta struct {
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					PartialJSON string `json:"partial_json"`
+				} `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+				parseErrors++
+				return false
+			}
+			switch parsed.Delta.Type {
+			case "text_delta":
+				emit(Chunk{Text: parsed.Delta.Text})
+			case "input_json_delta":
+				if t := toolBlocks[parsed.Index]; t != nil {
+					t.args.WriteString(parsed.Delta.PartialJSON)
+				}
+			}
+
+		case "message_delta":
+			var parsed struct {
+				Usage struct {
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+				Delta struct {
+					StopReason string `json:"stop_reason"`
+				} `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+				parseErrors++
+				return false
+			}
+			switch parsed.Delta.StopReason {
+			case "":
+			case "refusal":
+				// Claude's safety classifiers declined: the text so far is not
+				// the answer. The error chunk carries the usage and model (the
+				// audited wrapper bills them from any chunk).
+				doneSent = true
+				emit(Chunk{Error: claudeRefusalError(), TokensIn: tokensIn, TokensOut: parsed.Usage.OutputTokens})
+				return true
+			default:
+				doneSent = true
+				emit(Chunk{
+					Done:         true,
+					TokensIn:     tokensIn,
+					TokensOut:    parsed.Usage.OutputTokens,
+					ToolCalls:    assembleToolCalls(toolBlocks),
+					FinishReason: parsed.Delta.StopReason,
+				})
+			}
+
+		case "error":
+			var parsed struct {
+				Error struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+				parseErrors++
+				return false
+			}
+			emit(Chunk{Error: classifyClaudeStreamError(parsed.Error.Type, parsed.Error.Message), TokensIn: tokensIn})
+			return true
+		}
+		return false
+	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -278,125 +419,29 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 			return nil
 		}
 
-		switch eventType {
-		case "message_start":
-			var parsed struct {
-				Message struct {
-					Model string `json:"model"`
-					Usage struct {
-						InputTokens              int `json:"input_tokens"`
-						CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-						CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-					} `json:"usage"`
-				} `json:"message"`
-			}
-			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
-				parseErrors++
-				continue
-			}
-			// Cache tokens are billed separately (reads ~0.1×, writes ~1.25×)
-			// and are EXCLUDED from input_tokens — not counting them made
-			// prompt-cached tool loops (the norm on long conversations)
-			// systematically understate usage against the daily budget.
-			// Counting both at full rate errs toward overstatement, the safe
-			// direction for a spend cap.
-			if m := strings.TrimSpace(parsed.Message.Model); m != "" {
-				servedModel = m
-			}
-			u := parsed.Message.Usage
-			if total := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens; total > 0 {
-				tokensIn = total
-				onChunk(Chunk{TokensIn: tokensIn})
-			}
-
-		case "content_block_start":
-			// A tool_use block opens here with its id+name; its JSON arguments
-			// arrive as input_json_delta fragments on subsequent deltas.
-			var parsed struct {
-				Index        int `json:"index"`
-				ContentBlock struct {
-					Type string `json:"type"`
-					ID   string `json:"id"`
-					Name string `json:"name"`
-				} `json:"content_block"`
-			}
-			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
-				parseErrors++
-				continue
-			}
-			if parsed.ContentBlock.Type == "tool_use" {
-				toolBlocks[parsed.Index] = &pendingToolCall{
-					id:   parsed.ContentBlock.ID,
-					name: parsed.ContentBlock.Name,
-				}
-			}
-
-		case "content_block_delta":
-			var parsed struct {
-				Index int `json:"index"`
-				Delta struct {
-					Type        string `json:"type"`
-					Text        string `json:"text"`
-					PartialJSON string `json:"partial_json"`
-				} `json:"delta"`
-			}
-			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
-				parseErrors++
-				continue
-			}
-			switch parsed.Delta.Type {
-			case "text_delta":
-				onChunk(Chunk{Text: parsed.Delta.Text})
-			case "input_json_delta":
-				if t := toolBlocks[parsed.Index]; t != nil {
-					t.args.WriteString(parsed.Delta.PartialJSON)
-				}
-			}
-
-		case "message_delta":
-			var parsed struct {
-				Usage struct {
-					OutputTokens int `json:"output_tokens"`
-				} `json:"usage"`
-				Delta struct {
-					StopReason string `json:"stop_reason"`
-				} `json:"delta"`
-			}
-			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
-				parseErrors++
-				continue
-			}
-			if parsed.Delta.StopReason != "" {
-				doneSent = true
-				onChunk(Chunk{
-					Done:         true,
-					TokensIn:     tokensIn,
-					TokensOut:    parsed.Usage.OutputTokens,
-					ToolCalls:    assembleToolCalls(toolBlocks),
-					FinishReason: parsed.Delta.StopReason,
-					ServedModel:  servedModel,
-				})
-			}
-
-		case "error":
-			var parsed struct {
-				Error struct {
-					Type    string `json:"type"`
-					Message string `json:"message"`
-				} `json:"error"`
-			}
-			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
-				parseErrors++
-				continue
-			}
-			onChunk(Chunk{Error: classifyClaudeStreamError(parsed.Error.Type, parsed.Error.Message)})
+		emitted = false
+		stop := handle(data)
+		eventType = ""
+		if stop {
 			return nil
 		}
-
-		eventType = ""
+		// An event that delivered nothing — ping, thinking_delta and
+		// signature_delta (adaptive thinking), content_block_start/stop,
+		// input_json_delta fragments, message_stop, an unknown or undecodable
+		// event — still proves the provider is working: one keepalive per
+		// event feeds the chat idle watchdog (as parseOpenAISSE does), so a
+		// long thinking phase is not cancelled as a stalled stream.
+		if !emitted {
+			onChunk(Chunk{ServedModel: servedModel})
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
+		if doneSent {
+			// The answer and its usage were delivered; a read error on the
+			// trailing message_stop / connection close loses nothing.
+			return nil
+		}
 		return fmt.Errorf("reading claude SSE stream: %w", err)
 	}
 

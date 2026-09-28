@@ -17,7 +17,8 @@ func TestDetectContextLimitError_ParsesTheStatedWindow(t *testing.T) {
 		{"azure openai", "This model's maximum context length is 16384 tokens. However, your messages resulted in 40123 tokens. Please reduce the length of the messages.", 16384},
 		{"vllm", "This model's maximum context length is 32768 tokens. However, you requested 40000 tokens (32000 in the messages, 8000 in the completion). Please reduce the length of the messages or completion.", 32768},
 		{"no number", "prompt is too long: the context length was exceeded", 0},
-		{"claude wording", "prompt is too long: 250000 tokens > 200000 maximum", 0},
+		{"claude wording", "prompt is too long: 250000 tokens > 200000 maximum", 200000},
+		{"claude max_tokens wording", "input length and `max_tokens` exceed context limit: 180000 + 32000 > 200000, decrease input length or `max_tokens` and try again", 200000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := detectContextLimitError(400, tc.message)

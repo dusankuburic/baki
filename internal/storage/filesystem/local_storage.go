@@ -804,6 +804,9 @@ func (b *LocalStorageBackend) ListKnowledgeChunkContents(ctx context.Context, or
 func (b *LocalStorageBackend) SampleKnowledgeChunkEmbeddings(ctx context.Context, orgID string, n int) ([]interfaces.KnowledgeChunk, error) {
 	return nil, nil
 }
+func (b *LocalStorageBackend) SampleKnowledgeChunkEmbeddingsUpTo(ctx context.Context, orgID string, upTo interfaces.KnowledgeChunkCursor, n int) ([]interfaces.KnowledgeChunk, error) {
+	return nil, nil
+}
 func (b *LocalStorageBackend) UpdateKnowledgeChunkEmbeddings(ctx context.Context, userID string, chunks []interfaces.KnowledgeChunk) error {
 	return nil
 }

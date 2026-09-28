@@ -30,3 +30,71 @@ export function budgetDetail(message: string): string {
   const amounts = message.match(/\$[0-9.]+\s*\/\s*\$[0-9.]+/)
   return amounts ? ` (${amounts[0]})` : ''
 }
+
+// Provider failures the user fixes in Settings (credentials, role, balance,
+// Max tokens) or should at least know the class of. Each gets a localized
+// title, the server's message as detail, and an "Open settings" action on the
+// error bubble pointing at the section that fixes it.
+export type ProviderErrorCode =
+  | 'PROVIDER_AUTH'
+  | 'PROVIDER_PERMISSION'
+  | 'PROVIDER_NOT_CONFIGURED'
+  | 'PROVIDER_UNAVAILABLE'
+  | 'PROVIDER_CONTENT_FILTERED'
+  | 'PROVIDER_OUTPUT_LIMIT'
+  | 'PROVIDER_BALANCE'
+
+export interface ProviderErrorInfo {
+  // chat namespace key of the bubble's title.
+  titleKey:
+    | 'errors.providerAuthTitle'
+    | 'errors.providerPermissionTitle'
+    | 'errors.providerNotConfiguredTitle'
+    | 'errors.providerUnavailableTitle'
+    | 'errors.providerContentFilteredTitle'
+    | 'errors.providerOutputLimitTitle'
+    | 'errors.providerBalanceTitle'
+  // Settings section the "Open settings" action opens.
+  settingsSection: 'accounts' | 'behavior'
+  // The provider listing is stale (a key was revoked or removed elsewhere):
+  // refetch it so the picker stops offering a provider that cannot answer.
+  refreshProviders: boolean
+}
+
+const PROVIDER_ERRORS: Record<ProviderErrorCode, ProviderErrorInfo> = {
+  PROVIDER_AUTH: {titleKey: 'errors.providerAuthTitle', settingsSection: 'accounts', refreshProviders: true},
+  PROVIDER_PERMISSION: {
+    titleKey: 'errors.providerPermissionTitle',
+    settingsSection: 'accounts',
+    refreshProviders: false,
+  },
+  PROVIDER_NOT_CONFIGURED: {
+    titleKey: 'errors.providerNotConfiguredTitle',
+    settingsSection: 'accounts',
+    refreshProviders: true,
+  },
+  PROVIDER_UNAVAILABLE: {
+    titleKey: 'errors.providerUnavailableTitle',
+    settingsSection: 'accounts',
+    refreshProviders: false,
+  },
+  PROVIDER_CONTENT_FILTERED: {
+    titleKey: 'errors.providerContentFilteredTitle',
+    settingsSection: 'accounts',
+    refreshProviders: false,
+  },
+  // The server's copy says to raise Max tokens in AI Behavior.
+  PROVIDER_OUTPUT_LIMIT: {
+    titleKey: 'errors.providerOutputLimitTitle',
+    settingsSection: 'behavior',
+    refreshProviders: false,
+  },
+  PROVIDER_BALANCE: {titleKey: 'errors.providerBalanceTitle', settingsSection: 'accounts', refreshProviders: false},
+}
+
+// providerErrorInfo returns the treatment for a provider failure code, or
+// null for any other (or no) code.
+export function providerErrorInfo(code?: string | null): ProviderErrorInfo | null {
+  if (!code || !Object.prototype.hasOwnProperty.call(PROVIDER_ERRORS, code)) return null
+  return PROVIDER_ERRORS[code as ProviderErrorCode]
+}

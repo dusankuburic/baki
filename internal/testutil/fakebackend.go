@@ -40,6 +40,13 @@ type FakeBackend struct {
 	// its embedding has this width, mirroring the Postgres embedding_vec
 	// rule. 0 keeps the any-embedding rule (every embedded chunk is indexed).
 	EmbeddingDim int
+	// UpdateKnowledgeEmbeddingsFailAt, when >0, makes the Nth (1-based) call
+	// of UpdateKnowledgeChunkEmbeddings fail without writing — one re-index
+	// page's commit failing. Every other call writes (each call is its own
+	// committed page, like the Postgres per-page RLS transaction).
+	// UpdateKnowledgeEmbeddingsCalls counts the calls.
+	UpdateKnowledgeEmbeddingsFailAt int
+	UpdateKnowledgeEmbeddingsCalls  int
 	// FindingStatuses (flowID -> findingKey -> status) and Baselines (flowID ->
 	// baseline) back the triage methods. Lazily initialized, so a struct-literal
 	// FakeBackend works without NewFakeBackend.
@@ -548,8 +555,46 @@ func (m *FakeBackend) SampleKnowledgeChunkEmbeddings(_ context.Context, orgID st
 	}
 	return out, nil
 }
+
+// SampleKnowledgeChunkEmbeddingsUpTo mirrors the Postgres query: the org's
+// embedded chunks at or before the (DocID, ID) cursor, nearest first,
+// capped at n, embeddings copied.
+func (m *FakeBackend) SampleKnowledgeChunkEmbeddingsUpTo(_ context.Context, orgID string, upTo interfaces.KnowledgeChunkCursor, n int) ([]interfaces.KnowledgeChunk, error) {
+	m.initKnowledge()
+	if n <= 0 {
+		return nil, nil
+	}
+	var out []interfaces.KnowledgeChunk
+	for _, c := range m.KnowledgeChunks {
+		d, ok := m.KnowledgeDocs[c.DocID]
+		if !ok || d.OrgID != orgID || len(c.Embedding) == 0 {
+			continue
+		}
+		if c.DocID > upTo.DocID || (c.DocID == upTo.DocID && c.ID > upTo.ID) {
+			continue
+		}
+		out = append(out, interfaces.KnowledgeChunk{
+			ID: c.ID, DocID: c.DocID, Content: c.Content,
+			Embedding: append([]float32(nil), c.Embedding...),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].DocID != out[j].DocID {
+			return out[i].DocID > out[j].DocID
+		}
+		return out[i].ID > out[j].ID
+	})
+	if len(out) > n {
+		out = out[:n]
+	}
+	return out, nil
+}
 func (m *FakeBackend) UpdateKnowledgeChunkEmbeddings(_ context.Context, _ string, chunks []interfaces.KnowledgeChunk) error {
 	m.initKnowledge()
+	m.UpdateKnowledgeEmbeddingsCalls++
+	if m.UpdateKnowledgeEmbeddingsFailAt > 0 && m.UpdateKnowledgeEmbeddingsCalls == m.UpdateKnowledgeEmbeddingsFailAt {
+		return fmt.Errorf("fake: update knowledge chunk embeddings failed (call %d)", m.UpdateKnowledgeEmbeddingsCalls)
+	}
 	for _, c := range chunks {
 		if old, ok := m.KnowledgeChunks[c.ID]; ok {
 			old.Embedding = c.Embedding

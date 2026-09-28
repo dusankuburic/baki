@@ -46,6 +46,12 @@ type AuthHandler struct {
 	// DeleteUser cascades the user's provider keys in SQL — this hook is what
 	// tells the in-process caches.
 	onUserDeleted func(scope string)
+	// providers releases, on account erasure, what the SQL cascade does not
+	// reach: the process state of the user's own Azure AI Foundry credential
+	// (read before the cascade) and every organisation shared credential the
+	// user lent as an admin (disabled and audited). nil = none (bare tests,
+	// the desktop). Wired in di/services.go.
+	providers *service.ProviderService
 }
 
 func NewAuthHandler(tokenStore RefreshTokenStore, backend storageif.StorageBackend, security *SecurityConfig, ssoClient SSOClient, identityStore IdentityStore, email *mailer.Service, authSvc *service.AuthService) *AuthHandler {
@@ -58,6 +64,13 @@ func NewAuthHandler(tokenStore RefreshTokenStore, backend storageif.StorageBacke
 // served.
 func (h *AuthHandler) OnUserDeleted(fn func(scope string)) {
 	h.onUserDeleted = fn
+}
+
+// SetProviderService wires the provider service account erasure releases
+// credentials through (see providers). Set once at boot, before requests are
+// served.
+func (h *AuthHandler) SetProviderService(p *service.ProviderService) {
+	h.providers = p
 }
 
 // credentials is the shared {email, password} JSON body of the register and
@@ -650,10 +663,24 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Read before the erasure cascades the user's provider keys away: the
+	// Azure AI Foundry document names the credential whose process state
+	// (Entra ID token source, cached listing) must be released with it.
+	var releaseOwn func()
+	if h.providers != nil {
+		releaseOwn = h.providers.PrepareAccountErasure(h.security.KeyScope(r))
+	}
+
 	if err := h.backend.DeleteUser(r.Context(), claims.UserID); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	if releaseOwn != nil {
+		releaseOwn()
+	}
+	// An organisation credential the user lent as an admin does not cascade
+	// with the account (org_provider_keys is keyed by org): disable it.
+	disableLentCredentials(r, h.backend, h.security.TrustedProxies, h.providers, claims.UserID, lenderReasonAccountDeleted)
 
 	// The erasure cascaded the user's provider keys in SQL; drop whatever the
 	// in-process caches still hold for that scope (DI wires this to

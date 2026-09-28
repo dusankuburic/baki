@@ -656,11 +656,56 @@ func (b *PostgresStorageBackend) SampleKnowledgeChunkEmbeddings(ctx context.Cont
 	return chunks, rows.Err()
 }
 
+// SampleKnowledgeChunkEmbeddingsUpTo returns up to n of the org's chunks at
+// or before the (doc_id, id) cursor, nearest first, with their stored
+// embeddings — the chunks a resumed re-index's previous request converted
+// (rag.reindexGuard). Same read path, org join and jsonb guard as
+// SampleKnowledgeChunkEmbeddings; the row comparison walks the same
+// (doc_id, id) keyset as ListKnowledgeChunkContents, backwards.
+func (b *PostgresStorageBackend) SampleKnowledgeChunkEmbeddingsUpTo(ctx context.Context, orgID string, upTo interfaces.KnowledgeChunkCursor, n int) ([]interfaces.KnowledgeChunk, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	rows, err := b.query(ctx).QueryContext(ctx, `
+		SELECT c.id, c.doc_id, c.content, c.embedding
+		FROM knowledge_chunks c
+		JOIN knowledge_documents d ON c.doc_id = d.id
+		WHERE d.org_id = $1
+		  AND (c.doc_id, c.id) <= ($2::text, $3::text)
+		  AND CASE WHEN jsonb_typeof(c.embedding) = 'array'
+		           THEN jsonb_array_length(c.embedding) ELSE 0 END > 0
+		ORDER BY c.doc_id DESC, c.id DESC
+		LIMIT $4`, orgID, upTo.DocID, upTo.ID, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var chunks []interfaces.KnowledgeChunk
+	for rows.Next() {
+		var c interfaces.KnowledgeChunk
+		var embJSON []byte
+		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &embJSON); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(embJSON, &c.Embedding); err != nil {
+			logger.Warn("corrupt embedding JSON", "chunk_id", c.ID, "error", err)
+			continue
+		}
+		chunks = append(chunks, c)
+	}
+	return chunks, rows.Err()
+}
+
 // UpdateKnowledgeChunkEmbeddings replaces chunk embeddings in place for
 // re-indexing (RLS-scoped like SaveKnowledgeChunks; see its comment for why
 // the tx must set app.current_user_id). embedding_vec is refreshed only for
 // vectors matching the configured dimension — a switch TO a new dimension
 // leaves old rows NULL and this call fills exactly the matching ones.
+//
+// The re-index route runs outside the request-long RLS transaction
+// (rlsExemptPath), so each call — one re-index page — opens, and commits,
+// its own short RLS transaction as the calling admin: a later page's
+// failure keeps the pages before it.
 func (b *PostgresStorageBackend) UpdateKnowledgeChunkEmbeddings(ctx context.Context, userID string, chunks []interfaces.KnowledgeChunk) error {
 	if len(chunks) == 0 {
 		return nil

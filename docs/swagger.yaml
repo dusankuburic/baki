@@ -1,5 +1,22 @@
 basePath: /
 definitions:
+  ai.AzureFoundryAuth:
+    properties:
+      clientId:
+        type: string
+      clientSecret:
+        type: string
+      key:
+        description: Key is the resource API key (AzureAuthModeAPIKey).
+        type: string
+      mode:
+        type: string
+      tenantId:
+        description: |-
+          TenantID, ClientID and ClientSecret describe the app registration
+          (AzureAuthModeEntra).
+        type: string
+    type: object
   api.identityLinkView:
     properties:
       createdAt:
@@ -7,6 +24,69 @@ definitions:
       email:
         type: string
       provider:
+        type: string
+    type: object
+  api.knowledgeReindexRequest:
+    properties:
+      cursor:
+        $ref: '#/definitions/interfaces.KnowledgeChunkCursor'
+      force:
+        type: boolean
+    type: object
+  api.orgAzureFoundrySaveRequest:
+    properties:
+      auth:
+        $ref: '#/definitions/ai.AzureFoundryAuth'
+      chatDeployment:
+        description: |-
+          ChatDeployment is the deployment offered as the default model;
+          EmbeddingDeployment (optional) the one used for the knowledge base.
+          Deployments (optional, ≤ azureMaxDeployments) are further chat
+          deployments offered in the model picker. No data-plane route lists an
+          API-key caller's deployments (GET /openai/v1/models is the resource's
+          model CATALOGUE), so the picker shows exactly these names — plus the
+          project's deployments with Entra ID and a project endpoint. Saving
+          requires a chat deployment (ChatDeployment or Deployments) unless
+          Entra ID + project endpoint can list them (MISSING_DEPLOYMENT).
+        type: string
+      claudeDeployments:
+        description: |-
+          ClaudeDeployments (optional, ≤ azureMaxClaudeDeployments) are the
+          resource's Claude deployments, which answer on the Anthropic Messages
+          route ({endpoint}/anthropic/v1/messages), not on /openai/v1 (404).
+          They are offered in the model picker as "claude:<name>" (see
+          azure_claude.go) and count as chat deployments for the save-time
+          rule. With Entra ID and a project endpoint the project listing also
+          discovers them (modelPublisher "Anthropic").
+        items:
+          type: string
+        type: array
+      deployments:
+        items:
+          type: string
+        type: array
+      embeddingDeployment:
+        type: string
+      endpoint:
+        description: |-
+          Endpoint is the resource endpoint, e.g. https://my-res.openai.azure.com
+          or https://my-res.services.ai.azure.com (no path).
+        type: string
+      projectEndpoint:
+        description: |-
+          ProjectEndpoint (optional) is the Foundry project endpoint,
+          https://<res>.services.ai.azure.com/api/projects/<project>, which
+          unlocks the project's agents (Entra ID only) and deployment metadata.
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  api.orgAzureFoundrySaveResponse:
+    properties:
+      status:
+        example: ok
+        type: string
+      updatedAt:
         type: string
     type: object
   api.roleCounts:
@@ -21,6 +101,12 @@ definitions:
         type: integer
       viewer:
         type: integer
+    type: object
+  api.statusResponse:
+    properties:
+      status:
+        example: ok
+        type: string
     type: object
   api.userStatsView:
     properties:
@@ -45,6 +131,13 @@ definitions:
     - RoleMember
     - RoleViewer
     - RoleGuest
+  interfaces.KnowledgeChunkCursor:
+    properties:
+      docId:
+        type: string
+      id:
+        type: string
+    type: object
   interfaces.User:
     properties:
       avatarUrl:
@@ -64,6 +157,35 @@ definitions:
       updatedAt:
         type: string
     type: object
+  pad-core_models.ProviderTestResult:
+    properties:
+      error:
+        type: string
+      latencyMs:
+        type: integer
+      ok:
+        type: boolean
+    type: object
+  rag.ReindexResult:
+    properties:
+      chunks:
+        type: integer
+      docs:
+        type: integer
+      nextCursor:
+        $ref: '#/definitions/interfaces.KnowledgeChunkCursor'
+      truncated:
+        type: boolean
+    type: object
+  render.ErrorResponse:
+    properties:
+      code:
+        type: string
+      message:
+        type: string
+      requestId:
+        type: string
+    type: object
   render.PagedResponse-interfaces_User:
     properties:
       items:
@@ -76,6 +198,41 @@ definitions:
         type: integer
       total:
         type: integer
+    type: object
+  service.OrgAzureFoundryConfig:
+    properties:
+      authMode:
+        type: string
+      chatDeployment:
+        type: string
+      claudeDeployments:
+        items:
+          type: string
+        type: array
+      clientId:
+        type: string
+      configured:
+        type: boolean
+      deployments:
+        items:
+          type: string
+        type: array
+      embeddingDeployment:
+        type: string
+      endpoint:
+        type: string
+      hasSecret:
+        type: boolean
+      projectEndpoint:
+        type: string
+      shared:
+        type: boolean
+      tenantId:
+        type: string
+      updatedAt:
+        type: string
+      updatedBy:
+        type: string
     type: object
 info:
   contact: {}
@@ -2398,7 +2555,14 @@ paths:
     post:
       consumes:
       - application/json
-      description: Initiates a streaming chat session with an AI provider.
+      description: Initiates a streaming chat session with an AI provider. The answer
+        arrives on the event stream as chunk, tool, tool_result, done and error events.
+        The done payload carries tokensIn, tokensOut and chunks, plus — when known
+        — servedModel (the model that answered an alias such as an Azure AI Foundry
+        deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token
+        rates the turn was billed at). An error payload carries message and, when
+        classified, code (AI_BUDGET_EXCEEDED, PROVIDER_AUTH, PROVIDER_PERMISSION,
+        PROVIDER_NOT_CONFIGURED, …).
       parameters:
       - description: request
         in: body
@@ -4829,40 +4993,44 @@ paths:
         name: id
         required: true
         type: string
-      - description: Optional JSON object; force=true re-indexes even when the corpus
-          was indexed with a different embedding model
+      - description: Optional. force=true re-indexes even when the corpus was indexed
+          with a different embedding model (first request of a run only); cursor =
+          the previous answer's nextCursor resumes the run after it
         in: body
         name: request
         schema:
-          type: object
+          $ref: '#/definitions/api.knowledgeReindexRequest'
       produces:
       - application/json
       responses:
         "200":
-          description: Re-indexed ({chunks, docs, truncated?}); truncated=true means
-            the per-request ceiling (10 000 chunks) was reached with chunks left unconverted
+          description: 'Re-indexed this request''s pages ({chunks, docs}); nextCursor
+            (with truncated=true) means chunks remain — post again with {force, cursor:
+            nextCursor}. Every page is committed as it completes, so a later failure
+            keeps the earlier pages'
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/rag.ReindexResult'
         "400":
           description: Embedding provider not configured (EMBEDDING_NOT_CONFIGURED),
             rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED),
             a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed
-            body
+            body / cursor
           schema:
             additionalProperties:
               type: string
             type: object
         "409":
-          description: Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED;
-            resend with force) or another upload/re-index of this org is in flight
-            (KNOWLEDGE_BUSY)
+          description: 'Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED;
+            resend with force — on a resumed request: the caller''s model is not the
+            one the run converted to) or another upload/re-index of this org is in
+            flight (KNOWLEDGE_BUSY)'
           schema:
             additionalProperties:
               type: string
             type: object
         "429":
           description: Embedding provider throttled the request (EMBEDDING_RATE_LIMITED)
+            or the daily AI budget is spent (BUDGET_EXCEEDED)
           schema:
             additionalProperties:
               type: string
@@ -4875,6 +5043,14 @@ paths:
             type: object
         "503":
           description: Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE)
+            or the budget could not be checked (BUDGET_UNAVAILABLE)
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "504":
+          description: The request's deadline ran out before a page was committed
+            (KNOWLEDGE_TIMEOUT)
           schema:
             additionalProperties:
               type: string
@@ -5046,28 +5222,28 @@ paths:
         "200":
           description: OK
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/api.statusResponse'
         "403":
           description: Not an org admin
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
         "404":
           description: Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
       summary: Delete the organisation's shared Azure AI Foundry configuration
       tags:
       - org
     get:
-      description: Returns the org's shared Azure AI Foundry settings (endpoint, auth
-        mode, project endpoint, deployments) without any secret, with who shared it
-        and when. Any member. {configured:false} when the org has none.
+      description: 'Returns the org''s shared Azure AI Foundry settings without any
+        secret: endpoint, auth mode, whether a secret is stored, the Entra ID tenant
+        and client IDs, the project endpoint and the deployment names, plus who shared
+        it (updatedBy: the admin''s display name, else email) and when (updatedAt:
+        RFC 3339 with sub-second precision — send it back verbatim as the save''s
+        compare-and-swap token). Any member, viewers included (only admins and members
+        run on it). {configured:false, shared:false} when the org has none; 500 ORG_CREDENTIAL_UNREADABLE
+        when it has one that cannot be read (a deployment key rotation, a database
+        failure).'
       parameters:
       - description: Org ID
         in: path
@@ -5080,70 +5256,72 @@ paths:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/service.OrgAzureFoundryConfig'
         "403":
           description: Not a member
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
         "404":
           description: Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
+        "500":
+          description: The stored configuration cannot be read (ORG_CREDENTIAL_UNREADABLE)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
       summary: Get the organisation's shared Azure AI Foundry configuration
       tags:
       - org
     post:
       consumes:
       - application/json
-      description: Validates and stores the org's shared Azure AI Foundry endpoint,
+      description: 'Validates and stores the org''s shared Azure AI Foundry endpoint,
         credential (API key or Microsoft Entra ID service principal), optional project
-        endpoint and deployment names, for members without a configuration of their
-        own. Org admins only. An omitted secret keeps the stored one.
+        endpoint and deployment names, for admins and members without a configuration
+        of their own. Org admins only. An omitted secret keeps the stored one only
+        while the endpoint host (and the project endpoint''s host) is unchanged —
+        a changed endpoint needs the secret re-entered (MISSING_SECRET). Compare-and-swap:
+        send back the updatedAt the GET returned (omit it only when the GET said configured:false);
+        when the stored configuration changed since — another admin saved or removed
+        it — nothing is written and the answer is 409 CONFLICT (reload, then re-apply).
+        The reply''s updatedAt is the token for the next save.'
       parameters:
       - description: Org ID
         in: path
         name: id
         required: true
         type: string
-      - description: request
+      - description: The configuration plus the updatedAt it was loaded with
         in: body
         name: request
         required: true
         schema:
-          type: object
+          $ref: '#/definitions/api.orgAzureFoundrySaveRequest'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/api.orgAzureFoundrySaveResponse'
         "400":
-          description: INVALID_CONFIG, INVALID_PROJECT_ENDPOINT, MISSING_DEPLOYMENT
-            or HOST_NOT_ALLOWED
+          description: INVALID_CONFIG, INVALID_ENDPOINT, INVALID_PROJECT_ENDPOINT,
+            INVALID_AUTH, MISSING_SECRET, MISSING_DEPLOYMENT, INVALID_DEPLOYMENT,
+            CONFIG_TOO_LARGE or HOST_NOT_ALLOWED
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
         "403":
           description: Not an org admin
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
         "404":
           description: Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: The stored configuration changed since it was loaded (CONFLICT)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
       summary: Save the organisation's shared Azure AI Foundry configuration
       tags:
       - org
@@ -5151,7 +5329,8 @@ paths:
     post:
       description: Sends a tiny chat request through the org's shared Azure AI Foundry
         credential (never the caller's own) and reports whether it works. Org admins
-        only.
+        only. The call is billed to the org (its credential, its daily budget), rides
+        the chat rate-limit bucket and is audited (providers.test).
       parameters:
       - description: Org ID
         in: path
@@ -5162,22 +5341,17 @@ paths:
       - application/json
       responses:
         "200":
-          description: ProviderTestResult
+          description: Test result
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/pad-core_models.ProviderTestResult'
         "403":
           description: Not an org admin
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
         "404":
           description: Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
       summary: Test the organisation's shared Azure AI Foundry credential
       tags:
       - org
@@ -5520,7 +5694,8 @@ paths:
       description: Returns a list of supported AI providers and their current status.
         With orgId, a provider the caller has not configured but that organisation
         has (a shared credential) is listed as configured and shared; the parameter
-        is ignored unless the caller is a member of that org.
+        is ignored unless the caller is an admin or member of that org (viewers, guests
+        and non-members need a credential of their own).
       parameters:
       - description: Organisation whose shared credentials to include
         in: query

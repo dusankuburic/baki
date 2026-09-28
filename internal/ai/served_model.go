@@ -127,6 +127,33 @@ func lookupServedEntry(scope, providerID, requestModel string) (servedEntry, boo
 	return e, true
 }
 
+// lookupServedModelForResource returns the model most recently seen serving
+// requestModel on one resource, whichever user's call observed it: a
+// deployment serves the same model for every caller of its resource, so
+// this is safe for decisions about the request (the Claude sampling policy)
+// and never reaches a model list. Aliases observed with more than one served
+// model (routers) are skipped. A linear scan of the bounded memo.
+func lookupServedModelForResource(resource, providerID, requestModel string) (string, bool) {
+	if resource == "" || requestModel == "" {
+		return "", false
+	}
+	suffix := "\x00" + resource + "\x00" + providerID + "\x00" + requestModel
+	now := time.Now()
+	servedMu.Lock()
+	defer servedMu.Unlock()
+	var best servedEntry
+	found := false
+	for k, e := range servedMemo {
+		if !strings.HasSuffix(k, suffix) || e.varied || now.Sub(e.seen) > servedMemoTTL {
+			continue
+		}
+		if !found || e.seen.After(best.seen) {
+			best, found = e, true
+		}
+	}
+	return best.model, found
+}
+
 // lookupServedModel returns the model last seen serving requestModel.
 func lookupServedModel(scope, providerID, requestModel string) (string, bool) {
 	e, ok := lookupServedEntry(scope, providerID, requestModel)
@@ -192,10 +219,10 @@ func annotateServedModel(providerID string, m *ModelInfo, served string, withLim
 	m.ServedModel = served
 	if entry, ok := catalogEntryFor(providerID, served); ok {
 		m.Pricing = entry.Pricing
-		// A Claude deployment on Azure AI Foundry keeps its fixed window
-		// (claudeOnFoundryContextLimit): the Claude catalogue's larger
-		// windows are api.anthropic.com's, not verified on Foundry.
-		if withLimits && entry.ContextLimit > 0 && !IsClaudeModel(m.ID) {
+		// Claude on Azure AI Foundry uses the catalogue window too: Anthropic's
+		// Foundry page gives the same windows as the Claude API (1M for
+		// Opus/Sonnet 4.6+ and 5.x, 200k for the rest).
+		if withLimits && entry.ContextLimit > 0 {
 			m.ContextLimit = entry.ContextLimit
 		}
 		if withLimits && entry.MaxOutputTokens > 0 {
@@ -229,9 +256,11 @@ type UsagePricer interface {
 }
 
 // AliasReservationCeiling is the most expensive catalogued input and output
-// rate of an alias provider. It is used ONLY to reserve in-flight budget for
-// a deployment whose model is not known yet (no listing price): reserving too
-// much is the safe direction for a spend cap, reserving $0 disables the
+// rate in an alias provider's own table (Claude deployments use
+// AliasClaudeCeiling, model routers AliasRouterCeiling). It is used to reserve in-flight
+// budget for a deployment whose model is not known yet (no listing price)
+// and as the billing fallback for an uncatalogued served model: reserving
+// too much is the safe direction for a spend cap, reserving $0 disables the
 // concurrent-stream and tool-loop overspend guards. Zero for other providers.
 func AliasReservationCeiling(providerID string) Pricing {
 	var c Pricing
@@ -246,6 +275,20 @@ func AliasReservationCeiling(providerID string) Pricing {
 			c.OutputCostPerM = m.Pricing.OutputCostPerM
 		}
 	}
+	return c
+}
+
+// AliasRouterCeiling is the reservation and billing fallback for a model
+// router alias (a deployment named like one, or any alias whose served model
+// has varied): the router can route to any model on the resource, Claude
+// included, so it takes the higher of the provider's own ceiling and the
+// Claude ceiling. Plain deployments keep AliasReservationCeiling so an
+// unknown GPT deployment is not reserved at Fable/Mythos rates.
+func AliasRouterCeiling(providerID string) Pricing {
+	c := AliasReservationCeiling(providerID)
+	claude := AliasClaudeCeiling(providerID)
+	c.InputCostPerM = max(c.InputCostPerM, claude.InputCostPerM)
+	c.OutputCostPerM = max(c.OutputCostPerM, claude.OutputCostPerM)
 	return c
 }
 

@@ -92,6 +92,10 @@ const (
 	AuditActionOrgRuleDelete    = "org_rule_delete"
 	AuditActionSSOLink          = "auth.sso_link"
 	AuditActionSSOUnlink        = "auth.sso_unlink"
+	// AuditActionProvidersTest: an org admin's connection test of the
+	// organisation's shared provider credential, a billed call on the
+	// org's resource (the per-user test of one's own key is not audited).
+	AuditActionProvidersTest = "providers.test"
 )
 
 // AllAuditActions is the closed set of audit action strings the handlers
@@ -115,7 +119,7 @@ func AllAuditActions() []string {
 		AuditActionKnowledgeReindex, AuditActionOrgCreate, AuditActionOrgUpdate, AuditActionOrgDelete,
 		AuditActionScanNow, AuditActionAlertDismiss, AuditActionAlertClear, AuditActionOrgChannelSave,
 		AuditActionOrgChannelDelete, AuditActionOrgRuleSave, AuditActionOrgRuleDelete,
-		AuditActionSSOLink, AuditActionSSOUnlink,
+		AuditActionSSOLink, AuditActionSSOUnlink, AuditActionProvidersTest,
 	}
 }
 

@@ -1,4 +1,4 @@
-import {useEffect, useState, useMemo} from 'react'
+import {useCallback, useEffect, useState, useMemo} from 'react'
 import {useTranslation} from 'react-i18next'
 import {
   Building2,
@@ -18,16 +18,31 @@ import {
 import clsx from 'clsx'
 import {useOrgStore, type Organisation, type OrgRole} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
+import {useChatStore} from '@/stores/chatStore'
 import {Button, useConfirm} from '@/components/shared'
 import OrgChannelsSection from './OrgChannelsSection'
 import OrgCustomRulesSection from './OrgCustomRulesSection'
 import AzureFoundrySection from './AzureFoundrySection'
 import {useAsync} from '@/hooks/useAsync'
-import {request} from '@/api/client'
+import {request, ApiError} from '@/api/client'
 import {writeClipboard} from '@/lib/clipboard'
 import {useToast} from '@/components/shared/Toast'
 
 const ROLES: OrgRole[] = ['admin', 'member', 'viewer', 'guest']
+
+// The i18n key naming each role. `satisfies` keeps it in step with OrgRole.
+const ROLE_LABEL_KEYS = {
+  admin: 'orgs.roleAdmin',
+  member: 'orgs.roleMember',
+  viewer: 'orgs.roleViewer',
+  guest: 'orgs.roleGuest',
+} as const satisfies Record<OrgRole, string>
+
+// roleLabelKey tolerates a role this client does not know (a newer server):
+// null, and the caller shows the raw value.
+function roleLabelKey(role: string): (typeof ROLE_LABEL_KEYS)[OrgRole] | null {
+  return Object.prototype.hasOwnProperty.call(ROLE_LABEL_KEYS, role) ? ROLE_LABEL_KEYS[role as OrgRole] : null
+}
 
 // inviteLinkURL builds the same deep link the invite email carries
 // (`<base>/#invite=<token>`, see internal/mail/service.go). Shown once after
@@ -45,6 +60,10 @@ function inviteLinkURL(token: string): string {
  */
 export default function OrganizationsPanel() {
   const {t} = useTranslation('settings')
+  const roleLabel = (role: string) => {
+    const key = roleLabelKey(role)
+    return key ? t(key) : role
+  }
   const {error: toastError, success: toastSuccess} = useToast()
   const organisations = useOrgStore(s => s.organisations)
   const activeOrgId = useOrgStore(s => s.activeOrgId)
@@ -60,7 +79,29 @@ export default function OrganizationsPanel() {
   const setMemberRole = useOrgStore(s => s.setMemberRole)
   const clearError = useOrgStore(s => s.clearError)
   const currentUser = useAuthStore(s => s.user)
+  const bumpProviderEpoch = useChatStore(s => s.bumpProviderEpoch)
   const {confirm} = useConfirm()
+
+  // A 403 from an org action (the caller's role changed since the list
+  // loaded) shows localized permission copy instead of the server's raw
+  // "forbidden"; cleared when the next action starts.
+  const [forbidden, setForbidden] = useState(false)
+  const reportFailure = (err: unknown) => {
+    if (err instanceof ApiError && err.status === 403) {
+      clearError()
+      setForbidden(true)
+    }
+  }
+  const dismissError = () => {
+    clearError()
+    setForbidden(false)
+  }
+  const bannerText = forbidden ? t('orgs.permissionDenied') : error
+
+  // Set when the deployment has no org keystore: the shared-credentials
+  // block hides for every org (it is a deployment property, not an org's).
+  const [orgAzureUnavailable, setOrgAzureUnavailable] = useState(false)
+  const markOrgAzureUnavailable = useCallback(() => setOrgAzureUnavailable(true), [])
 
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
@@ -87,13 +128,15 @@ export default function OrganizationsPanel() {
     const name = newName.trim()
     if (!name) return
     setCreateBusy(true)
+    setForbidden(false)
     try {
       const o = await createOrg(name)
       setActiveOrg(o.id)
       setNewName('')
       setCreating(false)
-    } catch {
-      // error surfaces via store.error
+    } catch (err) {
+      reportFailure(err)
+      // other errors surface via store.error
     } finally {
       setCreateBusy(false)
     }
@@ -110,13 +153,15 @@ export default function OrganizationsPanel() {
     }
     setInviteError(null)
     setInviteBusy(true)
+    setForbidden(false)
     try {
       const token = await inviteMember(selected.id, email, inviteRole)
       setInviteEmail('')
       setInviteLink(token ? {email, url: inviteLinkURL(token)} : null)
       setInviteLinkCopied(false)
-    } catch {
-      // error surfaces via store.error
+    } catch (err) {
+      reportFailure(err)
+      // other errors surface via store.error
     } finally {
       setInviteBusy(false)
     }
@@ -131,10 +176,12 @@ export default function OrganizationsPanel() {
       confirmLabel: t('orgs.removeMemberConfirm'),
     })
     if (!ok) return
+    setForbidden(false)
     try {
       await removeMember(selected.id, userId)
-    } catch {
-      // error surfaces via store.error
+    } catch (err) {
+      reportFailure(err)
+      // other errors surface via store.error
     }
   }
 
@@ -150,11 +197,13 @@ export default function OrganizationsPanel() {
       confirmLabel: t('orgs.leaveConfirm'),
     })
     if (!ok) return
+    setForbidden(false)
     try {
       await removeMember(org.id, currentUser.id)
       toastSuccess(t('orgs.left', {name: org.name}))
-    } catch {
-      // error surfaces via store.error
+    } catch (err) {
+      reportFailure(err)
+      // other errors surface via store.error
     }
   }
 
@@ -171,11 +220,13 @@ export default function OrganizationsPanel() {
       return
     }
     setRenameBusy(true)
+    setForbidden(false)
     try {
       await renameOrg(org.id, name)
       setRenamingId(null)
-    } catch {
-      // error surfaces via store.error; keep the editor open with the typed name
+    } catch (err) {
+      reportFailure(err)
+      // other errors surface via store.error; keep the editor open with the typed name
     } finally {
       setRenameBusy(false)
     }
@@ -183,10 +234,12 @@ export default function OrganizationsPanel() {
 
   const handleRoleChange = async (userId: string, role: OrgRole) => {
     if (!selected) return
+    setForbidden(false)
     try {
       await setMemberRole(selected.id, userId, role)
-    } catch {
-      // error surfaces via store.error
+    } catch (err) {
+      reportFailure(err)
+      // other errors surface via store.error
     }
   }
 
@@ -198,10 +251,12 @@ export default function OrganizationsPanel() {
       confirmLabel: t('orgs.deleteConfirm'),
     })
     if (!ok) return
+    setForbidden(false)
     try {
       await deleteOrg(org.id)
-    } catch {
-      // error surfaces via store.error
+    } catch (err) {
+      reportFailure(err)
+      // other errors surface via store.error
     }
   }
 
@@ -215,14 +270,14 @@ export default function OrganizationsPanel() {
         </div>
       )}
 
-      {error && (
+      {bannerText && (
         <div
           role="alert"
           className="flex items-start gap-2 p-3 rounded-lg bg-semantic-error/10 border border-semantic-error/30 text-semantic-error"
         >
           <AlertCircle size={16} className="shrink-0 mt-0.5" />
-          <span className="text-sm flex-1">{error}</span>
-          <button onClick={clearError} className="text-xs hover:opacity-80">
+          <span className="text-sm flex-1">{bannerText}</span>
+          <button onClick={dismissError} className="text-xs hover:opacity-80">
             {t('orgs.dismiss')}
           </button>
         </div>
@@ -249,7 +304,7 @@ export default function OrganizationsPanel() {
               }}
               className="px-3 py-1.5 rounded-lg text-sm text-text-secondary hover:bg-surface-3"
             >
-              Cancel
+              {t('orgs.cancel')}
             </button>
             <button
               onClick={handleCreate}
@@ -276,8 +331,10 @@ export default function OrganizationsPanel() {
             // The roster comes with the list, but a server that omits it must
             // not take the whole panel down with a nil dereference.
             const members = org.members ?? []
-            const isAdmin = members.find(m => m.userId === currentUser?.id)?.role === 'admin'
-            const canManageMembers = isOwner || isAdmin
+            // Role only, like the server (GetAndCheckAdmin): ownership grants
+            // nothing by itself, so an owner whose admin role was changed saw
+            // controls that could only answer 403.
+            const canManageMembers = members.find(m => m.userId === currentUser?.id)?.role === 'admin'
             const isActive = org.id === activeOrgId
             const isRenaming = renamingId === org.id
             return (
@@ -328,12 +385,12 @@ export default function OrganizationsPanel() {
                       )}
                       {isOwner && (
                         <span className="text-2xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-brand-500/15 text-brand-400">
-                          Owner
+                          {t('orgs.owner')}
                         </span>
                       )}
                     </div>
                     <p className="text-xs text-text-tertiary mt-0.5">
-                      {members.length} {members.length === 1 ? 'member' : 'members'}
+                      {t('orgs.memberCount', {count: members.length})}
                     </p>
                   </div>
                   {canManageMembers && !isRenaming && (
@@ -369,15 +426,23 @@ export default function OrganizationsPanel() {
                     <OrgChannelsSection orgId={org.id} isAdmin={canManageMembers} />
                     <OrgCustomRulesSection orgId={org.id} isAdmin={canManageMembers} />
                     {/* The org's shared Azure AI Foundry credentials: members
-                        read, admins (and the owner) manage. A member's own
-                        credentials always take precedence. */}
-                    <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-1">
-                        {t('providers.azureOrgTitle')}
-                      </h4>
-                      <p className="text-xs text-text-tertiary mb-3">{t('providers.azureOrgHint')}</p>
-                      <AzureFoundrySection scope={{kind: 'org', orgId: org.id, canEdit: canManageMembers}} />
-                    </div>
+                        read, admins manage. A member's own credentials always
+                        take precedence. Hidden entirely on a deployment
+                        without an org keystore. A save or removal changes
+                        what the chat picker lists, so it refetches. */}
+                    {!orgAzureUnavailable && (
+                      <div>
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-1">
+                          {t('providers.azureOrgTitle')}
+                        </h4>
+                        <p className="text-xs text-text-tertiary mb-3">{t('providers.azureOrgHint')}</p>
+                        <AzureFoundrySection
+                          scope={{kind: 'org', orgId: org.id, canEdit: canManageMembers}}
+                          onConfigured={bumpProviderEpoch}
+                          onUnavailable={markOrgAzureUnavailable}
+                        />
+                      </div>
+                    )}
                     <div>
                       <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">
                         {t('orgs.members')}
@@ -416,12 +481,12 @@ export default function OrganizationsPanel() {
                                 >
                                   {ROLES.map(r => (
                                     <option key={r} value={r}>
-                                      {r}
+                                      {t(ROLE_LABEL_KEYS[r])}
                                     </option>
                                   ))}
                                 </select>
                               ) : (
-                                <span className="px-2 py-1 text-xs text-text-tertiary capitalize">{m.role}</span>
+                                <span className="px-2 py-1 text-xs text-text-tertiary">{roleLabel(m.role)}</span>
                               )}
                               {canManageMembers ? (
                                 <button
@@ -484,7 +549,7 @@ export default function OrganizationsPanel() {
                           >
                             {ROLES.map(r => (
                               <option key={r} value={r}>
-                                {r}
+                                {t(ROLE_LABEL_KEYS[r])}
                               </option>
                             ))}
                           </select>
@@ -569,6 +634,10 @@ interface OrgInvite {
 
 function PendingInvites({orgId}: {orgId: string; onInviteSent?: () => Promise<void>}) {
   const {t} = useTranslation('settings')
+  const roleLabel = (role: string) => {
+    const key = roleLabelKey(role)
+    return key ? t(key) : role
+  }
   const {error: toastError, success: toastSuccess} = useToast()
   const {confirm} = useConfirm()
 
@@ -594,7 +663,11 @@ function PendingInvites({orgId}: {orgId: string; onInviteSent?: () => Promise<vo
       toastSuccess(t('orgs.revoked'))
       refetch()
     } catch (err) {
-      toastError(t('orgs.revokeFailed', {message: err instanceof Error ? err.message : 'Unknown error'}))
+      toastError(
+        err instanceof ApiError && err.status === 403
+          ? t('orgs.permissionDenied')
+          : t('orgs.revokeFailed', {message: err instanceof Error ? err.message : t('orgs.unknownError')}),
+      )
     } finally {
       setRevokingId(null)
     }
@@ -625,7 +698,7 @@ function PendingInvites({orgId}: {orgId: string; onInviteSent?: () => Promise<vo
                 </p>
                 <p className="text-xs text-text-tertiary flex items-center gap-1">
                   <Clock size={10} />
-                  <span className="capitalize">{inv.role}</span>
+                  <span>{roleLabel(inv.role)}</span>
                   {' · '}
                   {expired ? (
                     <span className="text-red-400">{t('orgs.expired', {date: formatDate(inv.expiresAt)})}</span>

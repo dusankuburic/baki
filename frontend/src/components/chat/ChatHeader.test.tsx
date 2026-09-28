@@ -57,6 +57,8 @@ describe('ChatHeader', () => {
     const user = userEvent.setup()
     renderHeader({providers: [{id: 'claude' as ProviderID, name: 'Claude', configured: true, shared: true}]})
     expect(screen.getByTitle("Using your organisation's shared credentials")).toHaveTextContent('shared')
+    // Named for screen readers, not only in the mouse tooltip.
+    expect(screen.getByRole('img', {name: "Using your organisation's shared credentials"})).toBeInTheDocument()
     await user.click(screen.getByText('Claude'))
     expect(screen.getByRole('menuitem', {name: 'Claude · shared'})).toBeInTheDocument()
   })

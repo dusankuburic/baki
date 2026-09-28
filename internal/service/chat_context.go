@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/ai/scrubber"
@@ -292,6 +293,53 @@ func (s *ChatService) isOrgMember(ctx context.Context, orgID, userID string) boo
 	return false
 }
 
+// orgRole returns userID's role in orgID per the backend's org store (the
+// same narrow lookup as isOrgMember, whose rows carry the members); ok is
+// false outside the org, in local mode, and on a store error (fail closed).
+func (s *ChatService) orgRole(ctx context.Context, orgID, userID string) (role auth.Role, ok bool) {
+	if s.backend == nil || orgID == "" || userID == "" {
+		return "", false
+	}
+	orgs, isLister := s.backend.(interface {
+		ListOrgsForUser(ctx context.Context, userID string) ([]*interfaces.Organisation, error)
+	})
+	if !isLister {
+		return "", false
+	}
+	list, err := orgs.ListOrgsForUser(ctx, userID)
+	if err != nil {
+		logger.Warn("chat: org role lookup failed; not using the org's shared credential", "error", err)
+		return "", false
+	}
+	for _, o := range list {
+		if o == nil || o.ID != orgID {
+			continue
+		}
+		for _, m := range o.Members {
+			if m.UserID == userID {
+				return m.Role, true
+			}
+		}
+	}
+	return "", false
+}
+
+// credentialOrg is the organisation whose shared credential (G7) the caller
+// may fall back to on a flow owned by orgID: orgID itself when the caller is
+// one of its admins or members (service.OrgRoleUsesSharedCredential), else
+// "" — their own credential only. Flow access alone is not enough: a
+// collaborator granted one flow, a removed member who still owns org flows,
+// a viewer or a guest must not spend what an admin lent the members.
+func (s *ChatService) credentialOrg(ctx context.Context, orgID, scope string) string {
+	if orgID == "" {
+		return ""
+	}
+	if role, ok := s.orgRole(ctx, orgID, scope); ok && OrgRoleUsesSharedCredential(role) {
+		return orgID
+	}
+	return ""
+}
+
 // cachedContextCore returns the memoised scrub+BuildContext result, computing
 // and storing it on a miss. The cache is bypassed when there is no document
 // (nothing to key on) or when the cache is unset (e.g. a test-built service).
@@ -529,13 +577,13 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 	defer logger.Guard("App.PreviewContext", &err)
 
 	// Same resolution as prepareTurn: an org flow may run on the org's
-	// shared credential (G7), and the preview must not refuse what the turn
-	// would accept.
+	// shared credential (G7) for its admins and members, and the preview
+	// must accept exactly what the turn would.
 	orgID := ""
 	if doc != nil {
 		orgID = doc.OrganizationID
 	}
-	provider, err := s.factory.ForOrg(scope, orgID, req.Provider)
+	provider, err := s.factory.ForOrg(scope, s.credentialOrg(ctx, orgID, scope), req.Provider)
 	if err != nil {
 		return nil, err
 	}

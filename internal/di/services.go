@@ -254,6 +254,7 @@ var ServiceModule = fx.Options(
 		) *service.ChatService {
 			svc := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, backend, mode)
 			svc.SetKnowledgeService(knowledge)
+			wireKnowledgeBudget(knowledge, svc)
 			// nil when PAD_REDIS_URL is unset → single-replica resume (local maps).
 			svc.SetResumeBackplane(redisClient)
 			// Drop the scrubbed-context cache when a flow changes in place,
@@ -322,12 +323,25 @@ var ServiceModule = fx.Options(
 	// same setter pattern as OnApiKeyChanged above, which can't be used here
 	// because no service owns the deletion, only the auth handler does — drops
 	// the provider service's cached live listings for that scope so they
-	// cannot outlive the account.
+	// cannot outlive the account. The provider service also releases the
+	// user's own Azure AI Foundry credential (read before the cascade) and
+	// disables every organisation credential the user lent as an admin (the
+	// org_provider_keys rows do not cascade with the account).
 	fx.Decorate(func(h *api.AuthHandler, svc *service.ProviderService) *api.AuthHandler {
 		h.OnUserDeleted(svc.InvalidateScope)
+		h.SetProviderService(svc)
 		return h
 	}),
 )
+
+// wireKnowledgeBudget makes the knowledge base's billed embedding runs
+// (upload, re-index) consult the daily AI budget a chat turn does (R-4);
+// nil knowledge (no knowledge service wired) is a no-op.
+func wireKnowledgeBudget(knowledge *rag.KnowledgeService, chat *service.ChatService) {
+	if knowledge != nil && chat != nil {
+		knowledge.SetBudgetChecker(chat)
+	}
+}
 
 // ProvideDeploymentCustomRules compiles PAD_CUSTOM_RULES once at boot.
 //

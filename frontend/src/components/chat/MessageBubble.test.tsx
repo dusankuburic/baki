@@ -109,6 +109,8 @@ describe('MessageBubble — served model', () => {
     render(<MessageBubble message={msg({content: 'hi', model: 'my-deployment', servedModel: 'gpt-4o-2024-08-06'})} />)
     expect(screen.getByText('· my-deployment')).toBeInTheDocument()
     expect(screen.getByTitle('Answered by gpt-4o-2024-08-06')).toHaveTextContent('· gpt-4o-2024-08-06')
+    // Named for screen readers too, not only in the mouse tooltip.
+    expect(screen.getByRole('img', {name: 'Answered by gpt-4o-2024-08-06'})).toBeInTheDocument()
   })
 
   it('does not repeat the model when the served one is the same, and never on user turns', () => {
@@ -118,5 +120,36 @@ describe('MessageBubble — served model', () => {
 
     render(<MessageBubble message={msg({id: 'm2', role: 'user', content: 'q', model: 'a', servedModel: 'b'})} />)
     expect(screen.queryByText('· b')).toBeNull()
+  })
+})
+
+describe('MessageBubble — provider errors', () => {
+  it('offers "Open settings" on a provider error bubble and opens the section that fixes it', () => {
+    const openSettings = vi.fn()
+    const original = useUIStore.getState().openSettings
+    useUIStore.setState({openSettings})
+    render(
+      <MessageBubble
+        message={msg({content: '**Denied** — detail', finishReason: 'error', errorCode: 'PROVIDER_OUTPUT_LIMIT'})}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', {name: 'Open settings'}))
+    expect(openSettings).toHaveBeenCalledWith('behavior')
+    useUIStore.setState({openSettings: original})
+  })
+
+  it('offers no settings action on other errors', () => {
+    render(<MessageBubble message={msg({content: 'x', finishReason: 'error', errorCode: 'STREAM_TIMEOUT'})} />)
+    expect(screen.queryByRole('button', {name: 'Open settings'})).toBeNull()
+  })
+
+  it('re-renders when only the served model arrives (memo comparator)', () => {
+    const base = msg({content: 'hi', model: 'dep'})
+    const {rerender} = render(<MessageBubble message={base} />)
+    expect(screen.queryByTitle(/Answered by/)).toBeNull()
+    rerender(<MessageBubble message={{...base, servedModel: 'gpt-4o'}} />)
+    expect(screen.getByTitle('Answered by gpt-4o')).toBeInTheDocument()
+    rerender(<MessageBubble message={{...base, model: 'dep-2', servedModel: 'gpt-4o'}} />)
+    expect(screen.getByText('· dep-2')).toBeInTheDocument()
   })
 })

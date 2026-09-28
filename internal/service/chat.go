@@ -171,6 +171,17 @@ func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string, in
 	return nil
 }
 
+// CheckBudget reports whether the caller may spend on AI for orgID ("" =
+// personal) right now: the chat turn's daily-budget rule (org total plus the
+// per-user sub-limit, other streams' in-flight spend included), with nothing
+// of its own in flight. The knowledge base calls it before an upload or a
+// re-index (rag.BudgetChecker) — both are billed embedding runs that used to
+// bypass the daily budget entirely. Errors match ErrAIBudgetExceeded or
+// ErrAIBudgetUnavailable.
+func (s *ChatService) CheckBudget(ctx context.Context, scope, orgID string) error {
+	return s.enforceBudget(ctx, scope, orgID, 0, nil)
+}
+
 // othersInFlight sums the in-flight ledger of every active stream other than
 // self: orgSum over streams attributed to orgID (when non-empty), userSum over
 // streams owned by scope.
@@ -528,13 +539,23 @@ func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models
 	// org level; personal flows fall back to the per-user total. Resolved
 	// before the provider because an org flow may also run on the org's
 	// shared credential (G7) when the member has none of their own.
+	//
+	// The shared credential itself is only for the org's admins and members
+	// (credentialOrg): a per-flow collaborator outside the org, a viewer or a
+	// guest runs on their own key even on an org flow — whose usage is still
+	// attributed to, and budgeted against, the flow's org (orgID).
 	orgID := ""
 	if doc != nil {
 		orgID = doc.OrganizationID
 	}
-	provider, err := s.factory.ForOrg(scope, orgID, req.Provider)
+	provider, err := s.factory.ForOrg(scope, s.credentialOrg(ctx, orgID, scope), req.Provider)
 	if err != nil {
 		return turnSetup{}, providerSetupError(scope, req.Provider, err)
+	}
+	if ctl != nil {
+		// Read by classifyFailure: a rejected shared credential is the org
+		// admin's to fix, not the member's.
+		ctl.sharedCredential.Store(ai.UsedOrgCredential(provider))
 	}
 	// Policy gate on the resolved provider (its ID came from the factory's
 	// own table, so it is safe to echo back): the same settings load

@@ -43,9 +43,10 @@ export interface ProviderInfo {
   defaultModel: string
   configured: boolean
   /**
-   * True when the credentials came from the active organisation rather than
-   * the member (GET /api/providers/list?orgId=…). A member's own credentials
-   * always win; the org's are the fallback.
+   * True when the credentials came from the organisation named by `orgId`
+   * (GET /api/providers/list?orgId=… — the open flow's org, else the active
+   * one) rather than the member. A member's own credentials always win; the
+   * org's are the fallback, for its admins and members only.
    */
   shared?: boolean
 }
@@ -82,7 +83,10 @@ export type AzureFoundryPublicConfig =
       embeddingDeployment?: string
       /** Additional chat deployments offered in the model picker (normalised by the server). */
       deployments?: string[]
-      /** Claude deployments (Anthropic Messages route); listed as "claude:<name>". */
+      /**
+       * Claude deployments (Anthropic Messages route); listed as
+       * "claude:<name>" and counted as chat targets.
+       */
       claudeDeployments?: string[]
       /**
        * Org-scoped view (GET /api/orgs/{orgId}/providers/azure-foundry/config)
@@ -101,8 +105,11 @@ export type AzureFoundryAuthInput =
 /**
  * POST /api/providers/azure-foundry/config body. An API key cannot list the
  * resource's deployments, so the chat model picker shows exactly
- * `chatDeployment` plus `deployments` (at most 16); the server requires one of
- * them unless Entra ID with a project endpoint lists the project's deployments.
+ * `chatDeployment`, `deployments` (at most 16) and `claudeDeployments` (at
+ * most 20, listed as "claude:<name>"); the server requires at least one of
+ * the three unless Entra ID with a project endpoint lists the project's
+ * deployments. A name listed twice is kept only in the first list it appears
+ * in (chat, embedding, additional, then Claude — case-insensitively).
  */
 export interface AzureFoundryConfigInput {
   endpoint: string
@@ -112,9 +119,16 @@ export interface AzureFoundryConfigInput {
   embeddingDeployment?: string
   /** Additional chat deployments; omitted when empty. */
   deployments?: string[]
-  /** Claude deployments; omitted when empty. */
+  /** Claude deployments (a chat target of their own); omitted when empty. */
   claudeDeployments?: string[]
 }
+
+/**
+ * POST /api/orgs/{orgId}/providers/azure-foundry/config body: the same
+ * document plus the `updatedAt` the admin last read (compare-and-swap; a
+ * stale value answers 409 CONFLICT). Omitted on a first save.
+ */
+export type OrgAzureFoundryConfigInput = AzureFoundryConfigInput & {updatedAt?: string}
 
 export interface SourceFileInfo {
   filename: string
