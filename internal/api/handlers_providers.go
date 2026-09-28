@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"pad-analyzer/internal/ai"
@@ -23,19 +25,35 @@ func NewProviderHandler(providerSvc *service.ProviderService, security *Security
 }
 
 // @Summary      List AI providers
-// @Description  Returns a list of supported AI providers and their current status.
+// @Description  Returns a list of supported AI providers and their current status. With orgId, a provider the caller has not configured but that organisation has (a shared credential) is listed as configured and shared; the parameter is ignored unless the caller is a member of that org.
 // @Tags         providers
+// @Param        orgId query string false "Organisation whose shared credentials to include"
 // @Produce      json
 // @Success      200 {object} []map[string]interface{} "OK"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/providers/list [get]
 func (h *ProviderHandler) handleListProviders(w http.ResponseWriter, r *http.Request) {
-	providers, err := h.providerSvc.ListProviders(r.Context(), h.security.KeyScope(r))
+	providers, err := h.providerSvc.ListProviders(r.Context(), h.security.KeyScope(r), h.listingOrg(r))
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 	render.JSON(w, providers)
+}
+
+// listingOrg returns the ?orgId= the caller may list shared credentials for:
+// the parameter when the caller is a member of that organisation, else ""
+// (listed without an org — a non-member learns nothing, not even that the
+// org exists).
+func (h *ProviderHandler) listingOrg(r *http.Request) string {
+	orgID := r.URL.Query().Get("orgId")
+	if orgID == "" || h.security.OrgSvc == nil {
+		return ""
+	}
+	if !h.security.OrgSvc.IsMember(r.Context(), orgID, h.security.CallerID(r)) {
+		return ""
+	}
+	return orgID
 }
 
 // @Summary      Test provider connection
@@ -234,10 +252,19 @@ func (h *ProviderHandler) handleGetAzureFoundryConfig(w http.ResponseWriter, r *
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/providers/azure-foundry/config [post]
 func (h *ProviderHandler) handleSaveAzureFoundryConfig(w http.ResponseWriter, r *http.Request) {
+	// Strict decode: the stored document is parsed with DisallowUnknownFields
+	// (ParseAzureFoundryConfig), so a misspelled field must fail here rather
+	// than vanish. 64 KiB is far above the 2 KiB document cap.
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	dec.DisallowUnknownFields()
 	var req ai.AzureFoundryConfig
-	if !decodeBody(w, r, &req) {
+	if err := dec.Decode(&req); err != nil {
+		render.ErrorWithCode(w, fmt.Errorf("invalid Azure AI Foundry configuration: %w", err), http.StatusBadRequest, ai.AzureCfgErrInvalidConfig)
 		return
 	}
+	// Normalised before the save AND the audit row: the row must carry the
+	// canonical auth mode, not a client's case/whitespace variant.
+	req.Normalize()
 	if err := h.providerSvc.SaveAzureFoundryConfig(h.security.KeyScope(r), req); err != nil {
 		var cfgErr *ai.AzureConfigError
 		if errors.As(err, &cfgErr) {

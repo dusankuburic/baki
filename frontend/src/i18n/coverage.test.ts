@@ -160,7 +160,9 @@ function usesI18n(src: string): boolean {
 function sourceFiles(dir: string): string[] {
   const out: string[] = []
   for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry)
+    // Normalize to forward slashes: join() yields backslashes on Windows, and
+    // the allowlist below is written with forward slashes.
+    const full = join(dir, entry).replaceAll('\\', '/')
     if (statSync(full).isDirectory()) {
       out.push(...sourceFiles(full))
       continue

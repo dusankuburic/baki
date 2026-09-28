@@ -87,6 +87,28 @@ var rlsHeavyExactPaths = map[string]bool{
 	// (which then sat in the 30s cache). Pool connections retry cleanly per
 	// query; the explicit predicates remain the access control.
 	"/api/dashboard/home": true,
+	// Provider routes that dial OUTBOUND while the handler runs: the live
+	// model listings (each under liveModelsBudget + grace, ~8.5 s), the
+	// connection test (15 s of real billed chat completions plus a model
+	// listing) and the GitHub device-flow calls (start/poll/user for GitHub
+	// Models and Copilot — the poll repeats for as long as the user dithers
+	// on the authorization page). None of them touches the RLS-scoped
+	// backend: credentials and tokens go through the keystore's own
+	// context.Background() connection with per-user WHERE user_id = clauses
+	// (Go-layer authz, not RLS), so the request-long transaction pinned a
+	// pooled connection for the whole upstream dial — with MaxOpenConns 25,
+	// a handful of concurrent tests froze the backend, the same
+	// pool-exhaustion shape /api/dashboard/home had. The purely local
+	// siblings (revoke, the azure-foundry config read/save whose validation
+	// does no network I/O) keep their RLS transaction.
+	"/api/providers/list":          true,
+	"/api/providers/test":          true,
+	"/api/providers/github/start":  true,
+	"/api/providers/github/poll":   true,
+	"/api/providers/github/user":   true,
+	"/api/providers/copilot/start": true,
+	"/api/providers/copilot/poll":  true,
+	"/api/providers/copilot/user":  true,
 }
 
 // rlsBlobContentPath matches the dynamic library routes whose handlers stream

@@ -31,6 +31,17 @@ func TestClassifyFailure_Codes(t *testing.T) {
 		{"circuit open", ai.ErrCircuitOpen, ChatErrProviderUnavailable, "temporarily unavailable"},
 		{"rate limited", ai.ErrRateLimited, ChatErrProviderRateLimited, "rate-limiting"},
 		{"bad key", ai.ErrApiKeyInvalid, ChatErrProviderAuth, "Settings"},
+		// Finding #23: the credentials work, a role is missing — checked
+		// before ErrApiKeyInvalid, which the error also matches.
+		{"missing role", fmt.Errorf("azure ai foundry: %w: %w: the principal lacks the required data action", ai.ErrProviderPermissionDenied, ai.ErrApiKeyInvalid), ChatErrProviderPermission, "Foundry User role"},
+		// Finding #15: Entra ID refused the service principal — no API key involved.
+		{"entra credentials rejected", fmt.Errorf("get azure ai foundry token: %w: %w", ai.ErrEntraCredentialsRejected, ai.ErrApiKeyInvalid), ChatErrProviderAuth, "Microsoft Entra ID rejected"},
+		// The token WAS issued and the resource refused it (also
+		// ErrApiKeyInvalid): the copy names the access token, not a key the
+		// principal does not have.
+		{"entra token rejected", fmt.Errorf("%w: %w", ai.ErrEntraTokenRejected, ai.ErrApiKeyInvalid), ChatErrProviderAuth, "Entra ID access token"},
+		// The identity service did not answer: unavailable, not an auth failure.
+		{"entra token unavailable", fmt.Errorf("get azure ai foundry token: %w", ai.ErrEntraTokenUnavailable), ChatErrProviderUnavailable, "Entra ID token"},
 		{"no balance", ai.ErrInsufficientBalance, ChatErrProviderBalance, "insufficient balance"},
 		{"context limit", ai.ErrContextLimit, ChatErrContextLimit, "context window"},
 		{"truncated", errors.New("openai stream truncated before terminal marker"), ChatErrInterrupted, "interrupted"},

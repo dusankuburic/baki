@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"pad-analyzer/internal/auth"
@@ -51,6 +52,42 @@ func TestAccountDelete_ErasesAndRevokesToken(t *testing.T) {
 	// must now be rejected (401).
 	rr2 := doRequestWithAuth(t, rt, http.MethodGet, "/api/auth/me", bearer, nil)
 	checkStatus(t, rr2, http.StatusUnauthorized)
+}
+
+// TestAccountDelete_RunsUserDeletedHook: the erasure must run the
+// onUserDeleted hook (DI wires it to ProviderService.InvalidateScope — the
+// SQL cascade removes the provider keys, the hook tells the in-process
+// caches) with the caller's key scope, and only after a successful delete.
+func TestAccountDelete_RunsUserDeletedHook(t *testing.T) {
+	rt, _ := newAccountTestRouter(t, "u1", "alice@example.com")
+	bearer := jwtBearer(t, rt, "u1", "alice@example.com")
+
+	var mu sync.Mutex
+	var scopes []string
+	rt.handlers.Auth.OnUserDeleted(func(scope string) {
+		mu.Lock()
+		scopes = append(scopes, scope)
+		mu.Unlock()
+	})
+
+	// A refused confirmation must not fire the hook.
+	rr := doRequestWithAuth(t, rt, http.MethodDelete, "/api/auth/account", bearer, map[string]string{"confirmEmail": "other@example.com"})
+	checkStatus(t, rr, http.StatusBadRequest)
+	mu.Lock()
+	fired := len(scopes)
+	mu.Unlock()
+	if fired != 0 {
+		t.Errorf("hook fired on a refused confirmation: %v", scopes)
+	}
+
+	rr = doRequestWithAuth(t, rt, http.MethodDelete, "/api/auth/account", bearer, map[string]string{"confirmEmail": "alice@example.com"})
+	checkStatus(t, rr, http.StatusOK)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(scopes) != 1 || scopes[0] != "u1" {
+		t.Errorf("onUserDeleted scopes = %v, want exactly [u1] (the caller's key scope)", scopes)
+	}
 }
 
 func TestAccountExport_ReturnsUserData(t *testing.T) {

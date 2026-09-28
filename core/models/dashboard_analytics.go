@@ -173,13 +173,19 @@ type AIDailyPoint struct {
 	Calls     int     `json:"calls"`
 }
 
+// ModelUsage is one row of the by-model breakdown. Model is what the caller
+// asked for (for Azure AI Foundry a deployment name or agent); ServedModel is
+// the model that actually answered when it differs, so the UI can label the
+// row "deployment · served". Rows are grouped by the served model, so one
+// deployment routed to two models over the window yields two rows.
 type ModelUsage struct {
-	Provider  string  `json:"provider"`
-	Model     string  `json:"model"`
-	TokensIn  int     `json:"tokensIn"`
-	TokensOut int     `json:"tokensOut"`
-	Calls     int     `json:"calls"`
-	Cost      float64 `json:"cost"`
+	Provider    string  `json:"provider"`
+	Model       string  `json:"model"`
+	ServedModel string  `json:"servedModel,omitempty"`
+	TokensIn    int     `json:"tokensIn"`
+	TokensOut   int     `json:"tokensOut"`
+	Calls       int     `json:"calls"`
+	Cost        float64 `json:"cost"`
 }
 
 // AnalyticsAI is AI usage for the caller's account and/or the scoped orgs.

@@ -71,6 +71,12 @@ type streamCtl struct {
 	// and the subscriber watchdog — unblocks together.
 	started   chan struct{}
 	startOnce sync.Once
+	// settled is closed by the worker's cleanup as its very last step — after
+	// the stream left the active set, its terminal state was recorded AND the
+	// detached answer persist (persistAssistantTurn) returned. The active set
+	// alone says the stream is over, not that its answer is stored; callers
+	// that need the store (tests) wait here.
+	settled   chan struct{}
 	mu        sync.Mutex
 	buffer    strings.Builder
 	done      bool   // stream finished successfully
@@ -78,10 +84,18 @@ type streamCtl struct {
 	errCode   string // machine-readable class of errMsg ("" = unclassified); see chat_errors.go
 	tokensIn  int
 	tokensOut int
-	ownerID   string // caller identity (scope) that created this stream
-	// orgID is the budget scope the stream is attributed to ("" = personal).
-	// Set once prepareTurn resolves it; read by othersInFlight.
-	orgID string
+	// servedModel is the model that answered (alias providers: the deployment's
+	// underlying model, from the provider's terminal chunk); "" when the
+	// provider named none. Guarded by mu; carried on done/resume payloads.
+	servedModel string
+	// ownerID, orgID and streamID are IMMUTABLE after publication: the control
+	// is stored in activeStreams (tryStartStream) before the worker exists, and
+	// othersInFlight reads ownerID/orgID from every other stream lock-free, so
+	// a later write would be a data race. orgID is the budget scope the stream
+	// is attributed to ("" = personal), taken from the flow document at
+	// construction.
+	ownerID string // caller identity (scope) that created this stream
+	orgID   string
 	// inflightCost is what THIS stream has spent so far plus one more maximum
 	// response it may still produce, in dollars, for OTHER streams' budget
 	// checks. The daily budget used to be read-then-act against the store
@@ -102,6 +116,21 @@ type streamCtl struct {
 	// from lastActivity on purpose: a heartbeat must never reset the
 	// provider-idle watchdog.
 	lastEmit atomic.Int64
+	// hostedOpen counts the provider's hosted tool steps (a Foundry agent's
+	// MCP call, code interpreter run, …) that have started but not finished
+	// in the current provider turn. A hosted step runs server-side without
+	// streaming anything, so while one is open the idle watchdog allows
+	// hostedStepIdleTimeout instead of the normal idle limit.
+	hostedOpen atomic.Int32
+	// awaitingOutput is set before each provider call and cleared by its first
+	// Text / ToolCalls / Done chunk (and by endProviderTurn). A reasoning
+	// deployment (o-series, gpt-5, DeepSeek-R1 on chat completions) streams
+	// nothing while it thinks, and a Responses run emits argument and
+	// reasoning deltas the parser may not surface as chunks, so while it is
+	// set the idle watchdog allows hostedStepIdleTimeout instead of the normal
+	// limit — a provider that hangs before its first token is caught at the
+	// hosted limit, still under maxChatStreamDuration.
+	awaitingOutput atomic.Bool
 	// journal records agentic events (tool/tool_result/fix_proposal/
 	// fix_decision) for replay on reconnect; guarded by mu. See journalEvent.
 	journal []journalEvent
@@ -168,6 +197,45 @@ func heartbeatStream(ctx context.Context, ctl *streamCtl, emit func(string, map[
 // touch records provider activity for the idle timeout.
 func (c *streamCtl) touch() { c.lastActivity.Store(time.Now().UnixNano()) }
 
+// hostedStep accounts one provider ToolEvent: a start opens a hosted step, a
+// completion closes one (never below zero — a completion whose start was not
+// seen must not hide a later open step).
+func (c *streamCtl) hostedStep(start bool) {
+	if start {
+		c.hostedOpen.Add(1)
+		return
+	}
+	for {
+		n := c.hostedOpen.Load()
+		if n <= 0 || c.hostedOpen.CompareAndSwap(n, n-1) {
+			return
+		}
+	}
+}
+
+// endProviderTurn clears the hosted-step count once a provider call returns:
+// a step whose completion never arrived (failed or truncated stream) must
+// not keep the longer idle limit for the rest of the stream. The
+// awaiting-output flag is cleared for the same reason.
+func (c *streamCtl) endProviderTurn() {
+	c.hostedOpen.Store(0)
+	c.awaitingOutput.Store(false)
+}
+
+// beginProviderTurn marks the start of a provider call: until its first
+// output chunk arrives the idle watchdog applies the hosted-step limit (see
+// awaitingOutput).
+func (c *streamCtl) beginProviderTurn() { c.awaitingOutput.Store(true) }
+
+// sawOutput records a chunk that proves the provider is producing output
+// (text, tool calls or the terminal chunk): the normal idle limit applies
+// from here on.
+func (c *streamCtl) sawOutput(text, toolCalls, done bool) {
+	if text || toolCalls || done {
+		c.awaitingOutput.Store(false)
+	}
+}
+
 // setInflight publishes this stream's spend-so-far plus reservation for
 // concurrent streams' budget checks (see inflightCost).
 func (c *streamCtl) setInflight(cost float64) {
@@ -205,14 +273,41 @@ func (c *streamCtl) setFailure(code, msg string) {
 	c.mu.Unlock()
 }
 
-// markDone records a successful terminal chunk's token counts under lock.
-// Shared by the single-turn stream path and the tool loop's final-answer turn.
-func (c *streamCtl) markDone(tokensIn, tokensOut int) {
+// markDone records a successful terminal chunk's token counts and the model
+// that answered under lock. Shared by the single-turn stream path and the
+// tool loop's final-answer turn.
+func (c *streamCtl) markDone(tokensIn, tokensOut int, servedModel string) {
 	c.mu.Lock()
 	c.done = true
 	c.tokensIn = tokensIn
 	c.tokensOut = tokensOut
+	c.servedModel = servedModel
 	c.mu.Unlock()
+}
+
+// ensureTerminal records a failure when the worker exits without done/error
+// recorded: a Done or Error chunk dropped at the begin gate (the legacy
+// handshake cancelled before /chat/begin), a provider that returned nil after
+// its chunks were dropped, a panic. Without it the stream moved to
+// finishedStreams as neither done nor failed, BeginStream reported it live and
+// ResumeStream handed back a non-terminal snapshot for good. A cancelled
+// stream gets its stored reason (or the timeout copy); anything else is an
+// interruption. Returns set=true when it recorded something, so the caller
+// can emit the matching error event to a subscribed client.
+func (c *streamCtl) ensureTerminal(ctx context.Context) (code, msg string, set bool) {
+	code, msg = ChatErrInterrupted, "the response ended before it finished — try again"
+	if ctx.Err() != nil {
+		if cc, cm := c.classifyFailure(ctx, ctx.Err()); cc != "" {
+			code, msg = cc, cm
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.done || c.errMsg != "" {
+		return "", "", false
+	}
+	c.errCode, c.errMsg = code, msg
+	return code, msg, true
 }
 
 // failureMessage returns the client-facing message for a stream error (the
@@ -239,13 +334,14 @@ func (c *streamCtl) snapshot() resumeSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return resumeSnapshot{
-		Owner:     c.ownerID,
-		Text:      c.buffer.String(),
-		Done:      c.done,
-		Error:     c.errMsg,
-		ErrorCode: c.errCode,
-		TokensIn:  c.tokensIn,
-		TokensOut: c.tokensOut,
-		Events:    c.snapshotEvents(),
+		Owner:       c.ownerID,
+		Text:        c.buffer.String(),
+		Done:        c.done,
+		Error:       c.errMsg,
+		ErrorCode:   c.errCode,
+		TokensIn:    c.tokensIn,
+		TokensOut:   c.tokensOut,
+		ServedModel: c.servedModel,
+		Events:      c.snapshotEvents(),
 	}
 }

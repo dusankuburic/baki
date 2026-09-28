@@ -645,8 +645,14 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 		// not affected by this deadline; only normal JSON endpoints benefit.
 		ReadTimeout: 30 * time.Second,
 		// WriteTimeout is deliberately 0 (unlimited) because SSE and chat-stream
-		// responses are long-lived. Per-handler write deadlines are set via
-		// http.ResponseController.SetWriteDeadline for non-streaming routes.
+		// responses are long-lived. SSE writes carry their own 30s deadline via
+		// http.ResponseController.SetWriteDeadline in the events handler
+		// (internal/api/events.go); WebSocket writes set per-message deadlines
+		// on the hijacked connection. Non-streaming routes have NO per-handler
+		// write deadline — nothing sets one — so a stuck handler+write is
+		// bounded in practice only by handler execution (ReadTimeout caps body
+		// reads, queries carry their own timeouts) and by server.Shutdown's
+		// drain budget on stop, not by the server config here.
 		WriteTimeout: 0,
 		IdleTimeout:  120 * time.Second,
 		// MaxHeaderBytes caps total request header size to guard against
@@ -702,14 +708,24 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			}
 			wsCancel()
 			// fx.StopTimeout (25s) bounds EVERY OnStop hook together, and this
-			// hook runs first (hooks stop in reverse start order). It used to
-			// take 5s WS + 20s HTTP = the whole budget, leaving nothing for the
-			// hooks after it — the audit flush (5s), the background loops
-			// (≤5s each, usually instant) and the pool close — so a slow HTTP
-			// drain turned into a SIGKILL during audit flush. Now 3s + 12s here,
-			// ~10s for everything else. A request still in flight after 12s is
-			// cut off; that beats losing the audit tail and the clean pool close.
-			shutdownCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+			// hook runs first (hooks stop in reverse start order). Worst-case
+			// stack after this hook: 3s WS + 8s HTTP here, then the background
+			// loops (scanner ≤5s loop drain + ≤5s delivery drain, retention
+			// ≤5s), the audit flush (5s), telemetry (5s), and finally the
+			// constructor-phase pool close. At a 12s HTTP drain this hook alone
+			// could eat 15s, so audit(5)+telemetry(5) = 25s left ZERO headroom
+			// for the pool close — a maximally slow drain plus any loop drain
+			// pushed the pool close past StopTimeout into a mid-flush cut.
+			// 3s + 8s here leaves 14s for everything else, which covers the
+			// full audit+telemetry flushes (10s) plus the pool close even when
+			// one background loop drains its whole 5s budget. The absolute
+			// pathological stack (every budget consumed in full ≈ 36s) still
+			// exceeds ACA's 30s grace; no StopTimeout fits it under 30s, so
+			// the platform SIGKILL remains the backstop for that scenario —
+			// what this budget buys is that the ordinary slow-drain case
+			// completes cleanly. A request still in flight after 8s is cut
+			// off; that beats losing the audit tail and the clean pool close.
+			shutdownCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
 			return server.Shutdown(shutdownCtx)
 		},

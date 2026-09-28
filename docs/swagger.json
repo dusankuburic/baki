@@ -6949,7 +6949,10 @@
         },
         "/api/orgs/{id}/knowledge/reindex": {
             "post": {
-                "description": "Re-embeds every knowledge chunk with the currently configured embedding provider — the recovery path after switching embedding provider/model, which strands the existing corpus at the old dimension (searches silently return nothing).",
+                "description": "Re-embeds every knowledge chunk with the caller's embedding provider — the recovery path after switching embedding provider/model, which strands the existing corpus at the old dimension (searches silently return nothing). When the corpus was indexed with a different embedding model at the same width, the request is refused with 409 EMBEDDING_MODEL_CHANGED unless the body sets \"force\": true — re-indexing switches every document to the caller's model, and members whose embedding provider uses another model stop receiving the org's guidelines.",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -6964,18 +6967,44 @@
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "description": "Optional JSON object; force=true re-indexes even when the corpus was indexed with a different embedding model",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "type": "object"
+                        }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Re-indexed",
+                        "description": "Re-indexed ({chunks, docs, truncated?}); truncated=true means the per-request ceiling (10 000 chunks) was reached with chunks left unconverted",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
                         }
                     },
                     "400": {
-                        "description": "Embedding provider not configured",
+                        "description": "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED), a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed body",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force) or another upload/re-index of this org is in flight (KNOWLEDGE_BUSY)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -6991,12 +7020,22 @@
                                 "type": "string"
                             }
                         }
+                    },
+                    "503": {
+                        "description": "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
         },
         "/api/orgs/{id}/knowledge/upload": {
             "post": {
+                "description": "Chunks and embeds the document with the caller's embedding provider. Refused with 409 EMBEDDING_MODEL_CHANGED when that provider's model is not the one the org's knowledge base was indexed with (mixing models would make documents unfindable for members on the other model).",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -7022,6 +7061,42 @@
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED) or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED) or another upload/re-index of this org is in flight (KNOWLEDGE_BUSY)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -7201,6 +7276,219 @@
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/orgs/{id}/providers/azure-foundry/config": {
+            "get": {
+                "description": "Returns the org's shared Azure AI Foundry settings (endpoint, auth mode, project endpoint, deployments) without any secret, with who shared it and when. Any member. {configured:false} when the org has none.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "org"
+                ],
+                "summary": "Get the organisation's shared Azure AI Foundry configuration",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Org ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "Not a member",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Validates and stores the org's shared Azure AI Foundry endpoint, credential (API key or Microsoft Entra ID service principal), optional project endpoint and deployment names, for members without a configuration of their own. Org admins only. An omitted secret keeps the stored one.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "org"
+                ],
+                "summary": "Save the organisation's shared Azure AI Foundry configuration",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Org ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "INVALID_CONFIG, INVALID_PROJECT_ENDPOINT, MISSING_DEPLOYMENT or HOST_NOT_ALLOWED",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Not an org admin",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Removes the org's shared Azure AI Foundry credential. Members without a configuration of their own lose the provider. Org admins only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "org"
+                ],
+                "summary": "Delete the organisation's shared Azure AI Foundry configuration",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Org ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Not an org admin",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/orgs/{id}/providers/azure-foundry/test": {
+            "post": {
+                "description": "Sends a tiny chat request through the org's shared Azure AI Foundry credential (never the caller's own) and reports whether it works. Org admins only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "org"
+                ],
+                "summary": "Test the organisation's shared Azure AI Foundry credential",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Org ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "ProviderTestResult",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "Not an org admin",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -7708,7 +7996,7 @@
         },
         "/api/providers/list": {
             "get": {
-                "description": "Returns a list of supported AI providers and their current status.",
+                "description": "Returns a list of supported AI providers and their current status. With orgId, a provider the caller has not configured but that organisation has (a shared credential) is listed as configured and shared; the parameter is ignored unless the caller is a member of that org.",
                 "produces": [
                     "application/json"
                 ],
@@ -7716,6 +8004,14 @@
                     "providers"
                 ],
                 "summary": "List AI providers",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Organisation whose shared credentials to include",
+                        "name": "orgId",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",

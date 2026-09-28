@@ -153,6 +153,15 @@ func (s *ChatService) ClearConversation(ctx context.Context, doc *models.FlowDoc
 	return nil
 }
 
+// persistAnswerTimeout bounds the detached end-of-stream write of the answer
+// (persistAssistantTurn). The write runs under the conversation's stripe mutex
+// after the stream's own context is gone: unbounded, a stalled store parked
+// every finishing stream there for good, holding the stripe every new stream
+// on that conversation needs (mu.Lock is not ctx-aware) and, before the
+// cleanup reordering in StreamChatMessage, its activeStreams slot. A variable
+// so tests can shorten it.
+var persistAnswerTimeout = 15 * time.Second
+
 // persistAssistantTurn appends the finished answer to the stored conversation.
 //
 // The question is persisted when the stream starts (persistInitialUserTurn) but
@@ -163,7 +172,8 @@ func (s *ChatService) ClearConversation(ctx context.Context, doc *models.FlowDoc
 // persistence, and SaveConversation still honours the history preference.
 //
 // Best-effort and idempotent in effect: the client's own save replaces the whole
-// list with the same content.
+// list with the same content. Bounded by persistAnswerTimeout: a store that
+// hangs turns into a logged warning, never a held stripe.
 func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.FlowDocument, req models.ChatRequest, ctl *streamCtl) {
 	if doc == nil || ctl == nil {
 		return
@@ -178,8 +188,9 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 
 	convKey := req.ConversationKey()
 	// The stream's context is cancelled as the worker unwinds; this write must
-	// still land.
-	writeCtx := context.WithoutCancel(ctx)
+	// still land — within a bound (see persistAnswerTimeout).
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistAnswerTimeout)
+	defer cancel()
 	// Same critical section as reconstruct + persist-user-turn: the next turn
 	// on this conversation may already be reading the history this replaces,
 	// and SaveConversation is a full-file replace.

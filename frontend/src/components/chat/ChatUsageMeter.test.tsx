@@ -1,0 +1,78 @@
+import {describe, it, expect, beforeEach} from 'vitest'
+import {render, screen} from '@testing-library/react'
+import ChatUsageMeter, {threadCost} from './ChatUsageMeter'
+import {useChatStore} from '@/stores/chatStore'
+import {useSettingsStore} from '@/stores/settingsStore'
+import type {ChatMessage} from '@/types'
+
+function assistant(partial: Partial<ChatMessage>): ChatMessage {
+  return {id: partial.id ?? 'a1', role: 'assistant', content: 'x', timestamp: '2024-01-01T00:00:00Z', ...partial}
+}
+
+function seed(messages: ChatMessage[], showCost = true) {
+  useChatStore.setState({activeThreadId: 'threadA', streams: {}, conversations: new Map([['threadA', messages]])})
+  useSettingsStore.setState(s => ({settings: {...s.settings, ai: {...s.settings.ai, showCostEstimates: showCost}}}))
+}
+
+beforeEach(() => {
+  seed([])
+})
+
+describe('threadCost', () => {
+  it('prices everything at the listing when no turn carries its own rates', () => {
+    expect(threadCost([assistant({tokensIn: 1000, tokensOut: 500})], 1000, 500, 2, 10)).toBeCloseTo(0.007, 9)
+  })
+
+  it('prices rated turns at their billed rates and only the remainder at the listing', () => {
+    const msgs = [
+      assistant({id: 'a1', tokensIn: 1000, tokensOut: 1000, inputCostPerM: 1, outputCostPerM: 4}),
+      assistant({id: 'a2', tokensIn: 1000, tokensOut: 1000}),
+      {id: 'u1', role: 'user', content: 'q', timestamp: 't', tokensIn: 5, inputCostPerM: 99} as ChatMessage,
+    ]
+    // a1: (1000*1 + 1000*4)/1M = 0.005; the other 1000/1000 at 2/10 = 0.012.
+    expect(threadCost(msgs, 2000, 2000, 2, 10)).toBeCloseTo(0.017, 9)
+  })
+
+  it('prices rated turns even when the listing is unknown, and hides when nothing can be priced', () => {
+    const rated = [assistant({tokensIn: 2_000_000, tokensOut: 0, inputCostPerM: 1, outputCostPerM: 0})]
+    expect(threadCost(rated, 2_000_000, 0, 0, 0)).toBe(2)
+    expect(threadCost([assistant({tokensIn: 10, tokensOut: 10})], 10, 10, 0, 0)).toBeNull()
+    // A negative rate is not a price.
+    expect(threadCost([assistant({tokensIn: 10, tokensOut: 10, inputCostPerM: -1})], 10, 10, 0, 0)).toBeNull()
+  })
+
+  it('never prices the listing remainder below zero when rated turns exceed the totals', () => {
+    const rated = [assistant({tokensIn: 5000, tokensOut: 5000, inputCostPerM: 1, outputCostPerM: 1})]
+    expect(threadCost(rated, 1000, 1000, 100, 100)).toBeCloseTo(0.01, 9)
+  })
+})
+
+describe('ChatUsageMeter', () => {
+  it('shows the cost from the listing price', () => {
+    render(<ChatUsageMeter promptTokens={1000} completionTokens={500} inputCostPerM={2} outputCostPerM={10} />)
+    expect(screen.getByText(/· \$0\.007/)).toBeInTheDocument()
+  })
+
+  it("uses a turn's billed rates over the listing price", () => {
+    seed([assistant({tokensIn: 1000, tokensOut: 500, inputCostPerM: 20, outputCostPerM: 100})])
+    render(<ChatUsageMeter promptTokens={1000} completionTokens={500} inputCostPerM={2} outputCostPerM={10} />)
+    expect(screen.getByText(/· \$0\.070/)).toBeInTheDocument()
+  })
+
+  it('shows a cost from billed rates alone when the listing has none', () => {
+    seed([assistant({tokensIn: 1000, tokensOut: 500, inputCostPerM: 20, outputCostPerM: 100})])
+    render(<ChatUsageMeter promptTokens={1000} completionTokens={500} />)
+    expect(screen.getByText(/· \$0\.070/)).toBeInTheDocument()
+  })
+
+  it('hides the cost when no rate is known, or when cost estimates are off', () => {
+    const {unmount} = render(<ChatUsageMeter promptTokens={1000} completionTokens={500} />)
+    expect(screen.getByText(/tokens/)).toBeInTheDocument()
+    expect(screen.queryByText(/\$/)).toBeNull()
+    unmount()
+
+    seed([assistant({tokensIn: 1000, tokensOut: 500, inputCostPerM: 20, outputCostPerM: 100})], false)
+    render(<ChatUsageMeter promptTokens={1000} completionTokens={500} inputCostPerM={2} outputCostPerM={10} />)
+    expect(screen.queryByText(/\$/)).toBeNull()
+  })
+})

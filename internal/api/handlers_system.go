@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"

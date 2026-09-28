@@ -951,6 +951,9 @@ export const chat = {
     model: 'Model',
     slowToolProtocol: 'This provider runs tools through a slower text-marker protocol',
     using: 'Using',
+    // Badge on a provider whose credentials come from the active organisation.
+    shared: 'shared',
+    sharedTitle: "Using your organisation's shared credentials",
   },
   trail: {
     usedTools_one: 'Used {{count}} tool',
@@ -1028,6 +1031,8 @@ export const chat = {
     copied: 'Copied',
     retry: 'Retry',
     regenerate: 'Regenerate',
+    // Tooltip on the served-model tag: the model that actually answered.
+    servedBy: 'Answered by {{model}}',
   },
   fixCard: {
     includeFix: 'Include fix for {{name}}',

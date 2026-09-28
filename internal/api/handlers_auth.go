@@ -40,10 +40,24 @@ type AuthHandler struct {
 	// authSvc owns credential verification (bcrypt timing/lockout) and
 	// password-mutation business logic; see internal/service/auth.go.
 	authSvc *service.AuthService
+	// onUserDeleted runs after handleAuthDeleteAccount erased the user (wired
+	// in di/services.go to ProviderService.InvalidateScope, mirroring
+	// SystemService.OnApiKeyChanged); nil = no hook (bare tests). The backend's
+	// DeleteUser cascades the user's provider keys in SQL — this hook is what
+	// tells the in-process caches.
+	onUserDeleted func(scope string)
 }
 
 func NewAuthHandler(tokenStore RefreshTokenStore, backend storageif.StorageBackend, security *SecurityConfig, ssoClient SSOClient, identityStore IdentityStore, email *mailer.Service, authSvc *service.AuthService) *AuthHandler {
 	return &AuthHandler{tokenStore: tokenStore, backend: backend, security: security, ssoClient: ssoClient, identityStore: identityStore, email: email, authSvc: authSvc}
+}
+
+// OnUserDeleted registers the hook handleAuthDeleteAccount runs after a
+// successful erasure. Post-construction wiring (same pattern as
+// SystemService.OnApiKeyChanged): set once at boot in di, before requests are
+// served.
+func (h *AuthHandler) OnUserDeleted(fn func(scope string)) {
+	h.onUserDeleted = fn
 }
 
 // credentials is the shared {email, password} JSON body of the register and
@@ -639,6 +653,14 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 	if err := h.backend.DeleteUser(r.Context(), claims.UserID); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
+	}
+
+	// The erasure cascaded the user's provider keys in SQL; drop whatever the
+	// in-process caches still hold for that scope (DI wires this to
+	// ProviderService.InvalidateScope). KeyScope is exactly what those caches
+	// are keyed by.
+	if h.onUserDeleted != nil {
+		h.onUserDeleted(h.security.KeyScope(r))
 	}
 
 	if tokenStr := auth.ExtractToken(r); tokenStr != "" {

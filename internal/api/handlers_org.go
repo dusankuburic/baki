@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
@@ -31,6 +33,10 @@ type OrgHandler struct {
 	// analysis re-resolves instead of serving a cached profile. Nil in local
 	// mode and in tests that don't exercise the rule endpoints.
 	ruleProfiles *service.RuleProfileResolver
+	// providers serves the organisation's shared provider credentials (G7);
+	// the routes report ORG_KEYSTORE_UNAVAILABLE when it is nil or has no
+	// org secret store (desktop, local mode).
+	providers *service.ProviderService
 
 	// notifyPolicy decides whether an org notification channel may point at
 	// loopback. Resolved once at construction from JWTEnabled — the same "is this
@@ -40,6 +46,10 @@ type OrgHandler struct {
 	// cloud always lands on the strict policy, while a single-user desktop run
 	// keeps the localhost hatch that makes local webhooks useful.
 	notifyPolicy notify.TargetPolicy
+	// channelClient is the one guarded HTTP client shared by every channel
+	// test (D-25): building a client per call cloned a transport whose idle
+	// connections nobody closed.
+	channelClient *http.Client
 }
 
 // channelPolicy maps the deployment's auth posture onto the egress policy.
@@ -50,15 +60,17 @@ func channelPolicy(security *SecurityConfig) notify.TargetPolicy {
 	return notify.AllowLoopbackTargets
 }
 
-func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, knowledge *rag.KnowledgeService, security *SecurityConfig, email *mailer.Service, ruleProfiles *service.RuleProfileResolver) *OrgHandler {
+func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, knowledge *rag.KnowledgeService, security *SecurityConfig, email *mailer.Service, ruleProfiles *service.RuleProfileResolver, providers *service.ProviderService) *OrgHandler {
 	return &OrgHandler{
-		orgSvc:       orgSvc,
-		backend:      backend,
-		knowledge:    knowledge,
-		security:     security,
-		email:        email,
-		ruleProfiles: ruleProfiles,
-		notifyPolicy: channelPolicy(security),
+		orgSvc:        orgSvc,
+		backend:       backend,
+		knowledge:     knowledge,
+		security:      security,
+		email:         email,
+		ruleProfiles:  ruleProfiles,
+		providers:     providers,
+		notifyPolicy:  channelPolicy(security),
+		channelClient: notify.NewChannelClient(channelPolicy(security)),
 	}
 }
 
@@ -73,6 +85,174 @@ func (h *OrgHandler) knowledgeBackendAvailable(w http.ResponseWriter) bool {
 		return false
 	}
 	return true
+}
+
+// orgProviderKeysAvailable gates the organisation credential routes (G7) on
+// an org secret store: the desktop and local mode have no organisations and
+// no database keystore, so the routes answer 404 ORG_KEYSTORE_UNAVAILABLE
+// there instead of nil-panicking.
+func (h *OrgHandler) orgProviderKeysAvailable(w http.ResponseWriter) bool {
+	if h.providers == nil || !h.providers.OrgKeysAvailable() {
+		render.ErrorWithCode(w, service.ErrOrgKeyStoreUnavailable, http.StatusNotFound, "ORG_KEYSTORE_UNAVAILABLE")
+		return false
+	}
+	return true
+}
+
+// --- Organisation-shared Azure AI Foundry credential (G7) ---
+//
+// Trust model. An org admin is NOT a trusted principal — anyone can create an
+// organisation and be its admin — so what these routes hold is only what
+// that admin chose to lend the org's members: the secret is write-only
+// (never in any response, GET included), only admins write or delete it,
+// every member may read its public form, and a member's OWN credential
+// always wins over it for chat (ProviderFactory.ForOrg). Usage on the shared
+// credential is attributed to the org and capped by the org's daily budget
+// like every org-scoped turn; the row goes with the organisation.
+
+// @Summary      Get the organisation's shared Azure AI Foundry configuration
+// @Description  Returns the org's shared Azure AI Foundry settings (endpoint, auth mode, project endpoint, deployments) without any secret, with who shared it and when. Any member. {configured:false} when the org has none.
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      403 {object} map[string]string "Not a member"
+// @Failure      404 {object} map[string]string "Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)"
+// @Router       /api/orgs/{id}/providers/azure-foundry/config [get]
+func (h *OrgHandler) handleOrgAzureFoundryConfigGet(w http.ResponseWriter, r *http.Request) {
+	if !h.orgProviderKeysAvailable(w) {
+		return
+	}
+	org := h.requireMember(w, r)
+	if org == nil {
+		return
+	}
+	cfg, err := h.providers.GetOrgAzureFoundryConfig(org.ID)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	cfg.UpdatedBy = h.memberLabel(r.Context(), cfg.UpdatedByID)
+	render.JSON(w, cfg)
+}
+
+// memberLabel renders a user id as the name members see: the display name,
+// else the email, else the id itself (a departed account).
+func (h *OrgHandler) memberLabel(ctx context.Context, userID string) string {
+	if userID == "" || h.backend == nil {
+		return userID
+	}
+	u, err := h.backend.LoadUserByID(ctx, userID)
+	if err != nil || u == nil {
+		return userID
+	}
+	if u.DisplayName != "" {
+		return u.DisplayName
+	}
+	if u.Email != "" {
+		return u.Email
+	}
+	return userID
+}
+
+// @Summary      Save the organisation's shared Azure AI Foundry configuration
+// @Description  Validates and stores the org's shared Azure AI Foundry endpoint, credential (API key or Microsoft Entra ID service principal), optional project endpoint and deployment names, for members without a configuration of their own. Org admins only. An omitted secret keeps the stored one.
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "INVALID_CONFIG, INVALID_PROJECT_ENDPOINT, MISSING_DEPLOYMENT or HOST_NOT_ALLOWED"
+// @Failure      403 {object} map[string]string "Not an org admin"
+// @Failure      404 {object} map[string]string "Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)"
+// @Router       /api/orgs/{id}/providers/azure-foundry/config [post]
+func (h *OrgHandler) handleOrgAzureFoundryConfigSave(w http.ResponseWriter, r *http.Request) {
+	if !h.orgProviderKeysAvailable(w) {
+		return
+	}
+	org := h.requireAdmin(w, r)
+	if org == nil {
+		return
+	}
+	// Same strict decode as the per-user route: the stored document is
+	// parsed with DisallowUnknownFields, so a misspelled field must fail
+	// here rather than vanish. 64 KiB is far above the 2 KiB document cap.
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	dec.DisallowUnknownFields()
+	var req ai.AzureFoundryConfig
+	if err := dec.Decode(&req); err != nil {
+		render.ErrorWithCode(w, fmt.Errorf("invalid Azure AI Foundry configuration: %w", err), http.StatusBadRequest, ai.AzureCfgErrInvalidConfig)
+		return
+	}
+	// Normalised before the save AND the audit row: the row must carry the
+	// canonical auth mode, not a client's case/whitespace variant.
+	req.Normalize()
+	if err := h.providers.SaveOrgAzureFoundryConfig(org.ID, h.security.CallerID(r), req); err != nil {
+		var cfgErr *ai.AzureConfigError
+		if errors.As(err, &cfgErr) {
+			render.ErrorWithCode(w, err, http.StatusBadRequest, cfgErr.Code)
+			return
+		}
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	// Never the secrets — only that the org's provider changed and how it
+	// authenticates.
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "org", org.ID,
+		map[string]string{"op": "save", "provider": ai.AzureFoundryProviderID, "authMode": req.Auth.Mode})
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// @Summary      Delete the organisation's shared Azure AI Foundry configuration
+// @Description  Removes the org's shared Azure AI Foundry credential. Members without a configuration of their own lose the provider. Org admins only.
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      403 {object} map[string]string "Not an org admin"
+// @Failure      404 {object} map[string]string "Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)"
+// @Router       /api/orgs/{id}/providers/azure-foundry/config [delete]
+func (h *OrgHandler) handleOrgAzureFoundryConfigDelete(w http.ResponseWriter, r *http.Request) {
+	if !h.orgProviderKeysAvailable(w) {
+		return
+	}
+	org := h.requireAdmin(w, r)
+	if org == nil {
+		return
+	}
+	if err := h.providers.DeleteOrgAzureFoundryConfig(org.ID); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "org", org.ID,
+		map[string]string{"op": "delete", "provider": ai.AzureFoundryProviderID})
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// @Summary      Test the organisation's shared Azure AI Foundry credential
+// @Description  Sends a tiny chat request through the org's shared Azure AI Foundry credential (never the caller's own) and reports whether it works. Org admins only.
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "ProviderTestResult"
+// @Failure      403 {object} map[string]string "Not an org admin"
+// @Failure      404 {object} map[string]string "Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)"
+// @Router       /api/orgs/{id}/providers/azure-foundry/test [post]
+func (h *OrgHandler) handleOrgAzureFoundryTest(w http.ResponseWriter, r *http.Request) {
+	if !h.orgProviderKeysAvailable(w) {
+		return
+	}
+	org := h.requireAdmin(w, r)
+	if org == nil {
+		return
+	}
+	res, err := h.providers.TestOrgProviderConnection(r.Context(), h.security.KeyScope(r), org.ID, ai.AzureFoundryProviderID)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, res)
 }
 
 // requireMember verifies the caller is a member of the org identified by the
@@ -151,11 +331,16 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 }
 
 // @Summary      Upload knowledge doc
+// @Description  Chunks and embeds the document with the caller's embedding provider. Refused with 409 EMBEDDING_MODEL_CHANGED when that provider's model is not the one the org's knowledge base was indexed with (mixing models would make documents unfindable for members on the other model).
 // @Tags         org
 // @Param        id path string true "Org ID"
 // @Accept       multipart/form-data
 // @Produce      json
 // @Success      201 {object} map[string]interface{} "Uploaded"
+// @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED) or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)"
+// @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED) or another upload/re-index of this org is in flight (KNOWLEDGE_BUSY)"
+// @Failure      429 {object} map[string]string "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED)"
+// @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE)"
 // @Router       /api/orgs/{id}/knowledge/upload [post]
 func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Request) {
 	if h.knowledge == nil {
@@ -187,8 +372,7 @@ func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Reques
 		// server fault: render as 4xx with a distinct machine code so the
 		// frontend can explain the root cause (and so the message survives
 		// 5xx masking).
-		if errors.Is(err, rag.ErrEmbeddingNotConfigured) || errors.Is(err, rag.ErrEmbeddingUnavailable) {
-			render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED")
+		if renderKnowledgeEmbeddingError(w, err) {
 			return
 		}
 		render.Error(w, err, http.StatusInternalServerError)
@@ -225,13 +409,73 @@ func (h *OrgHandler) handleKnowledgeDelete(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// renderKnowledgeEmbeddingError renders the knowledge base's embedding
+// failures with a distinct machine code, and reports whether it did. None of
+// these is a server fault: a missing embedding provider, rejected
+// credentials, a missing data-plane role, a mistyped deployment or a
+// throttled resource are the admin's configuration (4xx keeps the provider's
+// message, which names the cause), a provider outage or open breaker is a
+// 503 (the message is masked; the code is what the frontend keys on), and a
+// caller whose embedding model is not the corpus's is a 409 the frontend
+// turns into an explanation (upload) or a second confirm (re-index).
+//
+// Order matters: the permission-denied error also unwraps to
+// ai.ErrApiKeyInvalid, and the rag.ErrEmbeddingFailed catch-all must come
+// after every specific cause it wraps.
+func renderKnowledgeEmbeddingError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, rag.ErrEmbeddingNotConfigured), errors.Is(err, rag.ErrEmbeddingUnavailable):
+		render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED")
+	case errors.Is(err, rag.ErrEmbeddingModelChanged):
+		render.ErrorWithCode(w, err, http.StatusConflict, "EMBEDDING_MODEL_CHANGED")
+	case errors.Is(err, rag.ErrKnowledgeBusy):
+		render.ErrorWithCode(w, err, http.StatusConflict, "KNOWLEDGE_BUSY")
+	case errors.Is(err, ai.ErrRateLimited):
+		w.Header().Set("Retry-After", embeddingRetryAfter(err))
+		render.ErrorWithCode(w, err, http.StatusTooManyRequests, "EMBEDDING_RATE_LIMITED")
+	case errors.Is(err, ai.ErrProviderPermissionDenied): // before ErrApiKeyInvalid, which it also matches
+		render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_PERMISSION_DENIED")
+	case errors.Is(err, ai.ErrApiKeyInvalid):
+		render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_AUTH_FAILED")
+	case errors.Is(err, ai.ErrProviderConfigInvalid), errors.Is(err, ai.ErrKeyNotConfigured):
+		render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED")
+	case errors.Is(err, ai.ErrProviderDown), errors.Is(err, ai.ErrCircuitOpen):
+		render.ErrorWithCode(w, err, http.StatusServiceUnavailable, "EMBEDDING_PROVIDER_UNAVAILABLE")
+	case errors.Is(err, rag.ErrEmbeddingFailed):
+		// The provider's own rejection (unknown deployment, invalid input):
+		// the admin's configuration, not a server fault — keep the message.
+		render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_PROVIDER_REJECTED")
+	default:
+		return false
+	}
+	return true
+}
+
+// embeddingRetryAfter is the Retry-After value (delta-seconds) for a throttled
+// embedding request: the provider's own hint when it carried one, else 30 s.
+func embeddingRetryAfter(err error) string {
+	var rl *ai.RateLimitError
+	if errors.As(err, &rl) && rl.RetryAfter > 0 {
+		return fmt.Sprintf("%d", int((rl.RetryAfter+time.Second-1)/time.Second))
+	}
+	return "30"
+}
+
+// maxKnowledgeReindexBodyBytes bounds the optional re-index body ({"force":true}).
+const maxKnowledgeReindexBodyBytes = 4 << 10
+
 // @Summary      Re-index org knowledge base
-// @Description  Re-embeds every knowledge chunk with the currently configured embedding provider — the recovery path after switching embedding provider/model, which strands the existing corpus at the old dimension (searches silently return nothing).
+// @Description  Re-embeds every knowledge chunk with the caller's embedding provider — the recovery path after switching embedding provider/model, which strands the existing corpus at the old dimension (searches silently return nothing). When the corpus was indexed with a different embedding model at the same width, the request is refused with 409 EMBEDDING_MODEL_CHANGED unless the body sets "force": true — re-indexing switches every document to the caller's model, and members whose embedding provider uses another model stop receiving the org's guidelines.
 // @Tags         org
+// @Accept       json
 // @Param        id path string true "Org ID"
+// @Param        request body object false "Optional JSON object; force=true re-indexes even when the corpus was indexed with a different embedding model"
 // @Produce      json
-// @Success      200 {object} map[string]interface{} "Re-indexed"
-// @Failure      400 {object} map[string]string "Embedding provider not configured"
+// @Success      200 {object} map[string]interface{} "Re-indexed ({chunks, docs, truncated?}); truncated=true means the per-request ceiling (10 000 chunks) was reached with chunks left unconverted"
+// @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED), a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed body"
+// @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force) or another upload/re-index of this org is in flight (KNOWLEDGE_BUSY)"
+// @Failure      429 {object} map[string]string "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED)"
+// @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/orgs/{id}/knowledge/reindex [post]
 func (h *OrgHandler) handleKnowledgeReindex(w http.ResponseWriter, r *http.Request) {
@@ -245,16 +489,38 @@ func (h *OrgHandler) handleKnowledgeReindex(w http.ResponseWriter, r *http.Reque
 	if h.requireAdmin(w, r) == nil {
 		return
 	}
-	res, err := h.knowledge.ReindexOrg(r.Context(), h.security.KeyScope(r), chi.URLParam(r, "id"))
+	// Optional body: absent / empty / {} all mean force=false.
+	var req struct {
+		Force bool `json:"force"`
+	}
+	if r.Body != nil {
+		if err := decodeOptional(http.MaxBytesReader(w, r.Body, maxKnowledgeReindexBodyBytes), &req); err != nil {
+			render.Error(w, fmt.Errorf("invalid re-index request: %w", err), http.StatusBadRequest)
+			return
+		}
+	}
+	res, err := h.knowledge.ReindexOrg(r.Context(), h.security.KeyScope(r), chi.URLParam(r, "id"), req.Force)
 	if err != nil {
-		if errors.Is(err, rag.ErrEmbeddingNotConfigured) || errors.Is(err, rag.ErrEmbeddingUnavailable) {
-			render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED")
+		if renderKnowledgeEmbeddingError(w, err) {
 			return
 		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKnowledgeReindex, "org", chi.URLParam(r, "id"), nil)
+	// The audit row records a forced switch and a partial walk (the corpus
+	// is larger than one request converts), the two facts a later reader of
+	// the log needs.
+	var details map[string]string
+	if req.Force || res.Truncated {
+		details = map[string]string{}
+		if req.Force {
+			details["force"] = "true"
+		}
+		if res.Truncated {
+			details["truncated"] = "true"
+		}
+	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKnowledgeReindex, "org", chi.URLParam(r, "id"), details)
 	render.JSON(w, res)
 }
 
@@ -333,7 +599,7 @@ func (h *OrgHandler) handleChannelSave(w http.ResponseWriter, r *http.Request) {
 	}
 	// Fail fast on a bad URL (the notify builder validates HTTPS + localhost
 	// carve-outs) so a typo never silently disables the channel.
-	if _, err := notify.BuildChannelNotifier(req.Kind, req.URL, req.Secret, h.notifyPolicy); err != nil {
+	if err := notify.ValidateChannel(r.Context(), req.Kind, req.URL, h.notifyPolicy); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
@@ -420,7 +686,7 @@ func (h *OrgHandler) handleChannelTest(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("channel not found"), http.StatusNotFound)
 		return
 	}
-	n, err := notify.BuildChannelNotifier(target.Kind, target.URL, target.Secret, h.notifyPolicy)
+	n, err := notify.BuildChannelNotifierWith(r.Context(), h.channelClient, target.Kind, target.URL, target.Secret, h.notifyPolicy)
 	if err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
@@ -433,6 +699,16 @@ func (h *OrgHandler) handleChannelTest(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+		// A panicking notifier must not take the process down. notify.deliver
+		// has this recovery, but this goroutine calls n.Notify directly so the
+		// handler can surface the outcome — convert the panic into the error
+		// the waiting handler reports.
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Warn("org channel test panicked", "channel", target.Name, "kind", target.Kind, "recover", r)
+				done <- fmt.Errorf("delivery panicked: %v", r)
+			}
+		}()
 		done <- n.Notify(ctx, notify.Event{
 			Type:    notify.EventTest,
 			Title:   "baki channel test",

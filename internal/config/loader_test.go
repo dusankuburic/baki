@@ -397,7 +397,64 @@ func TestApplyEnvVars_EmbeddingDim(t *testing.T) {
 		if cfg.Storage.EmbeddingDim != 0 {
 			t.Errorf("EmbeddingDim = %d, want 0 (default applied downstream)", cfg.Storage.EmbeddingDim)
 		}
+		// Downstream (storage contract, AI factory width) reads the one
+		// shared default, so the two layers cannot drift apart (#11).
+		if got := cfg.Storage.EffectiveEmbeddingDim(); got != 1536 {
+			t.Errorf("EffectiveEmbeddingDim = %d, want DefaultEmbeddingDim (1536)", got)
+		}
 	})
+	t.Run("set width is effective", func(t *testing.T) {
+		cfg := Default()
+		cfg.Storage.EmbeddingDim = 3072
+		if got := cfg.Storage.EffectiveEmbeddingDim(); got != 3072 {
+			t.Errorf("EffectiveEmbeddingDim = %d, want 3072", got)
+		}
+	})
+}
+
+// TestApplyEnvVars_EmbeddingProvider: PAD_EMBEDDING_PROVIDER is read into the
+// storage config, normalised (case, whitespace), and unset stays empty.
+func TestApplyEnvVars_EmbeddingProvider(t *testing.T) {
+	t.Run("set", func(t *testing.T) {
+		t.Setenv("PAD_EMBEDDING_PROVIDER", "  Azure-Foundry ")
+		cfg := Default()
+		if err := applyEnvVars(cfg); err != nil {
+			t.Fatalf("applyEnvVars: %v", err)
+		}
+		if cfg.Storage.EmbeddingProvider != "azure-foundry" {
+			t.Errorf("EmbeddingProvider = %q, want azure-foundry", cfg.Storage.EmbeddingProvider)
+		}
+	})
+	t.Run("unset", func(t *testing.T) {
+		cfg := Default()
+		if err := applyEnvVars(cfg); err != nil {
+			t.Fatalf("applyEnvVars: %v", err)
+		}
+		if cfg.Storage.EmbeddingProvider != "" {
+			t.Errorf("EmbeddingProvider = %q, want empty", cfg.Storage.EmbeddingProvider)
+		}
+	})
+}
+
+// TestValidate_EmbeddingProvider: boot fails closed on a provider id that
+// cannot embed (a typo would otherwise silently index the shared knowledge
+// base with the fallback model); empty and every embedding-capable id pass.
+func TestValidate_EmbeddingProvider(t *testing.T) {
+	for _, id := range append([]string{""}, EmbeddingProviderIDs...) {
+		cfg := cloudCfg()
+		cfg.Storage.EmbeddingProvider = id
+		if err := Validate(cfg); err != nil {
+			t.Errorf("PAD_EMBEDDING_PROVIDER=%q: unexpected error %v", id, err)
+		}
+	}
+	for _, id := range []string{"azure", "claude", "copilot", "azure_foundry"} {
+		cfg := cloudCfg()
+		cfg.Storage.EmbeddingProvider = id
+		err := Validate(cfg)
+		if err == nil || !strings.Contains(err.Error(), "PAD_EMBEDDING_PROVIDER") {
+			t.Errorf("PAD_EMBEDDING_PROVIDER=%q: want a boot error naming the variable, got %v", id, err)
+		}
+	}
 }
 
 // TestValidate_CloudEncryptionKeyStrength confirms the dedicated encryption key

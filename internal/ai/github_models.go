@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -122,7 +123,7 @@ func (g *GitHubModelsProvider) fetchModels(ctx context.Context) (models []ModelI
 		Name         string `json:"name"`
 		ContextLimit int    `json:"context_limit"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSONBodyBytes)).Decode(&parsed); err != nil {
 		return catalogModels("github-models"), false
 	}
 

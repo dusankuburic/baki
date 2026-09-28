@@ -3,7 +3,9 @@ package ai
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
+	"net"
 	"pad-analyzer/internal/metrics"
 	"time"
 )
@@ -22,11 +24,42 @@ const retryBaseDelay = 500 * time.Millisecond
 // this ceiling keeps it positive and bounded for any attempt count.
 const retryMaxDelay = 30 * time.Second
 
+// isTransportError reports whether err is a network-level failure of the
+// provider's endpoint — the *url.Error/*net.OpError family client.Do returns
+// for connection refused/reset, DNS failure, an aborted TLS exchange. The
+// CALLER ending its own request is deliberately excluded: a cancelled or
+// timed-out request context also surfaces through url.Error, and the user
+// giving up is not a provider outage worth retrying or tripping on.
+func isTransportError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr)
+}
+
+// asProviderDown gives a bare transport error ErrProviderDown semantics, so
+// callers (the service's error mapping, logs) classify an unreachable
+// provider as down, while the network error's own text — the part the user
+// can act on ("connection refused", "no such host") — stays visible. Errors
+// already carrying a classification pass through unchanged.
+func asProviderDown(err error) error {
+	if !isTransportError(err) || errors.Is(err, ErrProviderDown) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrProviderDown, err)
+}
+
 // isRetryable reports whether an error is a transient provider condition worth
-// retrying. Rate-limit and provider-down are safe to retry; auth/balance/
-// context-limit errors are permanent and must surface immediately.
+// retrying. Rate-limit, provider-down and transport-level network failures
+// (connection refused/reset, DNS — see isTransportError) are safe to retry;
+// auth/balance/context-limit errors are permanent and must surface immediately.
 func isRetryable(err error) bool {
-	return errors.Is(err, ErrRateLimited) || errors.Is(err, ErrProviderDown)
+	return errors.Is(err, ErrRateLimited) || errors.Is(err, ErrProviderDown) || isTransportError(err)
 }
 
 // backoff sleeps before the next retry, returning early (with ctx.Err()) if the
@@ -55,12 +88,27 @@ func cappedBackoff(attempt int, baseDelay time.Duration) time.Duration {
 	return d
 }
 
+// maxRetryAfterWait caps how long a server Retry-After hint may hold a call.
+// A longer hint (a TPM window, a daily quota's "retry after 86400 seconds")
+// is reported at once as the rate limit it is instead of outliving the
+// 15 s connection test (which then said "context deadline exceeded" for a
+// 429 it is meant to count as OK) or the 90 s idle watchdog.
+const maxRetryAfterWait = 20 * time.Second
+
 func backoff(ctx context.Context, attempt int, lastErr error, baseDelay time.Duration) error {
 	d := cappedBackoff(attempt, baseDelay)
 	// Full jitter: random in [0, d] to avoid thundering-herd alignment.
 	d = time.Duration(rand.Int63n(int64(d) + 1)) // #nosec G404 -- jitter only, not security-sensitive
 	if hint := retryAfterFrom(lastErr); hint > d {
+		if hint > maxRetryAfterWait {
+			return lastErr
+		}
 		d = hint
+	}
+	// A wait the caller's deadline cannot cover ends with the real cause
+	// (the rate limit, the outage), not with the deadline that masked it.
+	if dl, ok := ctx.Deadline(); ok && lastErr != nil && time.Until(dl) <= d {
+		return lastErr
 	}
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -145,7 +193,9 @@ func (rp *RetryingProvider) Chat(ctx context.Context, req Request) (*Response, e
 		}
 		lastErr = err
 	}
-	return nil, lastErr
+	// A transport failure (connection refused, DNS) only reaches this point
+	// after exhausting the budget: hand it on with provider-down semantics.
+	return nil, asProviderDown(lastErr)
 }
 
 // retryReason maps a retryable error onto a CLOSED-SET metric label. Raw error
@@ -157,6 +207,8 @@ func retryReason(err error) string {
 		return "rate_limited"
 	case errors.Is(err, ErrProviderDown):
 		return "provider_down"
+	case isTransportError(err):
+		return "transport"
 	default:
 		return "other"
 	}
@@ -177,7 +229,30 @@ func (rp *RetryingProvider) Embed(ctx context.Context, text []string) ([][]float
 		}
 		lastErr = err
 	}
-	return nil, lastErr
+	return nil, asProviderDown(lastErr)
+}
+
+// heldUsageError carries the token usage of a withheld error chunk (see
+// Stream) onto the error Stream finally returns, so wrappers further out —
+// the audited provider records spend from chunks it never sees — can still
+// bill the run. The message and classification pass through unchanged.
+type heldUsageError struct {
+	err         error
+	tokensIn    int
+	tokensOut   int
+	servedModel string
+}
+
+func (e *heldUsageError) Error() string { return e.err.Error() }
+func (e *heldUsageError) Unwrap() error { return e.err }
+
+// usageOf extracts the usage a Stream error carried, if any.
+func usageOf(err error) (tokensIn, tokensOut int, servedModel string, ok bool) {
+	var he *heldUsageError
+	if !errors.As(err, &he) {
+		return 0, 0, "", false
+	}
+	return he.tokensIn, he.tokensOut, he.servedModel, true
 }
 
 // Stream retries only when the stream fails before any content reaches the
@@ -185,9 +260,14 @@ func (rp *RetryingProvider) Embed(ctx context.Context, text []string) ([][]float
 // an error Chunk mid-SSE (e.g. Claude's `error` event) and returning nil. An
 // error chunk that arrives before any content is held back and converted into
 // a returned error so it retries like a pre-stream failure. Once content
-// (text, done, or tool calls — metadata-only chunks like TokensIn don't count)
-// has been delivered, a partial stream cannot be safely replayed, so errors
-// are passed through as-is.
+// (text, done, tool calls or a hosted server-side step — metadata-only chunks
+// like TokensIn, empty keepalives and split-off Reasoning, none of which the
+// user sees, don't count) has been delivered, a partial stream cannot be
+// safely replayed, so errors are passed through as-is.
+//
+// A withheld error chunk may be the only place a run's token usage rides (the
+// MCP-approvals error is one such); the usage is stashed and re-attached to
+// the error this wrapper finally returns via heldUsageError.
 func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	var lastErr error
 	for attempt := range rp.maxAttempts {
@@ -199,25 +279,33 @@ func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk fun
 		}
 		delivered := false
 		var heldErr error
+		var heldTokensIn, heldTokensOut int
+		var heldServedModel string
 		err := rp.Provider.Stream(ctx, req, func(c Chunk) {
 			if c.Error != nil && !delivered {
 				heldErr = c.Error
+				heldTokensIn, heldTokensOut, heldServedModel = c.TokensIn, c.TokensOut, c.ServedModel
 				return
 			}
-			// A hosted tool step (ToolEvent) also counts: the provider already
-			// ran something server-side, so the turn cannot be replayed.
-			if c.Text != "" || c.Done || len(c.ToolCalls) > 0 || c.ToolEvent != nil {
+			// A hosted tool step also counts — shown in the trail (ToolEvent)
+			// or not (ServerStep): the provider already ran something
+			// server-side, so the turn cannot be replayed. Replay safety must
+			// not depend on which steps have a display label.
+			if c.Text != "" || c.Done || len(c.ToolCalls) > 0 || c.ToolEvent != nil || c.ServerStep {
 				delivered = true
 			}
 			onChunk(c)
 		})
 		if err == nil {
 			err = heldErr
+			if err != nil && (heldTokensIn > 0 || heldTokensOut > 0 || heldServedModel != "") {
+				err = &heldUsageError{err: err, tokensIn: heldTokensIn, tokensOut: heldTokensOut, servedModel: heldServedModel}
+			}
 		}
 		if err == nil || !isRetryable(err) || delivered {
 			return err
 		}
 		lastErr = err
 	}
-	return lastErr
+	return asProviderDown(lastErr)
 }

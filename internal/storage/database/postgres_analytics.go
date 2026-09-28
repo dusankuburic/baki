@@ -287,13 +287,18 @@ func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID 
 		return nil, fmt.Errorf("iterate usage providers: %w", err)
 	}
 
+	// Grouped by the model that ANSWERED (served_model, falling back to the
+	// requested model when the provider did not report one): an Azure AI
+	// Foundry deployment alias or model router routed to two models over the
+	// window is two rows, each labelled with the deployment it came through.
 	mod, err := b.query(ctx).QueryContext(ctx, fmt.Sprintf(`
-		SELECT u.provider, COALESCE(u.model, ''), COALESCE(SUM(u.prompt_tokens), 0)::int,
+		SELECT u.provider, COALESCE(u.model, ''), COALESCE(NULLIF(u.served_model, ''), u.model, ''),
+		       COALESCE(SUM(u.prompt_tokens), 0)::int,
 		       COALESCE(SUM(u.completion_tokens), 0)::int, COUNT(*)::int, COALESCE(SUM(u.estimated_cost), 0)::float
 		FROM usage_metrics u
 		WHERE %s AND u.created_at >= $%d AND u.created_at < $%d
-		GROUP BY u.provider, u.model
-		ORDER BY 6 DESC
+		GROUP BY 1, 2, 3
+		ORDER BY 7 DESC
 		LIMIT 10`, pred, n+1, n+2), append(append([]any{}, args...), w.From, w.To)...)
 	if err != nil {
 		return nil, fmt.Errorf("analytics usage models: %w", err)
@@ -301,8 +306,11 @@ func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID 
 	defer mod.Close()
 	for mod.Next() {
 		var r interfaces.UsageModelRow
-		if err := mod.Scan(&r.Provider, &r.Model, &r.TokensIn, &r.TokensOut, &r.Calls, &r.Cost); err != nil {
+		if err := mod.Scan(&r.Provider, &r.Model, &r.ServedModel, &r.TokensIn, &r.TokensOut, &r.Calls, &r.Cost); err != nil {
 			return nil, fmt.Errorf("scan usage models: %w", err)
+		}
+		if r.ServedModel == r.Model {
+			r.ServedModel = ""
 		}
 		out.ByModel = append(out.ByModel, r)
 	}

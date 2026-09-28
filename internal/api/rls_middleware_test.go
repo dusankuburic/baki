@@ -62,6 +62,25 @@ func TestRLSExemptPath_matching(t *testing.T) {
 		{"/api/analysis/baseline/set", false},
 		{"/api/flow/load-path", false},
 		{"/api/library", false},
+		// Provider routes that dial outbound (live listings, the connection
+		// test, the GitHub device flow) must not hold the RLS transaction's
+		// pooled connection across the upstream call.
+		{"/api/providers/list", true},
+		{"/api/providers/test", true},
+		{"/api/providers/github/start", true},
+		{"/api/providers/github/poll", true},
+		{"/api/providers/github/user", true},
+		{"/api/providers/copilot/start", true},
+		{"/api/providers/copilot/poll", true},
+		{"/api/providers/copilot/user", true},
+		// But their purely local siblings stay transactional: revoke is a
+		// keystore delete, and the azure-foundry config routes validate
+		// offline (no DNS, no network I/O).
+		{"/api/providers/github/revoke", false},
+		{"/api/providers/copilot/revoke", false},
+		{"/api/providers/azure-foundry/config", false},
+		// And a path under the provider tree that is no route at all.
+		{"/api/providers/other", false},
 		// Blob-content library routes: exempt (blob transfer must not pin the
 		// RLS transaction's pooled connection).
 		{"/api/library/abc/content", true},

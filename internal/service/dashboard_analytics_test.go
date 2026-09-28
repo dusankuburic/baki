@@ -13,6 +13,7 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 	"pad-core/analyzer"
+	"pad-core/models"
 )
 
 // anaStubBackend serves canned analytics rows. Snapshots are filtered by the
@@ -573,7 +574,7 @@ func TestBuildAnalytics_SectionsAndScoping(t *testing.T) {
 	be.usage = &storageif.UsageRows{
 		Daily:      []storageif.UsageDailyRow{{Date: dayOf(q, 0), TokensIn: 100, TokensOut: 50, Calls: 2, Cost: 0.5}, {Date: prevDay, TokensIn: 10, TokensOut: 5, Calls: 1, Cost: 0.1}},
 		ByProvider: []storageif.ProviderCost{{Provider: "openai", Cost: 0.5, TokensIn: 100, TokensOut: 50}},
-		ByModel:    []storageif.UsageModelRow{{Provider: "openai", Model: "gpt", TokensIn: 100, TokensOut: 50, Calls: 2, Cost: 0.5}},
+		ByModel:    []storageif.UsageModelRow{{Provider: "openai", Model: "gpt", ServedModel: "gpt-4o-2024-11-20", TokensIn: 100, TokensOut: 50, Calls: 2, Cost: 0.5}},
 	}
 	be.activity = &storageif.ActivityRows{
 		Events:   []storageif.ActivityEventRow{{Action: "flow.upload", UserID: "user-1", ActorName: "Me", ResourceType: "flow", ResourceID: "A", Label: "Flow A", CreatedAt: time.Now()}, {Action: "flow.share", UserID: "user-9", ActorName: "Ada", ResourceType: "flow", ResourceID: "A", Label: "Flow A", CreatedAt: time.Now()}},
@@ -602,6 +603,9 @@ func TestBuildAnalytics_SectionsAndScoping(t *testing.T) {
 	ai := out.AI
 	if ai.Scoped != "user" || ai.FlowScoped || ai.TotalCost != 0.5 || ai.PrevCost == nil || *ai.PrevCost != 0.1 || ai.TotalTokens != 150 || len(ai.Daily) != 7 || len(ai.ByProvider) != 1 || len(ai.ByModel) != 1 {
 		t.Errorf("ai = %+v", ai)
+	}
+	if len(ai.ByModel) == 1 && (ai.ByModel[0].Model != "gpt" || ai.ByModel[0].ServedModel != "gpt-4o-2024-11-20") {
+		t.Errorf("ByModel row must carry the served model next to the requested one (D-42): %+v", ai.ByModel[0])
 	}
 	if out.Summary.AISpend.Value != 0.5 || out.Summary.AISpend.Prev == nil || *out.Summary.AISpend.Prev != 0.1 {
 		t.Errorf("AISpend tile = %+v", out.Summary.AISpend)
@@ -705,5 +709,35 @@ func TestBuildAnalytics_NeedsCloudBackendAndResolver(t *testing.T) {
 	}
 	if _, err := cloud.BuildAnalytics(context.Background(), "u", AnalyticsCaller{}, q); err == nil {
 		t.Error("a missing scope resolver must be an error, not a panic")
+	}
+}
+
+// TestAnaCachePut_BoundedByEntryCap pins the cache bound: the analytics key
+// embeds caller-chosen From/To nanoseconds and flow lists, so distinct keys
+// are unbounded input. Inserting well over anaCacheMaxEntries entries must
+// keep the map at ≤ cap (expired-first sweep, then nearest-to-expiry
+// eviction), and the most recently inserted key must still be resident.
+func TestAnaCachePut_BoundedByEntryCap(t *testing.T) {
+	svc := NewDashboardService(newAnaStub(), nil, nil)
+
+	const extra = 50
+	for i := 0; i < anaCacheMaxEntries+extra; i++ {
+		svc.anaCachePut(fmt.Sprintf("user-1\x00q%d", i), &models.DashboardAnalyticsData{})
+	}
+
+	svc.dashMu.Lock()
+	size := len(svc.anaCache)
+	_, newestResident := svc.anaCache[fmt.Sprintf("user-1\x00q%d", anaCacheMaxEntries+extra-1)]
+	_, oldestResident := svc.anaCache["user-1\x00q0"]
+	svc.dashMu.Unlock()
+
+	if size > anaCacheMaxEntries {
+		t.Errorf("cache size = %d after %d distinct inserts, want ≤ %d", size, anaCacheMaxEntries+extra, anaCacheMaxEntries)
+	}
+	if !newestResident {
+		t.Error("the most recently inserted entry must survive eviction")
+	}
+	if oldestResident {
+		t.Error("the oldest entry should have been evicted once the cap was exceeded")
 	}
 }

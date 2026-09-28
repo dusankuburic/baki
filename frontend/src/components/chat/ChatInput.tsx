@@ -33,7 +33,9 @@ interface Props {
   // The flow's source files, for @-mention completion. Owned by AITab so the
   // menu does not refetch the same list every time it opens.
   sourceFiles?: SourceFileInfo[]
-  // Thread usage totals, rendered in the composer's always-present footer.
+  // Thread usage totals, rendered in the composer's always-present footer,
+  // with the current model's listing price for the cost estimate (turns that
+  // reported their own billed rates are priced at those; see ChatUsageMeter).
   promptTokens?: number
   completionTokens?: number
   inputCostPerM?: number

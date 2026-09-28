@@ -31,6 +31,39 @@ describe('parseChatEvent', () => {
     })
   })
 
+  it('carries the served model and billed rates when the backend sent them on done', () => {
+    expect(
+      parseChatEvent({
+        streamId: 's1',
+        type: 'done',
+        data: {tokensOut: 4, tokensIn: 2, servedModel: 'gpt-4o-2024-08-06', inputCostPerM: 2.5, outputCostPerM: 10},
+      }),
+    ).toEqual({
+      kind: 'done',
+      tokensOut: 4,
+      tokensIn: 2,
+      chunks: undefined,
+      servedModel: 'gpt-4o-2024-08-06',
+      inputCostPerM: 2.5,
+      outputCostPerM: 10,
+    })
+  })
+
+  it('omits served-model fields that are absent, empty or of the wrong type', () => {
+    const plain = parseChatEvent({streamId: 's1', type: 'done', data: {tokensOut: 1, tokensIn: 1}})
+    expect(plain).toEqual({kind: 'done', tokensOut: 1, tokensIn: 1, chunks: undefined})
+    // toEqual ignores undefined-valued keys: check the keys are really absent
+    // (the commit copies only defined fields onto the message).
+    expect(Object.keys(plain!)).toEqual(['kind', 'tokensOut', 'tokensIn', 'chunks'])
+
+    const junk = parseChatEvent({
+      streamId: 's1',
+      type: 'done',
+      data: {tokensOut: 1, tokensIn: 1, servedModel: '', inputCostPerM: '3', outputCostPerM: Number.NaN},
+    })
+    expect(Object.keys(junk!)).toEqual(['kind', 'tokensOut', 'tokensIn', 'chunks'])
+  })
+
   it('parses an error envelope, defaulting the message', () => {
     expect(parseChatEvent({streamId: 's1', type: 'error', data: {message: 'boom'}})).toEqual({
       kind: 'error',

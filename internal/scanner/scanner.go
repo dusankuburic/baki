@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -73,6 +74,9 @@ type Scanner struct {
 	// private addresses. Set from the deployment mode at construction; the zero
 	// value blocks them, so a caller that forgets gets the safe behaviour.
 	notifyPolicy notify.TargetPolicy
+	// channelClient is the one guarded HTTP client every org-channel notifier
+	// shares (D-25), so deliveries reuse a single connection pool.
+	channelClient *http.Client
 
 	// deliverySem bounds concurrent org-channel deliveries and deliveryWG lets
 	// Stop wait for them.
@@ -95,13 +99,14 @@ type Scanner struct {
 // admin "scan now" action).
 func New(backend storageif.StorageBackend, analyze AnalyzeFunc, notifier *notify.Dispatcher, interval time.Duration, notifyPolicy notify.TargetPolicy) *Scanner {
 	return &Scanner{
-		backend:      backend,
-		analyze:      analyze,
-		notifier:     notifier,
-		interval:     interval,
-		lastSig:      make(map[string]string),
-		notifyPolicy: notifyPolicy,
-		deliverySem:  make(chan struct{}, maxConcurrentDeliveries),
+		backend:       backend,
+		analyze:       analyze,
+		notifier:      notifier,
+		interval:      interval,
+		lastSig:       make(map[string]string),
+		notifyPolicy:  notifyPolicy,
+		channelClient: notify.NewChannelClient(notifyPolicy),
+		deliverySem:   make(chan struct{}, maxConcurrentDeliveries),
 	}
 }
 
@@ -517,6 +522,9 @@ func parseStored(content json.RawMessage) *models.FlowDocument {
 	if err := json.Unmarshal(content, &doc); err != nil {
 		return nil
 	}
+	// Stored content is client-supplied: never trust its desktop file path
+	// (see resolveStoredFlow in internal/service/document_provider.go).
+	doc.FilePath = ""
 	doc.RebuildIndexes()
 	return &doc
 }
@@ -588,7 +596,7 @@ func (s *Scanner) notifiersForOrg(ctx context.Context, orgID string) ([]notify.A
 	}
 	built := make([]notify.AlertNotifier, 0, len(channels))
 	for _, ch := range channels {
-		n, err := notify.BuildChannelNotifier(ch.Kind, ch.URL, ch.Secret, s.notifyPolicy)
+		n, err := notify.BuildChannelNotifierWith(ctx, s.channelClient, ch.Kind, ch.URL, ch.Secret, s.notifyPolicy)
 		if err != nil {
 			logger.Warn("scanner: invalid org channel", "orgId", orgID, "channel", ch.Name, "err", err)
 			continue

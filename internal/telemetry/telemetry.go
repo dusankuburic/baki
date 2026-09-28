@@ -145,8 +145,15 @@ func Init(ctx context.Context, serviceName, version, otlpEndpoint string) (func(
 		)
 	} else {
 		slog.Warn("telemetry: no OTLP endpoint configured, tracing will be disabled")
+		// No exporter means nothing consumes spans, but otelhttp still asks
+		// the provider for a tracer per request — with the default
+		// ParentBased(AlwaysSample) sampler it gets a real RECORDING span
+		// that is started, scoped and ended for pure overhead. NeverSample
+		// makes those spans non-recording no-ops. (runtime.Start below is
+		// left as-is: one process-lifetime goroutine, not per-request work.)
 		tracerProvider = sdktrace.NewTracerProvider(
 			sdktrace.WithResource(res),
+			sdktrace.WithSampler(sdktrace.NeverSample()),
 		)
 	}
 

@@ -152,9 +152,12 @@ type ModelDetail struct {
 }
 
 type ProviderInfo struct {
-	ID           string        `json:"id"`
-	Name         string        `json:"name"`
-	Configured   bool          `json:"configured"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Configured bool   `json:"configured"`
+	// Shared is true when the caller has no credential of their own for the
+	// provider and the listing runs on their organisation's shared one.
+	Shared       bool          `json:"shared,omitempty"`
 	Models       []ModelDetail `json:"models"`
 	DefaultModel string        `json:"defaultModel"`
 	ContextLimit int           `json:"contextLimit"`

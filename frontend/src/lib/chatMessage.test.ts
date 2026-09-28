@@ -19,11 +19,18 @@ describe('parseChatMessage', () => {
       tokensOut: 5,
       model: 'gpt-x',
       provider: 'openai',
+      servedModel: 'gpt-x-2024-08-06',
+      inputCostPerM: 2.5,
+      outputCostPerM: 10,
     })
     expect(m?.contextBlockId).toBe('b1')
     expect(m?.tokensIn).toBe(10)
     expect(m?.model).toBe('gpt-x')
     expect(m?.provider).toBe('openai')
+    // Served model + billed rates survive the reload (meta line, cost line).
+    expect(m?.servedModel).toBe('gpt-x-2024-08-06')
+    expect(m?.inputCostPerM).toBe(2.5)
+    expect(m?.outputCostPerM).toBe(10)
   })
 
   it('rejects payloads missing id or timestamp', () => {
@@ -44,7 +51,16 @@ describe('parseChatMessage', () => {
   })
 
   it('drops optional fields of the wrong type', () => {
-    const m = parseChatMessage({id: 'm1', role: 'user', content: 'x', timestamp: 't', tokensIn: 'lots', model: 123})
+    const m = parseChatMessage({
+      id: 'm1',
+      role: 'user',
+      content: 'x',
+      timestamp: 't',
+      tokensIn: 'lots',
+      model: 123,
+      servedModel: 7,
+      inputCostPerM: '2.5',
+    })
     expect(m).toEqual({id: 'm1', role: 'user', content: 'x', timestamp: 't'})
   })
 })

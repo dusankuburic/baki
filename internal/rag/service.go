@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
+	"pad-core/ai/scrubber"
 	"pad-core/logger"
 	"pad-core/models"
 
@@ -23,7 +26,50 @@ import (
 var (
 	ErrEmbeddingNotConfigured = errors.New("embedding provider not configured")
 	ErrEmbeddingUnavailable   = errors.New("embedding provider unavailable")
+	// ErrEmbeddingModelChanged: the caller's embedding model is not the one
+	// the org's knowledge base was indexed with (see checkCorpusModel). Upload
+	// refuses; re-index refuses unless forced. The HTTP layer maps it to 409
+	// EMBEDDING_MODEL_CHANGED.
+	ErrEmbeddingModelChanged = errors.New("your embedding model differs from the one this knowledge base was indexed with")
+	// ErrEmbeddingFailed: the embedding provider's request failed while
+	// indexing (upload, re-index, or the mismatch-guard sample). It wraps the
+	// provider's own cause (unwrapped with ai.EmbeddingFailureCause, so a
+	// split-cascade failure is not opaque) so the HTTP layer can classify it —
+	// invalid key, permission denied, throttling, outage, or the provider's
+	// rejection of the request — instead of rendering a masked 500.
+	ErrEmbeddingFailed = errors.New("embedding provider request failed")
+	// ErrKnowledgeBusy: another upload or re-index of the same org is in
+	// flight in this process (see lockOrg). The HTTP layer maps it to 409
+	// KNOWLEDGE_BUSY.
+	ErrKnowledgeBusy = errors.New("the knowledge base is being updated — try again in a moment")
 )
+
+// azureFoundryProviderID is the provider that embeds the knowledge base only
+// on the operator's opt-in (PAD_EMBEDDING_PROVIDER; see embedder).
+const azureFoundryProviderID = "azure-foundry"
+
+// Mismatch-guard tuning (checkCorpusModel). The same model re-embedding the
+// same text scores ~0.999 (float noise, API-side batching); two different
+// models' vectors are unrelated (~0). 0.95 separates the two with room for
+// a model's own non-determinism. The WORST same-width pair decides, so a
+// partially converted (mixed) corpus is caught instead of passing on its
+// one matching sample — the sample is one chunk per document (see
+// SampleKnowledgeChunkEmbeddings) for the same reason.
+const (
+	corpusSampleSize   = 3
+	sameModelMinCosine = 0.95
+)
+
+// Re-index paging (ReindexOrg). One page is five embed batches; the ceiling
+// bounds one request's embedding bill and how long it holds the request's
+// RLS transaction. The walk is keyset-ordered, so nothing is re-embedded
+// twice within one request; the cursor lives only inside that request, so
+// a corpus beyond the ceiling reports Truncated (the most one request
+// converts) rather than silently leaving a tail. maxReindexChunks is a var
+// so tests can lower it.
+const reindexPageSize = 500
+
+var maxReindexChunks = 10000
 
 // SettingsProvider returns the current application settings.
 type SettingsProvider interface {
@@ -53,9 +99,32 @@ type KnowledgeService struct {
 	store    interfaces.StorageBackend
 	factory  *ai.ProviderFactory
 	settings SettingsProvider
+	// embeddingProvider is the operator's deployment-wide pin
+	// (PAD_EMBEDDING_PROVIDER, see WithEmbeddingProvider); "" = none.
+	embeddingProvider string
 	// embedOverride substitutes the resolved embedder when set — a test hook
 	// mirroring ChatService's (applyFixFunc etc.); nil in production.
 	embedOverride ai.Provider
+	// orgLocks serialises corpus mutations per org (lockOrg): orgID → *sync.Mutex.
+	orgLocks sync.Map
+}
+
+// Option configures a KnowledgeService at construction.
+type Option func(*KnowledgeService)
+
+// WithEmbeddingProvider pins the provider that embeds the org knowledge base
+// (PAD_EMBEDDING_PROVIDER, validated by config at boot). It wins over the
+// settings' AI.EmbeddingProvider, and it is the only way the knowledge base
+// embeds with Azure AI Foundry (see embedder). "" leaves the default path.
+func WithEmbeddingProvider(providerID string) Option {
+	return func(s *KnowledgeService) { s.embeddingProvider = providerID }
+}
+
+// WithEmbedder makes every request embed with p instead of resolving a
+// provider per caller — for tests of the knowledge-base flows (other
+// packages cannot reach the embedOverride hook) and single-provider tools.
+func WithEmbedder(p ai.Provider) Option {
+	return func(s *KnowledgeService) { s.embedOverride = p }
 }
 
 // NewKnowledgeService takes the provider factory and settings store rather than
@@ -63,36 +132,63 @@ type KnowledgeService struct {
 // resolved lazily, per request, in the caller's scope. Resolving once at
 // startup with an empty scope would fail in cloud mode (keys are per-user) and
 // never pick up keys added later without a restart.
-func NewKnowledgeService(store interfaces.StorageBackend, factory *ai.ProviderFactory, settings SettingsProvider) *KnowledgeService {
-	return &KnowledgeService{store: store, factory: factory, settings: settings}
+func NewKnowledgeService(store interfaces.StorageBackend, factory *ai.ProviderFactory, settings SettingsProvider, opts ...Option) *KnowledgeService {
+	s := &KnowledgeService{store: store, factory: factory, settings: settings}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // embedder resolves the embedding provider in the caller's scope. It honours
-// the configured EmbeddingProvider (default openai) AND the optional
-// EmbeddingModel override (so a deployer can pick e.g. text-embedding-3-large).
+// the operator's pin (PAD_EMBEDDING_PROVIDER), else the configured
+// EmbeddingProvider (default openai), AND the optional EmbeddingModel override
+// (so a deployer can pick e.g. text-embedding-3-large).
 //
 // Fallback: if the configured embedding provider has no key configured (common
 // on a Claude- or Gemini-only deploy that never set EmbeddingProvider), the
 // service scans the embedding-CAPABLE providers in a fixed priority order
-// (deterministic — a map iteration would pick randomly per call), restricted to
-// providers enabled in settings, and uses the first one with a key. The
-// capability filter matters: returning the first merely-keyed provider (as an
-// earlier version did) let a Claude-only deploy construct a chat-only provider
-// that then failed at Embed time with an opaque wrapped 500 instead of the
-// machine-readable sentinel the UI explains.
-func (s *KnowledgeService) embedder(scope string) (ai.Provider, error) {
+// (deterministic — a map iteration would pick randomly per call) and uses the
+// first one with a key. The capability filter matters: returning the first
+// merely-keyed provider (as an earlier version did) let a Claude-only deploy
+// construct a chat-only provider that then failed at Embed time with an opaque
+// wrapped 500 instead of the machine-readable sentinel the UI explains.
+//
+// Azure AI Foundry is operator opt-in: it embeds only when the pin is
+// "azure-foundry", never through the settings value alone nor the fallback.
+// A user's Azure document names an embedding deployment of THEIR choosing
+// (the name reveals nothing about the model), so a member with only an Azure
+// configuration would otherwise silently add a second embedding model to the
+// org's shared corpus — at the same width, where nothing else can tell the
+// two apart.
+//
+// Organisation-shared credentials (G7): for Azure AI Foundry and for the
+// operator's pinned provider the org's shared credential is preferred over
+// the caller's own (ForEmbeddingOrg) — the corpus is one and must be
+// embedded with one resource, whichever member uploads or searches. The
+// fallback scan stays per member: an org shares one deliberate credential,
+// not a fallback.
+func (s *KnowledgeService) embedder(scope, orgID string) (ai.Provider, error) {
 	if s.embedOverride != nil {
 		return s.embedOverride, nil
 	}
 	if s.factory == nil {
 		return nil, ErrEmbeddingNotConfigured
 	}
+	forEmbedding := func(pid, model string) (ai.Provider, error) {
+		if orgID != "" && (pid == azureFoundryProviderID || (s.embeddingProvider != "" && pid == s.embeddingProvider)) {
+			return s.factory.ForEmbeddingOrg(scope, orgID, pid, model)
+		}
+		return s.factory.ForEmbedding(scope, pid, model)
+	}
 
-	providerID := ""
+	providerID := s.embeddingProvider
 	embeddingModel := ""
 	if s.settings != nil {
 		if settings := s.settings.Get(); settings != nil {
-			providerID = settings.AI.EmbeddingProvider
+			if providerID == "" {
+				providerID = settings.AI.EmbeddingProvider
+			}
 			embeddingModel = settings.AI.EmbeddingModel
 		}
 	}
@@ -107,29 +203,153 @@ func (s *KnowledgeService) embedder(scope string) (ai.Provider, error) {
 		// provider and failing later at Embed time.
 		return nil, fmt.Errorf("%w (%q does not support embeddings)", ErrEmbeddingUnavailable, providerID)
 	}
-	p, err := s.factory.ForEmbedding(scope, providerID, embeddingModel)
-	if err == nil {
-		return p, nil
+	var err error
+	if providerID == azureFoundryProviderID && s.embeddingProvider != azureFoundryProviderID {
+		err = fmt.Errorf("%s embeds the knowledge base only when the operator sets PAD_EMBEDDING_PROVIDER=%s", azureFoundryProviderID, azureFoundryProviderID)
+	} else {
+		var p ai.Provider
+		if p, err = forEmbedding(providerID, embeddingModel); err == nil {
+			return p, nil
+		}
 	}
 
 	// Fallback: first keyed, embedding-capable provider in fixed priority
-	// order. Having a usable key (which ForEmbedding decides) is the whole
+	// order. Having a usable key (which ForEmbedding decides — an Azure
+	// document without an embedding deployment is not one) is the whole
 	// test. This used to also require settings.AI.Providers[pid].Enabled,
 	// but no UI ever sets that flag and the only provider enabled by default
 	// (claude) cannot embed — so the fallback was unreachable by construction
 	// and a keyed Gemini/GLM deployment without an OpenAI key got
-	// ErrEmbeddingUnavailable instead of its own provider.
-	{
-		for _, pid := range ai.EmbeddingFallbackOrder() {
-			if pid == providerID {
-				continue // already tried above
-			}
-			if p2, err2 := s.factory.ForEmbedding(scope, pid, embeddingModel); err2 == nil {
-				return p2, nil
-			}
+	// ErrEmbeddingUnavailable instead of its own provider. Azure AI Foundry
+	// is never a fallback (operator opt-in only, see above).
+	for _, pid := range ai.EmbeddingFallbackOrder() {
+		if pid == providerID || pid == azureFoundryProviderID {
+			continue // already tried above / opt-in only
+		}
+		if p2, err2 := s.factory.ForEmbedding(scope, pid, embeddingModel); err2 == nil {
+			return p2, nil
 		}
 	}
-	return nil, fmt.Errorf("%w (configured %q: %w; no enabled embedding-capable fallback had a key)", ErrEmbeddingUnavailable, providerID, err)
+	return nil, fmt.Errorf("%w (configured %q: %w; no embedding-capable fallback had a key)", ErrEmbeddingUnavailable, providerID, err)
+}
+
+// corpusVerdict is what checkCorpusModel learned about the caller's model.
+type corpusVerdict int
+
+const (
+	corpusEmpty      corpusVerdict = iota // nothing comparable indexed — nothing to disagree with
+	corpusSameModel                       // every same-width sample reproduced its stored vector
+	corpusOtherModel                      // same width, unrelated vectors: another model
+	corpusOtherWidth                      // no same-width pair: the caller's width differs from every sampled row
+)
+
+// checkCorpusModel is the embedding-model mismatch guard. Nothing records
+// which model produced a stored vector, and equal width does not mean equal
+// model (OpenAI text-embedding-3-small and an Azure ada-002 deployment are
+// both 1536 wide), so it asks the model itself: up to corpusSampleSize
+// indexed chunks (one per document) are re-embedded with provider and
+// compared with their stored vectors. The same model reproduces them
+// (cosine ~1); another model's vectors are unrelated. The WORST same-width
+// pair decides (corpusOtherModel below sameModelMinCosine), so a mixed
+// corpus — a partial re-index, a race — refuses everyone until a forced
+// re-index repairs it. A sample with no same-width pair is corpusOtherWidth:
+// whether that is the stranded-corpus recovery or a switch is the caller's
+// call (corpusStranded). All-zero stored vectors have no defined
+// similarity and are ignored; an empty corpus is corpusEmpty.
+func (s *KnowledgeService) checkCorpusModel(ctx context.Context, provider ai.Provider, orgID string) (corpusVerdict, error) {
+	samples, err := s.store.SampleKnowledgeChunkEmbeddings(ctx, orgID, corpusSampleSize)
+	if err != nil {
+		return corpusEmpty, fmt.Errorf("sample indexed chunks: %w", err)
+	}
+	texts := make([]string, 0, len(samples))
+	stored := make([][]float32, 0, len(samples))
+	for _, c := range samples {
+		if strings.TrimSpace(c.Content) == "" || len(c.Embedding) == 0 {
+			continue
+		}
+		texts = append(texts, c.Content)
+		stored = append(stored, c.Embedding)
+	}
+	if len(texts) == 0 {
+		return corpusEmpty, nil
+	}
+	fresh, err := provider.Embed(ctx, texts)
+	if err != nil {
+		return corpusEmpty, fmt.Errorf("%w: %w", ErrEmbeddingFailed, ai.EmbeddingFailureCause(err))
+	}
+	if len(fresh) != len(texts) {
+		return corpusEmpty, fmt.Errorf("embedding count mismatch: got %d for %d chunks", len(fresh), len(texts))
+	}
+	worst, sameWidth, compared := 2.0, false, false
+	for i := range texts {
+		if len(fresh[i]) != len(stored[i]) {
+			continue
+		}
+		sameWidth = true
+		sim, ok := cosineSimilarity(stored[i], fresh[i])
+		if !ok {
+			continue
+		}
+		compared = true
+		worst = min(worst, sim)
+	}
+	switch {
+	case !sameWidth:
+		return corpusOtherWidth, nil
+	case !compared:
+		return corpusEmpty, nil // only undefined (all-zero) vectors at this width
+	case worst < sameModelMinCosine:
+		logger.Warn("knowledge base: caller's embedding model differs from the indexed corpus",
+			"org_id", orgID, "worst_similarity", worst, "width", len(fresh[0]))
+		return corpusOtherModel, nil
+	}
+	return corpusSameModel, nil
+}
+
+// corpusStranded: nothing in the org's corpus is in the vector index at the
+// deployment's width — the state a width change leaves behind and the only
+// case in which a caller at another width is recovering the corpus rather
+// than switching it. A store that cannot tell (no pgvector column, so the
+// count errors) is treated as stranded, which keeps the pre-guard behaviour.
+func (s *KnowledgeService) corpusStranded(ctx context.Context, orgID string) bool {
+	_, indexed, err := s.store.CountKnowledgeChunks(ctx, orgID)
+	return err != nil || indexed == 0
+}
+
+// lockOrg serialises corpus mutations per org in this process: a re-index
+// snapshots the corpus, embeds it for seconds to minutes and updates by id,
+// so an upload landing in between carries the pre-switch model and is never
+// seen by the re-index. Non-blocking, so a second admin gets a 409
+// (ErrKnowledgeBusy) instead of a request parked behind a long re-index.
+// Search never takes it — readers never wait.
+//
+// Process-local: a multi-replica deployment needs a database lock instead
+// (pg_advisory_xact_lock(hashtext(orgID)) in the request's RLS transaction),
+// because two replicas cannot see each other's mutex. sync.Map never evicts;
+// it holds one mutex per org ever touched, bounded by the org count.
+func (s *KnowledgeService) lockOrg(orgID string) (func(), error) {
+	v, _ := s.orgLocks.LoadOrStore(orgID, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	if !mu.TryLock() {
+		return nil, ErrKnowledgeBusy
+	}
+	return mu.Unlock, nil
+}
+
+// cosineSimilarity of two equal-length vectors; ok=false when either is all
+// zeros (undefined).
+func cosineSimilarity(a, b []float32) (float64, bool) {
+	var dot, na, nb float64
+	for i := range a {
+		x, y := float64(a[i]), float64(b[i])
+		dot += x * y
+		na += x * x
+		nb += y * y
+	}
+	if na == 0 || nb == 0 {
+		return 0, false
+	}
+	return dot / (math.Sqrt(na) * math.Sqrt(nb)), true
 }
 
 // AddDocument chunks content, generates embeddings in the caller's scope, then
@@ -141,7 +361,7 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 		return fmt.Errorf("document is empty")
 	}
 
-	provider, err := s.embedder(scope)
+	provider, err := s.embedder(scope, orgID)
 	if err != nil {
 		return fmt.Errorf("embedding provider unavailable: %w", err)
 	}
@@ -159,9 +379,52 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 		return fmt.Errorf("document too large: %d chunks exceeds limit of %d", len(chunks), maxKnowledgeChunks)
 	}
 
+	// Taken after the cheap validation, so a bad request never waits on (or
+	// is refused by) a running re-index.
+	unlock, err := s.lockOrg(orgID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	// Replace semantics: re-uploading a filename supersedes the old version
+	// (chunks cascade with the document). Before this, both versions were
+	// listed AND both were retrieved — stale content kept influencing chat
+	// until manually deleted. Superseded IDs are captured up front and
+	// deleted BY ID at the end (see the ORDERING comment below), because
+	// DeleteKnowledgeDocumentByName would also match the document we are
+	// about to write.
+	superseded, total, err := s.supersededDocIDs(ctx, orgID, filename)
+	if err != nil {
+		return fmt.Errorf("replace existing document: %w", err)
+	}
+
+	// Never mix embedding models in one corpus: a document embedded with a
+	// different model than the rest is unfindable for members on the other
+	// model (and vice versa). Checked before the document is embedded, so a
+	// refused upload costs one small request. No force option here — an
+	// admin who means to switch models re-indexes (with force) first.
+	//
+	// When the upload replaces every document the org has, nothing survives
+	// to be mixed with: the guard has nothing to protect (delete-then-upload
+	// reaches the same state unguarded) and would only force a re-index of
+	// content about to be deleted.
+	if len(superseded) < total {
+		verdict, err := s.checkCorpusModel(ctx, provider, orgID)
+		if err != nil {
+			return err
+		}
+		// An upload at another width is never a recovery: it always produces
+		// a mixed corpus. Re-index first (unforced when the corpus is
+		// stranded, see ReindexOrg).
+		if verdict == corpusOtherModel || verdict == corpusOtherWidth {
+			return ErrEmbeddingModelChanged
+		}
+	}
+
 	embeddings, err := embedBatched(ctx, provider, chunks)
 	if err != nil {
-		return fmt.Errorf("generate embeddings: %w", err)
+		return fmt.Errorf("%w: %w", ErrEmbeddingFailed, ai.EmbeddingFailureCause(err))
 	}
 	if len(embeddings) != len(chunks) {
 		return fmt.Errorf("embedding count mismatch: got %d for %d chunks", len(embeddings), len(chunks))
@@ -172,11 +435,6 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 		OrgID:    orgID,
 		Filename: filename,
 	}
-	// Replace semantics: re-uploading a filename supersedes the old version
-	// (chunks cascade with the document). Before this, both versions were
-	// listed AND both were retrieved — stale content kept influencing chat
-	// until manually deleted.
-	//
 	// ORDERING: write the new version FIRST, delete the old one only once the
 	// new document AND its chunks have committed. The previous order deleted
 	// first, on the reasoning that embedding had already succeeded — true, but
@@ -185,14 +443,6 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 	// version, and the rollback below removed the NEW document when the old one
 	// was already gone. There is no cross-call transaction available here, so
 	// write-new-then-delete-old is what makes a failed re-upload a no-op.
-	//
-	// Superseded IDs are captured up front and deleted BY ID, because
-	// DeleteKnowledgeDocumentByName would also match the document we are about
-	// to write.
-	superseded, err := s.supersededDocIDs(ctx, orgID, filename)
-	if err != nil {
-		return fmt.Errorf("replace existing document: %w", err)
-	}
 	if err := s.store.SaveKnowledgeDocument(ctx, doc); err != nil {
 		return err
 	}
@@ -234,23 +484,28 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 }
 
 // supersededDocIDs returns the IDs of existing documents in orgID sharing
-// filename — the versions a re-upload replaces.
-func (s *KnowledgeService) supersededDocIDs(ctx context.Context, orgID, filename string) ([]string, error) {
+// filename — the versions a re-upload replaces — and how many documents the
+// org has in total (so AddDocument can tell "replacing the only document"
+// from "adding to a corpus").
+func (s *KnowledgeService) supersededDocIDs(ctx context.Context, orgID, filename string) (ids []string, total int, err error) {
 	docs, err := s.store.ListKnowledgeDocuments(ctx, orgID, 0)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	var ids []string
 	for _, d := range docs {
-		if d != nil && d.Filename == filename {
+		if d == nil {
+			continue
+		}
+		total++
+		if d.Filename == filename {
 			ids = append(ids, d.ID)
 		}
 	}
-	return ids, nil
+	return ids, total, nil
 }
 
 func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query string) (string, error) {
-	provider, err := s.embedder(scope)
+	provider, err := s.embedder(scope, orgID)
 	if err != nil {
 		return "", err
 	}
@@ -262,6 +517,16 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 	if s.store == nil {
 		return "", nil
 	}
+
+	// Scrub the query before it leaves the process. The chat request only
+	// ever carries the scrubbed message (chat_context.go scrubs
+	// req.UserMessage before every provider call), but ragGuidelines hands
+	// this path the RAW message — without this, the embeddings request was
+	// the one place a pasted credential reached a provider verbatim (and,
+	// under PAD_EMBEDDING_PROVIDER, possibly a different provider than the
+	// chat model's). Scrubbed first so the truncation below cannot cut a
+	// secret in half and hide it from the patterns.
+	query = scrubber.ScrubText(query)
 
 	// Truncate the query before embedding: an oversized message (up to the 10
 	// MiB body limit) would otherwise become a multi-million-token embedding
@@ -302,7 +567,10 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 	return sb.String(), nil
 }
 
-// ReindexResult reports what a re-index did.
+// ReindexResult reports what a re-index did. Truncated is set when the
+// per-request ceiling (maxReindexChunks) was reached with chunks still
+// unconverted, so the admin knows the corpus is larger than one request
+// converts instead of believing it recovered.
 type ReindexResult struct {
 	Chunks    int  `json:"chunks"`
 	Docs      int  `json:"docs"`
@@ -313,60 +581,95 @@ type ReindexResult struct {
 // provider — the recovery path for an embedding-provider/model switch, which
 // strands every existing chunk at the old dimension (searches silently return
 // nothing). The chunk TEXT is still the source of truth, so no re-chunking
-// happens: contents are loaded, re-embedded in provider-safe batches, and the
-// embeddings updated in place. DocCount in the result is derived from distinct
-// DocIDs among the loaded chunks.
-func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string) (ReindexResult, error) {
+// happens: contents are walked page by page in (doc_id, id) order, each page
+// re-embedded in provider-safe batches and its embeddings updated in place,
+// up to maxReindexChunks per request (Truncated reports a remainder). Docs
+// in the result is the number of distinct DocIDs among the walked chunks.
+//
+// Re-indexing switches the WHOLE org corpus to the caller's embedding model,
+// and members whose embedder is another model stop retrieving it. Unless
+// force is set, a corpus indexed with a different model at the same width is
+// therefore refused with ErrEmbeddingModelChanged (checkCorpusModel), and so
+// is one indexed at another width while it is still in the vector index; a
+// width change against a corpus with NOTHING in the vector index is the
+// stranded-corpus recovery and proceeds unforced.
+func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, force bool) (ReindexResult, error) {
 	if s.store == nil {
 		return ReindexResult{}, fmt.Errorf("knowledge service has no storage backend (cloud mode required)")
 	}
-	provider, err := s.embedder(scope)
+	provider, err := s.embedder(scope, orgID)
 	if err != nil {
 		return ReindexResult{}, fmt.Errorf("embedding provider unavailable: %w", err)
 	}
-
-	chunks, err := s.store.ListKnowledgeChunkContents(ctx, orgID)
+	unlock, err := s.lockOrg(orgID)
 	if err != nil {
-		return ReindexResult{}, fmt.Errorf("load chunk contents: %w", err)
+		return ReindexResult{}, err
 	}
-	if len(chunks) == 0 {
-		return ReindexResult{}, nil // nothing indexed — nothing to re-index
-	}
-	res := ReindexResult{Chunks: len(chunks)}
-	docs := map[string]bool{}
-	for _, c := range chunks {
-		docs[c.DocID] = true
-	}
-	res.Docs = len(docs)
-
-	// Detect the store's cap: a second page attempt isn't worth the API —
-	// flag via the same bound the loader uses. (The loader's LIMIT equals
-	// the constant; a full page means possible truncation.)
-	res.Truncated = len(chunks) >= 2000
-
-	texts := make([]string, len(chunks))
-	for i := range chunks {
-		texts[i] = chunks[i].Content
-	}
-	embeddings, err := embedBatched(ctx, provider, texts)
-	if err != nil {
-		return ReindexResult{}, fmt.Errorf("generate embeddings: %w", err)
-	}
-	if len(embeddings) != len(chunks) {
-		return ReindexResult{}, fmt.Errorf("embedding count mismatch: got %d for %d chunks", len(embeddings), len(chunks))
-	}
-	for i := range chunks {
-		chunks[i].Embedding = embeddings[i]
+	defer unlock()
+	if !force {
+		verdict, err := s.checkCorpusModel(ctx, provider, orgID)
+		if err != nil {
+			return ReindexResult{}, err
+		}
+		if verdict == corpusOtherModel || (verdict == corpusOtherWidth && !s.corpusStranded(ctx, orgID)) {
+			return ReindexResult{}, ErrEmbeddingModelChanged
+		}
 	}
 
 	userID := ""
 	if claims := auth.ClaimsFromContext(ctx); claims != nil {
 		userID = claims.UserID
 	}
-	if err := s.store.UpdateKnowledgeChunkEmbeddings(ctx, userID, chunks); err != nil {
-		return ReindexResult{}, fmt.Errorf("update embeddings: %w", err)
+	var (
+		res    ReindexResult
+		docs   = map[string]bool{}
+		cursor interfaces.KnowledgeChunkCursor
+	)
+	for res.Chunks < maxReindexChunks {
+		want := min(reindexPageSize, maxReindexChunks-res.Chunks)
+		page, err := s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, want)
+		if err != nil {
+			return ReindexResult{}, fmt.Errorf("load chunk contents: %w", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		texts := make([]string, len(page))
+		for i := range page {
+			texts[i] = page[i].Content
+		}
+		embeddings, err := embedBatched(ctx, provider, texts)
+		if err != nil {
+			return ReindexResult{}, fmt.Errorf("%w: %w", ErrEmbeddingFailed, ai.EmbeddingFailureCause(err))
+		}
+		if len(embeddings) != len(page) {
+			return ReindexResult{}, fmt.Errorf("embedding count mismatch: got %d for %d chunks", len(embeddings), len(page))
+		}
+		for i := range page {
+			page[i].Embedding = embeddings[i]
+			docs[page[i].DocID] = true
+		}
+		if err := s.store.UpdateKnowledgeChunkEmbeddings(ctx, userID, page); err != nil {
+			return ReindexResult{}, fmt.Errorf("update embeddings: %w", err)
+		}
+		res.Chunks += len(page)
+		last := page[len(page)-1]
+		cursor = interfaces.KnowledgeChunkCursor{DocID: last.DocID, ID: last.ID}
+		if len(page) < want {
+			break
+		}
 	}
-	logger.Info("knowledge base re-indexed", "org_id", orgID, "chunks", res.Chunks, "docs", res.Docs)
+	res.Docs = len(docs)
+	if res.Chunks >= maxReindexChunks {
+		// At the ceiling: Truncated only when something is actually left
+		// (a corpus of exactly maxReindexChunks chunks is complete).
+		rest, err := s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, 1)
+		res.Truncated = err != nil || len(rest) > 0
+	}
+	if res.Chunks == 0 {
+		return ReindexResult{}, nil // nothing indexed — nothing to re-index
+	}
+	logger.Info("knowledge base re-indexed", "org_id", orgID, "chunks", res.Chunks, "docs", res.Docs, "truncated", res.Truncated)
 	return res, nil
 }
 

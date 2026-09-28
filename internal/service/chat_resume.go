@@ -38,6 +38,12 @@ const (
 // the full wall-clock cap would just stall the user silently.
 const streamIdleTimeout = 90 * time.Second
 
+// hostedStepIdleTimeout is the idle limit while a provider-hosted tool step is
+// open (streamCtl.hostedOpen): a Foundry agent's MCP call (Azure caps those at
+// 100 s) or code-interpreter run streams nothing until it finishes. Still
+// bounded, and below maxChatStreamDuration, so a hung hosted step is caught.
+const hostedStepIdleTimeout = 5 * time.Minute
+
 // ResumeResult is the buffered state of a stream returned to a reconnecting client.
 // Events replays the agentic journal (tool results, fix proposals/decisions)
 // recorded since the stream began — the reconnecting client rebuilds its tool
@@ -48,10 +54,13 @@ type ResumeResult struct {
 	Error string `json:"error"`
 	// ErrorCode is Error's machine-readable class (see chat_errors.go), so a
 	// client that missed the live error event still gets the same handling.
-	ErrorCode string         `json:"errorCode,omitempty"`
-	TokensIn  int            `json:"tokensIn"`
-	TokensOut int            `json:"tokensOut"`
-	Events    []journalEvent `json:"events,omitempty"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	TokensIn  int    `json:"tokensIn"`
+	TokensOut int    `json:"tokensOut"`
+	// ServedModel is the model that answered (alias providers), so a client
+	// that missed the live done event still learns it.
+	ServedModel string         `json:"servedModel,omitempty"`
+	Events      []journalEvent `json:"events,omitempty"`
 }
 
 // resumeSnapshot is the cross-replica-persistable form of a stream's resumable
@@ -59,14 +68,15 @@ type ResumeResult struct {
 // request that lands on a different replica can be authorized. It is written to
 // the backplane so a client that reconnects to any replica can fetch the buffer.
 type resumeSnapshot struct {
-	Owner     string         `json:"owner"`
-	Text      string         `json:"text"`
-	Done      bool           `json:"done"`
-	Error     string         `json:"error"`
-	ErrorCode string         `json:"errorCode,omitempty"`
-	TokensIn  int            `json:"tokensIn"`
-	TokensOut int            `json:"tokensOut"`
-	Events    []journalEvent `json:"events,omitempty"`
+	Owner       string         `json:"owner"`
+	Text        string         `json:"text"`
+	Done        bool           `json:"done"`
+	Error       string         `json:"error"`
+	ErrorCode   string         `json:"errorCode,omitempty"`
+	TokensIn    int            `json:"tokensIn"`
+	TokensOut   int            `json:"tokensOut"`
+	ServedModel string         `json:"servedModel,omitempty"`
+	Events      []journalEvent `json:"events,omitempty"`
 }
 
 // resumeStore is the pluggable backing for chat-stream resume. The no-op impl
@@ -154,10 +164,28 @@ func (s *ChatService) idleLimit() time.Duration {
 	return streamIdleTimeout
 }
 
+// idleLimitFor is the idle limit that applies to ctl right now: while a
+// hosted tool step is open, or a provider call has not produced its first
+// output yet (a reasoning model thinking silently — streamCtl.awaitingOutput),
+// it is raised to hostedStepIdleTimeout (both honour their test overrides).
+func (s *ChatService) idleLimitFor(ctl *streamCtl) time.Duration {
+	limit := s.idleLimit()
+	if ctl.hostedOpen.Load() > 0 || ctl.awaitingOutput.Load() {
+		hosted := hostedStepIdleTimeout
+		if s.hostedIdleTimeout > 0 {
+			hosted = s.hostedIdleTimeout
+		}
+		if limit < hosted {
+			limit = hosted
+		}
+	}
+	return limit
+}
+
 // watchStream is the stream watchdog. Two independent guards share one ticker:
 //
-//   - Idle: the provider has emitted nothing for idleLimit — the upstream is
-//     hung, and waiting out the wall-clock cap would just stall the user
+//   - Idle: the provider has emitted nothing for idleLimitFor — the upstream
+//     is hung, and waiting out the wall-clock cap would just stall the user
 //     silently. Active from stream start (a provider can hang before /begin).
 //   - Subscriber: a closed tab can't send /cancel, and the stream context is
 //     deliberately detached from the request, so once the client has begun,
@@ -175,7 +203,7 @@ func (s *ChatService) watchStream(ctx context.Context, streamID, scope string, c
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if idle := time.Since(time.Unix(0, ctl.lastActivity.Load())); idle > s.idleLimit() {
+			if idle := time.Since(time.Unix(0, ctl.lastActivity.Load())); idle > s.idleLimitFor(ctl) {
 				logger.Info("chat stream cancelled: provider idle", "streamID", streamID, "idle", idle)
 				ctl.cancelWithReason("response stopped: the AI provider stopped responding")
 				return
@@ -202,17 +230,25 @@ func (s *ChatService) watchStream(ctx context.Context, streamID, scope string, c
 	}
 }
 
-// mirrorStream periodically snapshots ctl to the resume backplane until the
-// stream's context ends (completion, cancel, or timeout), then writes a final
-// snapshot with the short resumeRetention TTL — matching the local
-// finishedStreams grace window so both expire together. Only run when the
-// backplane is enabled.
-func (s *ChatService) mirrorStream(ctx context.Context, streamID string, ctl *streamCtl) {
+// mirrorStream periodically snapshots ctl to the resume backplane until
+// finished is closed, then writes a final snapshot with the short
+// resumeRetention TTL — matching the local finishedStreams grace window so
+// both expire together. Only run when the backplane is enabled.
+//
+// finished — not ctx.Done() — is the exit signal on purpose: every deliberate
+// cancel (user stop, the watchdogs, the wall-clock cap) cancels ctx BEFORE
+// the worker records the terminal state, so a mirror that left on ctx.Done()
+// published a "final" snapshot with Done=false, Error="" and a reconnect on
+// another replica showed a live spinner for a stream that had ended. The
+// worker closes finished from its cleanup, strictly after setFailure /
+// markDone, and this goroutine is sequential, so no tick write can overtake
+// the terminal one.
+func (s *ChatService) mirrorStream(ctx context.Context, streamID string, ctl *streamCtl, finished <-chan struct{}) {
 	t := time.NewTicker(resumeMirrorInterval)
 	defer t.Stop()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-finished:
 			// Detached context: the stream ctx is already done, but the final
 			// buffer must still be published for reconnecting clients.
 			s.resumeBackplane().Save(context.WithoutCancel(ctx), streamID, ctl.snapshot(), resumeRetention)
@@ -275,7 +311,7 @@ func (s *ChatService) BeginStream(ctx context.Context, streamID string) *ResumeR
 		// later terminal event is emitted after this request arrived, i.e.
 		// after the client subscribed, so SSE delivery covers it.
 		if snap := ctl.snapshot(); snap.Done || snap.Error != "" {
-			return &ResumeResult{Text: snap.Text, Done: snap.Done, Error: snap.Error, ErrorCode: snap.ErrorCode, TokensIn: snap.TokensIn, TokensOut: snap.TokensOut, Events: snap.Events}
+			return &ResumeResult{Text: snap.Text, Done: snap.Done, Error: snap.Error, ErrorCode: snap.ErrorCode, TokensIn: snap.TokensIn, TokensOut: snap.TokensOut, ServedModel: snap.ServedModel, Events: snap.Events}
 		}
 		return nil
 	}
@@ -354,12 +390,13 @@ func (s *ChatService) ResumeStream(ctx context.Context, streamID string, from in
 		// emission for the duration of a full-buffer copy on long streams.
 		buf := ctl.buffer.String()
 		snap := &ResumeResult{
-			Done:      ctl.done,
-			Error:     ctl.errMsg,
-			ErrorCode: ctl.errCode,
-			TokensIn:  ctl.tokensIn,
-			TokensOut: ctl.tokensOut,
-			Events:    ctl.snapshotEvents(),
+			Done:        ctl.done,
+			Error:       ctl.errMsg,
+			ErrorCode:   ctl.errCode,
+			TokensIn:    ctl.tokensIn,
+			TokensOut:   ctl.tokensOut,
+			ServedModel: ctl.servedModel,
+			Events:      ctl.snapshotEvents(),
 		}
 		ctl.mu.Unlock()
 		snap.Text = sliceFrom(buf, from)
@@ -367,13 +404,14 @@ func (s *ChatService) ResumeStream(ctx context.Context, streamID string, from in
 	}
 	if snap, ok := s.resumeBackplane().Load(ctx, streamID); ok {
 		return &ResumeResult{
-			Text:      sliceFrom(snap.Text, from),
-			Done:      snap.Done,
-			Error:     snap.Error,
-			ErrorCode: snap.ErrorCode,
-			TokensIn:  snap.TokensIn,
-			TokensOut: snap.TokensOut,
-			Events:    snap.Events,
+			Text:        sliceFrom(snap.Text, from),
+			Done:        snap.Done,
+			Error:       snap.Error,
+			ErrorCode:   snap.ErrorCode,
+			TokensIn:    snap.TokensIn,
+			TokensOut:   snap.TokensOut,
+			ServedModel: snap.ServedModel,
+			Events:      snap.Events,
 		}, nil
 	}
 	return nil, fmt.Errorf("stream not found or already completed")

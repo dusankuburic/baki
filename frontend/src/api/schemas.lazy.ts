@@ -55,11 +55,13 @@ export function buildSchemas() {
   // break the Apply-fix button, health-score badge, per-rule timing,
   // confidence badges, and triage/suppression keying.
 
-  // Envelope check for `flow:loaded` SSE payloads entering the editor store
-  // (useAppEvents). Same philosophy as above: validate the top-level shape so
-  // a malformed payload (HTML error page, truncated JSON, a different event's
-  // data) is rejected before it can hijack the editor, while passthrough keeps
-  // the deep block tree untouched.
+  // Envelope check for the document a `flow:loaded` SSE event triggered a
+  // re-fetch of (useAppEvents). The event itself carries only a lightweight
+  // summary; the fetched document is validated here before it enters the
+  // editor store. Same philosophy as above: validate the top-level shape so
+  // a malformed payload (HTML error page, truncated JSON, a different
+  // event's data) is rejected before it can hijack the editor, while
+  // passthrough keeps the deep block tree untouched.
   const FlowDocumentEnvelopeSchema = z
     .object({
       id: z.string().min(1),

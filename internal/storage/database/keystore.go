@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/storage"
+	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
 
@@ -43,6 +44,9 @@ type EncryptedKeyStore struct {
 	db   *sql.DB
 	aead cipher.AEAD
 }
+
+// The keystore also holds organisations' shared credentials (G7).
+var _ interfaces.OrgSecretStore = (*EncryptedKeyStore)(nil)
 
 // NewEncryptedKeyStore builds a database-backed encrypted keystore. The secret
 // must be non-empty; the AES-256 key is its SHA-256 digest.
@@ -180,4 +184,109 @@ func (s *EncryptedKeyStore) Delete(scope, provider string) error {
 		return fmt.Errorf("keystore: delete: %w", err)
 	}
 	return nil
+}
+
+// --- Organisation-shared credentials (org_provider_keys, migration v23) ---
+//
+// Trust model. An org admin is NOT a trusted principal (anyone can create an
+// organisation and be its admin), so a shared credential is only ever what
+// that admin chose to lend the org's members: it is written by admins,
+// readable in its public (secret-free) form by members, and never returned
+// to any client — the secret is write-only. A member's OWN credential always
+// wins over the org's for chat (ProviderFactory.ForOrg), so an admin cannot
+// route a member's turns through the admin's resource once the member has
+// configured their own; usage run on the org credential is attributed to
+// the org (and capped by the org's daily budget) like every org-scoped turn.
+// The row goes with the organisation (ON DELETE CASCADE).
+
+// orgKeyAAD is keyAAD's counterpart for the org_provider_keys table. The
+// "org" prefix keeps an org ciphertext from ever authenticating under a user
+// scope (or vice versa), even for an org id that equals some user id.
+func orgKeyAAD(orgID, provider string) []byte {
+	return []byte("org\x00" + orgID + "\x00" + provider)
+}
+
+// SaveOrg upserts the encrypted shared key for an (org, provider) pair,
+// recording which admin wrote it.
+func (s *EncryptedKeyStore) SaveOrg(orgID, provider, key, updatedBy string) error {
+	ct, err := s.encrypt(key, orgKeyAAD(orgID, provider))
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	defer cancel()
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO org_provider_keys (org_id, provider, ciphertext, updated_by, updated_at)
+		 VALUES ($1, $2, $3, $4, NOW())
+		 ON CONFLICT (org_id, provider) DO UPDATE
+		   SET ciphertext = EXCLUDED.ciphertext, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+		orgID, provider, ct, updatedBy,
+	); err != nil {
+		return fmt.Errorf("keystore: save org: %w", err)
+	}
+	return nil
+}
+
+// GetOrg returns the decrypted shared key, storage.ErrSecretNotFound when
+// the org has none, or storage.ErrSecretDecryptFailed when the row cannot be
+// decrypted with the current deployment key (see Get).
+func (s *EncryptedKeyStore) GetOrg(orgID, provider string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	defer cancel()
+	var ct string
+	err := s.db.QueryRowContext(ctx, `SELECT ciphertext FROM org_provider_keys WHERE org_id = $1 AND provider = $2`, orgID, provider).Scan(&ct)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", storage.ErrSecretNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("keystore: get org: %w", err)
+	}
+	plaintext, err := s.decrypt(ct, orgKeyAAD(orgID, provider))
+	if err != nil {
+		logger.Warn("keystore: org ciphertext decrypt failed (deployment key may have rotated)",
+			"provider", provider, "error", err)
+		return "", storage.ErrSecretDecryptFailed
+	}
+	return plaintext, nil
+}
+
+// HasOrg reports whether the org has a shared key row for the provider.
+func (s *EncryptedKeyStore) HasOrg(orgID, provider string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	defer cancel()
+	var exists bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM org_provider_keys WHERE org_id = $1 AND provider = $2)`, orgID, provider,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("keystore: has org: %w", err)
+	}
+	return exists, nil
+}
+
+// DeleteOrg removes the org's shared key. Deleting a missing key is a no-op.
+func (s *EncryptedKeyStore) DeleteOrg(orgID, provider string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	defer cancel()
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM org_provider_keys WHERE org_id = $1 AND provider = $2`, orgID, provider); err != nil {
+		return fmt.Errorf("keystore: delete org: %w", err)
+	}
+	return nil
+}
+
+// OrgKeyMeta reports who last wrote the org's shared key and when, without
+// touching the ciphertext; ok is false when the org has no row.
+func (s *EncryptedKeyStore) OrgKeyMeta(orgID, provider string) (updatedBy string, updatedAt time.Time, ok bool, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	defer cancel()
+	err = s.db.QueryRowContext(ctx,
+		`SELECT updated_by, updated_at FROM org_provider_keys WHERE org_id = $1 AND provider = $2`, orgID, provider,
+	).Scan(&updatedBy, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", time.Time{}, false, nil
+	}
+	if err != nil {
+		return "", time.Time{}, false, fmt.Errorf("keystore: org key meta: %w", err)
+	}
+	return updatedBy, updatedAt, true, nil
 }

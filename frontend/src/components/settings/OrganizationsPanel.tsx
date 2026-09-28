@@ -21,6 +21,7 @@ import {useAuthStore} from '@/stores/authStore'
 import {Button, useConfirm} from '@/components/shared'
 import OrgChannelsSection from './OrgChannelsSection'
 import OrgCustomRulesSection from './OrgCustomRulesSection'
+import AzureFoundrySection from './AzureFoundrySection'
 import {useAsync} from '@/hooks/useAsync'
 import {request} from '@/api/client'
 import {writeClipboard} from '@/lib/clipboard'
@@ -367,6 +368,16 @@ export default function OrganizationsPanel() {
                   <div className="p-4 border-t border-border-subtle space-y-4 bg-surface-1/50">
                     <OrgChannelsSection orgId={org.id} isAdmin={canManageMembers} />
                     <OrgCustomRulesSection orgId={org.id} isAdmin={canManageMembers} />
+                    {/* The org's shared Azure AI Foundry credentials: members
+                        read, admins (and the owner) manage. A member's own
+                        credentials always take precedence. */}
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-1">
+                        {t('providers.azureOrgTitle')}
+                      </h4>
+                      <p className="text-xs text-text-tertiary mb-3">{t('providers.azureOrgHint')}</p>
+                      <AzureFoundrySection scope={{kind: 'org', orgId: org.id, canEdit: canManageMembers}} />
+                    </div>
                     <div>
                       <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">
                         {t('orgs.members')}

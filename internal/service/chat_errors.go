@@ -26,7 +26,38 @@ const (
 	ChatErrInterrupted           = "STREAM_INTERRUPTED"
 	ChatErrToolLoopLimit         = "TOOL_LOOP_LIMIT"
 	ChatErrContentFiltered       = "PROVIDER_CONTENT_FILTERED"
+	// ChatErrProviderPermission: the provider accepted the credentials but
+	// the identity lacks the role for the model or agent (Azure AI Foundry
+	// "PermissionDenied" — no Foundry User role for the service principal).
+	ChatErrProviderPermission = "PROVIDER_PERMISSION"
+	// ChatErrOutputLimit: the model spent its whole completion budget (Max
+	// tokens) without writing any answer — reasoning models (o-series,
+	// GPT-5, DeepSeek-R1) count their hidden thinking against that budget.
+	ChatErrOutputLimit = "PROVIDER_OUTPUT_LIMIT"
 )
+
+// outputLimitMsg is the ChatErrOutputLimit copy.
+const outputLimitMsg = "the model used its whole Max tokens budget before writing an answer (reasoning models count their thinking against it) — raise Max tokens in Settings → AI Behavior and try again"
+
+// isOutputLimitFinish reports whether a provider finish reason means the
+// completion stopped at its token cap: OpenAI-compatible chat completions and
+// the Responses mapping ("length"), Claude ("max_tokens"), Gemini
+// ("MAX_TOKENS").
+func isOutputLimitFinish(reason string) bool {
+	switch reason {
+	case "length", "max_tokens", "MAX_TOKENS":
+		return true
+	}
+	return false
+}
+
+// emptyOutputLimitTurn reports a turn that ended at the token cap with no
+// answer text and no tool calls: a "successful" completion that is empty
+// (and billed). A turn cut at the cap AFTER some text keeps that text — a
+// truncated answer is still shown, as before.
+func emptyOutputLimitTurn(sawText bool, toolCalls int, finishReason string) bool {
+	return !sawText && toolCalls == 0 && isOutputLimitFinish(finishReason)
+}
 
 // ErrAIBudgetExceeded / ErrAIBudgetUnavailable classify enforceBudget
 // failures. Match with errors.Is; the concrete error is a *budgetError whose
@@ -140,16 +171,34 @@ func (c *streamCtl) classifyFailure(ctx context.Context, err error) (code, msg s
 		return ChatErrProviderUnavailable, "the AI provider is temporarily unavailable after repeated failures — wait a moment and try again"
 	case errors.Is(err, ai.ErrProviderDown):
 		return ChatErrProviderUnavailable, "the AI provider is temporarily unavailable — try again shortly"
+	case errors.Is(err, ai.ErrEntraTokenUnavailable):
+		// The identity service (not the resource) did not answer: deliberately
+		// not ErrProviderDown upstream, so no retries and no open breaker.
+		return ChatErrProviderUnavailable, "could not obtain a Microsoft Entra ID token for this provider (the identity service did not answer) — try again shortly"
 	case errors.Is(err, ai.ErrInsufficientBalance):
 		return ChatErrProviderBalance, "the AI provider account has insufficient balance — add credits or switch providers"
 	case errors.Is(err, ai.ErrContentFiltered):
 		return ChatErrContentFiltered, "the provider's content filter blocked this request or response — rephrase and try again"
 	case errors.Is(err, ai.ErrProviderConfigInvalid):
 		return ChatErrProviderNotConfigured, "this provider's configuration is invalid — open Settings → AI Accounts and save it again"
+	case errors.Is(err, ai.ErrProviderPermissionDenied):
+		// Before ErrApiKeyInvalid, which it also matches: the credentials
+		// work, a role is missing.
+		return ChatErrProviderPermission, "the provider accepted these credentials, but the service principal lacks permission for this model or agent — assign it the Foundry User role on the Azure AI Foundry resource, then use Test in Settings → AI Accounts for details"
+	case errors.Is(err, ai.ErrEntraCredentialsRejected):
+		// Also ErrApiKeyInvalid; an Entra ID service principal has no API key.
+		return ChatErrProviderAuth, "Microsoft Entra ID rejected this provider's credentials (tenant ID, client ID or client secret — an expired client secret is the usual cause) — update them in Settings → AI Accounts"
+	case errors.Is(err, ai.ErrEntraTokenRejected):
+		// Also ErrApiKeyInvalid; the token WAS issued, the resource refused it
+		// (wrong audience for the resource kind, Entra ID auth disabled, a
+		// resource in another cloud). Azure's own explanation is what the
+		// connection test shows; the bubble must not send the user to edit a
+		// key the principal does not have.
+		return ChatErrProviderAuth, "Azure rejected this provider's Microsoft Entra ID access token — check that the endpoint is the resource's own and that Entra ID authentication is enabled on it, then use Test in Settings → AI Accounts for Azure's explanation"
 	case errors.Is(err, ai.ErrApiKeyInvalid):
-		return ChatErrProviderAuth, "the API key for this provider is invalid — check it in Settings → AI Providers"
+		return ChatErrProviderAuth, "the API key for this provider is invalid — check it in Settings → AI Accounts"
 	case errors.Is(err, ai.ErrKeyNotConfigured):
-		return ChatErrProviderNotConfigured, "no API key is configured for this provider — add one in Settings → AI Providers"
+		return ChatErrProviderNotConfigured, "no API key is configured for this provider — add one in Settings → AI Accounts"
 	case errors.Is(err, errProviderSetup):
 		return ChatErrProviderUnavailable, err.Error()
 	case isStreamTruncation(err):

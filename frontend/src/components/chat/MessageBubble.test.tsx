@@ -103,3 +103,20 @@ describe('MessageBubble — reading layout', () => {
     expect(container.querySelector('.bg-brand-500\\/10')).not.toBeNull()
   })
 })
+
+describe('MessageBubble — served model', () => {
+  it('names the model that answered when it differs from the selected one', () => {
+    render(<MessageBubble message={msg({content: 'hi', model: 'my-deployment', servedModel: 'gpt-4o-2024-08-06'})} />)
+    expect(screen.getByText('· my-deployment')).toBeInTheDocument()
+    expect(screen.getByTitle('Answered by gpt-4o-2024-08-06')).toHaveTextContent('· gpt-4o-2024-08-06')
+  })
+
+  it('does not repeat the model when the served one is the same, and never on user turns', () => {
+    render(<MessageBubble message={msg({content: 'hi', model: 'gpt-4o', servedModel: 'gpt-4o'})} />)
+    expect(screen.getAllByText('· gpt-4o')).toHaveLength(1)
+    expect(screen.queryByTitle(/Answered by/)).toBeNull()
+
+    render(<MessageBubble message={msg({id: 'm2', role: 'user', content: 'q', model: 'a', servedModel: 'b'})} />)
+    expect(screen.queryByText('· b')).toBeNull()
+  })
+})

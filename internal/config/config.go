@@ -18,6 +18,26 @@ const (
 	StorageDatabase StorageBackend = "database"
 )
 
+// DefaultEmbeddingDim is the knowledge-base vector width when
+// PAD_EMBEDDING_DIM is unset (OpenAI text-embedding-3-small's native width).
+// The storage layer's pgvector contract and the width the AI factory asks
+// embedding models for must agree, so both read it from here.
+const DefaultEmbeddingDim = 1536
+
+// EmbeddingProviderIDs lists the provider ids PAD_EMBEDDING_PROVIDER accepts:
+// the embedding-capable providers. The ai package cannot be imported here (it
+// imports config); an ai test keeps the two lists in sync.
+var EmbeddingProviderIDs = []string{"openai", "gemini", "glm", "github-models", "azure-foundry"}
+
+// EffectiveEmbeddingDim is the knowledge-base vector width in force:
+// EmbeddingDim, or DefaultEmbeddingDim when unset.
+func (s StorageConfig) EffectiveEmbeddingDim() int {
+	if s.EmbeddingDim > 0 {
+		return s.EmbeddingDim
+	}
+	return DefaultEmbeddingDim
+}
+
 // Config holds the complete application configuration
 type Config struct {
 	Mode       DeploymentMode
@@ -225,8 +245,20 @@ type StorageConfig struct {
 	// chunk whose embedding width differs from this is kept in the JSONB
 	// fallback column but skipped for the vector index (and ranked Go-side when
 	// pgvector is unavailable), mirroring the "re-index after changing the
-	// embedding provider" contract. 0 ⇒ default 1536 (OpenAI text-embedding-3-small).
+	// embedding provider" contract. 0 ⇒ DefaultEmbeddingDim (see
+	// EffectiveEmbeddingDim).
 	EmbeddingDim int
+
+	// EmbeddingProvider pins the provider that embeds the org knowledge base
+	// for the whole deployment (PAD_EMBEDDING_PROVIDER); it wins over the
+	// settings' AI.EmbeddingProvider. Empty ⇒ the settings value, else
+	// "openai", with a fallback to the caller's other embedding-capable keys.
+	// "azure-foundry" is the only way to embed with Azure AI Foundry: a
+	// user's Azure document names a deployment of THEIR choosing, so it never
+	// joins the shared corpus by default (a second model at the same width
+	// would silently split the org's retrieval). Validate accepts only
+	// EmbeddingProviderIDs.
+	EmbeddingProvider string
 
 	// Azure Blob Storage settings (optional). Used when Backend == StorageDatabase.
 	AzureStorageAccount   string

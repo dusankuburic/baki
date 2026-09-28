@@ -360,3 +360,57 @@ func TestPostgres_FlowDashboardAdvanced_NoErrorOnHappyPath(t *testing.T) {
 		t.Errorf("expected flow %q in Complexity scatter, got %+v", flow.ID, out.Complexity)
 	}
 }
+
+// TestPostgres_DeleteFlow_ReclaimsConversations pins the conversations
+// reclamation DeleteFlow owes: conversations.flow_id has no FK to flows (rows
+// for never-persisted flows must survive), so without an explicit delete a
+// deleted flow's chat rows linger forever — and under the conversations RLS
+// policy (which resolves visibility by joining flows) they become invisible
+// the moment the parent row is gone. The rows must be removed by the same
+// DeleteFlow call, for every scope stored under the flow.
+func TestPostgres_DeleteFlow_ReclaimsConversations(t *testing.T) {
+	b := openTestDB(t)
+	ctx := context.Background()
+
+	flow := &interfaces.FlowDocument{
+		ID:      "conv-reclaim-test-flow",
+		Name:    "Conversation Reclaim Test",
+		Content: []byte(`{"subflows":[]}`),
+	}
+	if err := b.SaveFlow(ctx, flow); err != nil {
+		t.Fatalf("SaveFlow: %v", err)
+	}
+	t.Cleanup(func() { b.DeleteFlow(ctx, flow.ID) })
+
+	msgs := []interfaces.ChatMessage{{ID: "m1", Role: "user", Content: "hi"}}
+	for _, scope := range []string{"openai", "anthropic"} {
+		if err := b.SaveConversation(ctx, flow.ID, scope, msgs); err != nil {
+			t.Fatalf("SaveConversation(%s): %v", scope, err)
+		}
+	}
+	// An unrelated flow's conversation must survive the delete.
+	other := &interfaces.FlowDocument{ID: "conv-reclaim-other-flow", Name: "Other", Content: []byte(`{}`)}
+	if err := b.SaveFlow(ctx, other); err != nil {
+		t.Fatalf("SaveFlow(other): %v", err)
+	}
+	t.Cleanup(func() { b.DeleteFlow(ctx, other.ID) })
+	if err := b.SaveConversation(ctx, other.ID, "openai", msgs); err != nil {
+		t.Fatalf("SaveConversation(other): %v", err)
+	}
+
+	if err := b.DeleteFlow(ctx, flow.ID); err != nil {
+		t.Fatalf("DeleteFlow: %v", err)
+	}
+	for _, scope := range []string{"openai", "anthropic"} {
+		got, err := b.LoadConversation(ctx, flow.ID, scope)
+		if err != nil {
+			t.Fatalf("LoadConversation(%s): %v", scope, err)
+		}
+		if len(got) != 0 {
+			t.Errorf("conversation for deleted flow (scope %s) = %d messages, want reclaimed/empty", scope, len(got))
+		}
+	}
+	if got, err := b.LoadConversation(ctx, other.ID, "openai"); err != nil || len(got) != 1 {
+		t.Errorf("unrelated flow's conversation must survive: msgs=%d err=%v", len(got), err)
+	}
+}

@@ -14,6 +14,7 @@ import {
   FixProposalPayload,
   ToolResultPayload,
   ChatEvent,
+  DoneMeta,
 } from '@/lib/chatEvent'
 import {subscribeToEvents, subscribeConnectionState, EventConnectionState, getEventConnectionState} from '@/api/client'
 
@@ -37,7 +38,9 @@ const STALL_PROBE_LIMIT = 3
 export interface StreamHandler {
   onChunk: (text: string, streamId: string) => void
   onReplace: (text: string, streamId: string) => void
-  onDone: (tokensOut: number, tokensIn: number, streamId: string) => void
+  // `meta` is the served model and billed rates when the backend reported
+  // them (see DoneMeta); undefined for a plain done.
+  onDone: (tokensOut: number, tokensIn: number, streamId: string, meta?: DoneMeta) => void
   // `code` is the failure's machine-readable class (AI_BUDGET_EXCEEDED, …)
   // when the backend sent one — see internal/service/chat_errors.go.
   onError: (error: string, streamId: string, code?: string) => void
@@ -66,6 +69,19 @@ export interface StreamHandler {
   onAppend?: (delta: string, streamId: string) => void
   // UTF-8 byte length of accumulated text, so a delta-resume requests only the tail.
   getAccLength?: (streamId: string) => number
+}
+
+// doneArg builds onDone's optional meta argument from a done event's fields
+// (`src` — or a resume/begin result, which types only servedModel) plus a
+// served model reported by the resume that finished the stream. Undefined
+// when nothing was reported, so a plain done stays a three-argument call.
+function doneArg(src: DoneMeta, servedModel?: string): DoneMeta | undefined {
+  const meta: DoneMeta = {}
+  if (src.servedModel) meta.servedModel = src.servedModel
+  if (src.inputCostPerM !== undefined) meta.inputCostPerM = src.inputCostPerM
+  if (src.outputCostPerM !== undefined) meta.outputCostPerM = src.outputCostPerM
+  if (servedModel) meta.servedModel = servedModel
+  return Object.keys(meta).length > 0 ? meta : undefined
 }
 
 // Per-stream live state: SSE unsubscriber + dropped-chunk bookkeeping. The
@@ -107,7 +123,10 @@ export function useStreamingMessage(handler: StreamHandler) {
   // 'delta' (reconnect): acc text is a clean prefix — request only the tail.
   // 'full' (mismatch): possible gaps — fetch the whole buffer and onReplace.
   const resumeInto = useCallback(
-    (streamId: string, opts?: {finish?: {tokensOut: number; tokensIn: number}; mode?: 'delta' | 'full'}) => {
+    (
+      streamId: string,
+      opts?: {finish?: {tokensOut: number; tokensIn: number; meta?: DoneMeta}; mode?: 'delta' | 'full'},
+    ) => {
       const finish = opts?.finish
       const mode = opts?.mode ?? 'full'
       const useDelta = mode === 'delta' && handlerRef.current.onAppend && handlerRef.current.getAccLength
@@ -149,6 +168,7 @@ export function useStreamingMessage(handler: StreamHandler) {
               res.tokensOut || finish?.tokensOut || 0,
               res.tokensIn || finish?.tokensIn || 0,
               streamId,
+              doneArg(finish?.meta ?? {}, res.servedModel),
             )
           } else {
             armStall(streamId)
@@ -158,7 +178,7 @@ export function useStreamingMessage(handler: StreamHandler) {
           // Stream gone: a done-verification pass still finishes with what
           // accumulated; reconnect probes just drop.
           if (!subsRef.current.has(streamId)) return
-          if (finish) handlerRef.current.onDone(finish.tokensOut, finish.tokensIn, streamId)
+          if (finish) handlerRef.current.onDone(finish.tokensOut, finish.tokensIn, streamId, finish.meta)
         })
     },
     [armStall],
@@ -221,7 +241,7 @@ export function useStreamingMessage(handler: StreamHandler) {
           }
           if (res.text) handlerRef.current.onReplace(res.text, streamId)
           if (res.done) {
-            handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId)
+            handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId, doneArg(res))
             return
           }
           if (res.text && utf8ByteLength(res.text) > before) {
@@ -294,10 +314,14 @@ export function useStreamingMessage(handler: StreamHandler) {
               clearTimeout(sub.stallTimer)
               sub.stallTimer = null
             }
+            const meta = doneArg(parsed)
             if (sub.countsInvalid || (parsed.chunks !== undefined && parsed.chunks !== sub.received)) {
-              resumeInto(streamId, {finish: {tokensOut: parsed.tokensOut, tokensIn: parsed.tokensIn}, mode: 'full'})
+              resumeInto(streamId, {
+                finish: {tokensOut: parsed.tokensOut, tokensIn: parsed.tokensIn, meta},
+                mode: 'full',
+              })
             } else {
-              handlerRef.current.onDone(parsed.tokensOut, parsed.tokensIn, streamId)
+              handlerRef.current.onDone(parsed.tokensOut, parsed.tokensIn, streamId, meta)
             }
             break
           }
@@ -401,7 +425,7 @@ export function useStreamingMessage(handler: StreamHandler) {
         if (res.error) {
           handlerRef.current.onError(res.error, streamId, res.errorCode)
         } else if (res.done) {
-          handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId)
+          handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId, doneArg(res))
         }
       }
       return true

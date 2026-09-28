@@ -64,18 +64,21 @@ var modelCatalog = map[string][]ModelInfo{
 	// user chose, so this list is not what the provider offers — it is the
 	// reference table the served-model name (response "model") is priced and
 	// sized against: Azure global-standard list prices (USD per 1M tokens,
-	// 2026-09) and the models' context windows. The unconfigured (metadata)
-	// provider also advertises it so the UI has something to show before the
-	// first deployment listing.
+	// 2026-09) and the models' INPUT caps. ContextLimit is what the chat
+	// service truncates the prompt against, so where Azure documents separate
+	// input and output limits (gpt-5 family: 272k in + 128k out = 400k) the
+	// input figure goes here, never the total window. The unconfigured
+	// (metadata) provider also advertises it so the UI has something to show
+	// before the first deployment listing.
 	"azure-foundry": {
 		{ID: "gpt-4.1", DisplayName: "GPT-4.1", ContextLimit: 1047576, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 8.0}},
 		{ID: "gpt-4.1-mini", DisplayName: "GPT-4.1 Mini", ContextLimit: 1047576, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 0.4, OutputCostPerM: 1.6}},
 		{ID: "gpt-4.1-nano", DisplayName: "GPT-4.1 Nano", ContextLimit: 1047576, MaxOutputTokens: 32768, Pricing: Pricing{InputCostPerM: 0.1, OutputCostPerM: 0.4}},
 		{ID: "gpt-4o", DisplayName: "GPT-4o", ContextLimit: 128000, MaxOutputTokens: 16384, Pricing: Pricing{InputCostPerM: 2.5, OutputCostPerM: 10.0}},
 		{ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", ContextLimit: 128000, MaxOutputTokens: 16384, Pricing: Pricing{InputCostPerM: 0.15, OutputCostPerM: 0.6}},
-		{ID: "gpt-5", DisplayName: "GPT-5", ContextLimit: 400000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 1.25, OutputCostPerM: 10.0}},
-		{ID: "gpt-5-mini", DisplayName: "GPT-5 Mini", ContextLimit: 400000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 0.25, OutputCostPerM: 2.0}},
-		{ID: "gpt-5-nano", DisplayName: "GPT-5 Nano", ContextLimit: 400000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 0.05, OutputCostPerM: 0.4}},
+		{ID: "gpt-5", DisplayName: "GPT-5", ContextLimit: 272000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 1.25, OutputCostPerM: 10.0}},
+		{ID: "gpt-5-mini", DisplayName: "GPT-5 Mini", ContextLimit: 272000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 0.25, OutputCostPerM: 2.0}},
+		{ID: "gpt-5-nano", DisplayName: "GPT-5 Nano", ContextLimit: 272000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 0.05, OutputCostPerM: 0.4}},
 		{ID: "gpt-5-chat", DisplayName: "GPT-5 Chat", ContextLimit: 128000, MaxOutputTokens: 16384, Pricing: Pricing{InputCostPerM: 1.25, OutputCostPerM: 10.0}},
 		{ID: "o3", DisplayName: "o3", ContextLimit: 200000, MaxOutputTokens: 100000, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 8.0}},
 		{ID: "o4-mini", DisplayName: "o4-mini", ContextLimit: 200000, MaxOutputTokens: 100000, Pricing: Pricing{InputCostPerM: 1.1, OutputCostPerM: 4.4}},
@@ -111,11 +114,20 @@ func normalizeServedModel(served string) string {
 // catalogEntryFor finds the catalogue entry describing the model a provider
 // reported serving. The match is exact on the normalised name, or — for
 // names that only add a numeric/date version to a catalogued ID
-// ("gpt-4.1-2025-04-14", "deepseek-v3-0324-2") — the longest catalogued ID the
-// name extends. Anything else (a sibling model such as "gpt-5-mini" when only
-// "gpt-5" is catalogued) is NOT matched: mispricing silently would be worse
-// than the explicit fallback.
+// ("gpt-4.1-2025-04-14", "deepseek-v3-0324-2", "claude-sonnet-4-6-20260301")
+// — the longest catalogued ID the name extends. Anything else (a sibling
+// model such as "gpt-5-mini" when only "gpt-5" is catalogued) is NOT matched:
+// mispricing silently would be worse than the explicit fallback.
+//
+// Azure AI Foundry's Claude deployments are priced by the Claude catalogue:
+// a "claude:<deployment>" id resolves by its deployment name there, and a
+// served model named "claude-…" (a Claude deployment's answer, or a model
+// router's route to one) that the Azure table does not list is looked up
+// there too.
 func catalogEntryFor(providerID, served string) (ModelInfo, bool) {
+	if providerID == azureFoundryProviderID && IsClaudeModel(served) {
+		return catalogEntryFor("claude", claudeDeploymentName(served))
+	}
 	norm := normalizeServedModel(served)
 	if norm == "" {
 		return ModelInfo{}, false
@@ -131,7 +143,13 @@ func catalogEntryFor(providerID, served string) (ModelInfo, bool) {
 			best, bestLen = m, len(id)
 		}
 	}
-	return best, bestLen > 0
+	if bestLen > 0 {
+		return best, true
+	}
+	if providerID == azureFoundryProviderID && strings.HasPrefix(norm, "claude") {
+		return catalogEntryFor("claude", served)
+	}
+	return ModelInfo{}, false
 }
 
 // versionOnlyRemainder reports whether what follows a catalogued ID is only a

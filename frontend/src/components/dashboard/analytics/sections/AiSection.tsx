@@ -18,6 +18,14 @@ interface ProviderRow extends HBarRow {
   tokensOut: number
 }
 
+// "deployment · served" when the model that answered differs from what was
+// asked for (an Azure AI Foundry deployment alias, model router or agent);
+// otherwise just the requested id. Rows are grouped by the served model, so
+// the same deployment can appear once per model it was routed to.
+export function modelLabel(r: Pick<ModelUsage, 'model' | 'servedModel'>): string {
+  return r.servedModel && r.servedModel !== r.model ? `${r.model} · ${r.servedModel}` : r.model
+}
+
 // Model calls, tokens and spend for the account and/or the scoped orgs. Usage
 // is never tied to flows, and the section says so.
 export function AiSection({data, refetching}: {data: DashboardAnalyticsData; refetching: boolean}) {
@@ -155,10 +163,15 @@ export function AiSection({data, refetching}: {data: DashboardAnalyticsData; ref
         <DataTable<ModelUsage>
           caption={t('analytics.cards.byModel')}
           filename="ai-usage-by-model.csv"
-          rowKey={r => `${r.provider}/${r.model}`}
+          rowKey={r => `${r.provider}/${r.model}/${r.servedModel ?? ''}`}
           columns={[
             {key: 'provider', header: t('analytics.columns.provider')},
-            {key: 'model', header: t('analytics.columns.model')},
+            {
+              key: 'model',
+              header: t('analytics.columns.model'),
+              render: r => modelLabel(r),
+              csv: r => modelLabel(r),
+            },
             {key: 'calls', header: t('analytics.columns.calls'), align: 'right'},
             {
               key: 'tokensIn',

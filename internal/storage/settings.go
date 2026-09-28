@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -126,6 +127,14 @@ func (s *SettingsStore) load() error {
 	return nil
 }
 
+// persistLocked writes the current settings durably: a unique temp file in
+// the target's directory (chmod 0600), then an atomic rename over the target.
+// The temp name must be unique per write (os.CreateTemp, O_EXCL): a shared
+// fixed "<path>.tmp" let two concurrent Updates interleave their O_TRUNC
+// writes on one temp file and publish a mixed or truncated body via the
+// rename — the exact defect the filesystem backend's atomicWrite fixed (see
+// its comment on ".baki-tmp-*"). Every failure path removes the temp so
+// nothing accumulates next to the settings file.
 func (s *SettingsStore) persistLocked() error {
 	if s.path == "" {
 		return nil // memory-only store
@@ -136,20 +145,38 @@ func (s *SettingsStore) persistLocked() error {
 		return err
 	}
 
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".settings-tmp-*")
+	if err != nil {
 		return err
 	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) } // best-effort; don't mask the real error
 
-	if err := os.Rename(tmp, s.path); err != nil {
-		// Atomic-write failure: the .tmp file exists but the rename failed
+	// CreateTemp already creates with 0600; chmod keeps that explicit and
+	// in step with the other atomic writers.
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpName, s.path); err != nil {
+		// Atomic-write failure: the temp file exists but the rename failed
 		// (e.g. cross-device link, antivirus interference, target locked).
 		// Surface this loudly — caller will return the error, but a log
 		// helps post-mortem because settings persistence may be invisible
 		// to UI flows.
 		logger.Error("settings: atomic rename failed",
-			"tmp", tmp, "target", s.path, "error", err)
-		_ = os.Remove(tmp)
+			"tmp", tmpName, "target", s.path, "error", err)
+		cleanup()
 		return err
 	}
 	return nil

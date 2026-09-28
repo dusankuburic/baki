@@ -458,6 +458,13 @@ function MessageBubble({
           {isUser ? t('message.roleUser') : t('message.roleAssistant')}
         </span>
         {message.model && !isUser && <span className="text-2xs text-text-tertiary/60">· {message.model}</span>}
+        {/* The model that actually answered, when the provider resolved the
+            selected one (a deployment, model-router, an agent) to another. */}
+        {message.servedModel && !isUser && message.servedModel !== message.model && (
+          <span className="text-2xs text-text-tertiary/60" title={t('message.servedBy', {model: message.servedModel})}>
+            · {message.servedModel}
+          </span>
+        )}
         {time && <span className="text-2xs text-text-tertiary/40">{time}</span>}
       </div>
 

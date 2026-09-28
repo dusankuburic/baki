@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -440,3 +443,187 @@ func (cbFailStub) Chat(context.Context, Request) (*Response, error) {
 	return nil, ErrProviderDown
 }
 func (cbFailStub) Embed(context.Context, []string) ([][]float32, error) { return nil, nil }
+
+// Finding #7: Azure AI Foundry state is per resource. Two tenants' resources
+// with the same deployment name ("gpt-4o") do not share a circuit: resource
+// A's outage opens A's circuit only, for chat and for embeddings, while every
+// provider on A's endpoint shares it.
+func TestCircuitBreaker_AzureResourcesDoNotShareState(t *testing.T) {
+	resetBreakerRegistry()
+	t.Cleanup(resetBreakerRegistry)
+	ResetAzureFoundryCaches()
+	var aHits atomic.Int32
+	a := newAzureTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ int, _ map[string]any) {
+		aHits.Add(1)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{"message": "the service is overloaded", "code": "ServiceUnavailable"}})
+	})
+	b := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, _ map[string]any) {
+		if strings.HasSuffix(r.URL.Path, "/embeddings") {
+			writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{{"embedding": []float32{0.1, 0.2}}}})
+			return
+		}
+		writeJSON(w, http.StatusOK, chatCompletionJSON("ok from b", "gpt-4o"))
+	})
+	chain := func(srv *azureTestServer) Provider {
+		cfg := azureKeyConfig(srv.URL)
+		cfg.ChatDeployment = "gpt-4o"
+		cfg.EmbeddingDeployment = "text-embedding-3-small"
+		p := newAzureFoundryProvider(cfg, nil, srv.Client())
+		return NewRetryingProviderWithConfig(NewCircuitBreakerProviderWithConfig(p, 5, time.Minute), 3, time.Millisecond)
+	}
+	ctx := context.Background()
+	req := Request{Model: "gpt-4o", Messages: []Message{{Role: "user", Content: "hi"}}}
+
+	// Two failing turns (three attempts each) open resource A's circuit; a
+	// fresh provider on A's endpoint sees it without reaching A.
+	for range 2 {
+		_, _ = chain(a).Chat(ctx, req)
+	}
+	hits := aHits.Load()
+	if _, err := chain(a).Chat(ctx, req); !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("resource A's circuit must be open, got %v", err)
+	}
+	if aHits.Load() != hits {
+		t.Error("an open circuit must not reach resource A")
+	}
+	// Resource B serves the same deployment name and is unaffected.
+	if resp, err := chain(b).Chat(ctx, req); err != nil || resp.Content != "ok from b" {
+		t.Fatalf("resource B must not share A's circuit: %v", err)
+	}
+
+	// Embeddings: A's failing embedding deployment opens A's provider-wide
+	// circuit only.
+	for range 2 {
+		_, _ = chain(a).Embed(ctx, []string{"x"})
+	}
+	if _, err := chain(a).Embed(ctx, []string{"x"}); !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("resource A's embedding circuit must be open, got %v", err)
+	}
+	if _, err := chain(b).Embed(ctx, []string{"x"}); err != nil {
+		t.Errorf("resource B's embeddings must not share A's circuit: %v", err)
+	}
+}
+
+func TestAzureFoundry_BreakerScope(t *testing.T) {
+	p := newAzureFoundryProvider(AzureFoundryConfig{Endpoint: "https://Res.openai.azure.com", ProjectEndpoint: "https://res.services.ai.azure.com/api/projects/p1"}, nil, nil)
+	if got := p.breakerScope(); got != "https://res.openai.azure.com|https://res.services.ai.azure.com/api/projects/p1" {
+		t.Errorf("breakerScope = %q", got)
+	}
+	if got := breakerScopeOf(NewAzureFoundryProvider("")); got != "" {
+		t.Errorf("the unconfigured provider has no scope: %q", got)
+	}
+	if got := breakerScopeOf(&cbStub{}); got != "" {
+		t.Errorf("shared upstreams have no scope: %q", got)
+	}
+}
+
+// The registry stays bounded: past breakerRegistryMax, healthy entries are
+// dropped and tripped circuits are kept.
+func TestBreakerRegistry_PrunesHealthyEntries(t *testing.T) {
+	resetBreakerRegistry()
+	t.Cleanup(resetBreakerRegistry)
+	tripped := breakerStateFor("tripped")
+	tripped.state = circuitOpen
+	failing := breakerStateFor("failing")
+	failing.failures = 2
+	failing.lastFailure = time.Now() // record() always pairs failures with a timestamp
+	for i := range breakerRegistryMax {
+		breakerStateFor(fmt.Sprintf("healthy-%d", i))
+	}
+	breakerRegistryMu.Lock()
+	n := len(breakerRegistry)
+	_, keptTripped := breakerRegistry["tripped"]
+	_, keptFailing := breakerRegistry["failing"]
+	breakerRegistryMu.Unlock()
+	if n > breakerRegistryMax {
+		t.Errorf("registry size %d exceeds %d", n, breakerRegistryMax)
+	}
+	if !keptTripped || !keptFailing || breakerStateFor("tripped") != tripped {
+		t.Error("open circuits and failure counts must survive pruning")
+	}
+}
+
+// A closed circuit whose last failure is older than breakerStaleFailure is
+// reclaimable: failures only reset on a same-key success, so without the age
+// rule any key that ever failed lived in the registry forever.
+func TestBreakerRegistry_PrunesStaleFailuresByAge(t *testing.T) {
+	resetBreakerRegistry()
+	t.Cleanup(resetBreakerRegistry)
+	stale := breakerStateFor("stale-failed")
+	stale.failures = 2
+	stale.lastFailure = time.Now().Add(-breakerStaleFailure - time.Minute)
+	fresh := breakerStateFor("fresh-failed")
+	fresh.failures = 1
+	fresh.lastFailure = time.Now()
+	// Fill with recently failed keys so pruning has nothing else to drop and
+	// the registry actually reaches the cap.
+	for i := 0; ; i++ {
+		st := breakerStateFor(fmt.Sprintf("filler-%d", i))
+		st.failures = 1
+		st.lastFailure = time.Now()
+		breakerRegistryMu.Lock()
+		full := len(breakerRegistry) >= breakerRegistryMax
+		breakerRegistryMu.Unlock()
+		if full {
+			break
+		}
+	}
+	breakerStateFor("trigger")
+
+	breakerRegistryMu.Lock()
+	defer breakerRegistryMu.Unlock()
+	if _, ok := breakerRegistry["stale-failed"]; ok {
+		t.Error("a closed circuit whose last failure is stale must be pruned")
+	}
+	if _, ok := breakerRegistry["fresh-failed"]; !ok {
+		t.Error("a recently failed closed circuit must survive the age pass")
+	}
+}
+
+// The cap holds even when every entry failed recently (pruning drops nothing):
+// the oldest failures are evicted instead of the registry growing past
+// breakerRegistryMax with every distinct failing key.
+func TestBreakerRegistry_HardCapHoldsUnderDistinctFailingKeys(t *testing.T) {
+	resetBreakerRegistry()
+	t.Cleanup(resetBreakerRegistry)
+	now := time.Now()
+	for i := range breakerRegistryMax + 64 {
+		st := breakerStateFor(fmt.Sprintf("flaky-%d", i))
+		st.failures = 1
+		st.lastFailure = now.Add(-time.Duration(i) * time.Second)
+	}
+	breakerRegistryMu.Lock()
+	n := len(breakerRegistry)
+	breakerRegistryMu.Unlock()
+	if n > breakerRegistryMax {
+		t.Errorf("registry size %d exceeds the hard cap %d", n, breakerRegistryMax)
+	}
+}
+
+// Open and half-open circuits are never dropped by the age pass while fresh:
+// evicting one would admit traffic to a provider the breaker just isolated.
+func TestBreakerRegistry_AgePassKeepsFreshOpenCircuits(t *testing.T) {
+	resetBreakerRegistry()
+	t.Cleanup(resetBreakerRegistry)
+	open := breakerStateFor("open-circuit")
+	open.state = circuitOpen
+	open.lastFailure = time.Now()
+	half := breakerStateFor("half-open-circuit")
+	half.state = circuitHalfOpen
+	half.lastFailure = time.Now()
+	for i := range breakerRegistryMax {
+		st := breakerStateFor(fmt.Sprintf("flaky-%d", i))
+		st.failures = 1
+		st.lastFailure = time.Now().Add(-time.Duration(i) * time.Second)
+	}
+	breakerStateFor("trigger")
+
+	breakerRegistryMu.Lock()
+	defer breakerRegistryMu.Unlock()
+	if _, ok := breakerRegistry["open-circuit"]; !ok {
+		t.Error("a fresh open circuit was evicted by the cap enforcement")
+	}
+	if _, ok := breakerRegistry["half-open-circuit"]; !ok {
+		t.Error("a fresh half-open circuit was evicted by the cap enforcement")
+	}
+}

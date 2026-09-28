@@ -171,7 +171,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		Auth:     NewAuthHandler(newMockTokenStore(), backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{}, config.ModeLocal), authSvc),
 		Admin:    NewAdminHandler(backend, security, NewMigrationRunner(nil), nil),
 		Provider: NewProviderHandler(providerSvc, security, backend),
-		Org:      NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), nil),
+		Org:      NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), nil, providerSvc),
 		Sharing:  NewSharingHandler(backend, flowSvc, security),
 	}
 

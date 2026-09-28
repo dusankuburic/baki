@@ -55,7 +55,6 @@ export default function AITab() {
     () => (_blockLookup && _selectedBlockId ? (_blockLookup.get(_selectedBlockId) ?? null) : null),
     [_blockLookup, _selectedBlockId],
   )
-  const aiSettings = useSettingsStore(s => s.settings.ai)
   const chatTextSize = useSettingsStore(s => s.settings.appearance.chatTextSize)
   const updateAppearance = useSettingsStore(s => s.updateAppearance)
   const provider = useChatStore(s => s.selectedProvider)
@@ -374,7 +373,6 @@ export default function AITab() {
 
   const selectedSourceFiles = activeThread?.selectedSourceFiles ?? []
   const configuredProviders = providers.filter(p => p.configured)
-  const showCost = aiSettings.showCostEstimates && currentModelDetail && currentModelDetail.inputCostPerM > 0
   const messages = activeThreadMessages
   const historyLoading = historyState === 'loading' && messages.length === 0
   const showWelcome = messages.length === 0 && !isCurrentThreadStreaming && !historyLoading
@@ -403,6 +401,7 @@ export default function AITab() {
               name: p.name,
               configured: p.configured,
               authType: p.authType,
+              shared: p.shared,
             }))}
             selectedProvider={provider}
             onSelectProvider={handleSetProvider}
@@ -551,8 +550,8 @@ export default function AITab() {
               promptTokens={activeThread.tokensIn ?? 0}
               completionTokens={activeThread.tokensOut ?? 0}
               contextLimit={currentModelDetail?.contextLimit || undefined}
-              inputCostPerM={showCost ? currentModelDetail?.inputCostPerM : undefined}
-              outputCostPerM={showCost ? currentModelDetail?.outputCostPerM : undefined}
+              inputCostPerM={currentModelDetail?.inputCostPerM}
+              outputCostPerM={currentModelDetail?.outputCostPerM}
             />
           </div>
         )}

@@ -4,12 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 )
 
 // azureTestServer records every request (method, path, headers, decoded JSON
@@ -338,11 +344,259 @@ func TestAzureFoundry_EntraRetriesOnceWithFreshToken(t *testing.T) {
 	p2 := newAzureFoundryProvider(cfg, nil, srv2.Client())
 	p2.tokens = newEntraTokenSource(&fakeCred{})
 	p2.tokenFn = p2.entraToken
-	if _, err := p2.Chat(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}); !errors.Is(err, ErrApiKeyInvalid) {
+	_, err = p2.Chat(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
+	if !errors.Is(err, ErrApiKeyInvalid) {
 		t.Errorf("want ErrApiKeyInvalid, got %v", err)
+	}
+	if errors.Is(err, ErrProviderPermissionDenied) {
+		t.Errorf("a 401 without code PermissionDenied is an invalid credential, got %v", err)
 	}
 	if n := len(srv2.requests()); n != 2 {
 		t.Errorf("want exactly one retry, got %d requests", n)
+	}
+}
+
+// D-26: with a real credential the "retry with a fresh token" only works if
+// Invalidate rebuilds the credential — azidentity's MSAL cache hands back the
+// refused token until 5 minutes before expiry (stickyCred mirrors that). With
+// no constructor the retry degrades to one request and the original error.
+func TestAzureFoundry_EntraRetryRebuildsCredential(t *testing.T) {
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, body map[string]any) {
+		if r.Header.Get("Authorization") != "Bearer tok-2" {
+			writeJSON(w, 401, map[string]any{"error": map[string]any{"message": "token rejected", "code": "401"}})
+			return
+		}
+		writeJSON(w, 200, chatCompletionJSON("ok", "gpt-4o"))
+	})
+	ResetAzureFoundryCaches()
+	cfg := AzureFoundryConfig{Endpoint: srv.URL, Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra,
+		TenantID: "11111111-2222-3333-4444-555555555555", ClientID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", ClientSecret: "s"}}
+	p := newAzureFoundryProvider(cfg, nil, srv.Client())
+	src := newEntraTokenSource(&stickyCred{token: "tok-1"})
+	var rebuilds atomic.Int32
+	src.newCred = func() (azcore.TokenCredential, error) {
+		rebuilds.Add(1)
+		return &stickyCred{token: "tok-2"}, nil
+	}
+	p.tokens = src
+	p.tokenFn = p.entraToken
+
+	resp, err := p.Chat(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if resp.Content != "ok" {
+		t.Errorf("content = %q", resp.Content)
+	}
+	reqs := srv.requests()
+	if len(reqs) != 2 || reqs[0].Headers.Get("Authorization") != "Bearer tok-1" || reqs[1].Headers.Get("Authorization") != "Bearer tok-2" {
+		t.Errorf("requests = %+v, want tok-1 then the rebuilt credential's tok-2", reqs)
+	}
+	if n := rebuilds.Load(); n != 1 {
+		t.Errorf("credential rebuilt %d times, want once", n)
+	}
+
+	// No constructor: MSAL's cached token would come back, so the retry is
+	// not attempted and the rejection is final after one request.
+	srv2 := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, body map[string]any) {
+		writeJSON(w, 401, map[string]any{"error": map[string]any{"message": "token rejected", "code": "401"}})
+	})
+	cfg.Endpoint = srv2.URL
+	p2 := newAzureFoundryProvider(cfg, nil, srv2.Client())
+	p2.tokens = newEntraTokenSource(&stickyCred{token: "tok-1"})
+	p2.tokenFn = p2.entraToken
+	_, err = p2.Chat(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
+	if !errors.Is(err, ErrApiKeyInvalid) {
+		t.Errorf("want ErrApiKeyInvalid, got %v", err)
+	}
+	if n := len(srv2.requests()); n != 1 {
+		t.Errorf("without a rebuilt credential the same token must not be replayed: %d requests", n)
+	}
+}
+
+// D-11: in Entra ID mode a 401/403 from the resource (either envelope,
+// including API Management's {"statusCode","message"} shape, which decodes
+// to an empty error.message) is a rejected access token carrying Azure's
+// one-line explanation — still ErrApiKeyInvalid (one fresh-token replay, no
+// retry, no breaker count), never PermissionDenied; the same body from an
+// API-key provider stays a bare invalid key.
+func TestAzureFoundry_EntraTokenRejectedKeepsAzureMessage(t *testing.T) {
+	const apimMsg = "Unauthorized. Access token is missing, invalid, audience is incorrect (https://cognitiveservices.azure.com), or have expired."
+	for name, body := range map[string]map[string]any{
+		"apim envelope":   {"statusCode": 401, "message": apimMsg},
+		"openai envelope": {"error": map[string]any{"code": "401", "message": apimMsg}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, _ map[string]any) {
+				writeJSON(w, 401, body)
+			})
+			ResetAzureFoundryCaches()
+			cfg := AzureFoundryConfig{Endpoint: srv.URL, Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra,
+				TenantID: "11111111-2222-3333-4444-555555555555", ClientID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", ClientSecret: "s"}}
+			p := newAzureFoundryProvider(cfg, nil, srv.Client())
+			p.tokens = newEntraTokenSource(&fakeCred{})
+			p.tokenFn = p.entraToken
+			req := Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}
+
+			check := func(what string, err error) {
+				t.Helper()
+				if !errors.Is(err, ErrEntraTokenRejected) || !errors.Is(err, ErrApiKeyInvalid) {
+					t.Errorf("%s: want ErrEntraTokenRejected and ErrApiKeyInvalid, got %v", what, err)
+				}
+				if errors.Is(err, ErrProviderPermissionDenied) {
+					t.Errorf("%s: a rejected token is not PermissionDenied: %v", what, err)
+				}
+				if err == nil || !strings.Contains(err.Error(), "audience is incorrect") || strings.ContainsAny(err.Error(), "\r\n") {
+					t.Errorf("%s: Azure's explanation must be kept on one line, got %v", what, err)
+				}
+			}
+			check("stream", p.Stream(context.Background(), req, func(Chunk) {}))
+			reqs := srv.requests()
+			if len(reqs) != 2 || reqs[0].Headers.Get("Authorization") != "Bearer tok-1" || reqs[1].Headers.Get("Authorization") != "Bearer tok-2" {
+				t.Errorf("requests = %+v, want exactly one fresh-token replay (tok-1, tok-2)", reqs)
+			}
+			_, err := p.Chat(context.Background(), req)
+			check("chat", err)
+
+			// API-key mode on the same body: an invalid key, nothing more.
+			kp := newAzureKeyProvider(t, srv, nil)
+			_, err = kp.Chat(context.Background(), req)
+			if !errors.Is(err, ErrApiKeyInvalid) || errors.Is(err, ErrEntraTokenRejected) {
+				t.Errorf("api-key provider: want a bare ErrApiKeyInvalid, got %v", err)
+			}
+		})
+	}
+}
+
+// D-14: the connection test's empty-candidate path asks the probe why an
+// Entra ID + project document that names nothing lists nothing — the token
+// refusal or the project route's answer — instead of "name a deployment".
+func TestProbeAzureFoundryProject_ReportsTokenRefusal(t *testing.T) {
+	resetEntraSources()
+	t.Cleanup(resetEntraSources)
+	const tenant = "11111111-2222-3333-4444-555555555555"
+	const client = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	refused := &azidentity.AuthenticationFailedError{RawResponse: &http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Body:       io.NopCloser(strings.NewReader(`{"error":"invalid_client","error_codes":[7000215]}`)),
+	}}
+	entraSources.mu.Lock()
+	entraSources.m[entraSourceKey(tenant, client, "wrong")] = entraSourceEntry{src: newEntraTokenSource(erroringCred{refused}), lastUsed: time.Now()}
+	entraSources.mu.Unlock()
+
+	doc := `{"endpoint":"https://my-res.services.ai.azure.com","auth":{"mode":"entra","tenantId":"` + tenant + `","clientId":"` + client + `","clientSecret":"wrong"},` +
+		`"projectEndpoint":"https://my-res.services.ai.azure.com/api/projects/p"}`
+	err := ProbeAzureFoundryProject(context.Background(), doc)
+	if !errors.Is(err, errEntraToken) || !errors.Is(err, ErrEntraCredentialsRejected) {
+		t.Fatalf("want the token refusal, got %v", err)
+	}
+	if err.Error() == "" || !strings.Contains(err.Error(), "AADSTS7000215") {
+		t.Errorf("the message must name the refusal: %q", err)
+	}
+
+	// Documents that cannot list for a benign reason probe nothing.
+	for name, doc := range map[string]string{
+		"unconfigured": "",
+		"api key":      `{"endpoint":"https://my-res.openai.azure.com","auth":{"mode":"api_key","key":"k"},"chatDeployment":"c"}`,
+		"no project":   `{"endpoint":"https://my-res.openai.azure.com","auth":{"mode":"entra","tenantId":"` + tenant + `","clientId":"` + client + `","clientSecret":"wrong"}}`,
+	} {
+		if err := ProbeAzureFoundryProject(context.Background(), doc); err != nil {
+			t.Errorf("%s: want nil, got %v", name, err)
+		}
+	}
+	if err := ProbeAzureFoundryProject(context.Background(), "not json"); !errors.Is(err, ErrProviderConfigInvalid) {
+		t.Errorf("a broken document reports its parse error, got %v", err)
+	}
+
+	// The project route's answer (a missing role) is reported too.
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, _ map[string]any) {
+		writeJSON(w, 403, map[string]any{"error": map[string]any{"code": "PermissionDenied", "message": "the principal lacks the Azure AI User role"}})
+	})
+	p := newAzureAgentProvider(t, srv)
+	err = p.probeProject(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "project deployments listing failed") || !strings.Contains(err.Error(), "Azure AI User") {
+		t.Errorf("want the project route's explanation, got %v", err)
+	}
+}
+
+// D-15: removing or replacing the document releases its Entra ID token
+// source (credential object and cached token) and its cached listing; other
+// principals' sources are untouched.
+func TestForgetAzureFoundryCredential_DropsSourceAndListing(t *testing.T) {
+	ResetAzureFoundryCaches()
+	t.Cleanup(ResetAzureFoundryCaches)
+	cfg := AzureFoundryConfig{Endpoint: "https://my-res.services.ai.azure.com", ProjectEndpoint: "https://my-res.services.ai.azure.com/api/projects/p",
+		Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra, TenantID: "11111111-2222-3333-4444-555555555555", ClientID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", ClientSecret: "s1"}}
+	other := cfg
+	other.Auth.ClientSecret = "s2"
+	src, err := entraSourceFor(cfg.Auth.TenantID, cfg.Auth.ClientID, cfg.Auth.ClientSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSrc, err := entraSourceFor(other.Auth.TenantID, other.Auth.ClientID, other.Auth.ClientSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	azureModelsCache.mu.Lock()
+	azureModelsCache.m[azureModelsCacheKey(cfg)] = azureModelsEntry{models: []ModelInfo{{ID: "chat"}}, expires: time.Now().Add(time.Hour)}
+	azureModelsCache.m[azureModelsCacheKey(other)] = azureModelsEntry{models: []ModelInfo{{ID: "chat"}}, expires: time.Now().Add(time.Hour)}
+	azureModelsCache.mu.Unlock()
+
+	ForgetAzureFoundryCredential(cfg)
+
+	if lookupEntraSource(src) {
+		t.Error("the document's token source must be dropped")
+	}
+	if !lookupEntraSource(otherSrc) {
+		t.Error("another principal's source must survive")
+	}
+	if _, ok := cachedAzureModels(azureModelsCacheKey(cfg)); ok {
+		t.Error("the document's cached listing must be dropped")
+	}
+	if _, ok := cachedAzureModels(azureModelsCacheKey(other)); !ok {
+		t.Error("another document's listing must survive")
+	}
+	if again, _ := entraSourceFor(cfg.Auth.TenantID, cfg.Auth.ClientID, cfg.Auth.ClientSecret); again == src {
+		t.Error("the next provider for the same tuple must build a fresh source")
+	}
+	ForgetAzureFoundryCredential(AzureFoundryConfig{}) // unconfigured: no-op, no panic
+}
+
+// Finding #23: a 401 PermissionDenied — an Entra ID principal the service
+// accepted but that lacks the data-plane role — keeps Azure's explanation, is
+// ErrProviderPermissionDenied as well as ErrApiKeyInvalid, and is not retried
+// with a fresh token (a new token cannot grant a role), for chat and streams.
+func TestAzureFoundry_PermissionDeniedKeepsAzureMessage(t *testing.T) {
+	const azureMsg = "The principal `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee` lacks the required data action `Microsoft.CognitiveServices/accounts/OpenAI/deployments/chat/completions/action` to perform `POST /openai/deployments/{deployment-id}/chat/completions` operation."
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, body map[string]any) {
+		writeJSON(w, 401, map[string]any{"error": map[string]any{"code": "PermissionDenied", "message": azureMsg}})
+	})
+	ResetAzureFoundryCaches()
+	cfg := AzureFoundryConfig{Endpoint: srv.URL, Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra,
+		TenantID: "11111111-2222-3333-4444-555555555555", ClientID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", ClientSecret: "s"}}
+	p := newAzureFoundryProvider(cfg, nil, srv.Client())
+	cred := &fakeCred{}
+	p.tokens = newEntraTokenSource(cred)
+	p.tokenFn = p.entraToken
+	req := Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}
+
+	check := func(what string, err error) {
+		t.Helper()
+		if !errors.Is(err, ErrProviderPermissionDenied) || !errors.Is(err, ErrApiKeyInvalid) {
+			t.Errorf("%s: want ErrProviderPermissionDenied and ErrApiKeyInvalid, got %v", what, err)
+		}
+		if err == nil || !strings.Contains(err.Error(), "lacks the required data action") {
+			t.Errorf("%s: Azure's explanation must be kept, got %v", what, err)
+		}
+	}
+	_, err := p.Chat(context.Background(), req)
+	check("chat", err)
+	check("stream", p.Stream(context.Background(), req, func(Chunk) {}))
+	if n := len(srv.requests()); n != 2 {
+		t.Errorf("want one request per call (no fresh-token retry), got %d", n)
+	}
+	if n := atomic.LoadInt32(&cred.calls); n != 1 {
+		t.Errorf("token fetches = %d, want 1 (the role is missing, not the token)", n)
 	}
 }
 
@@ -372,55 +626,89 @@ func TestAzureFoundry_429CarriesRetryAfterMs(t *testing.T) {
 	}
 }
 
-func TestAzureFoundry_ModelsListsDeploymentsAndCaches(t *testing.T) {
-	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, body map[string]any) {
-		if r.URL.Path != "/openai/v1/models" {
-			t.Errorf("unexpected path %s", r.URL.Path)
-		}
+// azureCatalogueServer answers GET /openai/v1/models the way Azure really
+// does — the resource's model CATALOGUE (versioned base and fine-tuned ids
+// with capabilities), not its deployments — and fails the test if anything
+// requests it: the listing must never be built from it.
+func azureCatalogueServer(t *testing.T) *azureTestServer {
+	t.Helper()
+	return newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, _ map[string]any) {
+		t.Errorf("unexpected request %s %s: the listing must not touch the network", r.Method, r.URL.Path)
 		writeJSON(w, 200, map[string]any{"object": "list", "data": []map[string]any{
-			{"id": "my-gpt4o", "object": "model", "owned_by": "openai"},
-			{"id": "text-embed", "object": "model", "owned_by": "openai"},
-			{"id": "my-gpt4o", "object": "model"},
+			{"id": "dall-e-3-3.0", "object": "model", "capabilities": map[string]any{"chat_completion": false, "inference": true}, "lifecycle_status": "generally-available"},
+			{"id": "gpt-4o-2024-11-20", "object": "model", "capabilities": map[string]any{"chat_completion": true, "inference": true}, "lifecycle_status": "generally-available"},
+			{"id": "text-embedding-3-large-1", "object": "model", "capabilities": map[string]any{"embeddings": true}},
 		}})
 	})
-	p := newAzureKeyProvider(t, srv, nil)
+}
+
+// Finding #1: GET /openai/v1/models is the catalogue, so the API-key listing
+// is exactly the document's deployments — chat, additional, embedding — with
+// no request at all, each sized and priced from the catalogue when its name
+// is a catalogued model.
+func TestAzureFoundry_ModelsListsConfiguredDeployments(t *testing.T) {
+	srv := azureCatalogueServer(t)
+	p := newAzureKeyProvider(t, srv, func(c *AzureFoundryConfig) {
+		c.ChatDeployment = "prod-gpt4o"
+		c.Deployments = []string{"gpt-4o", "Phi-4", "model-router"}
+		c.EmbeddingDeployment = "text-embedding-3-small"
+	})
 	models, err := p.Models(context.Background())
 	if err != nil {
 		t.Fatalf("Models: %v", err)
 	}
-	if len(models) != 2 || models[0].ID != "my-gpt4o" || models[1].ID != "text-embed" || models[0].ContextLimit <= 0 {
-		t.Errorf("models = %+v", models)
+	var ids []string
+	for _, m := range models {
+		ids = append(ids, m.ID)
 	}
-	if _, err := p.Models(context.Background()); err != nil {
-		t.Fatal(err)
+	if strings.Join(ids, ",") != "prod-gpt4o,gpt-4o,Phi-4,model-router,text-embedding-3-small" {
+		t.Fatalf("listing = %v, want the configured deployments in document order", ids)
 	}
-	if n := len(srv.requests()); n != 1 {
-		t.Errorf("second listing within the TTL must hit the cache: %d requests", n)
+	custom, gpt4o, phi, router, emb := models[0], models[1], models[2], models[3], models[4]
+	if custom.ContextLimit != p.ContextLimit() || custom.Pricing != (Pricing{}) || custom.MaxOutputTokens != 0 || custom.Embedding {
+		t.Errorf("custom-named deployment = %+v, want the provider default window and no guessed price", custom)
 	}
-	if got := srv.requests()[0].Headers.Get("api-key"); got != "secret-key" {
-		t.Errorf("listing not authenticated: api-key=%q", got)
+	if gpt4o.Pricing.InputCostPerM != 2.5 || gpt4o.ContextLimit != 128000 || gpt4o.MaxOutputTokens != 16384 || gpt4o.Embedding {
+		t.Errorf("catalogued name = %+v, want the catalogue's price and limits", gpt4o)
+	}
+	// Finding #32: a small-window model named after itself is sized right
+	// before any call succeeded.
+	if phi.ContextLimit != 16384 || phi.MaxOutputTokens != 8192 {
+		t.Errorf("Phi-4 = %+v, want its 16k window up front", phi)
+	}
+	if router.ContextLimit != p.ContextLimit() || router.MaxOutputTokens != 0 {
+		t.Errorf("model-router = %+v, want the conservative default window", router)
+	}
+	// Finding #42: the embedding deployment stays listed (pricing) but flagged.
+	if !emb.Embedding || emb.Pricing.InputCostPerM != 0.02 {
+		t.Errorf("embedding deployment = %+v, want Embedding and its catalogue price", emb)
+	}
+	if n := len(srv.requests()); n != 0 {
+		t.Errorf("API-key listing made %d requests, want none (never /openai/v1/models)", n)
+	}
+	if p.DefaultModel() != "prod-gpt4o" {
+		t.Errorf("default = %q, want the chat deployment", p.DefaultModel())
 	}
 }
 
-func TestAzureFoundry_ModelsFallbackAndErrors(t *testing.T) {
-	forbidden := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, body map[string]any) {
-		writeJSON(w, 403, map[string]any{"error": map[string]any{"message": "forbidden"}})
-	})
-	p := newAzureKeyProvider(t, forbidden, func(c *AzureFoundryConfig) { c.ChatDeployment = "chat1"; c.EmbeddingDeployment = "emb1" })
+func TestAzureFoundry_ModelsEmptyWithoutDeploymentsOrProject(t *testing.T) {
+	srv := azureCatalogueServer(t)
+	p := newAzureKeyProvider(t, srv, nil)
 	models, err := p.Models(context.Background())
-	if err != nil {
-		t.Fatalf("Models: %v", err)
+	if err != nil || len(models) != 0 {
+		t.Errorf("nothing named and no project: models=%+v err=%v, want an empty list", models, err)
 	}
-	if len(models) != 2 || models[0].ID != "chat1" || models[1].ID != "emb1" {
-		t.Errorf("fallback listing = %+v, want the configured deployments", models)
+	if p.DefaultModel() != "" {
+		t.Errorf("configured provider without a chat deployment: default = %q, want none (never the catalogue's gpt-4.1)", p.DefaultModel())
 	}
 
-	unauthorized := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, body map[string]any) {
-		writeJSON(w, 401, map[string]any{"error": map[string]any{"message": "bad key"}})
-	})
-	p = newAzureKeyProvider(t, unauthorized, nil)
-	if _, err := p.Models(context.Background()); !errors.Is(err, ErrApiKeyInvalid) {
-		t.Errorf("want ErrApiKeyInvalid, got %v", err)
+	// Only additional deployments: the first is the default.
+	q := newAzureKeyProvider(t, srv, func(c *AzureFoundryConfig) { c.Deployments = []string{"a1", "a2"} })
+	if q.DefaultModel() != "a1" {
+		t.Errorf("default = %q, want the first additional deployment", q.DefaultModel())
+	}
+	if n := len(srv.requests()); n != 0 {
+		t.Errorf("%d requests, want none", n)
 	}
 }
 
@@ -493,4 +781,86 @@ func TestNewAzureFoundryProvider_ConfigStates(t *testing.T) {
 	if valid.configErr != nil || valid.DefaultModel() != "chat" || *valid.baseURL != "https://my-res.openai.azure.com/openai/v1/chat/completions" {
 		t.Errorf("valid provider = err %v default %q base %q", valid.configErr, valid.DefaultModel(), *valid.baseURL)
 	}
+}
+
+// A full model-listing cache makes room by dropping expired listings first
+// and then the soonest-to-expire one — never by wiping the whole map, which
+// also discarded every listing the active users were about to read (a fresh
+// project listing is two paginated API calls each).
+func TestAzureModelsCacheEvictionIsIncremental(t *testing.T) {
+	azureModelsCache.mu.Lock()
+	prev := azureModelsCache.m
+	azureModelsCache.m = map[string]azureModelsEntry{}
+	azureModelsCache.mu.Unlock()
+	t.Cleanup(func() {
+		azureModelsCache.mu.Lock()
+		azureModelsCache.m = prev
+		azureModelsCache.mu.Unlock()
+	})
+
+	now := time.Now()
+	entry := func(ttl time.Duration) azureModelsEntry {
+		return azureModelsEntry{models: []ModelInfo{{ID: "m"}}, expires: now.Add(ttl)}
+	}
+	seed := func(t *testing.T, fill func(m map[string]azureModelsEntry)) {
+		t.Helper()
+		azureModelsCache.mu.Lock()
+		azureModelsCache.m = map[string]azureModelsEntry{}
+		fill(azureModelsCache.m)
+		azureModelsCache.mu.Unlock()
+	}
+
+	t.Run("expired listings are pruned first and are enough", func(t *testing.T) {
+		seed(t, func(m map[string]azureModelsEntry) {
+			for i := 0; i < azureModelsCacheMax-2; i++ {
+				m[fmt.Sprintf("live-%03d", i)] = entry(time.Hour)
+			}
+			m["stale"] = entry(-time.Minute)  // expired
+			m["stale2"] = entry(-time.Second) // expired
+		})
+		azureModelsCache.mu.Lock()
+		if len(azureModelsCache.m) != azureModelsCacheMax {
+			t.Fatalf("seed size = %d, want %d", len(azureModelsCache.m), azureModelsCacheMax)
+		}
+		pruneAzureModelsCacheLocked(now)
+		size := len(azureModelsCache.m)
+		_, staleKept := azureModelsCache.m["stale"]
+		_, stale2Kept := azureModelsCache.m["stale2"]
+		_, liveKept := azureModelsCache.m["live-000"]
+		azureModelsCache.mu.Unlock()
+		if staleKept || stale2Kept {
+			t.Error("expired listings must be pruned first")
+		}
+		if !liveKept {
+			t.Error("a live listing must survive an expired-first prune")
+		}
+		if size != azureModelsCacheMax-2 {
+			t.Errorf("size after prune = %d, want %d (only the expired dropped)", size, azureModelsCacheMax-2)
+		}
+	})
+
+	t.Run("with nothing expired, the soonest-to-expire entry goes", func(t *testing.T) {
+		seed(t, func(m map[string]azureModelsEntry) {
+			for i := 0; i < azureModelsCacheMax-2; i++ {
+				m[fmt.Sprintf("k-%03d", i)] = entry(time.Duration(i+1) * time.Minute)
+			}
+			m["soonest"] = entry(30 * time.Second)
+			m["freshest"] = entry(3 * time.Hour)
+		})
+		azureModelsCache.mu.Lock()
+		pruneAzureModelsCacheLocked(now)
+		size := len(azureModelsCache.m)
+		_, soonestKept := azureModelsCache.m["soonest"]
+		_, freshestKept := azureModelsCache.m["freshest"]
+		azureModelsCache.mu.Unlock()
+		if soonestKept {
+			t.Error("the soonest-to-expire entry is the one to drop")
+		}
+		if !freshestKept {
+			t.Error("the freshest entry must survive")
+		}
+		if size != azureModelsCacheMax-1 {
+			t.Errorf("size after prune = %d, want %d (exactly one dropped for one insert)", size, azureModelsCacheMax-1)
+		}
+	})
 }

@@ -16,7 +16,11 @@ import (
 // copilot OAuth) alike — are resolved under the caller's scope, so each user's
 // connected providers are isolated.
 type ProviderFactory struct {
-	getKey      func(scope, provider string) (string, error)
+	getKey func(scope, provider string) (string, error)
+	// getOrgKey resolves an organisation's SHARED credential (G7); nil when
+	// the deployment has no org secret store (desktop, local mode). A
+	// missing credential is ("", nil), like getKey.
+	getOrgKey   func(orgID, provider string) (string, error)
 	copilotAuth *CopilotAuth
 	recorder    UsageRecorder
 	rtCfg       *config.RuntimeConfig
@@ -29,6 +33,71 @@ type ProviderFactory struct {
 
 func NewProviderFactory(getKey func(scope, provider string) (string, error), copilotAuth *CopilotAuth, recorder UsageRecorder, rtCfg *config.RuntimeConfig) *ProviderFactory {
 	return &ProviderFactory{getKey: getKey, copilotAuth: copilotAuth, recorder: recorder, rtCfg: rtCfg}
+}
+
+// SetOrgKeyLookup enables organisation-shared credentials (G7): ForOrg and
+// ForEmbeddingOrg consult getOrgKey when the org has one. Set once at boot,
+// before requests are served; nil (the default) makes both behave as For and
+// ForEmbedding.
+func (f *ProviderFactory) SetOrgKeyLookup(getOrgKey func(orgID, provider string) (string, error)) {
+	f.getOrgKey = getOrgKey
+}
+
+// OrgScope is the memo/cache scope a provider built from an organisation's
+// shared credential runs under: the served-model memo, learned windows and
+// the provider service's live listings are then shared by the org's members
+// and invalidated together (ProviderService.InvalidateScope), instead of
+// being learned once per member for the same resource. It is NOT the usage
+// scope — usage stays attributed to the member (and to the org through the
+// request's OrgID) — and cannot collide with a user id.
+func OrgScope(orgID string) string { return "org:" + orgID }
+
+// resolveKey applies the member-first rule: the caller's own key when they
+// have one, else — with an org and an org store — the organisation's shared
+// one, under which the chain runs in OrgScope. A member key-store failure
+// (a decrypt failure after a secret rotation, a database error) is reported
+// rather than silently falling through to the org's credential: the member
+// configured something and must be told it is unreadable.
+func (f *ProviderFactory) resolveKey(scope, orgID, providerID string) (key, memoScope string, err error) {
+	key, err = f.getKey(scope, storageKey(providerID))
+	if err != nil {
+		return "", "", fmt.Errorf("get %s key: %w", providerID, err)
+	}
+	if key != "" {
+		return key, scope, nil
+	}
+	if orgID != "" && f.getOrgKey != nil {
+		key, err = f.getOrgKey(orgID, storageKey(providerID))
+		if err != nil {
+			return "", "", fmt.Errorf("get %s org key: %w", providerID, err)
+		}
+		if key != "" {
+			return key, OrgScope(orgID), nil
+		}
+	}
+	return "", "", fmt.Errorf("%s: %w", providerID, ErrKeyNotConfigured)
+}
+
+// resolveOrgFirstKey is resolveKey with the organisation's shared credential
+// preferred (ForEmbeddingOrg): one corpus, one resource.
+func (f *ProviderFactory) resolveOrgFirstKey(scope, orgID, providerID string) (key, memoScope string, err error) {
+	if orgID != "" && f.getOrgKey != nil {
+		key, err = f.getOrgKey(orgID, storageKey(providerID))
+		if err != nil {
+			return "", "", fmt.Errorf("get %s org key: %w", providerID, err)
+		}
+		if key != "" {
+			return key, OrgScope(orgID), nil
+		}
+	}
+	key, err = f.getKey(scope, storageKey(providerID))
+	if err != nil {
+		return "", "", fmt.Errorf("get %s key: %w", providerID, err)
+	}
+	if key != "" {
+		return key, scope, nil
+	}
+	return "", "", fmt.Errorf("%s: %w", providerID, ErrKeyNotConfigured)
 }
 
 // providerCtors maps provider IDs to their constructors.
@@ -55,6 +124,14 @@ func storageKey(providerID string) string {
 }
 
 func (f *ProviderFactory) wrapChain(p Provider, scope, providerID string) Provider {
+	return f.wrapChainScoped(p, scope, scope, providerID)
+}
+
+// wrapChainScoped is wrapChain with the memo scope named separately: scope
+// attributes usage (the member), memoScope keys the served-model memo and
+// learned windows (OrgScope for a provider built from an org's shared
+// credential, so the org's members share what one of them learned).
+func (f *ProviderFactory) wrapChainScoped(p Provider, scope, memoScope, providerID string) Provider {
 	var cb Provider
 	var rp Provider
 
@@ -83,7 +160,80 @@ func (f *ProviderFactory) wrapChain(p Provider, scope, providerID string) Provid
 		rp = NewRetryingProvider(cb)
 	}
 
-	return NewAuditedProvider(NewTracedProvider(rp), f.recorder, scope, providerID)
+	ap := newAuditedProvider(NewTracedProvider(rp), f.recorder, scope, providerID)
+	ap.memoScope = memoScope
+	// The wrappers above hide the raw provider's optional methods; the
+	// audited wrapper reads what it needs from p before they do.
+	ap.adoptRawHints(p)
+	return ap
+}
+
+// ForOrg is For with the organisation's shared credential as the fallback
+// (G7, member-first): the caller's own key when they have one, else the
+// org's, under which the chain's memos run in OrgScope(orgID). An empty
+// orgID, or a factory without an org store, behaves exactly as For. Copilot
+// is always the member's (OAuth or PAT); an org never has a Copilot key.
+func (f *ProviderFactory) ForOrg(scope, orgID, providerID string) (Provider, error) {
+	if providerID == "copilot" {
+		return f.For(scope, providerID)
+	}
+	ctor, ok := lookupProviderCtor(providerID)
+	if !ok {
+		return nil, fmt.Errorf("unknown provider: %s", providerID)
+	}
+	key, memoScope, err := f.resolveKey(scope, orgID, providerID)
+	if err != nil {
+		return nil, err
+	}
+	return f.wrapChainScoped(ctor(key), scope, memoScope, providerID), nil
+}
+
+// ForOrgCredential builds a provider from the organisation's shared
+// credential ONLY — never the caller's own — for an admin's connection test
+// of what the members will run on. scope attributes the test call's usage
+// to the caller; memos run in OrgScope. Copilot is never shared.
+func (f *ProviderFactory) ForOrgCredential(scope, orgID, providerID string) (Provider, error) {
+	if providerID == "copilot" {
+		return nil, fmt.Errorf("copilot: %w", ErrKeyNotConfigured)
+	}
+	ctor, ok := lookupProviderCtor(providerID)
+	if !ok {
+		return nil, fmt.Errorf("unknown provider: %s", providerID)
+	}
+	if orgID == "" || f.getOrgKey == nil {
+		return nil, fmt.Errorf("%s: %w", providerID, ErrKeyNotConfigured)
+	}
+	key, err := f.getOrgKey(orgID, storageKey(providerID))
+	if err != nil {
+		return nil, fmt.Errorf("get %s org key: %w", providerID, err)
+	}
+	if key == "" {
+		return nil, fmt.Errorf("%s: %w", providerID, ErrKeyNotConfigured)
+	}
+	return f.wrapChainScoped(ctor(key), scope, OrgScope(orgID), providerID), nil
+}
+
+// ForEmbeddingOrg is ForEmbedding with the organisation's shared credential
+// PREFERRED over the member's: the org's knowledge base is one corpus and
+// must be embedded with one resource, whichever member uploads or searches.
+// Without an org credential the member's own is used, as ForEmbedding does.
+func (f *ProviderFactory) ForEmbeddingOrg(scope, orgID, providerID, embeddingModel string) (Provider, error) {
+	if providerID == "copilot" {
+		return f.For(scope, providerID)
+	}
+	ctor, ok := lookupProviderCtor(providerID)
+	if !ok {
+		return nil, fmt.Errorf("unknown provider: %s", providerID)
+	}
+	key, memoScope, err := f.resolveOrgFirstKey(scope, orgID, providerID)
+	if err != nil {
+		return nil, err
+	}
+	p, err := f.prepareEmbedder(ctor(key), providerID, embeddingModel)
+	if err != nil {
+		return nil, err
+	}
+	return f.wrapChainScoped(p, scope, memoScope, providerID), nil
 }
 
 func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
@@ -114,6 +264,19 @@ func (f *ProviderFactory) SetEmbeddingDimensions(n int) {
 	if n > 0 {
 		f.embeddingDims = n
 	}
+}
+
+// EmbeddingDimensions reports the vector width ForEmbedding requests (0 =
+// none configured).
+func (f *ProviderFactory) EmbeddingDimensions() int { return f.embeddingDims }
+
+// embeddingReadiness is implemented by providers that can hold a usable key
+// (credential document) and still be unable to embed — an Azure AI Foundry
+// configuration without an embedding deployment. ForEmbedding reports that
+// as an error so callers scanning for an embedder move on to the next
+// provider instead of failing later at Embed time.
+type embeddingReadiness interface {
+	embeddingUnavailable() error
 }
 
 // embedDimensionSetter is implemented by providers that can ask their
@@ -153,7 +316,17 @@ func (f *ProviderFactory) ForEmbedding(scope, providerID, embeddingModel string)
 	if key == "" {
 		return nil, fmt.Errorf("%s: %w", providerID, ErrKeyNotConfigured)
 	}
-	p := ctor(key)
+	p, err := f.prepareEmbedder(ctor(key), providerID, embeddingModel)
+	if err != nil {
+		return nil, err
+	}
+	return f.wrapChain(p, scope, providerID), nil
+}
+
+// prepareEmbedder applies the embedding-model and vector-width overrides to
+// a raw provider and checks it can embed at all — before wrapping, since the
+// wrappers hide the concrete type.
+func (f *ProviderFactory) prepareEmbedder(p Provider, providerID, embeddingModel string) (Provider, error) {
 	if embeddingModel != "" {
 		if setter, ok := p.(embedModelSetter); ok {
 			setter.setEmbeddingModel(embeddingModel)
@@ -164,7 +337,14 @@ func (f *ProviderFactory) ForEmbedding(scope, providerID, embeddingModel string)
 			setter.setEmbeddingDimensions(f.embeddingDims)
 		}
 	}
-	return f.wrapChain(p, scope, providerID), nil
+	// After the setters (an embedding-model override can make a provider
+	// ready) and before wrapChain (the wrappers hide the concrete type).
+	if r, ok := p.(embeddingReadiness); ok {
+		if err := r.embeddingUnavailable(); err != nil {
+			return nil, fmt.Errorf("%s: %w", providerID, err)
+		}
+	}
+	return p, nil
 }
 
 // GetMetadataProvider returns a MetadataProvider suitable for reading provider

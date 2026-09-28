@@ -85,6 +85,48 @@ func TestRequestTimeout_ContextAlreadyCancelledPropagates(t *testing.T) {
 	handler.ServeHTTP(rr, req)
 }
 
+// TestRequestTimeout_BulkKnowledgePathsGetLongDeadline: the knowledge-base
+// bulk routes (upload, re-index) run a sequence of embedding calls and get
+// the bounded-long BulkRequestTimeout; the org's other knowledge routes
+// keep the ordinary per-request deadline.
+func TestRequestTimeout_BulkKnowledgePathsGetLongDeadline(t *testing.T) {
+	cases := []struct {
+		path string
+		bulk bool
+	}{
+		{"/api/orgs/o/knowledge/reindex", true},
+		{"/api/orgs/o/knowledge/upload", true},
+		{"/api/orgs/o/knowledge", false},
+		{"/api/orgs/o/knowledge/doc-1", false},
+		{"/api/orgs/o/knowledge/upload/extra", false},
+	}
+	for _, c := range cases {
+		t.Run(c.path, func(t *testing.T) {
+			var got time.Time
+			var has bool
+			h := RequestTimeout(30 * time.Second)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got, has = r.Context().Deadline()
+				w.WriteHeader(http.StatusOK)
+			}))
+			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, c.path, nil))
+			if !has {
+				t.Fatal("no deadline: every knowledge route is bounded")
+			}
+			remaining := time.Until(got)
+			if c.bulk {
+				if remaining < time.Minute || remaining > BulkRequestTimeout+time.Minute {
+					t.Errorf("bulk deadline %v from now; want ≈ %v", remaining.Round(time.Second), BulkRequestTimeout)
+				}
+			} else if remaining > 30*time.Second+time.Second {
+				t.Errorf("ordinary deadline %v from now; want ≤ 30s", remaining.Round(time.Second))
+			}
+			if isBulkPath(c.path) != c.bulk {
+				t.Errorf("isBulkPath(%q) = %v, want %v", c.path, !c.bulk, c.bulk)
+			}
+		})
+	}
+}
+
 func TestIsStreamingPath(t *testing.T) {
 	tests := []struct {
 		path     string

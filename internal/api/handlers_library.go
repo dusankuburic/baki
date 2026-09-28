@@ -723,5 +723,8 @@ func unmarshalFlowContent(content json.RawMessage) (*models.FlowDocument, error)
 	if err := json.Unmarshal(content, &doc); err != nil {
 		return nil, err
 	}
+	// Stored content is client-supplied: never trust its desktop file path
+	// (see resolveStoredFlow in internal/service/document_provider.go).
+	doc.FilePath = ""
 	return &doc, nil
 }

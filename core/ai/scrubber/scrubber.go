@@ -6,6 +6,7 @@ import (
 	"pad-core/models"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 var secretRegexes = []*regexp.Regexp{
@@ -283,8 +284,38 @@ func shannonEntropy(s string) float64 {
 	return entropy
 }
 
+// mayContainSecret is the prefilter for ScrubText: every secretRegexes match
+// contains one of anchorLiterals (stored lower-case; the same list the
+// stream scrubber keeps in sync with anchorRegex) case-insensitively, so
+// text with none cannot match — one folding pass plus substring scans
+// replaces nine regex scans over the whole text (measured ~35× faster on
+// clean prose). U+017F (ſ) and U+212A (Kelvin sign) fold to 's'/'k' under
+// the regexes' (?i) but not under a plain lower-casing, so they are folded
+// explicitly; the prefilter therefore stays a strict superset of the
+// regexes' lead-ins and detection is unchanged.
+func mayContainSecret(text string) bool {
+	lower := strings.Map(func(r rune) rune {
+		switch r {
+		case '\u017F':
+			return 's'
+		case '\u212A':
+			return 'k'
+		}
+		return unicode.ToLower(r)
+	}, text)
+	for _, a := range anchorLiterals {
+		if strings.Contains(lower, a) {
+			return true
+		}
+	}
+	return false
+}
+
 // ScrubText applies regex patterns to replace found secrets in raw text
 func ScrubText(text string) string {
+	if !mayContainSecret(text) {
+		return text
+	}
 	result := text
 	for _, pat := range secretRegexes {
 		// MatchString first: it is cheaper than the replace machinery and the

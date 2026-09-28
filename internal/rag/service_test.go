@@ -233,7 +233,7 @@ func TestEmbedder_ExplicitChatOnlyProvider_FailsFast(t *testing.T) {
 	settings.AI.Providers = enabledProviders("claude")
 	svc := NewKnowledgeService(nil, newTestFactory(map[string]bool{"claude": true}), stubSettings{settings})
 
-	_, err := svc.embedder("scope")
+	_, err := svc.embedder("scope", "")
 	if err == nil {
 		t.Fatal("want error for chat-only embedding provider, got nil")
 	}
@@ -254,7 +254,7 @@ func TestEmbedder_ClaudeOnlyNoFallback(t *testing.T) {
 	settings.AI.Providers = enabledProviders("claude")
 	svc := NewKnowledgeService(nil, newTestFactory(map[string]bool{"claude": true}), stubSettings{settings})
 
-	_, err := svc.embedder("scope")
+	_, err := svc.embedder("scope", "")
 	if !errors.Is(err, ErrEmbeddingUnavailable) {
 		t.Errorf("want ErrEmbeddingUnavailable on Claude-only deploy, got %v", err)
 	}
@@ -271,7 +271,7 @@ func TestEmbedder_FallbackPicksEmbeddingCapable_Deterministic(t *testing.T) {
 	svc := NewKnowledgeService(nil, newTestFactory(map[string]bool{"claude": true, "gemini": true, "glm": true}), stubSettings{settings})
 
 	for i := 0; i < 25; i++ {
-		p, err := svc.embedder("scope")
+		p, err := svc.embedder("scope", "")
 		if err != nil {
 			t.Fatalf("iteration %d: want fallback provider, got error: %v", i, err)
 		}
@@ -293,7 +293,7 @@ func TestEmbedder_FallbackUsesFirstKeyedProvider(t *testing.T) {
 	}
 	svc := NewKnowledgeService(nil, newTestFactory(map[string]bool{"gemini": true, "glm": true}), stubSettings{settings})
 
-	p, err := svc.embedder("scope")
+	p, err := svc.embedder("scope", "")
 	if err != nil {
 		t.Fatalf("want a keyed fallback, got error: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestEmbedder_FallbackUsesFirstKeyedProvider(t *testing.T) {
 	// Only the lower-priority provider has a key: it must be used even though
 	// its settings entry says nothing about being enabled.
 	svc = NewKnowledgeService(nil, newTestFactory(map[string]bool{"glm": true}), stubSettings{&models.AppSettings{}})
-	p, err = svc.embedder("scope")
+	p, err = svc.embedder("scope", "")
 	if err != nil {
 		t.Fatalf("want glm fallback, got error: %v", err)
 	}

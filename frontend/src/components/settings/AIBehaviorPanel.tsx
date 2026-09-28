@@ -141,6 +141,7 @@ export default function AIBehaviorPanel() {
       <div className="pt-2 space-y-6">
         <h3 className="text-base font-semibold text-text-primary mb-1">{t('behavior.advanced')}</h3>
         <ProviderAdvancedSettings
+          provider={activeProvider}
           config={ai.providers[activeProvider]}
           onUpdate={patch => updateProvider(activeProvider, patch)}
         />
@@ -174,9 +175,11 @@ function CustomInstructionsInput() {
 }
 
 function ProviderAdvancedSettings({
+  provider,
   config,
   onUpdate,
 }: {
+  provider: ProviderID
   config: AIProviderConfig
   onUpdate: (patch: Partial<AIProviderConfig>) => void
 }) {
@@ -227,14 +230,20 @@ function ProviderAdvancedSettings({
         <p className="text-2xs text-text-tertiary mt-1">{t('behavior.contextBudgetHint')}</p>
       </div>
 
-      <div>
-        <label className="text-xs font-medium text-text-secondary block mb-1.5">{t('behavior.defaultModel')}</label>
-        <Input
-          value={config.defaultModel}
-          onChange={e => onUpdate({defaultModel: e.target.value})}
-          placeholder={t('behavior.defaultModelPlaceholder')}
-        />
-      </div>
+      {/* Hidden for azure-foundry: deployments are user-named, so a free-text
+          model ID can only pin a non-existent deployment. The store
+          deliberately defaults it to '' there so the server-reported
+          deployment wins — this field must not fight that. */}
+      {provider !== 'azure-foundry' && (
+        <div>
+          <label className="text-xs font-medium text-text-secondary block mb-1.5">{t('behavior.defaultModel')}</label>
+          <Input
+            value={config.defaultModel}
+            onChange={e => onUpdate({defaultModel: e.target.value})}
+            placeholder={t('behavior.defaultModelPlaceholder')}
+          />
+        </div>
+      )}
     </div>
   )
 }

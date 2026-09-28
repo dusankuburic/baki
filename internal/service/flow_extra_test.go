@@ -195,6 +195,46 @@ func TestFlowService_LoadFlowFromPath_NonExistent(t *testing.T) {
 	}
 }
 
+// TestLoadFlowFromPath_LoadedEventCarriesOnlyASummary pins the local-mode
+// (broadcast) flow:loaded payload contract. The summary must carry the
+// on-disk path (and folder flag) so other tabs can refetch the document via
+// load-path/load-folder — cloud events carry no path and refetch from the
+// library instead — and must never carry the document itself: the SSE hub
+// pins frame-size × buffer-slots per stalled connection.
+func TestLoadFlowFromPath_LoadedEventCarriesOnlyASummary(t *testing.T) {
+	const source = "Display.UiFlow\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Main.txt")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	notifier := newTargetingNotifierStub()
+	svc := NewFlowService(notifier, newTestSettingsStore(t), NewLocalDocumentProvider(), nil, nil, nil)
+
+	doc, err := svc.LoadFlowFromPath(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	payloads := notifier.broadcastPayload("flow:loaded")
+	if len(payloads) != 1 {
+		t.Fatalf("captured %d flow:loaded payloads, want 1", len(payloads))
+	}
+	sum, ok := payloads[0].(FlowLoadedSummary)
+	if !ok {
+		t.Fatalf("payload is %T, want FlowLoadedSummary — the full document must never ride the SSE stream", payloads[0])
+	}
+	if sum.ID != doc.ID || sum.Name != doc.Name {
+		t.Errorf("summary identity = (%q, %q), want (%q, %q)", sum.ID, sum.Name, doc.ID, doc.Name)
+	}
+	if sum.FilePath != path {
+		t.Errorf("summary filePath = %q, want %q (other tabs refetch through it)", sum.FilePath, path)
+	}
+	if sum.IsFolder {
+		t.Error("summary claims a folder flow for a single-file load")
+	}
+}
+
 // TestSuppressFindingInSource_PersistsAndReparses verifies the end-to-end
 // apply-fix path (Phase 1): write a pad-ignore into the source file, re-parse,
 // and return a doc whose re-analysis no longer flags the block. Confirms the

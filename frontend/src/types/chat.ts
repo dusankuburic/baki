@@ -49,6 +49,14 @@ export interface ChatMessage {
   tokensOut?: number
   provider?: ProviderID
   model?: string
+  // servedModel is the model that actually answered when `model` is an alias
+  // the provider resolves (an Azure AI Foundry deployment, `model-router`, an
+  // `agent:*`); absent when the backend did not report one. The rates are the
+  // USD per 1M tokens this turn was billed at, when known — they price the
+  // message instead of the current model's listing.
+  servedModel?: string
+  inputCostPerM?: number
+  outputCostPerM?: number
   finishReason?: 'stop' | 'interrupted' | 'error'
   toolCalls?: ToolCallRecord[]
   fixProposal?: FixProposalSnapshot

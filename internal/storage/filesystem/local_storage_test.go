@@ -3,6 +3,10 @@ package filesystem
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +40,49 @@ func createTestFlow(id string) *interfaces.FlowDocument {
 			SubflowCount: 2,
 			MaxDepth:     3,
 		},
+	}
+}
+
+// TestNewLocalStorageBackend_SweepsCrashOrphanedTemps pins the startup sweep:
+// atomicWrite's unique ".baki-tmp-*" names are removed on every failure path,
+// but a crash between CreateTemp and the rename strands them forever (the old
+// fixed "<name>.tmp" self-overwrote on the next write, so stranding was
+// self-healing by construction). Constructing the backend must remove temps
+// older than staleTempMaxAge — including in nested directories like
+// conversations/<scope>/ — while a young temp (a live writer's) survives.
+func TestNewLocalStorageBackend_SweepsCrashOrphanedTemps(t *testing.T) {
+	dataDir := t.TempDir()
+
+	oldTop := filepath.Join(dataDir, ".baki-tmp-stale-top")
+	oldNested := filepath.Join(dataDir, "conversations", "openai", ".baki-tmp-stale-nested")
+	for _, p := range []string{oldTop, oldNested} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatalf("mkdir %s: %v", p, err)
+		}
+		if err := os.WriteFile(p, []byte("stranded"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+		stale := time.Now().Add(-2 * staleTempMaxAge)
+		if err := os.Chtimes(p, stale, stale); err != nil {
+			t.Fatalf("chtimes %s: %v", p, err)
+		}
+	}
+	fresh := filepath.Join(dataDir, ".baki-tmp-fresh")
+	if err := os.WriteFile(fresh, []byte("live writer"), 0o600); err != nil {
+		t.Fatalf("write %s: %v", fresh, err)
+	}
+
+	if _, err := NewLocalStorageBackend(dataDir); err != nil {
+		t.Fatalf("NewLocalStorageBackend: %v", err)
+	}
+
+	for _, p := range []string{oldTop, oldNested} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("stale temp %s survived the sweep (stat err = %v)", p, err)
+		}
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("fresh temp %s must survive the sweep: %v", fresh, err)
 	}
 }
 
@@ -397,7 +444,8 @@ func TestLocalStorageBackend_SaveFlow_VersionConflict(t *testing.T) {
 // the OCC check+write so that every increment lands exactly once and no update
 // is silently lost. Run with -race to also catch data races.
 func TestLocalStorageBackend_SaveFlow_ConcurrentRetry(t *testing.T) {
-	storage, err := NewLocalStorageBackend(t.TempDir())
+	dataDir := t.TempDir()
+	storage, err := NewLocalStorageBackend(dataDir)
 	testutil.AssertNoError(t, err, "NewLocalStorageBackend")
 	ctx := context.Background()
 
@@ -431,6 +479,83 @@ func TestLocalStorageBackend_SaveFlow_ConcurrentRetry(t *testing.T) {
 	testutil.AssertNoError(t, err, "load final")
 	// Seed left version 0; each of the writers commits exactly one increment.
 	testutil.AssertEqual(t, writers, final.Version, "every writer's increment should land exactly once")
+
+	assertNoTempStragglers(t, dataDir)
+}
+
+// assertNoTempStragglers fails the test if any atomicWrite temp file survived
+// under root — the unique ".baki-tmp-*" temps, or a legacy fixed "<name>.tmp".
+// atomicWrite renames its temp away on success and removes it on every failure
+// path, so a leftover means a cleanup path was missed.
+func assertNoTempStragglers(t *testing.T, root string) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && (strings.HasPrefix(d.Name(), ".baki-tmp-") || strings.HasSuffix(d.Name(), ".tmp")) {
+			t.Errorf("leftover temp file: %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+}
+
+// TestLocalStorageBackend_SaveSettings_ConcurrentWriters locks the temp-file
+// isolation of atomicWrite: settings.json is written by three unsynchronized
+// Save*Settings methods, so a shared fixed temp name let two O_TRUNC writers
+// interleave on one temp file and the rename then published a mixed or
+// truncated body. Each call must build its body in its OWN temp file so the
+// last rename is the only deciding event; the final file must parse as exactly
+// one writer's complete shape. Run with -race and -count to shake the window
+// open.
+func TestLocalStorageBackend_SaveSettings_ConcurrentWriters(t *testing.T) {
+	dataDir := t.TempDir()
+	storage, err := NewLocalStorageBackend(dataDir)
+	testutil.AssertNoError(t, err, "NewLocalStorageBackend")
+	ctx := context.Background()
+
+	const writers = 8
+	const rounds = 25
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	for w := range writers {
+		go func() {
+			defer wg.Done()
+			for range rounds {
+				s := &interfaces.AppSettings{
+					Version: 1,
+					AI:      interfaces.AISettings{ActiveProvider: fmt.Sprintf("writer-%d", w)},
+				}
+				if err := storage.SaveSettings(ctx, s); err != nil {
+					t.Errorf("save: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	// LoadSettings re-parses the file, so an interleaved/truncated body fails
+	// here rather than at the next consumer.
+	final, err := storage.LoadSettings(ctx)
+	testutil.AssertNoError(t, err, "load settings after concurrent writes")
+
+	matched := false
+	for w := range writers {
+		if final.AI.ActiveProvider == fmt.Sprintf("writer-%d", w) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		t.Errorf("final settings are not exactly one writer's shape: activeProvider=%q", final.AI.ActiveProvider)
+	}
+	testutil.AssertEqual(t, 1, final.Version, "version should be the one written shape's")
+
+	assertNoTempStragglers(t, dataDir)
 }
 
 // TestLocalStorageBackend_SaveFlow_NewFlowForcesVersionZero verifies that a

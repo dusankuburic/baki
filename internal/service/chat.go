@@ -65,15 +65,62 @@ func (s *ChatService) dailyUsage(ctx context.Context, scope, orgID string) (floa
 // are written asynchronously after each provider turn, so a budget check that
 // only reads the store lags the current stream by up to one full iteration
 // (several turns' worth of tokens on a tool loop). The tool loops pass their
-// locally-summed tokens priced at the provider's rates; when the async record
-// HAS landed both sides count, erring toward overstatement — the safe
-// direction for a spend cap.
-func inFlightCost(p ai.Provider, tokensIn, tokensOut int) float64 {
-	if p == nil || (tokensIn <= 0 && tokensOut <= 0) {
+// locally-summed tokens priced at the turn's reservation rate
+// (inFlightPricing, resolved once per turn); when the async record HAS landed
+// both sides count, erring toward overstatement — the safe direction for a
+// spend cap.
+func inFlightCost(price ai.Pricing, tokensIn, tokensOut int) float64 {
+	// Usage is whatever the upstream reported; a negative count (an
+	// operator-allow-listed non-Microsoft host answering anything) must not
+	// lower the ledger entry other streams' checks read.
+	tokensIn, tokensOut = max(tokensIn, 0), max(tokensOut, 0)
+	if tokensIn == 0 && tokensOut == 0 {
 		return 0
 	}
-	price := p.PricePerMillionTokens()
 	return float64(tokensIn)/1e6*price.InputCostPerM + float64(tokensOut)/1e6*price.OutputCostPerM
+}
+
+// inFlightPricing is the rate a stream's in-flight spend and reservation are
+// priced at. Every provider whose model ids are model names keeps its
+// provider-wide rate. An alias provider (Azure AI Foundry) has no
+// provider-wide price — a deployment name says nothing about cost — so it
+// reserves at the chosen deployment's listing price (the deployments listing,
+// served-model memo or agent definition, memoised on the audited wrapper),
+// else at the most expensive catalogued rate: reserving $0 would disable the
+// concurrent-stream and tool-loop overspend guards for it entirely, and
+// over-reserving is the safe direction for a spend cap. Actual usage is still
+// recorded at the served model's price (auditedProvider.record).
+func inFlightPricing(ctx context.Context, p ai.Provider, model string) ai.Pricing {
+	if p == nil {
+		return ai.Pricing{}
+	}
+	if !ai.UsesModelAliases(p.ID()) {
+		return p.PricePerMillionTokens()
+	}
+	// The audited wrapper (what the factory hands out) knows whether the
+	// alias's served model varies: a model router's listing price is the memo
+	// of the LAST routed call and must not price the reservation. A bare
+	// provider (tests) falls through to the listing lookup below.
+	if rp, ok := p.(ai.ReservationPricer); ok {
+		return rp.ReservationPricing(ctx, model)
+	}
+	if model == "" {
+		model = p.DefaultModel()
+	}
+	if models, err := p.Models(ctx); err == nil {
+		for _, m := range models {
+			if m.ID == model {
+				if m.Pricing != (ai.Pricing{}) {
+					return m.Pricing
+				}
+				break
+			}
+		}
+	}
+	if ai.IsClaudeModel(model) {
+		return ai.AliasClaudeCeiling(p.ID())
+	}
+	return ai.AliasReservationCeiling(p.ID())
 }
 
 // self is the calling stream (nil before it is registered): its own ledger
@@ -309,10 +356,12 @@ type ChatService struct {
 	// store (desktop), cloud routes through the backend (Postgres + RLS).
 	mode      config.DeploymentMode
 	knowledge *rag.KnowledgeService
-	// watchdogInterval / idleTimeout override subscriberCheckInterval and
-	// streamIdleTimeout in tests; 0 ⇒ defaults.
-	watchdogInterval time.Duration
-	idleTimeout      time.Duration
+	// watchdogInterval / idleTimeout / hostedIdleTimeout override
+	// subscriberCheckInterval, streamIdleTimeout and hostedStepIdleTimeout in
+	// tests; 0 ⇒ defaults.
+	watchdogInterval  time.Duration
+	idleTimeout       time.Duration
+	hostedIdleTimeout time.Duration
 	// heartbeatAfter / heartbeatTick override the client keepalive timing in
 	// tests (see heartbeatStream); 0 ⇒ defaults.
 	heartbeatAfter time.Duration
@@ -431,14 +480,84 @@ type turnSetup struct {
 	ragDone  <-chan string
 }
 
+// errProviderDisabled is the sentinel behind a turn refused because the
+// settings disable the requested provider (see providerDisabledByPolicy).
+// Match with errors.Is; the wrapping error's message is the client copy.
+var errProviderDisabled = errors.New("AI provider disabled by policy")
+
+// providerDisabledByPolicy reports whether the deployment settings disable
+// providerID for every chat turn. AIProviderConfig.Enabled predates this
+// check and no UI writes it, so it ships as a plain bool whose zero value —
+// false — is what BOTH DefaultSettings and the frontend's store persist for
+// every provider but the default active one (claude): a stored false is
+// indistinguishable from an unset flag through the model. Treating every
+// false as disabled would therefore cut off openai/gemini/... on every
+// existing deployment the moment this shipped. The guard fires only on an
+// unambiguous, explicit disable: an entry for a provider the defaults ENABLE
+// whose stored entry says false. An absent entry, or one matching the
+// shipped default, reads as enabled — exactly the pre-guard behavior.
+func providerDisabledByPolicy(settings *models.AppSettings, providerID string) bool {
+	if settings == nil {
+		return false
+	}
+	pc, ok := settings.AI.Providers[providerID]
+	if !ok || pc.Enabled {
+		return false
+	}
+	return models.DefaultSettings().AI.Providers[providerID].Enabled
+}
+
 // prepareTurn resolves the provider, computes org attribution, enforces the
-// daily AI budget, and — if a
-// knowledge base is configured for the flow's org — kicks off the per-turn RAG
-// guidelines lookup concurrently so its embedding API call overlaps with these
-// checks instead of gating first token (C-3). The returned ragDone channel (if
-// non-nil) delivers exactly one value; the caller must receive from it (or
-// abandon it on ctx cancellation) before finishing the turn.
-func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models.FlowDocument, req models.ChatRequest) (turnSetup, error) {
+// daily AI budget, and — if a knowledge base is configured for the flow's
+// org — kicks off the per-turn RAG guidelines lookup concurrently so its
+// embedding API call overlaps with the history reconstruction and context
+// build that follow instead of gating first token (C-3). The lookup starts
+// AFTER the policy and budget gates: it is a billed embedding call, and a
+// refused turn must not spend. The returned ragDone channel (if non-nil)
+// delivers exactly one value; the caller must receive from it (or abandon it
+// on ctx cancellation) before finishing the turn.
+//
+// ctl is the stream's (already published) control: one maximum response is
+// reserved on it BEFORE the budget check, with the check excluding ctl's own
+// entry, so streams whose starts overlap see each other's reservation. The
+// reservation used to be published only after the check (and after the
+// history reconstruction's DB round trips), a window in which every
+// simultaneously started stream passed the same store read.
+func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models.FlowDocument, req models.ChatRequest, ctl *streamCtl) (turnSetup, error) {
+	// Org-scoped flows attribute usage and enforce the daily budget at the
+	// org level; personal flows fall back to the per-user total. Resolved
+	// before the provider because an org flow may also run on the org's
+	// shared credential (G7) when the member has none of their own.
+	orgID := ""
+	if doc != nil {
+		orgID = doc.OrganizationID
+	}
+	provider, err := s.factory.ForOrg(scope, orgID, req.Provider)
+	if err != nil {
+		return turnSetup{}, providerSetupError(scope, req.Provider, err)
+	}
+	// Policy gate on the resolved provider (its ID came from the factory's
+	// own table, so it is safe to echo back): the same settings load
+	// chat_context.go uses for ContextTokenBudget, consulted here so every
+	// entry point that prepares a turn enforces it.
+	var appSettings *models.AppSettings
+	if s.settings != nil {
+		appSettings = s.settings.Get()
+	}
+	if providerDisabledByPolicy(appSettings, provider.ID()) {
+		return turnSetup{}, fmt.Errorf("%w: %s is disabled in this deployment's AI settings — pick another provider or ask your administrator to re-enable it", errProviderDisabled, provider.ID())
+	}
+
+	// Reserve one maximum response before the check so starts that overlap
+	// see each other. req.MaxTokens is pre-clamp (normalizeChatParams runs in
+	// buildStreamRequest): reserving slightly more is the safe direction.
+	if ctl != nil {
+		ctl.setInflight(inFlightCost(inFlightPricing(ctx, provider, req.Model), 0, maxOutputTokens(ai.Request{MaxTokens: req.MaxTokens})))
+	}
+	if err := s.enforceBudget(ctx, scope, orgID, 0, ctl); err != nil {
+		return turnSetup{}, err
+	}
+
 	var ragDone chan string
 	if s.knowledge != nil && doc != nil && doc.OrganizationID != "" {
 		ragDone = make(chan string, 1)
@@ -461,22 +580,6 @@ func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models
 			}()
 			ragDone <- s.ragGuidelines(ragCtx, scope, doc, req.UserMessage)
 		}()
-	}
-
-	provider, err := s.factory.For(scope, req.Provider)
-	if err != nil {
-		return turnSetup{}, providerSetupError(scope, req.Provider, err)
-	}
-
-	// Org-scoped flows attribute usage and enforce the daily budget at the
-	// org level; personal flows fall back to the per-user total.
-	orgID := ""
-	if doc != nil {
-		orgID = doc.OrganizationID
-	}
-
-	if err := s.enforceBudget(ctx, scope, orgID, 0, nil); err != nil {
-		return turnSetup{}, err
 	}
 
 	return turnSetup{provider: provider, orgID: orgID, ragDone: ragDone}, nil
@@ -532,25 +635,29 @@ func (s *ChatService) buildStreamRequest(ctx context.Context, ts turnSetup, scop
 	// goroutine aborts via its own ragCtx and sends "" → guidelines are simply
 	// skipped for this turn (skip-on-timeout). ctx.Done covers a stream
 	// cancelled while waiting.
-	sysPrompt := core.sysPrompt
+	//
+	// PERF-8: the guidelines depend on the turn's question, so they go into
+	// the final user message (buildMessages), never into the system prompt:
+	// Azure and OpenAI cache prompt prefixes automatically, and a system
+	// prompt that changes per turn made the whole history prefill uncached
+	// on every turn. sysPrompt stays core.sysPrompt — byte-stable across the
+	// conversation.
+	guidelines := ""
 	if ts.ragDone != nil {
 		select {
-		case guidelines := <-ts.ragDone:
-			if guidelines != "" {
-				sysPrompt += "\n\n" + guidelines
-			}
+		case guidelines = <-ts.ragDone:
 		case <-ctx.Done():
 			return ai.Request{}, nil, false, nil
 		}
 	}
 	scrubbedDoc = core.scrubbedDoc
-	sysPrompt = scrubber.ScrubText(sysPrompt)
+	sysPrompt := scrubber.ScrubText(core.sysPrompt)
 	contextText := scrubber.ScrubText(core.contextText)
 
 	temperature, maxTokens := normalizeChatParams(req.Temperature, req.MaxTokens, ts.provider.ContextLimit(), ai.ModelMaxOutputTokens(ctx, ts.provider, req.Model))
 	aiReq = ai.Request{
 		SystemPrompt: sysPrompt,
-		Messages:     buildMessages(req, contextText),
+		Messages:     buildMessages(req, contextText, scrubber.ScrubText(guidelines)),
 		Model:        req.Model,
 		Temperature:  temperature,
 		MaxTokens:    maxTokens,
@@ -566,8 +673,9 @@ func (s *ChatService) buildStreamRequest(ctx context.Context, ts turnSetup, scop
 	//
 	// Model-aware: the selected model's catalog window (e.g. 1M for Claude
 	// Opus/Sonnet 4.6) overrides the smaller provider-wide default, so
-	// truncation doesn't throw away history that would have fit.
-	if err := truncateForContextWindow(ts.provider, &aiReq, ai.ContextLimitFor(ctx, ts.provider, req.Model)); err != nil {
+	// truncation doesn't throw away history that would have fit. The current
+	// turn is the last message buildMessages appended.
+	if _, err := truncateForContextWindow(ts.provider, &aiReq, ai.ContextLimitFor(ctx, ts.provider, req.Model), len(aiReq.Messages)-1); err != nil {
 		return ai.Request{}, nil, false, err
 	}
 
@@ -637,7 +745,13 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	// session-token exchange on a cold cache) with "context canceled". Cancellation
 	// is handled explicitly via ctl.cancel() (CancelStream) and the timeout below.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxChatStreamDuration)
-	ctl := &streamCtl{cancel: cancel, started: make(chan struct{}), ownerID: scope, streamID: streamID}
+	// orgID is set here, before the control is published: othersInFlight reads
+	// it from other goroutines without a lock, so a later write would race.
+	orgID := ""
+	if doc != nil {
+		orgID = doc.OrganizationID
+	}
+	ctl := &streamCtl{cancel: cancel, started: make(chan struct{}), settled: make(chan struct{}), ownerID: scope, orgID: orgID, streamID: streamID}
 	ctl.touch() // pre-first-chunk work (context build, provider dial) counts as activity
 	ctl.lastEmit.Store(time.Now().UnixNano())
 	// Per-caller concurrency cap + stream-ID reservation, performed atomically
@@ -664,10 +778,14 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	// Multi-replica: mirror the stream to the shared backplane so a client that
 	// reconnects to a different replica can resume it (and OwnerOf can authorize
 	// there). The initial save publishes the owner immediately; mirrorStream then
-	// snapshots the growing buffer until the stream ends. No-op single-replica.
+	// snapshots the growing buffer until the worker's cleanup closes
+	// mirrorFinished — after the terminal state is recorded, so the last
+	// snapshot published is the terminal one. No-op single-replica.
+	var mirrorFinished chan struct{}
 	if rs := s.resumeBackplane(); rs.enabled() {
 		rs.Save(ctx, streamID, ctl.snapshot(), maxChatStreamDuration+resumeRetention)
-		go s.mirrorStream(ctx, streamID, ctl)
+		mirrorFinished = make(chan struct{})
+		go s.mirrorStream(ctx, streamID, ctl, mirrorFinished)
 	}
 
 	go s.watchStream(ctx, streamID, scope, ctl)
@@ -712,16 +830,40 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 				logger.Error("chat stream goroutine panicked", "streamID", streamID, "panic", r)
 			}
 		}()
+		// persistAnswer is set once the turn is known to be server-owned (the
+		// client omitted Messages); the answer is stored from the cleanup
+		// below, AFTER the stream has left the active set — the write is a
+		// bounded, best-effort DB round trip that must not keep the stream's
+		// concurrency slot and ledger entry alive.
+		persistAnswer := false
 		// On exit, remove the stream from the active set (so cancel/begin and
 		// leak-detection see it as gone) and move it to the finished set for a
 		// short grace period, so a client that reconnects after completion can
 		// still fetch the final buffer via ResumeStream instead of hanging.
 		defer func() {
+			// Every exit path must leave a terminal state behind (a chunk
+			// dropped at the begin gate, a panic): record one when nothing
+			// did, and tell a subscribed client. A stream that never began
+			// gets it through BeginStream/ResumeStream instead.
+			if code, msg, set := ctl.ensureTerminal(ctx); set {
+				select {
+				case <-ctl.started:
+					emit("error", errorEventData(code, msg))
+				default:
+				}
+			}
 			coalesce.flush() // deliver any batched-but-unsent tail before exit
 			cancel()
+			if mirrorFinished != nil {
+				close(mirrorFinished) // done/error are recorded by now; the mirror publishes them last
+			}
 			s.activeStreams.Delete(streamID)
 			s.finishedStreams.Store(streamID, ctl)
 			time.AfterFunc(resumeRetention, func() { s.finishedStreams.Delete(streamID) })
+			if persistAnswer {
+				s.persistAssistantTurn(ctx, doc, req, ctl)
+			}
+			close(ctl.settled)
 		}()
 
 		// fail stores the error in the stream buffer AND emits the SSE event so
@@ -746,8 +888,9 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		hbAfter, hbTick := s.heartbeatTiming()
 		go heartbeatStream(ctx, ctl, emit, hbStop, hbAfter, hbTick)
 
-		// C-3: RAG lookup, provider resolution and budget checks.
-		ts, err := s.prepareTurn(ctx, scope, doc, req)
+		// C-3: provider resolution, budget checks (with this stream's
+		// reservation published first) and the RAG lookup.
+		ts, err := s.prepareTurn(ctx, scope, doc, req, ctl)
 		if err != nil {
 			fail(ctl.classifyFailure(ctx, err))
 			return
@@ -765,8 +908,8 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			// reason the question is stored when it starts: the client saves
 			// the conversation itself on done, so a tab that closes (or any
 			// headless caller) left the question stored with no answer beside
-			// it. Deferred here so every exit path runs it.
-			defer s.persistAssistantTurn(ctx, doc, req, ctl)
+			// it. Run from the cleanup so every exit path does it.
+			persistAnswer = true
 		}
 		if len(req.Messages) == 0 {
 			// Hold the per-conversation mutex across reconstruct + persist so two
@@ -785,12 +928,10 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		if !ok {
 			return // ctx cancelled while waiting on RAG
 		}
-		// Reserve one maximum response on the concurrent-stream ledger before
-		// the first provider call, so a burst of streams started together can
-		// no longer each pass the same store read. The loops below refresh it
-		// per iteration with the actual spend so far plus one more response.
-		ctl.orgID = ts.orgID
-		ctl.setInflight(inFlightCost(ts.provider, 0, maxOutputTokens(aiReq)))
+		// The one-response reservation on the concurrent-stream ledger was
+		// published by prepareTurn, ahead of its budget check; the loops below
+		// refresh it per iteration with the actual spend so far plus one more
+		// response.
 
 		// When the caller opted into tools, run the agentic loop. Native
 		// function-calling providers use runToolLoop; providers without it
@@ -843,8 +984,24 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		// event carries the count so the client can detect chunks dropped by a
 		// saturated SSE buffer and recover the authoritative text via resume.
 		out := newScrubbedEmitter(ctl, emit)
+		// sawText: whether any answer text arrived (split-off reasoning and
+		// keepalives are not answer text) — an empty answer cut at the token
+		// cap is a failure, not a reply.
+		sawText := false
+		// lastServed: the model that answered, from any chunk that names it
+		// (alias providers put it on content chunks and the terminal one).
+		lastServed := ""
+		ctl.beginProviderTurn()
 		err = ts.provider.Stream(ctx, aiReq, func(chunk ai.Chunk) {
 			ctl.touch()
+			// Before the begin gate: the watchdog runs from stream start.
+			ctl.sawOutput(chunk.Text != "", len(chunk.ToolCalls) > 0, chunk.Done)
+			if chunk.ToolEvent != nil {
+				ctl.hostedStep(!chunk.ToolEvent.Done)
+			}
+			if chunk.ServedModel != "" {
+				lastServed = chunk.ServedModel
+			}
 			if !awaitStart() {
 				return
 			}
@@ -866,17 +1023,26 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			}
 			if chunk.Done {
 				out.flush()
-				ctl.markDone(chunk.TokensIn, chunk.TokensOut)
-				emit("done", map[string]interface{}{
-					"tokensIn":  chunk.TokensIn,
-					"tokensOut": chunk.TokensOut,
-					"chunks":    coalesce.flushAndCount(),
-				})
+				if emptyOutputLimitTurn(sawText, len(chunk.ToolCalls), chunk.FinishReason) {
+					// The provider still reported (and the audited wrapper
+					// recorded) the usage; only the reply is missing.
+					fail(ChatErrOutputLimit, outputLimitMsg)
+					return
+				}
+				ctl.markDone(chunk.TokensIn, chunk.TokensOut, lastServed)
+				emit("done", doneEventData(ctx, ts.provider, aiReq.Model, lastServed, chunk.TokensIn, chunk.TokensOut, coalesce.flushAndCount()))
 				return
 			}
 
-			out.text(chunk.Text)
+			// A ServerStep marker (hosted step without a trail entry), a
+			// keepalive or split-off reasoning carries no answer text: nothing
+			// to emit, the touch above is all it is for.
+			if chunk.Text != "" {
+				sawText = true
+				out.text(chunk.Text)
+			}
 		})
+		ctl.endProviderTurn()
 
 		if err != nil {
 			code, msg := ctl.classifyFailure(ctx, err)
@@ -943,6 +1109,9 @@ func (s *ChatService) runToolLoop(
 	}
 
 	var totalIn, totalOut int
+	// lastServed is the model that answered the most recent turn (alias
+	// providers), carried on the done payload.
+	lastServed := ""
 	// out masks secrets in streamed turn text and counts emitted chunk events
 	// across all turns; the count rides the done event so the client can detect
 	// dropped SSE chunks (see StreamChatMessage). One scrubber spans the loop —
@@ -950,7 +1119,11 @@ func (s *ChatService) runToolLoop(
 	// bleed between turns.
 	out := newScrubbedEmitter(ctl, emit)
 	mem := newLoopToolMemory()
-	reserve := inFlightCost(provider, 0, maxOutputTokens(base))
+	price := inFlightPricing(ctx, provider, base.Model)
+	reserve := inFlightCost(price, 0, maxOutputTokens(base))
+	// pin is the current turn's index in msgs (the last message the caller
+	// built); truncation never drops it and reports where it moved to.
+	pin := len(msgs) - 1
 	for i := 0; i < maxToolIterations; i++ {
 		metrics.RecordChatToolIteration()
 		// Re-check the daily AI budget every iteration: a tool loop multiplies
@@ -958,7 +1131,7 @@ func (s *ChatService) runToolLoop(
 		// alone would let one approved request run past the cap mid-loop. The
 		// in-flight term covers this stream's async-unwritten spend (see
 		// inFlightCost).
-		own := inFlightCost(provider, totalIn, totalOut)
+		own := inFlightCost(price, totalIn, totalOut)
 		ctl.setInflight(own + reserve)
 		if err := s.enforceBudget(ctx, scope, base.OrgID, own, ctl); err != nil {
 			code, msg, report := loopBudgetFailure(ctx, ctl, err)
@@ -976,8 +1149,10 @@ func (s *ChatService) runToolLoop(
 		// Re-enforce the context window each turn: tool results + assistant
 		// text accumulate and can overflow the model's context window by
 		// iteration 4-6, surfacing as a raw provider 400. Truncating oldest
-		// history here keeps the loop within bounds.
-		if err := truncateForContextWindow(provider, &turn, ctxLimit); err != nil {
+		// history (then the oldest tool exchange) here keeps the loop within
+		// bounds; the current turn itself is never dropped.
+		var err error
+		if pin, err = truncateForContextWindow(provider, &turn, ctxLimit, pin); err != nil {
 			fail(ChatErrContextLimit, "conversation is too long for this model's context window — too many tool results, try a simpler question")
 			return
 		}
@@ -986,20 +1161,29 @@ func (s *ChatService) runToolLoop(
 		// Stream the turn: forward assistant text to the client as it arrives, and
 		// capture the tool calls / token usage from the terminal (Done) chunk.
 		var (
-			turnText  strings.Builder
-			turnCalls []ai.ToolCall
-			turnIn    int
-			turnOut   int
-			chunkErr  error
+			turnText   strings.Builder
+			turnCalls  []ai.ToolCall
+			turnIn     int
+			turnOut    int
+			turnFinish string
+			chunkErr   error
 		)
+		ctl.beginProviderTurn()
 		streamErr := provider.Stream(ctx, turn, func(c ai.Chunk) {
 			ctl.touch()
+			ctl.sawOutput(c.Text != "", len(c.ToolCalls) > 0, c.Done)
+			if c.ServedModel != "" {
+				lastServed = c.ServedModel
+			}
 			switch {
 			case c.Error != nil:
 				chunkErr = c.Error
 			case c.ToolEvent != nil:
 				// A tool the provider ran server-side (a Foundry agent's web
-				// search, MCP call, …): forward it to the trail in order.
+				// search, MCP call, …): account it for the idle watchdog
+				// (before the begin gate — the watchdog runs from stream
+				// start), then forward it to the trail in order.
+				ctl.hostedStep(!c.ToolEvent.Done)
 				if !ensureStarted() {
 					return
 				}
@@ -1009,6 +1193,7 @@ func (s *ChatService) runToolLoop(
 				turnIn = c.TokensIn
 				turnOut = c.TokensOut
 				turnCalls = c.ToolCalls
+				turnFinish = c.FinishReason
 			case c.Text != "":
 				if !ensureStarted() {
 					return
@@ -1018,7 +1203,10 @@ func (s *ChatService) runToolLoop(
 				turnText.WriteString(c.Text)
 				out.text(c.Text)
 			}
+			// Anything else (keepalive, split-off reasoning, ServerStep
+			// marker) only feeds the idle watchdog through the touch above.
 		})
+		ctl.endProviderTurn()
 		if started {
 			// Release scrubber-held text before any error/tool/done event so the
 			// turn's tail isn't withheld or attributed to the next turn.
@@ -1061,11 +1249,17 @@ func (s *ChatService) runToolLoop(
 		// No tool calls → this turn is the final answer (its text already
 		// streamed above, so there's nothing more to emit but the done event).
 		if len(turnCalls) == 0 {
+			if emptyOutputLimitTurn(turnText.Len() > 0, 0, turnFinish) {
+				// Cut at the token cap before any answer (the usage is
+				// already recorded by the audited wrapper).
+				fail(ChatErrOutputLimit, outputLimitMsg)
+				return
+			}
 			if !ensureStarted() {
 				return
 			}
-			ctl.markDone(totalIn, totalOut)
-			emit("done", map[string]interface{}{"tokensIn": totalIn, "tokensOut": totalOut, "chunks": doneChunks()})
+			ctl.markDone(totalIn, totalOut, lastServed)
+			emit("done", doneEventData(ctx, provider, base.Model, lastServed, totalIn, totalOut, doneChunks()))
 			return
 		}
 
@@ -1136,14 +1330,17 @@ func (s *ChatService) runPromptToolLoop(
 	}
 
 	var totalIn, totalOut int
+	lastServed := ""
 	out := newScrubbedEmitter(ctl, emit)
 	mem := newLoopToolMemory()
-	reserve := inFlightCost(provider, 0, maxOutputTokens(base))
+	price := inFlightPricing(ctx, provider, base.Model)
+	reserve := inFlightCost(price, 0, maxOutputTokens(base))
+	pin := len(msgs) - 1 // the current turn (see runToolLoop)
 	for i := 0; i < maxToolIterations; i++ {
 		metrics.RecordChatToolIteration()
 		// Same per-iteration budget re-check as runToolLoop (in-flight term
 		// included).
-		own := inFlightCost(provider, totalIn, totalOut)
+		own := inFlightCost(price, totalIn, totalOut)
 		ctl.setInflight(own + reserve)
 		if err := s.enforceBudget(ctx, scope, base.OrgID, own, ctl); err != nil {
 			code, msg, report := loopBudgetFailure(ctx, ctl, err)
@@ -1155,7 +1352,8 @@ func (s *ChatService) runPromptToolLoop(
 		}
 		turn := base
 		turn.Messages = msgs
-		if err := truncateForContextWindow(provider, &turn, ctxLimit); err != nil {
+		var err error
+		if pin, err = truncateForContextWindow(provider, &turn, ctxLimit, pin); err != nil {
 			fail(ChatErrContextLimit, "conversation is too long for this model's context window — too many tool results, try a simpler question")
 			return
 		}
@@ -1165,19 +1363,26 @@ func (s *ChatService) runPromptToolLoop(
 		// before anything reaches the client, so we can't forward text as it
 		// streams.
 		var (
-			turnText strings.Builder
-			turnIn   int
-			turnOut  int
-			chunkErr error
+			turnText   strings.Builder
+			turnIn     int
+			turnOut    int
+			turnFinish string
+			chunkErr   error
 		)
+		ctl.beginProviderTurn()
 		streamErr := provider.Stream(ctx, turn, func(c ai.Chunk) {
 			ctl.touch()
+			ctl.sawOutput(c.Text != "", len(c.ToolCalls) > 0, c.Done)
+			if c.ServedModel != "" {
+				lastServed = c.ServedModel
+			}
 			switch {
 			case c.Error != nil:
 				chunkErr = c.Error
 			case c.Done:
 				turnIn = c.TokensIn
 				turnOut = c.TokensOut
+				turnFinish = c.FinishReason
 			case c.Text != "":
 				turnText.WriteString(c.Text)
 			}
@@ -1203,6 +1408,10 @@ func (s *ChatService) runPromptToolLoop(
 		// No tool calls → this turn is the final answer. Emit the cleaned text
 		// (preamble the model wrote around the absent marker) and finish.
 		if len(calls) == 0 {
+			if emptyOutputLimitTurn(full != "", 0, turnFinish) {
+				fail(ChatErrOutputLimit, outputLimitMsg)
+				return
+			}
 			if !ensureStarted() {
 				return
 			}
@@ -1210,8 +1419,8 @@ func (s *ChatService) runPromptToolLoop(
 				out.text(cleanText)
 				out.flush()
 			}
-			ctl.markDone(totalIn, totalOut)
-			emit("done", map[string]interface{}{"tokensIn": totalIn, "tokensOut": totalOut, "chunks": doneChunks()})
+			ctl.markDone(totalIn, totalOut, lastServed)
+			emit("done", doneEventData(ctx, provider, base.Model, lastServed, totalIn, totalOut, doneChunks()))
 			return
 		}
 
@@ -1270,6 +1479,26 @@ func toolSummary(result string) string {
 		line = line[:cut] + "…"
 	}
 	return line
+}
+
+// doneEventData is the done payload: usage, the model that answered (alias
+// providers — omitted when the provider named none) and the per-million rates
+// the turn was billed at, so the client shows model and cost without a
+// listing refetch. The rate comes from the audited wrapper (ai.UsagePricer:
+// the served model's catalogue price, else the provider rate, else the alias
+// ceiling); a bare provider (tests) carries no rate.
+func doneEventData(ctx context.Context, p ai.Provider, model, served string, tokensIn, tokensOut, chunks int) map[string]interface{} {
+	data := map[string]interface{}{"tokensIn": tokensIn, "tokensOut": tokensOut, "chunks": chunks}
+	if served != "" {
+		data["servedModel"] = served
+	}
+	if pr, ok := p.(ai.UsagePricer); ok {
+		if price, ok := pr.UsagePricing(ctx, model, served); ok {
+			data["inputCostPerM"] = price.InputCostPerM
+			data["outputCostPerM"] = price.OutputCostPerM
+		}
+	}
+	return data
 }
 
 // emitToolEvent forwards a tool step the PROVIDER ran server-side (a Foundry

@@ -55,6 +55,10 @@ func newChannelEnv(t *testing.T) *channelEnv {
 // builder that differs in one invisible way.
 func (e *channelEnv) allowLoopbackDelivery() *channelEnv {
 	e.rt.handlers.Org.notifyPolicy = notify.AllowLoopbackTargets
+	// The shared channel client (D-25) was built under the strict policy at
+	// construction; swap it with the policy so the test delivery can dial
+	// the loopback httptest server.
+	e.rt.handlers.Org.channelClient = notify.NewChannelClient(notify.AllowLoopbackTargets)
 	return e
 }
 

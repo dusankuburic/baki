@@ -21,6 +21,8 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/uptrace/opentelemetry-go-extra/otelsql"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+
+	"pad-analyzer/internal/config"
 )
 
 // pgErrUniqueViolation is the SQLSTATE for a unique constraint violation.
@@ -237,11 +239,12 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	// Apply the embedding-dimension contract (default 1536). Chunks whose width
-	// differs are kept but excluded from the pgvector index.
+	// Apply the embedding-dimension contract (default config.DefaultEmbeddingDim,
+	// the same width the AI factory asks embedding models for). Chunks whose
+	// width differs are kept but excluded from the pgvector index.
 	b.embeddingDim = cfg.EmbeddingDim
 	if b.embeddingDim <= 0 {
-		b.embeddingDim = 1536
+		b.embeddingDim = config.DefaultEmbeddingDim
 	}
 
 	// Detect whether pgvector is available so SearchKnowledge can push the

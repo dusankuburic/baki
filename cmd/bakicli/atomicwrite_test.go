@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -34,7 +35,10 @@ func TestAtomicWriteFile_ReplacesContentAndPreservesMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Mode().Perm() != 0o644 {
+	// Windows has no Unix permission bits — Stat maps everything to 0666-ish
+	// regardless of what the write requested — so the mode contract is only
+	// checkable where modes exist.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
 		t.Errorf("mode = %o, want 0644 (original mode must be preserved)", info.Mode().Perm())
 	}
 
@@ -71,7 +75,7 @@ func TestAtomicWriteFile_NewFileGetsDefaultMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("new-file mode = %o, want 0600", info.Mode().Perm())
 	}
 }

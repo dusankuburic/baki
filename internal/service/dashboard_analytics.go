@@ -88,9 +88,17 @@ type scopeResolver interface {
 	ScopeFlowIDs(ctx context.Context, userID, orgID string, scope LibraryScope, limit int) (ids []string, orgIDs []string, err error)
 }
 
+// anaCacheMaxEntries caps the analytics cache. The cache key embeds the
+// caller-chosen window (From/To to the nanosecond) and flow list, so a client
+// cycling query parameters can mint unlimited distinct keys, each holding a
+// several-hundred-KB payload for the TTL — without a cap that is an
+// unbounded, attacker-priced memory pool.
+const anaCacheMaxEntries = 128
+
 type anaCacheEntry struct {
 	data      *models.DashboardAnalyticsData
 	fetchedAt time.Time
+	seq       uint64 // insertion order; breaks fetchedAt ties on eviction
 }
 
 // ruleMeta is the catalog view of one rule.
@@ -123,13 +131,29 @@ func (s *DashboardService) anaCachePut(key string, data *models.DashboardAnalyti
 	if s.anaCache == nil {
 		s.anaCache = make(map[string]*anaCacheEntry)
 	}
-	s.anaCache[key] = &anaCacheEntry{data: data, fetchedAt: time.Now()}
+	s.anaSeq++
+	s.anaCache[key] = &anaCacheEntry{data: data, fetchedAt: time.Now(), seq: s.anaSeq}
 	// Same write-time sweep as the home cache: entries past the TTL are dead
 	// weight the hit check skips anyway.
 	for k, e := range s.anaCache {
 		if time.Since(e.fetchedAt) >= dashboardCacheTTL {
 			delete(s.anaCache, k)
 		}
+	}
+	// The TTL sweep cannot shrink a cache filled with fresh distinct keys, so
+	// also cap the entry count: when over the cap, evict the entry closest to
+	// expiry (the oldest fetchedAt — entries expire fetchedAt+TTL). Same
+	// expired-first/nearest-expiry order as pruneModelCacheLocked. Equal
+	// timestamps (coarse clock) fall back to insertion order so the victim
+	// is deterministic and always the oldest insert.
+	for len(s.anaCache) > anaCacheMaxEntries {
+		oldestKey, oldestAt, oldestSeq, first := "", time.Time{}, uint64(0), true
+		for k, e := range s.anaCache {
+			if first || e.fetchedAt.Before(oldestAt) || (e.fetchedAt.Equal(oldestAt) && e.seq < oldestSeq) {
+				oldestKey, oldestAt, oldestSeq, first = k, e.fetchedAt, e.seq, false
+			}
+		}
+		delete(s.anaCache, oldestKey)
 	}
 }
 
@@ -1014,7 +1038,7 @@ func aiSection(u *storageif.UsageRows, q AnalyticsQuery, mode string, orgIDs []s
 		out.ByProvider = append(out.ByProvider, models.ProviderCostStub{Provider: p.Provider, Cost: round2(p.Cost), TokensIn: p.TokensIn, TokensOut: p.TokensOut})
 	}
 	for _, m := range u.ByModel {
-		out.ByModel = append(out.ByModel, models.ModelUsage{Provider: m.Provider, Model: m.Model, TokensIn: m.TokensIn, TokensOut: m.TokensOut, Calls: m.Calls, Cost: round2(m.Cost)})
+		out.ByModel = append(out.ByModel, models.ModelUsage{Provider: m.Provider, Model: m.Model, ServedModel: m.ServedModel, TokensIn: m.TokensIn, TokensOut: m.TokensOut, Calls: m.Calls, Cost: round2(m.Cost)})
 	}
 	return out
 }

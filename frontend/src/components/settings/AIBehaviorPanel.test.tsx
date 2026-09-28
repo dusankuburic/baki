@@ -29,4 +29,21 @@ describe('AIBehaviorPanel', () => {
     // The chat used to keep its start-up provider until a reload.
     expect(useChatStore.getState().selectedProvider).toBe('gemini')
   })
+
+  it('hides the Default Model ID override for azure-foundry but shows it otherwise', () => {
+    render(<AIBehaviorPanel />)
+    // The default assistant (claude) offers the free-text model override.
+    expect(screen.getByText('Default Model ID')).toBeInTheDocument()
+
+    // Azure Foundry deployments are user-named: a free-text model ID can only
+    // pin a non-existent deployment, so the field is hidden there (the store
+    // defaults it to '' so the server-reported deployment wins).
+    fireEvent.click(screen.getAllByRole('radio', {name: 'Azure AI Foundry'})[0])
+    expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('azure-foundry')
+    expect(screen.queryByText('Default Model ID')).toBeNull()
+
+    // And it comes back for a regular provider.
+    fireEvent.click(screen.getAllByRole('radio', {name: 'Claude'})[0])
+    expect(screen.getByText('Default Model ID')).toBeInTheDocument()
+  })
 })

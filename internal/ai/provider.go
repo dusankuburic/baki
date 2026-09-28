@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +49,10 @@ type ModelInfo struct {
 	// Foundry deployment name, a model-router deployment. Empty for catalogue
 	// models, whose ID is the model.
 	ServedModel string `json:"servedModel,omitempty"`
+	// Embedding marks an embedding deployment (Azure AI Foundry): kept in
+	// Models() so embedding usage is priced and sized, never offered as a
+	// chat model or chosen as the chat default.
+	Embedding bool `json:"embedding,omitempty"`
 }
 
 type Pricing struct {
@@ -96,6 +101,11 @@ type Response struct {
 	// it routed to). Used to price usage when the request model is a
 	// deployment alias the catalogue cannot know. Empty when not reported.
 	ServedModel string `json:"servedModel,omitempty"`
+	// Reasoning is inline model reasoning split off the answer — a leading
+	// <think>…</think> block (DeepSeek-R1 and other open reasoning models on
+	// OpenAI-compatible chat completions). Not part of Content: never shown,
+	// stored or re-sent as history.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // ToolDefinition describes a tool offered to the model. InputSchema is a JSON
@@ -113,8 +123,16 @@ type ToolCall struct {
 	Input json.RawMessage `json:"input"`
 }
 
+// Chunk is one streamed event. A chunk with no field set is a keepalive: the
+// provider is still working (reasoning, assembling a tool call) but has
+// nothing to deliver — consumers only use it to reset their idle timers.
 type Chunk struct {
-	Text      string `json:"text"`
+	Text string `json:"text"`
+	// Reasoning is inline model reasoning split off the answer (see
+	// Response.Reasoning). It is not answer text: the chat service never
+	// displays, stores or re-sends it; the audited wrapper counts it toward
+	// the output-token estimate of a stream that ends without usage.
+	Reasoning string `json:"reasoning,omitempty"`
 	TokensIn  int    `json:"tokensIn,omitempty"`
 	TokensOut int    `json:"tokensOut,omitempty"`
 	Done      bool   `json:"done"`
@@ -134,6 +152,11 @@ type Chunk struct {
 	// (Done=true). Nothing for the chat service to execute — it forwards the
 	// step to the client's tool trail so hosted work is visible.
 	ToolEvent *ToolEvent `json:"toolEvent,omitempty"`
+	// ServerStep marks work the provider started server-side (a hosted
+	// agent step without a trail label) that a replay of the request would
+	// repeat: RetryingProvider treats the stream as delivered; every other
+	// consumer ignores it (it carries no text).
+	ServerStep bool `json:"-"`
 }
 
 // ToolEvent describes one server-side tool step of a hosted agent run.
@@ -176,12 +199,35 @@ var (
 	// or validate. Surfaced instead of a network error so the user is told to
 	// re-save the provider settings rather than to check connectivity.
 	ErrProviderConfigInvalid = errors.New("provider configuration is invalid")
+	// ErrProviderPermissionDenied marks credentials the provider ACCEPTED but
+	// whose identity lacks the role for the operation — Azure AI Foundry
+	// answers HTTP 401 with error.code "PermissionDenied" when a service
+	// principal has no data-plane role (Foundry User) on the resource. The
+	// concrete error (permissionDeniedError) also matches ErrApiKeyInvalid, so
+	// retry and circuit-breaker behaviour is that of any auth failure, and it
+	// keeps the provider's message, which names the principal and the missing
+	// data action.
+	ErrProviderPermissionDenied = errors.New("permission denied")
 )
+
+// permissionDeniedError is a permission-denied answer carrying the provider's
+// explanation (see ErrProviderPermissionDenied).
+type permissionDeniedError struct{ msg string }
+
+func (e *permissionDeniedError) Error() string { return "permission denied: " + e.msg }
+
+func (e *permissionDeniedError) Unwrap() []error {
+	return []error{ErrProviderPermissionDenied, ErrApiKeyInvalid}
+}
 
 // detectContextLimitError checks whether a provider 400 response is a
 // context-length-exceeded error and returns ErrContextLimit if so. Providers
 // use different message wording, so we match on common substrings (case-
-// insensitive). Returns nil when the response is not a context-limit error.
+// insensitive). When the message states the window ("This model's maximum
+// context length is 16384 tokens" — OpenAI, Azure OpenAI / Foundry, vLLM),
+// the error is a *ContextLimitError carrying it, which still satisfies
+// errors.Is(err, ErrContextLimit). Returns nil when the response is not a
+// context-limit error.
 func detectContextLimitError(statusCode int, message string) error {
 	if statusCode != 400 || message == "" {
 		return nil
@@ -191,11 +237,31 @@ func detectContextLimitError(statusCode int, message string) error {
 	// of tokens allowed (M).") matches none of the OpenAI/Claude phrasings.
 	for _, hint := range []string{"context length", "context window", "too long", "maximum context", "token limit", "prompt is too long", "exceeds the maximum number of tokens"} {
 		if strings.Contains(lower, hint) {
+			if m := contextWindowRe.FindStringSubmatch(message); m != nil {
+				if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+					return &ContextLimitError{Limit: n}
+				}
+			}
 			return ErrContextLimit
 		}
 	}
 	return nil
 }
+
+// contextWindowRe extracts the window a context-length rejection states.
+var contextWindowRe = regexp.MustCompile(`(?i)maximum context length is (\d+)`)
+
+// ContextLimitError is a context-length rejection whose message stated the
+// model's real window. It unwraps to ErrContextLimit so every errors.Is
+// check keeps working; the audited wrapper remembers Limit for alias
+// providers' deployments (recordContextWindow) so the next request is sized
+// to it instead of the listing's default window.
+type ContextLimitError struct {
+	Limit int
+}
+
+func (e *ContextLimitError) Error() string { return ErrContextLimit.Error() }
+func (e *ContextLimitError) Unwrap() error { return ErrContextLimit }
 
 // detectToolsUnsupportedError checks whether a provider 400 response is a
 // "this model can't use tools/function calling" rejection and returns
@@ -203,6 +269,14 @@ func detectContextLimitError(statusCode int, message string) error {
 // must BOTH mention tools/function-calling AND say they're unavailable — so an
 // ordinary error that merely contains the word "tool" (e.g. "tool result too
 // long") never matches. Returns nil for anything else.
+//
+// vLLM-served models (open models on Azure AI Foundry and GitHub Models whose
+// server runs without a tool-call parser — Phi-4-multimodal, some Llama
+// variants) reject a tools request with `"auto" tool choice requires
+// --enable-auto-tool-choice and --tool-call-parser to be set`; Azure passes
+// vLLM's error object through as the text of error.message. That wording is
+// only emitted when the server cannot parse tool calls at all, so it counts as
+// "unavailable" too.
 func detectToolsUnsupportedError(statusCode int, message string) error {
 	if statusCode != 400 || message == "" {
 		return nil
@@ -212,7 +286,7 @@ func detectToolsUnsupportedError(statusCode int, message string) error {
 	if !mentionsTools {
 		return nil
 	}
-	for _, hint := range []string{"not supported", "unsupported", "does not support", "doesn't support", "not available", "not enabled", "is disabled", "are disabled"} {
+	for _, hint := range []string{"not supported", "unsupported", "does not support", "doesn't support", "not available", "not enabled", "is disabled", "are disabled", "enable-auto-tool-choice", "tool-call-parser"} {
 		if strings.Contains(lower, hint) {
 			return ErrToolsUnsupported
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -66,7 +67,7 @@ func (g *GitHubAuth) StartDeviceFlow(ctx context.Context) (*DeviceAuthResponse, 
 	}
 
 	var result DeviceAuthResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSONBodyBytes)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode device code response: %w", err)
 	}
 	return &result, nil
@@ -99,7 +100,7 @@ func (g *GitHubAuth) PollToken(ctx context.Context, deviceCode string) (*GitHubA
 		AccessToken string `json:"access_token"`
 		Error       string `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSONBodyBytes)).Decode(&result); err != nil {
 		return nil, err
 	}
 
@@ -135,7 +136,7 @@ func (g *GitHubAuth) GetUser(ctx context.Context, token string) (*GitHubUser, er
 	}
 
 	var user GitHubUser
-	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSONBodyBytes)).Decode(&user); err != nil {
 		return nil, err
 	}
 	return &user, nil

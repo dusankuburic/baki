@@ -113,25 +113,35 @@ func TestLoadFlowFiles_AnonymousCallersDoNotShareEntries(t *testing.T) {
 // says so ("does not distinguish per-user delivery"), so asserting through it
 // would pass whether or not the fix is present.
 type targetingNotifierStub struct {
-	mu         sync.Mutex
-	broadcasts []string
-	targeted   map[string][]string
+	mu            sync.Mutex
+	broadcasts    []string
+	broadcastData map[string][]any
+	targeted      map[string][]string
+	// payloads records (event, data) for targeted deliveries so tests can
+	// assert on the payload shape, not just the count.
+	targetedPayloads map[string][]any
 }
 
 func newTargetingNotifierStub() *targetingNotifierStub {
-	return &targetingNotifierStub{targeted: map[string][]string{}}
+	return &targetingNotifierStub{
+		broadcastData:    map[string][]any{},
+		targeted:         map[string][]string{},
+		targetedPayloads: map[string][]any{},
+	}
 }
 
-func (n *targetingNotifierStub) Emit(name string, _ any) {
+func (n *targetingNotifierStub) Emit(name string, data any) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.broadcasts = append(n.broadcasts, name)
+	n.broadcastData[name] = append(n.broadcastData[name], data)
 }
 
-func (n *targetingNotifierStub) EmitTo(userID, name string, _ any) {
+func (n *targetingNotifierStub) EmitTo(userID, name string, data any) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.targeted[userID] = append(n.targeted[userID], name)
+	n.targetedPayloads[userID+"|"+name] = append(n.targetedPayloads[userID+"|"+name], data)
 }
 
 func (n *targetingNotifierStub) HasSubscriber(string) bool { return true }
@@ -158,6 +168,22 @@ func (n *targetingNotifierStub) countTargeted(userID, name string) int {
 		}
 	}
 	return c
+}
+
+// targetedPayload returns the data payloads of the targeted (userID, name)
+// deliveries, for shape assertions.
+func (n *targetingNotifierStub) targetedPayload(userID, name string) []any {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]any{}, n.targetedPayloads[userID+"|"+name]...)
+}
+
+// broadcastPayload returns the data payloads of the broadcast (name)
+// deliveries, for shape assertions.
+func (n *targetingNotifierStub) broadcastPayload(name string) []any {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]any{}, n.broadcastData[name]...)
 }
 
 // TestLoadFlowFiles_LoadedEventIsAddressedToTheCaller is the second half of the
@@ -192,5 +218,51 @@ func TestLoadFlowFiles_LoadedEventIsAddressedToTheCaller(t *testing.T) {
 	}
 	if n := notifier.countTargeted("alice", "flow:loaded"); n != 2 {
 		t.Errorf("caller received %d targeted flow:loaded events, want 2 (miss path + cache-hit path)", n)
+	}
+}
+
+// TestLoadFlowFiles_LoadedEventCarriesOnlyASummary pins the flow:loaded SSE
+// payload contract. The event must carry the lightweight FlowLoadedSummary —
+// never the FlowDocument — because the SSE hub pins every queued frame per
+// connected client: a document-sized event (Source + Subflows, hundreds of MB
+// for large flows) turns one upload into gigabytes of pinned memory across a
+// few stalled connections. Both the parse (miss) and cache-hit emission paths
+// are covered.
+func TestLoadFlowFiles_LoadedEventCarriesOnlyASummary(t *testing.T) {
+	astCache, _ := cache.NewLRUCache(100)
+	notifier := newTargetingNotifierStub()
+	svc := NewFlowService(notifier, nil, NewLocalDocumentProvider(), nil, nil, astCache)
+	ctx := context.Background()
+
+	files := map[string]string{"Main.txt": uploadFlowText}
+	doc, err := svc.LoadFlowFiles(ctx, files, "Payroll", "alice")
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if _, err := svc.LoadFlowFiles(ctx, files, "Payroll", "alice"); err != nil {
+		t.Fatalf("second upload: %v", err)
+	}
+
+	payloads := notifier.targetedPayload("alice", "flow:loaded")
+	if len(payloads) != 2 {
+		t.Fatalf("captured %d flow:loaded payloads, want 2", len(payloads))
+	}
+	for i, p := range payloads {
+		sum, ok := p.(FlowLoadedSummary)
+		if !ok {
+			t.Fatalf("payload %d is %T, want FlowLoadedSummary — the full document must never ride the SSE stream", i, p)
+		}
+		if sum.ID != doc.ID {
+			t.Errorf("payload %d id = %q, want the uploaded flow's id %q", i, sum.ID, doc.ID)
+		}
+		if sum.Name != doc.Name {
+			t.Errorf("payload %d name = %q, want %q", i, sum.Name, doc.Name)
+		}
+		if sum.FilePath != "" {
+			t.Errorf("payload %d carries filePath %q — uploads have no on-disk source; consumers must refetch from the library", i, sum.FilePath)
+		}
+		if sum.IsFolder {
+			t.Errorf("payload %d claims a folder flow for a single-file upload", i)
+		}
 	}
 }

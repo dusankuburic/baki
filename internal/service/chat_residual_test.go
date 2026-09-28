@@ -36,20 +36,21 @@ func TestEnforceBudget_InFlightTerm(t *testing.T) {
 
 // TestInFlightCost_PricesTokens: local spend priced at provider rates.
 func TestInFlightCost_PricesTokens(t *testing.T) {
+	ctx := context.Background()
 	p := &testutil.FakeProvider{} // Pricing zero-value
-	if got := inFlightCost(p, 0, 0); got != 0 {
+	if got := inFlightCost(inFlightPricing(ctx, p, ""), 0, 0); got != 0 {
 		t.Errorf("zero tokens = %v, want 0", got)
 	}
-	if got := inFlightCost(nil, 100, 100); got != 0 {
+	if got := inFlightCost(inFlightPricing(ctx, nil, ""), 100, 100); got != 0 {
 		t.Errorf("nil provider = %v, want 0", got)
 	}
 	// A provider with real pricing via the interface: wrap the fake — use
 	// glm's provider-wide pricing (1.4/4.4 per catalog audit) for real math.
 	g := ai.NewGLMProvider("k")
-	if got := inFlightCost(g, 1_000_000, 0); got != 1.4 {
+	if got := inFlightCost(inFlightPricing(ctx, g, "glm-4.5"), 1_000_000, 0); got != 1.4 {
 		t.Errorf("1M input on GLM = %v, want 1.4", got)
 	}
-	if got := inFlightCost(g, 0, 1_000_000); got != 4.4 {
+	if got := inFlightCost(inFlightPricing(ctx, g, "glm-4.5"), 0, 1_000_000); got != 4.4 {
 		t.Errorf("1M output on GLM = %v, want 4.4", got)
 	}
 }

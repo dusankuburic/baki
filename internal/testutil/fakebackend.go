@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"pad-analyzer/internal/auth"
@@ -34,6 +35,11 @@ type FakeBackend struct {
 	// (upload/replace/re-index round-trips in rag service tests).
 	KnowledgeDocs   map[string]*interfaces.KnowledgeDocument
 	KnowledgeChunks map[string]interfaces.KnowledgeChunk
+	// EmbeddingDim is the deployment's vector width: a chunk counts as
+	// vector-indexed (CountKnowledgeChunks, the sample's ordering) only when
+	// its embedding has this width, mirroring the Postgres embedding_vec
+	// rule. 0 keeps the any-embedding rule (every embedded chunk is indexed).
+	EmbeddingDim int
 	// FindingStatuses (flowID -> findingKey -> status) and Baselines (flowID ->
 	// baseline) back the triage methods. Lazily initialized, so a struct-literal
 	// FakeBackend works without NewFakeBackend.
@@ -61,6 +67,11 @@ type FakeBackend struct {
 	// AI budget check fails closed on a store error).
 	DailyUsage float64
 	UsageErr   error
+	// UsageMetrics collects every SaveUsageMetric row in arrival order (the
+	// audited provider records asynchronously, hence the mutex); read it via
+	// SavedUsageMetrics.
+	UsageMetrics []*interfaces.UsageMetric
+	usageMu      sync.Mutex
 	// ShareTokens is keyed by token hash; lazily initialized.
 	ShareTokens map[string]*interfaces.ShareToken
 	// GovernanceAlerts backs the governance-alert inbox methods (id -> alert).
@@ -310,8 +321,22 @@ func (m *FakeBackend) UpdateCollaborator(_ context.Context, _, _ string, _ strin
 func (m *FakeBackend) RemoveCollaborator(_ context.Context, _, _ string) error { return nil }
 
 // ---- Usage tracking ----
-func (m *FakeBackend) SaveUsageMetric(_ context.Context, _ *interfaces.UsageMetric) error {
+func (m *FakeBackend) SaveUsageMetric(_ context.Context, metric *interfaces.UsageMetric) error {
+	if metric == nil {
+		return nil
+	}
+	cp := *metric
+	m.usageMu.Lock()
+	m.UsageMetrics = append(m.UsageMetrics, &cp)
+	m.usageMu.Unlock()
 	return nil
+}
+
+// SavedUsageMetrics returns a snapshot of the rows SaveUsageMetric received.
+func (m *FakeBackend) SavedUsageMetrics() []*interfaces.UsageMetric {
+	m.usageMu.Lock()
+	defer m.usageMu.Unlock()
+	return append([]*interfaces.UsageMetric(nil), m.UsageMetrics...)
 }
 func (m *FakeBackend) GetDailyUsage(_ context.Context, _, _ string) (float64, error) {
 	return m.DailyUsage, m.UsageErr
@@ -441,13 +466,85 @@ func (m *FakeBackend) SaveKnowledgeChunks(_ context.Context, _ string, chunks []
 func (m *FakeBackend) SearchKnowledge(_ context.Context, _ string, _ []float32, _ int) ([]interfaces.KnowledgeChunk, error) {
 	return nil, nil
 }
-func (m *FakeBackend) ListKnowledgeChunkContents(_ context.Context, orgID string) ([]interfaces.KnowledgeChunk, error) {
+
+// ListKnowledgeChunkContents mirrors the Postgres keyset page: the org's
+// chunks strictly after the (DocID, ID) cursor, in (DocID, ID) order, capped
+// at limit (limit <= 0 = all).
+func (m *FakeBackend) ListKnowledgeChunkContents(_ context.Context, orgID string, after interfaces.KnowledgeChunkCursor, limit int) ([]interfaces.KnowledgeChunk, error) {
 	m.initKnowledge()
 	var out []interfaces.KnowledgeChunk
 	for _, c := range m.KnowledgeChunks {
-		if d, ok := m.KnowledgeDocs[c.DocID]; ok && d.OrgID == orgID {
-			out = append(out, interfaces.KnowledgeChunk{ID: c.ID, DocID: c.DocID, Content: c.Content})
+		d, ok := m.KnowledgeDocs[c.DocID]
+		if !ok || d.OrgID != orgID {
+			continue
 		}
+		if c.DocID < after.DocID || (c.DocID == after.DocID && c.ID <= after.ID) {
+			continue
+		}
+		out = append(out, interfaces.KnowledgeChunk{ID: c.ID, DocID: c.DocID, Content: c.Content})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].DocID != out[j].DocID {
+			return out[i].DocID < out[j].DocID
+		}
+		return out[i].ID < out[j].ID
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// vectorIndexed mirrors the Postgres embedding_vec rule: an embedded chunk
+// is in the vector index when EmbeddingDim is unset or matches its width.
+func (m *FakeBackend) vectorIndexed(c interfaces.KnowledgeChunk) bool {
+	return len(c.Embedding) > 0 && (m.EmbeddingDim == 0 || len(c.Embedding) == m.EmbeddingDim)
+}
+
+// SampleKnowledgeChunkEmbeddings mirrors the Postgres sample: ONE chunk per
+// document (the vector-indexed one first, then the lowest ID), documents
+// whose pick is indexed first, then DocID order, capped at n — with the
+// embedding copied so callers cannot alias the stored slice.
+func (m *FakeBackend) SampleKnowledgeChunkEmbeddings(_ context.Context, orgID string, n int) ([]interfaces.KnowledgeChunk, error) {
+	m.initKnowledge()
+	if n <= 0 {
+		return nil, nil
+	}
+	var all []interfaces.KnowledgeChunk
+	for _, c := range m.KnowledgeChunks {
+		if d, ok := m.KnowledgeDocs[c.DocID]; ok && d.OrgID == orgID && len(c.Embedding) > 0 {
+			all = append(all, interfaces.KnowledgeChunk{
+				ID: c.ID, DocID: c.DocID, Content: c.Content,
+				Embedding: append([]float32(nil), c.Embedding...),
+			})
+		}
+	}
+	// DISTINCT ON (doc_id) ... ORDER BY doc_id, (embedding_vec IS NULL), id
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].DocID != all[j].DocID {
+			return all[i].DocID < all[j].DocID
+		}
+		if vi, vj := m.vectorIndexed(all[i]), m.vectorIndexed(all[j]); vi != vj {
+			return vi
+		}
+		return all[i].ID < all[j].ID
+	})
+	var out []interfaces.KnowledgeChunk
+	for _, c := range all {
+		if len(out) > 0 && out[len(out)-1].DocID == c.DocID {
+			continue
+		}
+		out = append(out, c)
+	}
+	// ORDER BY unindexed, doc_id LIMIT n
+	sort.SliceStable(out, func(i, j int) bool {
+		if vi, vj := m.vectorIndexed(out[i]), m.vectorIndexed(out[j]); vi != vj {
+			return vi
+		}
+		return out[i].DocID < out[j].DocID
+	})
+	if len(out) > n {
+		out = out[:n]
 	}
 	return out, nil
 }
@@ -467,7 +564,7 @@ func (m *FakeBackend) CountKnowledgeChunks(_ context.Context, orgID string) (int
 	for _, c := range m.KnowledgeChunks {
 		if d, ok := m.KnowledgeDocs[c.DocID]; ok && d.OrgID == orgID {
 			total++
-			if len(c.Embedding) > 0 {
+			if m.vectorIndexed(c) {
 				indexed++
 			}
 		}

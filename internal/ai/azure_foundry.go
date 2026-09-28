@@ -2,14 +2,15 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"pad-core/logger"
 )
@@ -22,11 +23,13 @@ import (
 // are configured, the project's prompt agents (see azure_agents.go /
 // responses.go).
 //
-// Wire format: {endpoint}/openai/v1/chat/completions, /embeddings and /models
-// speak the OpenAI shape, so openaiBase does the work; the differences are the
+// Wire format: {endpoint}/openai/v1/chat/completions and /embeddings speak
+// the OpenAI shape, so openaiBase does the work; the differences are the
 // per-instance base URL, the `api-key` header, max_completion_tokens, and
 // Azure's content-filter and retry-after-ms semantics (handled in the base
-// so every OpenAI-compatible provider benefits).
+// so every OpenAI-compatible provider benefits). /openai/v1/models is NOT
+// used: it lists the resource's model catalogue, not its deployments (see
+// Models).
 type AzureFoundryProvider struct {
 	openaiBase
 	cfg AzureFoundryConfig
@@ -40,6 +43,11 @@ type AzureFoundryProvider struct {
 
 	mu        sync.Mutex
 	lastToken string
+
+	// claude is the Anthropic-wire provider for the resource's Claude
+	// deployments ("claude:<name>" ids), built on first use (claudeProvider).
+	claudeOnce sync.Once
+	claude     *ClaudeProvider
 }
 
 // NewAzureFoundryProvider builds the provider from the stored document (see
@@ -70,6 +78,7 @@ func newAzureFoundryProvider(cfg AzureFoundryConfig, cfgErr error, client *http.
 		embeddingModel:        cfg.EmbeddingDeployment,
 		embeddingModelDefault: cfg.EmbeddingDeployment,
 		maxTokensParam:        maxTokensParamCompletion,
+		embedDimensionsFor:    azureEmbeddingDimensions,
 	}
 	if p.configErr != nil || !cfg.Configured() {
 		return p
@@ -91,6 +100,11 @@ func newAzureFoundryProvider(cfg AzureFoundryConfig, cfgErr error, client *http.
 		}
 		p.tokens = src
 		p.tokenFn = p.entraToken
+		// A 401/403 in Entra ID mode is a rejected ACCESS TOKEN (audience,
+		// cloud, Entra auth disabled, revoked) with Azure's explanation —
+		// not an API key the principal does not have. PermissionDenied keeps
+		// its own path; API-key mode keeps the bare invalid-key mapping.
+		p.handle401 = entraUnauthorized
 	}
 	return p
 }
@@ -110,11 +124,22 @@ func (p *AzureFoundryProvider) entraToken(ctx context.Context) (string, error) {
 
 // withTokenRetry runs fn and, when the service rejected an Entra ID token
 // (401 → ErrApiKeyInvalid) that has not expired, drops it and tries once more
-// with a fresh one — a role assignment or secret rotation invalidates tokens
-// out of band. The same token coming back means the rejection is real.
+// with a fresh one — an issued token can be refused before it expires (a
+// signing-key rollover, a gateway validation hiccup); a role assignment or
+// secret rotation does NOT invalidate issued tokens (RBAC is evaluated per
+// request, and a client-credentials token stays valid until exp). The fresh
+// token comes from a rebuilt credential (entraTokenSource.Invalidate), since
+// MSAL's own cache would otherwise hand back the refused one; the same token
+// coming back means the rejection is real.
+//
+// Two auth failures return at once: a token that could not be OBTAINED
+// (errEntraToken — Entra ID refused the credentials; asking again costs
+// another failing sign-in), and a principal the service accepted but denied
+// (ErrProviderPermissionDenied — a new token cannot grant a missing role).
 func (p *AzureFoundryProvider) withTokenRetry(ctx context.Context, fn func() error) error {
 	err := fn()
-	if err == nil || p.tokens == nil || !errors.Is(err, ErrApiKeyInvalid) {
+	if err == nil || p.tokens == nil || !errors.Is(err, ErrApiKeyInvalid) ||
+		errors.Is(err, errEntraToken) || errors.Is(err, ErrProviderPermissionDenied) {
 		return err
 	}
 	p.mu.Lock()
@@ -149,6 +174,77 @@ func (p *AzureFoundryProvider) authorize(ctx context.Context, req *http.Request)
 // Config returns the parsed document (redact with Public() before exposing).
 func (p *AzureFoundryProvider) Config() AzureFoundryConfig { return p.cfg }
 
+// ProbeAzureFoundryProject explains an empty listing for an Entra ID + project
+// document that names no chat deployment (the project listing is its only
+// source): the token request's refusal, or the project deployments route's
+// answer. nil when the document cannot list anything for a benign reason.
+// Models() deliberately never fails for these (a failing listing would make
+// the provider list fall back to the catalogue); the connection test calls
+// this when it has no candidate to try, so "name a chat deployment" is not
+// the answer to a rejected secret, a missing role or a wrong project.
+func ProbeAzureFoundryProject(ctx context.Context, raw string) error {
+	return NewAzureFoundryProvider(raw).probeProject(ctx)
+}
+
+func (p *AzureFoundryProvider) probeProject(ctx context.Context) error {
+	if p.configErr != nil {
+		return p.configErr
+	}
+	if !p.cfg.Configured() || !p.cfg.listsProjectDeployments() {
+		return nil
+	}
+	if _, err := p.entraToken(ctx); err != nil {
+		return err
+	}
+	ectx, cancel := context.WithTimeout(ctx, azureProjectExtrasTimeout)
+	defer cancel()
+	if _, err := p.fetchProjectDeployments(ectx); err != nil {
+		return fmt.Errorf("the project deployments listing failed: %w", err)
+	}
+	return nil
+}
+
+// ForgetAzureFoundryCredential releases what the process keeps for a document
+// beyond the KeyStore: its Entra ID token source (credential object and
+// cached bearer token) and its cached project listing. Called when the
+// document is deleted or replaced by one with another credential. Memos keyed
+// by resource (served models, learned windows) hold no secret and stay.
+func ForgetAzureFoundryCredential(cfg AzureFoundryConfig) {
+	if !cfg.Configured() {
+		return
+	}
+	if cfg.Auth.Mode == AzureAuthModeEntra {
+		forgetEntraSource(cfg.Auth.TenantID, cfg.Auth.ClientID, cfg.Auth.ClientSecret)
+	}
+	InvalidateAzureFoundryModels(cfg)
+}
+
+// servedMemoResource scopes the served-model memo to this resource (and
+// project, whose agents are memoised by name): deployment names are only
+// unique within one resource, so after the user switches resources a
+// same-named deployment starts from the listing, not the old mapping. Both
+// endpoints are already normalised (lower-case, no trailing slash).
+func (p *AzureFoundryProvider) servedMemoResource() string {
+	if p.cfg.ProjectEndpoint == "" {
+		return p.cfg.Endpoint
+	}
+	return p.cfg.Endpoint + "\x00" + p.cfg.ProjectEndpoint
+}
+
+// breakerScope keys circuit-breaker state by the resource (and project) the
+// user configured (breakerScoper): a 5xx from one tenant's resource says
+// nothing about another tenant's, even when both named a deployment "gpt-4o".
+// Endpoints, not the credential fingerprint: users of one resource share its
+// health, and the key holds no secret. Both are already normalised
+// (lower-case host, no trailing slash); lower-casing again keeps the key
+// canonical for documents that bypassed normalisation.
+func (p *AzureFoundryProvider) breakerScope() string {
+	if p.cfg.Endpoint == "" && p.cfg.ProjectEndpoint == "" {
+		return ""
+	}
+	return strings.ToLower(p.cfg.Endpoint) + "|" + strings.ToLower(p.cfg.ProjectEndpoint)
+}
+
 func (p *AzureFoundryProvider) ID() string        { return azureFoundryProviderID }
 func (p *AzureFoundryProvider) Name() string      { return "Azure AI Foundry" }
 func (p *AzureFoundryProvider) ContextLimit() int { return 128000 }
@@ -164,14 +260,24 @@ func (p *AzureFoundryProvider) SupportsTools() bool { return true }
 // does not know is metered at $0 and counted by the pricing-fallback metric.
 func (p *AzureFoundryProvider) PricePerMillionTokens() Pricing { return Pricing{} }
 
-// DefaultModel is the configured chat deployment, else the catalogue's
-// reference default (only meaningful for the unconfigured metadata provider —
-// ProviderService substitutes the first real deployment for the UI).
+// DefaultModel is the configured chat deployment, else the first additional
+// deployment, else the first Claude deployment. A configured document that
+// names none (Entra ID + project endpoint, whose deployments come from the
+// project listing) has no default: "" lets ProviderService pick the first
+// listed chat deployment instead of a catalogue name the resource almost
+// certainly has not deployed. The unconfigured metadata provider keeps the
+// catalogue's reference default.
 func (p *AzureFoundryProvider) DefaultModel() string {
-	if p.cfg.ChatDeployment != "" {
-		return p.cfg.ChatDeployment
+	if !p.cfg.Configured() {
+		return "gpt-4.1"
 	}
-	return "gpt-4.1"
+	if names := p.cfg.chatDeployments(); len(names) > 0 {
+		return names[0]
+	}
+	if names := p.cfg.ClaudeDeployments; len(names) > 0 {
+		return claudeModelPrefix + names[0]
+	}
+	return ""
 }
 
 func (p *AzureFoundryProvider) EstimateTokens(text string) int { return EstimateTokensOpenAI(text) }
@@ -190,6 +296,11 @@ func (p *AzureFoundryProvider) setEmbeddingModel(model string) {
 func (p *AzureFoundryProvider) Chat(ctx context.Context, req Request) (*Response, error) {
 	if p.configErr != nil {
 		return nil, p.configErr
+	}
+	// Claude deployments answer on the Anthropic Messages route, never on
+	// /openai/v1 (see azure_claude.go).
+	if IsClaudeModel(req.Model) {
+		return p.claudeChat(ctx, req)
 	}
 	if IsAgentModel(req.Model) {
 		var resp *Response
@@ -213,6 +324,9 @@ func (p *AzureFoundryProvider) Stream(ctx context.Context, req Request, onChunk 
 	if p.configErr != nil {
 		return p.configErr
 	}
+	if IsClaudeModel(req.Model) {
+		return p.claudeStream(ctx, req, onChunk)
+	}
 	if IsAgentModel(req.Model) {
 		return p.withTokenRetry(ctx, func() error { return p.agentStream(ctx, req, onChunk) })
 	}
@@ -221,12 +335,51 @@ func (p *AzureFoundryProvider) Stream(ctx context.Context, req Request, onChunk 
 	return p.withTokenRetry(ctx, func() error { return p.stream(ctx, req, onChunk) })
 }
 
-func (p *AzureFoundryProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+// ErrEmbeddingDeploymentMissing reports an Azure AI Foundry configuration
+// that names no embedding deployment (the field is optional): the provider is
+// keyed but cannot embed. ProviderFactory.ForEmbedding returns it (via
+// embeddingUnavailable) so the knowledge base's embedder resolution moves on
+// and ends in the machine-readable "embedding not configured" error instead
+// of a masked 500 at Embed time.
+var ErrEmbeddingDeploymentMissing = errors.New("azure ai foundry: no embedding deployment configured — set one under Settings → AI Accounts → Azure AI Foundry")
+
+// embeddingUnavailable satisfies embeddingReadiness (see ForEmbedding). It
+// runs after the deployment-wide embedding-model override was applied, so an
+// AI.EmbeddingModel override still counts as a deployment.
+func (p *AzureFoundryProvider) embeddingUnavailable() error {
 	if p.configErr != nil {
-		return nil, p.configErr
+		return p.configErr
 	}
 	if p.embeddingModel == "" {
-		return nil, errors.New("azure ai foundry: no embedding deployment configured — set one under Settings → AI Accounts → Azure AI Foundry")
+		return ErrEmbeddingDeploymentMissing
+	}
+	return nil
+}
+
+// azureAdaName matches "ada" as a standalone token of a deployment name
+// ("text-embedding-ada-002", "ada002") but not inside a word ("canada").
+var azureAdaName = regexp.MustCompile(`(^|[^a-z])ada([^a-z]|$)`)
+
+// azureEmbeddingDimensions decides `dimensions` for an embedding DEPLOYMENT
+// name, which need not reveal the model behind it ("kb-embed"). A
+// text-embedding-3 name follows the OpenAI rule (never above the native
+// width); an ada name gets none (text-embedding-ada-002 has a fixed width);
+// any other name gets the configured width, and embed() retries once without
+// it when the model turns out to refuse the parameter.
+func azureEmbeddingDimensions(deployment string, n int) int {
+	name := strings.ToLower(deployment)
+	switch {
+	case n <= 0, azureAdaName.MatchString(name):
+		return 0
+	case strings.Contains(name, "text-embedding-3"):
+		return embeddingDimensionsFor(deployment, n)
+	}
+	return n
+}
+
+func (p *AzureFoundryProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	if err := p.embeddingUnavailable(); err != nil {
+		return nil, err
 	}
 	var vecs [][]float32
 	err := p.withTokenRetry(ctx, func() error {
@@ -239,14 +392,36 @@ func (p *AzureFoundryProvider) Embed(ctx context.Context, text []string) ([][]fl
 
 // --- model listing ---
 
-// azureModelsCacheTTL bounds how long a listing is reused per credential
-// set. The chat path consults Models() on every turn (context window,
-// output cap, pricing) and the factory builds a fresh provider per request,
-// so an instance-level memo would not survive; the cache is keyed by the
-// credential fingerprint, never shared between users or resources.
+// azureModelsCacheTTL bounds how long a COMPLETE project listing (Entra ID +
+// project endpoint: the project's deployments and agents) is reused. The chat
+// path consults Models() on every turn (context window, output cap, pricing)
+// and the factory builds a fresh provider per request, so an instance-level
+// memo would not survive; the cache is keyed per credential set AND the
+// document's deployment names (azureModelsCacheKey), never shared between
+// users or resources. Listings built from the document alone need no network
+// and are not cached.
 const azureModelsCacheTTL = 5 * time.Minute
 
+// azureModelsRetryAfter is how long a listing cut short by a transient
+// project failure (network, 5xx, 429, a hung project host, a token that could
+// not be obtained, the extras bound) is served before the project is asked
+// again. A deliberate trade: the agents can be missing for up to 30 s after
+// such a failure, instead of every chat turn paying the whole listing (up to
+// the 10 s extras bound) for as long as the failure lasts.
+const azureModelsRetryAfter = 30 * time.Second
+
 const azureModelsCacheMax = 512
+
+// azureModelsFlight collapses concurrent listings of one document (chat
+// turns, provider listings, embedding records started at the same time) into
+// one pair of project calls; see Models.
+var azureModelsFlight singleflight.Group
+
+// azureProjectExtrasTimeout bounds the project listings (deployments and
+// agents, every page) as a whole, so a slow or unreachable project endpoint
+// costs the chat path at most this much — it only decorates the listing. A
+// variable so tests can shorten it.
+var azureProjectExtrasTimeout = 10 * time.Second
 
 type azureModelsEntry struct {
 	models  []ModelInfo
@@ -258,33 +433,85 @@ var azureModelsCache = struct {
 	m  map[string]azureModelsEntry
 }{m: map[string]azureModelsEntry{}}
 
-// ResetAzureFoundryCaches drops the model-listing cache, the served-model memo
-// and the Entra token sources (tests, and after a configuration save so a
-// new deployment shows up without waiting for the TTL).
+// pruneAzureModelsCacheLocked makes room for one new entry WITHOUT wiping the
+// map: expired listings go first, and when none are expired the one closest to
+// expiry — the least valuable, it would be dropped by the next read anyway —
+// mirroring the served-model memo's pruning. The old whole-map wipe also
+// discarded every listing the active users were about to read, re-paying the
+// project listing (two paginated API calls each) for all of them at once.
+// Bounded work: one pass over the map (≤ azureModelsCacheMax entries) per
+// insert while full.
+func pruneAzureModelsCacheLocked(now time.Time) {
+	for k, e := range azureModelsCache.m {
+		if !now.Before(e.expires) {
+			delete(azureModelsCache.m, k)
+		}
+	}
+	for len(azureModelsCache.m) >= azureModelsCacheMax {
+		oldest, oldestExp, first := "", time.Time{}, true
+		for k, e := range azureModelsCache.m {
+			if first || e.expires.Before(oldestExp) {
+				oldest, oldestExp, first = k, e.expires, false
+			}
+		}
+		delete(azureModelsCache.m, oldest)
+	}
+}
+
+// azureModelsCacheKey scopes a cached listing to the credential set (which
+// includes both endpoints) AND the document's deployment names, which the
+// listing is built from: two users of one shared resource and key with
+// different deployments must never see each other's listing. Fingerprint()
+// itself stays credential-only (it also keys the Entra token sources).
+func azureModelsCacheKey(cfg AzureFoundryConfig) string {
+	parts := append([]string{cfg.Fingerprint(), cfg.ChatDeployment, cfg.EmbeddingDeployment}, cfg.Deployments...)
+	for _, d := range cfg.ClaudeDeployments {
+		parts = append(parts, claudeModelPrefix+d)
+	}
+	return strings.Join(parts, "\x00")
+}
+
+// ResetAzureFoundryCaches drops the model-listing cache, the served-model
+// memo, the learned context windows, the learned parameter repairs, the
+// embedding-dimensions refusals and the Entra token sources (tests). A
+// configuration save only invalidates that document's listing
+// (InvalidateAzureFoundryModels) and, when the credential changed, its token
+// source (ForgetAzureFoundryCredential); the memos need no reset because
+// they are keyed by resource (servedMemoResource). In-flight listings
+// (azureModelsFlight) hold nothing to clear.
 func ResetAzureFoundryCaches() {
 	azureModelsCache.mu.Lock()
 	azureModelsCache.m = map[string]azureModelsEntry{}
 	azureModelsCache.mu.Unlock()
 	resetServedModels()
+	resetLearnedWindows()
+	resetLearnedRepairs()
+	resetEmbedDimsRefusals()
 	resetEntraSources()
 }
 
-// InvalidateAzureFoundryModels drops the cached listing for one credential set.
+// InvalidateAzureFoundryModels drops the cached listing for one document
+// (same key as Models uses).
 func InvalidateAzureFoundryModels(cfg AzureFoundryConfig) {
 	azureModelsCache.mu.Lock()
-	delete(azureModelsCache.m, cfg.Fingerprint())
+	delete(azureModelsCache.m, azureModelsCacheKey(cfg))
 	azureModelsCache.mu.Unlock()
 }
 
-// Models lists what the resource can serve: the deployments from
-// GET /openai/v1/models (their ids are the `model` values requests must
-// use), annotated with the underlying model when the project deployments
-// listing is reachable, followed by the project's agents (Entra ID only).
-// Unconfigured (metadata) providers return the static reference catalogue
-// without touching the network. A listing failure other than bad
-// credentials falls back to the deployments named in the document so chat
-// keeps working; bad credentials are reported so the connection test can say
-// "invalid API key".
+// Models lists what the user can call. No data-plane route lists an API-key
+// caller's deployments — GET /openai/v1/models returns the resource's model
+// CATALOGUE (hundreds of versioned base and fine-tuned ids such as
+// "dall-e-3-3.0"), not deployment names — so the listing is the document's
+// own deployments: the chat deployment, the additional deployments and the
+// embedding deployment (flagged Embedding), each sized and priced from the
+// catalogue when its name is a catalogued model (the portal names deployments
+// after their model by default). With Entra ID and a project endpoint the
+// project's deployments listing is authoritative on top of that — it names
+// the model behind each deployment and adds the ones the document does not —
+// followed by the project's agents. Nothing named and no project yields an
+// empty list. Unconfigured (metadata) providers return the static reference
+// catalogue without touching the network. A bad key is reported by the
+// connection test's chat call (401 → ErrApiKeyInvalid), not by the listing.
 func (p *AzureFoundryProvider) Models(ctx context.Context) ([]ModelInfo, error) {
 	if p.configErr != nil {
 		return nil, p.configErr
@@ -292,104 +519,131 @@ func (p *AzureFoundryProvider) Models(ctx context.Context) ([]ModelInfo, error) 
 	if !p.cfg.Configured() {
 		return catalogModels(azureFoundryProviderID), nil
 	}
-	key := p.cfg.Fingerprint()
-	azureModelsCache.mu.Lock()
-	if e, ok := azureModelsCache.m[key]; ok && time.Now().Before(e.expires) {
-		out := make([]ModelInfo, len(e.models))
-		copy(out, e.models)
-		azureModelsCache.mu.Unlock()
-		return out, nil
+	models := p.configuredDeployments()
+	if !p.cfg.listsProjectDeployments() {
+		return models, nil
 	}
-	azureModelsCache.mu.Unlock()
 
-	var models []ModelInfo
-	err := p.withTokenRetry(ctx, func() error {
-		var err error
-		models, err = p.fetchDeployments(ctx)
-		return err
+	key := azureModelsCacheKey(p.cfg)
+	if cached, ok := cachedAzureModels(key); ok {
+		return cached, nil
+	}
+
+	// One listing per document at a time: callers that arrive while it runs
+	// share the result instead of each running the two paginated project
+	// calls. The flight is detached from the first caller's cancellation (its
+	// result fills the cache for everyone; projectListing bounds itself — the
+	// token fetch 30 s, the extras azureProjectExtrasTimeout) and each caller
+	// waits under its own ctx, falling back to the document's deployments
+	// when that ends first.
+	//
+	// A complete listing is cached for azureModelsCacheTTL; one cut short by
+	// a transient project failure, a token failure or the extras bound is
+	// cached for azureModelsRetryAfter only — served (the document's
+	// deployments keep chat working) but asked again soon instead of hiding
+	// the agents for the full TTL, and never re-fetched on every turn. An
+	// empty listing is not cached.
+	ch := azureModelsFlight.DoChan(key, func() (any, error) {
+		listed, complete := p.projectListing(context.WithoutCancel(ctx), p.configuredDeployments())
+		if len(listed) > 0 {
+			ttl := azureModelsCacheTTL
+			if !complete {
+				ttl = azureModelsRetryAfter
+			}
+			storeAzureModels(key, listed, ttl)
+		}
+		return listed, nil
 	})
-	if err != nil {
-		if errors.Is(err, ErrApiKeyInvalid) || errors.Is(err, ErrRateLimited) {
-			return nil, err
-		}
-		logger.Warn("azure ai foundry: list deployments failed; using the configured deployment names", "error", err)
-		models = p.configuredDeployments()
+	select {
+	case r := <-ch:
+		listed := r.Val.([]ModelInfo)
+		out := make([]ModelInfo, len(listed))
+		copy(out, listed)
+		return out, nil
+	case <-ctx.Done():
+		return models, nil
 	}
-	models = p.projectExtras(ctx, models)
-	if len(models) == 0 {
-		models = p.configuredDeployments()
-	}
-
-	// An empty listing (listing failed and the document names no
-	// deployment) is not cached: the next call retries instead of pinning
-	// "no models" for the TTL after a transient outage.
-	if len(models) > 0 {
-		azureModelsCache.mu.Lock()
-		if len(azureModelsCache.m) >= azureModelsCacheMax {
-			azureModelsCache.m = map[string]azureModelsEntry{}
-		}
-		azureModelsCache.m[key] = azureModelsEntry{models: models, expires: time.Now().Add(azureModelsCacheTTL)}
-		azureModelsCache.mu.Unlock()
-	}
-
-	out := make([]ModelInfo, len(models))
-	copy(out, models)
-	return out, nil
 }
 
-// configuredDeployments is the listing when the resource cannot be asked:
-// whatever the document names.
+// cachedAzureModels returns a copy of the cached listing for key while it is
+// live.
+func cachedAzureModels(key string) ([]ModelInfo, bool) {
+	azureModelsCache.mu.Lock()
+	defer azureModelsCache.mu.Unlock()
+	e, ok := azureModelsCache.m[key]
+	if !ok || !time.Now().Before(e.expires) {
+		return nil, false
+	}
+	out := make([]ModelInfo, len(e.models))
+	copy(out, e.models)
+	return out, true
+}
+
+// storeAzureModels caches a listing for ttl, making room first when the
+// cache is full.
+func storeAzureModels(key string, models []ModelInfo, ttl time.Duration) {
+	now := time.Now()
+	azureModelsCache.mu.Lock()
+	defer azureModelsCache.mu.Unlock()
+	if len(azureModelsCache.m) >= azureModelsCacheMax {
+		pruneAzureModelsCacheLocked(now)
+	}
+	azureModelsCache.m[key] = azureModelsEntry{models: models, expires: now.Add(ttl)}
+}
+
+// projectListing runs the project extras (Entra ID + project endpoint) and
+// reports whether the result is complete. The token is obtained first under
+// the caller's full context: the token fetch is shared (singleflight) with
+// concurrent chat turns, which must not inherit the extras' short bound, and a
+// token that cannot be obtained skips the extras instead of being requested
+// again for every project call.
+func (p *AzureFoundryProvider) projectListing(ctx context.Context, models []ModelInfo) ([]ModelInfo, bool) {
+	if _, err := p.entraToken(ctx); err != nil {
+		logger.Warn("azure ai foundry: entra id token unavailable; listing the configured deployments only", "error", err)
+		return models, false
+	}
+	ectx, cancel := context.WithTimeout(ctx, azureProjectExtrasTimeout)
+	defer cancel()
+	return p.projectExtras(ectx, models)
+}
+
+// configuredDeployments is the listing the document itself names: the chat
+// deployment, the additional deployments, the Claude deployments, then the
+// embedding deployment.
 func (p *AzureFoundryProvider) configuredDeployments() []ModelInfo {
 	var out []ModelInfo
-	for _, d := range []string{p.cfg.ChatDeployment, p.cfg.EmbeddingDeployment} {
-		if d != "" {
-			out = append(out, ModelInfo{ID: d, DisplayName: d, ContextLimit: p.ContextLimit()})
-		}
+	for _, d := range p.cfg.chatDeployments() {
+		out = append(out, p.deploymentEntry(d, false))
+	}
+	for _, d := range p.cfg.ClaudeDeployments {
+		out = append(out, claudeDeploymentEntry(d))
+	}
+	if d := p.cfg.EmbeddingDeployment; d != "" && !strings.EqualFold(d, p.cfg.ChatDeployment) {
+		out = append(out, p.deploymentEntry(d, true))
 	}
 	return out
 }
 
-// fetchDeployments calls GET {endpoint}/openai/v1/models. The response is the
-// OpenAI list shape whose ids are the resource's deployment names.
-func (p *AzureFoundryProvider) fetchDeployments(ctx context.Context) ([]ModelInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.Endpoint+"/openai/v1/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	if err := p.authorize(ctx, req); err != nil {
-		return nil, err
-	}
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("azure ai foundry: list deployments: %w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized:
-		return nil, ErrApiKeyInvalid
-	case resp.StatusCode == http.StatusTooManyRequests:
-		return nil, rateLimitErr(resp)
-	case resp.StatusCode != http.StatusOK:
-		return nil, fmt.Errorf("azure ai foundry: list deployments: status %d", resp.StatusCode)
-	}
-	var parsed struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("azure ai foundry: list deployments: %w", err)
-	}
-	out := make([]ModelInfo, 0, len(parsed.Data))
-	seen := map[string]bool{}
-	for _, d := range parsed.Data {
-		id := strings.TrimSpace(d.ID)
-		if id == "" || seen[id] {
-			continue
+// deploymentEntry is the listing entry for one deployment name. When the
+// name is itself a catalogued model — the portal's default deployment names
+// ("gpt-4o", "Phi-4", "text-embedding-3-small") — the entry carries that
+// model's price, context window and output cap up front, so a small-window
+// deployment is sized correctly before any call succeeded. A model-router
+// name keeps the conservative default window (each call may be routed to a
+// different model). Anything else starts at the provider-wide window and is
+// enriched later from the project listing or the served-model memo.
+func (p *AzureFoundryProvider) deploymentEntry(name string, embedding bool) ModelInfo {
+	m := ModelInfo{ID: name, DisplayName: name, ContextLimit: p.ContextLimit(), Embedding: embedding}
+	if entry, ok := catalogEntryFor(azureFoundryProviderID, name); ok {
+		m.Pricing = entry.Pricing
+		if !isModelRouterAlias(name) {
+			if entry.ContextLimit > 0 {
+				m.ContextLimit = entry.ContextLimit
+			}
+			if entry.MaxOutputTokens > 0 {
+				m.MaxOutputTokens = entry.MaxOutputTokens
+			}
 		}
-		seen[id] = true
-		out = append(out, ModelInfo{ID: id, DisplayName: id, ContextLimit: p.ContextLimit()})
 	}
-	return out, nil
+	return m
 }

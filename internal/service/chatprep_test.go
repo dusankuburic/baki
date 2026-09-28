@@ -17,7 +17,7 @@ func TestBuildMessages_MergesContextIntoSingleUserTurn(t *testing.T) {
 		},
 		UserMessage: "what does this flow do?",
 	}
-	out := buildMessages(req, "FLOW CONTEXT HERE")
+	out := buildMessages(req, "FLOW CONTEXT HERE", "")
 
 	if len(out) != 3 {
 		t.Fatalf("want 3 messages (2 history + 1 merged user turn), got %d", len(out))
@@ -38,7 +38,7 @@ func TestBuildMessages_ExcludeContext(t *testing.T) {
 		UserMessage:    "plain question",
 		ExcludeContext: true,
 	}
-	out := buildMessages(req, "SHOULD NOT APPEAR")
+	out := buildMessages(req, "SHOULD NOT APPEAR", "")
 	if len(out) != 1 {
 		t.Fatalf("want 1 message, got %d", len(out))
 	}
@@ -51,7 +51,7 @@ func TestBuildMessages_ExcludeContext(t *testing.T) {
 // ExcludeContext is false.
 func TestBuildMessages_NoContext(t *testing.T) {
 	req := models.ChatRequest{UserMessage: "hi"}
-	out := buildMessages(req, "")
+	out := buildMessages(req, "", "")
 	if len(out) != 1 || out[0].Content != "hi" {
 		t.Errorf("empty context: got %+v, want single 'hi' user turn", out)
 	}
@@ -66,7 +66,7 @@ func TestBuildMessages_NoConsecutiveUserPairFromContext(t *testing.T) {
 		Messages:    []models.ChatMessage{{Role: "assistant", Content: "a"}},
 		UserMessage: "q",
 	}
-	out := buildMessages(req, "ctx")
+	out := buildMessages(req, "ctx", "")
 	// Exactly one trailing user message is appended; the context did not become a
 	// separate message.
 	if len(out) != 2 {
@@ -80,5 +80,32 @@ func TestBuildMessages_NoConsecutiveUserPairFromContext(t *testing.T) {
 	}
 	if userCount != 1 {
 		t.Errorf("want exactly 1 user message, got %d", userCount)
+	}
+}
+
+// PERF-8: the per-turn RAG guidelines ride in the final user turn (after the
+// flow context, before the question) and never in the system prompt, so the
+// system prompt and history prefix stay byte-identical across turns for the
+// providers' automatic prompt cache. ExcludeContext drops the flow context
+// only; the guidelines are still included, as before the move.
+func TestBuildMessages_GuidelinesInUserTurnNotSystemPrompt(t *testing.T) {
+	req := models.ChatRequest{
+		Messages:    []models.ChatMessage{{Role: "user", Content: "earlier"}, {Role: "assistant", Content: "answer"}},
+		UserMessage: "what does this flow do?",
+	}
+	guidelines := "**Relevant Organizational Guidelines**:\n- never log credentials"
+	out := buildMessages(req, "FLOW CONTEXT", guidelines)
+	if len(out) != 3 || out[0].Content != "earlier" || out[1].Content != "answer" {
+		t.Fatalf("history changed: %+v", out)
+	}
+	want := "Context:\nFLOW CONTEXT\n\n" + guidelines + "\n\nwhat does this flow do?"
+	if got := out[2].Content; got != want {
+		t.Errorf("user turn = %q, want %q", got, want)
+	}
+
+	req.ExcludeContext = true
+	out = buildMessages(req, "FLOW CONTEXT", guidelines)
+	if got := out[2].Content; got != guidelines+"\n\nwhat does this flow do?" {
+		t.Errorf("ExcludeContext user turn = %q, want the guidelines kept and the context dropped", got)
 	}
 }

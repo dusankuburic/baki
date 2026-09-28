@@ -240,6 +240,14 @@ func rateLimitGroup(method, path string) string {
 		if path == "/api/chat/stream" {
 			return rlGroupChat
 		}
+		// The provider connection test fires up to three real, billed chat
+		// completions per call (connectionTestModels) — the same spend shape
+		// as a chat turn, so it rides the tight chat bucket, not general.
+		// The other provider routes (list, the OAuth device flow) cost no
+		// model tokens and stay on general.
+		if path == "/api/providers/test" {
+			return rlGroupChat
+		}
 		if path == "/api/flow/upload" {
 			return rlGroupUpload
 		}

@@ -96,6 +96,35 @@ func TestEncryptedKeyStore_AADBindsToRow(t *testing.T) {
 	}
 }
 
+// TestEncryptedKeyStore_OrgAADBindsToRow (G7): an org ciphertext round-trips
+// under its own (org, provider) AAD only — moved to another org, another
+// provider, or replayed under a USER scope whose id equals the org id, it
+// fails to authenticate.
+func TestEncryptedKeyStore_OrgAADBindsToRow(t *testing.T) {
+	s := newTestStore(t, "a-sufficiently-long-deployment-secret-123456")
+
+	ct, err := s.encrypt(`{"endpoint":"https://r.openai.azure.com"}`, orgKeyAAD("org-a", "azure-foundry"))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if _, err := s.decrypt(ct, orgKeyAAD("org-b", "azure-foundry")); err == nil {
+		t.Fatal("decrypt under a different org must fail (AAD mismatch)")
+	}
+	if _, err := s.decrypt(ct, orgKeyAAD("org-a", "openai")); err == nil {
+		t.Fatal("decrypt under a different provider must fail (AAD mismatch)")
+	}
+	if _, err := s.decrypt(ct, keyAAD("org-a", "azure-foundry")); err == nil {
+		t.Fatal("an org ciphertext must not authenticate under the user-scope AAD of the same id")
+	}
+	got, err := s.decrypt(ct, orgKeyAAD("org-a", "azure-foundry"))
+	if err != nil {
+		t.Fatalf("decrypt with correct AAD: %v", err)
+	}
+	if got != `{"endpoint":"https://r.openai.azure.com"}` {
+		t.Fatalf("round-trip mismatch: %q", got)
+	}
+}
+
 func TestEncryptedKeyStore_EmptySecretRejected(t *testing.T) {
 	if _, err := newKeystoreAEAD(nil); err == nil {
 		t.Fatal("expected error for empty secret")

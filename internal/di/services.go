@@ -2,6 +2,7 @@ package di
 
 import (
 	"context"
+	"errors"
 	"pad-core/logger"
 	"path/filepath"
 
@@ -9,6 +10,7 @@ import (
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/api"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/mail"
@@ -102,10 +104,14 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 			return backend.SaveUsageMetric(ctx, metric)
 		}
 	}
-	factory := ai.NewProviderFactory(keys.Get, copilotAuth, recorder, &cfg.Runtime)
+	factory := ai.NewProviderFactory(memberKeyLookup(keys), copilotAuth, recorder, &cfg.Runtime)
 	// Embeddings come back at the knowledge base's vector width where the
-	// model supports it (text-embedding-3-*), so they are always indexable.
-	factory.SetEmbeddingDimensions(cfg.Storage.EmbeddingDim)
+	// model supports it (text-embedding-3-*, up to its native width), so they
+	// are indexable. The width is the storage contract's, default included:
+	// passing the raw PAD_EMBEDDING_DIM (0 when unset) asked for nothing,
+	// and text-embedding-3-large then returned 3072-wide vectors against the
+	// 1536 index.
+	factory.SetEmbeddingDimensions(cfg.Storage.EffectiveEmbeddingDim())
 	// Azure AI Foundry endpoints are user-supplied. In cloud mode every
 	// request to one goes through the dial-time private-address guard (the
 	// operator can lift it for private-link resources); the desktop/local
@@ -121,6 +127,66 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 	})
 	auth := ai.NewGitHubAuth()
 	return auth, copilotAuth, factory
+}
+
+// memberKeyLookup adapts a KeyStore to the factory's contract, under which
+// "no key stored" is ("", nil) and only a real failure (a decrypt failure
+// after a secret rotation, a database error) is an error. Both keystores
+// report absence as storage.ErrSecretNotFound; passed through unmapped it
+// made a plainly unconfigured provider look like a broken one (chat showed
+// "couldn't load the AI provider configuration" instead of
+// PROVIDER_NOT_CONFIGURED) and would keep ForOrg from ever reaching the
+// organisation's shared credential.
+func memberKeyLookup(keys service.KeyStore) func(scope, provider string) (string, error) {
+	return func(scope, provider string) (string, error) {
+		v, err := keys.Get(scope, provider)
+		if errors.Is(err, storage.ErrSecretNotFound) {
+			return "", nil
+		}
+		return v, err
+	}
+}
+
+// orgKeyLookup is memberKeyLookup for an organisation's shared credentials.
+func orgKeyLookup(keys service.OrgKeyStore) func(orgID, provider string) (string, error) {
+	return func(orgID, provider string) (string, error) {
+		v, err := keys.GetOrg(orgID, provider)
+		if errors.Is(err, storage.ErrSecretNotFound) {
+			return "", nil
+		}
+		return v, err
+	}
+}
+
+// ProvideOrgKeyStore exposes the organisation credential store (G7) when the
+// deployment's keystore can hold one — the encrypted database keystore of
+// cloud mode implements both interfaces; the OS keyring does not — and nil
+// otherwise (desktop, local mode), which the org routes report as
+// ORG_KEYSTORE_UNAVAILABLE.
+func ProvideOrgKeyStore(keys service.KeyStore) service.OrgKeyStore {
+	if store, ok := keys.(service.OrgKeyStore); ok {
+		return store
+	}
+	return nil
+}
+
+// ProvideKnowledgeService builds the org knowledge-base service.
+//
+// It takes the factory (not a pre-resolved provider) so the embedding
+// provider is resolved per request in the caller's scope. Resolving once here
+// with an empty scope fails in cloud mode (keys are per-user) and never picks
+// up keys added later.
+//
+// settings is the service.SettingsProvider, NOT the concrete
+// *storage.SettingsStore: in cloud mode the configured embedding provider and
+// model live in the database, and taking the concrete store here read them
+// from a local file that always held the defaults.
+//
+// PAD_EMBEDDING_PROVIDER (validated at boot) pins the embedding provider for
+// the deployment; it is the only way the knowledge base embeds with Azure AI
+// Foundry.
+func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config) *rag.KnowledgeService {
+	return rag.NewKnowledgeService(backend, factory, settings, rag.WithEmbeddingProvider(cfg.Storage.EmbeddingProvider))
 }
 
 // ServiceModule bundles all internal services.
@@ -140,19 +206,8 @@ var ServiceModule = fx.Options(
 		service.NewWebhookNotifier,
 		// service.KeyStore itself comes from main.go's provideKeyStore (a
 		// plain fx provider, not a global) — no adapter needed here.
-		func(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider) *rag.KnowledgeService {
-			// Pass the factory (not a pre-resolved provider) so the embedding
-			// provider is resolved per request in the caller's scope. Resolving
-			// once here with an empty scope fails in cloud mode (keys are
-			// per-user) and never picks up keys added later.
-			//
-			// settings is the service.SettingsProvider, NOT the concrete
-			// *storage.SettingsStore: in cloud mode the configured embedding
-			// provider and model live in the database, and taking the concrete
-			// store here read them from a local file that always held the
-			// defaults.
-			return rag.NewKnowledgeService(backend, factory, settings)
-		},
+		ProvideOrgKeyStore,
+		ProvideKnowledgeService,
 		func(settings service.SettingsProvider, secrets service.KeyStore, notifier service.EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode) *service.SystemService {
 			return service.NewSystemService(settings, secrets, notifier, backend, mode)
 		},
@@ -211,8 +266,20 @@ var ServiceModule = fx.Options(
 			copilot *ai.CopilotAuth,
 			factory *ai.ProviderFactory,
 			secrets service.KeyStore,
+			orgKeys service.OrgKeyStore,
+			sys *service.SystemService,
 		) *service.ProviderService {
-			return service.NewProviderService(auth, copilot, factory, secrets)
+			svc := service.NewProviderService(auth, copilot, factory, secrets)
+			// Organisation-shared credentials (G7): nil outside cloud mode,
+			// where the org routes report ORG_KEYSTORE_UNAVAILABLE.
+			svc.SetOrgKeyStore(orgKeys)
+			// POST /api/keys/save and /api/keys/delete go through SystemService
+			// (removing an Azure AI Foundry configuration too): drop that
+			// provider's cached live listing and fence off a listing in
+			// flight, as an Azure config save does — a replacement key may
+			// carry other entitlements than the one it replaces.
+			sys.OnApiKeyChanged(svc.InvalidateModels)
+			return svc
 		},
 	),
 	// R4: the deployment custom-rule file is its OWN graph node rather than
@@ -223,6 +290,16 @@ var ServiceModule = fx.Options(
 	// resolver.
 	fx.Provide(ProvideDeploymentCustomRules),
 	fx.Provide(service.NewRuleProfileResolver),
+	// The factory learns the organisation credential store after
+	// construction (ProvideAI's signature is the tests' contract): ForOrg
+	// and ForEmbeddingOrg then fall back to — or, for embeddings, prefer —
+	// the org's shared credential. A decorator, not a second provider.
+	fx.Decorate(func(factory *ai.ProviderFactory, orgKeys service.OrgKeyStore) *ai.ProviderFactory {
+		if orgKeys != nil {
+			factory.SetOrgKeyLookup(orgKeyLookup(orgKeys))
+		}
+		return factory
+	}),
 	// A DECORATOR, not a second provider of *AnalysisService — fx hard-fails
 	// that graph with "already provided". It wires both dependencies into the
 	// service the constructor built.
@@ -239,6 +316,16 @@ var ServiceModule = fx.Options(
 	fx.Decorate(func(resolver *service.RuleProfileResolver, svc *service.FlowService) *service.FlowService {
 		svc.SetRuleProfileResolver(resolver)
 		return svc
+	}),
+	// Account erasure (handleAuthDeleteAccount → backend.DeleteUser) cascades
+	// the user's provider keys in SQL; this post-construction wiring — the
+	// same setter pattern as OnApiKeyChanged above, which can't be used here
+	// because no service owns the deletion, only the auth handler does — drops
+	// the provider service's cached live listings for that scope so they
+	// cannot outlive the account.
+	fx.Decorate(func(h *api.AuthHandler, svc *service.ProviderService) *api.AuthHandler {
+		h.OnUserDeleted(svc.InvalidateScope)
+		return h
 	}),
 )
 

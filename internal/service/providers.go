@@ -19,21 +19,60 @@ import (
 // the response for up to the request timeout.
 const dynamicModelTTL = 10 * time.Minute
 
+// emptyListingTTL caches a configured provider's EMPTY live listing briefly:
+// long enough that opening Settings twice does not fan out a second upstream
+// call for a provider with no entitlements, short enough that a listing that
+// fills in (a deployment created, a role granted) shows up soon.
+const emptyListingTTL = 30 * time.Second
+
+// invalidation is a per-key or per-scope invalidation mark: the generation
+// it was made at and when, so stale marks can be pruned.
+type invalidation struct {
+	gen uint64
+	at  time.Time
+}
+
+// invalidationFence keeps a mark long past any in-flight listing
+// (liveModelsBudget + grace, or a caller's own deadline).
+const invalidationFence = dynamicModelTTL
+
+// liveModelsBudget bounds each configured provider's live listing in
+// ListProviders. The listings run concurrently, so the whole response stays
+// well under the client's 30 s request timeout even when one upstream hangs;
+// a provider that misses the budget is listed from its metadata instead. A
+// variable so tests can shorten it.
+var liveModelsBudget = 8 * time.Second
+
+// liveModelsGrace is how long ListProviders waits past liveModelsBudget for a
+// listing that ignores its context before falling back to the metadata.
+const liveModelsGrace = 500 * time.Millisecond
+
 // ProviderService manages AI provider configuration, authentication, and connectivity.
 type ProviderService struct {
 	auth        *ai.GitHubAuth
 	copilotAuth *ai.CopilotAuth
 	factory     *ai.ProviderFactory
 	secrets     KeyStore
+	// orgKeys holds organisations' shared credentials (G7); nil on the
+	// desktop and in local mode, where the org routes report it missing.
+	orgKeys OrgKeyStore
 
 	modelMu    sync.Mutex
 	modelCache map[string]modelCacheEntry // key: scope + "\x00" + providerID
+	// modelGen is a monotonic stamp bumped by every invalidation (under
+	// modelMu). A listing records it when it starts and writes back only if
+	// neither its key nor its scope was invalidated after that stamp — the
+	// pre-save listing must not stay cached for dynamicModelTTL, but one
+	// user's Azure save must not discard another user's in-flight listing.
+	modelGen         uint64
+	invalidatedKeys  map[string]invalidation
+	invalidatedScope map[string]invalidation
 }
 
 type modelCacheEntry struct {
 	models []ai.ModelInfo
-	// defaultModel is the CONFIGURED provider's default (a user's Azure
-	// deployment name), which can differ from the metadata provider's.
+	// defaultModel is the CONFIGURED provider's default, which can differ
+	// from the metadata provider's.
 	defaultModel string
 	expiresAt    time.Time
 }
@@ -45,22 +84,71 @@ func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factor
 		factory:     factory,
 		secrets:     secrets,
 		modelCache:  make(map[string]modelCacheEntry),
+
+		invalidatedKeys:  make(map[string]invalidation),
+		invalidatedScope: make(map[string]invalidation),
 	}
+}
+
+// SetOrgKeyStore enables organisation-shared credentials (G7). Set once at
+// boot, before requests are served; nil leaves the org methods reporting
+// ErrOrgKeyStoreUnavailable and ListProviders ignoring the org.
+func (s *ProviderService) SetOrgKeyStore(store OrgKeyStore) { s.orgKeys = store }
+
+// OrgKeysAvailable reports whether this deployment can hold organisation
+// credentials (cloud mode with the database keystore).
+func (s *ProviderService) OrgKeysAvailable() bool { return s.orgKeys != nil }
+
+// ErrOrgKeyStoreUnavailable is returned by the organisation credential
+// methods on a deployment without an org secret store (desktop, local mode).
+var ErrOrgKeyStoreUnavailable = errors.New("organisation credentials require the database keystore (cloud mode)")
+
+// listingScope names whose credential a provider listing runs on: the
+// caller's own (cacheScope = scope) or the organisation's shared one
+// (cacheScope = ai.OrgScope(orgID), shared = true), so the cached live
+// listing is keyed — and invalidated — by the credential it was built from.
+type listingScope struct {
+	scope      string
+	orgID      string
+	cacheScope string
+	shared     bool
+}
+
+// personalScope is the listing scope of a caller running on their own keys.
+func personalScope(scope string) listingScope {
+	return listingScope{scope: scope, cacheScope: scope}
 }
 
 // dynamicModels returns the configured provider's live model list, cached for
 // dynamicModelTTL per (scope, provider). Static metadata providers are cheap
-// (no network) and are NOT cached.
-func (s *ProviderService) dynamicModels(ctx context.Context, scope, providerID string) (models []ai.ModelInfo, defaultModel string, ok bool) {
+// (no network) and are NOT cached. An empty listing is cached only for
+// emptyListingTTL (the next call soon retries instead of pinning "no
+// models"). Nothing is cached when the caller's budget expired while it ran
+// (it may be cut short), or when an InvalidateModels / InvalidateScope for
+// this key ran meanwhile (it describes the previous configuration).
+//
+// Alias providers (Azure AI Foundry) are never cached here: their listing is
+// built from the user's own document plus, with Entra ID and a project
+// endpoint, the project listing, which the provider caches itself per
+// credential set and deployment names — and only when complete. A second,
+// blind cache here would pin a degraded listing (agents missing after a
+// transient project failure) for dynamicModelTTL.
+func (s *ProviderService) dynamicModels(ctx context.Context, ls listingScope, providerID string) (models []ai.ModelInfo, defaultModel string, ok bool) {
+	scope := ls.cacheScope
 	key := scope + "\x00" + providerID
+	cacheable := !ai.UsesModelAliases(providerID)
 	s.modelMu.Lock()
-	if e, ok := s.modelCache[key]; ok && time.Now().Before(e.expiresAt) {
+	if e, hit := s.modelCache[key]; cacheable && hit && time.Now().Before(e.expiresAt) {
 		s.modelMu.Unlock()
 		return e.models, e.defaultModel, true
 	}
+	gen := s.modelGen
 	s.modelMu.Unlock()
 
-	realProvider, err := s.factory.For(scope, providerID)
+	// Member-first: with no org (personalScope) this is the caller's own
+	// key; with one it is the org's credential exactly when the caller has
+	// none — the same rule that decided ls.shared.
+	realProvider, err := s.factory.ForOrg(ls.scope, ls.orgID, providerID)
 	if err != nil {
 		return nil, "", false
 	}
@@ -70,26 +158,126 @@ func (s *ProviderService) dynamicModels(ctx context.Context, scope, providerID s
 		return nil, "", false
 	}
 	defaultModel = realProvider.DefaultModel()
-	s.modelMu.Lock()
-	s.modelCache[key] = modelCacheEntry{models: models, defaultModel: defaultModel, expiresAt: time.Now().Add(dynamicModelTTL)}
-	s.modelMu.Unlock()
+	if cacheable && ctx.Err() == nil {
+		ttl := dynamicModelTTL
+		if len(models) == 0 {
+			ttl = emptyListingTTL // retry soon, but not on every Settings open
+		}
+		s.modelMu.Lock()
+		if !s.invalidatedSinceLocked(key, scope, gen) {
+			// Insert-time pruning: expired entries are never removed by reads,
+			// so this is the only thing that keeps a departed user's keys from
+			// accumulating in the map forever.
+			s.pruneModelCacheLocked(time.Now())
+			s.modelCache[key] = modelCacheEntry{models: models, defaultModel: defaultModel, expiresAt: time.Now().Add(ttl)}
+		}
+		s.modelMu.Unlock()
+	}
 	return models, defaultModel, true
 }
 
-// InvalidateModels drops the cached live listing for one (scope, provider) so
-// a configuration change (new Azure deployment names, rotated credential)
-// shows up on the next listing instead of after dynamicModelTTL.
-func (s *ProviderService) InvalidateModels(scope, providerID string) {
+// invalidatedSinceLocked reports whether key or its scope was invalidated
+// after the generation stamp gen (taken when the listing started). Caller
+// holds modelMu.
+func (s *ProviderService) invalidatedSinceLocked(key, scope string, gen uint64) bool {
+	if inv, ok := s.invalidatedKeys[key]; ok && inv.gen > gen {
+		return true
+	}
+	inv, ok := s.invalidatedScope[scope]
+	return ok && inv.gen > gen
+}
+
+// modelCacheMax bounds the live-listing cache's size, mirroring the ai
+// package's azureModelsCacheMax for its Azure model listings.
+const modelCacheMax = 512
+
+// pruneModelCacheLocked drops expired entries first — they are invisible to
+// reads already, and nothing else ever removes them, so without this a
+// departed or deleted user's entries accumulated forever — then, while the
+// map is at modelCacheMax, the entry closest to expiry (the least valuable:
+// the next read would drop it anyway). Mirrors pruneAzureModelsCacheLocked in
+// internal/ai. Bounded work: one pass over the map per insert, plus one pass
+// per eviction.
+func (s *ProviderService) pruneModelCacheLocked(now time.Time) {
+	for k, e := range s.modelCache {
+		if !now.Before(e.expiresAt) {
+			delete(s.modelCache, k)
+		}
+	}
+	// Invalidation marks only fence listings that were in flight when they
+	// were made; past invalidationFence none can be, so the mark is dead.
+	for k, inv := range s.invalidatedKeys {
+		if now.Sub(inv.at) > invalidationFence {
+			delete(s.invalidatedKeys, k)
+		}
+	}
+	for k, inv := range s.invalidatedScope {
+		if now.Sub(inv.at) > invalidationFence {
+			delete(s.invalidatedScope, k)
+		}
+	}
+	for len(s.modelCache) >= modelCacheMax {
+		oldest, oldestExp, first := "", time.Time{}, true
+		for k, e := range s.modelCache {
+			if first || e.expiresAt.Before(oldestExp) {
+				oldest, oldestExp, first = k, e.expiresAt, false
+			}
+		}
+		delete(s.modelCache, oldest)
+	}
+}
+
+// InvalidateScope drops every cached live listing belonging to one scope
+// (user): account deletion cascades the user's provider keys in SQL, and this
+// is what tells the in-process cache. Also bumps the generation so a listing
+// already in flight for that user does not write itself back (same fence as
+// InvalidateModels).
+func (s *ProviderService) InvalidateScope(scope string) {
 	s.modelMu.Lock()
-	delete(s.modelCache, scope+"\x00"+providerID)
+	s.modelGen++
+	s.invalidatedScope[scope] = invalidation{gen: s.modelGen, at: time.Now()}
+	prefix := scope + "\x00"
+	for k := range s.modelCache {
+		if strings.HasPrefix(k, prefix) {
+			delete(s.modelCache, k)
+		}
+	}
 	s.modelMu.Unlock()
+}
+
+// InvalidateModels drops the cached live listing for one (scope, provider) so
+// a configuration change (new Azure deployment names, rotated credential,
+// removed key) shows up on the next listing instead of after
+// dynamicModelTTL, and bumps the generation so a listing already in flight
+// for the old configuration does not write itself back.
+func (s *ProviderService) InvalidateModels(scope, providerID string) {
+	key := scope + "\x00" + providerID
+	s.modelMu.Lock()
+	s.modelGen++
+	s.invalidatedKeys[key] = invalidation{gen: s.modelGen, at: time.Now()}
+	delete(s.modelCache, key)
+	s.modelMu.Unlock()
+}
+
+// chatModels drops the entries that are not chat models (embedding
+// deployments, flagged by the provider): they stay in Models() for pricing
+// but are never offered in the chat picker or chosen as its default.
+func chatModels(in []ai.ModelInfo) []ai.ModelInfo {
+	out := make([]ai.ModelInfo, 0, len(in))
+	for _, m := range in {
+		if !m.Embedding {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // chooseDefaultModel picks the model the UI preselects for a configured
 // provider: the provider's own default when the live listing has it, else the
 // metadata fallback when it has that, else the first chat-capable entry
-// (skipping agents and embedding deployments). A user-named Azure AI Foundry
-// resource rarely has a deployment called "gpt-4.1".
+// (skipping agents, embedding deployments and non-chat model families), else
+// the first entry that is not an embedding deployment. A user-named Azure AI
+// Foundry resource rarely has a deployment called "gpt-4.1".
 func chooseDefaultModel(preferred string, models []ai.ModelInfo, fallback string) string {
 	has := func(id string) bool {
 		for _, m := range models {
@@ -106,12 +294,14 @@ func chooseDefaultModel(preferred string, models []ai.ModelInfo, fallback string
 		return fallback
 	}
 	for _, m := range models {
-		if !ai.IsAgentModel(m.ID) && !isEmbeddingModelID(m.ID) {
+		if !m.Embedding && !ai.IsAgentModel(m.ID) && !isNonChatModelID(m.ID) {
 			return m.ID
 		}
 	}
-	if len(models) > 0 {
-		return models[0].ID
+	for _, m := range models {
+		if !m.Embedding {
+			return m.ID
+		}
 	}
 	if fallback != "" {
 		return fallback
@@ -119,62 +309,209 @@ func chooseDefaultModel(preferred string, models []ai.ModelInfo, fallback string
 	return preferred
 }
 
-// isEmbeddingModelID is the heuristic that keeps an embedding deployment from
-// being offered as the chat default.
-func isEmbeddingModelID(id string) bool {
-	return strings.Contains(strings.ToLower(id), "embed")
+// nonChatModelFamilies are id fragments of models the chat-completions route
+// cannot serve — image, speech, transcription, realtime-audio, video and
+// embedding models — which a deployment listing may contain.
+var nonChatModelFamilies = []string{"dall-e", "gpt-image", "whisper", "tts", "transcribe", "realtime", "sora", "embed"}
+
+// isNonChatModelID is the heuristic that keeps a non-chat deployment from
+// being chosen as the chat default or connection-test model.
+func isNonChatModelID(id string) bool {
+	lower := strings.ToLower(id)
+	for _, f := range nonChatModelFamilies {
+		if strings.Contains(lower, f) {
+			return true
+		}
+	}
+	return false
 }
 
-// connectionTestModels lists the models the connection test tries: the
-// provider's default and free model — but when the live listing (5 s budget)
-// does not contain the default, the first chat-capable listed model goes
-// first, so a resource whose deployments carry custom names still passes.
-func (s *ProviderService) connectionTestModels(ctx context.Context, provider ai.Provider) []string {
-	def := provider.DefaultModel()
-	candidates := []string{def}
-	if fm := provider.FreeModel(); fm != "" && fm != def {
-		candidates = append(candidates, fm)
+// connectionTestModels lists the models the connection test tries, in order.
+// Alias providers (Azure AI Foundry): the configured chat deployment first —
+// tried even when the live listing lacks it — then the free model, then the
+// first chat-capable listed model, so a resource whose deployments carry
+// custom names still passes. Every other provider: when the live listing
+// (5 s budget) has the catalogue default, the default then the free model;
+// when it lacks it, the first chat-capable listed model goes FIRST — a
+// catalogue default the listing lacks is a guaranteed miss, so the test
+// costs one call and, when both fail, the report is about a model the token
+// actually has. providerID is the registry id (the wrapped chain's ID() is
+// the raw provider's).
+func (s *ProviderService) connectionTestModels(ctx context.Context, provider ai.Provider, providerID string) []string {
+	var candidates []string
+	add := func(id string) {
+		if id == "" {
+			return
+		}
+		for _, c := range candidates {
+			if c == id {
+				return
+			}
+		}
+		candidates = append(candidates, id)
 	}
+	def := provider.DefaultModel()
+	add(def)
+	add(provider.FreeModel())
 	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	live, err := provider.Models(lctx)
-	if err != nil || len(live) == 0 {
+	if err != nil {
 		return candidates
 	}
-	for _, m := range live {
+	chat := chatModels(live)
+	for _, m := range chat {
 		if m.ID == def {
 			return candidates
 		}
 	}
-	if pick := chooseDefaultModel("", live, ""); pick != "" && pick != def {
-		return append([]string{pick}, candidates...)
+	pick := chooseDefaultModel("", chat, "")
+	if ai.UsesModelAliases(providerID) {
+		add(pick) // the configured deployment stays first (#6)
+		return candidates
+	}
+	if pick != "" && pick != def {
+		rest := candidates
+		candidates = append([]string{pick}, rest...)
 	}
 	return candidates
 }
 
-func (s *ProviderService) ListProviders(ctx context.Context, scope string) (providers []models.ProviderInfo, err error) {
+// azureProjectProbe explains an empty Azure AI Foundry candidate list (an
+// Entra ID + project document that names no deployment): the token
+// refusal or the project listing's failure. A package variable so tests
+// replace the network call.
+var azureProjectProbe = ai.ProbeAzureFoundryProject
+
+// liveListing is one configured provider's live listing (dynamicModels).
+type liveListing struct {
+	models       []ai.ModelInfo
+	defaultModel string
+	ok           bool
+}
+
+// startLiveListing runs dynamicModels for one provider in the background
+// under its own liveModelsBudget (still bounded by the request context).
+func (s *ProviderService) startLiveListing(ctx context.Context, ls listingScope, providerID string) <-chan liveListing {
+	ch := make(chan liveListing, 1)
+	go func() {
+		var l liveListing
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Warn("list dynamic provider models panicked", "provider", providerID, "panic", r)
+				l = liveListing{}
+			}
+			ch <- l
+		}()
+		lctx, cancel := context.WithTimeout(ctx, liveModelsBudget)
+		defer cancel()
+		l.models, l.defaultModel, l.ok = s.dynamicModels(lctx, ls, providerID)
+	}()
+	return ch
+}
+
+// awaitLiveListing returns the listing once it arrives, or a failed one when
+// wait expires first (a listing that ignores its context).
+func awaitLiveListing(wait context.Context, ch <-chan liveListing) liveListing {
+	select {
+	case l := <-ch:
+		return l
+	default:
+	}
+	select {
+	case l := <-ch:
+		return l
+	case <-wait.Done():
+		return liveListing{}
+	}
+}
+
+// isConfigured reports whether the caller has credentials for a provider.
+// OAuth device-flow tokens and manual API keys are both resolved under the
+// caller's scope (per-user in cloud mode).
+func (s *ProviderService) isConfigured(scope, providerID string) bool {
+	switch providerID {
+	case "github-models":
+		ok, _ := s.secrets.Has(scope, "github-models-token")
+		return ok
+	case "copilot":
+		oauthOk, _ := s.secrets.Has(scope, "copilot-oauth-token")
+		patOk, _ := s.secrets.Has(scope, "copilot")
+		return oauthOk || patOk
+	default:
+		ok, _ := s.secrets.Has(scope, providerID)
+		return ok
+	}
+}
+
+// isOrgConfigured reports whether the organisation holds a shared credential
+// for a provider. Copilot is per member only (OAuth or PAT), never shared.
+func (s *ProviderService) isOrgConfigured(orgID, providerID string) bool {
+	if s.orgKeys == nil || orgID == "" {
+		return false
+	}
+	switch providerID {
+	case "copilot":
+		return false
+	case "github-models":
+		ok, _ := s.orgKeys.HasOrg(orgID, "github-models-token")
+		return ok
+	default:
+		ok, _ := s.orgKeys.HasOrg(orgID, providerID)
+		return ok
+	}
+}
+
+// resolveListing decides whose credential a provider is listed on (G7,
+// member-first): the caller's own when they have one, else the org's shared
+// one when there is an org and it has one. configured is false when neither.
+func (s *ProviderService) resolveListing(scope, orgID, providerID string) (ls listingScope, configured bool) {
+	if s.isConfigured(scope, providerID) {
+		return personalScope(scope), true
+	}
+	if s.isOrgConfigured(orgID, providerID) {
+		return listingScope{scope: scope, orgID: orgID, cacheScope: ai.OrgScope(orgID), shared: true}, true
+	}
+	return personalScope(scope), false
+}
+
+// ListProviders lists every provider with its models and default. The
+// configured providers' live listings run concurrently, each under
+// liveModelsBudget; one that fails or misses the budget falls back to the
+// metadata catalogue, and the order stays AvailableProviders'.
+//
+// orgID ("" = none) adds the organisation's shared credentials (G7): a
+// provider the caller has not configured but the org has is listed as
+// configured and Shared, its live listing built from — and cached under —
+// the org's credential. The caller must already be verified a member of
+// orgID (the handler does); this method does not check.
+func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string) (providers []models.ProviderInfo, err error) {
 	defer logger.Guard("App.ListProviders", &err)
 
-	for _, meta := range ai.AvailableProviders() {
-		p := ai.GetMetadataProvider(meta.ID)
-		if p == nil {
+	metas := ai.AvailableProviders()
+	metaProviders := make([]ai.MetadataProvider, len(metas))
+	configured := make([]bool, len(metas))
+	shared := make([]bool, len(metas))
+	live := make([]<-chan liveListing, len(metas))
+	for i, meta := range metas {
+		metaProviders[i] = ai.GetMetadataProvider(meta.ID)
+		if metaProviders[i] == nil {
 			continue
 		}
+		var ls listingScope
+		ls, configured[i] = s.resolveListing(scope, orgID, meta.ID)
+		shared[i] = ls.shared
+		if configured[i] {
+			live[i] = s.startLiveListing(ctx, ls, meta.ID)
+		}
+	}
+	wait, cancel := context.WithTimeout(ctx, liveModelsBudget+liveModelsGrace)
+	defer cancel()
 
-		// OAuth device-flow tokens and manual API keys are both resolved under
-		// the caller's scope (per-user in cloud mode).
-		configured := false
-		switch meta.ID {
-		case "github-models":
-			ok, _ := s.secrets.Has(scope, "github-models-token")
-			configured = ok
-		case "copilot":
-			oauthOk, _ := s.secrets.Has(scope, "copilot-oauth-token")
-			patOk, _ := s.secrets.Has(scope, "copilot")
-			configured = oauthOk || patOk
-		default:
-			ok, _ := s.secrets.Has(scope, meta.ID)
-			configured = ok
+	for i, meta := range metas {
+		p := metaProviders[i]
+		if p == nil {
+			continue
 		}
 
 		modelInfos, mErr := p.Models(ctx)
@@ -182,32 +519,44 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope string) (prov
 			logger.Warn("list provider models", "provider", meta.ID, "error", mErr)
 		}
 		defaultModel := p.DefaultModel()
-		if configured {
-			if dynamicModels, liveDefault, ok := s.dynamicModels(ctx, scope, meta.ID); ok {
-				modelInfos = dynamicModels
-				// The metadata provider's default is a catalogue name; for a
-				// provider whose models are the user's own deployments (Azure
-				// AI Foundry) the default must be one the listing really has.
-				defaultModel = chooseDefaultModel(liveDefault, dynamicModels, defaultModel)
+		if live[i] != nil {
+			if l := awaitLiveListing(wait, live[i]); l.ok {
+				modelInfos = chatModels(l.models)
+				switch {
+				case ai.UsesModelAliases(meta.ID) && l.defaultModel != "":
+					// The user's own configuration names the default (Azure
+					// AI Foundry: the chat deployment). It wins even when the
+					// listing lacks it — a project listing may omit it and
+					// the name is what the user deployed.
+					defaultModel = l.defaultModel
+				case ai.UsesModelAliases(meta.ID):
+					// Nothing named (Entra ID + project endpoint): the first
+					// chat-capable listed deployment, never the catalogue's
+					// reference name.
+					defaultModel = chooseDefaultModel("", modelInfos, "")
+				default:
+					defaultModel = chooseDefaultModel(l.defaultModel, modelInfos, defaultModel)
+				}
 			}
 		}
 
-		modelDetails := make([]models.ModelDetail, len(modelInfos))
-		for i, m := range modelInfos {
-			modelDetails[i] = models.ModelDetail{
+		modelDetails := make([]models.ModelDetail, 0, len(modelInfos))
+		for _, m := range modelInfos {
+			modelDetails = append(modelDetails, models.ModelDetail{
 				ID:             m.ID,
 				DisplayName:    m.DisplayName,
 				ContextLimit:   m.ContextLimit,
 				InputCostPerM:  m.Pricing.InputCostPerM,
 				OutputCostPerM: m.Pricing.OutputCostPerM,
 				SupportsTools:  p.SupportsTools(),
-			}
+			})
 		}
 
 		providers = append(providers, models.ProviderInfo{
 			ID:           meta.ID,
 			Name:         meta.Name,
-			Configured:   configured,
+			Configured:   configured[i],
+			Shared:       shared[i],
 			Models:       modelDetails,
 			DefaultModel: defaultModel,
 			ContextLimit: p.ContextLimit(),
@@ -218,6 +567,18 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope string) (prov
 	return providers, nil
 }
 
+// TestProviderConnection sends a tiny chat request to the candidates of
+// connectionTestModels in order. Credentials are judged by the first answer
+// that says something about them: a success, an invalid key or a rate limit
+// (the key works). A model-level rejection — 404 DeploymentNotFound, 400
+// OperationNotSupported, insufficient balance on one model — says nothing
+// about the credentials, so the next candidate is tried while the budget
+// lasts; when every candidate fails, the reported error is the first
+// candidate's (the configured default's), which names what the user set up.
+// An outage (the upstream unreachable or failing after the retry wrapper's
+// attempts, an open circuit, an invalid stored document) is not model-level
+// either way: the test stops there instead of repeating the same retries
+// against the same outage for every candidate.
 func (s *ProviderService) TestProviderConnection(ctx context.Context, scope, providerID string) (result *models.ProviderTestResult, err error) {
 	defer logger.Guard("App.TestProviderConnection", &err)
 
@@ -225,45 +586,111 @@ func (s *ProviderService) TestProviderConnection(ctx context.Context, scope, pro
 	if err != nil {
 		return &models.ProviderTestResult{Ok: false, Error: err.Error()}, nil
 	}
+	return s.runConnectionTest(ctx, provider, providerID, func() string {
+		raw, getErr := s.secrets.Get(scope, providerID)
+		if getErr != nil {
+			return ""
+		}
+		return raw
+	}), nil
+}
 
+// TestOrgProviderConnection is TestProviderConnection for an organisation's
+// SHARED credential (G7): the provider is built from the org's credential
+// only — never the admin's own — so the result says whether what the org's
+// members will run on works. scope is the admin's, for usage attribution of
+// the test call.
+func (s *ProviderService) TestOrgProviderConnection(ctx context.Context, scope, orgID, providerID string) (result *models.ProviderTestResult, err error) {
+	defer logger.Guard("App.TestOrgProviderConnection", &err)
+	if s.orgKeys == nil {
+		return nil, ErrOrgKeyStoreUnavailable
+	}
+	provider, err := s.factory.ForOrgCredential(scope, orgID, providerID)
+	if err != nil {
+		return &models.ProviderTestResult{Ok: false, Error: err.Error()}, nil
+	}
+	return s.runConnectionTest(ctx, provider, providerID, func() string {
+		raw, getErr := s.orgKeys.GetOrg(orgID, providerID)
+		if getErr != nil {
+			return ""
+		}
+		return raw
+	}), nil
+}
+
+// runConnectionTest is the shared body of the connection tests; rawDoc
+// returns the stored Azure AI Foundry document (or "") for the project
+// probe that explains an empty candidate list.
+func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Provider, providerID string, rawDoc func() string) *models.ProviderTestResult {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	testModels := s.connectionTestModels(ctx, provider)
+	testModels := s.connectionTestModels(ctx, provider, providerID)
+	if len(testModels) == 0 {
+		msg := "no model to test: name a chat deployment in the provider settings"
+		if providerID == ai.AzureFoundryProviderID {
+			// An Entra ID + project document may name nothing and rely on the
+			// project listing; when that listing is empty, its failure
+			// (rejected credentials, a missing role, a wrong project) is the
+			// answer, not "name a deployment".
+			if raw := rawDoc(); raw != "" {
+				if perr := azureProjectProbe(ctx, raw); perr != nil {
+					msg = perr.Error()
+				}
+			}
+		}
+		return &models.ProviderTestResult{Ok: false, Latency: int(time.Since(start).Milliseconds()), Error: msg}
+	}
 
-	var chatErr error
+	var firstErr error
 	for _, model := range testModels {
-		_, chatErr = provider.Chat(ctx, ai.Request{
+		_, chatErr := provider.Chat(ctx, ai.Request{
 			Model:       model,
 			Messages:    []ai.Message{{Role: "user", Content: "Hi"}},
-			MaxTokens:   5,
+			MaxTokens:   16,
 			Temperature: 0,
 		})
 		if chatErr == nil {
-			break
+			latency := int(time.Since(start).Milliseconds())
+			return &models.ProviderTestResult{Ok: true, Latency: latency}
+		}
+		if errors.Is(chatErr, ai.ErrProviderPermissionDenied) || errors.Is(chatErr, ai.ErrEntraCredentialsRejected) || errors.Is(chatErr, ai.ErrEntraTokenRejected) {
+			// Auth failures (they also match ErrApiKeyInvalid) whose one-line
+			// text is what the user needs: the principal and the data action
+			// its missing role grants, Entra ID's AADSTS code, or Azure's
+			// explanation for a rejected Entra ID access token. "invalid
+			// API key" named a key an Entra ID principal does not have.
+			latency := int(time.Since(start).Milliseconds())
+			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: chatErr.Error()}
 		}
 		if errors.Is(chatErr, ai.ErrApiKeyInvalid) {
 			latency := int(time.Since(start).Milliseconds())
-			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: "invalid API key"}, nil
+			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: "invalid API key"}
 		}
 		if errors.Is(chatErr, ai.ErrRateLimited) {
 			latency := int(time.Since(start).Milliseconds())
-			return &models.ProviderTestResult{Ok: true, Latency: latency}, nil
+			return &models.ProviderTestResult{Ok: true, Latency: latency}
 		}
-		if errors.Is(chatErr, ai.ErrInsufficientBalance) {
-			continue
+		if errors.Is(chatErr, ai.ErrProviderDown) || errors.Is(chatErr, ai.ErrCircuitOpen) || errors.Is(chatErr, ai.ErrProviderConfigInvalid) {
+			// Nothing model-level: the upstream is unreachable or failing
+			// (RetryingProvider already spent its attempts and folded
+			// transport errors into ErrProviderDown), its circuit is open, or
+			// the stored document is invalid. The next candidate would only
+			// repeat the same retries against the same outage.
+			latency := int(time.Since(start).Milliseconds())
+			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: chatErr.Error()}
 		}
-		break
+		if firstErr == nil {
+			firstErr = chatErr
+		}
+		if ctx.Err() != nil {
+			break
+		}
 	}
 
 	latency := int(time.Since(start).Milliseconds())
-
-	if chatErr != nil {
-		return &models.ProviderTestResult{Ok: false, Latency: latency, Error: chatErr.Error()}, nil
-	}
-
-	return &models.ProviderTestResult{Ok: true, Latency: latency}, nil
+	return &models.ProviderTestResult{Ok: false, Latency: latency, Error: firstErr.Error()}
 }
 
 // --- GitHub Models OAuth ---
@@ -284,6 +711,10 @@ func (s *ProviderService) PollGitHubAuth(ctx context.Context, scope string, devi
 	if result.Status == "success" && result.Token != "" {
 		if saveErr := s.secrets.Save(scope, "github-models-token", result.Token); saveErr != nil {
 			logger.Error("failed to save github token", "error", saveErr)
+		} else {
+			// A replacement token may carry other entitlements: the previous
+			// token's cached listing must not outlive it (mirrors Revoke).
+			s.InvalidateModels(scope, "github-models")
 		}
 		result.Token = ""
 	}
@@ -293,7 +724,14 @@ func (s *ProviderService) PollGitHubAuth(ctx context.Context, scope string, devi
 
 func (s *ProviderService) RevokeGitHubAuth(scope string) (err error) {
 	defer logger.Guard("App.RevokeGitHubAuth", &err)
-	return s.secrets.Delete(scope, "github-models-token")
+	if err := s.secrets.Delete(scope, "github-models-token"); err != nil {
+		return err
+	}
+	// github-models is a cacheable live listing: drop it so the revoked
+	// credential's models disappear immediately instead of after
+	// dynamicModelTTL (mirrors DeleteApiKey's hook).
+	s.InvalidateModels(scope, "github-models")
+	return nil
 }
 
 func (s *ProviderService) GetGitHubUser(ctx context.Context, scope string) (user *ai.GitHubUser, err error) {
@@ -325,6 +763,10 @@ func (s *ProviderService) PollCopilotAuth(ctx context.Context, scope string, dev
 	if result.Status == "success" && result.Token != "" {
 		if saveErr := s.secrets.Save(scope, "copilot-oauth-token", result.Token); saveErr != nil {
 			logger.Error("failed to save copilot oauth token", "error", saveErr)
+		} else {
+			// A replacement token may carry other entitlements: the previous
+			// token's cached listing must not outlive it (mirrors Revoke).
+			s.InvalidateModels(scope, "copilot")
 		}
 		result.Token = ""
 		// C-4: pre-warm the Copilot session-token cache so the first chat turn
@@ -347,6 +789,15 @@ func (s *ProviderService) preWarmCopilot(scope string) {
 		return
 	}
 	go func() {
+		// The exchange is HTTP+JSON into provider-owned code; a panic here
+		// would crash the whole process (nothing above recovers a detached
+		// goroutine). Match startLiveListing: recover, log, and let the
+		// first Stream exchange lazily instead.
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Warn("copilot session-token pre-warm panicked", "panic", r)
+			}
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		// OAuth device-flow token (per-user) first, then manual PAT.
@@ -365,7 +816,14 @@ func (s *ProviderService) preWarmCopilot(scope string) {
 
 func (s *ProviderService) RevokeCopilotAuth(scope string) (err error) {
 	defer logger.Guard("App.RevokeCopilotAuth", &err)
-	return s.secrets.Delete(scope, "copilot-oauth-token")
+	if err := s.secrets.Delete(scope, "copilot-oauth-token"); err != nil {
+		return err
+	}
+	// copilot is a cacheable live listing: drop it so the revoked
+	// credential's models disappear immediately instead of after
+	// dynamicModelTTL (mirrors DeleteApiKey's hook).
+	s.InvalidateModels(scope, "copilot")
+	return nil
 }
 
 func (s *ProviderService) GetCopilotUser(ctx context.Context, scope string) (user *ai.GitHubUser, err error) {
@@ -399,24 +857,22 @@ func (s *ProviderService) GetAzureFoundryConfig(scope string) (cfg ai.AzureFound
 }
 
 // SaveAzureFoundryConfig validates and stores the document. A request that
-// omits the secret keeps the stored one (same auth mode), so editing the
-// endpoint or a deployment name never asks the user to re-enter a key.
-// Validation failures are *ai.AzureConfigError values carrying a client code.
+// omits the secret keeps the stored one — for an API key whenever the auth
+// mode matches, for Microsoft Entra ID only when the tenant ID and client ID
+// are unchanged (the same service principal), so editing the endpoint or a
+// deployment name never asks the user to re-enter a key but rotating to a
+// DIFFERENT principal cannot silently attach the old principal's secret
+// (which Entra ID would later reject with AADSTS7000215). A changed principal
+// with no secret fails validation like any missing secret. Validation
+// failures are *ai.AzureConfigError values carrying a client code. When the
+// saved document's credential differs from the previous one's, what the
+// process kept for the previous credential (its Entra ID token source and
+// cached listing) is released with it.
 func (s *ProviderService) SaveAzureFoundryConfig(scope string, cfg ai.AzureFoundryConfig) (err error) {
 	defer logger.Guard("App.SaveAzureFoundryConfig", &err)
 	cfg.Normalize()
-	if !cfg.HasSecret() {
-		if raw, getErr := s.secrets.Get(scope, ai.AzureFoundryProviderID); getErr == nil && raw != "" {
-			if prev, parseErr := ai.ParseAzureFoundryConfig(raw); parseErr == nil && prev.Auth.Mode == cfg.Auth.Mode {
-				switch cfg.Auth.Mode {
-				case ai.AzureAuthModeAPIKey:
-					cfg.Auth.Key = prev.Auth.Key
-				case ai.AzureAuthModeEntra:
-					cfg.Auth.ClientSecret = prev.Auth.ClientSecret
-				}
-			}
-		}
-	}
+	prev, hadPrev := storedAzureConfig(func() (string, error) { return s.secrets.Get(scope, ai.AzureFoundryProviderID) })
+	carryAzureSecret(&cfg, prev, hadPrev)
 	if err := ai.ValidateAzureFoundryConfig(cfg); err != nil {
 		return err
 	}
@@ -429,5 +885,137 @@ func (s *ProviderService) SaveAzureFoundryConfig(scope string, cfg ai.AzureFound
 	}
 	s.InvalidateModels(scope, ai.AzureFoundryProviderID)
 	ai.InvalidateAzureFoundryModels(cfg)
+	if hadPrev && prev.Fingerprint() != cfg.Fingerprint() {
+		ai.ForgetAzureFoundryCredential(prev)
+	}
+	return nil
+}
+
+// storedAzureConfig reads and parses a stored document; hadPrev is false
+// when there is none or it is unreadable (then nothing is carried over).
+func storedAzureConfig(get func() (string, error)) (prev ai.AzureFoundryConfig, hadPrev bool) {
+	raw, err := get()
+	if err != nil || raw == "" {
+		return ai.AzureFoundryConfig{}, false
+	}
+	p, parseErr := ai.ParseAzureFoundryConfig(raw)
+	if parseErr != nil {
+		return ai.AzureFoundryConfig{}, false
+	}
+	return p, true
+}
+
+// carryAzureSecret keeps the stored secret for a save that omits it — an API
+// key whenever the auth mode matches, an Entra ID client secret only for the
+// same principal (see SaveAzureFoundryConfig).
+func carryAzureSecret(cfg *ai.AzureFoundryConfig, prev ai.AzureFoundryConfig, hadPrev bool) {
+	if cfg.HasSecret() || !hadPrev || prev.Auth.Mode != cfg.Auth.Mode {
+		return
+	}
+	samePrincipal := prev.Auth.TenantID == cfg.Auth.TenantID && prev.Auth.ClientID == cfg.Auth.ClientID
+	switch cfg.Auth.Mode {
+	case ai.AzureAuthModeAPIKey:
+		// The resource key is not principal-bound; the mode match
+		// is the whole carry-over condition.
+		cfg.Auth.Key = prev.Auth.Key
+	case ai.AzureAuthModeEntra:
+		if samePrincipal {
+			cfg.Auth.ClientSecret = prev.Auth.ClientSecret
+		}
+	}
+}
+
+// --- Organisation-shared Azure AI Foundry configuration (G7) ---
+//
+// Trust model: an org admin is untrusted (anyone can create an org), so the
+// shared document is only what that admin lends the org's members. Members
+// read its public form (no secret, ever); admins write it; a member's own
+// document wins over it for chat (ProviderFactory.ForOrg), while the
+// knowledge base prefers it (one corpus, one resource). Usage on it is
+// attributed to the org and capped by the org's daily budget like every
+// org-scoped turn, and the row goes with the organisation.
+
+// OrgAzureFoundryConfig is an organisation's shared Azure AI Foundry
+// document in its public form, with who shared it and when. UpdatedByID is
+// the admin's user id (the handler resolves it to a display name into
+// UpdatedBy); UpdatedAt is RFC 3339.
+type OrgAzureFoundryConfig struct {
+	ai.AzureFoundryPublicConfig
+	Shared      bool   `json:"shared"`
+	UpdatedBy   string `json:"updatedBy,omitempty"`
+	UpdatedAt   string `json:"updatedAt,omitempty"`
+	UpdatedByID string `json:"-"`
+}
+
+// GetOrgAzureFoundryConfig returns the organisation's shared document with
+// the secrets removed; a missing or unreadable document reads as
+// unconfigured (Configured false, Shared false).
+func (s *ProviderService) GetOrgAzureFoundryConfig(orgID string) (cfg OrgAzureFoundryConfig, err error) {
+	defer logger.Guard("App.GetOrgAzureFoundryConfig", &err)
+	if s.orgKeys == nil {
+		return OrgAzureFoundryConfig{}, ErrOrgKeyStoreUnavailable
+	}
+	parsed, ok := storedAzureConfig(func() (string, error) { return s.orgKeys.GetOrg(orgID, ai.AzureFoundryProviderID) })
+	if !ok {
+		return OrgAzureFoundryConfig{}, nil
+	}
+	out := OrgAzureFoundryConfig{AzureFoundryPublicConfig: parsed.Public(), Shared: true}
+	if by, at, hasMeta, metaErr := s.orgKeys.OrgKeyMeta(orgID, ai.AzureFoundryProviderID); metaErr == nil && hasMeta {
+		out.UpdatedByID = by
+		if !at.IsZero() {
+			out.UpdatedAt = at.UTC().Format(time.RFC3339)
+		}
+	}
+	return out, nil
+}
+
+// SaveOrgAzureFoundryConfig is SaveAzureFoundryConfig for the organisation's
+// shared document: the same validation, the same carry-over of an omitted
+// secret from the stored document, the same release of a replaced
+// credential's process state. updatedBy is the saving admin's user id. The
+// org's cached listings (every member's, under ai.OrgScope) are dropped so
+// the new deployments show up on the next listing.
+func (s *ProviderService) SaveOrgAzureFoundryConfig(orgID, updatedBy string, cfg ai.AzureFoundryConfig) (err error) {
+	defer logger.Guard("App.SaveOrgAzureFoundryConfig", &err)
+	if s.orgKeys == nil {
+		return ErrOrgKeyStoreUnavailable
+	}
+	cfg.Normalize()
+	prev, hadPrev := storedAzureConfig(func() (string, error) { return s.orgKeys.GetOrg(orgID, ai.AzureFoundryProviderID) })
+	carryAzureSecret(&cfg, prev, hadPrev)
+	if err := ai.ValidateAzureFoundryConfig(cfg); err != nil {
+		return err
+	}
+	raw, err := cfg.Encode()
+	if err != nil {
+		return err
+	}
+	if err := s.orgKeys.SaveOrg(orgID, ai.AzureFoundryProviderID, raw, updatedBy); err != nil {
+		return err
+	}
+	s.InvalidateScope(ai.OrgScope(orgID))
+	ai.InvalidateAzureFoundryModels(cfg)
+	if hadPrev && prev.Fingerprint() != cfg.Fingerprint() {
+		ai.ForgetAzureFoundryCredential(prev)
+	}
+	return nil
+}
+
+// DeleteOrgAzureFoundryConfig removes the organisation's shared document,
+// releases what the process kept for its credential and drops the org's
+// cached listings. Deleting a missing document is a no-op.
+func (s *ProviderService) DeleteOrgAzureFoundryConfig(orgID string) (err error) {
+	defer logger.Guard("App.DeleteOrgAzureFoundryConfig", &err)
+	if s.orgKeys == nil {
+		return ErrOrgKeyStoreUnavailable
+	}
+	prev, hadPrev := storedAzureConfig(func() (string, error) { return s.orgKeys.GetOrg(orgID, ai.AzureFoundryProviderID) })
+	if err := s.orgKeys.DeleteOrg(orgID, ai.AzureFoundryProviderID); err != nil {
+		return err
+	}
+	if hadPrev {
+		ai.ForgetAzureFoundryCredential(prev)
+	}
+	s.InvalidateScope(ai.OrgScope(orgID))
 	return nil
 }

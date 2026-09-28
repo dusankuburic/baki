@@ -9,8 +9,20 @@ import type {
   AzureFoundryConfigInput,
 } from '@/types'
 
+// The org-scoped Azure AI Foundry routes (cloud only). Any member may read
+// the redacted view; saving, removing and testing need an org admin (403
+// otherwise). A member's own credentials always win over the org's.
+function orgAzurePath(orgId: string, leaf: 'config' | 'test'): string {
+  return `/api/orgs/${encodeURIComponent(orgId)}/providers/azure-foundry/${leaf}`
+}
+
 export const providersApi = {
-  listProviders: (): Promise<ProviderInfo[]> => request('/api/providers/list', {method: 'GET'}),
+  // With an orgId the server also considers the organisation's shared
+  // credentials; a provider that resolved to them carries `shared: true`.
+  listProviders: (orgId?: string): Promise<ProviderInfo[]> =>
+    request(orgId ? `/api/providers/list?orgId=${encodeURIComponent(orgId)}` : '/api/providers/list', {
+      method: 'GET',
+    }),
 
   saveApiKey: (provider: string, key: string): Promise<void> => request('/api/keys/save', {body: {provider, key}}),
 
@@ -46,8 +58,30 @@ export const providersApi = {
 
   // Removal and connection tests go through deleteApiKey / testProviderConnection
   // with provider 'azure-foundry'. A 400 arrives as an ApiError whose `code` is
-  // one of INVALID_ENDPOINT | HOST_NOT_ALLOWED | MISSING_SECRET |
-  // CONFIG_TOO_LARGE | INVALID_DEPLOYMENT | INVALID_AUTH.
+  // one of INVALID_ENDPOINT | HOST_NOT_ALLOWED (the resource endpoint's host is
+  // not allow-listed) | INVALID_PROJECT_ENDPOINT (the project endpoint's shape
+  // or host; the message says which) | MISSING_SECRET | CONFIG_TOO_LARGE |
+  // INVALID_DEPLOYMENT | INVALID_AUTH | INVALID_CONFIG (an unknown or
+  // misspelled field, named in the message) | MISSING_DEPLOYMENT (no chat
+  // deployment named — an API key cannot list the resource's deployments; only
+  // Entra ID with a project endpoint can). Every code carries a user-readable
+  // message. The chat model picker lists exactly the named deployments
+  // (chatDeployment + deployments), plus the project's deployments and agents
+  // with Entra ID + project.
   saveAzureFoundryConfig: (cfg: AzureFoundryConfigInput): Promise<void> =>
     request('/api/providers/azure-foundry/config', {body: cfg}),
+
+  // Org-scoped variants of the four calls above. Same public shape (plus
+  // `shared`, `updatedBy`, `updatedAt`), same body and error codes on save;
+  // noDedup for the same post-save reload reason.
+  getOrgAzureFoundryConfig: (orgId: string): Promise<AzureFoundryPublicConfig> =>
+    request(orgAzurePath(orgId, 'config'), {method: 'GET', noDedup: true}),
+
+  saveOrgAzureFoundryConfig: (orgId: string, cfg: AzureFoundryConfigInput): Promise<void> =>
+    request(orgAzurePath(orgId, 'config'), {body: cfg}),
+
+  deleteOrgAzureFoundryConfig: (orgId: string): Promise<void> =>
+    request(orgAzurePath(orgId, 'config'), {method: 'DELETE'}),
+
+  testOrgAzureFoundryConnection: (orgId: string): Promise<ProviderTestResult> => request(orgAzurePath(orgId, 'test')),
 }

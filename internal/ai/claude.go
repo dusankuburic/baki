@@ -17,6 +17,21 @@ var claudeAPIVersion = "2023-06-01"
 type ClaudeProvider struct {
 	apiKey string
 	client *http.Client
+	// messagesURL is the Messages endpoint of a provider that speaks the
+	// Anthropic wire format on another host — Claude deployments on an Azure
+	// AI Foundry resource (azure_claude.go). Empty for the plain provider,
+	// which reads the package URL (claudeAPIURL) at request time, so the
+	// plain provider's requests are unchanged and tests can still swap the
+	// package variable after construction.
+	messagesURL string
+	// authorize sets the request's credential; nil sends the API key as
+	// x-api-key (the plain provider).
+	authorize func(ctx context.Context, req *http.Request) error
+	// unauthorized, when set, classifies a 401/403 response from its status
+	// and body (Azure: an Entra ID access token the resource refused carries
+	// Azure's explanation); nil keeps the plain mapping (401 → ErrApiKeyInvalid,
+	// 403 → the service's message).
+	unauthorized func(status int, body []byte) error
 }
 
 func NewClaudeProvider(apiKey string) *ClaudeProvider {
@@ -24,6 +39,33 @@ func NewClaudeProvider(apiKey string) *ClaudeProvider {
 		apiKey: apiKey,
 		client: sharedHTTPClient,
 	}
+}
+
+// endpoint is the Messages URL requests go to: the instance override, else
+// the package URL.
+func (c *ClaudeProvider) endpoint() string {
+	if c.messagesURL != "" {
+		return c.messagesURL
+	}
+	return claudeAPIURL
+}
+
+// auth sets the credential header(s) on req.
+func (c *ClaudeProvider) auth(ctx context.Context, req *http.Request) error {
+	if c.authorize != nil {
+		return c.authorize(ctx, req)
+	}
+	req.Header.Set("x-api-key", c.apiKey)
+	return nil
+}
+
+// classifyUnauthorized runs the unauthorized hook for a 401/403; nil (no
+// hook, or another status) leaves the response to the shared mapping.
+func (c *ClaudeProvider) classifyUnauthorized(status int, body []byte) error {
+	if c.unauthorized == nil || (status != http.StatusUnauthorized && status != http.StatusForbidden) {
+		return nil
+	}
+	return c.unauthorized(status, body)
 }
 
 func (c *ClaudeProvider) SupportsTools() bool { return true }
@@ -272,12 +314,14 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", claudeAPIURL, bytes.NewReader(jsonBody))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint(), bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
-	httpReq.Header.Set("x-api-key", c.apiKey)
+	if err := c.auth(ctx, httpReq); err != nil {
+		return nil, err
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("anthropic-version", claudeAPIVersion)
 
@@ -290,6 +334,9 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 
 	if resp.StatusCode != http.StatusOK {
+		if err := c.classifyUnauthorized(resp.StatusCode, respBody); err != nil {
+			return nil, err
+		}
 		var apiErr claudeErrorResp
 		if err := json.Unmarshal(respBody, &apiErr); err == nil {
 			switch {
@@ -339,6 +386,7 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 		TokensOut:    parsed.Usage.OutputTokens,
 		FinishReason: parsed.StopReason,
 		ToolCalls:    toolCalls,
+		ServedModel:  parsed.Model,
 	}, nil
 }
 
@@ -349,12 +397,14 @@ func (c *ClaudeProvider) Stream(ctx context.Context, req Request, onChunk func(C
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", claudeAPIURL, bytes.NewReader(jsonBody))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint(), bytes.NewReader(jsonBody))
 	if err != nil {
 		return err
 	}
 
-	httpReq.Header.Set("x-api-key", c.apiKey)
+	if err := c.auth(ctx, httpReq); err != nil {
+		return err
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("anthropic-version", claudeAPIVersion)
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -367,6 +417,9 @@ func (c *ClaudeProvider) Stream(ctx context.Context, req Request, onChunk func(C
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+		if err := c.classifyUnauthorized(resp.StatusCode, body); err != nil {
+			return err
+		}
 		var apiErr claudeErrorResp
 		if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error.Message != "" {
 			switch {

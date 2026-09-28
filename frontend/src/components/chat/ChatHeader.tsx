@@ -28,6 +28,8 @@ interface ProviderSummary {
   name: string
   configured: boolean
   authType?: string
+  /** Credentials come from the active organisation (badged in the chip). */
+  shared?: boolean
 }
 
 interface Props {
@@ -162,7 +164,11 @@ export default function ChatHeader({
         label: t('provider.groupLabel'),
         items: providers.map(p => ({
           type: 'item' as const,
-          label: p.configured ? p.name : t('provider.notConfigured', {name: p.name}),
+          label: p.configured
+            ? p.shared
+              ? `${p.name} · ${t('provider.shared')}`
+              : p.name
+            : t('provider.notConfigured', {name: p.name}),
           icon: p.id === selectedProvider && p.configured ? Check : undefined,
           onSelect: () => {
             if (p.configured) onSelectProvider(p.id)
@@ -323,6 +329,14 @@ export default function ChatHeader({
             <span className="truncate font-medium text-text-secondary">
               {currentProvider?.name || t('provider.select')}
             </span>
+            {currentProvider?.shared && (
+              <span
+                className="shrink-0 px-1 py-px rounded text-2xs font-semibold uppercase tracking-wider bg-brand-500/15 text-brand-400"
+                title={t('provider.sharedTitle')}
+              >
+                {t('provider.shared')}
+              </span>
+            )}
             {currentModel && (
               // Hidden by the container query below ~340px: at that width the
               // provider name alone is all that fits without truncating both.

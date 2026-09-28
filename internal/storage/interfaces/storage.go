@@ -407,13 +407,17 @@ type UsageDailyRow struct {
 	Cost      float64
 }
 
+// UsageModelRow: ServedModel is the model that answered when it differs from
+// Model (see UsageMetric.ServedModel); rows are grouped by it, so a deployment
+// alias served by two models over the window yields two rows.
 type UsageModelRow struct {
-	Provider  string
-	Model     string
-	TokensIn  int
-	TokensOut int
-	Calls     int
-	Cost      float64
+	Provider    string
+	Model       string
+	ServedModel string
+	TokensIn    int
+	TokensOut   int
+	Calls       int
+	Cost        float64
 }
 
 // UsageRows: Daily spans the previous and current windows; the breakdowns
@@ -474,9 +478,18 @@ type KnowledgeStore interface {
 	// the calling user's identity ("" only in non-authenticated local mode).
 	SaveKnowledgeChunks(ctx context.Context, userID string, chunks []KnowledgeChunk) error
 	SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]KnowledgeChunk, error)
-	// ListKnowledgeChunkContents returns every chunk's DocID+Content (no
-	// embeddings) for re-indexing after an embedding-provider change.
-	ListKnowledgeChunkContents(ctx context.Context, orgID string) ([]KnowledgeChunk, error)
+	// ListKnowledgeChunkContents returns up to limit chunks (ID+DocID+Content,
+	// no embeddings) strictly after the cursor, in (doc_id, id) order — one
+	// page of a re-index walk after an embedding-provider change. limit <= 0
+	// means the backend's page cap.
+	ListKnowledgeChunkContents(ctx context.Context, orgID string, after KnowledgeChunkCursor, limit int) ([]KnowledgeChunk, error)
+	// SampleKnowledgeChunkEmbeddings returns up to n of the org's chunks WITH
+	// their stored embeddings (ID, DocID, Content, Embedding), one chunk per
+	// document, deterministic order, pgvector-indexed picks first. The RAG
+	// layer re-embeds their text with the caller's model to tell whether that
+	// model produced the corpus (embedding-model mismatch guard). Chunks
+	// without an embedding are skipped.
+	SampleKnowledgeChunkEmbeddings(ctx context.Context, orgID string, n int) ([]KnowledgeChunk, error)
 	// UpdateKnowledgeChunkEmbeddings replaces chunk embeddings in place
 	// (RLS-scoped to userID like SaveKnowledgeChunks) and refreshes the
 	// pgvector column for same-dimension vectors.
@@ -796,12 +809,17 @@ type HealthSnapshot struct {
 	AnalyzedAt  time.Time `json:"analyzedAt"`
 }
 
+// UsageMetric is one AI call's usage row. Model is the id the caller asked
+// for; ServedModel is the model the provider reported answering when it
+// differs (an Azure AI Foundry deployment alias, a model-router route, a
+// Foundry agent's underlying model) and empty when unknown or identical.
 type UsageMetric struct {
 	ID               string    `json:"id"`
 	UserID           string    `json:"userId"`
 	OrgID            string    `json:"orgId"`
 	Provider         string    `json:"provider"`
 	Model            string    `json:"model"`
+	ServedModel      string    `json:"servedModel,omitempty"`
 	PromptTokens     int       `json:"promptTokens"`
 	CompletionTokens int       `json:"completionTokens"`
 	EstimatedCost    float64   `json:"estimatedCost"`
@@ -997,6 +1015,11 @@ type KnowledgeChunk struct {
 	// assembly can attribute each chunk to its source — empty when unknown.
 	Filename string `json:"filename,omitempty"`
 }
+
+// KnowledgeChunkCursor is a keyset position in an org's chunks ordered by
+// (doc_id, id); the zero value starts from the beginning. Both columns are
+// TEXT, so "" sorts before every real value.
+type KnowledgeChunkCursor struct{ DocID, ID string }
 
 // FlowDocument represents a flow document
 type FlowDocument struct {

@@ -143,6 +143,12 @@ func resolveStoredFlow(id string, libDoc *storageif.FlowDocument) (*models.FlowD
 	doc.OwnerID = libDoc.OwnerID
 	doc.OrganizationID = libDoc.OrganizationID
 	doc.Source = libDoc.Source // raw PAD text for cloud-mode apply-fix/preview-fix
+	// FilePath is part of the client-supplied content blob (json:"filePath")
+	// and every desktop file path (GetSource, SaveSource, PatchFlow,
+	// snapshots, chat source files) selects itself with doc.FilePath != "".
+	// A stored flow must never carry one: that turned POST /api/library into
+	// an arbitrary server file read and write. Cloud flows patch doc.Source.
+	doc.FilePath = ""
 	doc.RebuildIndexes()
 	return &doc, nil
 }

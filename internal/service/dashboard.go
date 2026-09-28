@@ -46,8 +46,13 @@ type DashboardService struct {
 	// (dashboard_analytics.go); it shares dashMu and the TTL, and empties for
 	// a user whenever their home entry does.
 	anaCache map[string]*anaCacheEntry
-	anaSF    singleflight.Group
-	scope    scopeResolver
+	// anaSeq numbers anaCache inserts so the entry-cap eviction has a
+	// deterministic tie-break when several entries share one fetchedAt (the
+	// clock is coarse under a tight insert loop); without it the victim among
+	// ties followed map iteration order and the oldest entry could survive.
+	anaSeq uint64
+	anaSF  singleflight.Group
+	scope  scopeResolver
 	// dashSF collapses concurrent cold-cache builds for the same user so a cache
 	// miss under load runs buildCloud once (not N×), avoiding a thundering herd
 	// of ~16 sequential DB queries per concurrent caller.

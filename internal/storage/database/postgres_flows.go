@@ -614,6 +614,19 @@ func (b *PostgresStorageBackend) DeleteFlow(ctx context.Context, id string) erro
 	if err := validFlowID(id); err != nil {
 		return err
 	}
+	// conversations.flow_id deliberately has no FK to flows (chats about
+	// never-persisted flows must survive — see the migration note that drops
+	// conversations_flow_id_fkey), so nothing cascades and a deleted flow's
+	// chat rows would linger forever, unreachable under the conversations RLS
+	// policy once the parent flow is gone. Delete them here, BEFORE the flows
+	// row: that policy resolves visibility by joining flows, so removing the
+	// flow first would hide these rows from this very statement. Doc IDs are
+	// fresh UUIDs per parse (parser.ParseFiles), so a conversation about an
+	// unsaved/uploaded flow never shares an ID with a library row and is
+	// untouched by this delete.
+	if _, err := b.query(ctx).ExecContext(ctx, `DELETE FROM conversations WHERE flow_id = $1`, id); err != nil {
+		return fmt.Errorf("delete flow conversations: %w", err)
+	}
 	res, err := b.query(ctx).ExecContext(ctx, `DELETE FROM flows WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete flow: %w", err)

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,12 @@ func TestMain(m *testing.M) {
 	defer os.RemoveAll(tmp)
 
 	bakicliBin = filepath.Join(tmp, "bakicli")
+	if runtime.GOOS == "windows" {
+		// os/exec cannot launch a PE binary without the .exe extension on
+		// Windows ("executable file not found in %PATH%"), so every spawned-
+		// binary test would exit -1 with empty output without this.
+		bakicliBin += ".exe"
+	}
 	cmd := exec.Command("go", "build", "-o", bakicliBin, ".")
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

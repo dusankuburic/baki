@@ -76,6 +76,8 @@ var migrations = []migration{
 	{version: 19, name: "rls_force_all_tables", sql: rlsForceSQL, downSQL: rlsForceDownSQL},
 	{version: 20, name: "pgvector_knowledge_repair", sql: pgvectorRepairSQL, downSQL: pgvectorRepairDownSQL},
 	{version: 21, name: "org_custom_rules", sql: orgCustomRulesSQL, downSQL: orgCustomRulesDownSQL},
+	{version: 22, name: "usage_served_model", sql: usageServedModelSQL, downSQL: usageServedModelDownSQL},
+	{version: 23, name: "org_provider_keys", sql: orgProviderKeysSQL, downSQL: orgProviderKeysDownSQL},
 }
 
 // flowBlockCountIndexSQL adds an expression index matching the FlowSortBlocksDesc
@@ -1550,6 +1552,48 @@ CREATE POLICY rls_org_custom_rules_visible ON org_custom_rules FOR ALL USING (
 
 const orgCustomRulesDownSQL = `
 DROP TABLE IF EXISTS org_custom_rules;
+`
+
+// usageServedModelSQL (D-42): usage_metrics.model is the id the CALLER asked
+// for — for Azure AI Foundry that is a user-chosen deployment name ("my-gpt4o",
+// "model-router", "claude:sonnet") or a Foundry agent, which says nothing
+// about what was billed. served_model records the model the provider reported
+// answering the call, and is empty when unknown or identical to model, so the
+// analytics model breakdown can group by what actually served the request.
+// Additive with an empty-string default; legacy rows keep the empty value and
+// group by model exactly as before.
+const usageServedModelSQL = `
+ALTER TABLE usage_metrics ADD COLUMN IF NOT EXISTS served_model TEXT NOT NULL DEFAULT '';
+`
+
+const usageServedModelDownSQL = `
+ALTER TABLE usage_metrics DROP COLUMN IF EXISTS served_model;
+`
+
+// orgProviderKeysSQL (G7) stores an organisation's SHARED provider credential
+// (today: the Azure AI Foundry document), encrypted like provider_keys, so an
+// org admin can configure one resource for every member. updated_by is the
+// admin's user id (resolved to a display name at read time, never joined
+// here); updated_at is shown to members as "shared by … on …".
+//
+// No RLS, deliberately, for the same reason as provider_keys: the table is
+// keyed by org_id, every query in keystore.go carries `WHERE org_id = $1`,
+// and the AES-GCM associated data binds each ciphertext to its (org,
+// provider) row, so a stolen row cannot be replayed under another org. The
+// FK cascade removes the credential with the organisation.
+const orgProviderKeysSQL = `
+CREATE TABLE IF NOT EXISTS org_provider_keys (
+	org_id     TEXT        NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+	provider   TEXT        NOT NULL,
+	ciphertext TEXT        NOT NULL,
+	updated_by TEXT        NOT NULL DEFAULT '',
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (org_id, provider)
+);
+`
+
+const orgProviderKeysDownSQL = `
+DROP TABLE IF EXISTS org_provider_keys;
 `
 
 // flowsContentTrgmSQL (R3-5a) backs library content-search pushdown: an

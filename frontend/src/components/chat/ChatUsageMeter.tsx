@@ -1,11 +1,15 @@
 import {useTranslation} from 'react-i18next'
 import {useEffect, useState} from 'react'
 import {useChatStore} from '@/stores/chatStore'
+import {useSettingsStore} from '@/stores/settingsStore'
 import {formatCompact} from '@/lib/format'
+import type {ChatMessage} from '@/types'
 
 interface Props {
   promptTokens: number
   completionTokens: number
+  // The current model's listing price (USD per 1M tokens); 0 or undefined
+  // when unknown. Prices the tokens no message carries its own rates for.
   inputCostPerM?: number
   outputCostPerM?: number
 }
@@ -16,6 +20,45 @@ interface Props {
 // subscribing reactively, keeping AITab off the per-frame path.
 const TOKEN_REFRESH_MS = 250
 
+const EMPTY_MESSAGES: readonly ChatMessage[] = []
+
+// threadCost estimates the thread's spend in USD. Turns whose done event
+// reported the rates they were billed at (an alias provider answering through
+// a deployment, model-router or agent) are priced at those; the rest of the
+// thread's totals at the current model's listing. Null when nothing can be
+// priced — an unknown or zero rate hides the figure rather than showing $0.
+export function threadCost(
+  messages: readonly ChatMessage[],
+  promptTokens: number,
+  completionTokens: number,
+  listInputPerM: number,
+  listOutputPerM: number,
+): number | null {
+  let cost = 0
+  let priced = false
+  let ratedIn = 0
+  let ratedOut = 0
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue
+    const inRate = Math.max(0, m.inputCostPerM ?? 0)
+    const outRate = Math.max(0, m.outputCostPerM ?? 0)
+    if (inRate === 0 && outRate === 0) continue
+    const tokensIn = m.tokensIn ?? 0
+    const tokensOut = m.tokensOut ?? 0
+    cost += (tokensIn * inRate + tokensOut * outRate) / 1_000_000
+    ratedIn += tokensIn
+    ratedOut += tokensOut
+    priced = true
+  }
+  if (listInputPerM > 0 || listOutputPerM > 0) {
+    const restIn = Math.max(0, promptTokens - ratedIn)
+    const restOut = Math.max(0, completionTokens - ratedOut)
+    cost += (restIn * listInputPerM + restOut * listOutputPerM) / 1_000_000
+    priced = true
+  }
+  return priced ? cost : null
+}
+
 // ChatUsageMeter is the composer's single always-present usage line. It merges
 // what used to be two components that swapped places above the composer
 // (StreamingProgress while generating, TokenCounter when idle) — each of which
@@ -24,6 +67,12 @@ const TOKEN_REFRESH_MS = 250
 export default function ChatUsageMeter({promptTokens, completionTokens, inputCostPerM, outputCostPerM}: Props) {
   const {t} = useTranslation('chat')
   const isStreaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
+  // The active thread's messages price the turns that carry their own billed
+  // rates. They change per turn, not per frame, so subscribing is cheap.
+  const messages = useChatStore(
+    s => (s.activeThreadId ? s.conversations.get(s.activeThreadId) : undefined) ?? EMPTY_MESSAGES,
+  )
+  const showCost = useSettingsStore(s => s.settings.ai.showCostEstimates)
   const [live, setLive] = useState(0)
 
   useEffect(() => {
@@ -69,12 +118,10 @@ export default function ChatUsageMeter({promptTokens, completionTokens, inputCos
     return <span className="block h-3.5" aria-hidden="true" />
   }
 
-  const hasPricing = (inputCostPerM ?? 0) > 0 || (outputCostPerM ?? 0) > 0
-  let costStr = ''
-  if (hasPricing) {
-    const cost = (promptTokens * (inputCostPerM ?? 0) + completionTokens * (outputCostPerM ?? 0)) / 1_000_000
-    costStr = cost < 0.001 ? '<$0.001' : `$${cost.toFixed(3)}`
-  }
+  const cost = showCost
+    ? threadCost(messages, promptTokens, completionTokens, inputCostPerM ?? 0, outputCostPerM ?? 0)
+    : null
+  const costStr = cost === null ? '' : cost < 0.001 ? '<$0.001' : `$${cost.toFixed(3)}`
 
   return (
     <span className="text-2xs text-text-tertiary tabular-nums truncate">

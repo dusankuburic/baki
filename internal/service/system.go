@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"unicode/utf8"
 
+	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/errreport"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -27,6 +28,21 @@ type SystemService struct {
 	notifier EventNotifier
 	backend  storageif.StorageBackend
 	mode     config.DeploymentMode
+	// onKeyChanged runs after SaveApiKey stored or DeleteApiKey removed a
+	// credential (wired in di/services.go to
+	// ProviderService.InvalidateModels); nil = no hook.
+	onKeyChanged func(scope, provider string)
+}
+
+// OnApiKeyChanged registers the hook SaveApiKey and DeleteApiKey run after
+// a successful write. Post-construction wiring (same pattern as the
+// dashboard and chat cache hooks): the provider service's cached live
+// listing for that provider — a removed Azure AI Foundry configuration's
+// deployments, or the entitlements of a key that was replaced by another —
+// must not outlive the credential, and a listing in flight must not write
+// it back. Set once at boot, before requests are served.
+func (s *SystemService) OnApiKeyChanged(fn func(scope, provider string)) {
+	s.onKeyChanged = fn
 }
 
 func NewSystemService(settings SettingsProvider, secrets KeyStore, notifier EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode) *SystemService {
@@ -216,7 +232,13 @@ func truncateForLog(s string, max int) string {
 
 func (s *SystemService) SaveApiKey(scope, provider string, key string) (err error) {
 	defer logger.Guard("SystemService.SaveApiKey", &err)
-	return s.secrets.Save(scope, provider, key)
+	if err := s.secrets.Save(scope, provider, key); err != nil {
+		return err
+	}
+	if s.onKeyChanged != nil {
+		s.onKeyChanged(scope, provider)
+	}
+	return nil
 }
 
 func (s *SystemService) HasApiKey(scope, provider string) (result bool, err error) {
@@ -226,5 +248,23 @@ func (s *SystemService) HasApiKey(scope, provider string) (result bool, err erro
 
 func (s *SystemService) DeleteApiKey(scope, provider string) (err error) {
 	defer logger.Guard("SystemService.DeleteApiKey", &err)
-	return s.secrets.Delete(scope, provider)
+	// The Azure AI Foundry document registers process-wide state beyond the
+	// KeyStore (its Entra ID token source and cached listing); read it before
+	// the row is gone so it can be released with it.
+	var azureDoc string
+	if provider == ai.AzureFoundryProviderID {
+		azureDoc, _ = s.secrets.Get(scope, provider)
+	}
+	if err := s.secrets.Delete(scope, provider); err != nil {
+		return err
+	}
+	if azureDoc != "" {
+		if cfg, perr := ai.ParseAzureFoundryConfig(azureDoc); perr == nil {
+			ai.ForgetAzureFoundryCredential(cfg)
+		}
+	}
+	if s.onKeyChanged != nil {
+		s.onKeyChanged(scope, provider)
+	}
+	return nil
 }

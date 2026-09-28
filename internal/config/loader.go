@@ -205,6 +205,11 @@ var envBindings = []envBinding{
 	// pgvector-searchable; mismatched embeddings are excluded from the vector
 	// index rather than corrupting similarity search.
 	intEnv("PAD_EMBEDDING_DIM", func(c *Config, n int) { c.Storage.EmbeddingDim = n }),
+	// Knowledge-base embedding provider pin (the only way to embed the shared
+	// corpus with Azure AI Foundry). Validated against EmbeddingProviderIDs.
+	strEnv("PAD_EMBEDDING_PROVIDER", func(c *Config, v string) {
+		c.Storage.EmbeddingProvider = strings.ToLower(strings.TrimSpace(v))
+	}),
 	// Audit overflow spill queue. Empty → temp dir (zero-config); "off" disables.
 	strEnv("PAD_AUDIT_SPILL_DIR", func(c *Config, v string) { c.Governance.AuditSpillDir = v }),
 
@@ -264,6 +269,10 @@ func applyEnvVars(cfg *Config) error {
 	applyListEnv("PAD_ALLOWED_ORIGINS", &cfg.Server.AllowedOrigins)
 	applyListEnv("PAD_TRUSTED_PROXIES", &cfg.Server.TrustedProxies)
 	applyListEnv("PAD_AZURE_FOUNDRY_ALLOWED_HOSTS", &cfg.Runtime.AzureFoundryAllowedHosts)
+	// Host names are case-insensitive; the allow-list compares lower-cased.
+	for i, h := range cfg.Runtime.AzureFoundryAllowedHosts {
+		cfg.Runtime.AzureFoundryAllowedHosts[i] = strings.ToLower(strings.TrimSpace(h))
+	}
 
 	if err := applyStorageBackendEnv(cfg); err != nil {
 		return err
@@ -481,13 +490,36 @@ func Validate(cfg *Config) error {
 	if err := validateTrustedProxies(cfg.Server.TrustedProxies); err != nil {
 		return err
 	}
+	if err := validateAzureFoundryAllowedHosts(cfg.Runtime.AzureFoundryAllowedHosts); err != nil {
+		return err
+	}
 	if err := validateTLSConfig(cfg); err != nil {
 		return err
 	}
 	if err := validateProfilingConfig(cfg); err != nil {
 		return err
 	}
+	if err := validateEmbeddingProvider(cfg.Storage.EmbeddingProvider); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateEmbeddingProvider fails closed on an unknown PAD_EMBEDDING_PROVIDER:
+// a typo ("azure", "azure_foundry") would otherwise fall back silently to the
+// settings/openai path and index the shared knowledge base with a model the
+// operator did not choose.
+func validateEmbeddingProvider(id string) error {
+	if id == "" {
+		return nil
+	}
+	for _, known := range EmbeddingProviderIDs {
+		if id == known {
+			return nil
+		}
+	}
+	return fmt.Errorf("config: PAD_EMBEDDING_PROVIDER=%q is not an embedding-capable provider (use one of: %s, or leave it empty)",
+		id, strings.Join(EmbeddingProviderIDs, ", "))
 }
 
 // validateProfilingConfig refuses to expose the profiler without a shared
@@ -529,6 +561,39 @@ func validateTLSConfig(cfg *Config) error {
 	}
 	if cfg.Mode == ModeCloud && cfg.Auth.Enabled && !hasCert && !cfg.Server.BehindProxy {
 		return errors.New("config: cloud-mode auth requires TLS — set PAD_TLS_CERT/PAD_TLS_KEY to serve HTTPS directly, or PAD_BEHIND_PROXY=true if a TLS-terminating reverse proxy is in front (without one, JWTs and passwords would be sent in plaintext)")
+	}
+	return nil
+}
+
+// validateAzureFoundryAllowedHosts enforces that each entry in
+// PAD_AZURE_FOUNDRY_ALLOWED_HOSTS is a bare host name or a "*.suffix" glob
+// with at least two DNS labels. The consumer (the Azure AI Foundry endpoint
+// validator) compares host names exactly or by "*." suffix, so a URL-shaped
+// entry (scheme, port, path) silently never matched — every save failed with
+// HOST_NOT_ALLOWED and no boot diagnostic pointed at the variable — while
+// "*", "*." and a TLD-only glob such as "*.com" silently widened the
+// allow-list to nearly any host. IP literals are never Azure endpoints.
+func validateAzureFoundryAllowedHosts(entries []string) error {
+	for _, raw := range entries {
+		e := strings.ToLower(strings.TrimSpace(raw))
+		if e == "" {
+			continue
+		}
+		if strings.ContainsAny(e, "/:@ \t") {
+			return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q must be a bare host name or \"*.suffix\" (no scheme, port, path or credentials)", raw)
+		}
+		name := e
+		if strings.HasPrefix(e, "*.") {
+			name = e[2:]
+		} else if strings.Contains(e, "*") {
+			return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q: a wildcard is only allowed as a leading \"*.\"", raw)
+		}
+		if name == "" || strings.HasSuffix(name, ".") || strings.HasPrefix(name, ".") || strings.Count(name, ".") < 1 {
+			return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q must name at least two DNS labels", raw)
+		}
+		if net.ParseIP(name) != nil {
+			return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q: IP literals are never allowed as Azure endpoints", raw)
+		}
 	}
 	return nil
 }

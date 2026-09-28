@@ -12,7 +12,9 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/service"
 	"pad-core/logger"
+	"pad-core/models"
 )
 
 type Event struct {
@@ -28,6 +30,26 @@ type Event struct {
 // touches the socket. The client's read-inactivity watchdog is ~2× this
 // interval, so keep the two in sync.
 const sseHeartbeatInterval = 20 * time.Second
+
+// sseWriteTimeout bounds each individual write (frame or heartbeat ping) on
+// the SSE stream. The server deliberately sets no global WriteTimeout — that
+// would kill healthy idle connections — so without a per-write deadline a
+// client that stops reading while holding the connection open (suspended
+// laptop, zero TCP window) blocks w.Write forever: the write never errors, so
+// not even the heartbeat notices, the handler goroutine is pinned outside its
+// select (revoke/expiry/shutdown cannot run), and its 512-slot buffer stays
+// full. With the deadline, a stuck write fails within this timeout and the
+// normal write-error cleanup path tears the connection down.
+const sseWriteTimeout = 30 * time.Second
+
+// maxFrameBytes bounds one encoded SSE frame. Each client's channel buffers
+// up to 512 frames, so an unbounded frame size lets one large event (a
+// document-carrying event, a chat chunk quoting a pasted file) pin frame-size
+// × 512 bytes per slow connection. 256 KiB leaves ordinary events (chat
+// chunks, progress ticks, summaries) untouched and only caps pathological
+// ones; oversized document-carrying events are swapped for their lightweight
+// form rather than dropped outright.
+const maxFrameBytes = 256 << 10
 
 // EventManager manages Server-Sent Events (SSE) clients and implements
 // service.EventNotifier to allow internal services to emit events to the frontend.
@@ -159,13 +181,10 @@ func (m *EventManager) deliver(ev Event) {
 	// Encode the SSE frame ONCE for all recipients: encoding per connected
 	// client would multiply encode cost (and its allocations) by the number of
 	// live SSE tabs for every chat chunk / progress event.
-	data, err := json.Marshal(ev)
-	if err != nil {
-		logger.Warn("SSE: encode event failed; dropping", "event", ev.Name, "err", err)
+	frame, ok := encodeEventFrame(ev)
+	if !ok {
 		return
 	}
-	frame := append(append(make([]byte, 0, len(data)+16), "data: "...), data...)
-	frame = append(frame, '\n', '\n')
 
 	droppable := sheddable(ev.Name)
 
@@ -189,6 +208,66 @@ func (m *EventManager) deliver(ev Event) {
 	}
 }
 
+// marshalFrame encodes ev into its "data: …\n\n" SSE wire frame, or nil when
+// the JSON marshal fails (already logged).
+func marshalFrame(ev Event) []byte {
+	data, err := json.Marshal(ev)
+	if err != nil {
+		logger.Warn("SSE: encode event failed; dropping", "event", ev.Name, "err", err)
+		return nil
+	}
+	frame := append(append(make([]byte, 0, len(data)+16), "data: "...), data...)
+	return append(frame, '\n', '\n')
+}
+
+// encodeEventFrame marshals ev and enforces the maxFrameBytes bound. An
+// oversized frame is not enqueued: document-carrying events are replaced by
+// their lightweight form (which consumers can refetch over HTTP), anything
+// else is dropped — a missing notification is recoverable, an unbounded
+// frame pinned per stalled connection is not.
+func encodeEventFrame(ev Event) ([]byte, bool) {
+	frame := marshalFrame(ev)
+	if frame == nil {
+		return nil, false
+	}
+	if len(frame) <= maxFrameBytes {
+		return frame, true
+	}
+	origLen := len(frame)
+	if light, ok := lightweightEvent(ev); ok {
+		if lf := marshalFrame(light); lf != nil && len(lf) <= maxFrameBytes {
+			logger.Warn("SSE: event exceeded frame bound; delivered lightweight form instead",
+				"event", ev.Name, "bytes", origLen, "deliveredBytes", len(lf))
+			return lf, true
+		}
+		logger.Warn("SSE: event exceeded frame bound and its lightweight form was unusable; dropped",
+			"event", ev.Name, "bytes", origLen)
+		return nil, false
+	}
+	logger.Warn("SSE: event exceeded frame bound; dropped", "event", ev.Name, "bytes", origLen)
+	return nil, false
+}
+
+// lightweightEvent returns a bounded-size replacement for an oversized
+// document-carrying event. Emission sites normally send the summary directly;
+// this is the backstop for a site that regresses to emitting the full
+// document. TargetUser is preserved so user scoping survives the swap.
+func lightweightEvent(ev Event) (Event, bool) {
+	if ev.Name != "flow:loaded" {
+		return Event{}, false
+	}
+	var doc *models.FlowDocument
+	switch d := ev.Data.(type) {
+	case *models.FlowDocument:
+		doc = d
+	case models.FlowDocument:
+		doc = &d
+	default:
+		return Event{}, false
+	}
+	return Event{Name: ev.Name, Data: service.FlowLoadedSummaryOf(doc), TargetUser: ev.TargetUser}, true
+}
+
 // HandleEvents is the HTTP handler for the SSE endpoint.
 // @Summary      Server-sent events stream
 // @Description  Long-lived SSE channel for analysis, chat, and collaboration events. Chunks stream incrementally; reconnect with Last-Event-ID to resume.
@@ -201,6 +280,22 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		render.Error(w, fmt.Errorf("streaming unsupported"), http.StatusInternalServerError)
 		return
+	}
+
+	// Per-write deadline machinery (see sseWriteTimeout). The controller is
+	// created once; if the underlying writer cannot honor deadlines (a wrapped
+	// ResponseWriter without Unwrap), that is logged exactly once and writes
+	// proceed undelayed rather than tearing down every connection.
+	rc := http.NewResponseController(w)
+	deadlineOK := true
+	armWriteDeadline := func() {
+		if !deadlineOK {
+			return
+		}
+		if err := rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout)); err != nil {
+			logger.Warn("SSE: per-write deadlines unsupported by this connection; stalled clients cannot be reaped by write timeout", "err", err)
+			deadlineOK = false
+		}
 	}
 
 	// Key the connection cap per authenticated user (JWT mode) or per
@@ -268,6 +363,7 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	// fmt.Fprintf in the event loop triggers an implicit WriteHeader via the
 	// otelhttp RespWriterWrapper, and the subsequent Flush triggers it again
 	// ("superfluous response.WriteHeader call" warning).
+	armWriteDeadline()
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
@@ -331,6 +427,7 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-heartbeat.C:
 			// SSE comment frame: the client parser ignores non-"data: " lines,
 			// but any bytes reset its inactivity watchdog.
+			armWriteDeadline()
 			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
 				return
 			}
@@ -338,9 +435,12 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		case frame := <-ch:
 			// Frame arrives pre-encoded by deliver (one encode per event, not
 			// one per client).
+			armWriteDeadline()
 			if _, err := w.Write(frame); err != nil {
-				// Half-dead socket: stop spinning so the goroutine + 512-slot
-				// channel don't linger until the next heartbeat notices.
+				// Dead or stalled socket (a deadline-bound write to a client
+				// that stopped reading fails here within sseWriteTimeout):
+				// return so the goroutine, its channel and its queued frames
+				// are released instead of lingering.
 				return
 			}
 			flusher.Flush()

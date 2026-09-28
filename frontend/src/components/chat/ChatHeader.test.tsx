@@ -53,6 +53,14 @@ describe('ChatHeader', () => {
     expect(screen.getByText('· Sonnet')).toBeInTheDocument()
   })
 
+  it('badges a provider whose credentials are shared by the organisation', async () => {
+    const user = userEvent.setup()
+    renderHeader({providers: [{id: 'claude' as ProviderID, name: 'Claude', configured: true, shared: true}]})
+    expect(screen.getByTitle("Using your organisation's shared credentials")).toHaveTextContent('shared')
+    await user.click(screen.getByText('Claude'))
+    expect(screen.getByRole('menuitem', {name: 'Claude · shared'})).toBeInTheDocument()
+  })
+
   it('lists providers and models in a single menu and selects one', async () => {
     const user = userEvent.setup()
     const props = renderHeader()

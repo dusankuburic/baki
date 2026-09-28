@@ -1,10 +1,13 @@
 package service
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/metrics"
+	"pad-core/logger"
 )
 
 // toolExecResult is one executed tool call of a turn, in CALL order (results
@@ -21,6 +24,30 @@ type toolExecResult struct {
 // once. The read-only tools are in-memory scans (ms-fast), so this is a
 // politeness bound, not a capacity one.
 const maxParallelTools = 4
+
+// guardedToolRun runs one PARALLEL tool call, converting a panic in the tool —
+// model-controlled input reaching a bug in the tool implementation — into the
+// error-shaped result tool failures already surface to the model
+// (ai.ExecuteTool's "error: ..." strings), so the turn continues. The parallel
+// goroutines need this guard themselves: they run outside the stream worker's
+// recover, so without it a panicking tool kills the whole process. The
+// sequential path runs inside that recover and needs none.
+func guardedToolRun(call ai.ToolCall, run func() toolExecResult) (res toolExecResult) {
+	start := time.Now()
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Warn("chat tool panicked", "tool", call.Name, "panic", r)
+			metrics.RecordChatToolResult(metricToolLabel(call.Name), false)
+			res = toolExecResult{
+				id:     call.ID,
+				name:   call.Name,
+				result: fmt.Sprintf("error: tool %s failed unexpectedly (%v) — try a different tool or answer without it", call.Name, r),
+				took:   time.Since(start),
+			}
+		}
+	}()
+	return run()
+}
 
 // execTurnTools runs a model turn's tool calls through the loop memory,
 // emitting each call's tool (starting) / tool_result (finished) events itself
@@ -92,7 +119,7 @@ func (s *ChatService) execTurnTools(
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				results[i] = run(i)
+				results[i] = guardedToolRun(calls[i], func() toolExecResult { return run(i) })
 			}(i)
 		}
 		wg.Wait()

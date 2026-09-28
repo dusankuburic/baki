@@ -3,9 +3,11 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -302,6 +304,90 @@ func TestCopilotAuth_ExchangeToken_EmptyTokenReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "empty token") {
 		t.Errorf("error should mention empty token, got: %v", err)
+	}
+}
+
+// TestCopilotAuth_GetSessionToken_FirstCallerCancelDoesNotFailJoiners: the
+// shared exchange runs detached from the callers' cancellation (mirroring
+// entraTokenSource.Token). A caller that gives up mid-exchange used to cancel
+// it for every joiner, because the flight ran under the first caller's ctx;
+// now the joiner still gets the token and the cache still fills — from ONE
+// exchange.
+func TestCopilotAuth_GetSessionToken_FirstCallerCancelDoesNotFailJoiners(t *testing.T) {
+	release := make(chan struct{})
+	var exchanges atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		exchanges.Add(1)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(CopilotSessionToken{
+			Token:     "shared-tok",
+			ExpiresAt: time.Now().Add(1 * time.Hour).Unix(),
+		})
+	}))
+	defer server.Close()
+
+	orig := copilotTokenExchangeURL
+	defer func() { copilotTokenExchangeURL = orig }()
+	copilotTokenExchangeURL = server.URL
+
+	auth := &CopilotAuth{client: server.Client()}
+
+	// The first caller starts the exchange, then gives up while it is running.
+	quitterCtx, cancel := context.WithCancel(context.Background())
+	quitterDone := make(chan error, 1)
+	go func() {
+		_, err := auth.GetSessionToken(quitterCtx, "gh-tok")
+		quitterDone <- err
+	}()
+	for range 100 {
+		if exchanges.Load() == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if exchanges.Load() != 1 {
+		t.Fatal("the exchange never started")
+	}
+
+	// A joiner arrives while the exchange is in flight, then the first caller
+	// cancels — the exchange must survive that.
+	joinerDone := make(chan string, 1)
+	go func() {
+		tok, err := auth.GetSessionToken(context.Background(), "gh-tok")
+		if err != nil {
+			joinerDone <- ""
+			t.Errorf("joiner failed because another caller cancelled: %v", err)
+			return
+		}
+		joinerDone <- tok
+	}()
+	time.Sleep(20 * time.Millisecond) // let the joiner park on the flight
+	cancel()
+	if err := <-quitterDone; !errors.Is(err, context.Canceled) {
+		t.Errorf("the giving-up caller should see its own cancellation, got %v", err)
+	}
+	close(release)
+
+	select {
+	case tok := <-joinerDone:
+		if tok != "shared-tok" {
+			t.Errorf("joiner token = %q, want shared-tok", tok)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the joiner never got the shared exchange's result")
+	}
+	if got := exchanges.Load(); got != 1 {
+		t.Errorf("exchange ran %d times, want 1 (shared)", got)
+	}
+	// The completed exchange filled the cache despite the first caller
+	// leaving: the next caller does not re-exchange.
+	tok, err := auth.GetSessionToken(context.Background(), "gh-tok")
+	if err != nil || tok != "shared-tok" {
+		t.Errorf("cached token = %q, %v", tok, err)
+	}
+	if got := exchanges.Load(); got != 1 {
+		t.Errorf("exchange ran %d times, want 1 (cache filled for the next caller)", got)
 	}
 }
 

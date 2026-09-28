@@ -42,6 +42,12 @@ export interface ProviderInfo {
   models: ModelDetail[]
   defaultModel: string
   configured: boolean
+  /**
+   * True when the credentials came from the active organisation rather than
+   * the member (GET /api/providers/list?orgId=…). A member's own credentials
+   * always win; the org's are the fallback.
+   */
+  shared?: boolean
 }
 
 export interface ProviderTestResult {
@@ -74,19 +80,40 @@ export type AzureFoundryPublicConfig =
       projectEndpoint?: string
       chatDeployment?: string
       embeddingDeployment?: string
+      /** Additional chat deployments offered in the model picker (normalised by the server). */
+      deployments?: string[]
+      /** Claude deployments (Anthropic Messages route); listed as "claude:<name>". */
+      claudeDeployments?: string[]
+      /**
+       * Org-scoped view (GET /api/orgs/{orgId}/providers/azure-foundry/config)
+       * only: the credentials are the organisation's, and `updatedBy` /
+       * `updatedAt` say which admin saved them and when (RFC 3339).
+       */
+      shared?: boolean
+      updatedBy?: string
+      updatedAt?: string
     }
 
 /** Credential half of the POST body. A missing secret keeps the stored one. */
 export type AzureFoundryAuthInput =
   {mode: 'api_key'; key?: string} | {mode: 'entra'; tenantId: string; clientId: string; clientSecret?: string}
 
-/** POST /api/providers/azure-foundry/config body. */
+/**
+ * POST /api/providers/azure-foundry/config body. An API key cannot list the
+ * resource's deployments, so the chat model picker shows exactly
+ * `chatDeployment` plus `deployments` (at most 16); the server requires one of
+ * them unless Entra ID with a project endpoint lists the project's deployments.
+ */
 export interface AzureFoundryConfigInput {
   endpoint: string
   auth: AzureFoundryAuthInput
   projectEndpoint?: string
   chatDeployment?: string
   embeddingDeployment?: string
+  /** Additional chat deployments; omitted when empty. */
+  deployments?: string[]
+  /** Claude deployments; omitted when empty. */
+  claudeDeployments?: string[]
 }
 
 export interface SourceFileInfo {

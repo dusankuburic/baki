@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"pad-analyzer/internal/storage/interfaces"
 )
 
 // retryStub lets a test script a sequence of Chat/Stream outcomes.
@@ -190,6 +192,50 @@ func TestRetry_Stream_ErrorChunkAfterContentForwardedNotRetried(t *testing.T) {
 	}
 }
 
+// TestRetry_Stream_HostedStepCountsAsDelivered: once the provider ran a
+// server-side step — shown in the trail (ToolEvent) or not (ServerStep) — a
+// replay would run it again, so a later retryable error is forwarded instead.
+func TestRetry_Stream_HostedStepCountsAsDelivered(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		step Chunk
+	}{
+		{"trail ToolEvent", Chunk{ToolEvent: &ToolEvent{Name: "web_search_call", Label: "Agent · web search"}}},
+		{"unlabelled ServerStep", Chunk{ServerStep: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &retryStub{streamPlan: []func(onChunk func(Chunk)) error{
+				func(onChunk func(Chunk)) error {
+					onChunk(tc.step)
+					onChunk(Chunk{Error: fmt.Errorf("%w: slow down", ErrRateLimited)})
+					return nil
+				},
+				func(onChunk func(Chunk)) error {
+					onChunk(Chunk{Text: "replayed"})
+					onChunk(Chunk{Done: true})
+					return nil
+				},
+			}}
+			rp := NewRetryingProviderWithConfig(stub, 3, time.Millisecond)
+			var errs []error
+			err := rp.Stream(context.Background(), Request{}, func(c Chunk) {
+				if c.Error != nil {
+					errs = append(errs, c.Error)
+				}
+			})
+			if err != nil {
+				t.Fatalf("expected nil return (the error travels as a chunk after the step), got %v", err)
+			}
+			if stub.streamCall != 1 {
+				t.Errorf("expected exactly 1 Stream call (no replay after a server-side step), got %d", stub.streamCall)
+			}
+			if len(errs) != 1 || !errors.Is(errs[0], ErrRateLimited) {
+				t.Errorf("forwarded errors = %v", errs)
+			}
+		})
+	}
+}
+
 // TestRetry_Stream_PermanentErrorChunkReturnedNotRetried: a pre-content error
 // chunk that is not retryable is converted into a returned error (so callers
 // and outer wrappers see a real failure) without burning retry attempts.
@@ -208,6 +254,58 @@ func TestRetry_Stream_PermanentErrorChunkReturnedNotRetried(t *testing.T) {
 	}
 	if stub.streamCall != 1 {
 		t.Errorf("expected exactly 1 Stream call for permanent error, got %d", stub.streamCall)
+	}
+}
+
+// TestRetry_Stream_HeldErrorChunkKeepsUsage: an error chunk withheld before
+// delivery may be the only place a failed run's token usage rides (the
+// MCP-approvals error is one such); the error Stream returns must carry it so
+// the audited wrapper can bill the run instead of estimating.
+func TestRetry_Stream_HeldErrorChunkKeepsUsage(t *testing.T) {
+	stub := &retryStub{streamPlan: []func(onChunk func(Chunk)) error{
+		func(onChunk func(Chunk)) error {
+			// No content, no Done: the error chunk is the whole run.
+			onChunk(Chunk{Error: errors.New("the agent asked for approval"), TokensIn: 11, TokensOut: 4, ServedModel: "gpt-4.1"})
+			return nil
+		},
+	}}
+	rp := NewRetryingProvider(stub)
+
+	err := rp.Stream(context.Background(), Request{}, func(Chunk) {})
+	if err == nil || err.Error() != "the agent asked for approval" {
+		t.Fatalf("expected the chunk error returned unchanged, got %v", err)
+	}
+	in, out, served, ok := usageOf(err)
+	if !ok || in != 11 || out != 4 || served != "gpt-4.1" {
+		t.Errorf("usage on the returned error = %d/%d/%q (ok=%v), want 11/4/\"gpt-4.1\"", in, out, served, ok)
+	}
+	if stub.streamCall != 1 {
+		t.Errorf("a plain error must not be retried, got %d calls", stub.streamCall)
+	}
+}
+
+// TestAudited_StreamBillsUsageCarriedOnHeldError: end to end through the real
+// wrapper chain (audited outside retry), a failed run whose only usage rode
+// the withheld error chunk records those exact counts, not an estimate.
+func TestAudited_StreamBillsUsageCarriedOnHeldError(t *testing.T) {
+	stub := &auditStub{
+		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		streamChunks: []Chunk{{Error: errors.New("the agent asked for approval"), TokensIn: 11, TokensOut: 4, ServedModel: "gpt-4.1"}},
+	}
+	recorded := make(chan *interfaces.UsageMetric, 1)
+	ap := NewAuditedProvider(NewRetryingProviderWithConfig(stub, 3, time.Millisecond),
+		func(_ context.Context, m *interfaces.UsageMetric) error { recorded <- m; return nil },
+		"user-1", "stub")
+	if err := ap.Stream(context.Background(), Request{Model: "m"}, func(Chunk) {}); err == nil {
+		t.Fatal("expected the error chunk to surface as the Stream error")
+	}
+	select {
+	case m := <-recorded:
+		if m.PromptTokens != 11 || m.CompletionTokens != 4 {
+			t.Errorf("recorded %d/%d tokens, want the 11/4 carried on the withheld error chunk", m.PromptTokens, m.CompletionTokens)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no usage recorded for the failed run")
 	}
 }
 

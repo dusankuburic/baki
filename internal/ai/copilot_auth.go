@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -63,7 +64,7 @@ func (a *CopilotAuth) StartDeviceFlow(ctx context.Context) (*DeviceAuthResponse,
 	}
 
 	var result DeviceAuthResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSONBodyBytes)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode device code response: %w", err)
 	}
 	return &result, nil
@@ -97,7 +98,7 @@ func (a *CopilotAuth) PollToken(ctx context.Context, deviceCode string) (*GitHub
 		AccessToken string `json:"access_token"`
 		Error       string `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSONBodyBytes)).Decode(&result); err != nil {
 		return nil, err
 	}
 
@@ -142,7 +143,7 @@ func (a *CopilotAuth) ExchangeToken(ctx context.Context, githubToken string) (*C
 	}
 
 	var token CopilotSessionToken
-	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSONBodyBytes)).Decode(&token); err != nil {
 		return nil, fmt.Errorf("decode token exchange response: %w", err)
 	}
 	if token.Token == "" {
@@ -154,8 +155,12 @@ func (a *CopilotAuth) ExchangeToken(ctx context.Context, githubToken string) (*C
 // GetSessionToken returns a valid Copilot session token, refreshing if expired or within 5 min of expiry.
 // Uses singleflight so concurrent callers with the same GitHub token share a single HTTP exchange,
 // while different tokens proceed independently. The mutex is never held during network I/O.
-// The cache is keyed by a hash of the GitHub token so multiple users in cloud mode don't thrash
-// each other's cached session token.
+// The flight is keyed by the token's hash (the cache key — the raw token never
+// sits in the singleflight map) and the exchange runs detached from the
+// callers' cancellation, mirroring entraTokenSource.Token: the shared exchange
+// must not fail for every joiner because the first caller's ctx ended, and it
+// still fills the cache for the next caller after a joiner gives up.
+// authHTTPClient's 30 s timeout bounds the detached exchange.
 func (a *CopilotAuth) GetSessionToken(ctx context.Context, githubToken string) (string, error) {
 	cacheKey := tokenHash(githubToken)
 	a.mu.Lock()
@@ -176,18 +181,25 @@ func (a *CopilotAuth) GetSessionToken(ctx context.Context, githubToken string) (
 	}
 	a.mu.Unlock()
 
-	v, err, _ := a.flight.Do(githubToken, func() (any, error) {
-		return a.ExchangeToken(ctx, githubToken)
+	ch := a.flight.DoChan(cacheKey, func() (any, error) {
+		tok, err := a.ExchangeToken(context.WithoutCancel(ctx), githubToken)
+		if err != nil {
+			return nil, err
+		}
+		a.mu.Lock()
+		a.sessionTokens[cacheKey] = tok
+		a.mu.Unlock()
+		return tok.Token, nil
 	})
-	if err != nil {
-		return "", err
+	select {
+	case r := <-ch:
+		if r.Err != nil {
+			return "", r.Err
+		}
+		return r.Val.(string), nil
+	case <-ctx.Done():
+		return "", ctx.Err()
 	}
-	token := v.(*CopilotSessionToken)
-
-	a.mu.Lock()
-	a.sessionTokens[cacheKey] = token
-	a.mu.Unlock()
-	return token.Token, nil
 }
 
 // tokenHash returns a deterministic, non-reversible key for the session-token cache.

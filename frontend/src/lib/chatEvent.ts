@@ -10,9 +10,21 @@
 // an async (memoized-import) validator would add an await boundary on the hot
 // path. This stays allocation-light and order-preserving.
 
+// DoneMeta is what a finished turn reports beyond its token counts, when the
+// backend knows it: the model that actually answered (providers that resolve
+// aliases — an Azure AI Foundry deployment, `model-router`, an `agent:*` —
+// answer with a different model than the one selected) and the USD-per-1M-
+// token rates the turn was billed at. Every field is optional; an older
+// backend sends none.
+export interface DoneMeta {
+  servedModel?: string
+  inputCostPerM?: number
+  outputCostPerM?: number
+}
+
 export type ChatEvent =
   | {kind: 'chunk'; content: string}
-  | {kind: 'done'; tokensOut: number; tokensIn: number; chunks?: number}
+  | ({kind: 'done'; tokensOut: number; tokensIn: number; chunks?: number} & DoneMeta)
   | {kind: 'error'; message: string; code?: string}
   // Keepalive during a silent server phase; carries no data.
   | {kind: 'heartbeat'}
@@ -57,6 +69,20 @@ function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+// doneMeta picks the served-model fields out of a done event's data: present
+// only when the backend sent them with the right type, so a plain done
+// carries no undefined-valued keys.
+function doneMeta(data: Record<string, unknown>): DoneMeta {
+  const meta: DoneMeta = {}
+  const servedModel = asString(data.servedModel)
+  if (servedModel) meta.servedModel = servedModel
+  const inputCostPerM = asNumber(data.inputCostPerM)
+  if (inputCostPerM !== null) meta.inputCostPerM = inputCostPerM
+  const outputCostPerM = asNumber(data.outputCostPerM)
+  if (outputCostPerM !== null) meta.outputCostPerM = outputCostPerM
+  return meta
+}
+
 export function parseChatEvent(raw: unknown): ChatEvent | null {
   const payload = asRecord(raw)
   if (!payload) return null
@@ -73,6 +99,7 @@ export function parseChatEvent(raw: unknown): ChatEvent | null {
         tokensOut: asNumber(data.tokensOut) ?? 0,
         tokensIn: asNumber(data.tokensIn) ?? 0,
         chunks: asNumber(data.chunks) ?? undefined,
+        ...doneMeta(data),
       }
     case 'error': {
       const code = asString(data.code)

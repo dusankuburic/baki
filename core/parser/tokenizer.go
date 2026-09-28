@@ -57,6 +57,15 @@ func Tokenize(text string) []Token {
 			raw = raw[3:]
 		}
 
+		// PAD exports carry CRLF; the tokenizer's canonical line break is \n
+		// (goldens, serializer and analyzer all assume it). Single lines are
+		// TrimRight'd below, but the multi-line accumulators (block comments,
+		// triple-quoted literals) append `raw` verbatim, so strip the CR here
+		// or it leaks into the middle of the accumulated value.
+		if strings.HasSuffix(raw, "\r") {
+			raw = raw[:len(raw)-1]
+		}
+
 		trimmed := strings.TrimRight(raw, " \t\r")
 		indent := computeIndent(trimmed)
 		content := strings.TrimLeft(trimmed, " \t")

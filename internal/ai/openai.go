@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 )
 
-var openAIBaseURL = providerURL("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
+// openAIDefaultURL is OpenAI's own chat-completions endpoint; OPENAI_API_URL
+// overrides it (compatible servers and proxies).
+const openAIDefaultURL = "https://api.openai.com/v1/chat/completions"
+
+var openAIBaseURL = providerURL("OPENAI_API_URL", openAIDefaultURL)
 
 type OpenAIProvider struct {
 	openaiBase
@@ -20,13 +24,25 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 			providerLabel:         "openai",
 			embeddingModel:        "text-embedding-3-small",
 			embeddingModelDefault: "text-embedding-3-small",
-			// OpenAI's reasoning models (o-series, GPT-5) reject max_tokens;
-			// every current OpenAI model accepts the successor parameter. An
-			// OPENAI_API_URL proxy that only knows the old name is handled by
-			// send()'s one-shot parameter swap.
-			maxTokensParam: maxTokensParamCompletion,
+			maxTokensParam:        openAIMaxTokensParam(openAIBaseURL),
 		},
 	}
+}
+
+// openAIMaxTokensParam picks the completion-cap field for the configured
+// endpoint, at construction time (tests repoint openAIBaseURL). OpenAI itself
+// gets max_completion_tokens: its reasoning models (o-series, GPT-5) reject
+// max_tokens, and every current OpenAI model accepts the successor. An
+// OPENAI_API_URL override keeps max_tokens: compatible servers (Ollama,
+// llama-cpp-python, older vLLM) read only that name and silently IGNORE the
+// successor — no 400 would ever trigger send()'s repair, and generation would
+// run uncapped. A proxy in front of real OpenAI serving a reasoning model
+// rejects max_tokens with unsupported_parameter, and send() swaps it once.
+func openAIMaxTokensParam(baseURL string) string {
+	if baseURL == openAIDefaultURL {
+		return maxTokensParamCompletion
+	}
+	return maxTokensParamLegacy
 }
 
 func (o *OpenAIProvider) SupportsTools() bool { return true }
@@ -70,10 +86,10 @@ type openAIRequest struct {
 	// a provider sends; exactly one is set per request.
 	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
 	Temperature         float64         `json:"temperature,omitempty"`
-	Messages      []openAIMessage `json:"messages"`
-	Tools         []openAITool    `json:"tools,omitempty"`
-	Stream        bool            `json:"stream,omitempty"`
-	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
+	Messages            []openAIMessage `json:"messages"`
+	Tools               []openAITool    `json:"tools,omitempty"`
+	Stream              bool            `json:"stream,omitempty"`
+	StreamOptions       *streamOptions  `json:"stream_options,omitempty"`
 }
 
 type openAITool struct {
@@ -146,6 +162,11 @@ func toOpenAIMessages(systemPrompt string, msgs []Message) []openAIMessage {
 		om := openAIMessage{Role: m.Role, Content: m.Content}
 		if m.Role == "tool" {
 			om.ToolCallID = m.ToolCallID
+		}
+		if m.Role == "assistant" {
+			// Backstop for conversations stored before inline reasoning was
+			// split off the answer: never re-send a <think> block as history.
+			om.Content = stripLeadingThink(m.Content)
 		}
 		for _, tc := range m.ToolCalls {
 			oc := openAIToolCall{ID: tc.ID, Type: "function"}

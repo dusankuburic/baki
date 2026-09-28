@@ -132,7 +132,8 @@ describe('stall probe', () => {
 
     expect(chatApi.resumeStream).toHaveBeenCalledWith('s1', 0)
     expect(handler.onReplace).toHaveBeenCalledWith('hello world', 's1')
-    expect(handler.onDone).toHaveBeenCalledWith(5, 2, 's1')
+    // No served model on this resume: the meta argument is undefined.
+    expect(handler.onDone).toHaveBeenCalledWith(5, 2, 's1', undefined)
   })
 
   it('surfaces a dropped error event via resume', async () => {
@@ -270,6 +271,95 @@ describe('stall probe', () => {
 // type), which is the whole point: the previous test for this behaviour declared
 // its own 5-arg interface and invoked it directly, so it exercised a contract no
 // production code implemented.
+describe('done meta (served model + billed rates)', () => {
+  function doneEvent(streamId: string, data: Record<string, unknown>) {
+    return {name: 'chat:event', data: {streamId, type: 'done', data}}
+  }
+  const RATES = {inputCostPerM: 2.5, outputCostPerM: 10}
+
+  it('passes the served model and rates of a live done to the handler', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+
+    capturedCb!(chunkEvent('s1', 'hi'))
+    capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 1, servedModel: 'gpt-4o', ...RATES}))
+
+    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {servedModel: 'gpt-4o', ...RATES})
+  })
+
+  it('passes no meta for a plain done', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+
+    capturedCb!(chunkEvent('s1', 'hi'))
+    capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 1}))
+
+    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', undefined)
+  })
+
+  it("keeps the done event's rates through a chunk-mismatch resume and takes the served model from it", async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+    capturedCb!(chunkEvent('s1', 'hi'))
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'hi there',
+      done: true,
+      error: '',
+      tokensOut: 3,
+      tokensIn: 1,
+      servedModel: 'gpt-4o',
+    })
+
+    // Two chunks announced, one received: the finish goes through resume.
+    capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 2, ...RATES}))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(chatApi.resumeStream).toHaveBeenCalledWith('s1', 0)
+    expect(handler.onReplace).toHaveBeenCalledWith('hi there', 's1')
+    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {servedModel: 'gpt-4o', ...RATES})
+  })
+
+  it('forwards the served model a stall-probe resume reports', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+    capturedCb!(chunkEvent('s1', 'hel'))
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'hello',
+      done: true,
+      error: '',
+      tokensOut: 5,
+      tokensIn: 2,
+      servedModel: 'gpt-4o-mini',
+    })
+
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    expect(handler.onDone).toHaveBeenCalledWith(5, 2, 's1', {servedModel: 'gpt-4o-mini'})
+  })
+
+  it('forwards the served model of a stream /begin reports as already finished', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    vi.mocked(chatApi.beginStream).mockResolvedValue({
+      status: 'finished',
+      text: 'done already',
+      done: true,
+      tokensOut: 2,
+      tokensIn: 1,
+      servedModel: 'gpt-4o',
+    })
+
+    await result.current.registerStream('s1', true)
+
+    expect(handler.onReplace).toHaveBeenCalledWith('done already', 's1')
+    expect(handler.onDone).toHaveBeenCalledWith(2, 1, 's1', {servedModel: 'gpt-4o'})
+  })
+})
+
 describe('fix_decision dispatch', () => {
   function fixDecisionEvent(streamId: string, data: Record<string, unknown>) {
     return {name: 'chat:event', data: {streamId, type: 'fix_decision', data}}

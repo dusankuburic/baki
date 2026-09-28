@@ -24,7 +24,7 @@ func TestFailureMessage_FriendlyProviderCopy(t *testing.T) {
 		{"circuit open", ai.ErrCircuitOpen, "temporarily unavailable after repeated failures"},
 		{"provider down", fmt.Errorf("wrapped: %w", ai.ErrProviderDown), "temporarily unavailable"},
 		{"insufficient balance", ai.ErrInsufficientBalance, "insufficient balance"},
-		{"invalid key", ai.ErrApiKeyInvalid, "Settings → AI Providers"},
+		{"invalid key", ai.ErrApiKeyInvalid, "Settings → AI Accounts"},
 		{"truncated stream", fmt.Errorf("openai stream truncated before terminal marker: %w", errors.New("unexpected EOF")), "interrupted before it finished"},
 		{"malformed stream", fmt.Errorf("gemini stream had 3 undecodable event(s) and no terminal marker"), "interrupted before it finished"},
 		{"context limit", ai.ErrContextLimit, "context window"},

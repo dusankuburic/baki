@@ -48,6 +48,11 @@ services:
       # override (see .env.example). Empty = defaults.
       - PAD_AZURE_FOUNDRY_ALLOWED_HOSTS=${PAD_AZURE_FOUNDRY_ALLOWED_HOSTS:-}
       - PAD_AI_ALLOW_PRIVATE_EGRESS=${PAD_AI_ALLOW_PRIVATE_EGRESS:-}
+      # Knowledge-base embedding width and provider pin (see .env.example;
+      # PAD_EMBEDDING_PROVIDER=azure-foundry is the only way the knowledge
+      # base embeds with Azure AI Foundry). Empty = defaults.
+      - PAD_EMBEDDING_DIM=${PAD_EMBEDDING_DIM:-}
+      - PAD_EMBEDDING_PROVIDER=${PAD_EMBEDDING_PROVIDER:-}
       # General per-IP rate budget. The code defaults (1 rps, burst 20) are
       # tuned for public multi-tenant deployments; behind Docker NAT every
       # request — browser and CLI alike — arrives from the single gateway IP,

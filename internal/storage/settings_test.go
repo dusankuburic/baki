@@ -296,3 +296,55 @@ func TestMigrate_MigrationFunctionError(t *testing.T) {
 		t.Errorf("error should mention migration version, got: %v", err)
 	}
 }
+
+// TestSettingsStore_Persist_NoTempStragglers pins the unique-temp write:
+// persistLocked must leave the settings directory holding exactly the target
+// file — a leftover ".settings-tmp-*" (or the legacy fixed "<path>.tmp") means
+// a cleanup path was missed, and the next writer must not see or race a
+// previous writer's temp. Covers the success path and a failing rename (target
+// path is a directory, so the rename cannot succeed).
+func TestSettingsStore_Persist_NoTempStragglers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	s, err := NewSettingsStoreAt(path)
+	if err != nil {
+		t.Fatalf("NewSettingsStoreAt: %v", err)
+	}
+	if err := s.Update(context.Background(), *models.DefaultSettings()); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "settings.json" {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Errorf("settings dir after successful persist = %v, want exactly [settings.json]", names)
+	}
+
+	// A failing rename (target occupied by a directory) must still clean its temp.
+	dir2 := t.TempDir()
+	blocked := &SettingsStore{
+		path:    filepath.Join(dir2, "settings.json"), // will rename onto this…
+		current: models.DefaultSettings(),
+	}
+	// Make the rename fail by making the target path a directory.
+	if err := os.Mkdir(blocked.path, 0o750); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := blocked.persistLocked(); err == nil {
+		t.Fatal("persist onto a directory target should fail")
+	}
+	entries2, err := os.ReadDir(dir2)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries2 {
+		if strings.HasPrefix(e.Name(), ".settings-tmp-") || strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("leftover temp after failed persist: %s", e.Name())
+		}
+	}
+}

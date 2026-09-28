@@ -2,6 +2,7 @@ import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {renderHook, waitFor, act} from '@testing-library/react'
 import {useChatStore} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
+import {useOrgStore} from '@/stores/orgStore'
 import type {ProviderInfo} from '@/types'
 
 vi.mock('@/api', () => ({
@@ -33,8 +34,9 @@ const PROVIDERS = [
 ] as unknown as ProviderInfo[]
 
 beforeEach(() => {
-  vi.mocked(providersApi.listProviders).mockResolvedValue(PROVIDERS)
+  vi.mocked(providersApi.listProviders).mockClear().mockResolvedValue(PROVIDERS)
   useChatStore.setState({selectedProvider: 'claude', providerEpoch: 0})
+  useOrgStore.setState({activeOrgId: null})
   // The configured default (Settings → AI) wins over the catalog default.
   const s = useSettingsStore.getState().settings
   useSettingsStore.setState({
@@ -93,6 +95,30 @@ describe('useProviderSetup', () => {
     const {result} = renderHook(() => useProviderSetup())
     await waitFor(() => expect(result.current.currentModels).toHaveLength(2))
     expect(result.current.currentModels.find(m => m.id === 'opus')?.supportsTools).toBe(false)
+  })
+
+  it('scopes the list to the active organisation and passes the shared flag through', async () => {
+    useOrgStore.setState({activeOrgId: 'org-1'})
+    vi.mocked(providersApi.listProviders).mockResolvedValue([
+      {...PROVIDERS[0], shared: true},
+    ] as unknown as ProviderInfo[])
+    const {result} = renderHook(() => useProviderSetup())
+    await waitFor(() => expect(result.current.providers).toHaveLength(1))
+    expect(providersApi.listProviders).toHaveBeenCalledWith('org-1')
+    expect(result.current.currentProvider?.shared).toBe(true)
+
+    // Leaving the org drops the scope and refetches: the org's shared
+    // credentials no longer count.
+    act(() => useOrgStore.setState({activeOrgId: null}))
+    await waitFor(() => expect(providersApi.listProviders).toHaveBeenCalledTimes(2))
+    expect(providersApi.listProviders).toHaveBeenLastCalledWith(undefined)
+  })
+
+  it("lists the user's own providers unscoped when no organisation is active", async () => {
+    const {result} = renderHook(() => useProviderSetup())
+    await waitFor(() => expect(result.current.providers).toHaveLength(1))
+    expect(providersApi.listProviders).toHaveBeenCalledWith(undefined)
+    expect(result.current.currentProvider?.shared).toBeUndefined()
   })
 
   it('is "checking" (null) until providers load, and reports a failed check', async () => {

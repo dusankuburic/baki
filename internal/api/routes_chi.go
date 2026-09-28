@@ -355,6 +355,14 @@ func registerRoutes(rt *Router, r chi.Router) {
 				r.Post("/reindex", h.Org.handleKnowledgeReindex)
 				r.Delete("/{docId}", h.Org.handleKnowledgeDelete)
 			})
+			// Organisation-shared provider credentials (G7). Read: member
+			// (public form only). Write, delete, test: admin.
+			r.Route("/providers/azure-foundry", func(r chi.Router) {
+				r.Get("/config", h.Org.handleOrgAzureFoundryConfigGet)
+				r.Post("/config", h.Org.handleOrgAzureFoundryConfigSave)
+				r.Delete("/config", h.Org.handleOrgAzureFoundryConfigDelete)
+				r.Post("/test", h.Org.handleOrgAzureFoundryTest)
+			})
 			r.Route("/invites", func(r chi.Router) {
 				r.Get("/", h.Org.handleOrgInviteList)
 				r.Post("/", h.Org.handleOrgInviteCreate)

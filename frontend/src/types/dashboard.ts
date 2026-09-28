@@ -289,7 +289,10 @@ export interface AIDailyPoint {
 
 export interface ModelUsage {
   provider: string
+  /** What the caller asked for: a model id, or for Azure AI Foundry a deployment name / agent. */
   model: string
+  /** The model that actually answered, present only when it differs from `model` (deployment alias, model router, agent). */
+  servedModel?: string
   tokensIn: number
   tokensOut: number
   calls: number

@@ -66,18 +66,49 @@ func ValidChannelKind(kind string) bool {
 	return false
 }
 
-// BuildChannelNotifier constructs the single-channel notifier for an
-// org-configured channel (R2-3). Same URL validation and defaults as the
-// deployment-global builder; a bad URL errors instead of silently enabling.
-func BuildChannelNotifier(kind, rawURL, secret string, policy TargetPolicy) (AlertNotifier, error) {
-	u, err := validateAlertURL(rawURL, policy)
-	if err != nil {
-		return nil, err
+// ValidateChannel checks an org channel's kind and URL (the same validation
+// BuildChannelNotifierWith applies) without building a client or a
+// transport — what a channel save needs. The host lookup honours ctx.
+func ValidateChannel(ctx context.Context, kind, rawURL string, policy TargetPolicy) error {
+	if !ValidChannelKind(kind) {
+		return fmt.Errorf("unknown channel kind %q", kind)
 	}
-	client := &http.Client{
+	_, err := validateAlertURLContext(ctx, rawURL, policy)
+	return err
+}
+
+// NewChannelClient is the guarded HTTP client for org channels: one per
+// policy per process, shared by every notifier BuildChannelNotifierWith
+// builds with it, so connections pool and the transport's own idle timer
+// reaps them — a transport cloned per channel save or test kept its idle
+// TLS connection and two persistConn goroutines alive for 90 s after the
+// handler returned.
+func NewChannelClient(policy TargetPolicy) *http.Client {
+	return &http.Client{
 		Timeout:       defaultTimeout,
 		Transport:     egress.GuardedTransport(policy),
 		CheckRedirect: egress.NoRedirects,
+	}
+}
+
+// BuildChannelNotifier constructs the single-channel notifier for an
+// org-configured channel (R2-3) on a client of its own. Same URL validation
+// and defaults as the deployment-global builder; a bad URL errors instead of
+// silently enabling. Request paths should prefer BuildChannelNotifierWith
+// and a shared NewChannelClient.
+func BuildChannelNotifier(kind, rawURL, secret string, policy TargetPolicy) (AlertNotifier, error) {
+	return BuildChannelNotifierWith(context.Background(), NewChannelClient(policy), kind, rawURL, secret, policy)
+}
+
+// BuildChannelNotifierWith is BuildChannelNotifier on a caller-owned client
+// (NewChannelClient), with the validation lookup bounded by ctx.
+func BuildChannelNotifierWith(ctx context.Context, client *http.Client, kind, rawURL, secret string, policy TargetPolicy) (AlertNotifier, error) {
+	u, err := validateAlertURLContext(ctx, rawURL, policy)
+	if err != nil {
+		return nil, err
+	}
+	if client == nil {
+		client = NewChannelClient(policy)
 	}
 	switch kind {
 	case "webhook":
@@ -222,14 +253,28 @@ const (
 // egress.GuardedTransport on every client built here, and egress.NoRedirects
 // keeps a policy-passing endpoint from steering the signed payload somewhere
 // that never passed validation.
+//
+// The dial-time guard judges the address actually connected to, which only
+// works when this process dials the target itself. Behind an HTTP(S)_PROXY
+// the proxy resolves the name on its own, so the guard fails closed there: a
+// proxy on an internal address is refused (every delivery through it fails),
+// and behind a public proxy the target must resolve locally to public
+// addresses. Deployments whose egress proxy sits on a private address must
+// put the alert hosts in NO_PROXY so they are dialled directly and guarded.
 func validateAlertURL(raw string, policy TargetPolicy) (string, error) {
+	return validateAlertURLContext(context.Background(), raw, policy)
+}
+
+// validateAlertURLContext is validateAlertURL with the host lookup bounded
+// by ctx (a request's deadline and disconnect).
+func validateAlertURLContext(ctx context.Context, raw string, policy TargetPolicy) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return "", fmt.Errorf("invalid alert URL %q: %w", raw, err)
 	}
 	host := u.Hostname()
 	if u.Scheme == "https" {
-		if err := rejectPrivateTarget(host, policy); err != nil {
+		if err := rejectPrivateTargetContext(ctx, host, policy); err != nil {
 			return "", err
 		}
 		return raw, nil
@@ -240,15 +285,16 @@ func validateAlertURL(raw string, policy TargetPolicy) (string, error) {
 	return "", fmt.Errorf("alert URL %q must use https; governance payloads carry internal flow details and must not be sent in plaintext (http:// to localhost is accepted only in local/desktop mode)", raw)
 }
 
-// rejectPrivateTarget resolves host (skipping resolution for IPs and the
-// loopback dev names) and refuses RFC1918/loopback/link-local/unique-local
-// addresses (B1.9). The check is egress.RejectPrivateHost; this wrapper keeps
-// the "alert URL ..." wording that the channel endpoints surface to org admins.
-func rejectPrivateTarget(host string, policy TargetPolicy) error {
+// rejectPrivateTargetContext resolves host (skipping resolution for IPs and
+// the loopback dev names) and refuses RFC1918/loopback/link-local/unique-local
+// addresses (B1.9). The check is egress.RejectPrivateHostContext; this
+// wrapper keeps the "alert URL ..." wording that the channel endpoints
+// surface to org admins.
+func rejectPrivateTargetContext(ctx context.Context, host string, policy TargetPolicy) error {
 	if host == "" {
 		return fmt.Errorf("alert URL has no host")
 	}
-	if err := egress.RejectPrivateHost(host, policy); err != nil {
+	if err := egress.RejectPrivateHostContext(ctx, nil, host, policy); err != nil {
 		return fmt.Errorf("alert URL %w", err)
 	}
 	return nil

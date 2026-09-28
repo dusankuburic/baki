@@ -203,22 +203,22 @@ type chatContextValue struct {
 	contextText string
 }
 
-// buildScrubbedContext scrubs the document, builds the system prompt and context
-// text, augments the system prompt with RAG knowledge-base guidelines, and
-// scrubs both strings. It also returns the scrubbed document so the caller can
-// hand it to the tool loop. Shared by StreamChatMessage and PreviewContext so
-// the two context-preparation paths cannot drift apart.
+// buildScrubbedContext scrubs the document, builds the system prompt and
+// context text, looks up the turn's RAG knowledge-base guidelines, and scrubs
+// all three strings. It also returns the scrubbed document so the caller can
+// hand it to the tool loop. Shared with PreviewContext so the two
+// context-preparation paths cannot drift apart. The guidelines are returned
+// separately: they belong to the final user message (buildMessages), not the
+// system prompt, which must stay byte-stable across turns for the providers'
+// automatic prompt caching (PERF-8).
 //
 // This is the SYNCHRONOUS path (RAG blocks). The streaming worker instead uses
 // cachedContextCore + a concurrent, deadline-bounded ragGuidelines call so a
 // slow embedding provider cannot gate first token (C-3).
-func (s *ChatService) buildScrubbedContext(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (scrubbedDoc *models.FlowDocument, sysPrompt, contextText string) {
+func (s *ChatService) buildScrubbedContext(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (scrubbedDoc *models.FlowDocument, sysPrompt, contextText, guidelines string) {
 	cv := s.cachedContextCore(ctx, scope, provider, doc, report, req)
-	sysPrompt = cv.sysPrompt
-	if guidelines := s.ragGuidelines(ctx, scope, doc, req.UserMessage); guidelines != "" {
-		sysPrompt += "\n\n" + guidelines
-	}
-	return cv.scrubbedDoc, scrubber.ScrubText(sysPrompt), scrubber.ScrubText(cv.contextText)
+	guidelines = s.ragGuidelines(ctx, scope, doc, req.UserMessage)
+	return cv.scrubbedDoc, scrubber.ScrubText(cv.sysPrompt), scrubber.ScrubText(cv.contextText), scrubber.ScrubText(guidelines)
 }
 
 // ragGuidelines returns the RAG knowledge-base guidelines for a turn, or "" if
@@ -388,37 +388,84 @@ func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowD
 // rather than appended as a separate user message — two consecutive user-role
 // messages are rejected by many providers (400). ExcludeContext or empty
 // context skips the merge.
-func buildMessages(req models.ChatRequest, contextText string) []ai.Message {
+func buildMessages(req models.ChatRequest, contextText, guidelines string) []ai.Message {
 	messages := make([]ai.Message, len(req.Messages))
 	for i, m := range req.Messages {
 		messages[i] = ai.Message{Role: m.Role, Content: scrubber.ScrubText(m.Content)}
 	}
 	userContent := scrubber.ScrubText(req.UserMessage)
+	// The per-turn RAG guidelines ride in the user turn (included regardless
+	// of ExcludeContext, as they always were) so the system prompt and the
+	// history prefix stay byte-identical across turns — the providers'
+	// automatic prompt cache covers everything before this message (PERF-8).
+	if guidelines != "" {
+		userContent = guidelines + "\n\n" + userContent
+	}
 	if !req.ExcludeContext && contextText != "" {
 		userContent = "Context:\n" + contextText + "\n\n" + userContent
 	}
 	return append(messages, ai.Message{Role: "user", Content: userContent})
 }
 
+// promptTokenCeiling is a tokenizer-free upper bound on the prompt's token
+// count: every estimator in use (the cl100k BPE, or the rune heuristic, whose
+// CJK runes are three bytes each) yields at most one token per byte, so a
+// prompt whose byte count fits the window fits in tokens too and the tiktoken
+// pass — ~100 ms and ~50 MB of garbage per 400 KB, run again on every tool
+// iteration — can be skipped. The per-message and per-tool framing matches
+// truncateForContextWindow's own estimate.
+func promptTokenCeiling(req *ai.Request) int {
+	n := len(req.SystemPrompt)
+	for _, td := range req.Tools {
+		n += len(td.InputSchema) + 8
+	}
+	for _, m := range req.Messages {
+		n += len(m.Content) + 4
+		for _, tc := range m.ToolCalls {
+			n += len(tc.Input)
+		}
+	}
+	return n
+}
+
 // truncateForContextWindow estimates the total prompt tokens and, if the prompt
-// exceeds the model's context window, drops the oldest turns until it fits. If
-// the prompt still exceeds the limit after truncation (system prompt + the
-// pinned first turn alone are too large), returns ErrContextLimit so the caller
-// surfaces a clean "conversation too long" message instead of a raw provider
-// 400. Mutates req.Messages in place.
+// exceeds the model's context window, drops turns until it fits. If the prompt
+// still exceeds the limit after truncation (system prompt + the current turn
+// alone are too large), returns ErrContextLimit so the caller surfaces a clean
+// "conversation too long" message instead of a raw provider 400. Mutates
+// req.Messages in place.
 //
-// Truncation is turn-aware so it never produces a sequence a provider rejects:
-// it keeps the first message (the conversation's initial user turn, which also
-// guarantees a leading user role) plus the most-recent messages, and drops the
-// oldest turns in between. Drops happen in whole turns — an assistant message
-// and the tool_result messages that answered it travel together — so a
-// tool_result is never separated from its tool_use (a 400), and the message
-// following the pinned first turn is always an assistant (never a second
-// consecutive user turn, also a 400). That malformed-sequence 400 is the very
-// failure this guard exists to prevent, so the repair must not reintroduce it.
-func truncateForContextWindow(provider ai.Provider, req *ai.Request, ctxLimit int) error {
-	if ctxLimit <= 0 {
-		return nil // unknown limit — can't enforce
+// pin is the index of the CURRENT turn — the user message the caller built
+// for this request (history + merged flow context + question), which is never
+// dropped; an out-of-range pin means the last message. The returned int is
+// the pin's index in the truncated list, so a tool loop that appends its
+// exchanges after the turn can pass it back on the next iteration.
+//
+// Drop order: the oldest history turns before the pin first (the kept prefix
+// always starts with a user role, so no provider sees two consecutive user
+// turns), then the oldest exchange after the pin — an assistant message and
+// the results that answered it, as one unit, so a tool_result is never
+// separated from its tool_use (a 400). The previous form pinned messages[0]
+// instead: on the server-reconstructed path that is the thread's FIRST stored
+// question, and once the history between it and the current turn was gone
+// the "junction repair" deleted the current turn itself — the provider
+// re-answered the thread's first question, or received tool results for a
+// question it could no longer see.
+//
+// The reserve is the request's own completion cap when it exceeds the default
+// (providers reject prompt + max_tokens > window), and the prompt is checked
+// in bytes first (promptTokenCeiling) so the common case never tokenises.
+func truncateForContextWindow(provider ai.Provider, req *ai.Request, ctxLimit int, pin int) (int, error) {
+	if ctxLimit <= 0 || len(req.Messages) == 0 {
+		return pin, nil // unknown limit — can't enforce; nothing to truncate
+	}
+	msgs := req.Messages
+	if pin < 0 || pin >= len(msgs) {
+		pin = len(msgs) - 1 // the current turn is the last message the caller built
+	}
+	reserve := max(contextReserve, req.MaxTokens)
+	if promptTokenCeiling(req)+reserve <= ctxLimit {
+		return pin, nil // fits in bytes, so it fits in tokens — no tiktoken pass
 	}
 	// Fixed component (system prompt + tool schemas) — constant across the
 	// drop loop, precomputed once (B1.4).
@@ -438,55 +485,41 @@ func truncateForContextWindow(provider ai.Provider, req *ai.Request, ctxLimit in
 		}
 		return c
 	}
-	suffix := make([]int, len(req.Messages)+1)
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		suffix[i] = suffix[i+1] + msgCost(req.Messages[i])
+	suffix := make([]int, len(msgs)+1)
+	for i := len(msgs) - 1; i >= 0; i-- {
+		suffix[i] = suffix[i+1] + msgCost(msgs[i])
 	}
-	// The pinned head (messages[0]) stays in every candidate — count it.
-	// (Zero for the empty-history edge case; len<=1 short-circuits below.)
-	headCost := 0
-	if len(req.Messages) > 0 {
-		headCost = msgCost(req.Messages[0])
+	curCost := suffix[pin] - suffix[pin+1]
+	// b: first kept history index; a: first kept post-turn exchange index.
+	b, a := 0, pin+1
+	fits := func() bool {
+		return fixed+(suffix[b]-suffix[pin])+curCost+suffix[a]+reserve <= ctxLimit
 	}
-	total := func(from int) int { return fixed + headCost + suffix[from] }
-
-	if total(0)+contextReserve <= ctxLimit {
-		return nil // fits
-	}
-	if len(req.Messages) <= 1 {
-		return ai.ErrContextLimit // nothing left to drop
-	}
-
-	head := req.Messages[:1] // pinned initial turn (kept as the leading user role)
-	tail := req.Messages[1:]
-	drop := 1 // index into the ORIGINAL slice of the first kept message
-	for {
-		// Repair the head→tail junction: skip any leading messages that would be
-		// invalid immediately after the pinned user turn — another user turn
-		// (consecutive user roles) or an orphaned tool_result whose assistant
-		// was already dropped. The next kept message must be an assistant turn.
-		for len(tail) > 0 && tail[0].Role != "assistant" {
-			tail = tail[1:]
-			drop++
-		}
-		if total(drop)+contextReserve <= ctxLimit {
-			req.Messages = append(append([]ai.Message{}, head...), tail...)
-			return nil
-		}
-		if len(tail) == 0 {
-			break // only the pinned turn remains and it still overflows
-		}
-		// Drop the oldest assistant turn: the assistant message plus the
-		// tool_result messages that answered it.
-		tail = tail[1:]
-		drop++
-		for len(tail) > 0 && tail[0].Role == "tool" {
-			tail = tail[1:]
-			drop++
+	for !fits() && b < pin { // oldest history turns; kept prefix starts with a user turn
+		b++
+		for b < pin && msgs[b].Role != "user" {
+			b++
 		}
 	}
-	// Even the pinned first turn (+ system prompt) exceeds the window.
-	return ai.ErrContextLimit
+	for !fits() && a < len(msgs) { // oldest exchange after the current turn (assistant + its results)
+		a++
+		for a < len(msgs) && msgs[a].Role != "assistant" {
+			a++
+		}
+	}
+	if !fits() {
+		// Even the current turn (+ system prompt and tools) exceeds the window.
+		return pin, ai.ErrContextLimit
+	}
+	if b == 0 && a == pin+1 {
+		return pin, nil
+	}
+	kept := make([]ai.Message, 0, (pin-b)+1+(len(msgs)-a))
+	kept = append(kept, msgs[b:pin]...)
+	kept = append(kept, msgs[pin])
+	kept = append(kept, msgs[a:]...)
+	req.Messages = kept
+	return pin - b, nil
 }
 
 // PreviewContext returns what would be sent to the provider for a turn (system
@@ -495,13 +528,24 @@ func truncateForContextWindow(provider ai.Provider, req *ai.Request, ctxLimit in
 func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (res *models.ContextPreview, err error) {
 	defer logger.Guard("App.PreviewContext", &err)
 
-	provider, err := s.factory.For(scope, req.Provider)
+	// Same resolution as prepareTurn: an org flow may run on the org's
+	// shared credential (G7), and the preview must not refuse what the turn
+	// would accept.
+	orgID := ""
+	if doc != nil {
+		orgID = doc.OrganizationID
+	}
+	provider, err := s.factory.ForOrg(scope, orgID, req.Provider)
 	if err != nil {
 		return nil, err
 	}
 
-	_, sysPrompt, contextText := s.buildScrubbedContext(ctx, scope, provider, doc, report, req)
+	_, sysPrompt, contextText, guidelines := s.buildScrubbedContext(ctx, scope, provider, doc, report, req)
 	scrubbedUserMsg := scrubber.ScrubText(req.UserMessage)
+	if guidelines != "" {
+		// Shown where they are sent: in the user turn, not the system prompt.
+		scrubbedUserMsg = guidelines + "\n\n" + scrubbedUserMsg
+	}
 
 	total := provider.EstimateTokens(sysPrompt + contextText + scrubbedUserMsg)
 

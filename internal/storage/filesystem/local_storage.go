@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -55,16 +56,99 @@ type LocalStorageBackend struct {
 // then renames it over the destination. Rename is atomic on the same
 // filesystem, so a crash mid-write can never leave a truncated/corrupt file at
 // path — readers see either the old contents or the complete new contents.
+//
+// The temp name is unique per call (os.CreateTemp, O_EXCL): a fixed
+// path+".tmp" let two concurrent writers to the same destination interleave
+// their O_TRUNC writes on one shared temp file, publishing a mixed or
+// truncated body via the rename — settings.json has exactly that exposure
+// (SaveSettings/SaveUserSettings/SaveOrgSettings all write it with no lock).
+// The dot-prefixed name keeps a crash-orphaned temp out of the .json-suffix
+// filters (e.g. refreshMetaIndex) that scan these directories.
 func atomicWrite(path string, data []byte, perm os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".baki-tmp-*")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp) // best-effort cleanup; don't mask the rename error
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) } // best-effort; don't mask the real error
+
+	// CreateTemp creates with 0600; honor the caller's requested mode
+	// (governance alerts are 0644, everything else 0600).
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := renameOverOpenReader(tmpName, path); err != nil {
+		cleanup()
 		return err
 	}
 	return nil
+}
+
+// renameOverOpenReader renames oldpath over newpath, tolerating the one way
+// Windows departs from POSIX rename semantics: replacing a file that another
+// goroutine momentarily holds open for reading (Go's os.ReadFile opens with
+// FILE_SHARE_READ|WRITE and no FILE_SHARE_DELETE, so a LoadFlow racing a Save
+// holds exactly such a handle) fails instead of atomically swapping the file.
+// The failure surfaces as either ERROR_SHARING_VIOLATION (32) or
+// ERROR_ACCESS_DENIED (5)/EACCES/EPERM depending on Windows build and
+// filesystem — Go maps only the latter to ErrPermission, so errno 32 must be
+// matched on the raw errno (isSharingViolation) or it is invisible to
+// errors.Is. The reader's handle closes within microseconds, so a short
+// bounded retry turns the spurious denial into a success. Whether an error is
+// retryable at all is platform policy (transientSharingConflict): on non-Windows
+// POSIX rename is atomic over open files, and fs.ErrPermission there means a
+// genuine, permanent permission problem — retrying it just burned 20×100 ms
+// while the caller (often holding flowMu) serialized every other save.
+func renameOverOpenReader(oldpath, newpath string) error {
+	const attempts = 20 // ~2 s of 100 ms waits at worst
+	var err error
+	for range attempts {
+		if err = os.Rename(oldpath, newpath); err == nil {
+			return nil
+		}
+		if !transientSharingConflict(err) {
+			return err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return err
+}
+
+// readFileTolerant is the read-side mirror of renameOverOpenReader: while a
+// writer's rename is replacing the destination, a concurrent OPEN of the same
+// path fails with the same transient sharing violation (a LoadFlow racing a
+// Save — the mirror of the race the writer retry handles). The replacement
+// completes within microseconds, so the same bounded retry applies. On
+// non-Windows transientSharingConflict is false and reads fail through
+// immediately.
+func readFileTolerant(path string) ([]byte, error) {
+	const attempts = 20 // ~2 s of 100 ms waits at worst; matches the writer
+	var (
+		data []byte
+		err  error
+	)
+	for range attempts {
+		data, err = os.ReadFile(path) // #nosec G304 -- every caller passes a dataDir-relative path it validated (see the #nosec notes at the call sites)
+		if err == nil {
+			return data, nil
+		}
+		if !transientSharingConflict(err) {
+			return nil, err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil, err
 }
 
 // safePathSegment reports whether s is safe to use as a single on-disk path
@@ -79,11 +163,69 @@ func safePathSegment(s string) bool {
 	return !strings.ContainsAny(s, `/\`) && !strings.Contains(s, "..")
 }
 
+// staleTempMaxAge bounds how old a ".baki-tmp-*" file must be before the
+// startup sweep considers it crash-orphaned. atomicWrite removes its temp on
+// every failure path, so the only way one survives is the process dying
+// between CreateTemp and the rename; a live writer's temp is at most one
+// retry cycle old (~2 s worst case in renameOverOpenReader), so 10 minutes
+// never sweeps a temp a concurrent writer still owns. The old fixed
+// "<name>.tmp" self-overwrote on the next write, so stranding was bounded by
+// construction — the unique names traded that for needing this sweep.
+const staleTempMaxAge = 10 * time.Minute
+
+// sweepStaleTemps removes crash-orphaned atomicWrite temps under root, up to
+// a bounded depth (dataDir itself is flat: flows/, conversations/<scope>/,
+// versions/<id>/ — depth 3 covers every dir atomicWrite writes into without
+// walking arbitrarily deep trees on every startup). Best-effort: walk and
+// remove errors are logged, never fatal — a stuck temp costs disk space, it
+// must not cost the backend.
+func sweepStaleTemps(root string) {
+	const maxDepth = 3
+	cutoff := time.Now().Add(-staleTempMaxAge)
+	var walk func(dir string, depth int)
+	walk = func(dir string, depth int) {
+		if depth > maxDepth {
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			slog.Warn("local storage: temp sweep cannot read directory", "dir", dir, "error", err)
+			return
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() {
+				walk(filepath.Join(dir, name), depth+1)
+				continue
+			}
+			if !strings.HasPrefix(name, ".baki-tmp-") {
+				continue
+			}
+			full := filepath.Join(dir, name)
+			info, err := e.Info()
+			if err != nil {
+				slog.Warn("local storage: temp sweep cannot stat file", "file", full, "error", err)
+				continue
+			}
+			if info.ModTime().After(cutoff) {
+				continue // young enough to be a live writer's temp
+			}
+			if err := os.Remove(full); err != nil {
+				slog.Warn("local storage: temp sweep cannot remove crash-orphaned temp", "file", full, "error", err)
+			} else {
+				slog.Info("local storage: removed crash-orphaned temp file", "file", full, "age", time.Since(info.ModTime()).Round(time.Second))
+			}
+		}
+	}
+	walk(root, 0)
+}
+
 // NewLocalStorageBackend creates a new local file system storage backend
 func NewLocalStorageBackend(dataDir string) (*LocalStorageBackend, error) {
 	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
+	sweepStaleTemps(dataDir)
 
 	return &LocalStorageBackend{
 		dataDir:      dataDir,
@@ -182,7 +324,7 @@ func (lsb *LocalStorageBackend) LoadFlow(ctx context.Context, id string) (*inter
 		return nil, err
 	}
 
-	data, err := os.ReadFile(flowPath) // #nosec G304 -- flowPath = dataDir/flows/<id>.json with id validated by flowPath
+	data, err := readFileTolerant(flowPath) // #nosec G304 -- flowPath = dataDir/flows/<id>.json with id validated by flowPath
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, interfaces.ErrNotFound
@@ -255,7 +397,7 @@ func (lsb *LocalStorageBackend) refreshMetaIndex(ctx context.Context) (map[strin
 		if e, ok := lsb.flowMeta[flowID]; ok && e.modTime.Equal(info.ModTime()) && e.size == info.Size() {
 			continue // cache hit: one Stat, no read/parse
 		}
-		data, readErr := os.ReadFile(filepath.Join(flowsDir, file.Name())) // #nosec G304 -- enumerating the backend's own flows dir
+		data, readErr := readFileTolerant(filepath.Join(flowsDir, file.Name())) // #nosec G304 -- enumerating the backend's own flows dir
 		if readErr != nil {
 			continue // unreadable: treat as absent (matches previous skip behavior)
 		}
@@ -530,7 +672,7 @@ func (lsb *LocalStorageBackend) SaveSettings(ctx context.Context, settings *inte
 func (lsb *LocalStorageBackend) LoadSettings(ctx context.Context) (*interfaces.AppSettings, error) {
 	settingsPath := filepath.Join(lsb.dataDir, "settings.json")
 
-	data, err := os.ReadFile(settingsPath) // #nosec G304 -- settingsPath is the backend's own dataDir-relative file
+	data, err := readFileTolerant(settingsPath) // #nosec G304 -- settingsPath is the backend's own dataDir-relative file
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Return default settings if file doesn't exist
@@ -598,7 +740,7 @@ func (lsb *LocalStorageBackend) LoadConversation(ctx context.Context, flowID, sc
 	}
 	conversationPath := filepath.Join(lsb.dataDir, "conversations", scope, flowID+".json")
 
-	data, err := os.ReadFile(conversationPath) // #nosec G304 -- conversationPath is derived from the backend's own dataDir + ids
+	data, err := readFileTolerant(conversationPath) // #nosec G304 -- conversationPath is derived from the backend's own dataDir + ids
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []interfaces.ChatMessage{}, nil
@@ -656,7 +798,10 @@ func (b *LocalStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID st
 func (b *LocalStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
 	return nil, nil
 }
-func (b *LocalStorageBackend) ListKnowledgeChunkContents(ctx context.Context, orgID string) ([]interfaces.KnowledgeChunk, error) {
+func (b *LocalStorageBackend) ListKnowledgeChunkContents(ctx context.Context, orgID string, after interfaces.KnowledgeChunkCursor, limit int) ([]interfaces.KnowledgeChunk, error) {
+	return nil, nil
+}
+func (b *LocalStorageBackend) SampleKnowledgeChunkEmbeddings(ctx context.Context, orgID string, n int) ([]interfaces.KnowledgeChunk, error) {
 	return nil, nil
 }
 func (b *LocalStorageBackend) UpdateKnowledgeChunkEmbeddings(ctx context.Context, userID string, chunks []interfaces.KnowledgeChunk) error {
@@ -769,7 +914,7 @@ func (lsb *LocalStorageBackend) ListFlowVersions(ctx context.Context, flowID str
 		if e.IsDir() {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name())) // #nosec G304 -- dir is derived from validated flowID
+		data, err := readFileTolerant(filepath.Join(dir, e.Name())) // #nosec G304 -- dir is derived from validated flowID
 		if err != nil {
 			continue
 		}
@@ -793,7 +938,7 @@ func (lsb *LocalStorageBackend) LoadFlowVersion(ctx context.Context, flowID stri
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("%d.json", version))) // #nosec G304 -- dir is derived from validated flowID
+	data, err := readFileTolerant(filepath.Join(dir, fmt.Sprintf("%d.json", version))) // #nosec G304 -- dir is derived from validated flowID
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, interfaces.ErrNotFound

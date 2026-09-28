@@ -486,18 +486,20 @@ func TestRunToolLoop_UsesModelCatalogWindow(t *testing.T) {
 		return &ChatService{notifier: &testutil.CountingNotifier{}, analysisCache: &AnalysisService{}}
 	}
 
-	// A pinned first turn of ~1500 tokens (6000 bytes at the fake's len/4
+	// A current turn of ~1500 tokens (6000 bytes at the fake's len/4
 	// estimator) plus the 4000 reserve overflows a 5000 provider default on
-	// its own (→ ErrContextLimit even after truncation), while the 1M catalog
-	// window holds the whole conversation.
-	msgs := []ai.Message{{Role: "user", Content: strings.Repeat("u", 6000)}}
+	// its own (→ ErrContextLimit even after every older turn is truncated:
+	// the current turn is pinned), while the 1M catalog window holds the
+	// whole conversation.
+	var msgs []ai.Message
 	for i := 0; i < 20; i++ {
-		role := "assistant"
+		role := "user"
 		if i%2 == 1 {
-			role = "user"
+			role = "assistant"
 		}
 		msgs = append(msgs, ai.Message{Role: role, Content: fmt.Sprintf("turn %d %s", i, strings.Repeat("x", 300))})
 	}
+	msgs = append(msgs, ai.Message{Role: "user", Content: strings.Repeat("u", 6000)})
 
 	run := func(model string) (provider *windowFakeProvider, ctl *streamCtl) {
 		provider = &windowFakeProvider{
@@ -1186,17 +1188,7 @@ func TestStreamChatMessage_PersistsUserTurnAtStart(t *testing.T) {
 	svc.BeginStream(context.Background(), id)
 
 	// Wait for the stream to finish.
-	deadline := time.After(5 * time.Second)
-	for {
-		if _, ok := svc.activeStreams.Load(id); !ok {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("stream did not finish within 5s")
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
+	waitStreamFinished(t, svc, id) // settled: the answer persist has landed
 
 	// The store must hold [history + fresh user + the answer]. The start-persist
 	// retains the question; the completion-persist retains the answer, which
@@ -1294,17 +1286,7 @@ func TestStreamChatMessage_DoesNotStoreTheAnswerWhenHistoryIsOff(t *testing.T) {
 		t.Fatalf("StreamChatMessage: %v", err)
 	}
 	svc.BeginStream(context.Background(), id)
-	deadline := time.After(5 * time.Second)
-	for {
-		if _, ok := svc.activeStreams.Load(id); !ok {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("stream did not finish within 5s")
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
+	waitStreamFinished(t, svc, id) // settled: the answer persist has landed
 
 	got, err := svc.GetConversation(context.Background(), doc, "flow")
 	if err != nil {

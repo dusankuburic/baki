@@ -323,6 +323,13 @@ func TestParser_EmptyInput(t *testing.T) {
 	}
 }
 
+// normalizeGolden makes golden-file comparison independent of the checkout's
+// line endings: a Windows autocrlf=true checkout materializes the committed
+// LF goldens as CRLF on disk, while json.MarshalIndent always emits LF.
+func normalizeGolden(s string) string {
+	return strings.ReplaceAll(s, "\r\n", "\n")
+}
+
 func TestParser_GoldenFiles(t *testing.T) {
 	samplesDir := "testdata/samples"
 	entries, err := os.ReadDir(samplesDir)
@@ -364,7 +371,7 @@ func TestParser_GoldenFiles(t *testing.T) {
 					t.Fatalf("marshal actual: %v", err)
 				}
 
-				if string(goldenBytes) != string(actual) {
+				if normalizeGolden(string(goldenBytes)) != string(actual) {
 					t.Errorf("output does not match golden file %s", goldenPath)
 					abbreviated := string(actual)
 					if len(abbreviated) > 500 {
@@ -413,7 +420,7 @@ func TestParser_GoldenFiles(t *testing.T) {
 				t.Fatalf("marshal actual: %v", err)
 			}
 
-			if string(goldenBytes) != string(actual) {
+			if normalizeGolden(string(goldenBytes)) != string(actual) {
 				t.Errorf("output does not match golden file %s", goldenPath)
 				abbreviated := string(actual)
 				if len(abbreviated) > 500 {

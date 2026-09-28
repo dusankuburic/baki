@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
 
@@ -60,7 +61,7 @@ func TestAddDocument_ReplacesSameFilename(t *testing.T) {
 	if total != 1 {
 		t.Errorf("want 1 chunk (old version replaced), got %d", total)
 	}
-	contents, _ := store.ListKnowledgeChunkContents(ctx, "org-1")
+	contents, _ := store.ListKnowledgeChunkContents(ctx, "org-1", interfaces.KnowledgeChunkCursor{}, 0)
 	if len(contents) != 1 || !strings.Contains(contents[0].Content, "second version") {
 		t.Errorf("surviving chunk is not the newest upload: %+v", contents)
 	}
@@ -88,6 +89,10 @@ func TestAddDocument_ReplaceIsolatesOrgs(t *testing.T) {
 // switch that stranded every chunk at the old dimension.
 func TestReindexOrg_ReembedsCorpus(t *testing.T) {
 	svc, store, emb := newStubService()
+	// The deployment's width is the stub's (1): the width-3 vectors the
+	// corpus is stranded at below are outside the vector index, which is
+	// what makes the unforced re-index a recovery rather than a switch.
+	store.EmbeddingDim = 1
 	ctx := context.Background()
 
 	long := strings.Repeat("policy text ", 200) // forces >1 chunk at 1000 runes
@@ -105,7 +110,10 @@ func TestReindexOrg_ReembedsCorpus(t *testing.T) {
 		store.KnowledgeChunks[id] = c
 	}
 
-	res, err := svc.ReindexOrg(ctx, "scope", "org-1")
+	// No force: a width change (3 → 1) against a corpus with nothing in the
+	// vector index is the stranded-corpus recovery and passes the
+	// embedding-model mismatch guard.
+	res, err := svc.ReindexOrg(ctx, "scope", "org-1", false)
 	if err != nil {
 		t.Fatalf("ReindexOrg: %v", err)
 	}
@@ -121,7 +129,7 @@ func TestReindexOrg_ReembedsCorpus(t *testing.T) {
 		}
 	}
 	// Idempotent on empty orgs: no corpus, no work, no error.
-	empty, err := svc.ReindexOrg(ctx, "scope", "org-empty")
+	empty, err := svc.ReindexOrg(ctx, "scope", "org-empty", false)
 	if err != nil || empty.Chunks != 0 {
 		t.Errorf("empty org re-index: %+v, %v", empty, err)
 	}
@@ -131,7 +139,7 @@ func TestReindexOrg_ReembedsCorpus(t *testing.T) {
 // admin clicked re-index on a deployment with no embedding key.
 func TestReindexOrg_NoProvider(t *testing.T) {
 	svc := NewKnowledgeService(&testutil.FakeBackend{}, nil, nil)
-	if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1"); err == nil ||
+	if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", false); err == nil ||
 		!strings.Contains(err.Error(), "embedding provider") {
 		t.Fatalf("want embedding-provider error, got %v", err)
 	}

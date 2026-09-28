@@ -24,6 +24,10 @@ func TestDetectToolsUnsupportedError(t *testing.T) {
 		{"disabled", "Tools are disabled for the selected model."},
 		{"not available", "Function calling is not available on gpt-3.5-turbo-instruct"},
 		{"uppercase mix", "TOOL USE IS NOT SUPPORTED"},
+		// vLLM without a tool-call parser (open models on Azure AI Foundry /
+		// GitHub Models): bare, and as Azure relays it inside error.message.
+		{"vllm auto tool choice", `"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set`},
+		{"azure vllm wrapped", `{"object":"error","message":"\"auto\" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set","type":"BadRequestError","param":null,"code":400}`},
 	}
 	for _, tc := range positive {
 		t.Run("match/"+tc.name, func(t *testing.T) {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"pad-core/models"
 )
 
 // TestHandleEvents_EmitsHeartbeat verifies the SSE handler writes comment-frame
@@ -129,5 +131,65 @@ func TestDeliver_NeverShedsNonProgress(t *testing.T) {
 	}
 	if len(ch) != 4 {
 		t.Fatalf("non-droppable events were shed: %d/%d buffered", len(ch), cap(ch))
+	}
+}
+
+// TestEncodeEventFrame_EnforcesBound pins the frame-size contract at the pure
+// encode level: small frames pass, oversized frames without a lightweight
+// form are dropped, and an oversized flow:loaded is swapped for its summary
+// (identity kept, document body gone).
+func TestEncodeEventFrame_EnforcesBound(t *testing.T) {
+	frame, ok := encodeEventFrame(Event{Name: "chat:event", Data: map[string]string{"type": "chunk"}})
+	if !ok {
+		t.Fatal("small frame was refused")
+	}
+	if !strings.Contains(string(frame), `"chat:event"`) {
+		t.Fatalf("small frame lost its event name: %q", string(frame))
+	}
+
+	big := strings.Repeat("x", maxFrameBytes)
+	if _, ok := encodeEventFrame(Event{Name: "chat:event", Data: map[string]string{"chunk": big}}); ok {
+		t.Fatal("oversized frame without a lightweight form was accepted")
+	}
+
+	frame, ok = encodeEventFrame(Event{Name: "flow:loaded", Data: &models.FlowDocument{
+		ID: "flow-1", Name: "Big", Source: big,
+	}, TargetUser: "alice"})
+	if !ok {
+		t.Fatal("oversized flow:loaded was dropped instead of replaced by its summary")
+	}
+	if len(frame) > maxFrameBytes {
+		t.Fatalf("replacement frame still exceeds the bound: %d bytes", len(frame))
+	}
+	if !strings.Contains(string(frame), `"id":"flow-1"`) || !strings.Contains(string(frame), `"name":"Big"`) {
+		t.Fatalf("replacement frame lost the flow identity: %q", string(frame))
+	}
+	if strings.Contains(string(frame), "xxxxx") {
+		t.Fatal("replacement frame still carries document content")
+	}
+}
+
+// TestDeliver_ReplacesOversizedFlowLoaded verifies the bound end-to-end
+// through deliver: a document-carrying flow:loaded reaches the client channel
+// only as its small summary, and an oversized event with no lightweight form
+// never occupies a buffer slot.
+func TestDeliver_ReplacesOversizedFlowLoaded(t *testing.T) {
+	m := NewEventManager(make(chan struct{}))
+	ch := make(chan []byte, 4)
+	m.clients[ch] = ""
+
+	big := strings.Repeat("x", maxFrameBytes)
+	m.Emit("flow:loaded", &models.FlowDocument{ID: "flow-1", Name: "Big", Source: big})
+	if len(ch) != 1 {
+		t.Fatalf("oversized flow:loaded was dropped instead of replaced: %d frames buffered", len(ch))
+	}
+	frame := string(<-ch)
+	if !strings.Contains(frame, `"id":"flow-1"`) || strings.Contains(frame, "xxxxx") {
+		t.Fatalf("client received wrong payload for oversized flow:loaded: %q", frame)
+	}
+
+	m.Emit("analysis:complete", map[string]string{"blob": big})
+	if len(ch) != 0 {
+		t.Fatalf("oversized non-convertible event occupied a buffer slot: %q", string(<-ch))
 	}
 }

@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"testing"
-	"time"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/testutil"
@@ -52,17 +51,7 @@ func runHostedStream(t *testing.T, model string, useTools bool) (*testutil.Count
 		t.Fatalf("StreamChatMessage: %v", err)
 	}
 	svc.BeginStream(context.Background(), id)
-	deadline := time.After(5 * time.Second)
-	for {
-		if _, ok := svc.activeStreams.Load(id); !ok {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("stream did not finish within 5s")
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
+	waitStreamFinished(t, svc, id) // settled: the answer persist has landed
 	return notifier, fake
 }
 

@@ -17,7 +17,7 @@ import {logger} from '@/lib/logger'
 import {uuid} from '@/lib/uuid'
 import {utf8ByteLength} from '@/lib/utf8'
 import {classifyChatFailure, budgetDetail} from '@/lib/chatErrors'
-import type {ChatEvent, FixProposalPayload, ToolResultPayload} from '@/lib/chatEvent'
+import type {ChatEvent, DoneMeta, FixProposalPayload, ToolResultPayload} from '@/lib/chatEvent'
 import type {ChatMessage, ProviderID, ToolCallRecord} from '@/types'
 import {conversationHistoryEnabled} from '@/lib/chatHistory'
 import {buildChatRequest} from './useChatRequestBuilder'
@@ -55,6 +55,12 @@ export interface SendOptions extends StreamMeta {
 
 type ToastApi = NonNullable<ReturnType<typeof useOptionalToast>>
 
+// ALIAS_PROVIDERS resolve the selected model to another one at answer time
+// (Azure AI Foundry: a deployment, `model-router`, an agent). Their model
+// listing names the served model once one is known, so the first done that
+// reports one refetches /api/providers/list — once per thread, not per turn.
+const ALIAS_PROVIDERS: ReadonlySet<ProviderID> = new Set<ProviderID>(['azure-foundry'])
+
 // useChatStreamEngine owns every chat stream: sending a turn, the per-stream
 // text accumulator, the SSE handler wiring (via useStreamingMessage), stop /
 // abandon, and the per-thread generation tokens used to discard stale sends.
@@ -83,8 +89,11 @@ export function useChatStreamEngine() {
   const replaceStreamFixes = useChatStore(s => s.replaceStreamFixes)
   const startStream = useChatStore(s => s.startStream)
   const endStream = useChatStore(s => s.endStream)
+  const bumpProviderEpoch = useChatStore(s => s.bumpProviderEpoch)
 
   const streamAccRef = useRef(new Map<string, StreamAcc>())
+  // Threads whose served model already triggered a provider-list refetch.
+  const servedModelSeenRef = useRef(new Set<string>())
   const teardownRef = useRef<(streamId: string) => void>(() => {})
   const cancelRef = useRef<(streamId: string) => void>(() => {})
   // Threads whose last save failed (one toast per thread until a save lands).
@@ -261,13 +270,14 @@ export function useChatStreamEngine() {
   // never the open document's: a done event can land after the user switched
   // documents. The stream slot's tool trail and fix-proposal outcome (if any)
   // are pinned onto the message here — the slot dies with endStream, the
-  // message is what survives the reload.
+  // message is what survives the reload. So are the served model and billed
+  // rates the done event reported (opts.meta).
   const commitAssistantMessage = useCallback(
     (
       acc: Pick<StreamAcc, 'threadId' | 'provider' | 'model'>,
       messageId: string | undefined,
       content: string,
-      opts: {tokensIn?: number; tokensOut?: number; finishReason: ChatMessage['finishReason']},
+      opts: {tokensIn?: number; tokensOut?: number; finishReason: ChatMessage['finishReason']; meta?: DoneMeta},
     ) => {
       const threadId = acc.threadId
       const thread = useChatStore.getState().threads.find(t => t.id === threadId)
@@ -284,6 +294,9 @@ export function useChatStreamEngine() {
         tokensOut: opts.tokensOut,
         finishReason: opts.finishReason,
       }
+      if (opts.meta?.servedModel) msg.servedModel = opts.meta.servedModel
+      if (opts.meta?.inputCostPerM !== undefined) msg.inputCostPerM = opts.meta.inputCostPerM
+      if (opts.meta?.outputCostPerM !== undefined) msg.outputCostPerM = opts.meta.outputCostPerM
       if (slot && slot.toolCalls.length > 0) {
         msg.toolCalls = slot.toolCalls.map(tc => ({...tc}))
       }
@@ -325,14 +338,20 @@ export function useChatStreamEngine() {
   )
 
   const onDone = useCallback(
-    (tokensOut: number, tokensIn: number, streamId: string) => {
+    (tokensOut: number, tokensIn: number, streamId: string, meta?: DoneMeta) => {
       const acc = takeAcc(streamId)
       if (!acc) return
       const slot = useChatStore.getState().streams[acc.threadId]
-      commitAssistantMessage(acc, slot?.messageId, acc.text, {tokensIn, tokensOut, finishReason: 'stop'})
+      commitAssistantMessage(acc, slot?.messageId, acc.text, {tokensIn, tokensOut, finishReason: 'stop', meta})
       endStream(acc.threadId)
+      // An alias provider just revealed which model answers this thread:
+      // refetch the listing so the header can name it ("dep · gpt-4o").
+      if (meta?.servedModel && ALIAS_PROVIDERS.has(acc.provider) && !servedModelSeenRef.current.has(acc.threadId)) {
+        servedModelSeenRef.current.add(acc.threadId)
+        bumpProviderEpoch()
+      }
     },
-    [commitAssistantMessage, endStream, takeAcc],
+    [bumpProviderEpoch, commitAssistantMessage, endStream, takeAcc],
   )
 
   // notifyBudget shows the dedicated daily-budget notice: the user needs to

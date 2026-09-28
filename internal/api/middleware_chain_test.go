@@ -44,6 +44,13 @@ func TestRateLimitGroup_OtherBuckets(t *testing.T) {
 		{"GET", "/api/flow/upload", rlGroupGeneral}, // upload bucket is POST-only
 		{"GET", "/api/system/info", rlGroupGeneral},
 		{"POST", "/api/flow/list", rlGroupGeneral},
+		// The connection test is billed spend (up to three real chat
+		// completions per call) and rides the tight chat bucket; the free
+		// provider routes stay on general.
+		{"POST", "/api/providers/test", rlGroupChat},
+		{"POST", "/api/v1/providers/test", rlGroupChat},
+		{"GET", "/api/providers/list", rlGroupGeneral},
+		{"POST", "/api/providers/github/poll", rlGroupGeneral},
 	}
 	for _, c := range cases {
 		if got := rateLimitGroup(c.method, c.path); got != c.want {

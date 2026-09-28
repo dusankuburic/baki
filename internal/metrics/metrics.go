@@ -243,7 +243,7 @@ var (
 	aiPricingFallbackTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_ai_pricing_fallback_total",
-			Help: "AI usage priced from provider-default pricing because the model wasn't in the pricing catalog, by provider and model.",
+			Help: "AI usage priced from provider-default pricing because the model wasn't in the pricing catalog, by provider and model. The model label is a closed set: alias deployments collapse to \"deployment\" and unknown names to \"uncatalogued\" (see pricingMetricModel) — raw request models are client-chosen and would mint a series per name.",
 		},
 		[]string{"provider", "model"},
 	)
@@ -289,6 +289,21 @@ var (
 			Help: "Retried AI provider attempts (second and later tries), by provider and trigger.",
 		},
 		[]string{"provider", "reason"},
+	)
+	// aiHostedToolStepsTotal counts the server-side tool steps a provider-hosted
+	// agent run completed (Azure AI Foundry agents: Bing grounding, code
+	// interpreter, file search, MCP, …). Azure bills these per call / session /
+	// GB-day, outside the token usage the daily budget meters, so they are
+	// invisible to the budget by design — counting them makes the gap at least
+	// visible and sizeable. The tool label is a closed set: ToolEvent is only
+	// built for the known hosted item types (hostedToolLabels in the ai
+	// package), never from caller-supplied strings.
+	aiHostedToolStepsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_ai_hosted_tool_steps_total",
+			Help: "Provider-hosted agent tool steps completed (web search, MCP, code interpreter, …), by provider and tool type. Not priced: Azure bills these outside the token usage the daily budget meters.",
+		},
+		[]string{"provider", "tool"},
 	)
 	// Queue depths: surface backlog growth (bulk import, audit overflow) so it's
 	// visible before it becomes a problem. Gauges (Set on each change/tick).
@@ -346,6 +361,7 @@ var registry = func() *prometheus.Registry {
 		chatRAGLookupsTotal,
 		aiUsageCostTotal,
 		aiRetryAttemptsTotal,
+		aiHostedToolStepsTotal,
 		blobCleanerPending,
 		auditSpillDepth,
 		collectors.NewGoCollector(),
@@ -663,6 +679,13 @@ func RecordPricingFallback(provider, model string) {
 // error strings carry provider detail and would make this unbounded.
 func RecordAIRetryAttempt(provider, reason string) {
 	aiRetryAttemptsTotal.WithLabelValues(provider, reason).Inc()
+}
+
+// RecordAIHostedToolStep counts one completed provider-hosted agent tool step.
+// tool must be a closed-set item type (the hosted tool kinds the ai package
+// labels), never raw provider text.
+func RecordAIHostedToolStep(provider, tool string) {
+	aiHostedToolStepsTotal.WithLabelValues(provider, tool).Inc()
 }
 
 // Gather returns the current metric families from the package registry.

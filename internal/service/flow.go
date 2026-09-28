@@ -86,6 +86,34 @@ type FlowService struct {
 // caps worst-case memory regardless of how many flows are opened over uptime.
 const maxSearchIndexCache = 64
 
+// FlowLoadedSummary is the SSE payload for "flow:loaded". The event used to
+// carry the entire FlowDocument — Source plus the parsed Subflows, which for
+// large flows reaches hundreds of MB — and the SSE hub pins every queued
+// frame per connected client, so uploads could pin gigabytes across a few
+// stalled connections. The payload now carries only identity/refetch keys:
+// consumers that need the document fetch it over HTTP instead (cloud:
+// GET /api/library/{id}/content; local: POST /api/flow/load-path or
+// /load-folder via FilePath), and the tab that triggered the load already
+// holds the document from its own HTTP response.
+type FlowLoadedSummary struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// FilePath is the local-mode refetch key; empty for cloud flows, which
+	// have no on-disk source and are refetched from the library instead.
+	FilePath string `json:"filePath,omitempty"`
+	// IsFolder selects load-folder over load-path on the refetch: a folder
+	// flow cannot be loaded as a single file.
+	IsFolder bool `json:"isFolder,omitempty"`
+}
+
+// FlowLoadedSummaryOf builds the lightweight "flow:loaded" payload for doc.
+func FlowLoadedSummaryOf(doc *models.FlowDocument) FlowLoadedSummary {
+	if doc == nil {
+		return FlowLoadedSummary{}
+	}
+	return FlowLoadedSummary{ID: doc.ID, Name: doc.Name, FilePath: doc.FilePath, IsFolder: doc.IsFolder}
+}
+
 func NewFlowService(notifier EventNotifier, settings SettingsProvider, docProvider DocumentProvider, storage storageif.StorageBackend, authz *AuthzService, astCache cache.Cache) *FlowService {
 	idxCache, _ := cache.NewLRUCache(maxSearchIndexCache) // size > 0 ⇒ error impossible
 	return &FlowService{
@@ -438,8 +466,9 @@ func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string
 				// broadcasts to EVERY connected SSE client, so each upload
 				// shipped the whole parsed document to every other tenant.
 				// EmitTo("") is identical to Emit in local mode, so the desktop
-				// path is unchanged.
-				s.notifier.EmitTo(callerID, "flow:loaded", doc)
+				// path is unchanged. The payload is the lightweight summary —
+				// the uploader's own HTTP response carries the full document.
+				s.notifier.EmitTo(callerID, "flow:loaded", FlowLoadedSummaryOf(doc))
 				logger.Info("flow files loaded from cache", "root", rootName)
 				return doc, nil
 			}
@@ -464,7 +493,7 @@ func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string
 	}
 
 	s.docProvider.SetCurrentDoc(doc)
-	s.notifier.EmitTo(callerID, "flow:loaded", doc)
+	s.notifier.EmitTo(callerID, "flow:loaded", FlowLoadedSummaryOf(doc))
 	return doc, nil
 }
 
@@ -798,7 +827,7 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 				docCopy := *doc
 				docCopy.FilePath = path
 				doc = &docCopy
-				s.notifier.Emit("flow:loaded", doc)
+				s.notifier.Emit("flow:loaded", FlowLoadedSummaryOf(doc))
 				logger.Info("flow loaded from cache", "file", filepath.Base(path))
 				return doc, nil
 			}
@@ -832,7 +861,7 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 		_ = s.settings.AddRecentFile(path, info.Size())
 	}
 
-	s.notifier.Emit("flow:loaded", doc)
+	s.notifier.Emit("flow:loaded", FlowLoadedSummaryOf(doc))
 
 	logger.Info("flow parsed",
 		"file", fileName,
@@ -970,7 +999,7 @@ func (s *FlowService) PatchFlow(doc *models.FlowDocument, patch models.Patch) (*
 	if s.settings != nil {
 		_ = s.settings.AddRecentFile(doc.FilePath, int64(len(patched)))
 	}
-	s.notifier.Emit("flow:loaded", afterDoc)
+	s.notifier.Emit("flow:loaded", FlowLoadedSummaryOf(afterDoc))
 	s.docProvider.SetCurrentDoc(afterDoc)
 	return afterDoc, nil
 }

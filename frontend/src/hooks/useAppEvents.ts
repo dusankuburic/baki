@@ -1,9 +1,11 @@
 import {useEffect} from 'react'
-import {useFlowStore} from '@/stores/flowStore'
+import {useFlowStore, beginDocLoad, isDocLoadCurrent} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useGovernanceStore} from '@/stores/governanceStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {subscribeToEvents} from '@/api/client'
+import {flowApi} from '@/api'
+import {libraryApi} from '@/api/library'
 import type {FlowDocument as DomainFlowDocument} from '@/types'
 import {getFlowDocumentEnvelopeSchema} from '@/api/schemas'
 import {logger} from '@/lib/logger'
@@ -13,6 +15,26 @@ import {logger} from '@/lib/logger'
 // member. Coalescing to a trailing refetch that outlasts that debounce keeps a
 // slider drag or burst of toggles from reloading settings underneath the edit.
 const SETTINGS_REFETCH_DELAY_MS = 1500
+
+// The `flow:loaded` SSE event carries only a lightweight summary
+// ({id, name, filePath?, isFolder?}) — never the document itself: the hub
+// pins queued frames per connected client, so document-sized events meant one
+// upload could pin gigabytes across a few stalled connections. This fetches
+// the full document over HTTP when a tab actually needs it:
+// - filePath present → local mode: re-load from the on-disk source
+//   (load-folder for folder flows — they cannot load as a single file);
+// - no filePath → cloud mode: the library content endpoint.
+// The tab that triggered the load never comes through here (it applied the
+// HTTP response of its own POST directly); this serves the OTHER tabs of the
+// same user (EmitTo) or of the same local backend (broadcast).
+function fetchFlowForEvent(d: Record<string, unknown>): Promise<DomainFlowDocument | null> {
+  const filePath = typeof d.filePath === 'string' ? d.filePath : ''
+  const id = typeof d.id === 'string' ? d.id : ''
+  if (filePath) {
+    return d.isFolder ? flowApi.loadFlowFolder(filePath) : flowApi.loadFlowFromPath(filePath)
+  }
+  return libraryApi.getContent(id)
+}
 
 export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | null) => void}) {
   const {openDocument} = deps
@@ -27,45 +49,49 @@ export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | nul
         useFlowStore.getState().setParsing(true, (d?.percent as number) ?? 0)
       } else if (ev.name === 'flow:loaded') {
         if (!d) return
-        // Honor the initial load (no document open yet) or a refresh of the
-        // currently-open flow. A flow:loaded for a DIFFERENT flow is stale or
-        // unsolicited (another tab, an admin/batch action, or a late event for
-        // a flow the user already navigated away from) and must NOT hijack the
-        // editor — client-initiated loads call openDocument directly with the
-        // API result, so they don't depend on this SSE event.
         const eventFlowId = (d.id as string | undefined) ?? undefined
-        const currentDocId = useFlowStore.getState().document?.id
-        if (eventFlowId && currentDocId && eventFlowId !== currentDocId) {
+        if (!eventFlowId) return
+        // Honor the initial load (no document open yet). A flow:loaded for a
+        // flow OTHER than the currently-open one is stale or unsolicited
+        // (another tab, an admin/batch action, or a late event for a flow the
+        // user already navigated away from) and must NOT hijack the editor —
+        // client-initiated loads call openDocument directly with the API
+        // result, so they don't depend on this SSE event.
+        const currentDoc = useFlowStore.getState().document
+        if (currentDoc && currentDoc.id !== eventFlowId) {
           return
         }
-        // Boundary-validate the SSE payload before it enters the editor
-        // store: a malformed event (proxy error page, truncated JSON, another
-        // event's data shape) must not hijack the editor. Top-level envelope
-        // check only — see FlowDocumentEnvelopeSchema's doc comment.
-        //
-        // The schema factory dynamic-imports zod once (memoized); successive
-        // flow:loaded events await the same promise, so their continuations
-        // run in arrival order. The doc-id guard is RE-CHECKED inside the
-        // continuation: between event arrival and this deferred open, the
-        // user may have synchronously opened a different flow (the window is
-        // widest on the first event, while the zod chunk is still loading) —
-        // without the re-check, this late open would hijack the editor away
-        // from the user's choice.
-        void getFlowDocumentEnvelopeSchema()
-          .then(envelope => {
+        // A same-id event is an echo of a load whose HTTP response this tab
+        // (or the refetch below) already applied — the acting tab always holds
+        // the document from its own POST. Refetching on the echo would also
+        // ping-pong forever between tabs: the local refetch endpoints
+        // re-emit flow:loaded themselves.
+        if (currentDoc) {
+          return
+        }
+        // No document open: fetch the full document, boundary-validate it,
+        // then open. Both guards are RE-CHECKED after the awaits: between
+        // event arrival and this deferred open, the user may have opened a
+        // different flow — without the re-check, this late open would hijack
+        // the editor away from the user's choice.
+        const gen = beginDocLoad()
+        void Promise.all([fetchFlowForEvent(d), getFlowDocumentEnvelopeSchema()])
+          .then(([doc, envelope]) => {
+            if (cancelled || !doc || !isDocLoadCurrent(gen)) return
             const nowDocId = useFlowStore.getState().document?.id
-            if (eventFlowId && nowDocId && eventFlowId !== nowDocId) return
-            const parsed = envelope.safeParse(d)
+            if (nowDocId && nowDocId !== eventFlowId) return
+            const parsed = envelope.safeParse(doc)
             if (!parsed.success) {
-              logger.warn('flow:loaded event failed envelope validation, dropping', parsed.error.issues[0])
+              logger.warn('flow:loaded refetch failed envelope validation, dropping', parsed.error.issues[0])
               return
             }
             openDocument(parsed.data as unknown as DomainFlowDocument)
           })
           .catch(err => {
             // Transient chunk-load failure (deploy invalidated the hashed
-            // chunk): drop this event; the next flow:loaded retries the load.
-            logger.warn('flow:loaded schema load failed, dropping event', err)
+            // chunk) or refetch failure (flow deleted; a local upload with no
+            // on-disk source): drop this event; the next flow:loaded retries.
+            logger.warn('flow:loaded refetch failed, dropping event', err)
           })
       } else if (ev.name === 'flow:load-error') {
         useFlowStore.getState().setParseError((d?.error as string) ?? 'Unknown error')

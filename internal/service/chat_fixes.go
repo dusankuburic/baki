@@ -156,24 +156,11 @@ wait:
 	a.emitFixDecision(prop.ProposalID, "applying", "")
 	// Keepalive through the apply+verify window (L4): no provider chunks flow
 	// while it runs — a >90s re-analysis on a large flow would otherwise trip
-	// the idle watchdog even though fixApplyToolTimeout allows 120s.
-	applyDone := make(chan struct{})
-	if a.touch != nil {
-		keepalive := time.NewTicker(fixDecisionKeepalive)
-		go func() {
-			for {
-				select {
-				case <-keepalive.C:
-					a.touch()
-				case <-applyDone:
-					keepalive.Stop()
-					return
-				}
-			}
-		}()
-	}
+	// the idle watchdog even though fixApplyToolTimeout allows 120s. Closed via
+	// defer: a panic in the apply path must not strand the goroutine.
+	applyDone := a.beginApplyKeepalive(ctx)
+	defer close(applyDone)
 	outcome, updated, err := a.svc.applyApprovedFix(ctx, a.scope, a.doc, prop)
-	close(applyDone)
 	if err != nil {
 		a.emitFixDecision(prop.ProposalID, "error", err.Error())
 		return "", err
@@ -195,6 +182,40 @@ func (a *chatFixApplier) emitFixDecision(proposalID, status, message string) {
 		data["message"] = message
 	}
 	a.emit("fix_decision", data)
+}
+
+// beginApplyKeepalive starts the apply-window keepalive: a ticker goroutine
+// touching the stream's activity clock while an approved apply + re-analysis
+// runs (no provider chunks flow then — see ApplyFixWithApproval). It returns
+// the channel that ends the window; the caller MUST close it via defer
+// immediately, so a PANIC in the apply path — caught downstream by the stream
+// worker's recover — still ends the window. The window used to be closed by a
+// plain statement after the apply call, so the panic unwound past it and
+// stranded the ticker goroutine forever: it kept touching the dead stream
+// control every fixDecisionKeepalive and pinned the whole closure graph,
+// answer buffer included. The goroutine also watches ctx, so a hung apply
+// cannot outlive the stream context; the ticker itself is stopped by the
+// goroutine's own defer on every exit arm.
+func (a *chatFixApplier) beginApplyKeepalive(ctx context.Context) chan struct{} {
+	applyDone := make(chan struct{})
+	if a.touch == nil {
+		return applyDone
+	}
+	keepalive := time.NewTicker(fixDecisionKeepalive)
+	go func() {
+		defer keepalive.Stop()
+		for {
+			select {
+			case <-keepalive.C:
+				a.touch()
+			case <-applyDone:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return applyDone
 }
 
 // ApplyFixesWithApproval implements the batch half of ai.ToolFixApplier: ONE
@@ -292,24 +313,11 @@ wait:
 
 	a.emitFixDecision(batchID, "applying", "")
 	// Keepalive through the whole multi-apply window (N applies + re-analyses
-	// emit no provider chunks — see ApplyFixWithApproval).
-	applyDone := make(chan struct{})
-	if a.touch != nil {
-		ka := time.NewTicker(fixDecisionKeepalive)
-		go func() {
-			for {
-				select {
-				case <-ka.C:
-					a.touch()
-				case <-applyDone:
-					ka.Stop()
-					return
-				}
-			}
-		}()
-	}
+	// emit no provider chunks — see ApplyFixWithApproval). Closed via defer:
+	// a panic in the apply path must not strand the goroutine.
+	applyDone := a.beginApplyKeepalive(ctx)
+	defer close(applyDone)
 	outcome, updated, err := a.svc.applyApprovedFixes(ctx, a.scope, a.doc, props)
-	close(applyDone)
 	if err != nil {
 		a.emitFixDecision(batchID, "error", err.Error())
 		return "", err
@@ -582,6 +590,13 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, scope string, snap
 	// Associate every target with the CURRENT doc's analysis: exact BlockID
 	// first; the props were built from this flow's content moments ago, so a
 	// miss means a concurrent edit — the content key still gives a chance.
+	// A nil analysis cache (bare-struct wiring, analysis not available) must
+	// bail gracefully like the single-fix path does — calling through it
+	// panics inside the apply window.
+	if s.analysisCache == nil {
+		out.Detail = "analysis not available — could not prepare the batch"
+		return out, nil, nil
+	}
 	initReport, err := s.analysisCache.AnalyzeFlowReadOnly(ctx, doc)
 	if err != nil || initReport == nil {
 		out.Detail = "analysis not available — could not prepare the batch"

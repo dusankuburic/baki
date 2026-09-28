@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -429,4 +430,77 @@ func TestAuditedStream_DoneZeroNoContentRecordsNothing(t *testing.T) {
 		t.Fatalf("Stream: %v", err)
 	}
 	time.Sleep(20 * time.Millisecond)
+}
+
+// countedRecorder counts usage records under a mutex. The Done-chunk record
+// and the !sawDone fallback both decide synchronously inside Stream (the
+// goroutine only delivers), so once Stream has returned and the first record
+// landed, no further record can appear — a FINAL count assertion is sound
+// where the await-one helpers above could not fail on a second record.
+type countedRecorder struct {
+	mu      sync.Mutex
+	metrics []*interfaces.UsageMetric
+}
+
+func (c *countedRecorder) record(_ context.Context, m *interfaces.UsageMetric) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.metrics = append(c.metrics, m)
+	return nil
+}
+
+func (c *countedRecorder) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.metrics)
+}
+
+// assertExactlyOneRecorded waits for the async record goroutine to deliver,
+// gives any would-be duplicate a grace interval, then pins the FINAL count at
+// exactly one.
+func assertExactlyOneRecorded(t *testing.T, rec *countedRecorder) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for rec.count() == 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond) // a duplicate spawned during Stream lands by now
+	if got := rec.count(); got != 1 {
+		t.Fatalf("usage recorded %d times, want exactly 1 per stream", got)
+	}
+}
+
+// TestAuditedStream_RecordsUsageExactlyOnce_Done: the Done-chunk record and
+// the !sawDone fallback are meant to be mutually exclusive via sawDone, but
+// nothing pinned that — deleting the gate would double-bill every successful
+// stream. A stream with text plus a Done chunk carrying usage must produce
+// EXACTLY one usage record.
+func TestAuditedStream_RecordsUsageExactlyOnce_Done(t *testing.T) {
+	stub := &auditStub{
+		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		streamChunks: []Chunk{{Text: "a streamed answer"}, {Done: true, TokensIn: 100, TokensOut: 50}},
+	}
+	rec := &countedRecorder{}
+	ap := NewAuditedProvider(stub, rec.record, "user-1", "stub")
+	if err := ap.Stream(context.Background(), Request{Model: "m"}, func(Chunk) {}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	assertExactlyOneRecorded(t, rec)
+}
+
+// TestAuditedStream_RecordsUsageExactlyOnce_Truncated: the truncated-stream
+// fallback must fire exactly once too — a stream cut before Done (some text,
+// error return) records one estimated-usage metric, never two.
+func TestAuditedStream_RecordsUsageExactlyOnce_Truncated(t *testing.T) {
+	stub := &auditStub{
+		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		streamChunks: []Chunk{{Text: "some output before the stream died"}},
+		streamErr:    errStreamTruncated("stub"),
+	}
+	rec := &countedRecorder{}
+	ap := NewAuditedProvider(stub, rec.record, "user-1", "stub")
+	if err := ap.Stream(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "prompt"}}}, func(Chunk) {}); err == nil {
+		t.Fatal("expected the truncation error to propagate")
+	}
+	assertExactlyOneRecorded(t, rec)
 }

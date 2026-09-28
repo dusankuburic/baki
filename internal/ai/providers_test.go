@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -403,5 +404,41 @@ func TestGitHubModelsProvider_Chat_401(t *testing.T) {
 	})
 	if !errors.Is(err, ErrApiKeyInvalid) {
 		t.Errorf("expected ErrApiKeyInvalid, got %v", err)
+	}
+}
+
+// Finding #40: an OPENAI_API_URL override (Ollama, llama-cpp-python, older
+// vLLM) keeps max_tokens — those servers silently ignore
+// max_completion_tokens, so the cap would be lost without any 400 to repair
+// it — while OpenAI's own URL sends max_completion_tokens. The choice is made
+// per construction, from the URL in effect.
+func TestOpenAIProvider_MaxTokensParamFollowsTheEndpoint(t *testing.T) {
+	bodies := make(chan map[string]any, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies <- body
+		writeJSON(w, http.StatusOK, chatCompletionJSON("ok", "llama3.2"))
+	}))
+	defer srv.Close()
+	orig := openAIBaseURL
+	t.Cleanup(func() { openAIBaseURL = orig })
+
+	openAIBaseURL = srv.URL + "/v1/chat/completions"
+	if _, err := NewOpenAIProvider("k").Chat(context.Background(), Request{Model: "llama3.2", MaxTokens: 5, Messages: []Message{{Role: "user", Content: "hi"}}}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	body := <-bodies
+	if body["max_tokens"] != float64(5) {
+		t.Errorf("an overridden URL must send max_tokens=5, body=%v", body)
+	}
+	if _, has := body["max_completion_tokens"]; has {
+		t.Errorf("an overridden URL must not send max_completion_tokens, body=%v", body)
+	}
+
+	openAIBaseURL = openAIDefaultURL
+	req := NewOpenAIProvider("k").buildRequest(Request{Model: "gpt-5", MaxTokens: 7}, false)
+	if req.MaxCompletionTokens != 7 || req.MaxTokens != 0 {
+		t.Errorf("OpenAI's own URL must send max_completion_tokens: %+v", req)
 	}
 }

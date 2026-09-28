@@ -113,11 +113,14 @@ describe('SettingsModal', () => {
     fireEvent.keyDown(search, {key: 'Escape'})
     expect(onClose).toHaveBeenCalledTimes(1)
   })
-  it('finds the AI Accounts section when searching for the Azure AI Foundry provider', async () => {
+  it('finds the AI Accounts and Organizations sections when searching for the Azure AI Foundry provider', async () => {
     render(<SettingsModal isOpen onClose={noop} />)
     fireEvent.change(screen.getByRole('textbox', {name: 'Search settings'}), {target: {value: 'foundry'}})
-    expect(screen.getAllByRole('tab')).toHaveLength(1)
+    // Personal credentials live under AI Accounts; an organisation's shared
+    // Azure AI Foundry resource is managed under Organizations.
+    expect(screen.getAllByRole('tab')).toHaveLength(2)
     expect(tab('AI Accounts')).toBeInTheDocument()
+    expect(tab('Organizations')).toBeInTheDocument()
     await screen.findByText('Updates')
   })
 })

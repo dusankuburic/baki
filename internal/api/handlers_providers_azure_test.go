@@ -72,6 +72,9 @@ func TestAzureFoundryConfigRoutes(t *testing.T) {
 		{"foreign host", map[string]any{"endpoint": "https://evil.example", "auth": map[string]any{"mode": "api_key", "key": "k"}}, ai.AzureCfgErrHostNotAllowed},
 		{"missing key", map[string]any{"endpoint": "https://my-res.openai.azure.com", "auth": map[string]any{"mode": "api_key"}}, ai.AzureCfgErrMissingSecret},
 		{"bad deployment", map[string]any{"endpoint": "https://my-res.openai.azure.com", "auth": map[string]any{"mode": "api_key", "key": "k"}, "chatDeployment": "a b"}, ai.AzureCfgErrInvalidDeploy},
+		{"bad additional deployment", map[string]any{"endpoint": "https://my-res.openai.azure.com", "auth": map[string]any{"mode": "api_key", "key": "k"}, "deployments": []string{"ok", "a b"}}, ai.AzureCfgErrInvalidDeploy},
+		// An API key cannot list deployments: a chat deployment must be named.
+		{"no chat deployment", map[string]any{"endpoint": "https://my-res.openai.azure.com", "auth": map[string]any{"mode": "api_key", "key": "k"}, "embeddingDeployment": "emb"}, ai.AzureCfgErrMissingDeploy},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := azureConfigRequest(t, h, http.MethodPost, tc.body)
@@ -87,13 +90,19 @@ func TestAzureFoundryConfigRoutes(t *testing.T) {
 
 	rr = azureConfigRequest(t, h, http.MethodPost, map[string]any{
 		"endpoint": "https://my-res.openai.azure.com", "auth": map[string]any{"mode": "api_key", "key": "secret-1"},
-		"projectEndpoint": "https://my-res.services.ai.azure.com/api/projects/proj", "chatDeployment": "chat1"})
+		"projectEndpoint": "https://my-res.services.ai.azure.com/api/projects/proj", "chatDeployment": "chat1",
+		"deployments": []string{" gpt-4o ", "GPT-4O", "chat1", "phi-4"}})
 	checkStatus(t, rr, http.StatusOK)
 
 	rr = azureConfigRequest(t, h, http.MethodGet, nil)
 	got := azureDecode(t, rr)
 	if got["configured"] != true || got["hasSecret"] != true || got["authMode"] != "api_key" || got["chatDeployment"] != "chat1" {
 		t.Errorf("configured GET = %v", got)
+	}
+	// The additional deployments come back normalised (trimmed, deduplicated,
+	// without the chat deployment).
+	if deps, _ := got["deployments"].([]any); len(deps) != 2 || deps[0] != "gpt-4o" || deps[1] != "phi-4" {
+		t.Errorf("deployments = %v", got["deployments"])
 	}
 	if _, leaked := got["key"]; leaked {
 		t.Error("GET must never return the secret")

@@ -4,6 +4,26 @@ import OrganizationsPanel from './OrganizationsPanel'
 import {useOrgStore, type Organisation} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
 import {ToastProvider, ConfirmProvider} from '@/components/shared'
+import {providersApi} from '@/api'
+
+// The active org's shared Azure AI Foundry section reads the org route on
+// mount; without a mock the real client would fail the GET and render its
+// load-error row into every test here.
+vi.mock('@/api', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/api')>()
+  return {
+    ...actual,
+    providersApi: {
+      ...actual.providersApi,
+      getOrgAzureFoundryConfig: vi.fn(),
+      saveOrgAzureFoundryConfig: vi.fn(),
+      deleteOrgAzureFoundryConfig: vi.fn(),
+      testOrgAzureFoundryConnection: vi.fn(),
+    },
+  }
+})
+
+const azureApi = vi.mocked(providersApi)
 
 const org: Organisation = {
   id: 'org-1',
@@ -59,6 +79,10 @@ beforeEach(() => {
   renameOrg.mockResolvedValue(undefined)
   removeMember.mockResolvedValue(undefined)
   useAuthStore.setState({user: {id: 'u-admin', email: 'admin@acme.io', role: 'member'} as never})
+  // Pending by default: the section stays a skeleton, so its Save/Remove
+  // buttons cannot collide with the panel's own in the cases that do not
+  // exercise it. The Azure cases below resolve it explicitly.
+  azureApi.getOrgAzureFoundryConfig.mockReturnValue(new Promise(() => {}))
   seedStore()
 })
 
@@ -148,6 +172,24 @@ describe('OrganizationsPanel', () => {
     expect(setActiveOrg).not.toHaveBeenCalled()
   })
 
+  it('mounts the shared Azure AI Foundry section for the active org, editable by an admin', async () => {
+    azureApi.getOrgAzureFoundryConfig.mockResolvedValue({configured: false})
+    renderPanel()
+    expect(await screen.findByText('Shared Azure AI Foundry')).toBeInTheDocument()
+    expect(screen.getByText(/own Azure AI Foundry credentials take precedence/)).toBeInTheDocument()
+    await waitFor(() => expect(azureApi.getOrgAzureFoundryConfig).toHaveBeenCalledWith('org-1'))
+    // Unconfigured + admin: the form is offered.
+    expect(await screen.findByRole('textbox', {name: 'Azure endpoint'})).toBeInTheDocument()
+  })
+
+  it('does not mount the shared Azure AI Foundry section without an active org', async () => {
+    useOrgStore.setState({activeOrgId: null} as never)
+    renderPanel()
+    expect(await screen.findByText('Acme')).toBeInTheDocument()
+    expect(screen.queryByText('Shared Azure AI Foundry')).toBeNull()
+    expect(azureApi.getOrgAzureFoundryConfig).not.toHaveBeenCalled()
+  })
+
   it('treats an unchanged name as a cancel', async () => {
     renderPanel()
     fireEvent.click(await screen.findByRole('button', {name: 'Rename organization'}))
@@ -166,6 +208,25 @@ describe('OrganizationsPanel', () => {
       await screen.findByText('Acme')
       expect(screen.queryByRole('button', {name: 'Rename organization'})).toBeNull()
       expect(screen.queryByLabelText('Remove member')).toBeNull()
+    })
+
+    it('shows the shared Azure AI Foundry section read-only', async () => {
+      azureApi.getOrgAzureFoundryConfig.mockResolvedValue({
+        configured: true,
+        endpoint: 'https://acme.openai.azure.com',
+        authMode: 'api_key',
+        hasSecret: true,
+        chatDeployment: 'gpt-4.1',
+        shared: true,
+        updatedBy: 'admin@acme.io',
+      })
+      renderPanel()
+      expect(await screen.findByText('https://acme.openai.azure.com')).toBeInTheDocument()
+      expect(screen.getByText('Shared by your organisation · set by admin@acme.io')).toBeInTheDocument()
+      expect(screen.queryByRole('textbox', {name: 'Azure endpoint'})).toBeNull()
+      for (const name of ['Save', 'Edit', 'Test']) {
+        expect(screen.queryByRole('button', {name})).toBeNull()
+      }
     })
 
     // Members had no way out of an org short of asking an admin, although the

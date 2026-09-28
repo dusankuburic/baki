@@ -28,7 +28,7 @@ func TestTruncateForContextWindow_ToolOverhead(t *testing.T) {
 
 	// Control: without tools the conversation fits untouched.
 	req := mkReq()
-	if err := truncateForContextWindow(provider, req, ctxLimit); err != nil {
+	if _, err := truncateForContextWindow(provider, req, ctxLimit, 0); err != nil {
 		t.Fatalf("no-tools case should fit: %v", err)
 	}
 	if len(req.Messages) != 3 {
@@ -42,7 +42,7 @@ func TestTruncateForContextWindow_ToolOverhead(t *testing.T) {
 	// alone overflow the window fails outright (different branch).
 	req = mkReq()
 	req.Tools = []ai.ToolDefinition{{Name: "search_flow", InputSchema: []byte(stringRepeat("s", 2000))}}
-	if err := truncateForContextWindow(provider, req, ctxLimit); err != nil {
+	if _, err := truncateForContextWindow(provider, req, ctxLimit, 0); err != nil {
 		t.Fatalf("with-tools case should truncate, not fail: %v", err)
 	}
 	if len(req.Messages) != 1 || req.Messages[0].Role != "user" {

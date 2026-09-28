@@ -4,6 +4,7 @@
 export const enSettings = {
   providers: {
     connectedAs: 'Connected as',
+    disconnect: 'Disconnect',
     copilotSubscriptionLink: 'Copilot subscription',
     orUsePat: 'Or use a Personal Access Token',
     anthropicKey: 'Anthropic API Key',
@@ -29,10 +30,20 @@ export const enSettings = {
     azureProjectEndpointPlaceholder: 'https://my-resource.services.ai.azure.com/api/projects/my-project',
     azureProjectEndpointHint:
       'Needed to list and chat with Foundry agents. Agents require Microsoft Entra ID authentication (an app registration with the Foundry User role).',
-    azureChatDeployment: 'Default chat deployment (optional)',
+    azureChatDeployment: 'Default chat deployment',
     azureEmbeddingDeployment: 'Embedding deployment (optional)',
     azureDeploymentPlaceholder: 'e.g. gpt-4.1',
     azureEmbeddingDeploymentPlaceholder: 'e.g. text-embedding-3-small',
+    azureDeployments: 'Additional deployments (optional)',
+    azureDeploymentsPlaceholder: 'e.g. gpt-4o-mini, o4-mini, model-router',
+    azureDeploymentsHint:
+      "Comma-separated deployment names (as shown under Deployments in the Foundry portal) to offer in the chat model picker. An API key cannot list the resource's deployments, so the picker shows exactly the deployments named here; with Microsoft Entra ID and a project endpoint the project's deployments are listed too.",
+    azureClaudeDeployments: 'Claude deployments (optional)',
+    azureClaudeDeploymentsPlaceholder: 'e.g. claude-sonnet-4-6, claude-opus-4-8',
+    azureClaudeDeploymentsHint:
+      'Comma-separated names of the resource\'s Claude deployments. Claude answers on the Anthropic Messages route, not the OpenAI one, so name them here (they appear as "<name> · Claude" in the picker); with Microsoft Entra ID and a project endpoint they are discovered automatically.',
+    azureMissingDeployment:
+      "Name a default chat deployment or additional deployments — or Claude deployments, which answer on the Anthropic Messages route. An API key cannot list the resource's deployments; only Microsoft Entra ID with a project endpoint can.",
     azureSave: 'Save',
     azureSaving: 'Saving…',
     azureCancel: 'Cancel',
@@ -40,16 +51,41 @@ export const enSettings = {
     azureSaveFailed: 'Failed to save the Azure AI Foundry settings',
     azureHostRejected:
       'The endpoint host is not an Azure AI Foundry endpoint. Use https://<resource>.openai.azure.com or https://<resource>.services.ai.azure.com, or ask the operator to allow-list a custom host.',
+    // Client-side mirrors of the server's validation, shown inline while editing.
+    azureEndpointInvalid: 'The endpoint must be an absolute https:// URL',
+    azureEndpointHttps: 'The endpoint must use https://',
+    azureGuidInvalid: 'Must be a GUID, e.g. 123e4567-e89b-42d3-a456-426614174000',
+    // Load/remove/test outcomes and the confirm dialogs around destructive edits.
+    azureLoadFailed: 'Failed to load the Azure AI Foundry configuration',
+    azureRetry: 'Retry',
+    azureTestFailed: 'The connection test failed',
+    azureRemoveTitle: 'Remove Azure AI Foundry configuration',
+    azureRemoveMessage: 'The stored credentials and deployment settings will be deleted. This cannot be undone.',
+    azureRemoveFailed: 'Failed to remove the Azure AI Foundry configuration',
+    azureDiscardTitle: 'Discard unsaved changes?',
+    azureDiscardMessage: 'Your changes to the Azure AI Foundry configuration have not been saved.',
+    azureDiscard: 'Discard',
     azureConfiguredEndpoint: 'Endpoint',
     azureConfiguredAuth: 'Auth',
     azureConfiguredProject: 'Project',
     azureConfiguredChatDeployment: 'Chat deployment',
+    azureConfiguredDeployments: 'Additional deployments',
+    azureConfiguredClaudeDeployments: 'Claude deployments',
     azureConfiguredEmbeddingDeployment: 'Embedding deployment',
     azureAgentsHint:
       'Foundry agents appear in the chat model picker as "Agent · name" once a project endpoint and Entra ID credentials are saved.',
     azureEndpointAria: 'Azure endpoint',
     azureApiKeyAria: 'Azure API key',
     azureClientSecretAria: 'Azure client secret',
+    // Org-level shared credentials (cloud only), mounted in the Organizations
+    // panel for the active organisation.
+    azureOrgTitle: 'Shared Azure AI Foundry',
+    azureOrgHint:
+      "Credentials every member of this organisation can chat through. A member's own Azure AI Foundry credentials take precedence; prompts sent through the shared resource are billed to the organisation.",
+    azureOrgShared: 'Shared by your organisation',
+    azureOrgSharedBy: 'Shared by your organisation · set by {{name}}',
+    azureOrgNotConfigured: 'Your organisation has not set up a shared Azure AI Foundry resource.',
+    azureOrgReadOnly: 'Only organisation admins can change the shared configuration.',
   },
   knowledge: {
     orgLabel: 'Organization:',
@@ -58,15 +94,30 @@ export const enSettings = {
     selectOrgFirst: "Please select an organization in the 'Organizations' tab first to manage its knowledge base.",
     embeddingNoticePrefix: 'Requires an embedding provider.',
     embeddingNoticeSuffix:
-      "Indexing needs a configured OpenAI, Gemini, GLM, GitHub Models, or Azure AI Foundry key (set under AI Behavior → Embedding Assistant). Claude, Copilot, and xAI don't support embeddings, so a Claude-only setup can't use the Knowledge Base.",
+      "Indexing needs a configured OpenAI, Gemini, GLM, or GitHub Models key (set under AI Behavior → Embedding Assistant). Azure AI Foundry indexes the Knowledge Base only when your administrator enables it for this deployment, and then needs an embedding deployment in your Azure configuration. Claude, Copilot, and xAI don't support embeddings, so a Claude-only setup can't use the Knowledge Base.",
     embeddingMissingUpload:
-      'Indexing requires an embedding-capable provider key (OpenAI, Gemini, GLM, GitHub Models, or Azure AI Foundry). Configure one under AI Behavior → Embedding Assistant.',
+      'Indexing requires an embedding-capable provider key (OpenAI, Gemini, GLM, or GitHub Models — or Azure AI Foundry when your administrator enabled it and your Azure configuration names an embedding deployment). Configure one under AI Behavior → Embedding Assistant.',
     embeddingMissingReindex:
-      'Re-index needs an embedding-capable provider key (OpenAI, Gemini, GLM, GitHub Models, or Azure AI Foundry)',
+      'Re-index needs an embedding-capable provider key (OpenAI, Gemini, GLM, or GitHub Models — or Azure AI Foundry when enabled by your administrator, with an embedding deployment)',
+    modelChangedUpload:
+      'Not indexed: your embedding model differs from the one this knowledge base was indexed with, so members on that model could never find this document. Use the same embedding provider as the rest of your organization, or re-index the knowledge base with your model first.',
     uploadTitle: 'Upload SOP',
     uploadHint: 'Currently supports .txt and .md files up to 1MB.',
     reindexTitle:
-      'Re-embed every document with the currently configured embedding provider (recovery after changing the embedding model)',
+      'Re-embed every document with your embedding provider. Use it to recover after the embedding provider or model changed — members whose provider uses a different model stop receiving these guidelines.',
+    reindexConfirmTitle: 'Re-index knowledge base?',
+    reindexConfirmMessage:
+      'Every document is re-embedded with your embedding provider. This consumes embedding API usage for all indexed content.',
+    reindexConfirmLabel: 'Re-index',
+    reindexModelChangedTitle: 'Switch the embedding model?',
+    reindexModelChanged:
+      'This knowledge base was indexed with a different embedding model than yours. Re-indexing switches every document to your model, and members whose embedding provider uses another model will stop receiving these guidelines.',
+    reindexForceLabel: 'Re-index with my model',
+    reindexDone: 'Re-indexed {{chunks}} chunks across {{docs}} documents',
+    reindexTruncated: 'Re-indexed {{chunks}} chunks — more remain; run Re-index again to continue',
+    reindexNothing: 'Nothing to re-index',
+    reindexFailed: 'Re-index failed',
+    embeddingUnavailable: 'The embedding provider is unavailable — try again shortly',
     empty: 'No documents indexed yet.',
     dimensionMismatch: 'Not searchable — embedding dimension mismatch; re-index below.',
     indexedTitle: 'Indexed Documents',
@@ -87,6 +138,7 @@ export const enSettings = {
     aria: 'API key',
     saveFailed: 'Failed to save',
     valid: 'Valid',
+    validLatency: 'Valid · {{ms}} ms',
     invalid: 'Invalid',
     show: 'Show',
     hide: 'Hide',
@@ -113,7 +165,12 @@ export const enSettings = {
   keys: {
     configuredLocal: 'API key configured (saved in your OS keychain)',
     configuredServer: 'API key configured (stored encrypted on this server)',
+    // Entra ID setups store a client secret, not an API key — the summary
+    // line must not claim an "API key" for them.
+    entraConfiguredLocal: 'Microsoft Entra ID (client secret) configured (saved in your OS keychain)',
+    entraConfiguredServer: 'Microsoft Entra ID (client secret) configured (stored encrypted on this server)',
     remove: 'Remove',
+    removing: 'Removing…',
     test: 'Test',
     testing: 'Testing…',
   },
@@ -418,7 +475,7 @@ export const enSettings = {
       orgs: {
         label: 'Organizations',
         description: 'Group flows and share them with teammates. Roles control who can view or edit.',
-        keywords: 'organization team members invite roles owner channels webhook custom rules',
+        keywords: 'organization team members invite roles owner channels webhook custom rules azure foundry shared',
       },
       knowledge: {
         label: 'Knowledge Base',
@@ -442,7 +499,7 @@ export const enSettings = {
     activeAssistantHint: 'Select the primary AI provider to use for chat and analysis.',
     embeddingAssistant: 'Embedding Assistant',
     embeddingAssistantHint:
-      "Provider used to index and search your Knowledge Base. Only these providers support embeddings; a Claude-only setup can't use the Knowledge Base.",
+      "Provider used to index and search your Knowledge Base. Only these providers support embeddings; a Claude-only setup can't use the Knowledge Base. Azure AI Foundry is used for the Knowledge Base only when your administrator enables it for the deployment.",
     embeddingModel: 'Embedding Model',
     embeddingModelPlaceholder: 'Provider default',
     embeddingModelHintPrefix: 'Override the embedding model name (e.g.',

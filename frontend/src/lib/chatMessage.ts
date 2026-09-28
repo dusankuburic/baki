@@ -105,6 +105,11 @@ export function parseChatMessage(raw: unknown): ChatMessage | null {
   if (typeof m.tokensOut === 'number') out.tokensOut = m.tokensOut
   if (typeof m.provider === 'string' && m.provider) out.provider = m.provider as ChatMessage['provider']
   if (typeof m.model === 'string' && m.model) out.model = m.model
+  // Served model + billed rates (saved on done): the meta line and the cost
+  // estimate keep them across a reload.
+  if (typeof m.servedModel === 'string' && m.servedModel) out.servedModel = m.servedModel
+  if (typeof m.inputCostPerM === 'number') out.inputCostPerM = m.inputCostPerM
+  if (typeof m.outputCostPerM === 'number') out.outputCostPerM = m.outputCostPerM
   if (typeof m.finishReason === 'string') out.finishReason = m.finishReason as ChatMessage['finishReason']
 
   // Agentic trail. Saved by useChatStreamEngine on done; restored here so a

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"pad-core/models"
 )
@@ -34,4 +35,18 @@ type KeyStore interface {
 	Get(scope, provider string) (string, error)
 	Has(scope, provider string) (bool, error)
 	Delete(scope, provider string) error
+}
+
+// OrgKeyStore mirrors storage/interfaces.OrgSecretStore where it is consumed:
+// an organisation's shared provider credential (G7), written by org admins
+// and run on by members who have no credential of their own. Nil on the
+// desktop and in local mode (no organisations). The secret is write-only —
+// GetOrg builds providers and merges an edit that omits the secret; it is
+// never rendered to a client.
+type OrgKeyStore interface {
+	SaveOrg(orgID, provider, key, updatedBy string) error
+	GetOrg(orgID, provider string) (string, error)
+	HasOrg(orgID, provider string) (bool, error)
+	DeleteOrg(orgID, provider string) error
+	OrgKeyMeta(orgID, provider string) (updatedBy string, updatedAt time.Time, ok bool, err error)
 }

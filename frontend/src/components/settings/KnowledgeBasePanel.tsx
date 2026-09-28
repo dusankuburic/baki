@@ -18,6 +18,33 @@ interface KnowledgeDoc {
   vectorIndexed?: number
 }
 
+// POST /api/orgs/{id}/knowledge/reindex. `truncated`: the request exhausted
+// its chunk budget (10 000) with documents still waiting; the admin runs it
+// again to continue.
+interface ReindexResult {
+  chunks: number
+  docs: number
+  truncated?: boolean
+}
+
+// Upload and re-index failures whose server message is the thing to show:
+// the embedding provider's own verdict (rate limit, missing role, bad key,
+// rejected input) and the corpus lock (another upload or re-index is in
+// flight). EMBEDDING_PROVIDER_UNAVAILABLE (503) gets fixed copy instead —
+// its message is transport detail.
+// Upload and re-index embed whole documents in one request: the server gives
+// them a 5-minute deadline (vs. the 30-second default elsewhere), so the
+// client waits out that deadline plus a margin rather than aborting first.
+const KNOWLEDGE_BULK_TIMEOUT_MS = 5 * 60_000 + 30_000
+
+const VERBATIM_ERROR_CODES = new Set([
+  'KNOWLEDGE_BUSY',
+  'EMBEDDING_RATE_LIMITED',
+  'EMBEDDING_PERMISSION_DENIED',
+  'EMBEDDING_AUTH_FAILED',
+  'EMBEDDING_PROVIDER_REJECTED',
+])
+
 export default function KnowledgeBasePanel() {
   const {t} = useTranslation('settings')
   const organisations = useOrgStore(s => s.organisations)
@@ -60,6 +87,15 @@ export default function KnowledgeBasePanel() {
   const docs = data ?? []
   const loadError = fetchError ? 'Failed to load documents' : null
 
+  // providerVerdict maps an upload/re-index failure to the text to show, or
+  // null when it is not one of the embedding-provider outcomes both share.
+  const providerVerdict = (e: unknown): string | null => {
+    if (!(e instanceof ApiError) || !e.code) return null
+    if (VERBATIM_ERROR_CODES.has(e.code)) return e.message
+    if (e.code === 'EMBEDDING_PROVIDER_UNAVAILABLE') return t('knowledge.embeddingUnavailable')
+    return null
+  }
+
   const handleUpload = async () => {
     if (!activeOrgId || !selectedFile) return
     setUploadError(null)
@@ -75,6 +111,7 @@ export default function KnowledgeBasePanel() {
           filename: selectedFile.name,
           content,
         },
+        timeoutMs: KNOWLEDGE_BULK_TIMEOUT_MS,
       })
       setSelectedFile(null)
       toastSuccess('Document added')
@@ -86,10 +123,19 @@ export default function KnowledgeBasePanel() {
       // with clear guidance instead of a generic "Upload failed". Classify by
       // the envelope's machine-readable code first (stable across message
       // rewording), with the message regex as a fallback for older backends.
+      const verdict = providerVerdict(e)
       const embeddingMissing =
         (e instanceof ApiError && e.code === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
-      if (embeddingMissing) {
+      if (verdict) {
+        // Before the message regex: a provider verdict's message mentions
+        // the embedding provider too, and it is not a missing key.
+        setUploadError(verdict)
+      } else if (embeddingMissing) {
         setUploadError(t('knowledge.embeddingMissingUpload'))
+      } else if (e instanceof ApiError && e.code === 'EMBEDDING_MODEL_CHANGED') {
+        // 409: the uploader's embedding model is not the corpus's — mixing
+        // them would make the document unfindable for everyone else.
+        setUploadError(t('knowledge.modelChangedUpload'))
       } else {
         setUploadError('Upload failed: ' + String(e))
         toastError('Upload failed')
@@ -122,26 +168,53 @@ export default function KnowledgeBasePanel() {
   const handleReindex = async () => {
     if (!activeOrgId) return
     const ok = await confirm({
-      title: 'Re-index knowledge base?',
-      message:
-        'Every document is re-embedded with the currently configured embedding provider. This consumes embedding API usage for all indexed content.',
-      confirmLabel: 'Re-index',
+      title: t('knowledge.reindexConfirmTitle'),
+      message: t('knowledge.reindexConfirmMessage'),
+      confirmLabel: t('knowledge.reindexConfirmLabel'),
     })
     if (!ok) return
+    const reindex = (force: boolean) =>
+      request<ReindexResult>(`/api/orgs/${activeOrgId}/knowledge/reindex`, {
+        body: force ? {force: true} : {},
+        timeoutMs: KNOWLEDGE_BULK_TIMEOUT_MS,
+      })
     setReindexing(true)
     try {
-      const res = await request<{chunks: number; docs: number}>(`/api/orgs/${activeOrgId}/knowledge/reindex`, {
-        body: {},
-      })
-      toastSuccess(
-        res && res.chunks > 0 ? `Re-indexed ${res.chunks} chunks across ${res.docs} documents` : 'Nothing to re-index',
-      )
+      let res: ReindexResult
+      try {
+        res = await reindex(false)
+      } catch (e) {
+        // 409: the corpus was indexed with a different embedding model than
+        // the admin's. Re-indexing anyway strands every member on that model,
+        // so it takes a second, explicit confirmation before resending with
+        // force.
+        if (!(e instanceof ApiError && e.code === 'EMBEDDING_MODEL_CHANGED')) throw e
+        const force = await confirm({
+          title: t('knowledge.reindexModelChangedTitle'),
+          message: t('knowledge.reindexModelChanged'),
+          confirmLabel: t('knowledge.reindexForceLabel'),
+          danger: true,
+        })
+        if (!force) return
+        res = await reindex(true)
+      }
+      if (res?.truncated) {
+        // Not a success: documents are still waiting on the next run.
+        toastError(t('knowledge.reindexTruncated', {chunks: res.chunks}))
+      } else {
+        toastSuccess(
+          res && res.chunks > 0
+            ? t('knowledge.reindexDone', {chunks: res.chunks, docs: res.docs})
+            : t('knowledge.reindexNothing'),
+        )
+      }
       loadDocs()
     } catch (e) {
       logger.warn(e)
+      const verdict = providerVerdict(e)
       const embeddingMissing =
         (e instanceof ApiError && e.code === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
-      toastError(embeddingMissing ? t('knowledge.embeddingMissingReindex') : 'Re-index failed')
+      toastError(verdict ?? (embeddingMissing ? t('knowledge.embeddingMissingReindex') : t('knowledge.reindexFailed')))
     } finally {
       setReindexing(false)
     }

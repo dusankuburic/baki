@@ -17,6 +17,26 @@ vi.mock('@/api/client', () => ({
   }),
 }))
 
+const mockGetContent = vi.fn()
+const mockLoadFlowFromPath = vi.fn()
+const mockLoadFlowFolder = vi.fn()
+
+// The flow:loaded payload is a lightweight summary; the hook refetches the
+// full document over HTTP (library content in cloud mode, load-path /
+// load-folder in local mode).
+vi.mock('@/api', () => ({
+  flowApi: {
+    loadFlowFromPath: (...a: unknown[]) => mockLoadFlowFromPath(...a),
+    loadFlowFolder: (...a: unknown[]) => mockLoadFlowFolder(...a),
+  },
+}))
+
+vi.mock('@/api/library', () => ({
+  libraryApi: {
+    getContent: (...a: unknown[]) => mockGetContent(...a),
+  },
+}))
+
 const mockUnreadCount = vi.fn()
 vi.mock('@/api/governance', () => ({
   governanceApi: {
@@ -33,10 +53,14 @@ function TestComponent({openDocument}: {openDocument: (doc: unknown) => void}) {
   return null
 }
 
+// A fetched document that passes the FlowDocumentEnvelopeSchema boundary check.
+const fullDoc = (id: string, name: string) => ({id, name, subflows: [{id: 'sf1', name: 'Main', blocks: []}]})
+
 beforeEach(() => {
   capturedCallback = null
   vi.clearAllMocks()
   mockUnreadCount.mockResolvedValue({count: 0})
+  useFlowStore.setState({document: null})
   useGovernanceStore.setState({alerts: [], unreadCount: 0, panelOpen: false})
 })
 
@@ -74,16 +98,69 @@ describe('useAppEvents', () => {
     expect(useFlowStore.getState().parseProgress).toBe(42)
   })
 
-  it('calls openDocument when flow:loaded event arrives', async () => {
+  it('refetches the document from the library and calls openDocument (cloud summary)', async () => {
     const openDocument = vi.fn()
     render(<TestComponent openDocument={openDocument} />)
 
     await new Promise(r => setTimeout(r, 10))
 
-    const docData = {id: 'test-1', name: 'Test', subflows: [{id: 'sf1', name: 'Main', blocks: []}]}
-    capturedCallback!({name: 'flow:loaded', data: docData})
-    // Envelope validation awaits the (memoized, zod-importing) schema factory.
+    const docData = fullDoc('test-1', 'Test')
+    // No filePath on the summary → cloud mode → library content endpoint.
+    mockGetContent.mockResolvedValue(docData)
+    capturedCallback!({name: 'flow:loaded', data: {id: 'test-1', name: 'Test'}})
+
     await vi.waitFor(() => expect(openDocument).toHaveBeenCalledWith(docData))
+    expect(mockGetContent).toHaveBeenCalledWith('test-1')
+    expect(mockLoadFlowFromPath).not.toHaveBeenCalled()
+  })
+
+  it('refetches a local single-file flow via load-path', async () => {
+    const openDocument = vi.fn()
+    render(<TestComponent openDocument={openDocument} />)
+
+    await new Promise(r => setTimeout(r, 10))
+
+    const docData = fullDoc('local-1', 'Local')
+    mockLoadFlowFromPath.mockResolvedValue(docData)
+    capturedCallback!({
+      name: 'flow:loaded',
+      data: {id: 'local-1', name: 'Local', filePath: 'C:/flows/Main.txt'},
+    })
+
+    await vi.waitFor(() => expect(openDocument).toHaveBeenCalledWith(docData))
+    expect(mockLoadFlowFromPath).toHaveBeenCalledWith('C:/flows/Main.txt')
+    expect(mockGetContent).not.toHaveBeenCalled()
+  })
+
+  it('refetches a local folder flow via load-folder', async () => {
+    const openDocument = vi.fn()
+    render(<TestComponent openDocument={openDocument} />)
+
+    await new Promise(r => setTimeout(r, 10))
+
+    const docData = fullDoc('folder-1', 'Folder')
+    mockLoadFlowFolder.mockResolvedValue(docData)
+    capturedCallback!({
+      name: 'flow:loaded',
+      data: {id: 'folder-1', name: 'Folder', filePath: 'C:/flows', isFolder: true},
+    })
+
+    await vi.waitFor(() => expect(openDocument).toHaveBeenCalledWith(docData))
+    expect(mockLoadFlowFolder).toHaveBeenCalledWith('C:/flows')
+    expect(mockLoadFlowFromPath).not.toHaveBeenCalled()
+  })
+
+  it('drops the event when the refetch fails instead of crashing', async () => {
+    const openDocument = vi.fn()
+    render(<TestComponent openDocument={openDocument} />)
+
+    await new Promise(r => setTimeout(r, 10))
+
+    mockGetContent.mockRejectedValue(new Error('flow deleted'))
+    capturedCallback!({name: 'flow:loaded', data: {id: 'gone-1', name: 'Gone'}})
+
+    await new Promise(r => setTimeout(r, 10))
+    expect(openDocument).not.toHaveBeenCalled()
   })
 
   it('drops a malformed flow:loaded payload instead of hijacking the editor', async () => {
@@ -92,14 +169,13 @@ describe('useAppEvents', () => {
 
     await new Promise(r => setTimeout(r, 10))
 
-    // Not a flow document (no subflows / no id) — e.g. a proxy error page or
-    // a different event's data shape. Must be rejected at the boundary.
+    // Not a summary (no usable id) — e.g. a proxy error page or a different
+    // event's data shape. Must be rejected at the boundary, without a fetch.
     capturedCallback!({name: 'flow:loaded', data: {html: '<html>err</html>'}})
-    capturedCallback!({name: 'flow:loaded', data: {id: '', name: 'x', subflows: []}})
-    // Give the async validation a chance to (wrongly) run before asserting it
-    // never reached openDocument.
+    capturedCallback!({name: 'flow:loaded', data: {id: '', name: 'x'}})
     await new Promise(r => setTimeout(r, 10))
     expect(openDocument).not.toHaveBeenCalled()
+    expect(mockGetContent).not.toHaveBeenCalled()
   })
 
   it('forwards flow:load-error to the flow store', async () => {
@@ -130,8 +206,7 @@ describe('useAppEvents', () => {
   // Regression: a flow:loaded event for a flow OTHER than the one currently open
   // must not hijack the editor. Such an event is stale/unsolicited (another tab,
   // an admin action, or a late event for a flow the user navigated away from).
-  // The initial load (no document open) and a refresh of the current flow are
-  // still honored.
+  // The initial load (no document open) is still honored.
   it('does not hijack the editor with a flow:loaded for a different flow', async () => {
     const openDocument = vi.fn()
     // Simulate a document already open in the editor.
@@ -141,29 +216,40 @@ describe('useAppEvents', () => {
     await new Promise(r => setTimeout(r, 10))
 
     // A flow:loaded for a DIFFERENT flow arrives — must be ignored (the guard
-    // runs synchronously before the async envelope validation).
+    // runs synchronously before any refetch).
     capturedCallback!({
       name: 'flow:loaded',
-      data: {id: 'stale-flow', name: 'Stale', subflows: [{id: 'sf1', name: 'Main', blocks: []}]},
+      data: {id: 'stale-flow', name: 'Stale'},
     })
     await new Promise(r => setTimeout(r, 10))
     expect(openDocument).not.toHaveBeenCalled()
+    expect(mockGetContent).not.toHaveBeenCalled()
+  })
 
-    // A flow:loaded for the CURRENT flow (e.g. a collaborator re-parse) is still honored.
+  // A same-id event is an echo of a load whose HTTP response this tab already
+  // applied; refetching on it would ping-pong forever between tabs because the
+  // local refetch endpoints re-emit flow:loaded themselves.
+  it('ignores a flow:loaded echo for the flow already open (no refetch loop)', async () => {
+    const openDocument = vi.fn()
+    useFlowStore.setState({document: {id: 'current-flow', name: 'Current'} as never})
+    render(<TestComponent openDocument={openDocument} />)
+
+    await new Promise(r => setTimeout(r, 10))
+
     capturedCallback!({
       name: 'flow:loaded',
-      data: {id: 'current-flow', name: 'Current refreshed', subflows: [{id: 'sf1', name: 'Main', blocks: []}]},
+      data: {id: 'current-flow', name: 'Current refreshed'},
     })
-    await vi.waitFor(() => expect(openDocument).toHaveBeenCalledTimes(1))
-    expect(openDocument).toHaveBeenCalledWith(expect.objectContaining({id: 'current-flow'}))
+    await new Promise(r => setTimeout(r, 10))
+    expect(openDocument).not.toHaveBeenCalled()
+    expect(mockGetContent).not.toHaveBeenCalled()
+    expect(mockLoadFlowFromPath).not.toHaveBeenCalled()
   })
 
   // Regression (async-validation race): a flow:loaded that passed the stale-
   // flow guard at arrival must not hijack the editor if the user opens a
-  // DIFFERENT flow before the deferred validation completes — widest on the
-  // first event while the zod chunk is still loading. The guard is re-checked
-  // inside the continuation.
-  it('does not hijack the editor when a different flow is opened during async validation', async () => {
+  // DIFFERENT flow before the refetch completes.
+  it('does not hijack the editor when a different flow is opened during the refetch', async () => {
     const openDocument = vi.fn()
     // No document open yet, so the arrival-time guard passes for any flow.
     useFlowStore.setState({document: null})
@@ -172,12 +258,16 @@ describe('useAppEvents', () => {
     await new Promise(r => setTimeout(r, 10))
 
     // Event for flow A arrives and passes the guard…
-    capturedCallback!({
-      name: 'flow:loaded',
-      data: {id: 'flow-a', name: 'A', subflows: [{id: 'sf1', name: 'Main', blocks: []}]},
-    })
-    // …but before the async validation runs, the user opens flow B directly.
+    let resolveFetch!: (doc: unknown) => void
+    mockGetContent.mockReturnValue(
+      new Promise(r => {
+        resolveFetch = r
+      }),
+    )
+    capturedCallback!({name: 'flow:loaded', data: {id: 'flow-a', name: 'A'}})
+    // …but before the refetch resolves, the user opens flow B directly.
     useFlowStore.setState({document: {id: 'flow-b', name: 'B'} as never})
+    resolveFetch(fullDoc('flow-a', 'A'))
 
     await new Promise(r => setTimeout(r, 10))
     expect(openDocument).not.toHaveBeenCalled()

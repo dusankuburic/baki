@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,17 +10,26 @@ import (
 
 // TestRulesTable prints the rules table without error and includes expected columns.
 func TestRulesTable(t *testing.T) {
-	var buf bytes.Buffer
+	// Capture via a temp file, not an os.Pipe: the table exceeds the ~4 KB
+	// pipe buffer on Windows, and printRulesTable would block forever writing
+	// into a pipe nobody drains until after it returns (Linux's 64 KB buffer
+	// is why this only deadlocked on Windows).
+	tmp := t.TempDir()
+	outPath := filepath.Join(tmp, "out.txt")
+	f, err := os.Create(outPath)
+	if err != nil {
+		t.Fatalf("create temp: %v", err)
+	}
 	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
+	os.Stdout = f
 
 	printRulesTable()
 
-	w.Close()
+	f.Close()
 	os.Stdout = old
-	buf.ReadFrom(r)
-	output := buf.String()
+
+	data, _ := os.ReadFile(outPath)
+	output := string(data)
 
 	if !strings.Contains(output, "RULE") {
 		t.Errorf("expected RULE header in output, got: %s", output)

@@ -9,40 +9,18 @@ import {useChatStore} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {useTranslation} from 'react-i18next'
 
-interface ProviderEntry {
-  id: string
-  name: string
-  configured: boolean
-  authType: string
-}
-
 export default function ProvidersPanel() {
   const {t} = useTranslation('settings')
-  const [_providers, setProviders] = useState<ProviderEntry[]>([])
   const [githubUser, setGithubUser] = useState<string | null>(null)
   const [copilotUser, setCopilotUser] = useState<string | null>(null)
   const bumpProviderEpoch = useChatStore(s => s.bumpProviderEpoch)
   const setProvider = useChatStore(s => s.setProvider)
   const updateAI = useSettingsStore(s => s.updateAI)
 
-  // refreshLocal reloads the provider list + user info without bumping the
-  // provider epoch. Used for the initial mount load (no config changed yet).
+  // refreshLocal reloads the signed-in OAuth users without bumping the
+  // provider epoch. Used for the initial mount load (no config changed yet);
+  // the key inputs and the Azure section load their own state.
   const refreshLocal = useCallback(() => {
-    providersApi
-      .listProviders()
-      .then((ps: {id?: string; name?: string; configured?: boolean; authType?: string}[] | null) => {
-        setProviders(
-          (ps || []).map((p: {id?: string; name?: string; configured?: boolean; authType?: string}) => ({
-            id: p.id || '',
-            name: p.name || '',
-            configured: !!p.configured,
-            authType: p.authType || '',
-          })),
-        )
-      })
-      .catch(err => {
-        logger.warn('Failed to load providers', err)
-      })
     providersApi
       .getGitHubUser()
       .then((u: {login?: string} | null) => setGithubUser(u?.login || null))
@@ -123,7 +101,7 @@ export default function ProvidersPanel() {
                     })
                 }
               >
-                Disconnect
+                {t('providers.disconnect')}
               </button>
             </div>
           ) : (
@@ -162,7 +140,7 @@ export default function ProvidersPanel() {
                     })
                 }
               >
-                Disconnect
+                {t('providers.disconnect')}
               </button>
             </div>
           ) : (

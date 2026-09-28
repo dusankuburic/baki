@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,12 @@ import (
 // whose X-Baki-Timestamp is older (or further in the future) than this is
 // rejected, so a captured request can't be replayed after the window elapses.
 const ciWebhookMaxSkew = 5 * time.Minute
+
+// maxCIWebhookBodyBytes bounds the CI webhook body. The payload is a tiny
+// JSON ({flowId, failOn, format}), but verifySignature reads the WHOLE body
+// (HMAC over the raw bytes) before any of it is parsed — without a cap an
+// unauthenticated caller could feed gigabytes straight into memory.
+const maxCIWebhookBodyBytes = 1 << 20
 
 // CIWebhookSecret is the HMAC key an admin configures (PAD_CI_WEBHOOK_SECRET).
 // The AnalysisHandler holds it so the inbound CI endpoint can verify request
@@ -116,8 +123,17 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 		render.Error(w, fmt.Errorf("CI webhook not configured: set PAD_CI_WEBHOOK_SECRET"), http.StatusServiceUnavailable)
 		return
 	}
+	// verifySignature reads the entire body for the HMAC; bound it before the
+	// first read (the router's 10 MiB global cap never applied here — this
+	// endpoint is in publicRoutes with no per-route cap until now).
+	r.Body = http.MaxBytesReader(w, r.Body, maxCIWebhookBodyBytes)
 	ok, err := verifySignature(r, string(h.ciSecret))
 	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			render.Error(w, fmt.Errorf("CI webhook body exceeds %d bytes", maxCIWebhookBodyBytes), http.StatusRequestEntityTooLarge)
+			return
+		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

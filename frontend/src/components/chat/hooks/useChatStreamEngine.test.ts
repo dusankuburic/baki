@@ -1053,4 +1053,140 @@ describe('useChatStreamEngine', () => {
       expect(committed.fixProposals).toBeUndefined()
     })
   })
+
+  describe('served model + billed rates on done', () => {
+    const RATES = {inputCostPerM: 2.5, outputCostPerM: 10}
+
+    // Adds a thread with a live slot for `streamId` (alongside whatever is
+    // seeded) and returns the StreamMeta to begin its accumulator with.
+    function seedThread(threadId: string, streamId: string, provider: string) {
+      const st = useChatStore.getState()
+      useChatStore.setState({
+        threads: [
+          ...st.threads,
+          {
+            id: threadId,
+            flowId: 'flow-1',
+            title: 't',
+            createdAt: '2024',
+            contextBlockId: null,
+            selectedSourceFiles: [],
+            tokensIn: 0,
+            tokensOut: 0,
+          },
+        ],
+        conversations: new Map([...st.conversations, [threadId, []]]),
+        streams: {
+          ...st.streams,
+          [threadId]: {
+            streamId,
+            messageId: `m-${streamId}`,
+            text: '',
+            isThinking: true,
+            tokens: 0,
+            toolStatus: null,
+            toolCalls: [],
+            fixProposals: [],
+          },
+        },
+      })
+      return {provider: provider as never, model: 'my-deployment'}
+    }
+
+    it('pins the served model and the billed rates onto the committed message', () => {
+      const {result} = renderEngine()
+      act(() => {
+        result.current.beginAcc('streamA', 'threadA', seedThread('threadA', 'streamA', 'azure-foundry'))
+        capturedHandler!.onChunk('answer', 'streamA')
+      })
+      act(() => {
+        capturedHandler!.onDone(9, 4, 'streamA', {servedModel: 'gpt-4o-2024-08-06', ...RATES})
+      })
+      const committed = useChatStore.getState().conversations.get('threadA')![0]
+      expect(committed).toMatchObject({
+        content: 'answer',
+        model: 'my-deployment',
+        servedModel: 'gpt-4o-2024-08-06',
+        inputCostPerM: 2.5,
+        outputCostPerM: 10,
+        tokensIn: 4,
+        tokensOut: 9,
+      })
+    })
+
+    it('leaves the fields off a message whose done carried none', () => {
+      const {result} = renderEngine()
+      act(() => {
+        result.current.beginAcc('streamA', 'threadA', seedThread('threadA', 'streamA', 'azure-foundry'))
+        capturedHandler!.onChunk('answer', 'streamA')
+      })
+      act(() => {
+        capturedHandler!.onDone(2, 2, 'streamA')
+      })
+      const committed = useChatStore.getState().conversations.get('threadA')![0]
+      expect('servedModel' in committed).toBe(false)
+      expect('inputCostPerM' in committed).toBe(false)
+      expect('outputCostPerM' in committed).toBe(false)
+    })
+
+    it('refetches the provider list once per thread when an alias provider names the served model', () => {
+      const {result} = renderEngine()
+      const epoch0 = useChatStore.getState().providerEpoch
+      act(() => {
+        result.current.beginAcc('streamA', 'threadA', seedThread('threadA', 'streamA', 'azure-foundry'))
+      })
+      act(() => {
+        capturedHandler!.onDone(1, 1, 'streamA', {servedModel: 'gpt-4o', ...RATES})
+      })
+      expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
+
+      // A second turn on the same thread: the listing already names it.
+      act(() => {
+        useChatStore.setState({
+          streams: {
+            threadA: {
+              streamId: 'streamA2',
+              messageId: 'mA2',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+              fixProposals: [],
+            },
+          },
+        })
+        result.current.beginAcc('streamA2', 'threadA', {provider: 'azure-foundry' as never, model: 'my-deployment'})
+      })
+      act(() => {
+        capturedHandler!.onDone(1, 1, 'streamA2', {servedModel: 'gpt-4o', ...RATES})
+      })
+      expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
+
+      // Another thread on the same provider: once more.
+      act(() => {
+        result.current.beginAcc('streamB', 'threadB', seedThread('threadB', 'streamB', 'azure-foundry'))
+      })
+      act(() => {
+        capturedHandler!.onDone(1, 1, 'streamB', {servedModel: 'gpt-4o'})
+      })
+      expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 2)
+    })
+
+    it('does not refetch for a provider without aliases, nor for a done without a served model', () => {
+      const {result} = renderEngine()
+      const epoch0 = useChatStore.getState().providerEpoch
+      act(() => {
+        result.current.beginAcc('streamA', 'threadA', seedThread('threadA', 'streamA', 'claude'))
+        result.current.beginAcc('streamB', 'threadB', seedThread('threadB', 'streamB', 'azure-foundry'))
+      })
+      act(() => {
+        capturedHandler!.onDone(1, 1, 'streamA', {servedModel: 'claude-sonnet-4-20250514', ...RATES})
+        capturedHandler!.onDone(1, 1, 'streamB', {...RATES})
+      })
+      expect(useChatStore.getState().providerEpoch).toBe(epoch0)
+      // The rates still land on the messages either way.
+      expect(useChatStore.getState().conversations.get('threadB')![0]).toMatchObject(RATES)
+    })
+  })
 })

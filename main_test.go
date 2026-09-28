@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -16,9 +17,14 @@ import (
 // 0600 file under the config dir, and the only thing handed off is the path.
 func TestWriteSessionSecret_FileOnlyNoStdout(t *testing.T) {
 	// Redirect the config dir to a temp location so the test doesn't clobber a
-	// real session.key. ConfigDir() uses os.UserConfigDir(); override via env.
+	// real session.key. ConfigDir() uses os.UserConfigDir(), which honours
+	// XDG_CONFIG_HOME on Unix but %AppData% on Windows — set both so the
+	// override lands everywhere.
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
+	if runtime.GOOS == "windows" {
+		t.Setenv("AppData", tmp)
+	}
 
 	const secret = "SUPER-SECRET-SIGNING-KEY-1234"
 	path, err := writeSessionSecret(secret)
@@ -44,9 +50,11 @@ func TestWriteSessionSecret_FileOnlyNoStdout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat secret file: %v", err)
 	}
-	// 0o600 == -rw-------  (mask only leaves the permission bits)
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Errorf("secret file mode = %o, want 0600", mode)
+	// 0o600 == -rw-------  (mask only leaves the permission bits). Windows
+	// has no permission bits — Stat reports 0666 regardless — so the mode
+	// contract is only checkable where modes exist.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("secret file mode = %o, want 0600", info.Mode().Perm())
 	}
 }
 
@@ -57,6 +65,9 @@ func TestWriteSessionSecret_FileOnlyNoStdout(t *testing.T) {
 func TestWriteSessionSecret_DoesNotTouchStdout(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
+	if runtime.GOOS == "windows" {
+		t.Setenv("AppData", tmp)
+	}
 
 	const secret = "NEVER-ON-STDOUT-LEAK-CHECK"
 	path, err := writeSessionSecret(secret)

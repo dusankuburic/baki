@@ -750,11 +750,11 @@ func (b *PostgresStorageBackend) ListAuditEvents(ctx context.Context, filter int
 
 func (b *PostgresStorageBackend) SaveUsageMetric(ctx context.Context, metric *interfaces.UsageMetric) error {
 	query := `
-		INSERT INTO usage_metrics (id, user_id, org_id, provider, model, prompt_tokens, completion_tokens, estimated_cost, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO usage_metrics (id, user_id, org_id, provider, model, served_model, prompt_tokens, completion_tokens, estimated_cost, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
 	_, err := b.db.ExecContext(ctx, query,
-		metric.ID, metric.UserID, metric.OrgID, metric.Provider, metric.Model,
+		metric.ID, metric.UserID, metric.OrgID, metric.Provider, metric.Model, metric.ServedModel,
 		metric.PromptTokens, metric.CompletionTokens, metric.EstimatedCost, metric.CreatedAt,
 	)
 	if err != nil {

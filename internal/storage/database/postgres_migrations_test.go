@@ -1,6 +1,9 @@
 package database
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestMigrations_Ordered guards the migration set's invariants so an
 // accidentally reordered/edited/gap-introducing change fails fast in any
@@ -97,5 +100,55 @@ func TestMigrateDown_PrechecksReversibility(t *testing.T) {
 		if step.downSQL == "" {
 			t.Errorf("v%d should be reversible for the rollback path to work", v)
 		}
+	}
+}
+
+// TestMigration22_UsageServedModel pins the D-42 step: v22 adds the
+// usage_metrics.served_model column (additive, empty default so legacy rows
+// keep grouping by model) and its down step drops it again.
+func TestMigration22_UsageServedModel(t *testing.T) {
+	m, ok := migrationByVersion(22)
+	if !ok {
+		t.Fatal("migration v22 not registered")
+	}
+	if m.name != "usage_served_model" {
+		t.Errorf("v22 name = %q, want %q", m.name, "usage_served_model")
+	}
+	if !strings.Contains(m.sql, "ALTER TABLE usage_metrics ADD COLUMN IF NOT EXISTS served_model TEXT NOT NULL DEFAULT ''") {
+		t.Errorf("v22 must add usage_metrics.served_model with an empty default, got:\n%s", m.sql)
+	}
+	if !strings.Contains(m.downSQL, "ALTER TABLE usage_metrics DROP COLUMN IF EXISTS served_model") {
+		t.Errorf("v22 down must drop usage_metrics.served_model, got:\n%s", m.downSQL)
+	}
+}
+
+// TestMigration23_OrgProviderKeys pins the G7 step: v23 creates the
+// org_provider_keys table keyed by (org_id, provider), cascading with the
+// organisation, and its down step drops it again. Like provider_keys the
+// table carries no RLS (every query is org-bounded and the AAD binds the
+// row), so the step must not enable it.
+func TestMigration23_OrgProviderKeys(t *testing.T) {
+	m, ok := migrationByVersion(23)
+	if !ok {
+		t.Fatal("migration v23 not registered")
+	}
+	if m.name != "org_provider_keys" {
+		t.Errorf("v23 name = %q, want %q", m.name, "org_provider_keys")
+	}
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS org_provider_keys",
+		"REFERENCES organisations(id) ON DELETE CASCADE",
+		"PRIMARY KEY (org_id, provider)",
+		"updated_by TEXT        NOT NULL DEFAULT ''",
+	} {
+		if !strings.Contains(m.sql, want) {
+			t.Errorf("v23 must contain %q, got:\n%s", want, m.sql)
+		}
+	}
+	if strings.Contains(m.sql, "ROW LEVEL SECURITY") {
+		t.Errorf("v23 must not enable RLS on org_provider_keys (org-bounded queries + AAD), got:\n%s", m.sql)
+	}
+	if !strings.Contains(m.downSQL, "DROP TABLE IF EXISTS org_provider_keys") {
+		t.Errorf("v23 down must drop org_provider_keys, got:\n%s", m.downSQL)
 	}
 }

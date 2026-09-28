@@ -1,6 +1,7 @@
 import {useState, useEffect, useRef, useCallback, useMemo} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
+import {useOrgStore} from '@/stores/orgStore'
 import {providersApi} from '@/api'
 import {logger} from '@/lib/logger'
 import type {AISettings, ProviderID, ModelDetail, ProviderInfo} from '@/types'
@@ -12,6 +13,8 @@ export interface ProviderOption {
   authType: string
   models: ModelDetail[]
   defaultModel: string
+  /** Credentials resolved from the active organisation, not the user. */
+  shared?: boolean
 }
 
 export function useProviderSetup() {
@@ -20,6 +23,10 @@ export function useProviderSetup() {
   const providerEpoch = useChatStore(s => s.providerEpoch)
   const updateAI = useSettingsStore(s => s.updateAI)
   const aiSettings = useSettingsStore(s => s.settings.ai)
+  // The active organisation's shared credentials count as configured for
+  // its members (the user's own always win), so the list is scoped to it
+  // and refetched when it changes.
+  const activeOrgId = useOrgStore(s => s.activeOrgId)
 
   // null = still checking. Starting at false flashed "add an API key" on
   // every panel mount, and a failed check left that screen up for good.
@@ -48,7 +55,7 @@ export function useProviderSetup() {
   useEffect(() => {
     let cancelled = false
     providersApi
-      .listProviders()
+      .listProviders(activeOrgId ?? undefined)
       .then((ps: ProviderInfo[]) => {
         if (cancelled) return
         const list: ProviderOption[] = (ps || []).map((p: ProviderInfo) => ({
@@ -56,6 +63,7 @@ export function useProviderSetup() {
           name: p.name || '',
           configured: !!p.configured,
           authType: p.authType || '',
+          ...(p.shared ? {shared: true} : {}),
           models: (p.models || []).map((m: ModelDetail) => ({
             id: m.id || '',
             displayName: m.displayName || m.id || '',
@@ -81,7 +89,7 @@ export function useProviderSetup() {
     return () => {
       cancelled = true
     }
-  }, [providerEpoch])
+  }, [providerEpoch, activeOrgId])
 
   // The chat's provider must be one with a key. Re-applied on every provider
   // change, not only when the list loads: Settings' Active Assistant syncs the

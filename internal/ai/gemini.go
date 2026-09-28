@@ -145,7 +145,7 @@ func (g *GeminiProvider) embedBatch(ctx context.Context, texts []string) ([][]fl
 			Values []float32 `json:"values"`
 		} `json:"embeddings"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSONBodyBytes)).Decode(&parsed); err != nil {
 		return nil, err
 	}
 
