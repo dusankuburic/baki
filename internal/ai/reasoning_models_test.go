@@ -254,8 +254,9 @@ func reasoningContentEvent(s string) string {
 
 // TestParseOpenAISSE_ReasoningContentKeepalives: DeepSeek-V3.2/V4 and others
 // stream their thinking in delta.reasoning_content for minutes before the
-// first content delta. Each such event must reach the caller as an empty
-// keepalive (the chat idle watchdog is reset per chunk) — never as text.
+// first content delta. Each such event must reach the caller as one
+// reasoning-only chunk (Chunk.Reasoning — it resets the chat idle watchdog
+// like a keepalive) — never as text.
 func TestParseOpenAISSE_ReasoningContentKeepalives(t *testing.T) {
 	const n = 5
 	events := make([]string, 0, n+2)
@@ -278,11 +279,12 @@ func TestParseOpenAISSE_ReasoningContentKeepalives(t *testing.T) {
 		t.Fatalf("got %d chunk(s) before the first text, want at least %d keepalives: %+v", firstText, n, chunks)
 	}
 	for _, c := range chunks[:firstText] {
-		if !isKeepalive(c) {
-			t.Errorf("reasoning event produced a non-empty chunk: %+v", c)
+		if c.Reasoning != "thinking step " || c.Text != "" || c.Done || c.Error != nil || len(c.ToolCalls) != 0 ||
+			c.FinishReason != "" || c.TokensIn != 0 || c.TokensOut != 0 {
+			t.Errorf("reasoning event must yield one reasoning-only chunk, got %+v", c)
 		}
 	}
-	if text != "Answer." || reasoning != "" {
+	if text != "Answer." || reasoning != strings.Repeat("thinking step ", n) {
 		t.Errorf("text=%q reasoning=%q — reasoning_content must never become text", text, reasoning)
 	}
 	doneCount := 0

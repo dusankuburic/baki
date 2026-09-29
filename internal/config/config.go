@@ -299,13 +299,15 @@ type RuntimeConfig struct {
 	// Azure AI Foundry endpoint beyond Microsoft's own suffixes
 	// (*.openai.azure.com, *.services.ai.azure.com, …): exact hosts or
 	// "*.suffix" globs, for API Management fronts and private DNS zones
-	// (PAD_AZURE_FOUNDRY_ALLOWED_HOSTS).
+	// (PAD_AZURE_FOUNDRY_ALLOWED_HOSTS). Globs over public suffixes and
+	// multi-tenant Azure / hosting zones are refused at boot.
 	AzureFoundryAllowedHosts []string
-	// AIAllowPrivateEgress disables the cloud-mode dial-time guard that
-	// refuses AI endpoints resolving to private/loopback addresses
+	// AIAllowPrivateEgress relaxes the cloud-mode dial-time guard for AI
+	// endpoints to allow RFC 1918 and IPv6 unique-local addresses
 	// (PAD_AI_ALLOW_PRIVATE_EGRESS). Only for private-link resources, whose
-	// hosts resolve to RFC 1918 addresses by design; the endpoint allow-list
-	// still applies.
+	// hosts resolve to private addresses by design; loopback, link-local
+	// (169.254.169.254) and unspecified addresses stay refused, and the
+	// endpoint allow-list still applies.
 	AIAllowPrivateEgress bool
 }
 

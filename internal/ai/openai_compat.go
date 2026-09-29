@@ -67,12 +67,43 @@ type openaiBase struct {
 	// names the rejected access token instead of an API key the principal
 	// does not have (see entraUnauthorized).
 	handle401 func(apiErr openAIErrorResp, respBody []byte) error
+	// handle403, when set, classifies a 403 ahead of handle401: Azure AI
+	// Foundry answers 403 for a request its network rules (firewall,
+	// private endpoint) or the principal's role refuse — the credential was
+	// accepted, so it is not an invalid key and a fresh token cannot help
+	// (see azureForbidden).
+	handle403 func(apiErr openAIErrorResp, respBody []byte) error
+	// apiKeyHeader, when set, is the header the static apiKey travels in
+	// INSTEAD of Authorization: Bearer (Azure AI Foundry's `api-key`); a
+	// tokenFn provider always uses the bearer header.
+	apiKeyHeader string
 }
 
-// unauthorized classifies a 401/403: the provider's handle401 hook first,
-// then the shared unauthorizedError. Used by the chat and stream handlers
-// alike (and, through handleChatError, by embeddings).
-func (b *openaiBase) unauthorized(apiErr openAIErrorResp, respBody []byte) error {
+// setAuth sets the credential header on a request: the bearer token, or the
+// static key in apiKeyHeader when the provider names one.
+func (b *openaiBase) setAuth(ctx context.Context, req *http.Request) error {
+	token, err := b.resolveToken(ctx)
+	if err != nil {
+		return fmt.Errorf("get %s token: %w", b.providerLabel, err)
+	}
+	if b.apiKeyHeader != "" && b.tokenFn == nil {
+		req.Header.Set(b.apiKeyHeader, token)
+		return nil
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return nil
+}
+
+// unauthorized classifies a 401/403: a 403 goes to the provider's handle403
+// hook first, then the handle401 hook, then the shared unauthorizedError.
+// Used by the chat and stream handlers alike (and, through handleChatError,
+// by embeddings).
+func (b *openaiBase) unauthorized(status int, apiErr openAIErrorResp, respBody []byte) error {
+	if status == http.StatusForbidden && b.handle403 != nil {
+		if err := b.handle403(apiErr, respBody); err != nil {
+			return err
+		}
+	}
 	if b.handle401 != nil {
 		if err := b.handle401(apiErr, respBody); err != nil {
 			return err
@@ -119,10 +150,15 @@ func (b *openaiBase) resolveToken(ctx context.Context) (string, error) {
 // Exactly one of max_tokens / max_completion_tokens is set (maxTokensParam).
 func (b *openaiBase) buildRequest(req Request, stream bool) openAIRequest {
 	body := openAIRequest{
-		Model:       req.Model,
-		Temperature: req.Temperature,
-		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
-		Tools:       toOpenAITools(req.Tools),
+		Model:    req.Model,
+		Messages: toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Tools:    toOpenAITools(req.Tools),
+	}
+	// An explicitly chosen temperature goes out even when it is 0; an unset
+	// zero keeps meaning "the provider's default" and is omitted.
+	if req.TemperatureSet || req.Temperature != 0 {
+		t := req.Temperature
+		body.Temperature = &t
 	}
 	limit := orDefault(req.MaxTokens, 4096)
 	if b.maxTokensParam == maxTokensParamCompletion {
@@ -143,11 +179,9 @@ func (b *openaiBase) post(ctx context.Context, jsonBody []byte, model string, st
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	token, err := b.resolveToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("get %s token: %w", b.providerLabel, err)
+	if err := b.setAuth(ctx, httpReq); err != nil {
+		return nil, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
 	if stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
@@ -212,7 +246,11 @@ func (b *openaiBase) send(ctx context.Context, body openAIRequest, stream bool) 
 	if params := repairsFor(memoKey); len(params) > 0 && ensurePayload() {
 		for _, param := range params {
 			if param == reasoningEffortParam {
-				if hasTools {
+				// A model router picks the model per request: the model that
+				// needed reasoning_effort "none" last time says nothing about
+				// the next one, which may reject the parameter outright. The
+				// router relearns it from the rejection when it has to.
+				if hasTools && !isModelRouterAlias(body.Model) {
 					payload[reasoningEffortParam] = "none"
 					repaired[param], learned[param] = true, true
 				}
@@ -384,11 +422,15 @@ func forgetRepairs(key string) {
 	learnedRepairs.Unlock()
 }
 
-// resetLearnedRepairs clears the memo (tests, ResetAzureFoundryCaches).
+// resetLearnedRepairs clears the memo and the streaming refusals (tests,
+// ResetAzureFoundryCaches).
 func resetLearnedRepairs() {
 	learnedRepairs.Lock()
 	learnedRepairs.m = map[string]learnedRepair{}
 	learnedRepairs.Unlock()
+	streamRefusals.Lock()
+	streamRefusals.m = map[string]time.Time{}
+	streamRefusals.Unlock()
 }
 
 // reasoningEffortParam is the chat-completions reasoning control.
@@ -418,11 +460,74 @@ func reasoningToolsRejected(status int, errBody []byte) bool {
 	if !parameterRejectionStatus(status) {
 		return false
 	}
-	var apiErr openAIErrorResp
-	if err := json.Unmarshal(errBody, &apiErr); err != nil {
+	apiErr, ok := decodeOpenAIError(errBody)
+	if !ok {
 		return false
 	}
 	return reasoningToolsRejection.MatchString(apiErr.Error.Message)
+}
+
+// decodeOpenAIError decodes an error body into the OpenAI envelope. Besides
+// {"error":{"code","message","param","type"}} it reads the Azure AI Model
+// Inference layer's TOP-LEVEL shape (Foundry Models sold directly by Azure):
+//
+//	{"status":422,"code":"parameter_not_supported","message":"One of the parameters contain invalid values.","detail":{"loc":["body","response_format"],"input":"json_object"}}
+//	{"status":400,"code":"content_filter","message":"The response was filtered","param":"messages","type":null}
+//
+// whose `error`, when present, may be a plain string (which failed the whole
+// strict decode). The top-level fields fill Error.Code / Message / Param /
+// Type; the offending parameter comes from `param`, else detail.loc[1] (loc
+// is ["body", "<param>", …]); a string `detail` extends the message. The
+// top-level shape is only adopted when it carries a `code` or a `detail`:
+// API Management's {"statusCode":401,"message":…} envelope keeps an empty
+// Error (the Azure auth hooks read its message from the raw body). ok is
+// false when the body is not JSON at all.
+func decodeOpenAIError(body []byte) (openAIErrorResp, bool) {
+	var apiErr openAIErrorResp
+	strictOK := json.Unmarshal(body, &apiErr) == nil
+	if strictOK && (apiErr.Error.Message != "" || apiErr.Error.Code != "") {
+		return apiErr, true
+	}
+	var top struct {
+		Code    json.RawMessage `json:"code"`
+		Message string          `json:"message"`
+		Param   string          `json:"param"`
+		Type    json.RawMessage `json:"type"`
+		Detail  json.RawMessage `json:"detail"`
+	}
+	if json.Unmarshal(body, &top) != nil {
+		return apiErr, strictOK
+	}
+	code := rawText(top.Code)
+	detail := bytes.TrimSpace(top.Detail)
+	if code == "" && (len(detail) == 0 || bytes.Equal(detail, []byte("null"))) {
+		return apiErr, strictOK
+	}
+	var out openAIErrorResp
+	out.Error.Code = code
+	out.Error.Message = top.Message
+	out.Error.Param = top.Param
+	out.Error.Type = rawText(top.Type)
+	if len(detail) > 0 && detail[0] == '"' {
+		var s string
+		if json.Unmarshal(detail, &s) == nil && strings.TrimSpace(s) != "" {
+			if out.Error.Message == "" {
+				out.Error.Message = s
+			} else {
+				out.Error.Message += ": " + s
+			}
+		}
+	} else if len(detail) > 0 && detail[0] == '{' {
+		var d struct {
+			Loc []any `json:"loc"`
+		}
+		if json.Unmarshal(detail, &d) == nil && out.Error.Param == "" && len(d.Loc) > 1 {
+			if p, ok := d.Loc[1].(string); ok {
+				out.Error.Param = p
+			}
+		}
+	}
+	return out, true
 }
 
 // unsupportedParamPatterns recognise rejections that only name the parameter
@@ -444,12 +549,17 @@ func unsupportedParam(status int, errBody []byte) (string, bool) {
 	if !parameterRejectionStatus(status) {
 		return "", false
 	}
-	var apiErr openAIErrorResp
-	if err := json.Unmarshal(errBody, &apiErr); err != nil {
+	apiErr, ok := decodeOpenAIError(errBody)
+	if !ok {
 		return "", false
 	}
-	if (apiErr.Error.Code == "unsupported_parameter" || apiErr.Error.Code == "unsupported_value") && apiErr.Error.Param != "" {
-		return strings.ToLower(apiErr.Error.Param), true
+	switch apiErr.Error.Code {
+	case "unsupported_parameter", "unsupported_value",
+		// The Model Inference layer's code, the parameter in detail.loc.
+		"parameter_not_supported":
+		if apiErr.Error.Param != "" {
+			return strings.ToLower(apiErr.Error.Param), true
+		}
 	}
 	for _, re := range unsupportedParamPatterns {
 		if m := re.FindStringSubmatch(apiErr.Error.Message); m != nil {
@@ -478,6 +588,9 @@ var repairableParams = map[string]bool{
 	"stop":                   true,
 	"n":                      true,
 	"logprobs":               true,
+	// The Responses path's include:["reasoning.encrypted_content"]: an
+	// endpoint that refuses it answers without replayable reasoning.
+	"include": true,
 }
 
 // repairParam rewrites payload so the rejected parameter is gone: the two
@@ -526,13 +639,28 @@ func (b *openaiBase) chat(ctx context.Context, req Request) (*Response, error) {
 	}
 	choice := parsed.Choices[0]
 	// A completion the content filter cut short is not an answer (Azure
-	// OpenAI / Foundry); say so instead of returning the fragment.
+	// OpenAI / Foundry); say so instead of returning the fragment. The usage
+	// rides on the error (as the stream path's error chunk carries it), so
+	// the tokens the blocked completion spent can still be billed.
 	if choice.FinishReason == "content_filter" {
-		return nil, fmt.Errorf("%w: the response was stopped by the content filter", ErrContentFiltered)
+		return nil, &heldUsageError{
+			err:         fmt.Errorf("%w: the response was stopped by the content filter", ErrContentFiltered),
+			tokensIn:    parsed.Usage.PromptTokens,
+			tokensOut:   parsed.Usage.CompletionTokens,
+			servedModel: parsed.Model,
+		}
 	}
 	// A leading <think>…</think> block (DeepSeek-R1, …) is reasoning, not
-	// the answer — split exactly as the streaming path does.
+	// the answer — split exactly as the streaming path does. A separate
+	// message.reasoning_content is reasoning too, never Content.
 	content, reasoning := splitLeadingThink(choice.Message.Content)
+	if rc := choice.Message.ReasoningContent; rc != "" {
+		if reasoning == "" {
+			reasoning = rc
+		} else {
+			reasoning = rc + "\n" + reasoning
+		}
+	}
 
 	return &Response{
 		Content:      content,
@@ -587,14 +715,13 @@ func unauthorizedError(apiErr openAIErrorResp) error {
 // (Azure Foundry's PermissionDenied still needs the body; see
 // unauthorizedError).
 func (b *openaiBase) handleChatError(resp *http.Response, respBody []byte) error {
-	var apiErr openAIErrorResp
-	parsed := json.Unmarshal(respBody, &apiErr) == nil
+	apiErr, parsed := decodeOpenAIError(respBody)
 	if parsed && isContentFilterError(resp.StatusCode, apiErr, respBody) {
 		return fmt.Errorf("%w: %s", ErrContentFiltered, apiErr.Error.Message)
 	}
 	switch {
 	case resp.StatusCode == 401 || resp.StatusCode == 403:
-		return b.unauthorized(apiErr, respBody)
+		return b.unauthorized(resp.StatusCode, apiErr, respBody)
 	case resp.StatusCode == 429:
 		if b.handle429 != nil {
 			if handled := b.handle429(resp, apiErr); handled != nil {
@@ -663,16 +790,91 @@ func (b *openaiBase) logUpstreamRejection(resp *http.Response, model string) {
 }
 
 func (b *openaiBase) stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
+	key := b.repairsKey(req.Model)
+	if streamRefused(key) {
+		return b.streamViaChat(ctx, req, onChunk)
+	}
 	resp, errBody, err := b.send(ctx, b.buildRequest(req, true), true)
 	if err != nil {
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close() // send already read and closed it; harmless
+		if param, ok := unsupportedParam(resp.StatusCode, errBody); ok && param == "stream" {
+			// The model does not stream at all (o1 on Azure: "Unsupported
+			// value: 'stream' does not support true with this model"): answer
+			// the turn non-streaming and remember the deployment, so later
+			// turns skip the rejection round trip.
+			rememberStreamRefusal(key)
+			logger.Debug("model rejects streaming — answering non-streaming",
+				"provider", b.providerLabel, "model", req.Model)
+			return b.streamViaChat(ctx, req, onChunk)
+		}
 		return b.handleStreamError(resp, errBody)
 	}
 	defer drainAndClose(resp.Body)
 	return parseOpenAISSE(resp.Body, onChunk)
+}
+
+// streamViaChat serves a Stream call with one non-streaming request and
+// replays the reply as chunks: the answer (and split-off reasoning) as one
+// text chunk, then the Done chunk with tool calls, usage, finish reason and
+// the served model. A content-filter stop becomes an error chunk carrying
+// its usage, as the streaming parser emits it; every other failure is
+// returned before any chunk, like a stream's HTTP error.
+func (b *openaiBase) streamViaChat(ctx context.Context, req Request, onChunk func(Chunk)) error {
+	resp, err := b.chat(ctx, req)
+	if err != nil {
+		var held *heldUsageError
+		if errors.As(err, &held) {
+			onChunk(Chunk{Error: held.err, TokensIn: held.tokensIn, TokensOut: held.tokensOut, ServedModel: held.servedModel})
+			return nil
+		}
+		return err
+	}
+	if resp.Content != "" || resp.Reasoning != "" {
+		onChunk(Chunk{Text: resp.Content, Reasoning: resp.Reasoning, ServedModel: resp.ServedModel})
+	}
+	onChunk(Chunk{
+		Done:         true,
+		TokensIn:     resp.TokensIn,
+		TokensOut:    resp.TokensOut,
+		ToolCalls:    resp.ToolCalls,
+		FinishReason: resp.FinishReason,
+		ServedModel:  resp.ServedModel,
+	})
+	return nil
+}
+
+// streamRefusals remembers, per endpoint and deployment (repairsKey), the
+// models that refused `stream: true`, for learnedRepairsTTL: a separate memo
+// because send's learnedRepairs entry is overwritten by every repaired 200.
+var streamRefusals = struct {
+	sync.Mutex
+	m map[string]time.Time
+}{m: map[string]time.Time{}}
+
+func streamRefused(key string) bool {
+	streamRefusals.Lock()
+	defer streamRefusals.Unlock()
+	seen, ok := streamRefusals.m[key]
+	if !ok {
+		return false
+	}
+	if time.Since(seen) > learnedRepairsTTL {
+		delete(streamRefusals.m, key)
+		return false
+	}
+	return true
+}
+
+func rememberStreamRefusal(key string) {
+	streamRefusals.Lock()
+	defer streamRefusals.Unlock()
+	if len(streamRefusals.m) >= learnedRepairsMax {
+		streamRefusals.m = map[string]time.Time{}
+	}
+	streamRefusals.m[key] = time.Now()
 }
 
 // Bounds for drainAndClose: the chunked terminator after the terminal event
@@ -711,15 +913,14 @@ func drainAndClose(body io.ReadCloser) {
 // detection, the prose fallback) also require a non-empty error.message, as
 // they always have.
 func (b *openaiBase) handleStreamError(resp *http.Response, respBody []byte) error {
-	var apiErr openAIErrorResp
-	parsed := json.Unmarshal(respBody, &apiErr) == nil
+	apiErr, parsed := decodeOpenAIError(respBody)
 	msg := apiErr.Error.Message
 	if parsed && msg != "" && isContentFilterError(resp.StatusCode, apiErr, respBody) {
 		return fmt.Errorf("%w: %s", ErrContentFiltered, msg)
 	}
 	switch {
 	case resp.StatusCode == 401 || resp.StatusCode == 403:
-		return b.unauthorized(apiErr, respBody)
+		return b.unauthorized(resp.StatusCode, apiErr, respBody)
 	case resp.StatusCode == 429:
 		if b.handle429 != nil {
 			if handled := b.handle429(resp, apiErr); handled != nil {
@@ -849,8 +1050,8 @@ func rejectsEmbeddingDimensions(status int, errBody []byte) bool {
 	if status != http.StatusBadRequest {
 		return false
 	}
-	var apiErr openAIErrorResp
-	if err := json.Unmarshal(errBody, &apiErr); err != nil {
+	apiErr, ok := decodeOpenAIError(errBody)
+	if !ok {
 		return bytes.Contains(bytes.ToLower(errBody), []byte("dimensions"))
 	}
 	return strings.EqualFold(apiErr.Error.Param, "dimensions") ||
@@ -1059,11 +1260,9 @@ func (b *openaiBase) postEmbeddings(ctx context.Context, payload map[string]any)
 	if err != nil {
 		return nil, err
 	}
-	token, err := b.resolveToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("get %s token: %w", b.providerLabel, err)
+	if err := b.setAuth(ctx, httpReq); err != nil {
+		return nil, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
 	if b.extraHeaders != nil {
 		b.extraHeaders(httpReq, b.embeddingModel)

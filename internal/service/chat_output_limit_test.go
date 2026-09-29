@@ -67,17 +67,10 @@ func runScriptedStream(t *testing.T, p *scriptedChunkProvider, useTools bool) (t
 		t.Fatalf("StreamChatMessage: %v", err)
 	}
 	svc.BeginStream(context.Background(), streamID)
-	deadline := time.After(5 * time.Second)
-	for {
-		if _, ok := svc.activeStreams.Load(streamID); !ok {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("stream did not finish within 5s")
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
+	// Wait until the stream has SETTLED, not merely left activeStreams: the
+	// answer is persisted after that, and returning earlier let the test's
+	// TempDir cleanup race the write ("directory is not empty" on Windows).
+	waitStreamFinished(t, svc, streamID)
 	types, payloads = eventTypes(notifier)
 	return types, payloads, recorded
 }
@@ -163,9 +156,11 @@ func TestIsOutputLimitFinish(t *testing.T) {
 		"length":     true, // OpenAI-compatible chat completions, Responses incomplete
 		"max_tokens": true, // Claude
 		"MAX_TOKENS": true, // Gemini
-		"stop":       false,
-		"tool_calls": false,
-		"":           false,
+		// Claude 4.5+: the context window filled up during generation.
+		"model_context_window_exceeded": true,
+		"stop":                          false,
+		"tool_calls":                    false,
+		"":                              false,
 	} {
 		if got := isOutputLimitFinish(reason); got != want {
 			t.Errorf("isOutputLimitFinish(%q) = %v, want %v", reason, got, want)

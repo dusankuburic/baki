@@ -55,6 +55,8 @@ export const enSettings = {
     azureEndpointInvalid: 'The endpoint must be an absolute https:// URL',
     azureEndpointHttps: 'The endpoint must use https://',
     azureGuidInvalid: 'Must be a GUID, e.g. 123e4567-e89b-42d3-a456-426614174000',
+    azureTenantInvalid:
+      'Must be the directory (tenant) ID GUID or a domain of the tenant, e.g. contoso.onmicrosoft.com',
     // Load/remove/test outcomes and the confirm dialogs around destructive edits.
     azureLoadFailed: 'Failed to load the Azure AI Foundry configuration',
     azureRetry: 'Retry',

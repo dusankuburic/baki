@@ -31,6 +31,30 @@ func TestValidate_AzureFoundryAllowedHosts(t *testing.T) {
 		{"rejects single label", []string{"localhost"}, "at least two DNS labels"},
 		{"rejects trailing dot", []string{"apim.contoso.com."}, "at least two DNS labels"},
 		{"rejects ip literal", []string{"10.0.0.4"}, "IP literals"},
+		// Globs may not span hosts other parties can create: public suffixes
+		// (ICANN and private PSL sections) and multi-tenant Azure / hosting
+		// zones — at, above or inside them. Exact hosts there stay allowed.
+		{"rejects two-label public suffix glob", []string{"*.co.uk"}, "public suffix"},
+		{"rejects com.au glob", []string{"*.com.au"}, "public suffix"},
+		{"rejects apim glob", []string{"*.azure-api.net"}, "multi-tenant zone"},
+		{"rejects web apps glob", []string{"*.azurewebsites.net"}, "azurewebsites.net"},
+		{"rejects traffic manager glob", []string{"*.trafficmanager.net"}, "trafficmanager.net"},
+		{"rejects vm dns label glob", []string{"*.cloudapp.azure.com"}, "cloudapp.azure.com"},
+		{"rejects regional vm glob", []string{"*.westeurope.cloudapp.azure.com"}, "cloudapp.azure.com"},
+		{"rejects classic cloud service glob", []string{"*.cloudapp.net"}, "cloudapp.net"},
+		{"rejects front door glob", []string{"*.azurefd.net"}, "azurefd.net"},
+		{"rejects front door endpoint glob", []string{"*.z01.azurefd.net"}, "azurefd.net"},
+		{"rejects cdn glob", []string{"*.azureedge.net"}, "azureedge.net"},
+		{"rejects blob glob", []string{"*.blob.core.windows.net"}, "blob.core.windows.net"},
+		{"rejects parent of a zone", []string{"*.core.windows.net"}, "blob.core.windows.net"},
+		{"rejects azure.com glob", []string{"*.azure.com"}, "cloudapp.azure.com"},
+		{"rejects apim regional glob", []string{"*.regional.azure-api.net"}, "azure-api.net"},
+		{"exact apim host ok", []string{"contoso-ai.azure-api.net"}, ""},
+		{"exact web app host ok", []string{"contoso-ai.azurewebsites.net"}, ""},
+		{"exact front door host ok", []string{"contoso-ai-abc123.z01.azurefd.net"}, ""},
+		{"exact blob host ok", []string{"contoso.blob.core.windows.net"}, ""},
+		{"own domain glob ok", []string{"*.ai.contoso.co.uk"}, ""},
+		{"microsoft suffix glob ok", []string{"*.openai.azure.com"}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

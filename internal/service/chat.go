@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -213,6 +214,51 @@ func maxOutputTokens(req ai.Request) int {
 		return req.MaxTokens
 	}
 	return 4096
+}
+
+// modelOutputInfo reads the provider's listing entry for model: its output
+// ceiling (0 = unknown, as ai.ModelMaxOutputTokens) and the model it serves
+// when the id is only an alias for it (an Azure AI Foundry deployment name).
+func modelOutputInfo(ctx context.Context, p ai.Provider, model string) (maxOutput int, served string) {
+	models, err := p.Models(ctx)
+	if err != nil {
+		return 0, ""
+	}
+	for _, m := range models {
+		if m.ID == model {
+			return m.MaxOutputTokens, m.ServedModel
+		}
+	}
+	return 0, ""
+}
+
+// reasoningFloorTokens raises a max-tokens budget below the reasoning floor
+// of the turn's model (ai.ReasoningOutputFloor, known by its id or the model
+// the listing says it serves) to that floor; other budgets are returned
+// unchanged. Reasoning models count hidden reasoning against the same cap as
+// the answer, so the app's 4096 default often ended such a turn with no
+// answer at all (PROVIDER_OUTPUT_LIMIT). An unset budget (0) is raised too:
+// the providers' own defaults (4096–8192) are below the floor.
+func reasoningFloorTokens(maxTokens int, model, served string) int {
+	if floor := ai.ReasoningOutputFloor(model, served); floor > maxTokens {
+		return floor
+	}
+	return maxTokens
+}
+
+// turnGenerationParams is the turn's temperature and max tokens:
+// normalizeChatParams (ranges, the model's output ceiling, the context-window
+// backstop), then the reasoning floor (reasoningFloorTokens) re-capped by the
+// same ceiling and backstop — the floor never pushes a request past what the
+// model can produce.
+func turnGenerationParams(ctx context.Context, p ai.Provider, req models.ChatRequest) (float64, int) {
+	maxOutput, served := modelOutputInfo(ctx, p, req.Model)
+	ctxWindow := p.ContextLimit()
+	temperature, maxTokens := normalizeChatParams(req.Temperature, req.MaxTokens, ctxWindow, maxOutput)
+	if raised := reasoningFloorTokens(maxTokens, req.Model, served); raised != maxTokens {
+		_, maxTokens = normalizeChatParams(temperature, raised, ctxWindow, maxOutput)
+	}
+	return temperature, maxTokens
 }
 
 // errStreamIDInUse is returned by tryStartStream when a client-provided stream
@@ -571,9 +617,13 @@ func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models
 
 	// Reserve one maximum response before the check so starts that overlap
 	// see each other. req.MaxTokens is pre-clamp (normalizeChatParams runs in
-	// buildStreamRequest): reserving slightly more is the safe direction.
+	// buildStreamRequest): reserving slightly more is the safe direction. A
+	// reasoning model's turn is sent with at least the reasoning floor
+	// (turnGenerationParams), so that is what it reserves.
 	if ctl != nil {
-		ctl.setInflight(inFlightCost(inFlightPricing(ctx, provider, req.Model), 0, maxOutputTokens(ai.Request{MaxTokens: req.MaxTokens})))
+		_, served := modelOutputInfo(ctx, provider, req.Model)
+		reserveTokens := maxOutputTokens(ai.Request{MaxTokens: reasoningFloorTokens(req.MaxTokens, req.Model, served)})
+		ctl.setInflight(inFlightCost(inFlightPricing(ctx, provider, req.Model), 0, reserveTokens))
 	}
 	if err := s.enforceBudget(ctx, scope, orgID, 0, ctl); err != nil {
 		return turnSetup{}, err
@@ -675,14 +725,17 @@ func (s *ChatService) buildStreamRequest(ctx context.Context, ts turnSetup, scop
 	sysPrompt := scrubber.ScrubText(core.sysPrompt)
 	contextText := scrubber.ScrubText(core.contextText)
 
-	temperature, maxTokens := normalizeChatParams(req.Temperature, req.MaxTokens, ts.provider.ContextLimit(), ai.ModelMaxOutputTokens(ctx, ts.provider, req.Model))
+	temperature, maxTokens := turnGenerationParams(ctx, ts.provider, req)
 	aiReq = ai.Request{
 		SystemPrompt: sysPrompt,
 		Messages:     buildMessages(req, contextText, scrubber.ScrubText(guidelines)),
 		Model:        req.Model,
 		Temperature:  temperature,
-		MaxTokens:    maxTokens,
-		OrgID:        ts.orgID,
+		// An explicit temperature (0 included) is sent as chosen; unset,
+		// a zero Temperature keeps meaning "the provider's default".
+		TemperatureSet: req.TemperatureSet,
+		MaxTokens:      maxTokens,
+		OrgID:          ts.orgID,
 	}
 
 	// Enforce the model's context window before sending: truncate oldest
@@ -1114,6 +1167,30 @@ func (s *ChatService) runToolLoop(
 	// against a window the model doesn't actually have.
 	ctxLimit := ai.ContextLimitFor(ctx, provider, base.Model)
 
+	// replayItems: each assistant turn that issued tool calls carries the
+	// provider's own record of it (ai.Message.ProviderItems — Claude's
+	// thinking blocks with their signatures, a Responses run's encrypted
+	// reasoning), which the provider replays verbatim on the next request so
+	// the model keeps its reasoning across the tool step. A record is only
+	// valid while the history stays APPEND-ONLY and the request's system
+	// prompt, tools and provider do not change: Claude rejects (or drops) a
+	// thinking block whose earlier history was edited. So the first rewrite —
+	// truncation removing a message, the tools-unsupported fallback dropping
+	// the tools, a record from another provider — strips every record from
+	// the whole history and keeps them off for the rest of the loop (a record
+	// put back after its removal is just as invalid). Records live only in
+	// msgs: never persisted, never sent to the client.
+	replayItems := true
+	stopReplay := func() {
+		if replayItems {
+			replayItems = false
+			msgs = withoutProviderItems(msgs)
+		}
+	}
+	if hasForeignProviderItems(msgs, provider.ID()) {
+		stopReplay()
+	}
+
 	started := false
 	ensureStarted := func() bool {
 		if !started && awaitStart() {
@@ -1177,13 +1254,21 @@ func (s *ChatService) runToolLoop(
 			fail(ChatErrContextLimit, "conversation is too long for this model's context window — too many tool results, try a simpler question")
 			return
 		}
+		rewritten := !sameMessages(msgs, turn.Messages)
 		msgs = turn.Messages
+		if rewritten {
+			// Earlier messages were dropped: the history is no longer the
+			// one the recorded turns were produced after.
+			stopReplay()
+			turn.Messages = msgs
+		}
 
 		// Stream the turn: forward assistant text to the client as it arrives, and
 		// capture the tool calls / token usage from the terminal (Done) chunk.
 		var (
 			turnText   strings.Builder
 			turnCalls  []ai.ToolCall
+			turnItems  json.RawMessage
 			turnIn     int
 			turnOut    int
 			turnFinish string
@@ -1215,6 +1300,7 @@ func (s *ChatService) runToolLoop(
 				turnOut = c.TokensOut
 				turnCalls = c.ToolCalls
 				turnFinish = c.FinishReason
+				turnItems = c.ProviderItems
 			case c.Text != "":
 				if !ensureStarted() {
 					return
@@ -1241,6 +1327,7 @@ func (s *ChatService) runToolLoop(
 			// the whole turn with an opaque 400.
 			if errors.Is(streamErr, ai.ErrToolsUnsupported) && len(base.Tools) > 0 {
 				base.Tools = nil
+				stopReplay() // the tools changed under the recorded turns
 				if ensureStarted() {
 					emit("tool", map[string]interface{}{"name": "tools_unsupported", "label": "This model can't use tools — answering without them"})
 				}
@@ -1255,6 +1342,7 @@ func (s *ChatService) runToolLoop(
 			// in-stream error chunk (some providers stream the 400 body).
 			if errors.Is(chunkErr, ai.ErrToolsUnsupported) && len(base.Tools) > 0 {
 				base.Tools = nil
+				stopReplay()
 				if ensureStarted() {
 					emit("tool", map[string]interface{}{"name": "tools_unsupported", "label": "This model can't use tools — answering without them"})
 				}
@@ -1284,16 +1372,67 @@ func (s *ChatService) runToolLoop(
 			return
 		}
 
+		if truncatedToolTurn(turnCalls, turnFinish) {
+			// Cut off at the output limit mid-call, or arguments that are not
+			// JSON: running a call with incomplete arguments (a partial
+			// apply_fixes target list, a truncated query) would act on
+			// something the model never finished asking for. Fail like an
+			// exhausted budget; the audited wrapper recorded the usage.
+			fail(ChatErrOutputLimit, outputLimitMsg)
+			return
+		}
+
 		// Record the assistant turn that issued the calls (including any streamed
-		// preamble text), then run each tool and append its result so the next
-		// turn can see them.
-		msgs = append(msgs, ai.Message{Role: "assistant", Content: turnText.String(), ToolCalls: turnCalls})
+		// preamble text and, while replay is on, the provider's own record of
+		// the turn), then run each tool and append its result so the next turn
+		// can see them.
+		assistant := ai.Message{Role: "assistant", Content: turnText.String(), ToolCalls: turnCalls}
+		if replayItems && len(turnItems) > 0 {
+			assistant.ProviderItems = turnItems
+			assistant.ProviderItemsFrom = provider.ID()
+		}
+		msgs = append(msgs, assistant)
 		for _, r := range s.execTurnTools(emit, ctl, ensureStarted, mem, tctx, turnCalls) {
 			msgs = append(msgs, ai.Message{Role: "tool", Content: r.result, ToolCallID: r.id})
 		}
 	}
 
 	fail(ChatErrToolLoopLimit, fmt.Sprintf("tool loop exceeded %d iterations without a final answer", maxToolIterations))
+}
+
+// withoutProviderItems is msgs with every provider replay record removed
+// (ai.Message.ProviderItems / ProviderItemsFrom). A fresh slice when any
+// message carried one — msgs may share its backing array with the caller's
+// request — else msgs itself.
+func withoutProviderItems(msgs []ai.Message) []ai.Message {
+	if !slices.ContainsFunc(msgs, func(m ai.Message) bool { return len(m.ProviderItems) > 0 || m.ProviderItemsFrom != "" }) {
+		return msgs
+	}
+	out := make([]ai.Message, len(msgs))
+	copy(out, msgs)
+	for i := range out {
+		out[i].ProviderItems = nil
+		out[i].ProviderItemsFrom = ""
+	}
+	return out
+}
+
+// hasForeignProviderItems reports a replay record written by a provider
+// other than providerID: the provider changed under the recorded turns.
+func hasForeignProviderItems(msgs []ai.Message, providerID string) bool {
+	return slices.ContainsFunc(msgs, func(m ai.Message) bool {
+		return len(m.ProviderItems) > 0 && m.ProviderItemsFrom != providerID
+	})
+}
+
+// sameMessages reports whether after is before unchanged — the same slice
+// (truncateForContextWindow returns the request's own slice when nothing had
+// to go, and a new one when it dropped messages).
+func sameMessages(before, after []ai.Message) bool {
+	if len(before) != len(after) {
+		return false
+	}
+	return len(before) == 0 || &before[0] == &after[0]
 }
 
 // runPromptToolLoop is the prompt-based fallback for providers that don't

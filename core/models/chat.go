@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ToolCallRecord is one tool invocation behind an assistant message — the
 // transparency trail. It mirrors the wire `tool_result` event and is persisted
@@ -117,6 +120,30 @@ type ChatRequest struct {
 	// not a UUID is ignored and the server mints its own id.
 	UserMessageID      string `json:"userMessageId,omitempty"`
 	AssistantMessageID string `json:"assistantMessageId,omitempty"`
+	// TemperatureSet reports that the request body carried a "temperature"
+	// key, so an explicit 0 (deterministic sampling) is honoured instead of
+	// being read as "provider default". Set by UnmarshalJSON; never on the wire.
+	TemperatureSet bool `json:"-"`
+}
+
+// UnmarshalJSON decodes a ChatRequest and records whether "temperature" was
+// present (TemperatureSet): Temperature alone cannot tell an explicit 0 from
+// an omitted field.
+func (r *ChatRequest) UnmarshalJSON(data []byte) error {
+	type plain ChatRequest
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	var probe struct {
+		Temperature *json.RawMessage `json:"temperature"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	*r = ChatRequest(p)
+	r.TemperatureSet = probe.Temperature != nil && string(*probe.Temperature) != "null"
+	return nil
 }
 
 // ConversationKey returns the key under which this turn's conversation is

@@ -581,7 +581,7 @@ func TestEntraTokenSource_OtherFailuresAreOneLine(t *testing.T) {
 		want string
 	}{
 		"token endpoint outage": {outage, "AADSTS50001 temporarily_unavailable"},
-		"network failure":       {network, "no such host"},
+		"network failure":       {network, "does not resolve"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := newEntraTokenSource(erroringCred{tc.err}).Token(context.Background())

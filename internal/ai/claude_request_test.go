@@ -104,10 +104,11 @@ func TestClaude_OpusOmitsTemperatureUsesThinking(t *testing.T) {
 	}
 }
 
-// TestClaude_OpusOmitsThinkingWithTools verifies the agentic-loop guard: when
-// tools are attached, adaptive thinking is NOT enabled on Opus (the API would
-// require preserving thinking blocks across tool turns). Temperature stays
-// omitted regardless.
+// TestClaude_OpusOmitsThinkingWithTools pins the agentic-loop setting: with
+// tools attached the thinking field stays unset (Opus 4.7/4.8 then run the
+// loop without thinking; on 5.x/Fable/Mythos an omitted field is adaptive
+// thinking, whose blocks the chat service's loop replays verbatim).
+// Temperature stays omitted regardless.
 func TestClaude_OpusOmitsThinkingWithTools(t *testing.T) {
 	body := captureClaudeBody(t, Request{
 		Model:       "claude-opus-4-8",
@@ -119,7 +120,7 @@ func TestClaude_OpusOmitsThinkingWithTools(t *testing.T) {
 		t.Error("temperature must be omitted for Opus 4.7+")
 	}
 	if _, ok := body["thinking"]; ok {
-		t.Error("thinking must be omitted when tools are present (block-preservation requirement)")
+		t.Error("thinking must be omitted when tools are present")
 	}
 }
 

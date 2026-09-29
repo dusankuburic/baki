@@ -115,8 +115,9 @@ func (h *OrgHandler) orgProviderKeysAvailable(w http.ResponseWriter) bool {
 // OWN credential always wins over it for chat (ProviderFactory.ForOrg).
 // Usage on the shared credential is attributed to the org and capped by the
 // org's daily budget like every org-scoped turn; the row goes with the
-// organisation, and it is disabled when the admin who saved it is demoted,
-// removed or deletes their account (disableLentCredential).
+// organisation, and it is disabled when the admin who supplied its secret
+// (the lender) or last saved it is demoted, removed or deletes their account
+// (disableLentCredential).
 
 // orgAzureFoundrySaveRequest is the org save body: the Azure AI Foundry
 // document plus the compare-and-swap token. UpdatedAt is the updatedAt the
@@ -140,7 +141,7 @@ type statusResponse struct {
 }
 
 // @Summary      Get the organisation's shared Azure AI Foundry configuration
-// @Description  Returns the org's shared Azure AI Foundry settings without any secret: endpoint, auth mode, whether a secret is stored, the Entra ID tenant and client IDs, the project endpoint and the deployment names, plus who shared it (updatedBy: the admin's display name, else email) and when (updatedAt: RFC 3339 with sub-second precision — send it back verbatim as the save's compare-and-swap token). Any member, viewers included (only admins and members run on it). {configured:false, shared:false} when the org has none; 500 ORG_CREDENTIAL_UNREADABLE when it has one that cannot be read (a deployment key rotation, a database failure).
+// @Description  Returns the org's shared Azure AI Foundry settings without any secret: endpoint, auth mode, whether a secret is stored, the Entra ID tenant and client IDs, the project endpoint and the deployment names, plus who shared it (updatedBy: the display name, else email, of the admin who supplied the stored secret — an edit by another admin that kept the secret does not change it) and when it was last saved (updatedAt: RFC 3339 with sub-second precision — send it back verbatim as the save's compare-and-swap token). Any member, viewers included (only admins and members run on it). {configured:false, shared:false} when the org has none; 500 ORG_CREDENTIAL_UNREADABLE when it has one that cannot be read (a deployment key rotation, a database failure).
 // @Tags         org
 // @Param        id path string true "Org ID"
 // @Produce      json
@@ -166,7 +167,9 @@ func (h *OrgHandler) handleOrgAzureFoundryConfigGet(w http.ResponseWriter, r *ht
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	cfg.UpdatedBy = h.memberLabel(r.Context(), cfg.UpdatedByID)
+	// The label names the credential's lender — whose secret members run on
+	// — not the admin who last edited a deployment name.
+	cfg.UpdatedBy = h.memberLabel(r.Context(), cfg.SecretSetByID)
 	render.JSON(w, cfg)
 }
 
@@ -190,7 +193,7 @@ func (h *OrgHandler) memberLabel(ctx context.Context, userID string) string {
 }
 
 // @Summary      Save the organisation's shared Azure AI Foundry configuration
-// @Description  Validates and stores the org's shared Azure AI Foundry endpoint, credential (API key or Microsoft Entra ID service principal), optional project endpoint and deployment names, for admins and members without a configuration of their own. Org admins only. An omitted secret keeps the stored one only while the endpoint host (and the project endpoint's host) is unchanged — a changed endpoint needs the secret re-entered (MISSING_SECRET). Compare-and-swap: send back the updatedAt the GET returned (omit it only when the GET said configured:false); when the stored configuration changed since — another admin saved or removed it — nothing is written and the answer is 409 CONFLICT (reload, then re-apply). The reply's updatedAt is the token for the next save.
+// @Description  Validates and stores the org's shared Azure AI Foundry endpoint, credential (API key or Microsoft Entra ID service principal), optional project endpoint and deployment names, for admins and members without a configuration of their own. Org admins only. An omitted secret keeps the stored one only while the endpoint host (and the project endpoint's host) is unchanged — a changed endpoint needs the secret re-entered (MISSING_SECRET); the admin who supplies the secret becomes the credential's lender (it is disabled when they stop being an admin), an edit that keeps it does not. The body must be exactly one JSON object with known fields only (INVALID_CONFIG otherwise). Compare-and-swap: send back the updatedAt the GET returned (omit it only when the GET said configured:false); when the stored configuration changed since — another admin saved or removed it — nothing is written and the answer is 409 CONFLICT (reload, then re-apply). The reply's updatedAt is the token for the next save.
 // @Tags         org
 // @Param        id path string true "Org ID"
 // @Param        request body orgAzureFoundrySaveRequest true "The configuration plus the updatedAt it was loaded with"
@@ -210,13 +213,10 @@ func (h *OrgHandler) handleOrgAzureFoundryConfigSave(w http.ResponseWriter, r *h
 	if org == nil {
 		return
 	}
-	// Same strict decode as the per-user route: the stored document is
-	// parsed with DisallowUnknownFields, so a misspelled field must fail
-	// here rather than vanish. 64 KiB is far above the 2 KiB document cap.
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
-	dec.DisallowUnknownFields()
+	// Same strict decode as the per-user route: unknown fields and trailing
+	// data are refused.
 	var req orgAzureFoundrySaveRequest
-	if err := dec.Decode(&req); err != nil {
+	if err := decodeAzureConfigBody(w, r, &req); err != nil {
 		render.ErrorWithCode(w, fmt.Errorf("invalid Azure AI Foundry configuration: %w", err), http.StatusBadRequest, ai.AzureCfgErrInvalidConfig)
 		return
 	}
@@ -236,10 +236,12 @@ func (h *OrgHandler) handleOrgAzureFoundryConfigSave(w http.ResponseWriter, r *h
 		}
 		return
 	}
-	// Never the secrets — only that the org's provider changed and how it
-	// authenticates.
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "org", org.ID,
-		map[string]string{"op": "save", "provider": ai.AzureFoundryProviderID, "authMode": req.Auth.Mode})
+	// Never the secrets: where the org's credential now goes, whose it is,
+	// and whether the stored secret was carried over (a saved document
+	// always holds one, so one the request omitted was kept).
+	meta := azureConfigAuditMeta(req.AzureFoundryConfig, !req.HasSecret())
+	meta["provider"] = ai.AzureFoundryProviderID
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "org", org.ID, meta)
 	render.JSON(w, orgAzureFoundrySaveResponse{Status: "ok", UpdatedAt: updatedAt})
 }
 
@@ -311,8 +313,9 @@ const (
 
 // disableLentCredential disables the org's shared Azure AI Foundry
 // credential when userID — who just stopped being an admin of orgID — is the
-// admin who saved it, and audits it (keys.save, op "disable", like the other
-// org credential rows). Best effort: the membership change already happened,
+// admin who supplied its secret (its lender, even after another admin edited
+// the document without re-entering it) or last saved it, and audits it
+// (keys.save, op "disable", like the other org credential rows). Best effort: the membership change already happened,
 // so a failure is logged, not reported to the caller.
 func disableLentCredential(r *http.Request, backend storageif.StorageBackend, trustedProxies []string, providers *service.ProviderService, orgID, userID, reason string) {
 	if providers == nil || !providers.OrgKeysAvailable() {
@@ -329,7 +332,7 @@ func disableLentCredential(r *http.Request, backend storageif.StorageBackend, tr
 }
 
 // disableLentCredentials is disableLentCredential for every org whose shared
-// credential userID saved (account erasure).
+// credential userID lent or last saved (account erasure).
 func disableLentCredentials(r *http.Request, backend storageif.StorageBackend, trustedProxies []string, providers *service.ProviderService, userID, reason string) {
 	if providers == nil || !providers.OrgKeysAvailable() {
 		return

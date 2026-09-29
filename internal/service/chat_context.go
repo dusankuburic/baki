@@ -436,10 +436,21 @@ func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowD
 // rather than appended as a separate user message — two consecutive user-role
 // messages are rejected by many providers (400). ExcludeContext or empty
 // context skips the merge.
+//
+// History comes from the client or a saved conversation, so only the "user"
+// and "assistant" roles are passed on (historyRole); any other — "system",
+// "developer", "tool", anything unknown — is dropped. A client-supplied
+// system or developer message would otherwise reach OpenAI-compatible and
+// Claude models with operator authority over the app's own system prompt.
 func buildMessages(req models.ChatRequest, contextText, guidelines string) []ai.Message {
-	messages := make([]ai.Message, len(req.Messages))
+	messages := make([]ai.Message, 0, len(req.Messages)+1)
 	for i, m := range req.Messages {
-		messages[i] = ai.Message{Role: m.Role, Content: scrubber.ScrubText(m.Content)}
+		role, ok := historyRole(m.Role)
+		if !ok {
+			logger.Debug("chat: dropping a history message with a role history may not carry", "role", oneLineRole(m.Role), "index", i)
+			continue
+		}
+		messages = append(messages, ai.Message{Role: role, Content: scrubber.ScrubText(m.Content)})
 	}
 	userContent := scrubber.ScrubText(req.UserMessage)
 	// The per-turn RAG guidelines ride in the user turn (included regardless
@@ -453,6 +464,32 @@ func buildMessages(req models.ChatRequest, contextText, guidelines string) []ai.
 		userContent = "Context:\n" + contextText + "\n\n" + userContent
 	}
 	return append(messages, ai.Message{Role: "user", Content: userContent})
+}
+
+// historyRole canonicalises a history message's role: "user" and
+// "assistant" (any case, surrounding space trimmed) pass; every other role
+// is refused.
+func historyRole(role string) (string, bool) {
+	switch r := strings.ToLower(strings.TrimSpace(role)); r {
+	case "user", "assistant":
+		return r, true
+	}
+	return "", false
+}
+
+// oneLineRole bounds a refused role for the log: it is client input.
+func oneLineRole(role string) string {
+	const maxRoleLog = 32
+	role = strings.Map(func(r rune) rune {
+		if r < ' ' || r == 0x7f {
+			return -1
+		}
+		return r
+	}, role)
+	if r := []rune(role); len(r) > maxRoleLog {
+		return string(r[:maxRoleLog]) + "…"
+	}
+	return role
 }
 
 // promptTokenCeiling is a tokenizer-free upper bound on the prompt's token

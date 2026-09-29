@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
 )
 
@@ -42,14 +43,15 @@ type KeyStore interface {
 // and run on by members who have no credential of their own. Nil on the
 // desktop and in local mode (no organisations). The secret is write-only —
 // GetOrg builds providers and merges an edit that omits the secret; it is
-// never rendered to a client.
+// never rendered to a client. Each row records its last writer and its
+// secret's lender (see storageif.OrgSecretStore).
 type OrgKeyStore interface {
 	SaveOrg(orgID, provider, key, updatedBy string) error
 	GetOrg(orgID, provider string) (string, error)
 	HasOrg(orgID, provider string) (bool, error)
 	DeleteOrg(orgID, provider string) error
-	OrgKeyMeta(orgID, provider string) (updatedBy string, updatedAt time.Time, ok bool, err error)
-	SaveOrgIfUnchanged(orgID, provider, key, updatedBy string, expected time.Time) (updatedAt time.Time, ok bool, err error)
-	DeleteOrgIfUpdatedBy(orgID, provider, updatedBy string) (deleted bool, err error)
-	OrgsWithKeyUpdatedBy(provider, updatedBy string) ([]string, error)
+	OrgKeyMeta(orgID, provider string) (info storageif.OrgKeyInfo, ok bool, err error)
+	SaveOrgIfUnchanged(orgID, provider, key, updatedBy string, secretCarried bool, expected time.Time) (updatedAt time.Time, ok bool, err error)
+	DeleteOrgIfSavedBy(orgID, provider, userID string) (deleted bool, err error)
+	OrgsWithKeySavedBy(provider, userID string) ([]string, error)
 }

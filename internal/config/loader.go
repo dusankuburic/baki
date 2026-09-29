@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 // parseIntOrError parses a base-10 integer env var, returning a clear error
@@ -573,6 +575,15 @@ func validateTLSConfig(cfg *Config) error {
 // HOST_NOT_ALLOWED and no boot diagnostic pointed at the variable — while
 // "*", "*." and a TLD-only glob such as "*.com" silently widened the
 // allow-list to nearly any host. IP literals are never Azure endpoints.
+//
+// A glob must not span hosts that other parties can create: one over a
+// public suffix ("*.co.uk", "*.azurewebsites.net" — the Public Suffix List,
+// ICANN and private sections) or over, above or inside a multi-tenant Azure /
+// hosting zone (multiTenantHostZones: any Azure customer can stand up
+// "<anything>.azure-api.net" and have the server send users' credentials and
+// trust its answers). Exact hosts in those zones stay allowed — an
+// operator's own API Management front is "contoso-ai.azure-api.net", listed
+// as such.
 func validateAzureFoundryAllowedHosts(entries []string) error {
 	for _, raw := range entries {
 		e := strings.ToLower(strings.TrimSpace(raw))
@@ -594,8 +605,48 @@ func validateAzureFoundryAllowedHosts(entries []string) error {
 		if net.ParseIP(name) != nil {
 			return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q: IP literals are never allowed as Azure endpoints", raw)
 		}
+		if name != e { // a "*.suffix" glob
+			if zone := multiTenantZoneOf(name); zone != "" {
+				return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q: %q is a multi-tenant zone where anyone can create a host — list the exact host (e.g. contoso-ai.%s) instead of a glob", raw, zone, zone)
+			}
+			if ps, _ := publicsuffix.PublicSuffix(name); ps == name {
+				return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q: %q is a public suffix, so the glob would allow every domain registered under it — list exact hosts", raw, name)
+			}
+		}
 	}
 	return nil
+}
+
+// multiTenantHostZones are Azure and hosting DNS zones in which any customer
+// can create a host name (an API Management instance, a web app, a Traffic
+// Manager profile, a VM's DNS label, a Front Door or CDN endpoint, a storage
+// account, …). A PAD_AZURE_FOUNDRY_ALLOWED_HOSTS glob may not cover one.
+var multiTenantHostZones = []string{
+	"azure-api.net",
+	"azurewebsites.net",
+	"trafficmanager.net",
+	"cloudapp.azure.com",
+	"cloudapp.net",
+	"azurefd.net",
+	"azureedge.net",
+	"blob.core.windows.net",
+	"web.core.windows.net",
+	"azurecontainerapps.io",
+	"azurecontainer.io",
+	"azurestaticapps.net",
+	"azure-mobile.net",
+}
+
+// multiTenantZoneOf returns the multi-tenant zone a glob over name would
+// reach — name is the zone, a parent of it ("azure.com" covers
+// "cloudapp.azure.com") or inside it ("regional.azure-api.net") — or "".
+func multiTenantZoneOf(name string) string {
+	for _, z := range multiTenantHostZones {
+		if name == z || strings.HasSuffix(z, "."+name) || strings.HasSuffix(name, "."+z) {
+			return z
+		}
+	}
+	return ""
 }
 
 // validateTrustedProxies enforces that each entry in PAD_TRUSTED_PROXIES is

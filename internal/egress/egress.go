@@ -43,7 +43,11 @@
 // desktop/local mode where the "tenant" is the single user running the app on
 // their own machine and a target on localhost is exactly what they meant. The
 // loopback allowance is loopback only: link-local and RFC1918 stay refused
-// under both policies.
+// under it. AllowPrivateNetwork is the operator's opt-in for private-link AI
+// endpoints (PAD_AI_ALLOW_PRIVATE_EGRESS): RFC 1918 and IPv6 unique-local
+// addresses pass, everything else IsInternalIP names — loopback, link-local
+// (169.254.169.254 metadata), unspecified, the Azure platform address — stays
+// refused.
 package egress
 
 import (
@@ -52,7 +56,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -95,21 +101,96 @@ const (
 	// own machine is exactly what they meant. Nothing else is relaxed:
 	// link-local and private ranges stay refused.
 	AllowLoopback
+	// AllowPrivateNetwork is BlockInternal that additionally permits RFC 1918
+	// (10/8, 172.16/12, 192.168/16) and IPv6 unique-local (fc00::/7)
+	// addresses — the private-link case, where an allow-listed AI endpoint
+	// resolves to a private address by design (PAD_AI_ALLOW_PRIVATE_EGRESS).
+	// Nothing else is relaxed: loopback (a literal "localhost" included),
+	// link-local (169.254.169.254 metadata), unspecified and the other
+	// special-purpose ranges IsInternalIP names stay refused, and an RFC 1918
+	// address embedded in a NAT64 / 6to4 address does not count as private.
+	AllowPrivateNetwork
+)
+
+// Refuses reports whether the policy refuses a connection to ip: every
+// address IsInternalIP names, except — under AllowPrivateNetwork — RFC 1918
+// and unique-local ones. AllowLoopback's loopback allowance is by host name
+// (see IsLoopbackHost), not by address: a name that merely resolves to
+// loopback is refused under every policy.
+func (p Policy) Refuses(ip net.IP) bool {
+	if !IsInternalIP(ip) {
+		return false
+	}
+	return p != AllowPrivateNetwork || !ip.IsPrivate()
+}
+
+// internalPrefixes are the special-purpose ranges IsInternalIP refuses on top
+// of the net.IP predicates.
+var internalPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),        // "this network" (RFC 1122); 0.x reaches loopback on some stacks
+	netip.MustParsePrefix("100.64.0.0/10"),    // carrier-grade NAT shared space (RFC 6598), cloud-internal on several providers
+	netip.MustParsePrefix("168.63.129.16/32"), // Azure platform: wireserver, DNS, health probes — reachable from every Azure VM
+	netip.MustParsePrefix("192.0.0.0/24"),     // IETF protocol assignments (RFC 6890)
+	netip.MustParsePrefix("198.18.0.0/15"),    // benchmarking (RFC 2544), used for internal plumbing
+}
+
+// Prefixes of IPv6 addresses that carry an IPv4 address the network
+// translates to: a NAT64 gateway (RFC 6052 well-known prefix) connects to the
+// last 32 bits, a 6to4 relay (RFC 3056) to bits 16–47. IsInternalIP judges
+// the embedded address, so 64:ff9b::a9fe:a9fe is 169.254.169.254.
+var (
+	nat64Prefix   = netip.MustParsePrefix("64:ff9b::/96")
+	sixToFourPref = netip.MustParsePrefix("2002::/16")
 )
 
 // IsInternalIP is the single definition of "an address the outside world
 // should not be able to make this server reach": loopback, link-local (unicast
 // and multicast — 169.254.0.0/16 is where cloud metadata lives), private
-// (RFC 1918 and IPv6 unique-local) and unspecified (0.0.0.0 / ::, which some
-// stacks route to loopback).
+// (RFC 1918 and IPv6 unique-local), unspecified (0.0.0.0 / ::, which some
+// stacks route to loopback), "this network" 0.0.0.0/8, carrier-grade NAT
+// 100.64.0.0/10, the Azure platform address 168.63.129.16, IETF protocol
+// assignments 192.0.0.0/24 and benchmarking 198.18.0.0/15. A NAT64
+// (64:ff9b::/96) or 6to4 (2002::/16) address is judged by the IPv4 address it
+// embeds, and an IPv4-mapped IPv6 address by its IPv4 form.
 //
 // Both layers (validation-time RejectPrivateHost and dial-time
 // GuardDialContext) use it, so they cannot drift — previously the dial guard
 // omitted IsLoopback while the resolver check included it, which is precisely
 // how a literal http://127.0.0.1 passed both.
 func IsInternalIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsPrivate() || ip.IsUnspecified()
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsPrivate() || ip.IsUnspecified() {
+		return true
+	}
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	addr = addr.Unmap()
+	if v4, ok := embeddedIPv4(addr); ok {
+		return IsInternalIP(net.IP(v4.AsSlice()))
+	}
+	for _, p := range internalPrefixes {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// embeddedIPv4 extracts the IPv4 address a NAT64 or 6to4 address carries.
+func embeddedIPv4(a netip.Addr) (netip.Addr, bool) {
+	if !a.Is6() {
+		return netip.Addr{}, false
+	}
+	b := a.As16()
+	switch {
+	case nat64Prefix.Contains(a):
+		return netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]}), true
+	case sixToFourPref.Contains(a):
+		return netip.AddrFrom4([4]byte{b[2], b[3], b[4], b[5]}), true
+	}
+	return netip.Addr{}, false
 }
 
 // IsLoopbackHost reports whether host names the local machine, by literal IP
@@ -133,8 +214,8 @@ func RejectPrivateHost(host string, policy Policy) error {
 
 // RejectPrivateHostContext is the validation-time half of the guard: it
 // resolves host with r (LookupIPAddr short-circuits literal IPs, so those
-// never touch DNS) and refuses it when ANY resolved address is internal per
-// IsInternalIP. Under AllowLoopback a loopback host passes without
+// never touch DNS) and refuses it when the policy refuses ANY resolved address
+// (Policy.Refuses). Under AllowLoopback a loopback host passes without
 // resolution — the desktop/local escape hatch, opted into explicitly. An
 // empty host is an error. The lookup honours ctx (the request's deadline,
 // the client's disconnect): on Windows/cgo the system resolver can block
@@ -160,7 +241,7 @@ func RejectPrivateHostContext(ctx context.Context, r *net.Resolver, host string,
 		return fmt.Errorf("host %q does not resolve: %w", host, err)
 	}
 	for _, a := range addrs {
-		if IsInternalIP(a.IP) {
+		if policy.Refuses(a.IP) {
 			return fmt.Errorf("host %q resolves to a private/loopback address (%s) — internal targets are not allowed", host, a.IP)
 		}
 	}
@@ -198,7 +279,7 @@ func GuardDialContext(d *net.Dialer, policy Policy) func(ctx context.Context, ne
 	prevCtx, prev := d.ControlContext, d.Control
 	guarded.Control = nil
 	guarded.ControlContext = func(ctx context.Context, network, address string, c syscall.RawConn) error {
-		if err := checkDialAddress(address); err != nil {
+		if err := checkDialAddress(address, policy); err != nil {
 			return err
 		}
 		switch {
@@ -223,7 +304,7 @@ func GuardDialContext(d *net.Dialer, policy Policy) func(ctx context.Context, ne
 
 // checkDialAddress is the connect-time verdict on the "ip:port" the dialer is
 // about to connect to.
-func checkDialAddress(address string) error {
+func checkDialAddress(address string, policy Policy) error {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
 		return fmt.Errorf("egress: refusing connection to unparseable address %q", address)
@@ -232,7 +313,7 @@ func checkDialAddress(address string) error {
 	if ip == nil {
 		return fmt.Errorf("egress: refusing connection to unparseable address %q", address)
 	}
-	if IsInternalIP(ip) {
+	if policy.Refuses(ip) {
 		return fmt.Errorf("%w %s", ErrInternalAddress, ip)
 	}
 	return nil
@@ -424,7 +505,7 @@ func checkProxiedTarget(ctx context.Context, r *net.Resolver, host string, polic
 		return nil // a local resolution failure is not a verdict: the proxy resolves the name
 	}
 	for _, a := range addrs {
-		if IsInternalIP(a.IP) {
+		if policy.Refuses(a.IP) {
 			return fmt.Errorf("%w %s (target %q, via proxy)", ErrInternalAddress, a.IP, host)
 		}
 	}
@@ -457,6 +538,77 @@ func GuardedTransport(policy Policy) *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	GuardTransport(t, newGuardDialer(), policy)
 	return t
+}
+
+// transportFailureMarkers recognise a connection failure in an error whose
+// chain was flattened to text (azidentity reports a failed token request as a
+// string): the net and net/http phrasings of DNS, dial, proxy and TLS
+// failures, and this package's own refusals.
+var transportFailureMarkers = []string{
+	"dial tcp", "dial udp", "proxyconnect", "no such host", "connection refused",
+	"connection reset", "i/o timeout", "network is unreachable", "host is unreachable",
+	"tls: ", "x509: ", "egress: refusing",
+}
+
+// DescribeFailure maps a failed outbound connection to fixed, client-safe
+// copy ("the host name does not resolve"). The raw text of a transport or
+// guard failure names addresses — the target's resolved IP, the operator's
+// HTTP(S) proxy — that must stay in the server log, never in a response. ok
+// is false when err is not a connection failure (an HTTP answer, a provider
+// error, a validation error), whose own text is the caller's to show.
+//
+// Recognised: this package's refusals (ErrInternalAddress,
+// ErrUnverifiedTarget), *url.Error / *net.OpError / *net.DNSError anywhere
+// in the chain, and the same failures in an error flattened to text.
+func DescribeFailure(err error) (msg string, ok bool) {
+	if err == nil {
+		return "", false
+	}
+	text := err.Error()
+	switch {
+	case errors.Is(err, ErrInternalAddress) || strings.Contains(text, ErrInternalAddress.Error()):
+		return "the host resolves to an internal network address (private, loopback or link-local), which this server does not connect to", true
+	case errors.Is(err, ErrUnverifiedTarget) || strings.Contains(text, ErrUnverifiedTarget.Error()):
+		return "the host could not be verified before the server's outbound proxy connected to it", true
+	}
+	var (
+		urlErr *url.Error
+		opErr  *net.OpError
+		dnsErr *net.DNSError
+	)
+	typed := errors.As(err, &urlErr) || errors.As(err, &opErr) || errors.As(err, &dnsErr)
+	lower := strings.ToLower(text)
+	if !typed {
+		flattened := false
+		for _, m := range transportFailureMarkers {
+			if strings.Contains(lower, m) {
+				flattened = true
+				break
+			}
+		}
+		if !flattened {
+			return "", false
+		}
+	}
+	var netErr net.Error
+	switch {
+	case dnsErr != nil || strings.Contains(lower, "no such host"):
+		return "the host name does not resolve", true
+	case strings.Contains(lower, "proxyconnect"):
+		return "the connection through the server's outbound proxy failed", true
+	case strings.Contains(lower, "x509: ") || strings.Contains(lower, "tls: ") || strings.Contains(lower, "certificate"):
+		return "the TLS handshake failed (an untrusted certificate or an intercepting proxy)", true
+	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) ||
+		strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded"):
+		return "the connection timed out", true
+	case strings.Contains(lower, "connection refused"):
+		return "the connection was refused", true
+	case strings.Contains(lower, "connection reset") || strings.Contains(lower, "eof"):
+		return "the connection was closed unexpectedly", true
+	case strings.Contains(lower, "unreachable"):
+		return "the network is unreachable", true
+	}
+	return "the connection failed", true
 }
 
 // NoRedirects is an http.Client CheckRedirect that refuses to follow 3xx.

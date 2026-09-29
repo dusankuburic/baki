@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -33,26 +35,60 @@ import (
 // server-side (web search, file search, MCP, code interpreter) surface as
 // ToolEvent chunks for the client's tool trail.
 //
-// Only function calls and text carry over between tool-loop iterations:
-// under store:false the service cannot resolve replayed hosted items (web
-// search, MCP, code interpreter) or reasoning, so an agent may repeat a
-// hosted step in a later iteration (accepted risk R15).
+// Between tool-loop iterations the run's own output items carry over
+// (stateless replay): every request asks for include:
+// ["reasoning.encrypted_content"], the run's ordered output items — reasoning
+// with its encrypted content, the hosted tool items the Responses input
+// accepts (web search, file search, code interpreter, image generation, MCP,
+// computer use, tool search) and the function calls with their item ids —
+// ride on the Done chunk / Response as ProviderItems, and the chat service's
+// tool loop hands them back on the assistant turn. responsesInput replays
+// them verbatim instead of rebuilding the turn from its text and tool
+// calls, so a reasoning agent keeps its chain of thought across a tool step
+// and a hosted step is not repeated. Foundry's own tool items (Bing grounding,
+// OpenAPI, A2A, …) are not Responses input items and are dropped from the
+// replay; an agent may repeat those steps (accepted risk R15). A service that
+// rejects the replay (or the include) gets the legacy rebuild instead, once
+// per agent and remembered (see postResponses).
 
 type responsesRequest struct {
 	// AgentReference names the agent. The service rejects the older `agent`
 	// key ("The 'agent' property is deprecated. Use 'agent_reference'").
-	AgentReference  *agentRef       `json:"agent_reference,omitempty"`
-	Model           string          `json:"model,omitempty"`
-	Instructions    string          `json:"instructions,omitempty"`
-	Input           []responsesItem `json:"input"`
-	Tools           []any           `json:"tools,omitempty"`
-	Stream          bool            `json:"stream,omitempty"`
-	Store           *bool           `json:"store,omitempty"`
-	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
+	AgentReference *agentRef `json:"agent_reference,omitempty"`
+	Model          string    `json:"model,omitempty"`
+	Instructions   string    `json:"instructions,omitempty"`
+	// Input holds responsesItem values (the rebuilt history) and, for a
+	// replayed assistant turn, its provider items as json.RawMessage.
+	Input []any `json:"input"`
+	// Include asks for reasoning.encrypted_content, which makes a reasoning
+	// item replayable under store:false. A rejecting endpoint has it dropped
+	// by the parameter repair.
+	Include         []string `json:"include,omitempty"`
+	Tools           []any    `json:"tools,omitempty"`
+	Stream          bool     `json:"stream,omitempty"`
+	Store           *bool    `json:"store,omitempty"`
+	MaxOutputTokens int      `json:"max_output_tokens,omitempty"`
 	// No temperature: the agent definition (portal / CI) owns its sampling
 	// settings, and baki's provider-level temperature must not override them
 	// — it also cost reasoning-backed agents a rejection round trip per turn.
+
+	// legacyInput is Input rebuilt without any replayed provider items (nil
+	// when nothing was replayed): postResponses' fallback when the service
+	// rejects a replayed item.
+	legacyInput []any
+	// workflow marks a workflow agent: the request carries the preview
+	// opt-in header (see agentRequest).
+	workflow bool
 }
+
+// responsesIncludeEncryptedReasoning is the include value that returns a
+// reasoning item's encrypted_content.
+const responsesIncludeEncryptedReasoning = "reasoning.encrypted_content"
+
+// responsesReplayParam is the learned-repairs marker (not a wire parameter)
+// for an agent whose endpoint refused the provider-item replay or the
+// include: its requests go out as the legacy rebuild without include.
+const responsesReplayParam = "input.provider_items"
 
 type agentRef struct {
 	Type string `json:"type"`
@@ -71,36 +107,230 @@ type responsesItem struct {
 	Output    string `json:"output,omitempty"`
 }
 
-// toResponsesInput maps the neutral history onto Responses input items. The
-// system prompt (flow context, guidelines, custom instructions) rides as the
-// first message with the system role; the agent keeps its own instructions.
+// toResponsesInput maps the neutral history onto Responses input items (the
+// legacy rebuild: no provider items). The system prompt (flow context,
+// guidelines, custom instructions) rides as the first message with the
+// system role; the agent keeps its own instructions.
 func toResponsesInput(systemPrompt string, msgs []Message) []responsesItem {
 	var out []responsesItem
 	if systemPrompt != "" {
 		out = append(out, responsesItem{Type: "message", Role: "system", Content: systemPrompt})
 	}
 	for _, m := range msgs {
-		switch m.Role {
-		case "tool":
-			out = append(out, responsesItem{Type: "function_call_output", CallID: m.ToolCallID, Output: nonEmptyToolOutput(m.Content)})
-		case "assistant":
-			if m.Content != "" {
-				out = append(out, responsesItem{Type: "message", Role: "assistant", Content: m.Content})
-			}
-			for _, tc := range m.ToolCalls {
-				args := string(tc.Input)
-				if strings.TrimSpace(args) == "" {
-					args = "{}"
-				}
-				out = append(out, responsesItem{Type: "function_call", CallID: tc.ID, Name: tc.Name, Arguments: args})
-			}
-		default:
-			role := m.Role
-			if role == "" {
-				role = "user"
-			}
-			out = append(out, responsesItem{Type: "message", Role: role, Content: m.Content})
+		out = append(out, legacyResponsesItems(m)...)
+	}
+	return out
+}
+
+// legacyResponsesItems rebuilds one message as input items.
+func legacyResponsesItems(m Message) []responsesItem {
+	switch m.Role {
+	case "tool":
+		return []responsesItem{{Type: "function_call_output", CallID: m.ToolCallID, Output: nonEmptyToolOutput(m.Content)}}
+	case "assistant":
+		var out []responsesItem
+		if m.Content != "" {
+			out = append(out, responsesItem{Type: "message", Role: "assistant", Content: m.Content})
 		}
+		for _, tc := range m.ToolCalls {
+			args := string(tc.Input)
+			if strings.TrimSpace(args) == "" {
+				args = "{}"
+			}
+			out = append(out, responsesItem{Type: "function_call", CallID: tc.ID, Name: tc.Name, Arguments: args})
+		}
+		return out
+	}
+	role := m.Role
+	if role == "" {
+		role = "user"
+	}
+	return []responsesItem{{Type: "message", Role: role, Content: m.Content}}
+}
+
+// responsesInput builds a request's input: the legacy rebuild, except that
+// an assistant turn carrying this provider's ProviderItems is replaced by
+// those items, verbatim and in order (replayTurn). legacy is the full legacy
+// rebuild when anything was replayed — postResponses' fallback — and nil
+// otherwise.
+func responsesInput(systemPrompt string, msgs []Message) (input, legacy []any) {
+	replayed := false
+	if systemPrompt != "" {
+		input = append(input, responsesItem{Type: "message", Role: "system", Content: systemPrompt})
+	}
+	for _, m := range msgs {
+		if items, ok := replayTurn(m); ok {
+			input = append(input, items...)
+			replayed = true
+			continue
+		}
+		for _, it := range legacyResponsesItems(m) {
+			input = append(input, it)
+		}
+	}
+	if !replayed {
+		return input, nil
+	}
+	for _, it := range toResponsesInput(systemPrompt, msgs) {
+		legacy = append(legacy, it)
+	}
+	return input, legacy
+}
+
+// replayTurn returns an assistant turn's provider items for replay, when
+// this provider wrote them and they still describe the turn: every tool call
+// the loop answers must have its function_call item (a function_call_output
+// without its call is a 400), and a turn with text must have its message
+// item. Anything else falls back to the legacy rebuild of the turn.
+func replayTurn(m Message) ([]any, bool) {
+	if m.Role != "assistant" || m.ProviderItemsFrom != azureFoundryProviderID || len(m.ProviderItems) == 0 {
+		return nil, false
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(m.ProviderItems, &raw); err != nil {
+		logger.Debug("azure ai foundry: undecodable provider items; rebuilding the turn", "error", err)
+		return nil, false
+	}
+	items := replayableItems(raw)
+	if len(items) == 0 {
+		return nil, false
+	}
+	calls := map[string]bool{}
+	hasMessage := false
+	for _, it := range items {
+		var head struct {
+			Type   string `json:"type"`
+			CallID string `json:"call_id"`
+		}
+		_ = json.Unmarshal(it, &head)
+		switch head.Type {
+		case "function_call":
+			calls[head.CallID] = true
+		case "message":
+			hasMessage = true
+		}
+	}
+	for _, tc := range m.ToolCalls {
+		if !calls[tc.ID] {
+			logger.Debug("azure ai foundry: provider items miss a tool call of the turn; rebuilding the turn", "call", tc.ID)
+			return nil, false
+		}
+	}
+	if strings.TrimSpace(m.Content) != "" && !hasMessage {
+		return nil, false
+	}
+	out := make([]any, len(items))
+	for i, it := range items {
+		out[i] = it
+	}
+	return out, true
+}
+
+// replayableItemTypes are the output item types recorded for replay: members
+// of the Responses `input` union that a finished agent run can produce and
+// that need nothing from the app — the answer, reasoning, the function calls
+// the tool loop answers, and the hosted tools whose items the service
+// accepts back. Foundry's own tool items (bing_grounding_call, openapi_call,
+// a2a_preview_call, azure_ai_search_call, …, their *_output items,
+// workflow_action, structured_outputs) are not input items and are dropped;
+// client-executed items end the run with an error before any replay.
+var replayableItemTypes = map[string]bool{
+	"message":               true,
+	"reasoning":             true,
+	"function_call":         true,
+	"web_search_call":       true,
+	"file_search_call":      true,
+	"code_interpreter_call": true,
+	"image_generation_call": true,
+	"mcp_list_tools":        true,
+	"mcp_call":              true,
+	"computer_call":         true,
+	"computer_call_output":  true,
+	"tool_search_call":      true,
+	"tool_search_output":    true,
+}
+
+// replayImageResultMax bounds the image_generation_call `result` (a base64
+// image, several MB) kept for replay; a larger one is replaced by null, which
+// the input schema allows: re-uploading it on every tool-loop iteration cost
+// MBs per request and billed the image as input again.
+const replayImageResultMax = 64 << 10
+
+// replayableItems filters a run's ordered output items down to what the
+// Responses input accepts back, in order: allowed types only
+// (replayableItemTypes), minus the Foundry-only annotations of an output item
+// (agent_reference, response_id), a reasoning item without encrypted_content
+// (under store:false the service cannot resolve it by id) and an oversized
+// image result. A reasoning item belongs to the item right after it — the
+// service rejects one "provided without its required following item" — so
+// a reasoning item directly before a dropped item is dropped too.
+// Idempotent: the replay path runs it again on recorded items.
+func replayableItems(raw []json.RawMessage) []json.RawMessage {
+	var out []json.RawMessage
+	var outTypes []string
+	for _, r := range raw {
+		item, typ, ok := replayableItem(r)
+		if !ok {
+			for len(outTypes) > 0 && outTypes[len(outTypes)-1] == "reasoning" {
+				out, outTypes = out[:len(out)-1], outTypes[:len(outTypes)-1]
+			}
+			continue
+		}
+		out = append(out, item)
+		outTypes = append(outTypes, typ)
+	}
+	return out
+}
+
+// replayableItem normalises one output item for replay (see
+// replayableItems); ok is false for an item that must not be replayed.
+func replayableItem(raw json.RawMessage) (json.RawMessage, string, bool) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, "", false
+	}
+	var typ string
+	_ = json.Unmarshal(fields["type"], &typ)
+	if !replayableItemTypes[typ] {
+		return nil, typ, false
+	}
+	delete(fields, "agent_reference")
+	delete(fields, "response_id")
+	switch typ {
+	case "reasoning":
+		var enc string
+		_ = json.Unmarshal(fields["encrypted_content"], &enc)
+		if enc == "" || rawText(fields["id"]) == "" {
+			return nil, typ, false
+		}
+		if _, ok := fields["summary"]; !ok {
+			fields["summary"] = json.RawMessage(`[]`) // required on input
+		}
+	case "message":
+		if _, ok := fields["status"]; !ok {
+			fields["status"] = json.RawMessage(`"completed"`) // required on input
+		}
+	case "image_generation_call":
+		if len(fields["result"]) > replayImageResultMax {
+			fields["result"] = json.RawMessage(`null`)
+		}
+	}
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return nil, typ, false
+	}
+	return out, typ, true
+}
+
+// providerItemsJSON encodes recorded items as the ProviderItems array; nil
+// when there is nothing to replay.
+func providerItemsJSON(items []json.RawMessage) json.RawMessage {
+	if len(items) == 0 {
+		return nil
+	}
+	out, err := json.Marshal(items)
+	if err != nil {
+		return nil
 	}
 	return out
 }
@@ -122,17 +352,30 @@ func nonEmptyToolOutput(s string) string {
 const minResponsesOutputTokens = 16
 
 // agentRequest builds the Responses request for an agent turn.
+//
+// A workflow agent (kind remembered from the listing, see agentKindFor) is a
+// preview: the request carries its Foundry-Features opt-in header. Under
+// this stateless replay every turn starts the workflow from the top with the
+// whole conversation as input: a human-in-the-loop node (a question, an
+// approval) does not resume where the previous turn paused — it runs again
+// and reads the user's latest message as its answer, if the workflow is
+// written to.
 func (p *AzureFoundryProvider) agentRequest(req Request, stream bool) responsesRequest {
 	noStore := false
+	name := agentNameOf(req.Model)
+	input, legacy := responsesInput(req.SystemPrompt, req.Messages)
 	body := responsesRequest{
-		AgentReference: &agentRef{Type: "agent_reference", Name: agentNameOf(req.Model)},
-		Input:          toResponsesInput(req.SystemPrompt, req.Messages),
+		AgentReference: &agentRef{Type: "agent_reference", Name: name},
+		Input:          input,
+		Include:        []string{responsesIncludeEncryptedReasoning},
 		Stream:         stream,
 		// Flow content must not be retained server-side beyond the request;
 		// an endpoint that rejects the parameter fails the turn (see
 		// postResponses) instead of being retried without it, which the
 		// Responses API would default to storing.
-		Store: &noStore,
+		Store:       &noStore,
+		legacyInput: legacy,
+		workflow:    agentKindFor(p.cfg.ProjectEndpoint, name) == agentKindWorkflow,
 	}
 	if req.MaxTokens > 0 {
 		body.MaxOutputTokens = max(req.MaxTokens, minResponsesOutputTokens)
@@ -190,14 +433,37 @@ func (p *AzureFoundryProvider) postResponses(ctx context.Context, body responses
 	repaired := map[string]bool{}
 	learned := map[string]bool{}
 	memoKey := endpoint + "\x00" + agentName
+	// legacyReplay swaps the payload to the legacy rebuild without include
+	// (responsesReplayParam), reporting whether anything changed.
+	legacyReplay := func() bool {
+		changed := false
+		if body.legacyInput != nil {
+			payload["input"] = body.legacyInput
+			changed = true
+		}
+		if _, ok := payload["include"]; ok {
+			delete(payload, "include")
+			changed = true
+		}
+		return changed
+	}
 	if params := repairsFor(memoKey); len(params) > 0 && ensurePayload() {
+		changed := false
 		for _, param := range params {
+			if param == responsesReplayParam {
+				// Kept learned even when this request replays nothing, so
+				// the memo survives turns without provider items.
+				changed = legacyReplay() || changed
+				repaired[param], learned[param] = true, true
+				continue
+			}
 			if param == "store" || !repairParam(payload, param) {
 				continue
 			}
 			repaired[param], learned[param] = true, true
+			changed = true
 		}
-		if len(learned) > 0 {
+		if changed {
 			if err := remarshal(); err != nil {
 				return nil, nil, err
 			}
@@ -212,6 +478,9 @@ func (p *AzureFoundryProvider) postResponses(ctx context.Context, body responses
 		httpReq.Header.Set("Content-Type", "application/json")
 		if body.Stream {
 			httpReq.Header.Set("Accept", "text/event-stream")
+		}
+		if body.workflow {
+			httpReq.Header.Set(foundryFeaturesHeader, workflowFeatureValue)
 		}
 		if err := p.authorize(ctx, httpReq); err != nil {
 			return nil, nil, err
@@ -235,7 +504,24 @@ func (p *AzureFoundryProvider) postResponses(ctx context.Context, body responses
 		if paramOK && param == "store" {
 			return nil, nil, fmt.Errorf("%w: the Foundry endpoint rejected store=false; resending without it would retain flow content server-side, so the request is refused", ErrProviderConfigInvalid)
 		}
-		if !paramOK || len(repaired) >= maxResponsesRepairs {
+		if len(repaired) >= maxResponsesRepairs {
+			return resp, errBody, nil
+		}
+		// A rejection of the replayed provider items or of the include
+		// (unless it is a plain parameter rejection the repair below
+		// handles — include itself is repairable): once, the legacy rebuild
+		// without include, remembered for this agent on success.
+		if (!paramOK || !repairableParams[param]) && !repaired[responsesReplayParam] &&
+			(body.legacyInput != nil || len(body.Include) > 0) &&
+			replayRejected(resp.StatusCode, errBody) && ensurePayload() && legacyReplay() {
+			repaired[responsesReplayParam] = true
+			if err := remarshal(); err != nil {
+				return nil, nil, err
+			}
+			logger.Debug("azure ai foundry: responses replay rejected — retrying with the legacy history", "agent", agentName)
+			continue
+		}
+		if !paramOK {
 			return resp, errBody, nil
 		}
 		if learned[param] {
@@ -263,6 +549,44 @@ func (p *AzureFoundryProvider) postResponses(ctx context.Context, body responses
 // send's maxSendRepairs: each parameter is repaired at most once anyway; the
 // cap bounds a server that keeps naming new ones.
 const maxResponsesRepairs = 4
+
+// replayRejection matches a 400's prose blaming a replayed item or the
+// include when the error names no parameter: "Item with id 'rs_…' not
+// found. Items are not persisted when `store` is set to false.", "Item
+// 'rs_…' of type 'reasoning' was provided without its required following
+// item.", "The encrypted content for item rs_… could not be verified.",
+// "Invalid value: 'bing_grounding_call'" on an input item, an unsupported
+// include value.
+var replayRejection = regexp.MustCompile(`(?i)encrypted[ _]content|item with id|required following item|of type '[a-z_]+'|input\[\d+\]|'include'|include\[\d*\]|reasoning\.encrypted`)
+
+// replayRejected reports whether a Responses rejection blames the replayed
+// input items or the include (param input / input[n]… / include, or the
+// prose above) rather than the request as a whole. A context-length or
+// content-filter rejection also names the input but is not about the
+// replay: retrying without the items would only fail again.
+func replayRejected(status int, errBody []byte) bool {
+	if !parameterRejectionStatus(status) {
+		return false
+	}
+	apiErr, ok := decodeOpenAIError(errBody)
+	if !ok {
+		return false
+	}
+	msg := apiErr.Error.Message
+	switch apiErr.Error.Code {
+	case "context_length_exceeded", "content_filter":
+		return false
+	}
+	if detectContextLimitError(http.StatusBadRequest, msg) != nil {
+		return false
+	}
+	param := strings.ToLower(strings.TrimSpace(apiErr.Error.Param))
+	if param == "input" || param == "include" || strings.HasPrefix(param, "input[") ||
+		strings.HasPrefix(param, "input.") || strings.HasPrefix(param, "include[") {
+		return true
+	}
+	return replayRejection.MatchString(msg)
+}
 
 // maxAgentResponseBytes caps the non-streaming agent response read. One byte
 // more than the cap is read so an over-limit body can be told apart from a
@@ -294,16 +618,22 @@ func (p *AzureFoundryProvider) agentChat(ctx context.Context, req Request) (*Res
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, fmt.Errorf("parse azure ai foundry agent response: %w", err)
 	}
-	if err := parsed.terminalError(); err != nil {
-		return nil, err
-	}
-	out := &Response{ServedModel: parsed.Model, FinishReason: "stop"}
+	// response.model is the agent's deployment: resolve the model behind it
+	// before it reaches pricing and the served-model memo.
+	servedModel := p.deploymentModelResolver()(parsed.Model)
+	tokensIn, tokensOut := 0, 0
 	if parsed.Usage != nil {
-		out.TokensIn = parsed.Usage.InputTokens
-		out.TokensOut = parsed.Usage.OutputTokens
+		tokensIn, tokensOut = parsed.Usage.InputTokens, parsed.Usage.OutputTokens
 	}
+	if err := parsed.terminalError(); err != nil {
+		// The usage rides on the error (as the stream path's error chunk
+		// carries it), so a failed or filtered run can still be billed.
+		return nil, &heldUsageError{err: err, tokensIn: tokensIn, tokensOut: tokensOut, servedModel: servedModel}
+	}
+	out := &Response{ServedModel: servedModel, FinishReason: "stop", TokensIn: tokensIn, TokensOut: tokensOut}
 	var text strings.Builder
-	approvals := map[string]bool{}
+	var blockers runBlockers
+	var replay []json.RawMessage
 	for _, raw := range parsed.Output {
 		// Items are decoded one by one: a hosted tool item of an unexpected
 		// shape must not fail the whole turn.
@@ -312,18 +642,21 @@ func (p *AzureFoundryProvider) agentChat(ctx context.Context, req Request) (*Res
 			logger.Debug("azure ai foundry: skipping undecodable agent output item")
 			continue
 		}
+		replay = append(replay, raw)
+		if blockers.observe(item) {
+			continue
+		}
 		switch item.Type {
 		case "message":
 			text.WriteString(item.messageText())
 		case "function_call":
 			out.ToolCalls = append(out.ToolCalls, item.toolCall())
-		case "mcp_approval_request":
-			approvals[mcpToolName(item)] = true
 		}
 	}
-	if len(approvals) > 0 {
-		return nil, mcpApprovalError(approvals)
+	if err := blockers.err(); err != nil {
+		return nil, &heldUsageError{err: err, tokensIn: tokensIn, tokensOut: tokensOut, servedModel: servedModel}
 	}
+	out.ProviderItems = providerItemsJSON(replayableItems(replay))
 	out.Content = text.String()
 	if len(out.ToolCalls) > 0 {
 		out.FinishReason = "tool_calls"
@@ -351,7 +684,15 @@ func (p *AzureFoundryProvider) agentStream(ctx context.Context, req Request, onC
 	// terminator: drain the rest so the HTTP/1.1 connection goes back to the
 	// pool instead of being discarded (a new TCP + TLS handshake per turn).
 	defer drainAndClose(resp.Body)
-	return parseResponsesSSE(resp.Body, onChunk)
+	// response.model is the agent's deployment: every chunk's served model is
+	// resolved to the model behind it (see deploymentModelResolver).
+	resolve := p.deploymentModelResolver()
+	return parseResponsesSSE(resp.Body, func(c Chunk) {
+		if c.ServedModel != "" {
+			c.ServedModel = resolve(c.ServedModel)
+		}
+		onChunk(c)
+	})
 }
 
 // --- wire types ---
@@ -409,7 +750,17 @@ type responsesOutputItem struct {
 	Arguments   string          `json:"arguments"`
 	Output      json.RawMessage `json:"output"`
 	Error       json.RawMessage `json:"error"`
-	Content     []struct {
+	// Outputs is code_interpreter_call's logs / image list; Result is
+	// image_generation_call's base64 image or program_output's result.
+	Outputs json.RawMessage `json:"outputs"`
+	Result  json.RawMessage `json:"result"`
+	// Kind is workflow_action's CSDL action kind ("InvokeAzureAgent").
+	Kind string `json:"kind"`
+	// ConsentLink is oauth_consent_request's consent URL.
+	ConsentLink string `json:"consent_link"`
+	// Execution is tool_search_call's "server" | "client".
+	Execution string `json:"execution"`
+	Content   []struct {
 		Type    string `json:"type"`
 		Text    string `json:"text"`
 		Refusal string `json:"refusal"`
@@ -451,11 +802,15 @@ func decodeOutputItem(raw json.RawMessage) (responsesOutputItem, bool) {
 		CallID      string `json:"call_id"`
 		Name        string `json:"name"`
 		ServerLabel string `json:"server_label"`
+		Kind        string `json:"kind"`
+		ConsentLink string `json:"consent_link"`
+		Execution   string `json:"execution"`
 	}
 	if err := json.Unmarshal(raw, &head); err != nil || head.Type == "" {
 		return responsesOutputItem{}, false
 	}
-	return responsesOutputItem{ID: head.ID, Type: head.Type, Status: head.Status, CallID: head.CallID, Name: head.Name, ServerLabel: head.ServerLabel}, true
+	return responsesOutputItem{ID: head.ID, Type: head.Type, Status: head.Status, CallID: head.CallID, Name: head.Name,
+		ServerLabel: head.ServerLabel, Kind: head.Kind, ConsentLink: head.ConsentLink, Execution: head.Execution}, true
 }
 
 // rawText flattens a string | object | array | null JSON value for display:
@@ -520,6 +875,142 @@ func mcpApprovalError(tools map[string]bool) error {
 	return fmt.Errorf("the Foundry agent asked for approval to run MCP tool %s, and this app cannot approve MCP tool calls: set require_approval to \"never\" for that MCP tool in the agent definition, then try again", strings.Join(names, ", "))
 }
 
+// clientToolError explains a run that stopped for a tool the CLIENT must
+// execute — a custom tool, shell, local shell, apply_patch, computer use
+// without a hosted executor, a client-side tool search. The app runs only its
+// own flow tools (function calls), so the turn ends with this message instead
+// of an empty answer, like mcpApprovalError.
+func clientToolError(tools map[string]bool) error {
+	names := make([]string, 0, len(tools))
+	for n := range tools {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return fmt.Errorf("the Foundry agent asked this app to run %s on its side, and this app runs only its own flow tools: remove that tool from the agent definition (or use its hosted variant), then try again", strings.Join(names, ", "))
+}
+
+// oauthConsentError explains a run that stopped because an MCP server needs
+// the user's OAuth consent (an oauth_consent_request item). The link is the
+// service's own consent page for this user; after consenting, the same
+// question works.
+func oauthConsentError(consents map[string]string) error {
+	labels := make([]string, 0, len(consents))
+	for l := range consents {
+		labels = append(labels, l)
+	}
+	sort.Strings(labels)
+	parts := make([]string, 0, len(labels))
+	for _, l := range labels {
+		if link := consents[l]; link != "" {
+			parts = append(parts, fmt.Sprintf("MCP server %q: %s", l, link))
+		} else {
+			parts = append(parts, fmt.Sprintf("MCP server %q", l))
+		}
+	}
+	return fmt.Errorf("the Foundry agent needs your OAuth consent before it can use %s — open the link, sign in and consent, then try again", strings.Join(parts, "; "))
+}
+
+// clientExecutedTypes are the output item types that ask the client to run
+// something (tool_search_call counts only with execution "client";
+// computer_call only when the run carries no computer_call_output for it).
+var clientExecutedTypes = map[string]bool{
+	"custom_tool_call": true,
+	"shell_call":       true,
+	"local_shell_call": true,
+	"apply_patch_call": true,
+}
+
+// runBlockers collects the output items that end an agent run without an
+// answer the app can act on: MCP approval requests, OAuth consent requests
+// and client-executed tool calls. Fed every output item (added and done
+// events alike — repeats are harmless), it reports the explanation at the
+// terminal event.
+type runBlockers struct {
+	approvals map[string]bool
+	consents  map[string]string
+	client    map[string]bool
+	// computer holds computer_call items by call id until their
+	// computer_call_output shows the service executed them.
+	computer map[string]string
+	executed map[string]bool
+}
+
+// observe records item; true when it is a blocker (not a trail step).
+func (b *runBlockers) observe(item responsesOutputItem) bool {
+	switch {
+	case item.Type == "mcp_approval_request":
+		if b.approvals == nil {
+			b.approvals = map[string]bool{}
+		}
+		b.approvals[mcpToolName(item)] = true
+		return true
+	case item.Type == "oauth_consent_request":
+		if b.consents == nil {
+			b.consents = map[string]string{}
+		}
+		label := item.ServerLabel
+		if label == "" {
+			label = "(unnamed)"
+		}
+		if b.consents[label] == "" {
+			b.consents[label] = strings.TrimSpace(item.ConsentLink)
+		}
+		return true
+	case clientExecutedTypes[item.Type],
+		item.Type == "tool_search_call" && strings.EqualFold(item.Execution, "client"):
+		if b.client == nil {
+			b.client = map[string]bool{}
+		}
+		b.client[clientToolName(item)] = true
+		return true
+	case item.Type == "computer_call":
+		if b.computer == nil {
+			b.computer = map[string]string{}
+		}
+		b.computer[responsesCallKey(item.ID, item.CallID)] = clientToolName(item)
+	case item.Type == "computer_call_output":
+		if b.executed == nil {
+			b.executed = map[string]bool{}
+		}
+		b.executed[item.CallID] = true
+	}
+	return false
+}
+
+// clientToolName names a client-executed item in the explanation.
+func clientToolName(item responsesOutputItem) string {
+	if item.Name != "" {
+		return item.Type + " (" + item.Name + ")"
+	}
+	return item.Type
+}
+
+// err is the run's explanation, nil when nothing blocks it: an OAuth consent
+// first (the user can act on it at once), then MCP approvals, then
+// client-executed tools.
+func (b *runBlockers) err() error {
+	if len(b.consents) > 0 {
+		return oauthConsentError(b.consents)
+	}
+	if len(b.approvals) > 0 {
+		return mcpApprovalError(b.approvals)
+	}
+	client := b.client
+	for id, name := range b.computer {
+		if b.executed[id] {
+			continue
+		}
+		if client == nil {
+			client = map[string]bool{}
+		}
+		client[name] = true
+	}
+	if len(client) > 0 {
+		return clientToolError(client)
+	}
+	return nil
+}
+
 func (it responsesOutputItem) toolCall() ToolCall {
 	args := it.Arguments
 	if strings.TrimSpace(args) == "" {
@@ -532,15 +1023,10 @@ func (it responsesOutputItem) toolCall() ToolCall {
 	return ToolCall{ID: id, Name: it.Name, Input: json.RawMessage(args)}
 }
 
-// responsesCallKey keys pending function calls, preferring call_id and
-// falling back to id — the same preference toolCall uses for the emitted
-// ToolCall.ID. Canonicalising BOTH the added and the done event this way is
-// what pairs them when the shapes differ (a Foundry added event carrying only
-// call_id, a done event carrying id and call_id): keying by id-first made the
-// two keys disagree and double-emitted the call. Argument-delta events still
-// reference the item by its item_id; a stream that keys its added event by
-// call_id while its deltas use the id accumulates nothing (the done event
-// carries the complete arguments), an accepted limitation.
+// responsesCallKey is the one key an item is known by where a single key is
+// wanted, preferring call_id — what the emitted ToolCall.ID and a
+// *_call_output item reference — and falling back to id. Pending function
+// calls are indexed under BOTH keys instead (see parseResponsesSSE).
 func responsesCallKey(id, callID string) string {
 	if callID != "" {
 		return callID
@@ -554,6 +1040,13 @@ type responsesError struct {
 	Message string `json:"message"`
 }
 
+// classifyResponsesError maps a failed run's error, or a stream `error`
+// event's, onto the shared sentinels. The stream's error types stand for
+// HTTP statuses (server_error 500, too_many_requests 429, forbidden 403,
+// user_error 400): forbidden is a permission denial — the credential was
+// accepted, so no retry, no breaker count and no fresh-token replay —
+// and user_error a rejected request, still read by the context-length and
+// tools-unsupported detection.
 func classifyResponsesError(code, typ, msg string) error {
 	switch {
 	case code == "rate_limit_exceeded" || typ == "too_many_requests" || typ == "rate_limit_error":
@@ -562,17 +1055,36 @@ func classifyResponsesError(code, typ, msg string) error {
 		return fmt.Errorf("%w: %s", ErrProviderDown, msg)
 	case code == "content_filter":
 		return fmt.Errorf("%w: %s", ErrContentFiltered, msg)
+	case typ == "forbidden":
+		m := oneLine(strings.Join(strings.Fields(msg), " "), azureAuthMessageMax)
+		if m == "" {
+			m = "the Foundry agent run was refused (forbidden)"
+		}
+		return &permissionDeniedError{msg: m}
+	case typ == "user_error":
+		if err := detectContextLimitError(http.StatusBadRequest, msg); err != nil {
+			return err
+		}
+		if err := detectToolsUnsupportedError(http.StatusBadRequest, msg); err != nil {
+			return err
+		}
+		if msg == "" {
+			return errors.New("azure ai foundry agent request rejected (bad request)")
+		}
+		return fmt.Errorf("azure ai foundry agent request rejected (bad request): %s", msg)
 	case code == "" && msg == "":
-		return fmt.Errorf("azure ai foundry agent run failed")
+		return errors.New("azure ai foundry agent run failed")
 	}
 	return fmt.Errorf("azure ai foundry agent error: %s", msg)
 }
 
-// hostedToolLabels names the server-side tool steps a Foundry agent run can
+// hostedToolLabels names the server-side steps a Foundry agent run can
 // contain, as they appear in the tool trail: the OpenAI hosted tools plus
-// Foundry's own tool items (v1 spec). Only the *_call items are listed — the
-// matching *_call_output items are not separate steps. An unlisted
-// server-side item still blocks a replay (Chunk.ServerStep).
+// Foundry's own tool items and run steps (v1 spec). Only the calls are
+// listed: a separate *_call_output item (Foundry's tools, computer use,
+// programs, tool search) completes its call's trail entry, paired by call_id
+// (see parseResponsesSSE). An unlisted server-side item still blocks a
+// replay (Chunk.ServerStep).
 var hostedToolLabels = map[string]string{
 	"web_search_call":                   "Agent · web search",
 	"file_search_call":                  "Agent · file search",
@@ -581,6 +1093,7 @@ var hostedToolLabels = map[string]string{
 	"mcp_list_tools":                    "Agent · MCP tools",
 	"image_generation_call":             "Agent · image generation",
 	"computer_call":                     "Agent · computer use",
+	"tool_search_call":                  "Agent · tool search",
 	"a2a_preview_call":                  "Agent · connected agent",
 	"azure_ai_search_call":              "Agent · Azure AI Search",
 	"bing_grounding_call":               "Agent · Bing search",
@@ -591,6 +1104,10 @@ var hostedToolLabels = map[string]string{
 	"fabric_dataagent_preview_call":     "Agent · Fabric data agent",
 	"browser_automation_preview_call":   "Agent · browser automation",
 	"memory_search_call":                "Agent · memory search",
+	"memory_command_preview_call":       "Agent · memory update",
+	"workflow_action":                   "Agent · workflow step",
+	"structured_outputs":                "Agent · structured output",
+	"program":                           "Agent · program",
 }
 
 // hostedToolNamed lists the item types whose trail label names the tool or
@@ -607,8 +1124,11 @@ func hostedToolLabel(item responsesOutputItem) string {
 	if !ok {
 		return ""
 	}
-	if hostedToolNamed[item.Type] && item.Name != "" {
+	switch {
+	case hostedToolNamed[item.Type] && item.Name != "":
 		return label + ": " + item.Name
+	case item.Type == "workflow_action" && item.Kind != "":
+		return label + ": " + item.Kind
 	}
 	return label
 }
@@ -621,6 +1141,92 @@ func clientSideItem(typ string) bool {
 		return true
 	}
 	return false
+}
+
+// hostedToolOK reports whether a finished hosted item succeeded: not failed,
+// incomplete or cancelled (a workflow action), no error ("error": null is
+// how a successful MCP call reports), and an image generation that carries
+// its image.
+func hostedToolOK(item responsesOutputItem) bool {
+	switch item.Status {
+	case "failed", "incomplete", "cancelled":
+		return false
+	}
+	if rawText(item.Error) != "" {
+		return false
+	}
+	if item.Type == "image_generation_call" && !hasImageResult(item) {
+		return false
+	}
+	return true
+}
+
+// hasImageResult reports a non-empty image_generation_call result without
+// decoding the (multi-MB) base64 string.
+func hasImageResult(item responsesOutputItem) bool {
+	r := bytes.TrimSpace(item.Result)
+	return len(r) > 2 && r[0] == '"'
+}
+
+// codeInterpreterLogs is a code_interpreter_call's outputs as text: the
+// logs, else a note that it produced an image.
+func codeInterpreterLogs(outputs json.RawMessage) string {
+	var list []struct {
+		Type string `json:"type"`
+		Logs string `json:"logs"`
+	}
+	if json.Unmarshal(outputs, &list) != nil {
+		return ""
+	}
+	image := false
+	for _, o := range list {
+		if strings.TrimSpace(o.Logs) != "" {
+			return o.Logs
+		}
+		image = image || o.Type == "image"
+	}
+	if image {
+		return "image output"
+	}
+	return ""
+}
+
+// heldStep is a finished hosted call whose result arrives as a separate
+// *_call_output item: its trail completion waits for that item.
+type heldStep struct {
+	item  responsesOutputItem
+	label string
+	start time.Time // zero when the step's start was not seen
+}
+
+// stepDoneChunk is a hosted step's trail completion: result is the item that
+// carries the outcome (the call itself, or its paired *_call_output).
+func stepDoneChunk(call responsesOutputItem, label string, start time.Time, result responsesOutputItem) Chunk {
+	var took int64
+	if !start.IsZero() {
+		took = time.Since(start).Milliseconds()
+	}
+	summary := hostedToolSummary(result)
+	if summary == "" && result.Type != call.Type {
+		summary = hostedToolSummary(call)
+	}
+	return Chunk{ToolEvent: &ToolEvent{
+		Name:       call.Type,
+		Label:      label,
+		Done:       true,
+		OK:         hostedToolOK(call) && hostedToolOK(result),
+		DurationMs: took,
+		Summary:    summary,
+	}}
+}
+
+// hasOwnResult reports whether a hosted item carries its outcome itself
+// (output, error, code interpreter outputs, an image or program result) —
+// otherwise, with a call_id, the outcome comes as a *_call_output item.
+func hasOwnResult(item responsesOutputItem) bool {
+	result := bytes.TrimSpace(item.Result)
+	return rawText(item.Output) != "" || rawText(item.Error) != "" || rawText(item.Outputs) != "" ||
+		(len(result) > 0 && !bytes.Equal(result, []byte("null")))
 }
 
 // responsesEvent is the union of the streaming event payloads baki reads.
@@ -656,21 +1262,34 @@ type pendingResponsesCall struct {
 
 // parseResponsesSSE turns the Responses streaming events into chunks: text
 // deltas as they arrive, hosted tool steps as ToolEvents (or a ServerStep
-// marker for a server-side item without a trail label), function calls and
-// usage on the Done chunk, failures as error chunks.
+// marker for a server-side item without a trail label), function calls,
+// usage and the run's replayable output items (ProviderItems) on the Done
+// chunk, failures and runs the app cannot continue (MCP approval, OAuth
+// consent, client-executed tools) as error chunks.
 func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxResponsesSSELine)
 
 	var (
 		parseErrors int
-		calls       = map[string]*pendingResponsesCall{}
+		// calls holds each pending function call under its item id AND its
+		// call_id (one pointer, two keys): argument delta/done events name
+		// the item id, while an added event may carry only the call_id and
+		// the done event both — any key finds the one call.
+		calls = map[string]*pendingResponsesCall{}
 		// started pairs a hosted step's start and end by output_index:
 		// Foundry's own tool items carry a call_id and no id.
 		started = map[int]time.Time{}
-		// approvals collects the MCP tools the run stopped for (see
-		// mcpApprovalError), reported at the terminal event.
-		approvals = map[string]bool{}
+		// held keeps, by call_id, the finished hosted calls whose outcome
+		// comes as a separate *_call_output item (heldOrder: arrival order).
+		held      = map[string]*heldStep{}
+		heldOrder []string
+		// blockers collects what ends the run without a usable answer (see
+		// runBlockers), reported at the terminal event.
+		blockers runBlockers
+		// outputs records every finished output item by output_index, for
+		// the replay (ProviderItems on the Done chunk).
+		outputs = map[int]json.RawMessage{}
 		// streamedText counts the text streamed per message item id (and
 		// under "" for deltas without one); totalStreamed across all. They
 		// decide whether a message's done event still carries unseen text.
@@ -691,6 +1310,32 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 	emit := func(c Chunk) {
 		emitted = true
 		onChunk(c)
+	}
+	findCall := func(id, callID string) *pendingResponsesCall {
+		for _, k := range []string{id, callID} {
+			if c, ok := calls[k]; ok && k != "" {
+				return c
+			}
+		}
+		return nil
+	}
+	indexCall := func(c *pendingResponsesCall, id, callID string) {
+		for _, k := range []string{id, callID} {
+			if k != "" {
+				calls[k] = c
+			}
+		}
+	}
+	// flushHeld completes the held steps whose output never came (a terminal
+	// event or the end of the stream is next), from the call alone.
+	flushHeld := func() {
+		for _, k := range heldOrder {
+			if h, ok := held[k]; ok {
+				delete(held, k)
+				emit(stepDoneChunk(h.item, h.label, h.start, h.item))
+			}
+		}
+		heldOrder = nil
 	}
 
 	for scanner.Scan() {
@@ -731,10 +1376,15 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 			}
 			switch {
 			case item.Type == "function_call":
-				calls[responsesCallKey(item.ID, item.CallID)] = &pendingResponsesCall{index: ev.OutputIndex, item: item}
+				c := findCall(item.ID, item.CallID)
+				if c == nil {
+					c = &pendingResponsesCall{index: ev.OutputIndex, item: item}
+				}
+				indexCall(c, item.ID, item.CallID)
 			case clientSideItem(item.Type):
-			case item.Type == "mcp_approval_request":
-				approvals[mcpToolName(item)] = true
+			// observe records the item (computer calls and their outputs
+			// too, which stay trail steps); true for a blocker.
+			case blockers.observe(item):
 				emit(Chunk{ServerStep: true})
 			default:
 				if label := hostedToolLabel(item); label != "" {
@@ -766,14 +1416,14 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 				onChunk(Chunk{}) // see output_item.added
 				continue
 			}
+			outputs[ev.OutputIndex] = ev.Item
 			switch {
 			case item.Type == "function_call":
-				key := responsesCallKey(item.ID, item.CallID)
-				c, ok := calls[key]
-				if !ok {
+				c := findCall(item.ID, item.CallID)
+				if c == nil {
 					c = &pendingResponsesCall{index: ev.OutputIndex}
-					calls[key] = c
 				}
+				indexCall(c, item.ID, item.CallID)
 				c.item = item
 				if item.Arguments != "" {
 					c.args.Reset()
@@ -792,32 +1442,40 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 					}
 				}
 			case clientSideItem(item.Type):
-			case item.Type == "mcp_approval_request":
-				approvals[mcpToolName(item)] = true
+			case blockers.observe(item):
 				emit(Chunk{ServerStep: true})
 			default:
 				label := hostedToolLabel(item)
 				if label == "" {
+					// A *_call_output completes its held call's trail entry.
+					if h, ok := held[item.CallID]; ok && item.CallID != "" && strings.HasSuffix(item.Type, "_output") {
+						delete(held, item.CallID)
+						emit(stepDoneChunk(h.item, h.label, h.start, item))
+						continue
+					}
 					emit(Chunk{ServerStep: true}) // see output_item.added
 					continue
 				}
-				var took int64
-				if t0, ok := started[ev.OutputIndex]; ok {
-					took = time.Since(t0).Milliseconds()
+				var t0 time.Time
+				if t, ok := started[ev.OutputIndex]; ok {
+					t0 = t
 					delete(started, ev.OutputIndex)
 				}
-				emit(Chunk{ToolEvent: &ToolEvent{
-					Name:  item.Type,
-					Label: label,
-					Done:  true,
-					// "error": null is how a successful MCP call reports.
-					OK:         item.Status != "failed" && item.Status != "incomplete" && rawText(item.Error) == "",
-					DurationMs: took,
-					Summary:    hostedToolSummary(item),
-				}})
+				if item.CallID != "" && !hasOwnResult(item) {
+					// The outcome comes as its *_call_output item: the trail
+					// entry completes then (or at the terminal event).
+					if _, dup := held[item.CallID]; !dup {
+						heldOrder = append(heldOrder, item.CallID)
+					}
+					held[item.CallID] = &heldStep{item: item, label: label, start: t0}
+					emit(Chunk{ServerStep: true})
+					continue
+				}
+				emit(stepDoneChunk(item, label, t0, item))
 			}
 
 		case "response.completed", "response.incomplete":
+			flushHeld()
 			var finish string
 			tokensIn, tokensOut := 0, 0
 			if ev.Response != nil {
@@ -828,7 +1486,7 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 				if ev.Response.IncompleteDetails != nil {
 					switch ev.Response.IncompleteDetails.Reason {
 					case "content_filter":
-						// Usage rides on the error chunk (as the MCP-approvals
+						// Usage rides on the error chunk (as the blockers'
 						// branch below does) so the tokens spent are still billed.
 						emit(Chunk{Error: fmt.Errorf("%w: the response was stopped by the content filter", ErrContentFiltered), TokensIn: tokensIn, TokensOut: tokensOut, ServedModel: servedModel})
 						return nil
@@ -840,12 +1498,13 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 					}
 				}
 			}
-			if len(approvals) > 0 {
-				// The run stopped for MCP tool approval and cannot continue
-				// (not even with function outputs replayed): explain instead
-				// of finishing with an empty answer. The usage rides on the
-				// error chunk so the tokens spent are still billed.
-				emit(Chunk{Error: mcpApprovalError(approvals), TokensIn: tokensIn, TokensOut: tokensOut, ServedModel: servedModel})
+			if err := blockers.err(); err != nil {
+				// The run stopped for something the app cannot provide (MCP
+				// approval, OAuth consent, a client-executed tool) and cannot
+				// continue (not even with function outputs replayed): explain
+				// instead of finishing with an empty answer. The usage rides
+				// on the error chunk so the tokens spent are still billed.
+				emit(Chunk{Error: err, TokensIn: tokensIn, TokensOut: tokensOut, ServedModel: servedModel})
 				return nil
 			}
 			toolCalls := assembleResponsesCalls(calls)
@@ -855,10 +1514,12 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 					finish = "tool_calls"
 				}
 			}
-			emit(Chunk{Done: true, TokensIn: tokensIn, TokensOut: tokensOut, ToolCalls: toolCalls, FinishReason: finish, ServedModel: servedModel})
+			emit(Chunk{Done: true, TokensIn: tokensIn, TokensOut: tokensOut, ToolCalls: toolCalls, FinishReason: finish, ServedModel: servedModel,
+				ProviderItems: providerItemsJSON(replayableItems(orderedOutputs(outputs)))})
 			return nil
 
 		case "response.failed":
+			flushHeld()
 			tokensIn, tokensOut := 0, 0
 			var failure error
 			if ev.Response != nil {
@@ -873,12 +1534,13 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 				failure = classifyResponsesError("", "", "")
 			}
 			// Usage rides on the error chunk (as the content-filter and
-			// MCP-approval branches do) so the tokens a failed run spent are
+			// blockers' branches do) so the tokens a failed run spent are
 			// still billed by Azure's numbers, not a tokenizer estimate.
 			emit(Chunk{Error: failure, TokensIn: tokensIn, TokensOut: tokensOut, ServedModel: servedModel})
 			return nil
 
 		case "error":
+			flushHeld()
 			code, typ, msg := ev.Code, "", ev.Message
 			if ev.Error != nil {
 				code, typ, msg = ev.Error.Code, ev.Error.Type, ev.Error.Message
@@ -900,26 +1562,48 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 		}
 	}
 
+	// Reaching here means the stream ended before a terminal event (every
+	// terminal branch returns): the run was cut off, not completed. The
+	// held trail steps still complete, so the trail shows no step forever
+	// running.
+	flushHeld()
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("reading azure responses SSE stream: %w", err)
 	}
-	// Reaching here means the stream ended before a terminal event (every
-	// terminal branch returns): the run was cut off, not completed.
 	if parseErrors > 0 {
 		return errStreamMalformed("azure responses", parseErrors)
 	}
 	return errStreamTruncated("azure responses")
 }
 
+// orderedOutputs lists the recorded output items by output_index.
+func orderedOutputs(outputs map[int]json.RawMessage) []json.RawMessage {
+	idx := make([]int, 0, len(outputs))
+	for i := range outputs {
+		idx = append(idx, i)
+	}
+	sort.Ints(idx)
+	out := make([]json.RawMessage, 0, len(idx))
+	for _, i := range idx {
+		out = append(out, outputs[i])
+	}
+	return out
+}
+
 // assembleResponsesCalls orders the accumulated function calls by output
-// position and converts them to the neutral ToolCall.
+// position and converts them to the neutral ToolCall. calls indexes each call
+// under up to two keys; each is emitted once.
 func assembleResponsesCalls(calls map[string]*pendingResponsesCall) []ToolCall {
 	if len(calls) == 0 {
 		return nil
 	}
+	seen := make(map[*pendingResponsesCall]bool, len(calls))
 	list := make([]*pendingResponsesCall, 0, len(calls))
 	for _, c := range calls {
-		list = append(list, c)
+		if !seen[c] {
+			seen[c] = true
+			list = append(list, c)
+		}
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].index < list[j].index })
 	out := make([]ToolCall, 0, len(list))
@@ -943,14 +1627,29 @@ const (
 )
 
 // hostedToolSummary is the trail's one-line result for a finished hosted
-// step: the tool's error or output when present, else nothing. The text is
-// sent to the client and stored with the conversation, so it goes through the
-// secret scrubber — before the cut, so a secret straddling it is still
-// matched — and is cut on a rune boundary.
+// step: the tool's error, else its outcome — `output`, a code interpreter's
+// `outputs` logs, a program's `result`, "image generated" for an image
+// generation (never its base64 `result`) — else nothing. The text is sent to
+// the client and stored with the conversation, so it goes through the secret
+// scrubber — before the cut, so a secret straddling it is still matched —
+// and is cut on a rune boundary.
 func hostedToolSummary(item responsesOutputItem) string {
 	s := errorText(item.Error)
 	if s == "" {
-		s = rawText(item.Output)
+		switch item.Type {
+		case "image_generation_call":
+			if hasImageResult(item) {
+				s = "image generated"
+			}
+		default:
+			s = rawText(item.Output)
+			if s == "" {
+				s = codeInterpreterLogs(item.Outputs)
+			}
+			if s == "" {
+				s = rawText(item.Result)
+			}
+		}
 	}
 	s = strings.TrimSpace(s)
 	if i := strings.IndexByte(s, '\n'); i >= 0 {

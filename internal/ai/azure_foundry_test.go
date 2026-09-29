@@ -115,7 +115,8 @@ func TestAzureFoundry_ChatRequestShape(t *testing.T) {
 	if got.Path != "/openai/v1/chat/completions" {
 		t.Errorf("path = %q", got.Path)
 	}
-	if got.Headers.Get("api-key") != "secret-key" || got.Headers.Get("Authorization") != "Bearer secret-key" {
+	// Only the api-key header: the key is not an Entra ID bearer token.
+	if got.Headers.Get("api-key") != "secret-key" || got.Headers.Get("Authorization") != "" {
 		t.Errorf("auth headers = %v", got.Headers)
 	}
 	if got.Body["model"] != "my-gpt4o" {

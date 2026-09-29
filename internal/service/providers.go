@@ -11,6 +11,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/storage"
 	"pad-core/logger"
 	"pad-core/models"
@@ -611,7 +612,7 @@ func (s *ProviderService) TestProviderConnection(ctx context.Context, scope, pro
 
 	provider, err := s.factory.For(scope, providerID)
 	if err != nil {
-		return &models.ProviderTestResult{Ok: false, Error: err.Error()}, nil
+		return &models.ProviderTestResult{Ok: false, Error: connectionTestError(providerID, "", err)}, nil
 	}
 	return s.runConnectionTest(ctx, provider, providerID, func() string {
 		raw, getErr := s.secrets.Get(scope, providerID)
@@ -634,7 +635,7 @@ func (s *ProviderService) TestOrgProviderConnection(ctx context.Context, scope, 
 	}
 	provider, err := s.factory.ForOrgCredential(scope, orgID, providerID)
 	if err != nil {
-		return &models.ProviderTestResult{Ok: false, Error: err.Error()}, nil
+		return &models.ProviderTestResult{Ok: false, Error: connectionTestError(providerID, "", err)}, nil
 	}
 	return s.runConnectionTest(ctx, provider, providerID, func() string {
 		raw, getErr := s.orgKeys.GetOrg(orgID, providerID)
@@ -663,7 +664,7 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 			// answer, not "name a deployment".
 			if raw := rawDoc(); raw != "" {
 				if perr := azureProjectProbe(ctx, raw); perr != nil {
-					msg = perr.Error()
+					msg = connectionTestError(providerID, "the project endpoint", perr)
 				}
 			}
 		}
@@ -689,13 +690,17 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 			// explanation for a rejected Entra ID access token. "invalid
 			// API key" named a key an Entra ID principal does not have.
 			latency := int(time.Since(start).Milliseconds())
-			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: chatErr.Error()}
+			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: connectionTestError(providerID, "", chatErr)}
 		}
 		if errors.Is(chatErr, ai.ErrApiKeyInvalid) {
 			latency := int(time.Since(start).Milliseconds())
 			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: "invalid API key"}
 		}
-		if errors.Is(chatErr, ai.ErrRateLimited) {
+		if errors.Is(chatErr, ai.ErrRateLimited) || errors.Is(chatErr, ai.ErrOutputLimit) {
+			// The credentials work: a rate limit is the resource answering,
+			// and an output-limit stop is a reply the model spent entirely on
+			// hidden reasoning (always-thinking models under the test's
+			// 16-token cap) — the call itself succeeded.
 			latency := int(time.Since(start).Milliseconds())
 			return &models.ProviderTestResult{Ok: true, Latency: latency}
 		}
@@ -706,7 +711,7 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 			// the stored document is invalid. The next candidate would only
 			// repeat the same retries against the same outage.
 			latency := int(time.Since(start).Milliseconds())
-			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: chatErr.Error()}
+			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: connectionTestError(providerID, "", chatErr)}
 		}
 		if firstErr == nil {
 			firstErr = chatErr
@@ -717,7 +722,27 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 	}
 
 	latency := int(time.Since(start).Milliseconds())
-	return &models.ProviderTestResult{Ok: false, Latency: latency, Error: firstErr.Error()}
+	return &models.ProviderTestResult{Ok: false, Latency: latency, Error: connectionTestError(providerID, "", firstErr)}
+}
+
+// connectionTestError is the text a connection test reports for err. A
+// failure to connect — a DNS, dial, proxy or TLS failure, or the egress
+// guard refusing the address — is fixed copy (egress.DescribeFailure): the
+// raw text names the address the host resolved to and the operator's
+// HTTP(S) proxy, which a client must never see; the detail goes to the
+// server log. Anything else (an HTTP answer, Azure's explanation, a
+// validation error) is the error's own text. target names what could not be
+// reached ("" = the endpoint).
+func connectionTestError(providerID, target string, err error) string {
+	what, ok := egress.DescribeFailure(err)
+	if !ok {
+		return err.Error()
+	}
+	logger.Warn("provider connection test: connection failure", "provider", providerID, "error", err)
+	if target == "" {
+		target = "the endpoint"
+	}
+	return "could not connect to " + target + ": " + what
 }
 
 // --- GitHub Models OAuth ---
@@ -1039,21 +1064,27 @@ func saveCarryError(cfg ai.AzureFoundryConfig, refusal error) error {
 // while the knowledge base prefers it (one corpus, one resource). Usage on
 // it is attributed to the org and capped by the org's daily budget like
 // every org-scoped turn, and the row goes with the organisation. When the
-// admin who saved it stops being an admin — demoted, removed, account
-// deleted — it is disabled (DisableOrgAzureFoundryConfigSavedBy): the
-// credential was theirs to lend.
+// admin who supplied its secret (the lender, secret_set_by) or last saved it
+// stops being an admin — demoted, removed, account deleted — it is disabled
+// (DisableOrgAzureFoundryConfigSavedBy): the credential was theirs to lend,
+// and an edit by another admin that kept the stored secret does not make it
+// theirs.
 
 // OrgAzureFoundryConfig is an organisation's shared Azure AI Foundry
-// document in its public form, with who shared it and when. UpdatedByID is
-// the admin's user id (the handler resolves it to a display name into
-// UpdatedBy); UpdatedAt is RFC 3339 with the store's full sub-second
-// precision — a save sends it back verbatim as its compare-and-swap token.
+// document in its public form, with who shared it and when. UpdatedBy is the
+// lender's display name — the admin who supplied the stored secret, resolved
+// by the handler from SecretSetByID (an edit that kept the secret does not
+// change who lends it); UpdatedByID is the admin who last saved the
+// document. UpdatedAt is the last save, RFC 3339 with the store's full
+// sub-second precision — a save sends it back verbatim as its
+// compare-and-swap token.
 type OrgAzureFoundryConfig struct {
 	ai.AzureFoundryPublicConfig
-	Shared      bool   `json:"shared"`
-	UpdatedBy   string `json:"updatedBy,omitempty"`
-	UpdatedAt   string `json:"updatedAt,omitempty"`
-	UpdatedByID string `json:"-"`
+	Shared        bool   `json:"shared"`
+	UpdatedBy     string `json:"updatedBy,omitempty"`
+	UpdatedAt     string `json:"updatedAt,omitempty"`
+	UpdatedByID   string `json:"-"`
+	SecretSetByID string `json:"-"`
 }
 
 // GetOrgAzureFoundryConfig returns the organisation's shared document with
@@ -1077,15 +1108,19 @@ func (s *ProviderService) GetOrgAzureFoundryConfig(orgID string) (cfg OrgAzureFo
 	if parseErr != nil {
 		return OrgAzureFoundryConfig{}, fmt.Errorf("%w: %w", ErrOrgCredentialUnreadable, parseErr)
 	}
-	by, at, hasMeta, metaErr := s.orgKeys.OrgKeyMeta(orgID, ai.AzureFoundryProviderID)
+	meta, hasMeta, metaErr := s.orgKeys.OrgKeyMeta(orgID, ai.AzureFoundryProviderID)
 	if metaErr != nil {
 		return OrgAzureFoundryConfig{}, fmt.Errorf("%w: %w", ErrOrgCredentialUnreadable, metaErr)
 	}
 	out := OrgAzureFoundryConfig{AzureFoundryPublicConfig: parsed.Public(), Shared: true}
 	if hasMeta {
-		out.UpdatedByID = by
-		if !at.IsZero() {
-			out.UpdatedAt = formatOrgKeyStamp(at)
+		out.UpdatedByID = meta.UpdatedBy
+		out.SecretSetByID = meta.SecretSetBy
+		if out.SecretSetByID == "" {
+			out.SecretSetByID = meta.UpdatedBy // a row no save has stamped since v24
+		}
+		if !meta.UpdatedAt.IsZero() {
+			out.UpdatedAt = formatOrgKeyStamp(meta.UpdatedAt)
 		}
 	}
 	return out, nil
@@ -1114,9 +1149,10 @@ func parseOrgKeyStamp(s string) (time.Time, error) {
 // shared document: the same validation, the same carry-over of an omitted
 // secret from the stored document (endpoint hosts unchanged), the same
 // release of a replaced credential's process state. updatedBy is the saving
-// admin's user id. The org's cached listings (every member's, under
-// ai.OrgScope) are dropped so the new deployments show up on the next
-// listing.
+// admin's user id; it becomes the credential's lender only when the save
+// supplies the secret — a carried-over secret keeps its lender. The org's
+// cached listings (every member's, under ai.OrgScope) are dropped so the new
+// deployments show up on the next listing.
 //
 // Compare-and-swap: expectedUpdatedAt is the updatedAt the admin's GET
 // returned ("" when it said configured:false). The write happens only while
@@ -1135,6 +1171,7 @@ func (s *ProviderService) SaveOrgAzureFoundryConfig(orgID, updatedBy, expectedUp
 	}
 	cfg.Normalize()
 	prev, hadPrev := storedAzureConfig(func() (string, error) { return s.orgKeys.GetOrg(orgID, ai.AzureFoundryProviderID) })
+	supplied := cfg.HasSecret()
 	if refusal := carryAzureSecret(&cfg, prev, hadPrev); refusal != nil {
 		return "", saveCarryError(cfg, refusal)
 	}
@@ -1145,7 +1182,12 @@ func (s *ProviderService) SaveOrgAzureFoundryConfig(orgID, updatedBy, expectedUp
 	if err != nil {
 		return "", err
 	}
-	at, ok, err := s.orgKeys.SaveOrgIfUnchanged(orgID, ai.AzureFoundryProviderID, raw, updatedBy, expected)
+	// Validation passed, so the document holds a secret: one the request did
+	// not supply was carried over from the stored document, and its lender
+	// stays. The compare-and-swap guarantees the row carried over from is the
+	// row being replaced.
+	secretCarried := !supplied
+	at, ok, err := s.orgKeys.SaveOrgIfUnchanged(orgID, ai.AzureFoundryProviderID, raw, updatedBy, secretCarried, expected)
 	if err != nil {
 		return "", err
 	}
@@ -1180,21 +1222,24 @@ func (s *ProviderService) DeleteOrgAzureFoundryConfig(orgID string) (err error) 
 }
 
 // DisableOrgAzureFoundryConfigSavedBy deletes the organisation's shared
-// document when userID is the admin who last saved it — called when that
-// admin is demoted, removed from the org or deletes their account: the
-// credential was theirs to lend, and a key its owner can no longer manage
-// must not stay live for the org. The delete is conditional on the stored
-// updated_by, so a newer save by another admin is kept. disabled reports
-// whether a document was removed; the process state kept for it is released
-// and the org's cached listings dropped, as DeleteOrgAzureFoundryConfig does.
-// A deployment without an org store has nothing to disable.
+// document when userID is the admin who supplied its secret (the lender) or
+// last saved it — called when that admin is demoted, removed from the org or
+// deletes their account: the credential was theirs to lend, and a key its
+// owner can no longer manage must not stay live for the org. Another admin's
+// later edit that kept the stored secret does not save it from its lender's
+// departure. The delete is conditional on the stored secret_set_by /
+// updated_by, so a newer save by another admin with their own secret is
+// kept. disabled reports whether a document was removed; the process state
+// kept for it is released and the org's cached listings dropped, as
+// DeleteOrgAzureFoundryConfig does. A deployment without an org store has
+// nothing to disable.
 func (s *ProviderService) DisableOrgAzureFoundryConfigSavedBy(orgID, userID string) (disabled bool, err error) {
 	defer logger.Guard("App.DisableOrgAzureFoundryConfigSavedBy", &err)
 	if s.orgKeys == nil || orgID == "" || userID == "" {
 		return false, nil
 	}
 	prev, hadPrev := storedAzureConfig(func() (string, error) { return s.orgKeys.GetOrg(orgID, ai.AzureFoundryProviderID) })
-	deleted, err := s.orgKeys.DeleteOrgIfUpdatedBy(orgID, ai.AzureFoundryProviderID, userID)
+	deleted, err := s.orgKeys.DeleteOrgIfSavedBy(orgID, ai.AzureFoundryProviderID, userID)
 	if err != nil || !deleted {
 		return false, err
 	}
@@ -1206,16 +1251,16 @@ func (s *ProviderService) DisableOrgAzureFoundryConfigSavedBy(orgID, userID stri
 }
 
 // DisableOrgCredentialsSavedBy is DisableOrgAzureFoundryConfigSavedBy for
-// every organisation whose shared document userID last saved (account
-// erasure: the membership rows go with the account, the credential rows do
-// not). Returns the orgs disabled; an org that fails is logged and skipped
+// every organisation whose shared document userID lent or last saved
+// (account erasure: the membership rows go with the account, the credential
+// rows do not). Returns the orgs disabled; an org that fails is logged and skipped
 // so the others are still disabled.
 func (s *ProviderService) DisableOrgCredentialsSavedBy(userID string) (orgIDs []string, err error) {
 	defer logger.Guard("App.DisableOrgCredentialsSavedBy", &err)
 	if s.orgKeys == nil || userID == "" {
 		return nil, nil
 	}
-	candidates, err := s.orgKeys.OrgsWithKeyUpdatedBy(ai.AzureFoundryProviderID, userID)
+	candidates, err := s.orgKeys.OrgsWithKeySavedBy(ai.AzureFoundryProviderID, userID)
 	if err != nil {
 		return nil, err
 	}

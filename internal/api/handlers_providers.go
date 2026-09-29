@@ -4,7 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
@@ -245,7 +249,7 @@ func (h *ProviderHandler) handleGetAzureFoundryConfig(w http.ResponseWriter, r *
 }
 
 // @Summary      Save Azure AI Foundry configuration
-// @Description  Validates and stores the caller's Azure AI Foundry endpoint, credential (API key or Microsoft Entra ID service principal), optional project endpoint and deployment names. An omitted secret keeps the stored one.
+// @Description  Validates and stores the caller's Azure AI Foundry endpoint, credential (API key or Microsoft Entra ID service principal), optional project endpoint and deployment names. An omitted secret keeps the stored one. The body must be exactly one JSON object with known fields only (INVALID_CONFIG otherwise).
 // @Tags         providers
 // @Param        request body object true "request"
 // @Accept       json
@@ -255,18 +259,13 @@ func (h *ProviderHandler) handleGetAzureFoundryConfig(w http.ResponseWriter, r *
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/providers/azure-foundry/config [post]
 func (h *ProviderHandler) handleSaveAzureFoundryConfig(w http.ResponseWriter, r *http.Request) {
-	// Strict decode: the stored document is parsed with DisallowUnknownFields
-	// (ParseAzureFoundryConfig), so a misspelled field must fail here rather
-	// than vanish. 64 KiB is far above the 2 KiB document cap.
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
-	dec.DisallowUnknownFields()
 	var req ai.AzureFoundryConfig
-	if err := dec.Decode(&req); err != nil {
+	if err := decodeAzureConfigBody(w, r, &req); err != nil {
 		render.ErrorWithCode(w, fmt.Errorf("invalid Azure AI Foundry configuration: %w", err), http.StatusBadRequest, ai.AzureCfgErrInvalidConfig)
 		return
 	}
 	// Normalised before the save AND the audit row: the row must carry the
-	// canonical auth mode, not a client's case/whitespace variant.
+	// canonical auth mode and hosts, not a client's case/whitespace variant.
 	req.Normalize()
 	if err := h.providerSvc.SaveAzureFoundryConfig(h.security.KeyScope(r), req); err != nil {
 		var cfgErr *ai.AzureConfigError
@@ -277,7 +276,66 @@ func (h *ProviderHandler) handleSaveAzureFoundryConfig(w http.ResponseWriter, r 
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// Never the secrets — only that the provider changed and how it authenticates.
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", ai.AzureFoundryProviderID, map[string]string{"op": "save", "authMode": req.Auth.Mode})
+	// A saved document always holds a secret, so one the request omitted was
+	// carried over from the stored document.
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", ai.AzureFoundryProviderID,
+		azureConfigAuditMeta(req, !req.HasSecret()))
 	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// azureConfigBodyLimit bounds a configuration save body: far above the 2 KiB
+// document cap, far below anything that costs memory.
+const azureConfigBodyLimit = 64 << 10
+
+// decodeAzureConfigBody decodes an Azure AI Foundry configuration save body
+// strictly: an unknown field is refused (the stored document is parsed with
+// DisallowUnknownFields, so a misspelled field must fail here rather than
+// vanish), and so is anything after the JSON value — a body such as
+// `{…}{"endpoint":…}` used to save the first object and silently ignore the
+// rest, so what was audited or reviewed was not what was sent.
+func decodeAzureConfigBody(w http.ResponseWriter, r *http.Request, v any) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, azureConfigBodyLimit))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("unexpected data after the JSON object")
+	}
+	return nil
+}
+
+// azureConfigAuditMeta is the audit meta of an Azure AI Foundry
+// configuration save: where the credential now goes and whose it is — the
+// endpoint and project endpoint hosts, the auth mode, the Microsoft Entra ID
+// tenant and client IDs — and secretCarried, whether the stored secret was
+// kept (the request omitted it) rather than a new one supplied. Never a
+// secret.
+func azureConfigAuditMeta(cfg ai.AzureFoundryConfig, secretCarried bool) map[string]string {
+	meta := map[string]string{
+		"op":            "save",
+		"authMode":      cfg.Auth.Mode,
+		"endpointHost":  auditURLHost(cfg.Endpoint),
+		"secretCarried": strconv.FormatBool(secretCarried),
+	}
+	if host := auditURLHost(cfg.ProjectEndpoint); host != "" {
+		meta["projectHost"] = host
+	}
+	if cfg.Auth.Mode == ai.AzureAuthModeEntra {
+		meta["tenantId"] = cfg.Auth.TenantID
+		meta["clientId"] = cfg.Auth.ClientID
+	}
+	return meta
+}
+
+// auditURLHost is the lower-cased host[:port] of a URL, "" when it has none.
+func auditURLHost(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Host)
 }

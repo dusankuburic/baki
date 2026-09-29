@@ -316,21 +316,41 @@ describe('AzureFoundrySection', () => {
     expect(screen.queryByText('The endpoint must be an absolute https:// URL')).toBeNull()
   })
 
-  it('flags non-GUID Entra IDs inline and blocks Save until they look like GUIDs', async () => {
+  it('accepts a tenant domain name and still rejects a malformed tenant', async () => {
     await renderUnconfigured()
     fireEvent.change(endpointField(), {target: {value: 'https://my-res.services.ai.azure.com'}})
     fireEvent.click(screen.getByRole('radio', {name: 'Microsoft Entra ID'}))
-    fireEvent.change(screen.getByRole('textbox', {name: 'Tenant ID'}), {target: {value: 'tenant-guid'}})
     fireEvent.change(screen.getByRole('textbox', {name: 'Client ID'}), {target: {value: CLIENT_GUID}})
     fireEvent.change(screen.getByLabelText('Azure client secret'), {target: {value: 's3cret'}})
     fireEvent.change(screen.getByRole('textbox', {name: 'Project endpoint (optional)'}), {
       target: {value: 'https://my-res.services.ai.azure.com/api/projects/my-project'},
     })
-    fireEvent.blur(screen.getByRole('textbox', {name: 'Tenant ID'}))
+    const tenant = screen.getByRole('textbox', {name: 'Tenant ID'})
+    fireEvent.change(tenant, {target: {value: 'contoso.onmicrosoft.com'}})
+    fireEvent.blur(tenant)
+    expect(screen.queryByText(/directory \(tenant\) ID GUID/)).toBeNull()
+    expect(saveButton()).toBeEnabled()
+
+    fireEvent.change(tenant, {target: {value: 'common'}})
+    expect(screen.getByText(/directory \(tenant\) ID GUID/)).toBeInTheDocument()
+    expect(saveButton()).toBeDisabled()
+  })
+
+  it('flags non-GUID Entra IDs inline and blocks Save until they look like GUIDs', async () => {
+    await renderUnconfigured()
+    fireEvent.change(endpointField(), {target: {value: 'https://my-res.services.ai.azure.com'}})
+    fireEvent.click(screen.getByRole('radio', {name: 'Microsoft Entra ID'}))
+    fireEvent.change(screen.getByRole('textbox', {name: 'Tenant ID'}), {target: {value: TENANT_GUID}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Client ID'}), {target: {value: 'client-guid'}})
+    fireEvent.change(screen.getByLabelText('Azure client secret'), {target: {value: 's3cret'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Project endpoint (optional)'}), {
+      target: {value: 'https://my-res.services.ai.azure.com/api/projects/my-project'},
+    })
+    fireEvent.blur(screen.getByRole('textbox', {name: 'Client ID'}))
     expect(screen.getByText(/Must be a GUID/)).toBeInTheDocument()
     expect(saveButton()).toBeDisabled()
 
-    fireEvent.change(screen.getByRole('textbox', {name: 'Tenant ID'}), {target: {value: TENANT_GUID}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Client ID'}), {target: {value: CLIENT_GUID}})
     expect(screen.queryByText(/Must be a GUID/)).toBeNull()
     expect(saveButton()).toBeEnabled()
   })

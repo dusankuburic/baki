@@ -34,7 +34,7 @@ var modelCatalog = map[string][]ModelInfo{
 		{ID: "claude-opus-4-5", DisplayName: "Claude Opus 4.5", ContextLimit: 200000, MaxOutputTokens: 64000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},
 		{ID: "claude-sonnet-5-5", DisplayName: "Claude Sonnet 5.5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 10.0}},
 		{ID: "claude-sonnet-5", DisplayName: "Claude Sonnet 5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 10.0}},
-		{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6", ContextLimit: 1000000, MaxOutputTokens: 64000, Pricing: Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}},
+		{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}},
 		{ID: "claude-sonnet-4-5", DisplayName: "Claude Sonnet 4.5", ContextLimit: 200000, MaxOutputTokens: 64000, Pricing: Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}},
 		{ID: "claude-haiku-4-5", DisplayName: "Claude Haiku 4.5", ContextLimit: 200000, MaxOutputTokens: 64000, Pricing: Pricing{InputCostPerM: 1.0, OutputCostPerM: 5.0}},
 	},

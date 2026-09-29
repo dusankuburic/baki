@@ -40,6 +40,28 @@ func TestIsInternalIP(t *testing.T) {
 		{"::", true},
 		{"8.8.8.8", false},
 		{"2606:4700::1111", false},
+		// Special-purpose ranges beyond the net.IP predicates.
+		{"168.63.129.16", true}, // Azure wireserver / DNS
+		{"168.63.129.17", false},
+		{"100.64.0.1", true}, // CGNAT
+		{"100.127.255.254", true},
+		{"100.128.0.1", false},
+		{"0.1.2.3", true}, // "this network"
+		{"192.0.0.8", true},
+		{"192.0.1.1", false},
+		{"198.18.0.1", true}, // benchmarking
+		{"198.19.255.255", true},
+		{"198.20.0.1", false},
+		// IPv4-mapped, NAT64 and 6to4 forms are judged by the embedded IPv4.
+		{"::ffff:169.254.169.254", true},
+		{"64:ff9b::a9fe:a9fe", true}, // NAT64 169.254.169.254
+		{"64:ff9b::7f00:1", true},    // NAT64 127.0.0.1
+		{"64:ff9b::a00:1", true},     // NAT64 10.0.0.1
+		{"64:ff9b::808:808", false},  // NAT64 8.8.8.8
+		{"2002:a9fe:a9fe::1", true},  // 6to4 169.254.169.254
+		{"2002:7f00:1::", true},      // 6to4 127.0.0.1
+		{"2002:a83f:8110::1", true},  // 6to4 168.63.129.16
+		{"2002:808:808::1", false},   // 6to4 8.8.8.8
 	}
 	for _, c := range cases {
 		t.Run(c.ip, func(t *testing.T) {
@@ -329,7 +351,7 @@ func TestCheckDialAddress(t *testing.T) {
 		"example.com:443":       false, // the hook only ever sees IPs
 		"no-port":               false,
 	} {
-		if err := checkDialAddress(addr); (err == nil) != ok {
+		if err := checkDialAddress(addr, BlockInternal); (err == nil) != ok {
 			t.Errorf("checkDialAddress(%q) = %v, want ok=%v", addr, err, ok)
 		}
 	}

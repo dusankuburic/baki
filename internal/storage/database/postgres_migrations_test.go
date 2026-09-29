@@ -152,3 +152,34 @@ func TestMigration23_OrgProviderKeys(t *testing.T) {
 		t.Errorf("v23 down must drop org_provider_keys, got:\n%s", m.downSQL)
 	}
 }
+
+// TestMigration24_OrgProviderKeysSecretSetBy pins the lender-tracking step:
+// v24 adds org_provider_keys.secret_set_by (additive, empty default),
+// backfills it from updated_by so existing credentials keep their lender,
+// and its down step drops the column again. The table stays RLS-free.
+func TestMigration24_OrgProviderKeysSecretSetBy(t *testing.T) {
+	m, ok := migrationByVersion(24)
+	if !ok {
+		t.Fatal("migration v24 not registered")
+	}
+	if m.name != "org_provider_keys_secret_set_by" {
+		t.Errorf("v24 name = %q, want %q", m.name, "org_provider_keys_secret_set_by")
+	}
+	for _, want := range []string{
+		"ALTER TABLE org_provider_keys ADD COLUMN IF NOT EXISTS secret_set_by TEXT NOT NULL DEFAULT ''",
+		"UPDATE org_provider_keys SET secret_set_by = updated_by WHERE secret_set_by = ''",
+	} {
+		if !strings.Contains(m.sql, want) {
+			t.Errorf("v24 must contain %q, got:\n%s", want, m.sql)
+		}
+	}
+	if strings.Index(m.sql, "ADD COLUMN") > strings.Index(m.sql, "UPDATE org_provider_keys") {
+		t.Errorf("v24 must add the column before backfilling it, got:\n%s", m.sql)
+	}
+	if strings.Contains(m.sql, "ROW LEVEL SECURITY") {
+		t.Errorf("v24 must not enable RLS on org_provider_keys, got:\n%s", m.sql)
+	}
+	if !strings.Contains(m.downSQL, "ALTER TABLE org_provider_keys DROP COLUMN IF EXISTS secret_set_by") {
+		t.Errorf("v24 down must drop secret_set_by, got:\n%s", m.downSQL)
+	}
+}

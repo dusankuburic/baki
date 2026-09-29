@@ -1,7 +1,9 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 
 	"pad-analyzer/internal/ai"
@@ -40,13 +42,36 @@ const (
 const outputLimitMsg = "the model used its whole Max tokens budget before writing an answer (reasoning models count their thinking against it) — raise Max tokens in Settings → AI Behavior and try again"
 
 // isOutputLimitFinish reports whether a provider finish reason means the
-// completion stopped at its token cap: OpenAI-compatible chat completions and
-// the Responses mapping ("length"), Claude ("max_tokens"), Gemini
-// ("MAX_TOKENS").
+// completion was cut off at an output limit: its token cap — OpenAI-compatible
+// chat completions and the Responses mapping ("length"), Claude
+// ("max_tokens"), Gemini ("MAX_TOKENS") — or, on Claude 4.5+ models, the
+// context window filling up during generation
+// ("model_context_window_exceeded"; the API accepts input + max_tokens beyond
+// the window and stops there instead of refusing the request).
 func isOutputLimitFinish(reason string) bool {
 	switch reason {
-	case "length", "max_tokens", "MAX_TOKENS":
+	case "length", "max_tokens", "MAX_TOKENS", "model_context_window_exceeded":
 		return true
+	}
+	return false
+}
+
+// truncatedToolTurn reports a turn whose tool calls must not run: the turn
+// was cut off at an output limit (a call may be missing arguments or be only
+// the first of those the model meant to make), or a call's arguments are not
+// valid JSON — a call cut mid-argument, whatever finish reason the provider
+// reported. Empty arguments are the providers' "{}" (no arguments).
+func truncatedToolTurn(calls []ai.ToolCall, finishReason string) bool {
+	if len(calls) == 0 {
+		return false
+	}
+	if isOutputLimitFinish(finishReason) {
+		return true
+	}
+	for _, tc := range calls {
+		if in := bytes.TrimSpace(tc.Input); len(in) > 0 && !json.Valid(in) {
+			return true
+		}
 	}
 	return false
 }
@@ -211,6 +236,8 @@ func (c *streamCtl) classifyFailureBase(ctx context.Context, err error) (code, m
 		return ChatErrProviderBalance, "the AI provider account has insufficient balance — add credits or switch providers"
 	case errors.Is(err, ai.ErrContentFiltered):
 		return ChatErrContentFiltered, "the provider's content filter blocked this request or response — rephrase and try again"
+	case errors.Is(err, ai.ErrOutputLimit):
+		return ChatErrOutputLimit, outputLimitMsg
 	case errors.Is(err, ai.ErrProviderConfigInvalid):
 		return ChatErrProviderNotConfigured, "this provider's configuration is invalid — open Settings → AI Accounts and save it again"
 	case errors.Is(err, ai.ErrProviderPermissionDenied):
@@ -219,6 +246,11 @@ func (c *streamCtl) classifyFailureBase(ctx context.Context, err error) (code, m
 		return ChatErrProviderPermission, "the provider accepted these credentials, but the service principal lacks permission for this model or agent — assign it the Foundry User role on the Azure AI Foundry resource, then use Test in Settings → AI Accounts for details"
 	case errors.Is(err, ai.ErrEntraCredentialsRejected):
 		// Also ErrApiKeyInvalid; an Entra ID service principal has no API key.
+		// Name the specific cause when Entra gave one (expired secret, secret
+		// ID pasted for its value, unknown tenant, Conditional Access, …).
+		if reason, ok := ai.EntraRejectionReason(err); ok {
+			return ChatErrProviderAuth, reason + " — update the credentials in Settings → AI Accounts"
+		}
 		return ChatErrProviderAuth, "Microsoft Entra ID rejected this provider's credentials (tenant ID, client ID or client secret — an expired client secret is the usual cause) — update them in Settings → AI Accounts"
 	case errors.Is(err, ai.ErrEntraTokenRejected):
 		// Also ErrApiKeyInvalid; the token WAS issued, the resource refused it

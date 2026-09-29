@@ -14,11 +14,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	azruntime "github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"golang.org/x/sync/singleflight"
 
+	"pad-analyzer/internal/egress"
 	"pad-core/logger"
 )
 
@@ -33,8 +35,10 @@ const azureFoundryScope = "https://ai.azure.com/.default"
 var errEntraToken = errors.New("azure ai foundry: entra id token")
 
 // ErrEntraCredentialsRejected marks a Microsoft Entra ID token request the
-// identity platform refused with HTTP 400/401 — unknown tenant, wrong client
-// ID, invalid or expired client secret. The error also matches
+// identity platform refused — HTTP 400/401, or one of the AADSTS codes that
+// name a fixable cause (aadExplanations): unknown tenant, wrong client ID,
+// invalid or expired client secret, a disabled application, Conditional
+// Access. The error's message names the cause. The error also matches
 // ErrApiKeyInvalid, so every auth-failure rule applies (no retry, no
 // circuit-breaker count, PROVIDER_AUTH); the chat copy and the connection
 // test check this first to name the service principal instead of an API key.
@@ -42,7 +46,9 @@ var ErrEntraCredentialsRejected = errors.New("microsoft entra id rejected the se
 
 // ErrEntraTokenUnavailable marks a token request that failed for a reason
 // other than refused credentials — the identity service unreachable or
-// answering 5xx, the fetch timed out. Deliberately not ErrProviderDown:
+// answering 5xx or OAuth "temporarily_unavailable" (whatever the HTTP
+// status), the fetch timed out: worth trying again later, unlike a
+// refusal. Deliberately not ErrProviderDown:
 // azidentity already retried the token endpoint, the retry wrapper would
 // re-run 30 s fetches (and mask the cause behind the connection test's
 // deadline), and the resource's circuit breaker must not open for the
@@ -88,6 +94,19 @@ type entraTokenError struct {
 
 func (e *entraTokenError) Error() string { return e.msg }
 
+// EntraRejectionReason returns the one-line explanation of a refused
+// Microsoft Entra ID sign-in anywhere in err's chain ("Microsoft Entra ID
+// refused the sign-in: the client secret has expired — … (AADSTS7000222
+// invalid_client)"), for chat copy that should name the fix. It never
+// contains the secret. false when err is not a credential refusal.
+func EntraRejectionReason(err error) (string, bool) {
+	var e *entraTokenError
+	if !errors.As(err, &e) || !e.rejected || e.msg == "" {
+		return "", false
+	}
+	return e.msg, true
+}
+
 func (e *entraTokenError) Unwrap() []error {
 	errs := []error{errEntraToken}
 	if e.rejected {
@@ -101,47 +120,107 @@ func (e *entraTokenError) Unwrap() []error {
 	return errs
 }
 
-// classifyEntraTokenError maps a GetToken failure to an entraTokenError: a
-// 400/401 from the token endpoint is ErrEntraCredentialsRejected (and
-// ErrApiKeyInvalid) with the AADSTS code; any other failure is one line
-// without the response dump. The full azidentity text goes to the server log.
+// classifyEntraTokenError maps a GetToken failure to an entraTokenError, one
+// line without the response dump (the full azidentity text goes to the
+// server log):
+//   - OAuth "temporarily_unavailable" is ErrEntraTokenUnavailable whatever
+//     the HTTP status: the identity service asks to be asked again;
+//   - an AADSTS code with a known cause (aadExplanations) is
+//     ErrEntraCredentialsRejected (and ErrApiKeyInvalid) whose message says
+//     what to fix — an expired secret, the secret ID pasted for its value, an
+//     unknown tenant or application, Conditional Access;
+//   - any other 400/401 is ErrEntraCredentialsRejected with the AADSTS code;
+//   - anything else is ErrEntraTokenUnavailable — a connection failure in
+//     fixed copy (egress.DescribeFailure: the text of a failed dial names the
+//     proxy's or the resolved address, which must not reach a client).
+//
+// The messages carry the AADSTS code and OAuth error, never the secret.
 func classifyEntraTokenError(err error) error {
 	logger.Warn("azure ai foundry: entra id token request failed", "error", err)
 	var afe *azidentity.AuthenticationFailedError
 	if errors.As(err, &afe) && afe.RawResponse != nil {
 		status := afe.RawResponse.StatusCode
-		detail := aadErrorDetail(afe.RawResponse)
+		body := readAADRefusal(afe.RawResponse)
+		detail := aadErrorDetail(status, body)
+		if body.Error == aadTemporarilyUnavailable {
+			return &entraTokenError{cause: err,
+				msg: "Microsoft Entra ID is temporarily unavailable — try again shortly (" + detail + ")"}
+		}
+		if why := aadExplanation(body.ErrorCodes); why != "" {
+			return &entraTokenError{rejected: true, cause: err,
+				msg: "Microsoft Entra ID refused the sign-in: " + why + " (" + detail + ")"}
+		}
 		if status == http.StatusBadRequest || status == http.StatusUnauthorized {
 			return &entraTokenError{rejected: true, cause: err,
 				msg: "Microsoft Entra ID rejected the tenant ID, client ID or client secret (" + detail + ")"}
 		}
 		return &entraTokenError{cause: err, msg: "the Microsoft Entra ID token request failed (" + detail + ")"}
 	}
+	if what, ok := egress.DescribeFailure(err); ok {
+		return &entraTokenError{cause: err, msg: "could not reach Microsoft Entra ID for a token: " + what}
+	}
 	return &entraTokenError{cause: err, msg: "the Microsoft Entra ID token request failed: " + oneLine(err.Error(), 300)}
+}
+
+// aadTemporarilyUnavailable is the OAuth error of a token endpoint that asks
+// to be retried later (RFC 6749 section 4.1.2.1).
+const aadTemporarilyUnavailable = "temporarily_unavailable"
+
+// aadExplanations are the AADSTS codes whose cause the user can fix, and
+// what to do about each. Every one of them is a refusal (not retryable).
+var aadExplanations = map[int]string{
+	7000222: "the client secret has expired — create a new secret under Certificates & secrets in the app registration and save it here",
+	7000215: "the client secret is not valid — paste the secret's Value, not its Secret ID",
+	700016:  "the application (client) ID was not found in the tenant — check the client ID, and that the app is registered in or consented to by this tenant",
+	90002:   "the tenant was not found — check the tenant ID (the directory ID or a domain such as contoso.onmicrosoft.com)",
+	900023:  "the tenant ID is not a valid tenant — use the directory ID or a domain such as contoso.onmicrosoft.com",
+	500011:  "the Azure AI Foundry resource principal (https://ai.azure.com) was not found in the tenant — check that the tenant ID is the resource's own tenant and that the resource is in the Azure public cloud (the only cloud supported)",
+	53003:   "a Conditional Access policy blocked the sign-in — a tenant administrator must allow this service principal",
+	7000112: "the application is disabled in the tenant — a tenant administrator must enable it",
+}
+
+// aadExplanation is the explanation of the first known AADSTS code, "" when
+// none is known.
+func aadExplanation(codes []int) string {
+	for _, c := range codes {
+		if why, ok := aadExplanations[c]; ok {
+			return why
+		}
+	}
+	return ""
+}
+
+// aadRefusal is the OAuth error body of a token-endpoint answer.
+type aadRefusal struct {
+	Error      string `json:"error"`
+	ErrorCodes []int  `json:"error_codes"`
+}
+
+// readAADRefusal parses a token-endpoint answer's OAuth error body; the zero
+// value when there is none.
+func readAADRefusal(resp *http.Response) aadRefusal {
+	var body aadRefusal
+	raw, err := azruntime.Payload(resp) // re-readable: the logged error keeps its body
+	if err != nil || json.Unmarshal(raw, &body) != nil {
+		return aadRefusal{}
+	}
+	body.Error = oneLine(body.Error, 64)
+	return body
 }
 
 // aadErrorDetail names a token-endpoint refusal by its first AADSTS code and
 // OAuth error ("AADSTS7000215 invalid_client"), else by its HTTP status.
-func aadErrorDetail(resp *http.Response) string {
-	var body struct {
-		Error      string `json:"error"`
-		ErrorCodes []int  `json:"error_codes"`
-	}
-	status := fmt.Sprintf("HTTP %d", resp.StatusCode)
-	raw, err := azruntime.Payload(resp) // re-readable: the logged error keeps its body
-	if err != nil || json.Unmarshal(raw, &body) != nil {
-		return status
-	}
-	oauth := oneLine(body.Error, 64)
+func aadErrorDetail(status int, body aadRefusal) string {
+	httpStatus := fmt.Sprintf("HTTP %d", status)
 	switch {
-	case len(body.ErrorCodes) > 0 && oauth != "":
-		return fmt.Sprintf("AADSTS%d %s", body.ErrorCodes[0], oauth)
+	case len(body.ErrorCodes) > 0 && body.Error != "":
+		return fmt.Sprintf("AADSTS%d %s", body.ErrorCodes[0], body.Error)
 	case len(body.ErrorCodes) > 0:
 		return fmt.Sprintf("AADSTS%d", body.ErrorCodes[0])
-	case oauth != "":
-		return status + " " + oauth
+	case body.Error != "":
+		return httpStatus + " " + body.Error
 	}
-	return status
+	return httpStatus
 }
 
 // oneLine reduces s to its first line, trimmed and cut on a rune boundary to
@@ -294,12 +373,21 @@ const entraSourcesMax = 256
 // entraCredentialOptions wires the Entra ID credential to the package's
 // runtime client (azureHTTPClient): azidentity's default pipeline would use
 // azcore's own transport, which bypasses the egress guard and follows
-// redirects. The authority host (login.microsoftonline.com) is a fixed,
-// Microsoft-owned public host, so the cloud-mode dial-time guard passes it
-// without any allow-list entry, and desktop/local mode's loopback allowance
-// keeps local fakes and proxies working.
+// redirects.
+//
+// The authority is pinned to the Azure public cloud
+// (login.microsoftonline.com): with no cloud set, azidentity takes a
+// process-wide AZURE_AUTHORITY_HOST from the environment — set for some
+// other Azure SDK client, it would silently send every user's client secret
+// to that authority. Azure AI Foundry support is public-cloud only (the
+// token scope and the host allow-list are the public cloud's), so there is
+// nothing to switch to. The authority is a fixed, Microsoft-owned public
+// host, so the cloud-mode dial-time guard passes it without any allow-list
+// entry, and desktop/local mode's loopback allowance keeps local fakes and
+// proxies working.
 func entraCredentialOptions() *azidentity.ClientSecretCredentialOptions {
 	opts := &azidentity.ClientSecretCredentialOptions{}
+	opts.Cloud = cloud.AzurePublic
 	opts.Transport = azureHTTPClient()
 	return opts
 }
@@ -348,10 +436,10 @@ func entraSourceFor(tenantID, clientID, clientSecret string) (*entraTokenSource,
 	// hop: azidentity's default (nil options) pipeline uses azcore's own
 	// transport — no egress guard, redirects followed. *http.Client satisfies
 	// azcore's policy.Transporter, and azureHTTPClient() is the guarded,
-	// no-redirects client in cloud mode. The authority host
-	// (login.microsoftonline.com) is a fixed, Microsoft-owned host that
-	// resolves publicly, so the BlockInternal dial-time guard passes it
-	// unchanged; in desktop/local mode nothing is guarded and loopback is
+	// no-redirects client in cloud mode. The authority host is pinned to the
+	// public cloud's login.microsoftonline.com (entraCredentialOptions), a
+	// fixed, Microsoft-owned host that resolves publicly, so the
+	// BlockInternal dial-time guard passes it unchanged; in desktop/local mode nothing is guarded and loopback is
 	// allowed, so nothing regresses there either. The constructor is kept so
 	// Invalidate can rebuild the credential (a fresh MSAL cache).
 	newCred := func() (azcore.TokenCredential, error) {

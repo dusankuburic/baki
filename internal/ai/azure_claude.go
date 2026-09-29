@@ -4,25 +4,29 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
-// Claude on Azure AI Foundry. Claude deployments (Opus/Sonnet/Haiku 4.x —
-// Azure Marketplace billing, a paid pay-as-you-go subscription is required)
-// are NOT reachable through the resource's /openai/v1 route (404): they
-// answer on the Anthropic Messages API at
+// Claude on Azure AI Foundry. Claude deployments — Fable 5.1 and 5, Mythos
+// 5.1 and 5 (limited availability), Opus 5.5, 5, 4.8, 4.7, 4.6 and 4.5,
+// Sonnet 5.5, 5, 4.6 and 4.5, Haiku 4.5 (Anthropic's Foundry page, "API model
+// IDs and deployments"); Azure Marketplace billing, a paid pay-as-you-go
+// subscription is required — are NOT reachable through the resource's
+// /openai/v1 route (404): they answer on the Anthropic Messages API at
 //
-//	POST {endpoint}/anthropic/v1/messages
+//	POST https://{resource}.services.ai.azure.com/anthropic/v1/messages
 //
 // with the header anthropic-version: 2023-06-01 and either api-key / x-api-key:
 // <key> (API-key mode; both are accepted, both are sent) or
 // Authorization: Bearer <Entra ID token> (scope
-// https://ai.azure.com/.default; the Mythos tier is Entra ID only), `model`
-// being the DEPLOYMENT name; standard Anthropic streaming, tools, adaptive
-// thinking and error envelopes; 429 with retry-after. The route is documented
-// on the *.services.ai.azure.com host; whether a *.openai.azure.com endpoint
-// also serves /anthropic is unverified, so the document's endpoint host is
-// used as-is and the smoke test decides.
+// https://ai.azure.com/.default), `model` being the DEPLOYMENT name; standard
+// Anthropic streaming, tools, adaptive thinking and error envelopes; 429 with
+// retry-after; request-id and apim-request-id on every response. That host
+// is the only one the route is documented on, so a document whose endpoint
+// is the same resource's *.openai.azure.com or *.cognitiveservices.azure.com
+// host is sent to <resource>.services.ai.azure.com (claudeOnFoundryBase); any
+// other allow-listed host (an operator's API Management front) is used as-is.
 //
 // The chat model picker offers each Claude deployment as "claude:<name>"
 // (claudeModelPrefix): the prefix is what routes the call to the Anthropic
@@ -57,20 +61,50 @@ const (
 	anthropicModelPublisher = "Anthropic"
 )
 
+// claudeOnFoundryHostSuffixes are the resource host suffixes whose Claude
+// route lives on the same resource's services.ai.azure.com host.
+var claudeOnFoundryHostSuffixes = []string{".openai.azure.com", ".cognitiveservices.azure.com"}
+
+// claudeOnFoundryBase is the base URL of the resource's Anthropic route: the
+// endpoint itself, except that https://<resource>.openai.azure.com and
+// https://<resource>.cognitiveservices.azure.com (a single-label resource
+// name — the names Azure issues) become https://<resource>.services.ai.azure.com,
+// the host Anthropic documents for Claude in Microsoft Foundry. Every other
+// host — services.ai.azure.com itself, an operator's API Management front
+// (PAD_AZURE_FOUNDRY_ALLOWED_HOSTS), a multi-label private DNS name — is kept.
+func claudeOnFoundryBase(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.Port() != "" {
+		return endpoint
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, suffix := range claudeOnFoundryHostSuffixes {
+		resource, ok := strings.CutSuffix(host, suffix)
+		if ok && resource != "" && !strings.Contains(resource, ".") {
+			u.Host = resource + ".services.ai.azure.com"
+			return strings.TrimRight(u.String(), "/")
+		}
+	}
+	return endpoint
+}
+
 // newClaudeOnFoundry builds the Anthropic-wire provider for the resource's
-// Claude deployments: the Messages route on the document's endpoint, the
-// document's credential (tokenFn in Entra ID mode — the Azure provider's
-// entraToken, which records the token on the call's context so
-// withTokenRetry can invalidate exactly that one), the guarded Azure client,
-// and servedModelFor, which names the model behind a deployment for the
-// sampling policy. Only Chat and Stream are used; the Azure provider keeps
-// its own identity, listing and pricing.
+// Claude deployments: the Messages route on the resource's documented host
+// (claudeOnFoundryBase), the document's credential (tokenFn in Entra ID mode
+// — the Azure provider's entraToken, which records the token on the call's
+// context so withTokenRetry can invalidate exactly that one), the guarded
+// Azure client, and servedModelFor, which names the model behind a
+// deployment for the sampling policy. Only Chat and Stream are used; the
+// Azure provider keeps its own identity, listing and pricing — the chat
+// service's tool loop therefore tags this route's replay records with the
+// Azure provider's ID (itemsOwner).
 func newClaudeOnFoundry(cfg AzureFoundryConfig, client *http.Client, tokenFn func(ctx context.Context) (string, error), servedModelFor func(string) string) *ClaudeProvider {
 	p := &ClaudeProvider{
 		client:         client,
-		messagesURL:    cfg.Endpoint + "/anthropic/v1/messages",
+		messagesURL:    claudeOnFoundryBase(cfg.Endpoint) + "/anthropic/v1/messages",
 		servedModelFor: servedModelFor,
 		label:          "azure ai foundry (claude)",
+		itemsOwner:     azureFoundryProviderID,
 	}
 	switch cfg.Auth.Mode {
 	case AzureAuthModeAPIKey:

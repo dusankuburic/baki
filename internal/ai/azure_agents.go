@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"pad-core/logger"
 )
@@ -244,6 +245,7 @@ func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]p
 				Type           string         `json:"type"`
 				ModelName      string         `json:"modelName"`
 				ModelPublisher string         `json:"modelPublisher"`
+				ConnectionName string         `json:"connectionName"`
 				Capabilities   map[string]any `json:"capabilities"`
 			}
 			if err := json.Unmarshal(raw, &d); err != nil {
@@ -252,6 +254,15 @@ func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]p
 			}
 			name := strings.TrimSpace(d.Name)
 			if name == "" || seen[strings.ToLower(name)] {
+				continue
+			}
+			if conn := strings.TrimSpace(d.ConnectionName); conn != "" {
+				// A deployment that comes from a project CONNECTION (an AI
+				// gateway / external model endpoint) is reachable through that
+				// connection only — the resource's /openai/v1 route answers
+				// 404 for its name — so it is not offered.
+				logger.Debug("azure ai foundry: skipping a connection deployment not callable on /openai/v1",
+					"deployment", name, "connection", conn)
 				continue
 			}
 			seen[strings.ToLower(name)] = true
@@ -343,8 +354,12 @@ func definitiveProjectFailure(err error) bool {
 // returns each agent the shared Responses route can run — prompt and workflow
 // agents, or no kind (older shapes). Hosted agents answer only on their own
 // endpoint, external (A2A) and voice agents are not Responses chat targets;
-// they are skipped and do not count toward the cap. agentModels turns the
-// result into model-list entries once the deployments listing is known.
+// a disabled agent (state) or one whose latest version is still being
+// provisioned, failed or is being deleted (versions.latest.status) cannot
+// answer either. They are skipped and do not count toward the cap. Each
+// listed agent's kind is remembered (rememberAgentKind) so a workflow agent
+// is invoked with its preview opt-in header. agentModels turns the result
+// into model-list entries once the deployments listing is known.
 func (p *AzureFoundryProvider) fetchAgents(ctx context.Context) ([]azureAgent, error) {
 	var out []azureAgent
 	next := p.cfg.ProjectEndpoint + "/agents?api-version=" + azureProjectAPIVersion
@@ -383,6 +398,12 @@ func (p *AzureFoundryProvider) fetchAgents(ctx context.Context) ([]azureAgent, e
 				logger.Debug("azure ai foundry: skipping agent not callable via agent_reference", "agent", name, "kind", a.kind())
 				continue
 			}
+			if !a.usable() {
+				logger.Debug("azure ai foundry: skipping an agent that is disabled or whose latest version is not active",
+					"agent", name, "state", a.State, "status", a.Versions.Latest.Status)
+				continue
+			}
+			rememberAgentKind(p.cfg.ProjectEndpoint, name, a.kind())
 			out = append(out, a)
 			if len(out) >= azureProjectMaxAgents {
 				break
@@ -423,9 +444,14 @@ func (p *AzureFoundryProvider) agentModels(agents []azureAgent, deployedModels m
 	out := make([]ModelInfo, 0, len(agents))
 	for _, a := range agents {
 		name := a.label()
+		display := "Agent · " + name
+		if a.kind() == agentKindWorkflow {
+			// A preview kind that retires on December 1, 2026: say what it is.
+			display += " (workflow)"
+		}
 		m := ModelInfo{
 			ID:           agentModelPrefix + name,
-			DisplayName:  "Agent · " + name,
+			DisplayName:  display,
 			ContextLimit: p.ContextLimit(),
 		}
 		if dep := a.model(); dep != "" {
@@ -453,11 +479,16 @@ func (p *AzureFoundryProvider) agentModels(agents []azureAgent, deployedModels m
 // and kind sit on the latest version's definition; older shapes carry them at
 // the top level, so both are read.
 type azureAgent struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Model    string `json:"model"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Model string `json:"model"`
+	// State is the agent's operational state (enabled | disabled).
+	State    string `json:"state"`
 	Versions struct {
 		Latest struct {
+			// Status is the latest version's provisioning status (creating |
+			// active | failed | deleting | deleted); optional.
+			Status     string `json:"status"`
 			Definition struct {
 				Kind  string `json:"kind"`
 				Model string `json:"model"`
@@ -496,10 +527,126 @@ func (a azureAgent) kind() string {
 // agents are not Responses chat targets.
 func (a azureAgent) runsViaAgentReference() bool {
 	switch a.kind() {
-	case "", "prompt", "workflow":
+	case "", "prompt", agentKindWorkflow:
 		return true
 	}
 	return false
+}
+
+// usable reports whether the agent can answer now: its state is "enabled"
+// and its latest version, when the listing reports a status, is "active". An
+// absent state is an older listing shape that predates the field and is
+// kept.
+func (a azureAgent) usable() bool {
+	if s := strings.TrimSpace(a.State); s != "" && !strings.EqualFold(s, "enabled") {
+		return false
+	}
+	if s := strings.TrimSpace(a.Versions.Latest.Status); s != "" && !strings.EqualFold(s, "active") {
+		return false
+	}
+	return true
+}
+
+// agentKindWorkflow is the workflow agent kind. Workflow agents are a
+// preview gated by the Foundry-Features opt-in header on every call
+// (workflowFeatureHeader) and retire on December 1, 2026; they stay listed,
+// marked "(workflow)", until then.
+const agentKindWorkflow = "workflow"
+
+// Workflow agents' preview opt-in: the Foundry-Features header and value the
+// project data plane requires on requests that run one.
+const (
+	foundryFeaturesHeader = "Foundry-Features"
+	workflowFeatureValue  = "WorkflowAgents=V1Preview"
+)
+
+// agentKinds remembers each listed agent's kind per project (the listing is
+// the only place it is reported), so the chat path knows to send the
+// workflow opt-in header without a listing call. Keyed by project endpoint +
+// lower-cased agent name (no secret); bounded, and as long-lived as the
+// served-model memo — an agent's kind does not change without a new listing
+// refreshing the entry.
+var agentKinds = struct {
+	sync.Mutex
+	m map[string]agentKindEntry
+}{m: map[string]agentKindEntry{}}
+
+type agentKindEntry struct {
+	kind string
+	seen time.Time
+}
+
+func agentKindKey(project, name string) string {
+	return project + "\x00" + strings.ToLower(name)
+}
+
+// rememberAgentKind records a listed agent's kind ("" forgets it).
+func rememberAgentKind(project, name, kind string) {
+	key := agentKindKey(project, name)
+	agentKinds.Lock()
+	defer agentKinds.Unlock()
+	if kind == "" {
+		delete(agentKinds.m, key)
+		return
+	}
+	if len(agentKinds.m) >= servedMemoMax {
+		agentKinds.m = map[string]agentKindEntry{}
+	}
+	agentKinds.m[key] = agentKindEntry{kind: kind, seen: time.Now()}
+}
+
+// agentKindFor returns the remembered kind of an agent, "" when unknown.
+func agentKindFor(project, name string) string {
+	key := agentKindKey(project, name)
+	agentKinds.Lock()
+	defer agentKinds.Unlock()
+	e, ok := agentKinds.m[key]
+	if !ok {
+		return ""
+	}
+	if time.Since(e.seen) > servedMemoTTL {
+		delete(agentKinds.m, key)
+		return ""
+	}
+	return e.kind
+}
+
+// resetAgentKinds clears the memo (tests, ResetAzureFoundryCaches).
+func resetAgentKinds() {
+	agentKinds.Lock()
+	agentKinds.m = map[string]agentKindEntry{}
+	agentKinds.Unlock()
+}
+
+// deploymentModelResolver maps a deployment name to the model the cached
+// project deployments listing says it serves (modelName). An agent run's
+// response.model is the agent's DEPLOYMENT — a custom name such as
+// "prod-chat" prices at $0 and teaches the served-model memo nothing — so
+// the agent paths resolve it before it reaches pricing and the memo. Names
+// the listing does not know (a versioned model name, no cached listing)
+// pass through unchanged. The listing is read once per call (never fetched).
+func (p *AzureFoundryProvider) deploymentModelResolver() func(string) string {
+	identity := func(s string) string { return s }
+	models, ok := p.cachedListing()
+	if !ok {
+		return identity
+	}
+	served := map[string]string{}
+	for _, m := range models {
+		if m.ServedModel == "" || m.Embedding || IsAgentModel(m.ID) || IsClaudeModel(m.ID) {
+			continue
+		}
+		served[strings.ToLower(m.ID)] = m.ServedModel
+	}
+	if len(served) == 0 {
+		return identity
+	}
+	return func(s string) string {
+		if m, ok := served[strings.ToLower(strings.TrimSpace(s))]; ok {
+			return m
+		}
+		return s
+	}
 }
 
 func (a azureAgent) model() string {

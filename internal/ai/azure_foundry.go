@@ -80,15 +80,18 @@ func newAzureFoundryProvider(cfg AzureFoundryConfig, cfgErr error, client *http.
 	if p.configErr != nil || !cfg.Configured() {
 		return p
 	}
+	// A 403 is the resource refusing an accepted credential (network rules,
+	// a missing role), in either auth mode — see azureForbidden.
+	p.handle403 = azureForbidden
 	switch cfg.Auth.Mode {
 	case AzureAuthModeAPIKey:
-		// Azure accepts the key either as `api-key` or as a bearer token;
-		// send both so API Management fronts that only inspect one still work.
+		// The key travels ONLY as the documented `api-key` header: a copy in
+		// Authorization: Bearer is not an Entra ID token, and a front that
+		// validates bearer tokens (API Management with validate-jwt, the
+		// resource itself when it prefers the bearer) rejected the request
+		// or read the key as a malformed JWT.
 		p.apiKey = cfg.Auth.Key
-		key := cfg.Auth.Key
-		p.extraHeaders = func(req *http.Request, _ string) {
-			req.Header.Set("api-key", key)
-		}
+		p.apiKeyHeader = "api-key"
 	case AzureAuthModeEntra:
 		src, err := entraSourceFor(cfg.Auth.TenantID, cfg.Auth.ClientID, cfg.Auth.ClientSecret)
 		if err != nil {
@@ -97,10 +100,11 @@ func newAzureFoundryProvider(cfg AzureFoundryConfig, cfgErr error, client *http.
 		}
 		p.tokens = src
 		p.tokenFn = p.entraToken
-		// A 401/403 in Entra ID mode is a rejected ACCESS TOKEN (audience,
-		// cloud, Entra auth disabled, revoked) with Azure's explanation —
-		// not an API key the principal does not have. PermissionDenied keeps
-		// its own path; API-key mode keeps the bare invalid-key mapping.
+		// A 401 in Entra ID mode is a rejected ACCESS TOKEN (audience, cloud,
+		// Entra auth disabled, revoked) with Azure's explanation — not an API
+		// key the principal does not have. PermissionDenied keeps its own
+		// path; API-key mode keeps the bare invalid-key mapping; a 403 is
+		// handle403's.
 		p.handle401 = entraUnauthorized
 	}
 	return p
@@ -200,8 +204,8 @@ func (p *AzureFoundryProvider) withTokenRetry(ctx context.Context, fn func(ctx c
 func (p *AzureFoundryProvider) authorize(ctx context.Context, req *http.Request) error {
 	switch p.cfg.Auth.Mode {
 	case AzureAuthModeAPIKey:
+		// Only the api-key header (see newAzureFoundryProvider).
 		req.Header.Set("api-key", p.cfg.Auth.Key)
-		req.Header.Set("Authorization", "Bearer "+p.cfg.Auth.Key)
 	case AzureAuthModeEntra:
 		tok, err := p.entraToken(ctx)
 		if err != nil {
@@ -585,8 +589,9 @@ func azureModelsCacheKey(cfg AzureFoundryConfig) string {
 }
 
 // ResetAzureFoundryCaches drops the model-listing cache, the served-model
-// memo, the learned context windows, the learned parameter repairs, the
-// embedding-dimensions refusals and the Entra token sources (tests). A
+// memo, the learned context windows, the learned parameter repairs (and
+// streaming refusals), the embedding-dimensions refusals, the Entra token
+// sources and the remembered agent kinds (tests). A
 // configuration save only invalidates that document's listing
 // (InvalidateAzureFoundryModels) and, when the credential changed, its token
 // source (ForgetAzureFoundryCredential); the memos need no reset because
@@ -601,6 +606,7 @@ func ResetAzureFoundryCaches() {
 	resetLearnedRepairs()
 	resetEmbedDimsRefusals()
 	resetEntraSources()
+	resetAgentKinds()
 }
 
 // InvalidateAzureFoundryModels drops the cached listing for one document

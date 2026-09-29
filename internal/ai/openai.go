@@ -84,12 +84,16 @@ type openAIRequest struct {
 	// models (o-series, GPT-5) and Azure AI Foundry deployments of them reject
 	// max_tokens outright. openaiBase.maxTokensParam decides which of the two
 	// a provider sends; exactly one is set per request.
-	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
-	Temperature         float64         `json:"temperature,omitempty"`
-	Messages            []openAIMessage `json:"messages"`
-	Tools               []openAITool    `json:"tools,omitempty"`
-	Stream              bool            `json:"stream,omitempty"`
-	StreamOptions       *streamOptions  `json:"stream_options,omitempty"`
+	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
+	// Temperature is a pointer so an explicit 0 (Request.TemperatureSet —
+	// deterministic sampling) goes out on the wire; nil omits the field
+	// (the provider's default), which a zero Temperature without
+	// TemperatureSet still means.
+	Temperature   *float64        `json:"temperature,omitempty"`
+	Messages      []openAIMessage `json:"messages"`
+	Tools         []openAITool    `json:"tools,omitempty"`
+	Stream        bool            `json:"stream,omitempty"`
+	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
 }
 
 type openAITool struct {
@@ -123,6 +127,12 @@ type openAIMessage struct {
 	Content    string           `json:"content"`
 	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string           `json:"tool_call_id,omitempty"`
+	// ReasoningContent is response-only: the model's reasoning that some
+	// servers return next to the answer (message.reasoning_content —
+	// DeepSeek-R1, GLM, Grok mini, Cohere on Foundry). It becomes
+	// Response.Reasoning, never Content; toOpenAIMessages never sets it, so
+	// it is omitted from requests.
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 type openAIResponse struct {
@@ -142,6 +152,9 @@ type openAIResponse struct {
 	} `json:"usage"`
 }
 
+// openAIErrorResp is the OpenAI error envelope ({"error":{…}}). Decode it
+// with decodeOpenAIError, which also reads the Azure AI Model Inference
+// layer's top-level shape into the same fields.
 type openAIErrorResp struct {
 	Error struct {
 		Message string `json:"message"`

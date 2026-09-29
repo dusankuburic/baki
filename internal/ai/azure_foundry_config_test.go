@@ -120,6 +120,27 @@ func TestAzureFoundryConfig_Validate(t *testing.T) {
 		{"api key missing", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: AzureAuthModeAPIKey}}, AzureCfgErrMissingSecret},
 		{"entra secret missing", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra, TenantID: entra.TenantID, ClientID: entra.ClientID}}, AzureCfgErrMissingSecret},
 		{"entra tenant not a guid", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra, TenantID: "contoso", ClientID: entra.ClientID, ClientSecret: "s"}}, AzureCfgErrInvalidAuth},
+		{"entra tenant domain", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra, TenantID: "Contoso.onmicrosoft.com", ClientID: entra.ClientID, ClientSecret: "s"}}, ""},
+		{"entra tenant custom domain", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra, TenantID: "ai-team.contoso-corp.com", ClientID: entra.ClientID, ClientSecret: "s"}}, ""},
+		{"entra tenant common", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra, TenantID: "common", ClientID: entra.ClientID, ClientSecret: "s"}}, AzureCfgErrInvalidAuth},
+		{"entra tenant organizations", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra, TenantID: "organizations", ClientID: entra.ClientID, ClientSecret: "s"}}, AzureCfgErrInvalidAuth},
+		{"entra tenant consumers", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra, TenantID: "consumers", ClientID: entra.ClientID, ClientSecret: "s"}}, AzureCfgErrInvalidAuth},
+		{"entra tenant path", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra, TenantID: "contoso.com/../x", ClientID: entra.ClientID, ClientSecret: "s"}}, AzureCfgErrInvalidAuth},
+		{"entra tenant ip", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra, TenantID: "10.0.0.1", ClientID: entra.ClientID, ClientSecret: "s"}}, AzureCfgErrInvalidAuth},
+		{"entra tenant dotted edge", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra, TenantID: ".contoso.com", ClientID: entra.ClientID, ClientSecret: "s"}}, AzureCfgErrInvalidAuth},
+		{"entra tenant hyphen label", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: AzureAuthModeEntra, TenantID: "-contoso.com", ClientID: entra.ClientID, ClientSecret: "s"}}, AzureCfgErrInvalidAuth},
+		// The project name starts with a letter or digit: no "." / ".."
+		// segment, whether typed or percent-encoded.
+		{"project dot dot", AzureFoundryConfig{Endpoint: "https://my-res.services.ai.azure.com", Auth: entra, ProjectEndpoint: "https://my-res.services.ai.azure.com/api/projects/.."}, AzureCfgErrInvalidProject},
+		{"project encoded dot dot", AzureFoundryConfig{Endpoint: "https://my-res.services.ai.azure.com", Auth: entra, ProjectEndpoint: "https://my-res.services.ai.azure.com/api/projects/%2e%2e"}, AzureCfgErrInvalidProject},
+		{"project dot", AzureFoundryConfig{Endpoint: "https://my-res.services.ai.azure.com", Auth: entra, ProjectEndpoint: "https://my-res.services.ai.azure.com/api/projects/."}, AzureCfgErrInvalidProject},
+		{"project leading dash", AzureFoundryConfig{Endpoint: "https://my-res.services.ai.azure.com", Auth: entra, ProjectEndpoint: "https://my-res.services.ai.azure.com/api/projects/-p"}, AzureCfgErrInvalidProject},
+		{"project digit first", AzureFoundryConfig{Endpoint: "https://my-res.services.ai.azure.com", Auth: entra, ProjectEndpoint: "https://my-res.services.ai.azure.com/api/projects/1proj.v2"}, ""},
+		// Serverless (MaaS) endpoints; Microsoft's other *.ai.azure.com
+		// hosts are no resource's endpoint.
+		{"serverless models host", AzureFoundryConfig{Endpoint: "https://phi-4-xyz.eastus2.models.ai.azure.com", Auth: apiKey}, ""},
+		{"portal host", AzureFoundryConfig{Endpoint: "https://ai.azure.com", Auth: apiKey}, AzureCfgErrHostNotAllowed},
+		{"other ai.azure.com host", AzureFoundryConfig{Endpoint: "https://foo.ai.azure.com", Auth: apiKey}, AzureCfgErrHostNotAllowed},
 		{"unknown mode", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: "managed"}}, AzureCfgErrInvalidAuth},
 		{"bad deployment name", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: apiKey, ChatDeployment: "my deployment!"}, AzureCfgErrInvalidDeploy},
 		// Finding #14: IP literals never pass, whatever suffix a zone carries.
@@ -319,6 +340,10 @@ func TestAzureHostPolicy(t *testing.T) {
 		"my-res.openai.azure.com":            true,
 		"my-res.services.ai.azure.com":       true,
 		"my-res.cognitiveservices.azure.com": true,
+		"dep.eastus2.models.ai.azure.com":    true,
+		"models.ai.azure.com":                false,
+		"foo.ai.azure.com":                   false,
+		"ai.azure.com":                       false,
 		"gateway.example.com":                true,
 		"api.corp.example":                   true,
 		"corp.example":                       false,
@@ -366,7 +391,7 @@ func TestGuardedAzureTransport_BehindAPrivateProxy(t *testing.T) {
 	base := sharedHTTPClient.Transport.(*http.Transport).Clone()
 	base.Proxy = http.ProxyURL(proxyURL)
 	client := &http.Client{
-		Transport:     guardedAzureTransport(base, &net.Dialer{Timeout: 2 * time.Second}),
+		Transport:     guardedAzureTransport(base, &net.Dialer{Timeout: 2 * time.Second}, egress.BlockInternal),
 		CheckRedirect: egress.NoRedirects,
 	}
 	chat := func(endpoint string) (*Response, error) {
@@ -424,9 +449,30 @@ func TestConfigureAzureFoundry_GuardedClientKeepsTheProxy(t *testing.T) {
 		t.Errorf("direct dials must stay guarded, got %v", err)
 	}
 
+	// PAD_AI_ALLOW_PRIVATE_EGRESS keeps a guarded transport: RFC 1918 and
+	// unique-local addresses (private-link endpoints) are dialled, loopback,
+	// link-local metadata and unspecified addresses still are not.
 	ConfigureAzureFoundry(AzureFoundryOptions{Egress: egress.BlockInternal, AllowPrivateEgress: true})
+	tr, ok = azureHTTPClient().Transport.(*http.Transport)
+	if !ok || tr == sharedHTTPClient.Transport || tr.DialContext == nil {
+		t.Fatalf("PAD_AI_ALLOW_PRIVATE_EGRESS must keep a guarded transport, got %T", azureHTTPClient().Transport)
+	}
+	for _, addr := range []string{"169.254.169.254:443", "127.0.0.1:443", "[::1]:443", "0.0.0.0:443", "168.63.129.16:443", "[fe80::1]:443"} {
+		if _, err := tr.DialContext(context.Background(), "tcp", addr); !errors.Is(err, egress.ErrInternalAddress) {
+			t.Errorf("%s under PAD_AI_ALLOW_PRIVATE_EGRESS: want an internal-address refusal, got %v", addr, err)
+		}
+	}
+	// A private address passes the guard (the dial itself then fails fast:
+	// nothing listens on the port in a test run, or the network is absent).
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := tr.DialContext(ctx, "tcp", "10.255.255.1:9"); errors.Is(err, egress.ErrInternalAddress) {
+		t.Errorf("an RFC 1918 address must pass under PAD_AI_ALLOW_PRIVATE_EGRESS, got %v", err)
+	}
+
+	ConfigureAzureFoundry(AzureFoundryOptions{Egress: egress.AllowLoopback})
 	if azureHTTPClient().Transport != sharedHTTPClient.Transport {
-		t.Error("PAD_AI_ALLOW_PRIVATE_EGRESS uses the shared transport")
+		t.Error("desktop/local mode uses the shared transport")
 	}
 }
 

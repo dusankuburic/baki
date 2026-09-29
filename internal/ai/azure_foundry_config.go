@@ -317,20 +317,51 @@ func normalizeAzureURL(raw string) string {
 }
 
 var (
-	// azureFoundryHostSuffixes are the DNS suffixes Microsoft issues for
-	// Foundry / Azure OpenAI resources. A user-supplied endpoint outside them
-	// is refused (the credential would otherwise be posted to an arbitrary
-	// host of the user's choosing — with the server's egress).
+	// azureFoundryHostSuffixes are the DNS suffixes Microsoft documents for
+	// Foundry / Azure OpenAI resources in the Azure public cloud (the only
+	// cloud supported): the Azure OpenAI and Foundry resource hosts, the
+	// Cognitive Services custom subdomain, and serverless (MaaS) model
+	// endpoints (<deployment>.<region>.models.ai.azure.com). A user-supplied
+	// endpoint outside them is refused (the credential would otherwise be
+	// posted to an arbitrary host of the user's choosing — with the server's
+	// egress). The broader ".ai.azure.com" is deliberately not listed: it
+	// covers Microsoft's own portal and service hosts, which are no
+	// resource's endpoint.
 	azureFoundryHostSuffixes = []string{
 		".openai.azure.com",
 		".services.ai.azure.com",
 		".cognitiveservices.azure.com",
-		".ai.azure.com",
+		".models.ai.azure.com",
 	}
 	azureDeploymentName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
-	azureProjectPath    = regexp.MustCompile(`^/api/projects/[A-Za-z0-9._-]{1,64}$`)
-	azureGUID           = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	// azureProjectPath: the project name starts with a letter or digit, so
+	// "." and ".." (also as %2e%2e, which url.Parse decodes) can never make
+	// the joined project routes climb out of /api/projects/.
+	azureProjectPath = regexp.MustCompile(`^/api/projects/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	azureGUID        = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	// azureTenantDomain is a tenant's verified domain name
+	// (contoso.onmicrosoft.com, contoso.com): lower-case DNS labels, at least
+	// two. The input is lower-cased by normalize.
+	azureTenantDomain = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 )
+
+// azureMultiTenantAuthorities are the Entra ID pseudo-tenants that are not a
+// tenant: a client-credentials sign-in needs the app's home tenant.
+var azureMultiTenantAuthorities = map[string]bool{"common": true, "organizations": true, "consumers": true}
+
+// validAzureTenantID accepts a directory (tenant) ID — a GUID — or one of
+// the tenant's domain names (contoso.onmicrosoft.com), and refuses the
+// multi-tenant pseudo-tenants and IP literals.
+func validAzureTenantID(id string) bool {
+	if azureGUID.MatchString(id) {
+		return true
+	}
+	if azureMultiTenantAuthorities[id] || len(id) > 253 || !azureTenantDomain.MatchString(id) {
+		return false
+	}
+	_, err := netip.ParseAddr(id)
+	return err != nil
+}
 
 // Validate checks the document's shape and the endpoint allow-list. It does
 // no DNS resolution and no network I/O (the dial-time guard covers runtime),
@@ -356,8 +387,8 @@ func (c AzureFoundryConfig) Validate(hosts azureHostPolicy) error {
 			return azureCfgErr(AzureCfgErrInvalidAuth, "the API key is too long")
 		}
 	case AzureAuthModeEntra:
-		if !azureGUID.MatchString(c.Auth.TenantID) {
-			return azureCfgErr(AzureCfgErrInvalidAuth, "the tenant ID must be a GUID")
+		if !validAzureTenantID(c.Auth.TenantID) {
+			return azureCfgErr(AzureCfgErrInvalidAuth, "the tenant ID must be the directory (tenant) ID GUID or a domain name of the tenant such as contoso.onmicrosoft.com (common, organizations and consumers are not tenants)")
 		}
 		if !azureGUID.MatchString(c.Auth.ClientID) {
 			return azureCfgErr(AzureCfgErrInvalidAuth, "the client ID must be a GUID")
@@ -435,7 +466,7 @@ func validateAzureEndpoint(raw string, hosts azureHostPolicy, project bool) erro
 			// resource endpoint is fine that it is wrong.
 			return azureCfgErr(AzureCfgErrInvalidProject, "the project endpoint host %q is not an Azure AI Foundry host (expected <resource>.services.ai.azure.com; the operator can allow other hosts with PAD_AZURE_FOUNDRY_ALLOWED_HOSTS)", u.Hostname())
 		}
-		return azureCfgErr(AzureCfgErrHostNotAllowed, "host %q is not an Azure AI Foundry endpoint (expected *.openai.azure.com or *.services.ai.azure.com; the operator can allow other hosts with PAD_AZURE_FOUNDRY_ALLOWED_HOSTS)", u.Hostname())
+		return azureCfgErr(AzureCfgErrHostNotAllowed, "host %q is not an Azure AI Foundry endpoint (expected *.openai.azure.com, *.services.ai.azure.com, *.cognitiveservices.azure.com or *.models.ai.azure.com in the Azure public cloud; the operator can allow other hosts with PAD_AZURE_FOUNDRY_ALLOWED_HOSTS)", u.Hostname())
 	}
 	return nil
 }
@@ -497,10 +528,20 @@ type AzureFoundryOptions struct {
 	// ExtraAllowedHosts extends the endpoint allow-list
 	// (PAD_AZURE_FOUNDRY_ALLOWED_HOSTS).
 	ExtraAllowedHosts []string
-	// AllowPrivateEgress disables the dial-time guard for allow-listed hosts
-	// (PAD_AI_ALLOW_PRIVATE_EGRESS) — for private-link endpoints, whose
-	// privatelink.* names resolve to RFC 1918 addresses by design.
+	// AllowPrivateEgress relaxes the dial-time guard to
+	// egress.AllowPrivateNetwork (PAD_AI_ALLOW_PRIVATE_EGRESS) — for
+	// private-link endpoints, whose privatelink.* names resolve to RFC 1918
+	// addresses by design. Only RFC 1918 and unique-local addresses are
+	// opened: loopback, link-local (169.254.169.254), unspecified and the
+	// other special-purpose ranges stay refused.
 	AllowPrivateEgress bool
+	// Transport is a TEST SEAM — nil in production. When non-nil, the Azure
+	// client every provider and the Entra ID token requests use
+	// (azureHTTPClient) is built on this RoundTripper instead of the shared
+	// transport, still refusing redirects (egress.NoRedirects). The egress
+	// dial-time guard cannot wrap an arbitrary RoundTripper, so the seam
+	// BYPASSES it whatever Egress says: never set it outside tests.
+	Transport http.RoundTripper
 }
 
 // unconfiguredAzureClient is the zero-value client, served until
@@ -536,14 +577,22 @@ var azureRuntime = struct {
 // boot; tests that construct providers directly never need it.
 func ConfigureAzureFoundry(opts AzureFoundryOptions) {
 	var client *http.Client
-	if opts.Egress == egress.BlockInternal && !opts.AllowPrivateEgress {
+	switch {
+	case opts.Transport != nil:
+		// Tests only (see AzureFoundryOptions.Transport): no dial guard.
+		client = &http.Client{Timeout: 0, Transport: opts.Transport, CheckRedirect: egress.NoRedirects}
+	case opts.Egress == egress.BlockInternal:
 		base, ok := sharedHTTPClient.Transport.(*http.Transport)
 		if !ok {
 			base = http.DefaultTransport.(*http.Transport)
 		}
-		t := guardedAzureTransport(base, &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second})
+		policy := egress.BlockInternal
+		if opts.AllowPrivateEgress {
+			policy = egress.AllowPrivateNetwork
+		}
+		t := guardedAzureTransport(base, &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}, policy)
 		client = &http.Client{Timeout: 0, Transport: t, CheckRedirect: egress.NoRedirects}
-	} else {
+	default:
 		client = &http.Client{Timeout: 0, Transport: sharedHTTPClient.Transport, CheckRedirect: egress.NoRedirects}
 	}
 	azureRuntime.mu.Lock()
@@ -555,7 +604,8 @@ func ConfigureAzureFoundry(opts AzureFoundryOptions) {
 
 // guardedAzureTransport clones base (keeping its pool settings and its Proxy
 // function — HTTP(S)_PROXY for the shared client) and installs the egress
-// guard with d as the dialer: a direct connection is judged on the concrete
+// guard under policy (egress.BlockInternal, or egress.AllowPrivateNetwork
+// for PAD_AI_ALLOW_PRIVATE_EGRESS) with d as the dialer: a direct connection is judged on the concrete
 // IP at connect time; a proxied request is judged on the Azure host in the
 // proxy hook, and the hop to the operator's proxy goes through (a proxy on a
 // private address is the normal corporate setup, and judging it refused every
@@ -563,9 +613,9 @@ func ConfigureAzureFoundry(opts AzureFoundryOptions) {
 // is sound here only because azureHostPolicy restricts every endpoint to
 // allow-listed hosts whose DNS no tenant controls; tenant-supplied targets
 // (notify webhooks) use egress.GuardTransport, which fails closed instead.
-func guardedAzureTransport(base *http.Transport, d *net.Dialer) *http.Transport {
+func guardedAzureTransport(base *http.Transport, d *net.Dialer, policy egress.Policy) *http.Transport {
 	t := base.Clone()
-	egress.GuardAllowListedTransport(t, d, egress.BlockInternal)
+	egress.GuardAllowListedTransport(t, d, policy)
 	return t
 }
 

@@ -356,7 +356,7 @@ func TestAzureClaude_ModelsListClaudeDeployments(t *testing.T) {
 		t.Errorf("listing = %s", got)
 	}
 	if m := byID["claude:claude-sonnet-4-6"]; m.DisplayName != "claude-sonnet-4-6 · Claude" || m.ContextLimit != 1000000 ||
-		m.MaxOutputTokens != 64000 || m.Pricing != (Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}) || m.Embedding {
+		m.MaxOutputTokens != 128000 || m.Pricing != (Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}) || m.Embedding {
 		t.Errorf("catalogued Claude deployment = %+v", m)
 	}
 	if m := byID["claude:claude-opus-4-8-20260901"]; m.Pricing != (Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}) || m.MaxOutputTokens != 128000 {
@@ -414,7 +414,7 @@ func TestAzureClaude_ProjectListingDiscoversAnthropicDeployments(t *testing.T) {
 		t.Errorf("listing = %s", got)
 	}
 	if m := byID["claude:sonnet"]; m.ServedModel != "claude-sonnet-4-6" || m.Pricing.InputCostPerM != 3.0 || m.ContextLimit != 1000000 ||
-		m.MaxOutputTokens != 64000 || m.DisplayName != "sonnet · Claude" || m.Embedding {
+		m.MaxOutputTokens != 128000 || m.DisplayName != "sonnet · Claude" || m.Embedding {
 		t.Errorf("re-listed Anthropic deployment = %+v", m)
 	}
 	if m := byID["claude:my-claude"]; m.ServedModel != "claude-haiku-4-5-20260101" || m.Pricing.InputCostPerM != 1.0 || m.ContextLimit != 200000 {
@@ -570,7 +570,7 @@ func TestAzureClaude_AuditedPricingAndMemo(t *testing.T) {
 			continue
 		}
 		found = true
-		if m.ServedModel != "claude-sonnet-4-6-20260301" || m.Pricing.InputCostPerM != 3.0 || m.MaxOutputTokens != 64000 || m.ContextLimit != 1000000 {
+		if m.ServedModel != "claude-sonnet-4-6-20260301" || m.Pricing.InputCostPerM != 3.0 || m.MaxOutputTokens != 128000 || m.ContextLimit != 1000000 {
 			t.Errorf("memo-enriched Claude entry = %+v", m)
 		}
 	}

@@ -7,15 +7,22 @@ import (
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage/database"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
+// The database keystore is what DI hands the provider service as its org
+// store (a type assertion, which would fail silently at runtime): pin that it
+// satisfies the service's interface, not only the storage one.
+var _ service.OrgKeyStore = (*database.EncryptedKeyStore)(nil)
+
 // TestOrgProviderKeys_CompareAndSwap_Postgres pins the org credential's
 // compare-and-swap save and the lender-scoped delete at the SQL layer: the
 // updated_at token survives the RFC 3339 round trip the API gives it,
-// a stale or missing token writes nothing, and DeleteOrgIfUpdatedBy /
-// OrgsWithKeyUpdatedBy only touch the rows the named admin last wrote.
+// a stale or missing token writes nothing, a save that carries the secret
+// keeps its lender (secret_set_by, migration v24), and DeleteOrgIfSavedBy /
+// OrgsWithKeySavedBy only touch the rows the named admin lent or last wrote.
 // Gated on DATABASE_URL (the podman harness).
 func TestOrgProviderKeys_CompareAndSwap_Postgres(t *testing.T) {
 	dsn := os.Getenv("DATABASE_URL")
@@ -48,27 +55,30 @@ func TestOrgProviderKeys_CompareAndSwap_Postgres(t *testing.T) {
 	const provider = "azure-foundry"
 	lender := fmt.Sprintf("lender-%d", stamp)
 
-	at1, ok, err := ks.SaveOrgIfUnchanged(orgA.ID, provider, "doc-1", lender, time.Time{})
+	at1, ok, err := ks.SaveOrgIfUnchanged(orgA.ID, provider, "doc-1", lender, false, time.Time{})
 	if err != nil || !ok || at1.IsZero() {
 		t.Fatalf("first save = (%v, %v, %v)", at1, ok, err)
 	}
-	if _, ok, err := ks.SaveOrgIfUnchanged(orgA.ID, provider, "doc-x", "admin-b", time.Time{}); err != nil || ok {
+	if _, ok, err := ks.SaveOrgIfUnchanged(orgA.ID, provider, "doc-x", "admin-b", false, time.Time{}); err != nil || ok {
 		t.Fatalf("token-less save over a row: ok=%v err=%v, want refused", ok, err)
 	}
 	// The token as the API hands it out and parses it back.
-	_, metaAt, _, err := ks.OrgKeyMeta(orgA.ID, provider)
+	meta, _, err := ks.OrgKeyMeta(orgA.ID, provider)
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := time.Parse(time.RFC3339Nano, metaAt.UTC().Format(time.RFC3339Nano))
+	if meta.UpdatedBy != lender || meta.SecretSetBy != lender {
+		t.Errorf("first save meta = %+v, want the lender as writer and lender", meta)
+	}
+	token, err := time.Parse(time.RFC3339Nano, meta.UpdatedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		t.Fatal(err)
 	}
-	at2, ok, err := ks.SaveOrgIfUnchanged(orgA.ID, provider, "doc-2", lender, token)
+	at2, ok, err := ks.SaveOrgIfUnchanged(orgA.ID, provider, "doc-2", lender, false, token)
 	if err != nil || !ok {
 		t.Fatalf("save with the current token = (%v, %v)", ok, err)
 	}
-	if _, ok, _ := ks.SaveOrgIfUnchanged(orgA.ID, provider, "doc-3", lender, token); ok {
+	if _, ok, _ := ks.SaveOrgIfUnchanged(orgA.ID, provider, "doc-3", lender, false, token); ok {
 		t.Error("a stale token wrote")
 	}
 	if got, _ := ks.GetOrg(orgA.ID, provider); got != "doc-2" {
@@ -78,20 +88,56 @@ func TestOrgProviderKeys_CompareAndSwap_Postgres(t *testing.T) {
 		t.Errorf("new token %v precedes %v", at2, at1)
 	}
 
-	if _, _, err := ks.SaveOrgIfUnchanged(orgB.ID, provider, "doc-b", "admin-b", time.Time{}); err != nil {
+	// Another admin edits org A carrying the stored secret: they become the
+	// last writer, the lender stays.
+	editor := fmt.Sprintf("editor-%d", stamp)
+	if _, ok, err := ks.SaveOrgIfUnchanged(orgA.ID, provider, "doc-2b", editor, true, at2); err != nil || !ok {
+		t.Fatalf("carrying edit = (%v, %v)", ok, err)
+	}
+	if meta, _, _ := ks.OrgKeyMeta(orgA.ID, provider); meta.UpdatedBy != editor || meta.SecretSetBy != lender {
+		t.Errorf("after a carrying edit meta = %+v, want writer %s and lender %s", meta, editor, lender)
+	}
+
+	if _, _, err := ks.SaveOrgIfUnchanged(orgB.ID, provider, "doc-b", "admin-b", false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	orgs, err := ks.OrgsWithKeyUpdatedBy(provider, lender)
+	orgs, err := ks.OrgsWithKeySavedBy(provider, lender)
 	if err != nil || len(orgs) != 1 || orgs[0] != orgA.ID {
-		t.Errorf("OrgsWithKeyUpdatedBy = %v, %v; want only org A", orgs, err)
+		t.Errorf("OrgsWithKeySavedBy(lender) = %v, %v; want only org A", orgs, err)
 	}
-	if deleted, err := ks.DeleteOrgIfUpdatedBy(orgB.ID, provider, lender); err != nil || deleted {
+	if orgs, err := ks.OrgsWithKeySavedBy(provider, editor); err != nil || len(orgs) != 1 || orgs[0] != orgA.ID {
+		t.Errorf("OrgsWithKeySavedBy(editor) = %v, %v; want only org A", orgs, err)
+	}
+	if orgs, err := ks.OrgsWithKeySavedBy(provider, ""); err != nil || len(orgs) != 0 {
+		t.Errorf("OrgsWithKeySavedBy(empty) = %v, %v; want none", orgs, err)
+	}
+	if deleted, err := ks.DeleteOrgIfSavedBy(orgB.ID, provider, lender); err != nil || deleted {
 		t.Errorf("delete of another admin's row: deleted=%v err=%v", deleted, err)
 	}
-	if deleted, err := ks.DeleteOrgIfUpdatedBy(orgA.ID, provider, lender); err != nil || !deleted {
+	// The lender's departure disables the credential another admin edited.
+	if deleted, err := ks.DeleteOrgIfSavedBy(orgA.ID, provider, lender); err != nil || !deleted {
 		t.Errorf("delete of the lender's row: deleted=%v err=%v", deleted, err)
 	}
 	if has, _ := ks.HasOrg(orgB.ID, provider); !has {
 		t.Error("org B's row was removed")
+	}
+
+	// A new secret makes its supplier the lender, and the last writer's
+	// departure still disables the credential.
+	at3, _, err := ks.SaveOrgIfUnchanged(orgA.ID, provider, "doc-4", lender, false, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := ks.SaveOrgIfUnchanged(orgA.ID, provider, "doc-5", editor, false, at3); err != nil || !ok {
+		t.Fatalf("new-secret save = (%v, %v)", ok, err)
+	}
+	if meta, _, _ := ks.OrgKeyMeta(orgA.ID, provider); meta.UpdatedBy != editor || meta.SecretSetBy != editor {
+		t.Errorf("after a new secret meta = %+v, want %s as writer and lender", meta, editor)
+	}
+	if deleted, _ := ks.DeleteOrgIfSavedBy(orgA.ID, provider, lender); deleted {
+		t.Error("the previous lender's departure removed a credential they no longer lend")
+	}
+	if deleted, err := ks.DeleteOrgIfSavedBy(orgA.ID, provider, editor); err != nil || !deleted {
+		t.Errorf("delete of the new lender's row: deleted=%v err=%v", deleted, err)
 	}
 }

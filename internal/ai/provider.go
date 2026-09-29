@@ -66,6 +66,11 @@ type Request struct {
 	SystemPrompt string    `json:"systemPrompt,omitempty"`
 	Temperature  float64   `json:"temperature,omitempty"`
 	MaxTokens    int       `json:"maxTokens,omitempty"`
+	// TemperatureSet marks Temperature as explicitly chosen by the caller, so
+	// a provider sends it even when it is 0 (deterministic sampling). False
+	// keeps the legacy rule: a zero Temperature means "provider default" and
+	// is omitted from the wire request.
+	TemperatureSet bool `json:"-"`
 	// Tools, when non-empty and the provider SupportsTools, are offered to the
 	// model so it can request a tool call instead of (or before) a text answer.
 	Tools []ToolDefinition `json:"tools,omitempty"`
@@ -85,6 +90,22 @@ type Message struct {
 	// ToolCallID is set on a Role=="tool" message carrying a tool result; it
 	// references the ToolCall.ID this result answers.
 	ToolCallID string `json:"toolCallId,omitempty"`
+	// ProviderItems is the provider's own record of an assistant turn,
+	// opaque to everything but the provider that produced it: Claude's
+	// ordered content blocks (thinking and redacted_thinking with their
+	// signatures, text, tool_use) or a Responses API run's ordered output
+	// items (encrypted reasoning, hosted tool calls, function calls). It is
+	// set only by the chat service's tool loop, on the assistant turn it
+	// appends, and only for the provider (ProviderItemsFrom) that answered;
+	// the provider replays it verbatim instead of rebuilding the turn from
+	// Content/ToolCalls, which is how thinking and reasoning survive a tool
+	// step. Never persisted, never sent to the client, and stripped from the
+	// whole history as soon as the loop rewrites earlier messages
+	// (truncation, tool fallback): replaying it after an edit is rejected.
+	ProviderItems json.RawMessage `json:"-"`
+	// ProviderItemsFrom is the provider ID that produced ProviderItems; a
+	// provider ignores items another provider wrote.
+	ProviderItemsFrom string `json:"-"`
 }
 
 type Response struct {
@@ -106,6 +127,9 @@ type Response struct {
 	// OpenAI-compatible chat completions). Not part of Content: never shown,
 	// stored or re-sent as history.
 	Reasoning string `json:"reasoning,omitempty"`
+	// ProviderItems is the provider's ordered record of this assistant turn
+	// for verbatim replay within a tool loop (see Message.ProviderItems).
+	ProviderItems json.RawMessage `json:"-"`
 }
 
 // ToolDefinition describes a tool offered to the model. InputSchema is a JSON
@@ -157,6 +181,10 @@ type Chunk struct {
 	// repeat: RetryingProvider treats the stream as delivered; every other
 	// consumer ignores it (it carries no text).
 	ServerStep bool `json:"-"`
+	// ProviderItems mirrors Response.ProviderItems on the Done chunk: the
+	// provider's ordered record of the turn for verbatim replay within a
+	// tool loop (see Message.ProviderItems).
+	ProviderItems json.RawMessage `json:"-"`
 }
 
 // ToolEvent describes one server-side tool step of a hosted agent run.

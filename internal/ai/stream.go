@@ -71,10 +71,112 @@ func classifyClaudeStreamError(errType, msg string) error {
 	switch errType {
 	case "rate_limit_error":
 		return fmt.Errorf("%w: claude stream error: %s", ErrRateLimited, msg)
-	case "overloaded_error", "api_error":
+	case "overloaded_error", "api_error", "timeout_error":
+		// timeout_error is the API's 504 ("the request timed out while
+		// processing") delivered after the 200: transient like a 5xx, so a
+		// failure before any content is retried.
 		return fmt.Errorf("%w: claude stream error: %s", ErrProviderDown, msg)
 	}
 	return fmt.Errorf("claude stream error: %s", msg)
+}
+
+// maxClaudeSSELine caps one Claude SSE line. A signature_delta or a
+// redacted_thinking block's data arrives as a single event and grows with the
+// thinking it encrypts; the 1 MiB default of the other parsers could end a
+// long-thinking turn as a read error. Same cap as the Responses parser.
+const maxClaudeSSELine = 32 << 20
+
+// claudeStreamBlock accumulates one streamed content block for the turn's
+// replay record (Chunk.ProviderItems): the block as content_block_start
+// opened it (every field, so one this parser does not know survives the
+// replay) plus its deltas — text_delta / thinking_delta text and the
+// signature_delta signature. A tool_use block's input is accumulated by its
+// pendingToolCall.
+type claudeStreamBlock struct {
+	typ    string
+	fields map[string]json.RawMessage
+	text   strings.Builder
+	sig    strings.Builder
+}
+
+// startString is a string field of the opening content block ("" if absent).
+func (b *claudeStreamBlock) startString(key string) string {
+	var s string
+	_ = json.Unmarshal(b.fields[key], &s)
+	return s
+}
+
+// record is the block as the non-streaming API would have returned it; ok is
+// false when it cannot be rebuilt faithfully (an unknown type, a tool_use
+// without its accumulator, input that is not valid JSON — a call cut off at
+// the token cap).
+func (b *claudeStreamBlock) record(tool *pendingToolCall) (json.RawMessage, bool) {
+	out := make(map[string]json.RawMessage, len(b.fields)+2)
+	for k, v := range b.fields {
+		out[k] = v
+	}
+	out["type"], _ = json.Marshal(b.typ)
+	str := func(s string) json.RawMessage {
+		raw, _ := json.Marshal(s)
+		return raw
+	}
+	switch b.typ {
+	case "text":
+		out["text"] = str(b.startString("text") + b.text.String())
+	case "thinking":
+		// Kept even when the text is empty (display "omitted"): the
+		// signature carries the encrypted reasoning the API reconstructs.
+		out["thinking"] = str(b.startString("thinking") + b.text.String())
+		out["signature"] = str(b.startString("signature") + b.sig.String())
+	case "redacted_thinking":
+		// Its encrypted data arrives whole on content_block_start.
+	case "tool_use":
+		if tool == nil {
+			return nil, false
+		}
+		input := tool.args.String()
+		if input == "" {
+			input = "{}"
+			if start, ok := b.fields["input"]; ok && len(start) > 0 && string(start) != "null" {
+				input = string(start)
+			}
+		}
+		if !json.Valid([]byte(input)) {
+			return nil, false
+		}
+		out["input"] = json.RawMessage(input)
+	default:
+		return nil, false
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return nil, false
+	}
+	return raw, true
+}
+
+// claudeStreamRecord assembles the turn's replay record from the streamed
+// blocks in index order (see claudeReplayRecord); nil when there are none or
+// any block cannot be rebuilt — the turn is then replayed from its text and
+// tool calls, without its thinking.
+func claudeStreamRecord(blocks map[int]*claudeStreamBlock, tools map[int]*pendingToolCall, broken bool) json.RawMessage {
+	if broken || len(blocks) == 0 {
+		return nil
+	}
+	idxs := make([]int, 0, len(blocks))
+	for i := range blocks {
+		idxs = append(idxs, i)
+	}
+	sort.Ints(idxs)
+	out := make([]json.RawMessage, 0, len(idxs))
+	for _, i := range idxs {
+		raw, ok := blocks[i].record(tools[i])
+		if !ok {
+			return nil
+		}
+		out = append(out, raw)
+	}
+	return claudeReplayRecord(out)
 }
 
 // Inline reasoning markers. DeepSeek-R1 (and other open reasoning models served
@@ -240,7 +342,7 @@ func partialSuffixLen(s, tag string) int {
 
 func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxClaudeSSELine)
 
 	var eventType string
 	var doneSent bool
@@ -259,6 +361,25 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 	// toolBlocks accumulates streamed tool_use blocks keyed by their content
 	// block index; finalized onto the Done chunk at message_delta.
 	toolBlocks := map[int]*pendingToolCall{}
+	// blocks accumulates EVERY content block by index — thinking and
+	// redacted_thinking with their signatures, text, tool_use — for the
+	// turn's replay record on the Done chunk (Chunk.ProviderItems): within a
+	// tool loop the API wants the assistant turn back exactly as produced.
+	// recordBroken: a delta arrived for a block that never opened, so the
+	// record could not be faithful.
+	blocks := map[int]*claudeStreamBlock{}
+	recordBroken := false
+	// blockFor returns the accumulator of a delta's block, opening a text or
+	// thinking block a server skipped the content_block_start for.
+	blockFor := func(index int, typ string) *claudeStreamBlock {
+		if b := blocks[index]; b != nil {
+			return b
+		}
+		b := &claudeStreamBlock{typ: typ}
+		blocks[index] = b
+		return b
+	}
+	record := func() json.RawMessage { return claudeStreamRecord(blocks, toolBlocks, recordBroken) }
 
 	// emitted records whether the current event delivered a chunk (see the
 	// keepalive below).
@@ -306,24 +427,32 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 			}
 
 		case "content_block_start":
-			// A tool_use block opens here with its id+name; its JSON arguments
-			// arrive as input_json_delta fragments on subsequent deltas.
+			// Every block opens here — a tool_use with its id+name (its JSON
+			// arguments arrive as input_json_delta fragments), a thinking
+			// block empty, a redacted_thinking block with its data whole.
 			var parsed struct {
-				Index        int `json:"index"`
-				ContentBlock struct {
-					Type string `json:"type"`
-					ID   string `json:"id"`
-					Name string `json:"name"`
-				} `json:"content_block"`
+				Index        int             `json:"index"`
+				ContentBlock json.RawMessage `json:"content_block"`
 			}
 			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
 				parseErrors++
 				return false
 			}
-			if parsed.ContentBlock.Type == "tool_use" {
+			var head struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			}
+			var fields map[string]json.RawMessage
+			if len(parsed.ContentBlock) > 0 {
+				_ = json.Unmarshal(parsed.ContentBlock, &head)
+				_ = json.Unmarshal(parsed.ContentBlock, &fields)
+			}
+			blocks[parsed.Index] = &claudeStreamBlock{typ: head.Type, fields: fields}
+			if head.Type == "tool_use" {
 				toolBlocks[parsed.Index] = &pendingToolCall{
-					id:   parsed.ContentBlock.ID,
-					name: parsed.ContentBlock.Name,
+					id:   head.ID,
+					name: head.Name,
 				}
 			}
 
@@ -333,6 +462,8 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 				Delta struct {
 					Type        string `json:"type"`
 					Text        string `json:"text"`
+					Thinking    string `json:"thinking"`
+					Signature   string `json:"signature"`
 					PartialJSON string `json:"partial_json"`
 				} `json:"delta"`
 			}
@@ -342,10 +473,19 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 			}
 			switch parsed.Delta.Type {
 			case "text_delta":
+				blockFor(parsed.Index, "text").text.WriteString(parsed.Delta.Text)
 				emit(Chunk{Text: parsed.Delta.Text})
+			case "thinking_delta":
+				// Recorded for the replay, never emitted: thinking is not
+				// answer text (the event still yields a keepalive below).
+				blockFor(parsed.Index, "thinking").text.WriteString(parsed.Delta.Thinking)
+			case "signature_delta":
+				blockFor(parsed.Index, "thinking").sig.WriteString(parsed.Delta.Signature)
 			case "input_json_delta":
 				if t := toolBlocks[parsed.Index]; t != nil {
 					t.args.WriteString(parsed.Delta.PartialJSON)
+				} else {
+					recordBroken = true
 				}
 			}
 
@@ -374,11 +514,12 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 			default:
 				doneSent = true
 				emit(Chunk{
-					Done:         true,
-					TokensIn:     tokensIn,
-					TokensOut:    parsed.Usage.OutputTokens,
-					ToolCalls:    assembleToolCalls(toolBlocks),
-					FinishReason: parsed.Delta.StopReason,
+					Done:          true,
+					TokensIn:      tokensIn,
+					TokensOut:     parsed.Usage.OutputTokens,
+					ToolCalls:     assembleToolCalls(toolBlocks),
+					FinishReason:  parsed.Delta.StopReason,
+					ProviderItems: record(),
 				})
 			}
 
@@ -414,7 +555,7 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
 			if !doneSent {
-				onChunk(Chunk{Done: true, TokensIn: tokensIn, ToolCalls: assembleToolCalls(toolBlocks), ServedModel: servedModel})
+				onChunk(Chunk{Done: true, TokensIn: tokensIn, ToolCalls: assembleToolCalls(toolBlocks), ServedModel: servedModel, ProviderItems: record()})
 			}
 			return nil
 		}
@@ -550,8 +691,13 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 			Model   string `json:"model"`
 			Choices []struct {
 				Delta struct {
-					Content   string `json:"content"`
-					ToolCalls []struct {
+					Content string `json:"content"`
+					// ReasoningContent is the separate reasoning channel of
+					// DeepSeek, GLM, Grok mini and other open reasoning models
+					// on Azure AI Foundry's /openai/v1 (and vLLM): reasoning,
+					// never answer text.
+					ReasoningContent string `json:"reasoning_content"`
+					ToolCalls        []struct {
 						Index    *int   `json:"index"`
 						ID       string `json:"id"`
 						Function struct {
@@ -600,6 +746,12 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 
 		emitted := false
 		for _, choice := range parsed.Choices {
+			if choice.Delta.ReasoningContent != "" {
+				// Chunk.Reasoning only: not shown as the answer, not stored,
+				// not re-sent as history (it still feeds the idle watchdog).
+				emitted = true
+				onChunk(Chunk{Reasoning: choice.Delta.ReasoningContent, ServedModel: servedModel})
+			}
 			if choice.Delta.Content != "" {
 				if t, r := think.write(choice.Delta.Content); t != "" || r != "" {
 					emitted = true
@@ -644,10 +796,10 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 				finishReason = *choice.FinishReason
 			}
 		}
-		// An event that produced no chunk — reasoning deltas
-		// (delta.reasoning_content: DeepSeek, GLM, Grok mini, Cohere on
-		// Foundry), tool-call argument fragments, content the think splitter
-		// holds, usage-only and filter-annotation events — still proves the
+		// An event that produced no chunk — tool-call argument fragments,
+		// content the think splitter holds, usage-only and filter-annotation
+		// events, a reasoning field other than delta.reasoning_content (which
+		// is emitted as Chunk.Reasoning above) — still proves the
 		// provider is working: one keepalive per event feeds the chat idle
 		// watchdog (as parseResponsesSSE's progress keepalives do), so a long
 		// reasoning phase is not cancelled as a stalled stream. It carries

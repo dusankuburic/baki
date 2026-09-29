@@ -78,6 +78,7 @@ var migrations = []migration{
 	{version: 21, name: "org_custom_rules", sql: orgCustomRulesSQL, downSQL: orgCustomRulesDownSQL},
 	{version: 22, name: "usage_served_model", sql: usageServedModelSQL, downSQL: usageServedModelDownSQL},
 	{version: 23, name: "org_provider_keys", sql: orgProviderKeysSQL, downSQL: orgProviderKeysDownSQL},
+	{version: 24, name: "org_provider_keys_secret_set_by", sql: orgProviderKeysSecretSetBySQL, downSQL: orgProviderKeysSecretSetByDownSQL},
 }
 
 // flowBlockCountIndexSQL adds an expression index matching the FlowSortBlocksDesc
@@ -1594,6 +1595,32 @@ CREATE TABLE IF NOT EXISTS org_provider_keys (
 
 const orgProviderKeysDownSQL = `
 DROP TABLE IF EXISTS org_provider_keys;
+`
+
+// orgProviderKeysSecretSetBySQL records the org credential's LENDER: the
+// admin who supplied the stored secret (secret_set_by), next to the admin who
+// last saved the document (updated_by). A save that carries the stored secret
+// over — another admin editing a deployment name — used to overwrite
+// updated_by, so when the admin whose secret it was left the admin role the
+// disable-on-departure delete (matched on updated_by) missed it and the
+// secret stayed live, and members were shown the wrong lender. secret_set_by
+// changes only when a new secret is supplied; the delete matches either
+// column. Existing rows are backfilled from updated_by (the best record there
+// is). Additive with an empty-string default.
+//
+//nolint:gosec // G101: DDL for the lender column (the name says "secret"), not a credential.
+const orgProviderKeysSecretSetBySQL = `
+ALTER TABLE org_provider_keys ADD COLUMN IF NOT EXISTS secret_set_by TEXT NOT NULL DEFAULT '';
+UPDATE org_provider_keys SET secret_set_by = updated_by WHERE secret_set_by = '';
+`
+
+// orgProviderKeysSecretSetByDownSQL reverses v24. Data-lossy only in the
+// lender record: the credentials themselves stay, and the disable path falls
+// back to updated_by alone.
+//
+//nolint:gosec // G101: DDL for the lender column (the name says "secret"), not a credential.
+const orgProviderKeysSecretSetByDownSQL = `
+ALTER TABLE org_provider_keys DROP COLUMN IF EXISTS secret_set_by;
 `
 
 // flowsContentTrgmSQL (R3-5a) backs library content-search pushdown: an

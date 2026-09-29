@@ -198,6 +198,13 @@ func (s *EncryptedKeyStore) Delete(scope, provider string) error {
 // configured their own; usage run on the org credential is attributed to
 // the org (and capped by the org's daily budget) like every org-scoped turn.
 // The row goes with the organisation (ON DELETE CASCADE).
+//
+// Lender tracking (migration v24): updated_by is the admin who last saved
+// the document, secret_set_by the admin who supplied its stored secret —
+// the credential's lender. A save that carries the stored secret over
+// changes updated_by only; the disable-on-departure path matches either
+// column, so the lender's departure still disables a credential another
+// admin has since edited.
 
 // orgKeyAAD is keyAAD's counterpart for the org_provider_keys table. The
 // "org" prefix keeps an org ciphertext from ever authenticating under a user
@@ -206,8 +213,9 @@ func orgKeyAAD(orgID, provider string) []byte {
 	return []byte("org\x00" + orgID + "\x00" + provider)
 }
 
-// SaveOrg upserts the encrypted shared key for an (org, provider) pair,
-// recording which admin wrote it.
+// SaveOrg upserts the encrypted shared key for an (org, provider) pair with
+// a newly supplied secret, recording updatedBy as both the admin who wrote
+// it and the secret's lender.
 func (s *EncryptedKeyStore) SaveOrg(orgID, provider, key, updatedBy string) error {
 	ct, err := s.encrypt(key, orgKeyAAD(orgID, provider))
 	if err != nil {
@@ -216,10 +224,11 @@ func (s *EncryptedKeyStore) SaveOrg(orgID, provider, key, updatedBy string) erro
 	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
 	defer cancel()
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO org_provider_keys (org_id, provider, ciphertext, updated_by, updated_at)
-		 VALUES ($1, $2, $3, $4, NOW())
+		`INSERT INTO org_provider_keys (org_id, provider, ciphertext, updated_by, secret_set_by, updated_at)
+		 VALUES ($1, $2, $3, $4, $4, NOW())
 		 ON CONFLICT (org_id, provider) DO UPDATE
-		   SET ciphertext = EXCLUDED.ciphertext, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+		   SET ciphertext = EXCLUDED.ciphertext, updated_by = EXCLUDED.updated_by,
+		       secret_set_by = EXCLUDED.secret_set_by, updated_at = NOW()`,
 		orgID, provider, ct, updatedBy,
 	); err != nil {
 		return fmt.Errorf("keystore: save org: %w", err)
@@ -233,7 +242,11 @@ func (s *EncryptedKeyStore) SaveOrg(orgID, provider, key, updatedBy string) erro
 // new updated_at. ok is false (nothing written) when another save or a
 // delete got there first. An admin's edit made from a stale read therefore
 // cannot silently overwrite another admin's newer configuration.
-func (s *EncryptedKeyStore) SaveOrgIfUnchanged(orgID, provider, key, updatedBy string, expected time.Time) (updatedAt time.Time, ok bool, err error) {
+//
+// secretCarried keeps the row's secret_set_by (the document still holds the
+// secret its lender supplied); otherwise updatedBy supplied the secret and
+// becomes the lender. A new row always records updatedBy as the lender.
+func (s *EncryptedKeyStore) SaveOrgIfUnchanged(orgID, provider, key, updatedBy string, secretCarried bool, expected time.Time) (updatedAt time.Time, ok bool, err error) {
 	ct, err := s.encrypt(key, orgKeyAAD(orgID, provider))
 	if err != nil {
 		return time.Time{}, false, err
@@ -242,8 +255,8 @@ func (s *EncryptedKeyStore) SaveOrgIfUnchanged(orgID, provider, key, updatedBy s
 	defer cancel()
 	if expected.IsZero() {
 		err = s.db.QueryRowContext(ctx,
-			`INSERT INTO org_provider_keys (org_id, provider, ciphertext, updated_by, updated_at)
-			 VALUES ($1, $2, $3, $4, NOW())
+			`INSERT INTO org_provider_keys (org_id, provider, ciphertext, updated_by, secret_set_by, updated_at)
+			 VALUES ($1, $2, $3, $4, $4, NOW())
 			 ON CONFLICT (org_id, provider) DO NOTHING
 			 RETURNING updated_at`,
 			orgID, provider, ct, updatedBy,
@@ -251,10 +264,12 @@ func (s *EncryptedKeyStore) SaveOrgIfUnchanged(orgID, provider, key, updatedBy s
 	} else {
 		err = s.db.QueryRowContext(ctx,
 			`UPDATE org_provider_keys
-			    SET ciphertext = $3, updated_by = $4, updated_at = NOW()
+			    SET ciphertext = $3, updated_by = $4,
+			        secret_set_by = CASE WHEN $6::boolean THEN secret_set_by ELSE $4 END,
+			        updated_at = NOW()
 			  WHERE org_id = $1 AND provider = $2 AND updated_at = $5
 			 RETURNING updated_at`,
-			orgID, provider, ct, updatedBy, expected,
+			orgID, provider, ct, updatedBy, expected, secretCarried,
 		).Scan(&updatedAt)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
@@ -266,15 +281,20 @@ func (s *EncryptedKeyStore) SaveOrgIfUnchanged(orgID, provider, key, updatedBy s
 	return updatedAt, true, nil
 }
 
-// DeleteOrgIfUpdatedBy removes the org's shared key only while updatedBy is
-// still the admin who last wrote it — atomically, so a newer save by another
-// admin is never deleted in its place. deleted is false when there was no
-// such row.
-func (s *EncryptedKeyStore) DeleteOrgIfUpdatedBy(orgID, provider, updatedBy string) (deleted bool, err error) {
+// DeleteOrgIfSavedBy removes the org's shared key only while userID is still
+// the admin who supplied its secret (secret_set_by) or last saved it
+// (updated_by) — atomically, so a newer save by another admin with their own
+// secret is never deleted in its place. deleted is false when there was no
+// such row; an empty userID matches nothing.
+func (s *EncryptedKeyStore) DeleteOrgIfSavedBy(orgID, provider, userID string) (deleted bool, err error) {
+	if userID == "" {
+		return false, nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
 	defer cancel()
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM org_provider_keys WHERE org_id = $1 AND provider = $2 AND updated_by = $3`, orgID, provider, updatedBy)
+		`DELETE FROM org_provider_keys
+		  WHERE org_id = $1 AND provider = $2 AND (secret_set_by = $3 OR updated_by = $3)`, orgID, provider, userID)
 	if err != nil {
 		return false, fmt.Errorf("keystore: delete org: %w", err)
 	}
@@ -285,13 +305,19 @@ func (s *EncryptedKeyStore) DeleteOrgIfUpdatedBy(orgID, provider, updatedBy stri
 	return n > 0, nil
 }
 
-// OrgsWithKeyUpdatedBy lists the organisations whose shared key for provider
-// was last written by updatedBy (account erasure disables them).
-func (s *EncryptedKeyStore) OrgsWithKeyUpdatedBy(provider, updatedBy string) ([]string, error) {
+// OrgsWithKeySavedBy lists the organisations whose shared key for provider
+// userID lent (secret_set_by) or last wrote (updated_by) — account erasure
+// disables them. An empty userID matches nothing.
+func (s *EncryptedKeyStore) OrgsWithKeySavedBy(provider, userID string) ([]string, error) {
+	if userID == "" {
+		return nil, nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT org_id FROM org_provider_keys WHERE provider = $1 AND updated_by = $2 ORDER BY org_id`, provider, updatedBy)
+		`SELECT org_id FROM org_provider_keys
+		  WHERE provider = $1 AND (secret_set_by = $2 OR updated_by = $2)
+		  ORDER BY org_id`, provider, userID)
 	if err != nil {
 		return nil, fmt.Errorf("keystore: org keys by updater: %w", err)
 	}
@@ -357,19 +383,20 @@ func (s *EncryptedKeyStore) DeleteOrg(orgID, provider string) error {
 	return nil
 }
 
-// OrgKeyMeta reports who last wrote the org's shared key and when, without
-// touching the ciphertext; ok is false when the org has no row.
-func (s *EncryptedKeyStore) OrgKeyMeta(orgID, provider string) (updatedBy string, updatedAt time.Time, ok bool, err error) {
+// OrgKeyMeta reports who last wrote the org's shared key, who supplied its
+// secret and when, without touching the ciphertext; ok is false when the org
+// has no row.
+func (s *EncryptedKeyStore) OrgKeyMeta(orgID, provider string) (info interfaces.OrgKeyInfo, ok bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
 	defer cancel()
 	err = s.db.QueryRowContext(ctx,
-		`SELECT updated_by, updated_at FROM org_provider_keys WHERE org_id = $1 AND provider = $2`, orgID, provider,
-	).Scan(&updatedBy, &updatedAt)
+		`SELECT updated_by, secret_set_by, updated_at FROM org_provider_keys WHERE org_id = $1 AND provider = $2`, orgID, provider,
+	).Scan(&info.UpdatedBy, &info.SecretSetBy, &info.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", time.Time{}, false, nil
+		return interfaces.OrgKeyInfo{}, false, nil
 	}
 	if err != nil {
-		return "", time.Time{}, false, fmt.Errorf("keystore: org key meta: %w", err)
+		return interfaces.OrgKeyInfo{}, false, fmt.Errorf("keystore: org key meta: %w", err)
 	}
-	return updatedBy, updatedAt, true, nil
+	return info, true, nil
 }

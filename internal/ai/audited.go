@@ -108,6 +108,15 @@ func (p *auditedProvider) Chat(ctx context.Context, req Request) (*Response, err
 		// A context-length rejection that states the window sizes the next
 		// request to this deployment (alias providers; see learned_window.go).
 		learnContextWindow(p.memoScope, p.providerID, req.Model, err)
+		// A failed non-streamed call can still have been billed by the
+		// provider (a content-filter finish, an agent run stopped for an MCP
+		// approval or a client-executed tool): the provider attaches the
+		// usage to the error (heldUsageError), as the stream path does.
+		if in, out, served, ok := usageOf(err); ok && (in > 0 || out > 0) {
+			recordServedModel(p.memoScope, p.providerID, req.Model, served)
+			metrics.RecordAITokens(p.providerID, in, out)
+			p.record(ctx, req.Model, served, req.OrgID, in, out)
+		}
 		return resp, err
 	}
 	if resp != nil {

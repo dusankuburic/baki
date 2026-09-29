@@ -35,11 +35,18 @@ const AZURE_HOST_SUFFIXES = [
   '.openai.azure.com',
   '.services.ai.azure.com',
   '.cognitiveservices.azure.com',
-  '.ai.azure.com',
+  '.models.ai.azure.com',
 ]
 
-// Same GUID shape the server requires for the Entra tenant/client IDs.
+// Same GUID shape the server requires for the Entra client ID (and accepts
+// for the tenant ID).
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// A tenant may also be given by one of its domain names
+// (contoso.onmicrosoft.com): at least two DNS labels, the server's
+// azureTenantDomain rule. The multi-tenant pseudo-tenants are single labels,
+// so they never match.
+const TENANT_DOMAIN_RE = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i
 
 /**
  * Whose credentials the section edits. The default is the signed-in user's
@@ -177,6 +184,7 @@ type AzureFieldErrorKey =
   | 'providers.azureEndpointHttps'
   | 'providers.azureHostRejected'
   | 'providers.azureGuidInvalid'
+  | 'providers.azureTenantInvalid'
 
 // Lightweight client-side mirrors of the server's endpoint rules: an absolute
 // https:// URL whose host is an Azure AI Foundry one. Returns the i18n key of
@@ -201,6 +209,14 @@ function endpointErrorKey(value: string): AzureFieldErrorKey | null {
 // existing required-field gating.
 function guidErrorKey(value: string): AzureFieldErrorKey | null {
   return value.trim() && !GUID_RE.test(value.trim()) ? 'providers.azureGuidInvalid' : null
+}
+
+// The tenant ID is a GUID or a domain name of the tenant (server rule).
+function tenantErrorKey(value: string): AzureFieldErrorKey | null {
+  const v = value.trim()
+  if (!v || GUID_RE.test(v)) return null
+  const isIPv4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(v)
+  return v.length <= 253 && TENANT_DOMAIN_RE.test(v) && !isIPv4 ? null : 'providers.azureTenantInvalid'
 }
 
 // The POST body: trimmed, blank optional fields dropped, and a blank secret
@@ -325,7 +341,7 @@ export default function AzureFoundrySection({onConfigured, scope = USER_SCOPE, o
   const chatTargetMissing = !hasChatTarget(form)
   const claudeDupes = claudeDuplicates(form)
   const endpointErr: AzureFieldErrorKey | null = endpointErrorKey(form.endpoint)
-  const tenantErr: AzureFieldErrorKey | null = form.authMode === 'entra' ? guidErrorKey(form.tenantId) : null
+  const tenantErr: AzureFieldErrorKey | null = form.authMode === 'entra' ? tenantErrorKey(form.tenantId) : null
   const clientErr: AzureFieldErrorKey | null = form.authMode === 'entra' ? guidErrorKey(form.clientId) : null
   // The suffix hint does not block Save: operators can extend the server's
   // host allow-list (PAD_AZURE_FOUNDRY_ALLOWED_HOSTS) past the standard

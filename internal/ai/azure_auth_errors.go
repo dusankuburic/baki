@@ -65,3 +65,23 @@ func entraUnauthorized(apiErr openAIErrorResp, body []byte) error {
 	}
 	return &entraTokenRejectedError{msg: azureAuthMessage(apiErr, body)}
 }
+
+// azureForbiddenFallback explains a 403 whose body says nothing.
+const azureForbiddenFallback = "the Azure resource refused the request (HTTP 403): check its networking rules (firewall, virtual network, private endpoint) and the role the credential holds on it"
+
+// azureForbidden is openaiBase's handle403 hook for Azure AI Foundry, in
+// both auth modes. Azure answers 403 when the credential WAS accepted but
+// the request is not allowed — the resource's network rules ("Access denied
+// due to Virtual Network/Firewall rules."), a missing data-plane role
+// (PermissionDenied) — so it is never an invalid key or a rejected token: it
+// keeps Azure's explanation as a permission denial (ErrProviderPermissionDenied,
+// which is also ErrApiKeyInvalid: no retry, no breaker count), and
+// withTokenRetry does not replay it with a fresh Entra ID token, which could
+// not change the answer. A 401 keeps its own classification (handle401).
+func azureForbidden(apiErr openAIErrorResp, body []byte) error {
+	msg := azureAuthMessage(apiErr, body)
+	if msg == "" {
+		msg = azureForbiddenFallback
+	}
+	return &permissionDeniedError{msg: msg}
+}

@@ -55,7 +55,7 @@ func TestOrgProviderKeys_Postgres(t *testing.T) {
 	if _, err := ks.GetOrg(orgA.ID, provider); !errors.Is(err, storage.ErrSecretNotFound) {
 		t.Fatalf("GetOrg before save: want ErrSecretNotFound, got %v", err)
 	}
-	if _, _, ok, err := ks.OrgKeyMeta(orgA.ID, provider); err != nil || ok {
+	if _, ok, err := ks.OrgKeyMeta(orgA.ID, provider); err != nil || ok {
 		t.Fatalf("OrgKeyMeta before save: ok=%v err=%v", ok, err)
 	}
 
@@ -68,9 +68,9 @@ func TestOrgProviderKeys_Postgres(t *testing.T) {
 	if err != nil || got != doc {
 		t.Fatalf("GetOrg = %q, %v; want the stored document", got, err)
 	}
-	by, at, ok, err := ks.OrgKeyMeta(orgA.ID, provider)
-	if err != nil || !ok || by != "admin-a" || at.Before(before) {
-		t.Fatalf("OrgKeyMeta = (%q, %v, %v, %v), want admin-a and a recent timestamp", by, at, ok, err)
+	info, ok, err := ks.OrgKeyMeta(orgA.ID, provider)
+	if err != nil || !ok || info.UpdatedBy != "admin-a" || info.SecretSetBy != "admin-a" || info.UpdatedAt.Before(before) {
+		t.Fatalf("OrgKeyMeta = (%+v, %v, %v), want admin-a as writer and lender and a recent timestamp", info, ok, err)
 	}
 
 	// Per-org isolation, and the user-scoped table is untouched.
@@ -89,8 +89,8 @@ func TestOrgProviderKeys_Postgres(t *testing.T) {
 	if got, _ := ks.GetOrg(orgA.ID, provider); got != doc2 {
 		t.Errorf("GetOrg after upsert = %q, want the new document", got)
 	}
-	if by, _, _, _ := ks.OrgKeyMeta(orgA.ID, provider); by != "admin-a2" {
-		t.Errorf("updated_by after upsert = %q, want admin-a2", by)
+	if info, _, _ := ks.OrgKeyMeta(orgA.ID, provider); info.UpdatedBy != "admin-a2" || info.SecretSetBy != "admin-a2" {
+		t.Errorf("after upsert = %+v, want admin-a2 as writer and lender", info)
 	}
 
 	// Explicit delete, then the cascade: deleting the organisation removes

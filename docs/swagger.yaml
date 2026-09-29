@@ -5238,12 +5238,13 @@ paths:
       description: 'Returns the org''s shared Azure AI Foundry settings without any
         secret: endpoint, auth mode, whether a secret is stored, the Entra ID tenant
         and client IDs, the project endpoint and the deployment names, plus who shared
-        it (updatedBy: the admin''s display name, else email) and when (updatedAt:
-        RFC 3339 with sub-second precision — send it back verbatim as the save''s
-        compare-and-swap token). Any member, viewers included (only admins and members
-        run on it). {configured:false, shared:false} when the org has none; 500 ORG_CREDENTIAL_UNREADABLE
-        when it has one that cannot be read (a deployment key rotation, a database
-        failure).'
+        it (updatedBy: the display name, else email, of the admin who supplied the
+        stored secret — an edit by another admin that kept the secret does not change
+        it) and when it was last saved (updatedAt: RFC 3339 with sub-second precision
+        — send it back verbatim as the save''s compare-and-swap token). Any member,
+        viewers included (only admins and members run on it). {configured:false, shared:false}
+        when the org has none; 500 ORG_CREDENTIAL_UNREADABLE when it has one that
+        cannot be read (a deployment key rotation, a database failure).'
       parameters:
       - description: Org ID
         in: path
@@ -5280,11 +5281,15 @@ paths:
         endpoint and deployment names, for admins and members without a configuration
         of their own. Org admins only. An omitted secret keeps the stored one only
         while the endpoint host (and the project endpoint''s host) is unchanged —
-        a changed endpoint needs the secret re-entered (MISSING_SECRET). Compare-and-swap:
-        send back the updatedAt the GET returned (omit it only when the GET said configured:false);
-        when the stored configuration changed since — another admin saved or removed
-        it — nothing is written and the answer is 409 CONFLICT (reload, then re-apply).
-        The reply''s updatedAt is the token for the next save.'
+        a changed endpoint needs the secret re-entered (MISSING_SECRET); the admin
+        who supplies the secret becomes the credential''s lender (it is disabled when
+        they stop being an admin), an edit that keeps it does not. The body must be
+        exactly one JSON object with known fields only (INVALID_CONFIG otherwise).
+        Compare-and-swap: send back the updatedAt the GET returned (omit it only when
+        the GET said configured:false); when the stored configuration changed since
+        — another admin saved or removed it — nothing is written and the answer is
+        409 CONFLICT (reload, then re-apply). The reply''s updatedAt is the token
+        for the next save.'
       parameters:
       - description: Org ID
         in: path
@@ -5465,7 +5470,8 @@ paths:
       - application/json
       description: Validates and stores the caller's Azure AI Foundry endpoint, credential
         (API key or Microsoft Entra ID service principal), optional project endpoint
-        and deployment names. An omitted secret keeps the stored one.
+        and deployment names. An omitted secret keeps the stored one. The body must
+        be exactly one JSON object with known fields only (INVALID_CONFIG otherwise).
       parameters:
       - description: request
         in: body

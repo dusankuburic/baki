@@ -205,8 +205,21 @@ type geminiFunctionResponse struct {
 }
 
 type geminiGenConfig struct {
-	Temperature     float64 `json:"temperature,omitempty"`
-	MaxOutputTokens int     `json:"maxOutputTokens,omitempty"`
+	// Temperature is a pointer so an explicit 0 (Request.TemperatureSet —
+	// deterministic sampling) is sent; nil leaves the model's default.
+	Temperature     *float64 `json:"temperature,omitempty"`
+	MaxOutputTokens int      `json:"maxOutputTokens,omitempty"`
+}
+
+// geminiTemperature is the generationConfig temperature for req: sent when
+// the caller chose it (TemperatureSet, 0 included) or it is non-zero; a zero
+// the caller did not choose keeps the legacy "provider default" (omitted).
+func geminiTemperature(req Request) *float64 {
+	if !req.TemperatureSet && req.Temperature == 0 {
+		return nil
+	}
+	t := req.Temperature
+	return &t
 }
 
 type geminiFunctionDecl struct {
@@ -324,7 +337,7 @@ func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, erro
 	body := geminiRequest{
 		Contents: toGeminiContents(req.Messages),
 		GenerationConfig: &geminiGenConfig{
-			Temperature:     req.Temperature,
+			Temperature:     geminiTemperature(req),
 			MaxOutputTokens: orDefault(req.MaxTokens, 4096),
 		},
 		Tools: toGeminiTools(req.Tools),
@@ -434,7 +447,7 @@ func (g *GeminiProvider) Stream(ctx context.Context, req Request, onChunk func(C
 	body := geminiRequest{
 		Contents: toGeminiContents(req.Messages),
 		GenerationConfig: &geminiGenConfig{
-			Temperature:     req.Temperature,
+			Temperature:     geminiTemperature(req),
 			MaxOutputTokens: orDefault(req.MaxTokens, 4096),
 		},
 		Tools: toGeminiTools(req.Tools),

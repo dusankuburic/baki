@@ -45,8 +45,8 @@ func TestClaudeProvider_Models(t *testing.T) {
 			if m.ContextLimit != 1000000 {
 				t.Errorf("expected 1000000 context limit, got %d", m.ContextLimit)
 			}
-			if m.MaxOutputTokens != 64000 {
-				t.Errorf("expected 64000 max output tokens, got %d", m.MaxOutputTokens)
+			if m.MaxOutputTokens != 128000 {
+				t.Errorf("expected 128000 max output tokens, got %d", m.MaxOutputTokens)
 			}
 		}
 	}
