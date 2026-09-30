@@ -19,10 +19,13 @@ import clsx from 'clsx'
 import {useOrgStore, type Organisation, type OrgRole} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useChatStore} from '@/stores/chatStore'
-import {Button, useConfirm} from '@/components/shared'
+import {useAzureFoundryStore} from '@/stores/azureFoundryStore'
+import {useUIStore} from '@/stores/uiStore'
+import {Badge, Button, useConfirm} from '@/components/shared'
 import OrgChannelsSection from './OrgChannelsSection'
 import OrgCustomRulesSection from './OrgCustomRulesSection'
-import AzureFoundrySection from './AzureFoundrySection'
+import AzureFoundryPanel from './azure/AzureFoundryPanel'
+import {orgAzureAnchor, orgIdFromAnchor} from './azure/registryView'
 import {useAsync} from '@/hooks/useAsync'
 import {request, ApiError} from '@/api/client'
 import {writeClipboard} from '@/lib/clipboard'
@@ -42,6 +45,19 @@ const ROLE_LABEL_KEYS = {
 // null, and the caller shows the raw value.
 function roleLabelKey(role: string): (typeof ROLE_LABEL_KEYS)[OrgRole] | null {
   return Object.prototype.hasOwnProperty.call(ROLE_LABEL_KEYS, role) ? ROLE_LABEL_KEYS[role as OrgRole] : null
+}
+
+// The organisation's name in its row: a deep link's landing spot when the
+// organisation is not the one expanded.
+function orgNameId(orgId: string): string {
+  return `org-name-${orgId}`
+}
+
+// Admins and members chat with the organisation's shared Azure AI Foundry
+// models; viewers and guests may not (the server refuses them the listing).
+function canUseOrgModels(org: Organisation, userId: string | undefined): boolean {
+  const role = (org.members ?? []).find(m => m.userId === userId)?.role
+  return role === 'admin' || role === 'member'
 }
 
 // inviteLinkURL builds the same deep link the invite email carries
@@ -98,10 +114,44 @@ export default function OrganizationsPanel() {
   }
   const bannerText = forbidden ? t('orgs.permissionDenied') : error
 
-  // Set when the deployment has no org keystore: the shared-credentials
-  // block hides for every org (it is a deployment property, not an org's).
+  // Set when the deployment has no org keystore: the shared-models block
+  // hides for every org (it is a deployment property, not an org's).
   const [orgAzureUnavailable, setOrgAzureUnavailable] = useState(false)
   const markOrgAzureUnavailable = useCallback(() => setOrgAzureUnavailable(true), [])
+  // F-48: removing or demoting the lender of an org resource's credential
+  // disables it server-side. The note says what disappeared and who
+  // re-enters it — in that org only — and the registry is marked stale, so
+  // the block (and the members' "Shared with you") fetch it again and show
+  // the resource as needing credentials. The chat picker refetches too.
+  const [credentialDisabledNote, setCredentialDisabledNote] = useState<{orgId: string; name: string} | null>(null)
+  const reportCredentialDisabled = useCallback(
+    (orgId: string, name: string) => {
+      setCredentialDisabledNote({orgId, name})
+      const azure = useAzureFoundryStore.getState()
+      azure.invalidate({kind: 'org', orgId})
+      azure.invalidate({kind: 'user'})
+      bumpProviderEpoch()
+    },
+    [bumpProviderEpoch],
+  )
+  // Credentials entered again (or a resource added): the note is stale. The
+  // registry store already relisted the chat picker.
+  const handleOrgAzureConnectionSaved = useCallback(() => setCredentialDisabledNote(null), [])
+
+  // A Settings deep link to an organisation's Azure AI Foundry block
+  // ("Manage in Organizations"). The active organisation's block focuses its
+  // own heading once loaded; any other organisation — not switched to here,
+  // which would reset the open flow and chat — gets its name focused, so the
+  // user lands on it. Spent either way.
+  const settingsAnchor = useUIStore(s => s.settingsAnchor)
+  useEffect(() => {
+    const anchoredOrg = orgIdFromAnchor(settingsAnchor)
+    if (!anchoredOrg || isLoading) return
+    const org = organisations.find(o => o.id === anchoredOrg)
+    if (org && org.id === activeOrgId && !orgAzureUnavailable && canUseOrgModels(org, currentUser?.id)) return
+    if (org) document.getElementById(orgNameId(org.id))?.focus()
+    useUIStore.getState().clearSettingsAnchor()
+  }, [settingsAnchor, isLoading, organisations, activeOrgId, orgAzureUnavailable, currentUser?.id])
 
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
@@ -167,7 +217,7 @@ export default function OrganizationsPanel() {
     }
   }
 
-  const handleRemoveMember = async (userId: string) => {
+  const handleRemoveMember = async (userId: string, name?: string) => {
     if (!selected) return
     const ok = await confirm({
       title: t('orgs.removeMemberTitle'),
@@ -178,7 +228,8 @@ export default function OrganizationsPanel() {
     if (!ok) return
     setForbidden(false)
     try {
-      await removeMember(selected.id, userId)
+      const reply = await removeMember(selected.id, userId)
+      if (reply?.sharedCredentialDisabled) reportCredentialDisabled(selected.id, name ?? userId)
     } catch (err) {
       reportFailure(err)
       // other errors surface via store.error
@@ -232,11 +283,12 @@ export default function OrganizationsPanel() {
     }
   }
 
-  const handleRoleChange = async (userId: string, role: OrgRole) => {
+  const handleRoleChange = async (userId: string, role: OrgRole, name?: string) => {
     if (!selected) return
     setForbidden(false)
     try {
-      await setMemberRole(selected.id, userId, role)
+      const reply = await setMemberRole(selected.id, userId, role)
+      if (reply?.sharedCredentialDisabled) reportCredentialDisabled(selected.id, name ?? userId)
     } catch (err) {
       reportFailure(err)
       // other errors surface via store.error
@@ -379,15 +431,16 @@ export default function OrganizationsPanel() {
                           </button>
                         </div>
                       ) : (
-                        <span title={org.name} className="text-sm font-semibold text-text-primary truncate">
+                        <span
+                          id={orgNameId(org.id)}
+                          tabIndex={-1}
+                          title={org.name}
+                          className="text-sm font-semibold text-text-primary truncate"
+                        >
                           {org.name}
                         </span>
                       )}
-                      {isOwner && (
-                        <span className="text-2xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-brand-500/15 text-brand-400">
-                          {t('orgs.owner')}
-                        </span>
-                      )}
+                      {isOwner && <Badge tone="brand">{t('orgs.owner')}</Badge>}
                     </div>
                     <p className="text-xs text-text-tertiary mt-0.5">
                       {t('orgs.memberCount', {count: members.length})}
@@ -425,22 +478,40 @@ export default function OrganizationsPanel() {
                   <div className="p-4 border-t border-border-subtle space-y-4 bg-surface-1/50">
                     <OrgChannelsSection orgId={org.id} isAdmin={canManageMembers} />
                     <OrgCustomRulesSection orgId={org.id} isAdmin={canManageMembers} />
-                    {/* The org's shared Azure AI Foundry credentials: members
-                        read, admins manage. A member's own credentials always
-                        take precedence. Hidden entirely on a deployment
-                        without an org keystore. A save or removal changes
-                        what the chat picker lists, so it refetches. */}
+                    {/* The org's shared Azure AI Foundry resources and models:
+                        members read, admins manage; they appear alongside
+                        members' own. Hidden entirely on a deployment without
+                        an org keystore. Viewers and guests cannot use them
+                        (the server refuses them), so they get a note. */}
                     {!orgAzureUnavailable && (
                       <div>
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-1">
+                        <h4
+                          id={orgAzureAnchor(org.id)}
+                          tabIndex={-1}
+                          className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-1"
+                        >
                           {t('providers.azureOrgTitle')}
                         </h4>
+                        {/* Always mounted: the note is inserted into an
+                            existing live region, which is what gets it
+                            announced. */}
+                        <p role="status" className="text-xs text-amber-400 mb-2 empty:mb-0">
+                          {credentialDisabledNote?.orgId === org.id &&
+                            t('orgs.sharedCredentialDisabled', {name: credentialDisabledNote.name})}
+                        </p>
                         <p className="text-xs text-text-tertiary mb-3">{t('providers.azureOrgHint')}</p>
-                        <AzureFoundrySection
-                          scope={{kind: 'org', orgId: org.id, canEdit: canManageMembers}}
-                          onConfigured={bumpProviderEpoch}
-                          onUnavailable={markOrgAzureUnavailable}
-                        />
+                        {canUseOrgModels(org, currentUser?.id) ? (
+                          <AzureFoundryPanel
+                            scope={{kind: 'org', orgId: org.id}}
+                            headingLevel={5}
+                            canEdit={canManageMembers}
+                            anchorId={orgAzureAnchor(org.id)}
+                            onConnectionSaved={handleOrgAzureConnectionSaved}
+                            onUnavailable={markOrgAzureUnavailable}
+                          />
+                        ) : (
+                          <p className="text-xs text-text-secondary">{t('providers.azureOrgViewerNote')}</p>
+                        )}
                       </div>
                     )}
                     <div>
@@ -475,7 +546,13 @@ export default function OrganizationsPanel() {
                               {canManageMembers ? (
                                 <select
                                   value={m.role}
-                                  onChange={e => void handleRoleChange(m.userId, e.target.value as OrgRole)}
+                                  onChange={e =>
+                                    void handleRoleChange(
+                                      m.userId,
+                                      e.target.value as OrgRole,
+                                      m.user?.displayName || m.user?.email || m.userId,
+                                    )
+                                  }
                                   disabled={m.userId === org.ownerId}
                                   className="px-2 py-1 rounded-md bg-surface-2 border border-border-default text-xs text-text-primary focus:outline-none focus:border-brand-500 disabled:opacity-50"
                                 >
@@ -490,7 +567,9 @@ export default function OrganizationsPanel() {
                               )}
                               {canManageMembers ? (
                                 <button
-                                  onClick={() => void handleRemoveMember(m.userId)}
+                                  onClick={() =>
+                                    void handleRemoveMember(m.userId, m.user?.displayName || m.user?.email || m.userId)
+                                  }
                                   disabled={m.userId === org.ownerId}
                                   className="p-1.5 rounded text-text-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-text-tertiary"
                                   title={

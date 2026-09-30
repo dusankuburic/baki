@@ -109,7 +109,7 @@ func (c *ClaudeProvider) EstimateTokens(text string) int {
 
 // Models is the Claude catalogue without the invite-only models
 // (claudeInviteOnly): those stay in the catalogue so a Foundry deployment of
-// one is priced, but are not offered in the direct provider's picker.
+// one is sized, but are not offered in the direct provider's picker.
 func (c *ClaudeProvider) Models(_ context.Context) ([]ModelInfo, error) {
 	models := catalogModels("claude")
 	out := models[:0]
@@ -132,13 +132,39 @@ type claudeRequest struct {
 	Messages    []claudeMessage     `json:"messages"`
 	Tools       []claudeTool        `json:"tools,omitempty"`
 	Thinking    *claudeThinking     `json:"thinking,omitempty"`
-	Stream      bool                `json:"stream,omitempty"`
+	// OutputConfig carries output_config.effort (F-19): the user-chosen
+	// reasoning depth, sent ONLY on the models that also reject sampling
+	// parameters (claudeRemovesSampling — Opus 4.5+/5.x/Fable/Mythos accept
+	// effort); older models would reject the object.
+	OutputConfig *claudeOutputConfig `json:"output_config,omitempty"`
+	Stream       bool                `json:"stream,omitempty"`
+	// CacheControl is the TOP-LEVEL automatic-caching marker (audit #9 F-02):
+	// the API applies the cache breakpoint to the last cacheable block itself
+	// and moves it forward as the conversation grows, so the growing history
+	// and accumulated tool_results of a tool loop are cache reads (~0.1x the
+	// input rate) instead of full-price input on every iteration. Compatible
+	// with the explicit system-block marker buildClaudeSystem keeps (same
+	// 5-minute TTL: a no-op when system is the last cacheable block,
+	// otherwise the second of the four breakpoint slots); no per-block
+	// markers are added. Any change to the request prefix (e.g. the thinking
+	// field) invalidates the cache once.
+	CacheControl *claudeCacheControl `json:"cache_control,omitempty"`
 }
 
-// claudeCacheControl marks a content block as a prompt-cache breakpoint. The
-// stable prefix up to and including the marked block is cached (~0.1x read cost
-// vs full price), which pays off when the same prefix is re-sent — every
-// iteration of the agentic tool loop and every turn of a conversation.
+// claudeOutputConfig is the Messages request's output_config object; its
+// effort field is Claude's reasoning-effort lever (low|medium|high).
+type claudeOutputConfig struct {
+	Effort string `json:"effort,omitempty"`
+}
+
+// claudeCacheControl marks a prompt-cache breakpoint. On a content block the
+// stable prefix up to and including the marked block is cached; at the TOP
+// level of the request (claudeRequest.CacheControl) it turns on automatic
+// caching: the API picks the last cacheable block itself and moves the
+// breakpoint forward as the conversation grows. Cache reads bill ~0.025-0.1x
+// the input rate by model, 5-minute writes 1.25x, which pays off when the
+// same prefix is re-sent — every iteration of the agentic tool loop and
+// every turn of a conversation.
 type claudeCacheControl struct {
 	Type string `json:"type"` // "ephemeral"
 }
@@ -213,10 +239,12 @@ type claudeContent struct {
 type claudeUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
-	// Cache tokens are billed separately (reads ~0.1×, writes ~1.25×) and are
-	// EXCLUDED from input_tokens — folded into the count at full rate so
-	// cached conversations don't silently bypass the budget (see
-	// parseClaudeSSE for the same treatment on streams).
+	// Cache tokens are billed separately (reads 0.025-0.1× by family, writes
+	// 1.25×) and are EXCLUDED from input_tokens — folded into TokensIn as the
+	// total so cached conversations don't silently bypass the budget, and
+	// carried separately (Response.CacheReadTokens / CacheWriteTokens) so the
+	// audited wrapper prices the slice at the cached rates (see parseClaudeSSE
+	// for the same treatment on streams).
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 }
@@ -294,6 +322,12 @@ func toClaudeMessages(msgs []Message, owner string) []claudeMessage {
 			out = append(out, claudeMessage{Role: "assistant", Content: blocks})
 
 		default:
+			// A blank turn (an interrupted answer) is rejected by the Messages API;
+			// consecutive same-role turns are merged by it, so dropping is safe.
+			// The last message is kept so the request is never emptied.
+			if strings.TrimSpace(m.Content) == "" && i < len(msgs)-1 {
+				continue
+			}
 			out = append(out, claudeMessage{Role: m.Role, Content: m.Content})
 		}
 	}
@@ -412,7 +446,7 @@ var claudeAlwaysThinkingFamilyRe = regexp.MustCompile(`(?:^|[^a-z])(?:fable|myth
 // with a 400: Opus 4.7 and later, every model of generation 5 and later
 // (Sonnet 5 and 5.5 reject non-default values too) and the Fable and Mythos
 // families, versioned or not (Claude Mythos Preview). For those we omit
-// sampling params (and, without tools, ask for adaptive thinking — see
+// sampling params and ask for adaptive thinking, with or without tools (see
 // buildBody). Matched case-insensitively; callers pass the SERVED model when
 // it is known (policyModel), else the deployment name. A name that reveals
 // nothing keeps temperature, and send repairs a rejection of it once.
@@ -469,30 +503,37 @@ func buildClaudeSystem(prompt string) []claudeSystemBlock {
 // (cached) system, tools, messages, and model-conditional sampling/thinking.
 func (c *ClaudeProvider) buildBody(req Request, stream bool) claudeRequest {
 	body := claudeRequest{
-		Model:     req.Model,
-		MaxTokens: orDefault(req.MaxTokens, 8192),
-		System:    buildClaudeSystem(req.SystemPrompt),
-		Messages:  toClaudeMessages(req.Messages, c.replayOwner()),
-		Tools:     toClaudeTools(req.Tools),
-		Stream:    stream,
+		Model:        req.Model,
+		MaxTokens:    orDefault(req.MaxTokens, 8192),
+		System:       buildClaudeSystem(req.SystemPrompt),
+		Messages:     toClaudeMessages(req.Messages, c.replayOwner()),
+		Tools:        toClaudeTools(req.Tools),
+		Stream:       stream,
+		CacheControl: ephemeralCache,
 	}
 	if claudeRemovesSampling(c.policyModel(req.Model)) {
 		// Opus 4.7+ and every 5.x / Fable / Mythos model reject non-default
 		// temperature/top_p/top_k — omit them.
 		//
-		// Thinking: without tools, ask for adaptive thinking explicitly (Opus
-		// 4.7/4.8 run without thinking when the field is omitted). With tools
-		// the field stays unset — the agentic loop's historical setting: Opus
-		// 4.7/4.8 then run the loop without thinking, while on the 5.x, Fable
-		// and Mythos models an omitted field IS adaptive thinking (always on
-		// for some of them). Their thinking blocks survive the tool steps
-		// because the chat service's loop replays each assistant turn
-		// verbatim (Message.ProviderItems, toClaudeMessages); where it cannot
-		// (history truncated or rewritten mid-loop) it drops every block, and
-		// adaptive mode needs none — no assistant turn has to start with a
-		// thinking block, unlike the manual budget_tokens mode.
-		if len(req.Tools) == 0 {
-			body.Thinking = &claudeThinking{Type: "adaptive"}
+		// Thinking: adaptive is asked for explicitly, with or without tools
+		// (audit #9 F-17). On Opus 4.7/4.8 an omitted field means thinking
+		// OFF, and the chat service always attaches the flow tools — so the
+		// agentic loop, the case where interleaved reasoning between tool
+		// results matters most, used to run without it while a tool-less
+		// question thought. On the 5.x/Fable/Mythos models an omitted field
+		// IS adaptive thinking, so asking explicitly is the same mode. Their
+		// thinking blocks survive the tool steps because the chat service's
+		// loop replays each assistant turn verbatim (Message.ProviderItems,
+		// toClaudeMessages); where it cannot (history truncated or rewritten
+		// mid-loop) it drops every block, and adaptive mode needs none — no
+		// assistant turn has to start with a thinking block, unlike the
+		// manual budget_tokens mode.
+		body.Thinking = &claudeThinking{Type: "adaptive"}
+		// F-19: the reasoning-effort lever, only inside this branch — the
+		// models that reject sampling parameters (Opus 4.5+, 5.x, Fable,
+		// Mythos) are the ones that accept output_config.effort.
+		if req.ReasoningEffort != "" {
+			body.OutputConfig = &claudeOutputConfig{Effort: req.ReasoningEffort}
 		}
 	} else if t, ok := claudeTemperature(req); ok {
 		body.Temperature = &t
@@ -790,13 +831,15 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 	}
 
 	return &Response{
-		Content:       text,
-		TokensIn:      parsed.Usage.totalInputTokens(),
-		TokensOut:     parsed.Usage.OutputTokens,
-		FinishReason:  parsed.StopReason,
-		ToolCalls:     toolCalls,
-		ServedModel:   parsed.Model,
-		ProviderItems: claudeReplayRecord(raw.Content),
+		Content:          text,
+		TokensIn:         parsed.Usage.totalInputTokens(),
+		TokensOut:        parsed.Usage.OutputTokens,
+		CacheReadTokens:  parsed.Usage.CacheReadInputTokens,
+		CacheWriteTokens: parsed.Usage.CacheCreationInputTokens,
+		FinishReason:     parsed.StopReason,
+		ToolCalls:        toolCalls,
+		ServedModel:      parsed.Model,
+		ProviderItems:    claudeReplayRecord(raw.Content),
 	}, nil
 }
 
@@ -810,4 +853,96 @@ func (c *ClaudeProvider) Stream(ctx context.Context, req Request, onChunk func(C
 	}
 	defer resp.Body.Close()
 	return parseClaudeSSE(resp.Body, onChunk)
+}
+
+// claudeCountTokensRequest is the count_tokens body: the same model, system,
+// messages, tools and thinking buildBody assembles, without the fields the
+// endpoint does not take — max_tokens, stream, temperature/top_p — and
+// without the top-level cache marker.
+type claudeCountTokensRequest struct {
+	Model    string              `json:"model"`
+	System   []claudeSystemBlock `json:"system,omitempty"`
+	Messages []claudeMessage     `json:"messages"`
+	Tools    []claudeTool        `json:"tools,omitempty"`
+	Thinking *claudeThinking     `json:"thinking,omitempty"`
+}
+
+// countTokensParam is the learnedRepairs entry of an endpoint with no
+// count_tokens route (404): remembered per endpoint so later calls fail fast
+// instead of paying the rejection round trip every turn.
+const countTokensParam = "count_tokens"
+
+// anthropicNotFound reports whether a 404 body is Anthropic's own error
+// envelope ({"type":"error","error":{"type":"not_found_error",…}}): the route
+// exists and refused THIS request — an unknown model or deployment, one
+// user's mistake — unlike a gateway's route-level 404, which says the
+// endpoint has no count_tokens route for anyone.
+func anthropicNotFound(body []byte) bool {
+	var env struct {
+		Type  string            `json:"type"`
+		Error claudeErrorDetail `json:"error"`
+	}
+	return json.Unmarshal(body, &env) == nil && env.Type == "error" && env.Error.Type == "not_found_error"
+}
+
+// CountTokens asks the provider's own tokenizer how many input tokens req
+// will consume (Anthropic's count_tokens endpoint, free and GA on Microsoft
+// Foundry; TokenCounter). The estimate (EstimateTokensClaude) is the OpenAI
+// BPE, and Anthropic documents ~30% more tokens on the 4.7+ tokenizer — an
+// exact count lets the chat service re-check a near-window prompt before the
+// estimate's error band lets an oversized request through. The count carries
+// no sampling or generation fields; errors are classified by the shared
+// decode path, and an endpoint whose route answers 404 is memoised as
+// unavailable (learnedRepairs) for the memo TTL. Anthropic's own
+// not_found_error is not: the memo is per endpoint, and one request's unknown
+// model must not turn exact counting off for every user of it.
+func (c *ClaudeProvider) CountTokens(ctx context.Context, req Request) (int, error) {
+	url := c.endpoint() + "/count_tokens"
+	if slices.Contains(repairsFor(url), countTokensParam) {
+		return 0, fmt.Errorf("claude count_tokens: %s has no count_tokens route (memoised)", c.logLabel())
+	}
+	body := c.buildBody(req, false)
+	countReq := claudeCountTokensRequest{
+		Model:    body.Model,
+		System:   body.System,
+		Messages: body.Messages,
+		Tools:    body.Tools,
+		Thinking: body.Thinking,
+	}
+	jsonBody, err := json.Marshal(countReq)
+	if err != nil {
+		return 0, fmt.Errorf("marshal count_tokens request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return 0, fmt.Errorf("build count_tokens request: %w", err)
+	}
+	if err := c.auth(ctx, httpReq); err != nil {
+		return 0, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("anthropic-version", claudeAPIVersion)
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return 0, fmt.Errorf("claude count_tokens request: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return 0, fmt.Errorf("read count_tokens response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusNotFound && !anthropicNotFound(respBody) {
+			rememberRepairs(url, map[string]bool{countTokensParam: true})
+			return 0, fmt.Errorf("claude count_tokens: no such route (status 404), memoised for this endpoint")
+		}
+		return 0, c.classifyError(resp, respBody, false)
+	}
+	var parsed struct {
+		InputTokens int `json:"input_tokens"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return 0, fmt.Errorf("parse count_tokens response: %w", err)
+	}
+	return parsed.InputTokens, nil
 }

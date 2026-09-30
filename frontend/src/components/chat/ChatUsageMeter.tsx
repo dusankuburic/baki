@@ -39,8 +39,12 @@ export function threadCost(
 
 // threadCostEstimate is threadCost plus whether the figure is only a lower
 // bound: some of the thread's tokens came from turns that reported no rates
-// and the current listing price is 0 (an Azure deployment lists at $0 — its
-// price follows the served model), so those tokens are not in the figure.
+// and the current listing price is 0, so those tokens are not in the figure.
+//
+// Azure AI Foundry turns are never priced (baki does not price Azure): their
+// tokens are left out of the figure outright — a thread is keyed by id, not
+// provider, so pricing them as "the rest" would bill them at another model's
+// listing after a provider switch — and do not make it a lower bound.
 export function threadCostEstimate(
   messages: readonly ChatMessage[],
   promptTokens: number,
@@ -54,6 +58,11 @@ export function threadCostEstimate(
   let ratedOut = 0
   for (const m of messages) {
     if (m.role !== 'assistant') continue
+    if (m.provider === 'azure-foundry') {
+      ratedIn += m.tokensIn ?? 0
+      ratedOut += m.tokensOut ?? 0
+      continue
+    }
     const inRate = Math.max(0, m.inputCostPerM ?? 0)
     const outRate = Math.max(0, m.outputCostPerM ?? 0)
     if (inRate === 0 && outRate === 0) continue
@@ -67,6 +76,8 @@ export function threadCostEstimate(
   const restIn = Math.max(0, promptTokens - ratedIn)
   const restOut = Math.max(0, completionTokens - ratedOut)
   if (listInputPerM > 0 || listOutputPerM > 0) {
+    // Only Azure turns so far: nothing is priced, so no figure at all.
+    if (!priced && restIn + restOut === 0) return null
     cost += (restIn * listInputPerM + restOut * listOutputPerM) / 1_000_000
     return {cost, lowerBound: false}
   }

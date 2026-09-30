@@ -59,3 +59,48 @@ func TestKnowledge_BudgetGatesUploadAndReindex(t *testing.T) {
 		t.Errorf("budget consulted %d times, want once per run (3)", budget.calls)
 	}
 }
+
+// azureEmbedder is fixedEmbedder answering as Azure AI Foundry.
+type azureEmbedder struct{ *fixedEmbedder }
+
+func (azureEmbedder) ID() string { return azureFoundryProviderID }
+
+// Review #4 B6: an upload or a re-index that embeds with Azure AI Foundry is
+// never refused by the daily budget — baki neither prices nor counts Azure
+// usage, so a budget other, priced providers spent must not stop it — while
+// the same runs on a priced embedder still are.
+func TestKnowledge_AzureEmbedderIgnoresAnExhaustedBudget(t *testing.T) {
+	ctx := context.Background()
+	store := testutil.NewFakeBackend()
+	seedCorpus(store, []float32{1, 0}, "existing guideline")
+	emb := &fixedEmbedder{vec: []float32{1, 0}}
+	svc := guardService(store, azureEmbedder{emb})
+	budget := &budgetStub{err: errBudgetSpent}
+	svc.SetBudgetChecker(budget)
+
+	if err := svc.AddDocument(ctx, "u1", "org-1", "new.md", "some content"); err != nil {
+		t.Errorf("Azure upload over budget: %v, want it indexed", err)
+	}
+	if _, err := svc.ReindexOrg(ctx, "u1", "org-1", false, interfaces.KnowledgeChunkCursor{}); err != nil {
+		t.Errorf("Azure re-index over budget: %v, want it run", err)
+	}
+	if emb.calls == 0 {
+		t.Error("the Azure runs embedded nothing")
+	}
+	if budget.calls != 0 {
+		t.Errorf("budget consulted %d times for Azure runs, want 0", budget.calls)
+	}
+
+	priced := &fixedEmbedder{vec: []float32{1, 0}}
+	svc = guardService(store, priced)
+	svc.SetBudgetChecker(budget)
+	if err := svc.AddDocument(ctx, "u1", "org-1", "other.md", "some content"); !errors.Is(err, errBudgetSpent) {
+		t.Errorf("priced upload over budget: %v, want the budget refusal", err)
+	}
+	if _, err := svc.ReindexOrg(ctx, "u1", "org-1", false, interfaces.KnowledgeChunkCursor{}); !errors.Is(err, errBudgetSpent) {
+		t.Errorf("priced re-index over budget: %v, want the budget refusal", err)
+	}
+	if priced.calls != 0 {
+		t.Errorf("%d embedding calls were made over budget on the priced embedder", priced.calls)
+	}
+}

@@ -54,7 +54,7 @@ event: response.web_search_call.searching
 data: {"type":"response.web_search_call.searching","item_id":"ws_1"}
 
 event: response.output_item.done
-data: {"type":"response.output_item.done","output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"completed"}}
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"completed","action":{"type":"search","query":"PAD run flow action"}}}
 
 event: response.output_text.delta
 data: {"type":"response.output_text.delta","item_id":"msg_1","delta":"Hel"}
@@ -78,7 +78,7 @@ event: response.output_item.done
 data: {"type":"response.output_item.done","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_9","name":"search_flow","arguments":"{\"q\":\"x\"}","status":"completed"}}
 
 event: response.completed
-data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","model":"gpt-4o-2024-11-20","usage":{"input_tokens":42,"output_tokens":7}}}
+data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","model":"gpt-4o-2024-11-20","usage":{"input_tokens":42,"output_tokens":7,"input_tokens_details":{"cached_tokens":30}}}}
 
 `
 
@@ -115,6 +115,9 @@ func TestParseResponsesSSE_TextToolsAndHostedSteps(t *testing.T) {
 	if len(events) != 2 || events[0].Done || events[0].Label != "Agent · web search" || !events[1].Done || !events[1].OK {
 		t.Errorf("tool events = %+v", events)
 	}
+	if events[1].Summary != "PAD run flow action" {
+		t.Errorf("the finished web search must show its query, got %q", events[1].Summary)
+	}
 	if keepalives != 7 {
 		t.Errorf("every silent event (response.created, the function-call accumulation events, the searching notification) must yield one keepalive, got %d", keepalives)
 	}
@@ -123,6 +126,11 @@ func TestParseResponsesSSE_TextToolsAndHostedSteps(t *testing.T) {
 	}
 	if done.TokensIn != 42 || done.TokensOut != 7 || done.ServedModel != "gpt-4o-2024-11-20" || done.FinishReason != "tool_calls" {
 		t.Errorf("done = %+v", done)
+	}
+	// F-05: the cached slice is a breakdown INCLUDED in TokensIn, surfaced
+	// for the meter (42 input of which 30 were cache reads).
+	if done.CacheReadTokens != 30 {
+		t.Errorf("done.CacheReadTokens = %d, want 30", done.CacheReadTokens)
 	}
 	if len(done.ToolCalls) != 1 || done.ToolCalls[0].ID != "call_9" || done.ToolCalls[0].Name != "search_flow" || string(done.ToolCalls[0].Input) != `{"q":"x"}` {
 		t.Errorf("tool calls = %+v", done.ToolCalls)
@@ -187,28 +195,45 @@ func TestParseResponsesSSE_Terminals(t *testing.T) {
 // carries no text and no hosted-tool steps — every reasoning event must feed
 // the chat service's idle watchdog or the run is cancelled mid-thought.
 func TestParseResponsesSSE_ReasoningKeepalives(t *testing.T) {
+	// The reasoning item brackets the phase (Chunk.SilentStep on its added and
+	// done events, F-08); the summary events inside it are keepalives.
 	body := sseEvents(
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"rs_1","type":"reasoning","encrypted_content":"enc"}}`,
 		`{"type":"response.reasoning_summary_part.added","item_id":"rs_1","output_index":0,"summary_index":0}`,
 		`{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","delta":"thinking "}`,
 		`{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","delta":"hard"}`,
 		`{"type":"response.reasoning_summary_text.done","item_id":"rs_1","text":"thinking hard"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"rs_1","type":"reasoning","encrypted_content":"enc"}}`,
 		`{"type":"response.completed","response":{"status":"completed","model":"gpt-5","usage":{"input_tokens":10,"output_tokens":2}}}`,
 	)
 	var chunks []Chunk
 	if err := parseResponsesSSE(strings.NewReader(body), func(c Chunk) { chunks = append(chunks, c) }); err != nil {
 		t.Fatal(err)
 	}
-	if len(chunks) != 5 {
+	if len(chunks) != 7 {
 		t.Fatalf("chunks = %+v", chunks)
 	}
-	for i := 0; i < 4; i++ {
+	if chunks[0].SilentStep != 1 {
+		t.Errorf("the reasoning item's added must open a silent phase, got %+v", chunks[0])
+	}
+	if c := chunks[0]; c.Text != "" || c.Done || c.ServerStep || c.Error != nil || c.ToolEvent != nil {
+		t.Errorf("the silent-phase open must carry nothing else, got %+v", c)
+	}
+	for i := 1; i <= 4; i++ {
 		c := chunks[i]
-		if c.Text != "" || c.Done || c.ServerStep || c.Error != nil || c.ToolEvent != nil {
+		if c.Text != "" || c.Done || c.ServerStep || c.Error != nil || c.ToolEvent != nil || c.SilentStep != 0 {
 			t.Errorf("reasoning event %d must yield an empty keepalive chunk, got %+v", i, c)
 		}
 	}
-	if !chunks[4].Done || chunks[4].FinishReason != "stop" || chunks[4].ServedModel != "gpt-5" {
-		t.Errorf("done = %+v", chunks[4])
+	if c := chunks[5]; c.SilentStep != -1 || c.Text != "" || c.Done || c.ServerStep || c.Error != nil || c.ToolEvent != nil {
+		t.Errorf("the reasoning item's done must close the silent phase, got %+v", c)
+	}
+	d := chunks[6]
+	if !d.Done || d.FinishReason != "stop" || d.ServedModel != "gpt-5" {
+		t.Errorf("done = %+v", d)
+	}
+	if !strings.Contains(string(d.ProviderItems), `"reasoning"`) {
+		t.Errorf("the reasoning item must still be recorded for replay, got %s", d.ProviderItems)
 	}
 }
 

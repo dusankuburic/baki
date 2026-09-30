@@ -9,13 +9,41 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/unicode/norm"
 
 	"pad-analyzer/internal/config"
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
 )
+
+// ClampModelLabel is a client-sent ChatMessage.ModelLabel as a conversation
+// save (/api/chat/save) stores it: NFC-normalised; control, bidi and
+// zero-width characters (Unicode Cc and Cf) dropped; whitespace runs — tabs
+// and newlines included — collapsed to one space and trimmed; at most 64
+// characters, a registry display name's limit. The label is only the name
+// shown next to an answer, so it is clamped rather than refused (a refusal
+// would fail the whole save); what the clamp removes is what lets a label
+// impersonate another model's name.
+func ClampModelLabel(label string) string {
+	if label == "" {
+		return ""
+	}
+	label = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsSpace(r):
+			return ' '
+		case unicode.In(r, unicode.Cc, unicode.Cf):
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(label, ""))
+	label = strings.Join(strings.Fields(norm.NFC.String(label)), " ")
+	return strings.TrimSpace(truncateRunes(label, storageif.AzureNameMaxLen))
+}
 
 // reconstructHistory loads the stored conversation for the request's
 // conversation key so a client that omitted Messages (the efficient path — it
@@ -93,29 +121,55 @@ func (s *ChatService) GetConversation(ctx context.Context, doc *models.FlowDocum
 }
 
 func (s *ChatService) SaveConversation(ctx context.Context, doc *models.FlowDocument, provider string, messages []models.ChatMessage) error {
+	_, err := s.saveConversation(ctx, doc, provider, messages)
+	return err
+}
+
+// saveConversation is SaveConversation reporting whether the list was stored:
+// false with a nil error when the caller turned "Save conversation history"
+// off (the save is accepted and dropped).
+func (s *ChatService) saveConversation(ctx context.Context, doc *models.FlowDocument, provider string, messages []models.ChatMessage) (stored bool, err error) {
 	if doc == nil {
-		return fmt.Errorf("no flow loaded")
+		return false, fmt.Errorf("no flow loaded")
 	}
 	// "Save conversation history" off: accept and drop. The toggle used to have
 	// no reader, so turns were stored regardless of it. The client stops
 	// calling this and sends history with each turn instead; the check here
 	// also covers the server's own start-of-stream persist and older clients.
 	if !s.conversationHistoryEnabled(ctx) {
-		return nil
+		return false, nil
 	}
-	trimmed := evictConvMessages(messages)
+	// An assistant message with blank content and no tool calls or fix
+	// proposals is dropped before storing (F-10), mirroring
+	// persistAssistantTurn's own blank rule: an empty 'stop' answer saved as
+	// an empty assistant message used to brick the thread on Claude, whose
+	// Messages API rejects {"role":"assistant","content":""} on every later
+	// turn. Tool-bearing and fix-bearing turns stay (their content is not the
+	// answer).
+	filtered := make([]models.ChatMessage, 0, len(messages))
+	for _, m := range messages {
+		if m.Role == "assistant" && strings.TrimSpace(m.Content) == "" &&
+			len(m.ToolCalls) == 0 && len(m.FixProposals) == 0 && m.FixProposal == nil {
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	trimmed := evictConvMessages(filtered)
 
 	if s.useBackendConversations() {
-		return s.backend.SaveConversation(ctx, doc.ID, provider, toStorageMessages(trimmed))
+		if err := s.backend.SaveConversation(ctx, doc.ID, provider, toStorageMessages(trimmed)); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 
 	path, err := convFilePath(s.configDir, provider, doc.ID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0750); err != nil {
-		return fmt.Errorf("failed to create conversations directory: %w", err)
+		return false, fmt.Errorf("failed to create conversations directory: %w", err)
 	}
 
 	conv := models.ConversationFile{
@@ -128,12 +182,15 @@ func (s *ChatService) SaveConversation(ctx context.Context, doc *models.FlowDocu
 
 	data, err := json.MarshalIndent(conv, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal conversation: %w", err)
+		return false, fmt.Errorf("failed to marshal conversation: %w", err)
 	}
 
 	// Atomic write at 0600: an interrupted write leaves the prior conversation
 	// intact rather than truncating it, and the file isn't world-readable.
-	return atomicWriteConv(dir, path, data)
+	if err := atomicWriteConv(dir, path, data); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *ChatService) ClearConversation(ctx context.Context, doc *models.FlowDocument, provider string) error {
@@ -174,7 +231,13 @@ var persistAnswerTimeout = 15 * time.Second
 // Best-effort and idempotent in effect: the client's own save replaces the whole
 // list with the same content. Bounded by persistAnswerTimeout: a store that
 // hangs turns into a logged warning, never a held stripe.
-func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.FlowDocument, req models.ChatRequest, ctl *streamCtl) {
+//
+// model and modelLabel are what the answer is stored with (turnModel's
+// requested id and label): the id the client asked for — an Azure AI Foundry
+// registry entry's "m/<entryId>", never the deployment it resolved to — and
+// the entry's display name at send time, so history keeps naming the model
+// after it is renamed or removed.
+func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.FlowDocument, req models.ChatRequest, ctl *streamCtl, model, modelLabel string) {
 	if doc == nil || ctl == nil {
 		return
 	}
@@ -225,7 +288,8 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 		Content:        answer,
 		Timestamp:      time.Now(),
 		Provider:       req.Provider,
-		Model:          req.Model,
+		Model:          model,
+		ModelLabel:     modelLabel,
 		TokensIn:       tokensIn,
 		TokensOut:      tokensOut,
 		ServedModel:    served,

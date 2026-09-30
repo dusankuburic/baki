@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -154,6 +155,15 @@ func ExecuteTool(name string, input json.RawMessage, tctx ToolContext) string {
 	t, ok := toolRegistry[name]
 	if !ok {
 		return "error: unknown tool " + name
+	}
+	// Malformed argument JSON (a call cut mid-argument, or the malformed JSON
+	// open models emit with finish tool_calls — Microsoft's function-calling
+	// guide: "the JSON response might not always be valid") becomes the
+	// standard retryable error result instead of aborting the turn: the model
+	// reads it, re-issues the call with valid JSON, and the loop stays bounded
+	// (audit #9 F-11). Empty input is the providers' "no arguments" and runs.
+	if in := bytes.TrimSpace(input); len(in) > 0 && !json.Valid(in) {
+		return fmt.Sprintf("error: the arguments for %s were not valid JSON — call it again with valid JSON arguments", name)
 	}
 	timeout := t.timeout
 	if timeout <= 0 {

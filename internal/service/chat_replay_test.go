@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -256,17 +257,15 @@ func TestRunToolLoop_ToolsFallbackStripsProviderItems(t *testing.T) {
 	}
 }
 
-// A tool call cut off at an output limit, or whose arguments are not JSON,
-// is never executed: the turn fails with PROVIDER_OUTPUT_LIMIT and no tool
-// runs — whatever the provider.
+// A tool call cut off at an OUTPUT LIMIT is never executed: the turn fails
+// with PROVIDER_OUTPUT_LIMIT and no tool runs — whatever the provider. (A
+// non-limit finish with malformed argument JSON is the case below instead.)
 func TestRunToolLoop_TruncatedToolCallIsNotExecuted(t *testing.T) {
 	for _, tc := range []struct{ finish, input string }{
 		{"max_tokens", `{"query":"xav"}`},
 		{"length", `{"query":"xav"}`},
 		{"MAX_TOKENS", `{"query":"xav"}`},
 		{"model_context_window_exceeded", `{"query":"xav"}`},
-		{"tool_use", `{"query":"xa`},
-		{"tool_calls", `not json`},
 	} {
 		p := &itemsProvider{id: "claude", turns: []itemsTurn{{chunks: []ai.Chunk{
 			{Text: "Let me look"},
@@ -293,6 +292,74 @@ func TestRunToolLoop_TruncatedToolCallIsNotExecuted(t *testing.T) {
 	}
 }
 
+// F-11: malformed argument JSON with a NON-limit finish no longer aborts the
+// turn with the raise-Max-tokens copy. The call is announced, answered with a
+// retryable "not valid JSON" tool result (ok=false), the loop sends that
+// result back (second provider request whose last message is the error tool
+// result), the replayed assistant record marshals (invalid input replaced
+// with {}), and the model's second answer finishes the turn with done.
+func TestRunToolLoop_MalformedToolArgumentsGetRetryableResult(t *testing.T) {
+	for _, tc := range []struct{ name, finish, input string }{
+		{"claude tool_use", "tool_use", `{"query":"xa`},
+		{"open tool_calls", "tool_calls", `not json`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &itemsProvider{id: "claude", turns: []itemsTurn{{chunks: []ai.Chunk{
+				{Text: "Let me look"},
+				{Done: true, FinishReason: tc.finish, ToolCalls: []ai.ToolCall{{ID: "t1", Name: "search_flow", Input: json.RawMessage(tc.input)}}},
+			}}}}
+			ctl, types, payloads := runItemsLoop(t, p, []ai.Message{{Role: "user", Content: "analyse"}})
+
+			if indexOf(types, "error") >= 0 || ctl.errCode != "" {
+				t.Fatalf("events %v, ctl code %q — a malformed-arguments call must not fail the turn", types, ctl.errCode)
+			}
+			if indexOf(types, "done") < 0 {
+				t.Fatalf("events %v — the model's retry must finish the turn", types)
+			}
+			// The call is announced and its result reports ok=false, naming
+			// the problem so the model can re-issue the call.
+			toolAt := indexOf(types, "tool")
+			resAt := indexOf(types, "tool_result")
+			if toolAt < 0 || resAt < 0 || resAt < toolAt {
+				t.Fatalf("events %v — want the call announced then its result", types)
+			}
+			if payloads[resAt]["ok"] != false || !strings.Contains(fmt.Sprint(payloads[resAt]["summary"]), "not valid JSON") {
+				t.Errorf("tool_result payload = %v, want ok=false naming the invalid JSON", payloads[resAt])
+			}
+			// Two provider requests; the second's last message is the error
+			// tool result the model reads to retry.
+			reqs := p.requests()
+			if len(reqs) != 2 {
+				t.Fatalf("%d provider requests, want 2", len(reqs))
+			}
+			second := reqs[1].Messages
+			if last := second[len(second)-1]; last.Role != "tool" || !strings.HasPrefix(last.Content, "error:") {
+				t.Errorf("second request's last message = %s/%q, want the error tool result", last.Role, last.Content)
+			}
+			// The recorded assistant turn marshals: its invalid input became
+			// an empty object while the executed call saw the original bytes.
+			var assistant *ai.Message
+			for i := range second {
+				if second[i].Role == "assistant" && len(second[i].ToolCalls) > 0 {
+					assistant = &second[i]
+				}
+			}
+			if assistant == nil {
+				t.Fatal("no assistant tool-call turn in the second request")
+			}
+			if got := string(assistant.ToolCalls[0].Input); got != "{}" {
+				t.Errorf("recorded call input = %q, want {} (the replay must marshal)", got)
+			}
+		})
+	}
+	// A valid call with the same non-limit finish still executes normally.
+	p := &itemsProvider{id: "claude", turns: []itemsTurn{toolTurn("t1", "search_flow", `{"query":"xav"}`, "")}}
+	_, types, payloads := runItemsLoop(t, p, []ai.Message{{Role: "user", Content: "analyse"}})
+	if resAt := indexOf(types, "tool_result"); resAt < 0 || payloads[resAt]["ok"] != true {
+		t.Errorf("events %v — a valid call must execute, not error", types)
+	}
+}
+
 // The reasoning floor: a reasoning model's turn gets at least 16384 max
 // tokens (known by its id or the model its listing entry serves), re-capped
 // by the model's output ceiling and the context-window backstop; other
@@ -304,6 +371,10 @@ func TestTurnGenerationParams_ReasoningFloor(t *testing.T) {
 		{ID: "o4-mini-small", MaxOutputTokens: 8192},
 		{ID: "prod-reasoner", ServedModel: "gpt-5-mini"},
 		{ID: "claude:opus", ServedModel: "claude-opus-5-5", MaxOutputTokens: 128000},
+		{ID: "grok-4", MaxOutputTokens: 8192},
+		{ID: "model-router", ServedModel: "gpt-4.1-mini"},
+		{ID: "claude:prod-opus"},
+		{ID: "claude:claude-haiku-4-5", ServedModel: "claude-haiku-4-5", MaxOutputTokens: 64000},
 	}}
 	for _, tc := range []struct {
 		model string
@@ -317,16 +388,35 @@ func TestTurnGenerationParams_ReasoningFloor(t *testing.T) {
 		{"o4-mini-small", 4096, 8192},
 		{"prod-reasoner", 4096, 16384}, // served model reveals the reasoner
 		{"claude:opus", 4096, 16384},
+		// grok-4's documented cap (8192, audit #9 F-01) re-clamps the floor:
+		// the catalogue limits, not the floor, bound the request.
+		{"grok-4", 4096, 8192},
+		// A model router always gets the floor (audit #9 F-03): the last
+		// routed non-reasoner must not suppress it for the next call.
+		{"model-router", 4096, 16384},
+		// A Claude deployment whose model nobody knows yet is floored (F-04)
+		// while a named non-thinking Claude model is not.
+		{"claude:prod-opus", 4096, 16384},
+		{"claude:claude-haiku-4-5", 4096, 4096},
 	} {
-		_, got := turnGenerationParams(context.Background(), p, models.ChatRequest{Model: tc.model, MaxTokens: tc.in})
+		_, got := turnGenerationParams(context.Background(), p, models.ChatRequest{Model: tc.model, MaxTokens: tc.in}, turnModel{resolved: tc.model})
 		if got != tc.want {
 			t.Errorf("%s with %d: max tokens %d, want %d", tc.model, tc.in, got, tc.want)
 		}
 	}
 	// The context-window backstop still caps the floor.
 	small := &itemsProvider{id: "x", limit: contextReserve + 10000, models: []ai.ModelInfo{{ID: "gpt-5"}}}
-	if _, got := turnGenerationParams(context.Background(), small, models.ChatRequest{Model: "gpt-5", MaxTokens: 4096}); got != 10000 {
+	if _, got := turnGenerationParams(context.Background(), small, models.ChatRequest{Model: "gpt-5", MaxTokens: 4096}, turnModel{resolved: "gpt-5"}); got != 10000 {
 		t.Errorf("backstop: max tokens %d, want 10000", got)
+	}
+	// F-29: the backstop is the MODEL's window (the listing entry), not the
+	// provider-wide placeholder — a 1M-window Claude deployment's 128000
+	// output cap used to be clamped to 124000 by the Azure 128000 default.
+	big := &itemsProvider{id: "azure-foundry", limit: 128000, models: []ai.ModelInfo{
+		{ID: "claude:opus", ServedModel: "claude-opus-5-5", ContextLimit: 1_000_000, MaxOutputTokens: 128000},
+	}}
+	if _, got := turnGenerationParams(context.Background(), big, models.ChatRequest{Model: "claude:opus", MaxTokens: 128000}, turnModel{resolved: "claude:opus"}); got != 128000 {
+		t.Errorf("model-window backstop: max tokens %d, want 128000", got)
 	}
 }
 
@@ -391,6 +481,20 @@ func TestStreamChatMessage_SendsReasoningFloorAndTemperatureSet(t *testing.T) {
 	got = run(models.ChatRequest{Model: "gpt-4o", MaxTokens: 4096})
 	if got.MaxTokens != 4096 || got.TemperatureSet {
 		t.Errorf("gpt-4o was sent max tokens %d (temperature set %v), want 4096 and unset", got.MaxTokens, got.TemperatureSet)
+	}
+	// F-19: the validated per-provider reasoning-effort choice reaches the
+	// provider request; "" (the default) is omitted.
+	got = run(models.ChatRequest{Model: "gpt-5", MaxTokens: 4096, ReasoningEffort: "high"})
+	if got.ReasoningEffort != "high" {
+		t.Errorf("reasoning effort = %q, want high", got.ReasoningEffort)
+	}
+	if got = run(models.ChatRequest{Model: "gpt-5", MaxTokens: 4096}); got.ReasoningEffort != "" {
+		t.Errorf("unset reasoning effort = %q, want the provider default", got.ReasoningEffort)
+	}
+	// An out-of-vocabulary value is refused before any provider call.
+	if _, err := svc.StreamChatMessage(context.Background(), "test", &models.FlowDocument{ID: "f1"}, nil,
+		models.ChatRequest{Provider: id, Model: "gpt-5", UserMessage: "q", ReasoningEffort: "xhigh"}); !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("reasoningEffort xhigh: err = %v, want ErrInvalidInput", err)
 	}
 }
 

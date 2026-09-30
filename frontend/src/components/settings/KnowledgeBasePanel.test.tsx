@@ -1,8 +1,9 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {describe, it, expect, vi, beforeEach, onTestFinished} from 'vitest'
 import {render, screen, fireEvent, waitFor, within} from '@testing-library/react'
 import KnowledgeBasePanel from './KnowledgeBasePanel'
 import {useOrgStore, type Organisation} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
+import {useAzureFoundryStore} from '@/stores/azureFoundryStore'
 import {ToastProvider, ConfirmProvider} from '@/components/shared'
 import {ApiError} from '@/api/client'
 
@@ -407,5 +408,219 @@ describe('KnowledgeBasePanel', () => {
     await confirmFirstReindexDialog()
     expect(await screen.findByText(/Your embedding model changed while the re-index was running/)).toBeInTheDocument()
     expect(call).toBe(2)
+  })
+  // F-13: Stop keeps the committed pages resumable — the Resume action
+  // continues from the last committed page's cursor without a re-confirm.
+  it('offers Resume after Stop and continues from the committed page', async () => {
+    seedStore('admin')
+    let call = 0
+    routeRequests({
+      reindex: (_body, signal) => {
+        call++
+        if (call === 1) return Promise.resolve({chunks: 250, docs: 2, nextCursor: {docId: 'd2'}})
+        // The second page hangs until the admin stops it.
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        })
+      },
+    })
+    renderPanel()
+    await confirmFirstReindexDialog()
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Re-indexed 250 chunks so far…')
+    fireEvent.click(screen.getByRole('button', {name: 'Stop'}))
+    expect(await screen.findByText(/The pages done are kept/)).toBeInTheDocument()
+
+    routeRequests({reindex: () => Promise.resolve({chunks: 30, docs: 1})})
+    fireEvent.click(await screen.findByRole('button', {name: 'Resume re-index'}))
+    await waitFor(() =>
+      expect(requestMock).toHaveBeenCalledWith(
+        '/api/orgs/org-1/knowledge/reindex',
+        expect.objectContaining({body: {cursor: {docId: 'd2'}}}),
+      ),
+    )
+    // A resume needs no confirmation: the model question was settled.
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(await screen.findByText('Re-indexed 30 chunks across 1 documents')).toBeInTheDocument()
+    expect(await waitFor(() => screen.queryByRole('button', {name: 'Resume re-index'}))).toBeNull()
+  })
+
+  // Stopped before the first page answered: no cursor exists, so the toast
+  // must not promise a Resume that never appears.
+  it('says to run Re-index again when stopped before the first page', async () => {
+    seedStore('admin')
+    routeRequests({
+      reindex: (_body, signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        }),
+    })
+    renderPanel()
+    await confirmFirstReindexDialog()
+
+    fireEvent.click(await screen.findByRole('button', {name: 'Stop'}))
+    expect(
+      await screen.findByText('Re-index stopped after 0 chunks. Run Re-index again to redo the rest.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Resume continues/)).toBeNull()
+    await waitFor(() => expect(screen.queryByRole('button', {name: 'Stop'})).toBeNull())
+    expect(screen.queryByRole('button', {name: 'Resume re-index'})).toBeNull()
+  })
+
+  // A resumed run's first page is a later page of the run it resumes: a model
+  // change refused there must start over, not re-arm a Resume that can only
+  // fail the same way.
+  it('explains a model change refused on the first page of a resumed run and drops Resume', async () => {
+    seedStore('admin')
+    routeRequests({
+      reindex: () =>
+        Promise.reject(
+          new ApiError('embedding rate limit hit; retry in 20s', 429, 'EMBEDDING_RATE_LIMITED', null, {
+            nextCursor: {docId: 'd9', id: 'c700'},
+            chunks: 700,
+          }),
+        ),
+    })
+    renderPanel()
+    await confirmFirstReindexDialog()
+    expect(await screen.findByText('embedding rate limit hit; retry in 20s')).toBeInTheDocument()
+
+    routeRequests({reindex: () => modelChanged()})
+    fireEvent.click(await screen.findByRole('button', {name: 'Resume re-index'}))
+    expect(await screen.findByText(/Your embedding model changed while the re-index was running/)).toBeInTheDocument()
+    expect(screen.queryByText('Re-index failed')).toBeNull()
+    await waitFor(() => expect(screen.queryByRole('button', {name: 'Stop'})).toBeNull())
+    expect(screen.queryByRole('button', {name: 'Resume re-index'})).toBeNull()
+  })
+
+  // F-13: a failed page hands the committed progress back on the error
+  // envelope (details.nextCursor); the panel resumes from THAT cursor.
+  it('resumes a failed page from the error details cursor', async () => {
+    seedStore('admin')
+    routeRequests({
+      reindex: () =>
+        Promise.reject(
+          new ApiError('embedding rate limit hit; retry in 20s', 429, 'EMBEDDING_RATE_LIMITED', null, {
+            nextCursor: {docId: 'd9', id: 'c700'},
+            chunks: 700,
+          }),
+        ),
+    })
+    renderPanel()
+    await confirmFirstReindexDialog()
+
+    expect(await screen.findByText('embedding rate limit hit; retry in 20s')).toBeInTheDocument()
+    routeRequests({reindex: () => Promise.resolve({chunks: 5, docs: 1})})
+    fireEvent.click(await screen.findByRole('button', {name: 'Resume re-index'}))
+    await waitFor(() =>
+      expect(requestMock).toHaveBeenCalledWith(
+        '/api/orgs/org-1/knowledge/reindex',
+        expect.objectContaining({body: {cursor: {docId: 'd9', id: 'c700'}}}),
+      ),
+    )
+  })
+
+  // F-14: the document-too-large verdict is the server's own message (the
+  // figures name the real limit), not a generic upload failure.
+  it('shows the document-too-large verdict verbatim on upload', async () => {
+    seedStore('admin')
+    routeRequests({
+      upload: () =>
+        Promise.reject(
+          new ApiError(
+            'document too large to index: 3000 passages exceed the limit of 2500',
+            413,
+            'KNOWLEDGE_DOCUMENT_TOO_LARGE',
+          ),
+        ),
+    })
+    const {container} = renderPanel()
+    await screen.findByText('guide.md')
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, {target: {files: [new File(['# rules'], 'rules.md', {type: 'text/markdown'})]}})
+    fireEvent.click(screen.getByText('Index Document'))
+    expect(await screen.findByText(/3000 passages exceed the limit of 2500/)).toBeInTheDocument()
+  })
+
+  // F-33: the org credential's missing embedding deployment is the org
+  // admin's to fix — the server message says so verbatim.
+  it("shows the org's not-configured verdict verbatim on re-index", async () => {
+    seedStore('admin')
+    routeRequests({
+      reindex: () =>
+        Promise.reject(
+          new ApiError(
+            "the organisation's shared Azure AI Foundry credential names no embedding deployment — ask an org admin to add one",
+            400,
+            'EMBEDDING_ORG_NOT_CONFIGURED',
+          ),
+        ),
+    })
+    renderPanel()
+    await confirmFirstReindexDialog()
+    expect(await screen.findByText(/ask an org admin to add one/)).toBeInTheDocument()
+  })
+
+  // A confirmed change of the Azure AI Foundry knowledge-base model (AI
+  // Accounts, with force) leaves the corpus refusing uploads until it is
+  // re-indexed: the panel asks for that until a re-index went through.
+  describe('after the knowledge-base model changed', () => {
+    const NOTICE = /The knowledge base embedding model changed/
+
+    function suggestReindex(keys: Record<string, true>) {
+      useAzureFoundryStore.setState({knowledgeReindex: keys})
+      onTestFinished(() => useAzureFoundryStore.setState({knowledgeReindex: {}}))
+    }
+
+    it('asks an admin to re-index, and stops asking once the re-index ran', async () => {
+      seedStore('admin')
+      suggestReindex({'org:org-1': true})
+      routeRequests({reindex: () => Promise.resolve({chunks: 2, docs: 1})})
+      renderPanel()
+      const notice = (await screen.findByText(NOTICE)).parentElement!
+      expect(notice).toHaveTextContent('uploads are refused until then')
+      fireEvent.click(within(notice).getByRole('button', {name: 'Re-index'}))
+      const dialog = await screen.findByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', {name: 'Re-index'}))
+      await waitFor(() => expect(screen.queryByText(NOTICE)).toBeNull())
+      expect(useAzureFoundryStore.getState().knowledgeReindex).toEqual({})
+    })
+
+    it('keeps asking after a re-index that left documents waiting', async () => {
+      seedStore('admin')
+      suggestReindex({user: true})
+      routeRequests({reindex: () => Promise.resolve({chunks: 10000, docs: 4, truncated: true})})
+      renderPanel()
+      const notice = (await screen.findByText(NOTICE)).parentElement!
+      fireEvent.click(within(notice).getByRole('button', {name: 'Re-index'}))
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', {name: 'Re-index'}))
+      expect(await screen.findByText(/more remain; run Re-index again to continue/)).toBeInTheDocument()
+      expect(screen.getByText(NOTICE)).toBeInTheDocument()
+    })
+
+    it('tells a member that an admin has to re-index', async () => {
+      seedStore('member')
+      suggestReindex({'org:org-1': true})
+      routeRequests({})
+      renderPanel()
+      expect(await screen.findByText(/An organisation admin needs to re-index it/)).toBeInTheDocument()
+      expect(screen.queryByRole('button', {name: 'Re-index'})).toBeNull()
+    })
+
+    it("says nothing for another organisation's change or an empty knowledge base", async () => {
+      seedStore('admin')
+      suggestReindex({'org:org-2': true})
+      routeRequests({})
+      const {unmount} = renderPanel()
+      await screen.findByText('guide.md')
+      expect(screen.queryByText(NOTICE)).toBeNull()
+      unmount()
+
+      useAzureFoundryStore.setState({knowledgeReindex: {'org:org-1': true}})
+      requestMock.mockResolvedValue([])
+      renderPanel()
+      await screen.findByText('No documents indexed yet.')
+      expect(screen.queryByText(NOTICE)).toBeNull()
+    })
   })
 })

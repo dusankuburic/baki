@@ -19,6 +19,7 @@ import (
 	"pad-analyzer/internal/storage"
 	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 
 	"go.uber.org/fx"
 )
@@ -71,6 +72,67 @@ func (m *memIdentityStore) LoadIdentityLink(_ context.Context, provider, subject
 		return &cp, nil
 	}
 	return nil, storageif.ErrNotFound
+}
+
+// orgServiceDirectory is the Azure AI Foundry registry's view of an
+// OrgService's organisations (service.AzureOrgDirectory): the test routers
+// keep organisations in a collaboration store, where production keeps them
+// in the backend the registry reads.
+type orgServiceDirectory struct{ orgs *collaboration.OrgService }
+
+func (d orgServiceDirectory) ListOrgsForUser(ctx context.Context, userID string) ([]*storageif.Organisation, error) {
+	return d.orgs.ListForUser(ctx, userID)
+}
+
+func (d orgServiceDirectory) LoadOrg(ctx context.Context, id string) (*storageif.Organisation, error) {
+	return d.orgs.Get(ctx, id)
+}
+
+// testAzureModelsDeps is what newTestAzureModels builds the registry service
+// from. Leave OrgKeys a nil INTERFACE (not a typed nil pointer) for a
+// deployment without organisation registries.
+type testAzureModelsDeps struct {
+	// Registry is the store (nil: a fresh fake); pass the same one to a
+	// rebuilt service to keep the registry's rows.
+	Registry *testutil.FakeAzureRegistry
+	Secrets  service.KeyStore
+	OrgKeys  service.OrgKeyStore
+	Factory  *ai.ProviderFactory
+	// Orgs is where the organisations live (nil: no "Shared with you").
+	Orgs  *collaboration.OrgService
+	Users service.AzureUserDirectory
+	// Corpus counts the knowledge bases' chunks (nil: every corpus empty).
+	Corpus service.AzureCorpusCounter
+	// PerUser: one registry per user and per organisation (the database
+	// store's shape, cloud); false is the desktop's single personal registry.
+	PerUser bool
+	// KnowledgeEmbedding: the knowledge base embeds with Azure AI Foundry.
+	KnowledgeEmbedding bool
+}
+
+// newTestAzureModels builds the Azure AI Foundry model registry service the
+// way di.ProvideAzureModelService does, on a fake registry store; the caller
+// wires it with SetAzureModels on the ProviderService (and SystemService), as
+// DI does.
+func newTestAzureModels(d testAzureModelsDeps) (*service.AzureModelService, *testutil.FakeAzureRegistry) {
+	reg := d.Registry
+	if reg == nil {
+		reg = testutil.NewFakeAzureRegistry()
+	}
+	deps := service.AzureModelServiceDeps{
+		Registry:                  reg,
+		Secrets:                   d.Secrets,
+		OrgKeys:                   d.OrgKeys,
+		Factory:                   d.Factory,
+		Users:                     d.Users,
+		Corpus:                    d.Corpus,
+		PerUserOwners:             d.PerUser,
+		KnowledgeEmbeddingEnabled: d.KnowledgeEmbedding,
+	}
+	if d.Orgs != nil {
+		deps.Orgs = orgServiceDirectory{orgs: d.Orgs}
+	}
+	return service.NewAzureModelService(deps), reg
 }
 
 // noopLifecycle is a stand-in fx.Lifecycle for tests that construct a Router

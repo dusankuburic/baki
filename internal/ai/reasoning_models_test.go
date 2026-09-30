@@ -418,8 +418,31 @@ const gpt56ToolsRejection = "Function tools with reasoning_effort are not suppor
 // gpt56Server behaves like a gpt-5.6 deployment on chat completions: tools are
 // refused unless reasoning_effort is "none"; with rejectTemperature it also
 // refuses a non-default temperature (checked first or second per order).
+// gpt56ResponsesStream is the resource's /openai/v1/responses answer for the
+// same deployment: reasoning with its encrypted content and one function
+// call, as the reroute (F-18) expects.
+const gpt56ResponsesStream = `data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_56","type":"reasoning","encrypted_content":"ENC56"}}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"rs_56","type":"reasoning","encrypted_content":"ENC56"}}
+
+data: {"type":"response.output_item.added","output_index":1,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"search_flow","arguments":"{\"q\":\"x\"}"}}
+
+data: {"type":"response.output_item.done","output_index":1,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"search_flow","arguments":"{\"q\":\"x\"}"}}
+
+data: {"type":"response.completed","response":{"status":"completed","model":"gpt-5.6-sol","usage":{"input_tokens":11,"output_tokens":3}}}
+
+`
+
+// gpt56ResponsesServer answers the Responses route and the chat-completions
+// route as a gpt-5.6 deployment: chat completions refuse tools unless
+// reasoning_effort is "none"; the Responses route answers normally (F-18).
 func gpt56Server(t *testing.T, rejectTemperature, temperatureFirst bool) *azureTestServer {
-	return newAzureTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ int, body map[string]any) {
+	return newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, body map[string]any) {
+		if strings.HasSuffix(r.URL.Path, "/responses") {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(gpt56ResponsesStream))
+			return
+		}
 		temperature := func() bool {
 			if _, has := body["temperature"]; has && rejectTemperature {
 				writeJSON(w, 400, map[string]any{"error": map[string]any{
@@ -454,7 +477,10 @@ func toolsRequest(temperature float64) Request {
 		Tools: []ToolDefinition{{Name: "search_flow", InputSchema: []byte(`{"type":"object"}`)}}}
 }
 
-func TestAzureFoundry_ReasoningToolsRejectionRetriesWithReasoningNone(t *testing.T) {
+// F-18: the observed chat-completions tools-with-reasoning rejection is
+// rerouted through the resource's Responses route — the turn keeps its
+// tools AND its reasoning (no reasoning_effort "none" repair at all).
+func TestAzureFoundry_ReasoningToolsRejectionReroutesToResponses(t *testing.T) {
 	srv := gpt56Server(t, false, false)
 	p := newAzureKeyProvider(t, srv, nil)
 	var done Chunk
@@ -466,18 +492,35 @@ func TestAzureFoundry_ReasoningToolsRejectionRetriesWithReasoningNone(t *testing
 	if err != nil {
 		t.Fatalf("Stream: %v (ErrToolsUnsupported=%v)", err, errors.Is(err, ErrToolsUnsupported))
 	}
-	if len(done.ToolCalls) != 1 {
+	if len(done.ToolCalls) != 1 || done.ToolCalls[0].Name != "search_flow" {
 		t.Errorf("tool calls = %+v", done.ToolCalls)
+	}
+	if !strings.Contains(string(done.ProviderItems), `"reasoning"`) {
+		t.Errorf("the rerouted turn must keep its reasoning for replay, got %s", done.ProviderItems)
 	}
 	reqs := srv.requests()
 	if len(reqs) != 2 {
-		t.Fatalf("got %d requests, want exactly one repair", len(reqs))
+		t.Fatalf("got %d requests, want the rejected chat-completions one and the Responses reroute", len(reqs))
 	}
-	if _, has := reqs[0].Body["reasoning_effort"]; has {
-		t.Error("reasoning_effort must not be sent up front")
+	if !strings.HasSuffix(reqs[0].Path, "/chat/completions") || reqs[0].Body["reasoning_effort"] != nil {
+		t.Errorf("first request = %s %v", reqs[0].Path, reqs[0].Body)
 	}
-	if reqs[1].Body["reasoning_effort"] != "none" || reqs[1].Body["tools"] == nil {
-		t.Errorf("repaired request = %v, want reasoning_effort none with the tools kept", reqs[1].Body)
+	if !strings.HasSuffix(reqs[1].Path, "/openai/v1/responses") {
+		t.Fatalf("rerouted request path = %s", reqs[1].Path)
+	}
+	if reqs[1].Body["reasoning_effort"] != nil || reqs[1].Body["reasoning"] != nil || reqs[1].Body["agent_reference"] != nil {
+		t.Errorf("rerouted request must carry no effort, no reasoning object and no agent_reference: %v", reqs[1].Body)
+	}
+	if reqs[1].Body["store"] != false || reqs[1].Body["tools"] == nil {
+		t.Errorf("rerouted request must be store:false with the tools kept: %v", reqs[1].Body)
+	}
+	// The route memo now answers later turns directly on /responses.
+	if err := p.Stream(context.Background(), toolsRequest(0), func(Chunk) {}); err != nil {
+		t.Fatalf("second Stream: %v", err)
+	}
+	reqs = srv.requests()
+	if len(reqs) != 3 || !strings.HasSuffix(reqs[2].Path, "/openai/v1/responses") {
+		t.Errorf("memoised turn: %d requests, last %s", len(reqs), reqs[len(reqs)-1].Path)
 	}
 }
 
@@ -497,12 +540,19 @@ func TestAzureFoundry_TemperatureAndReasoningRepairsKeepTools(t *testing.T) {
 			t.Fatalf("temperatureFirst=%v: Stream: %v", temperatureFirst, err)
 		}
 		reqs := srv.requests()
-		if len(reqs) != 3 {
-			t.Fatalf("temperatureFirst=%v: got %d requests, want 3", temperatureFirst, len(reqs))
+		// temperatureFirst: temperature repair, tools rejection, reroute (3);
+		// tools-first: the rejection reroutes before temperature is ever
+		// seen (2 — the Responses route answers whatever sampling is left).
+		want := map[bool]int{true: 3, false: 2}[temperatureFirst]
+		if len(reqs) != want {
+			t.Fatalf("temperatureFirst=%v: got %d requests, want %d", temperatureFirst, len(reqs), want)
 		}
-		last := reqs[2].Body
-		if _, has := last["temperature"]; has || last["reasoning_effort"] != "none" || last["tools"] == nil {
-			t.Errorf("temperatureFirst=%v: final request = %v", temperatureFirst, last)
+		last := reqs[len(reqs)-1]
+		if !strings.HasSuffix(last.Path, "/openai/v1/responses") {
+			t.Fatalf("temperatureFirst=%v: final request path = %s", temperatureFirst, last.Path)
+		}
+		if _, has := last.Body["temperature"]; has || last.Body["tools"] == nil {
+			t.Errorf("temperatureFirst=%v: final request = %v", temperatureFirst, last.Body)
 		}
 		if len(done.ToolCalls) != 1 {
 			t.Errorf("temperatureFirst=%v: tools lost: %+v", temperatureFirst, done)
@@ -515,7 +565,13 @@ func TestAzureFoundry_TemperatureAndReasoningRepairsKeepTools(t *testing.T) {
 // reported as tools-unsupported (the tool loop answers without tools) after
 // one repair, never looped on.
 func TestAzureFoundry_ReasoningNoneRefusedDegradesToToolsUnsupported(t *testing.T) {
-	srv := newAzureTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ int, body map[string]any) {
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, body map[string]any) {
+		if strings.HasSuffix(r.URL.Path, "/responses") {
+			// The route does not serve the model (F-18 refusal): the turn
+			// falls back to chat completions' repair path.
+			writeJSON(w, 404, map[string]any{"error": map[string]any{"code": "NotFound", "message": "The API version you requested is not yet supported"}})
+			return
+		}
 		if body["reasoning_effort"] == "none" {
 			writeJSON(w, 400, map[string]any{"error": map[string]any{
 				"message": "Unsupported value: 'reasoning_effort' does not support 'none' with this model.",
@@ -530,8 +586,10 @@ func TestAzureFoundry_ReasoningNoneRefusedDegradesToToolsUnsupported(t *testing.
 	if !errors.Is(err, ErrToolsUnsupported) {
 		t.Errorf("err = %v, want ErrToolsUnsupported", err)
 	}
-	if n := len(srv.requests()); n != 2 {
-		t.Errorf("got %d requests, want 2", n)
+	// chat rejection, Responses-route 404, then the fallback's own rejection
+	// and its refused "none" repair.
+	if n := len(srv.requests()); n != 4 {
+		t.Errorf("got %d requests, want 4", n)
 	}
 }
 

@@ -219,6 +219,42 @@ func TestKnowledgeUpload_AzureWithoutEmbeddingDeployment400(t *testing.T) {
 	}
 }
 
+// failingAzureEmbedderSource is a model registry that cannot be read.
+type failingAzureEmbedderSource struct{ err error }
+
+func (s failingAzureEmbedderSource) KnowledgeEmbedder(context.Context, string, string) (ai.Provider, error) {
+	return nil, s.err
+}
+
+// TestKnowledgeUpload_AzureRegistryFailureIs503Masked: when the Azure AI
+// Foundry model registry (or the key store behind it) cannot be read, the
+// upload is no 400 EMBEDDING_NOT_CONFIGURED echoing the driver's error — it
+// names database hosts and roles — but a 503 EMBEDDING_PROVIDER_UNAVAILABLE
+// with masked copy, the frontend's "try again" (review S6).
+func TestKnowledgeUpload_AzureRegistryFailureIs503Masked(t *testing.T) {
+	const driver = "read the organisation's Azure AI Foundry model registry: failed to connect to `host=10.1.2.3 user=baki_app database=baki`: dial error"
+	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
+	org, err := orgSvc.Create(bgCtx(), "Acme", "u-admin")
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	for _, cause := range []error{errors.New(driver), rag.ErrEmbeddingSetupUnavailable} {
+		store := &testutil.FakeBackend{}
+		knowledge := rag.NewKnowledgeService(store, ai.NewProviderFactory(nil, nil, nil, nil), nil,
+			rag.WithEmbeddingProvider("azure-foundry"), rag.WithAzureEmbedder(failingAzureEmbedderSource{err: cause}))
+		h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
+		r := chi.NewRouter()
+		r.Post("/api/orgs/{id}/knowledge/upload", h.handleKnowledgeUpload)
+		rr := postJSON(t, r, "/api/orgs/"+org.ID+"/knowledge/upload", `{"filename":"a.md","content":"a guideline"}`)
+		if rr.Code != http.StatusServiceUnavailable || errorCode(t, rr) != "EMBEDDING_PROVIDER_UNAVAILABLE" {
+			t.Errorf("%v: status = %d, body = %s; want 503 EMBEDDING_PROVIDER_UNAVAILABLE", cause, rr.Code, rr.Body.String())
+		}
+		if body := rr.Body.String(); strings.Contains(body, "10.1.2.3") || strings.Contains(body, "baki_app") {
+			t.Errorf("the answer leaks the driver's text: %s", body)
+		}
+	}
+}
+
 // TestKnowledgeUpload_ModelChanged409: uploading with another embedding model
 // than the corpus's is refused with the same machine code (no force on upload).
 func TestKnowledgeUpload_ModelChanged409(t *testing.T) {
@@ -355,7 +391,15 @@ func TestRenderKnowledgeEmbeddingError_Ladder(t *testing.T) {
 	}{
 		{"not configured", rag.ErrEmbeddingNotConfigured, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED"},
 		{"unavailable", fmt.Errorf("x: %w", rag.ErrEmbeddingUnavailable), http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED"},
+		// F-33: the org sentinel must map ahead of the ErrEmbeddingUnavailable
+		// case the rag embedder wraps it with.
+		{"org credential has no embedding deployment", fmt.Errorf("%w: azure-foundry: %w", rag.ErrEmbeddingUnavailable, ai.ErrOrgEmbeddingDeploymentMissing), http.StatusBadRequest, "EMBEDDING_ORG_NOT_CONFIGURED"},
+		// F-14.
+		{"document too large", fmt.Errorf("%w: 3000 passages exceed the limit of 2500", rag.ErrDocumentTooLarge), http.StatusRequestEntityTooLarge, "KNOWLEDGE_DOCUMENT_TOO_LARGE"},
 		{"model changed", rag.ErrEmbeddingModelChanged, http.StatusConflict, "EMBEDDING_MODEL_CHANGED"},
+		// S6: which model embeds could not be decided (the registry or the
+		// key store unreadable): transient and masked, no configuration gap.
+		{"setup unavailable", fmt.Errorf("embedding provider unavailable: %w", rag.ErrEmbeddingSetupUnavailable), http.StatusServiceUnavailable, "EMBEDDING_PROVIDER_UNAVAILABLE"},
 		{"busy", rag.ErrKnowledgeBusy, http.StatusConflict, "KNOWLEDGE_BUSY"},
 		{"failed: rate limited", fmt.Errorf("%w: %w", rag.ErrEmbeddingFailed, &ai.RateLimitError{}), http.StatusTooManyRequests, "EMBEDDING_RATE_LIMITED"},
 		{"failed: permission denied", fmt.Errorf("%w: %w", rag.ErrEmbeddingFailed, errors.Join(ai.ErrProviderPermissionDenied, ai.ErrApiKeyInvalid)), http.StatusBadRequest, "EMBEDDING_PERMISSION_DENIED"},

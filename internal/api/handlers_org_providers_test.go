@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -24,15 +26,19 @@ import (
 )
 
 // orgProvidersFixture is an organisation with an admin and a plain member,
-// a provider service holding organisation credentials, and one org handler
-// per caller (local-mode security: the caller is LocalUserID).
+// a provider service holding organisation credentials with the Azure AI
+// Foundry model registry wired as DI wires it (per-user and organisation
+// registries), and one org handler per caller (local-mode security: the
+// caller is LocalUserID).
 type orgProvidersFixture struct {
-	orgID   string
-	orgSvc  *collaboration.OrgService
-	secrets *testutil.FakeSecretStore
-	orgKeys *testutil.FakeOrgSecretStore
-	svc     *service.ProviderService
-	backend storageif.StorageBackend
+	orgID    string
+	orgSvc   *collaboration.OrgService
+	secrets  *testutil.FakeSecretStore
+	orgKeys  *testutil.FakeOrgSecretStore
+	svc      *service.ProviderService
+	backend  storageif.StorageBackend
+	factory  *ai.ProviderFactory
+	registry *testutil.FakeAzureRegistry
 }
 
 // namedUsersBackend resolves the admin's display name for the "shared by"
@@ -69,11 +75,51 @@ func newOrgProvidersFixture(t *testing.T, withOrgStore bool) *orgProvidersFixtur
 		return v, nil
 	}, nil, nil, nil)
 	svc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
+	f := &orgProvidersFixture{orgID: org.ID, orgSvc: orgSvc, secrets: secrets, orgKeys: orgKeys, svc: svc,
+		backend: &namedUsersBackend{FakeBackend: testutil.NewFakeBackend()}, factory: factory, registry: testutil.NewFakeAzureRegistry()}
 	if withOrgStore {
 		factory.SetOrgKeyLookup(orgKeys.OrgKeyLookup)
-		svc.SetOrgKeyStore(orgKeys)
+		f.useOrgStore(orgKeys)
+	} else {
+		f.useOrgStore(nil)
 	}
-	return &orgProvidersFixture{orgID: org.ID, orgSvc: orgSvc, secrets: secrets, orgKeys: orgKeys, svc: svc, backend: &namedUsersBackend{FakeBackend: testutil.NewFakeBackend()}}
+	return f
+}
+
+// useOrgStore (re)wires the organisation credential store — nil for none —
+// into the provider service and its model registry (rebuilt on the same
+// registry rows), as DI wires one store into both.
+func (f *orgProvidersFixture) useOrgStore(store service.OrgKeyStore) {
+	if store != nil {
+		f.svc.SetOrgKeyStore(store)
+	}
+	azure, _ := newTestAzureModels(testAzureModelsDeps{
+		Registry: f.registry, Secrets: f.secrets, OrgKeys: store, Factory: f.factory,
+		Orgs: f.orgSvc, Users: f.backend.(service.AzureUserDirectory), PerUser: true,
+	})
+	f.svc.SetAzureModels(azure)
+}
+
+// orgModels lists the organisation's registry models (the service directly,
+// as its admin).
+func (f *orgProvidersFixture) orgModels(t *testing.T) []service.AzureModelView {
+	t.Helper()
+	out, err := f.svc.AzureModels().ListModels(bgCtx(), service.AzureScope{Scope: "u-admin", OrgID: f.orgID})
+	if err != nil {
+		t.Fatalf("list the org's models: %v", err)
+	}
+	return out.Models
+}
+
+// orgModelDeployments is orgModels as "kind:deployment" strings.
+func (f *orgProvidersFixture) orgModelDeployments(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, m := range f.orgModels(t) {
+		out = append(out, m.Kind+":"+m.Deployment)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // router serves the org credential routes as caller.
@@ -186,6 +232,18 @@ func TestOrgAzureFoundryConfig_Authz(t *testing.T) {
 		if err != nil || !strings.Contains(raw, "org-secret-key") {
 			t.Errorf("stored document = %q, %v", raw, err)
 		}
+		// The deprecated save maps its deployment fields onto the
+		// organisation's resource "default": the chat deployment is a model
+		// there — the default for members — and the document is stored as
+		// saved, so a rolled-back binary still finds its chat deployment.
+		if !strings.Contains(raw, `"chatDeployment":"org-chat"`) {
+			t.Errorf("stored document = %q, want it as saved (chatDeployment org-chat)", raw)
+		}
+		models := f.orgModels(t)
+		if len(models) != 1 || models[0].ConnectionID != "default" || models[0].Kind != "chat" ||
+			models[0].Deployment != "org-chat" || !models[0].IsDefault || !models[0].Shared {
+			t.Errorf("org models after the save = %+v, want org-chat on resource default, the default for members", models)
+		}
 	})
 
 	t.Run("member reads the public form, never the secret", func(t *testing.T) {
@@ -229,9 +287,14 @@ func TestOrgAzureFoundryConfig_Authz(t *testing.T) {
 				t.Errorf("%s: code = %v, want %s (body %s)", tc.name, got["code"], tc.code, rr.Body.String())
 			}
 		}
+		// A rejected save changes nothing: neither the stored credential nor
+		// the resource's models.
 		raw, _ := f.orgKeys.GetOrg(f.orgID, "azure-foundry")
-		if !strings.Contains(raw, "org-chat") {
+		if !strings.Contains(raw, "org-secret-key") {
 			t.Error("a rejected save replaced the stored document")
+		}
+		if got := f.orgModelDeployments(t); !reflect.DeepEqual(got, []string{"chat:org-chat"}) {
+			t.Errorf("org models after the rejected saves = %v, want [chat:org-chat]", got)
 		}
 	})
 
@@ -258,6 +321,15 @@ func TestOrgAzureFoundryConfig_Authz(t *testing.T) {
 		}
 		if has, _ := f.orgKeys.HasOrg(f.orgID, "azure-foundry"); has {
 			t.Error("delete left the row")
+		}
+		// The deprecated delete removes the organisation's resource
+		// "default" together with its models.
+		if got := f.orgModelDeployments(t); len(got) != 0 {
+			t.Errorf("org models after the delete = %v, want none", got)
+		}
+		conns, err := f.svc.AzureModels().ListConnections(bgCtx(), service.AzureScope{Scope: "u-admin", OrgID: f.orgID})
+		if err != nil || len(conns.Connections) != 0 {
+			t.Errorf("org resources after the delete = %+v, %v; want none", conns.Connections, err)
 		}
 	})
 }
@@ -320,8 +392,20 @@ func TestListProviders_OrgIdOnlyForMembers(t *testing.T) {
 		t.Fatal("azure-foundry missing from the listing")
 		return nil
 	}
-	if az := list("u-member"); az["configured"] != true || az["shared"] != true || az["defaultModel"] != "org-chat" {
-		t.Errorf("member: %v, want configured and shared", az)
+	// The saved chat deployment is the org's model on its resource "default"
+	// and its default for members: the member's server default, as its
+	// registry id.
+	orgChat := ""
+	for _, m := range f.orgModels(t) {
+		if m.Deployment == "org-chat" {
+			orgChat = m.ModelID
+		}
+	}
+	if !strings.HasPrefix(orgChat, "m/") {
+		t.Fatalf("org-chat registry id = %q, want m/<id>", orgChat)
+	}
+	if az := list("u-member"); az["configured"] != true || az["shared"] != true || az["defaultModel"] != orgChat {
+		t.Errorf("member: %v, want configured and shared, defaultModel %s", az, orgChat)
 	}
 	if az := list("u-stranger"); az["configured"] != false || az["shared"] != nil {
 		t.Errorf("non-member: %v, want the parameter ignored", az)

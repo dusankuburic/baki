@@ -51,6 +51,9 @@ const externalTimeout = 15 * time.Second
 // temporarily unreachable IdP doesn't prevent the app from booting.
 type Client struct {
 	cfg config.SSOConfig
+	// timeout overrides externalTimeout when non-zero (tests: a hung-IdP test
+	// need not wait the full 15 s to prove the bound holds).
+	timeout time.Duration
 
 	mu              sync.Mutex
 	provider        *oidc.Provider
@@ -59,6 +62,15 @@ type Client struct {
 
 func NewClient(cfg config.SSOConfig) *Client {
 	return &Client{cfg: cfg}
+}
+
+// callTimeout is the deadline of one outbound IdP call: externalTimeout
+// unless the client overrides it.
+func (c *Client) callTimeout() time.Duration {
+	if c.timeout > 0 {
+		return c.timeout
+	}
+	return externalTimeout
 }
 
 // ProviderName returns the display label / identity_links provider key.
@@ -93,7 +105,7 @@ func (c *Client) ensureProvider(ctx context.Context) (*oidc.Provider, error) {
 
 	// Bound discovery with its own deadline so a hung IdP doesn't pin the
 	// caller's goroutine past externalTimeout.
-	discCtx, cancel := context.WithTimeout(ctx, externalTimeout)
+	discCtx, cancel := context.WithTimeout(ctx, c.callTimeout())
 	defer cancel()
 	p, err := oidc.NewProvider(discCtx, c.cfg.IssuerURL)
 	if err != nil {
@@ -173,7 +185,7 @@ func (c *Client) Exchange(ctx context.Context, code, pkceVerifier, nonce string)
 	// Bound code exchange. The IdP may be slow; the caller's ctx may be much
 	// longer (e.g. an fx root ctx). The deferred cancel propagates as a
 	// context.Canceled to oauth2 if the parent is cancelled mid-flight.
-	exchCtx, cancel := context.WithTimeout(ctx, externalTimeout)
+	exchCtx, cancel := context.WithTimeout(ctx, c.callTimeout())
 	token, err := oc.Exchange(exchCtx, code, oauth2.VerifierOption(pkceVerifier))
 	cancel()
 	if err != nil {
@@ -186,7 +198,7 @@ func (c *Client) Exchange(ctx context.Context, code, pkceVerifier, nonce string)
 	}
 
 	// Bound verification too — it fetches JWKS under the hood.
-	verifyCtx, cancel := context.WithTimeout(ctx, externalTimeout)
+	verifyCtx, cancel := context.WithTimeout(ctx, c.callTimeout())
 	idToken, err := p.Verifier(&oidc.Config{ClientID: c.cfg.ClientID}).Verify(verifyCtx, rawIDToken)
 	cancel()
 	if err != nil {

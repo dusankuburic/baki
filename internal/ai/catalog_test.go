@@ -15,6 +15,11 @@ import (
 func TestProviderCatalogConsistency(t *testing.T) {
 	var ids []string
 	for _, meta := range AvailableProviders() {
+		// The local models provider has no catalogue by design: its models
+		// are whatever the user's own server serves (see local_provider.go).
+		if meta.ID == LocalProviderID {
+			continue
+		}
 		ids = append(ids, meta.ID)
 	}
 
@@ -152,6 +157,9 @@ func TestEmbeddingCapability_ConsistentWithRegistry(t *testing.T) {
 // empty model list.
 func TestCatalog_CoversAllProviders(t *testing.T) {
 	for _, meta := range AvailableProviders() {
+		if meta.ID == LocalProviderID {
+			continue // served by the user's own server, no catalogue
+		}
 		if len(modelCatalog[meta.ID]) == 0 {
 			t.Errorf("provider %q has no modelCatalog entry", meta.ID)
 		}

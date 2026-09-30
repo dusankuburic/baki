@@ -50,6 +50,29 @@ func newAzureTestServer(t *testing.T, handler func(w http.ResponseWriter, r *htt
 	return s
 }
 
+// newAzureTLSTestServer is newAzureTestServer over httptest.NewTLSServer:
+// the deployments continuation guard (sameProjectHost) only follows https
+// links, so the nextLink pagination tests need an https project host. Pass
+// srv.Client() to the provider (as newAzureAgentProvider does) so the
+// self-signed certificate is trusted.
+func newAzureTLSTestServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Request, n int, body map[string]any)) *azureTestServer {
+	t.Helper()
+	s := &azureTestServer{}
+	s.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		s.mu.Lock()
+		s.reqs = append(s.reqs, azureSeenRequest{Path: r.URL.Path, Headers: r.Header.Clone(), Body: body})
+		n := len(s.reqs)
+		s.mu.Unlock()
+		handler(w, r, n, body)
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
 func (s *azureTestServer) requests() []azureSeenRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -669,8 +692,8 @@ func TestAzureFoundry_ModelsListsConfiguredDeployments(t *testing.T) {
 	if custom.ContextLimit != p.ContextLimit() || custom.Pricing != (Pricing{}) || custom.MaxOutputTokens != 0 || custom.Embedding {
 		t.Errorf("custom-named deployment = %+v, want the provider default window and no guessed price", custom)
 	}
-	if gpt4o.Pricing.InputCostPerM != 2.5 || gpt4o.ContextLimit != 128000 || gpt4o.MaxOutputTokens != 16384 || gpt4o.Embedding {
-		t.Errorf("catalogued name = %+v, want the catalogue's price and limits", gpt4o)
+	if gpt4o.Pricing != (Pricing{}) || gpt4o.ContextLimit != 128000 || gpt4o.MaxOutputTokens != 16384 || gpt4o.Embedding {
+		t.Errorf("catalogued name = %+v, want the catalogue's limits and no price (azure-foundry is unpriced)", gpt4o)
 	}
 	// Finding #32: a small-window model named after itself is sized right
 	// before any call succeeded.
@@ -680,9 +703,9 @@ func TestAzureFoundry_ModelsListsConfiguredDeployments(t *testing.T) {
 	if router.ContextLimit != p.ContextLimit() || router.MaxOutputTokens != 0 {
 		t.Errorf("model-router = %+v, want the conservative default window", router)
 	}
-	// Finding #42: the embedding deployment stays listed (pricing) but flagged.
-	if !emb.Embedding || emb.Pricing.InputCostPerM != 0.02 {
-		t.Errorf("embedding deployment = %+v, want Embedding and its catalogue price", emb)
+	// Finding #42: the embedding deployment stays listed but flagged.
+	if !emb.Embedding || emb.Pricing != (Pricing{}) || emb.ContextLimit != 8191 {
+		t.Errorf("embedding deployment = %+v, want Embedding, its window and no price", emb)
 	}
 	if n := len(srv.requests()); n != 0 {
 		t.Errorf("API-key listing made %d requests, want none (never /openai/v1/models)", n)

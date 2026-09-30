@@ -504,3 +504,41 @@ func TestAuditedStream_RecordsUsageExactlyOnce_Truncated(t *testing.T) {
 	}
 	assertExactlyOneRecorded(t, rec)
 }
+
+// A7: the cached slices are clamped like the totals before pricing — a
+// negative CacheWrite used to price negative (lowering the caller's daily
+// spend), and slices beyond the total they are part of priced tokens that
+// were never sent. CacheRead ∈ [0, In], CacheWrite ∈ [0, In-CacheRead].
+func TestAudited_CacheSlicesClamped(t *testing.T) {
+	const perM = 1_000_000.0
+	models := []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 0}}}
+	for _, tc := range []struct {
+		name     string
+		resp     Response
+		wantCost float64
+	}{
+		// Uncapped: (10 - (-1000) + 1.25 × -1000) / 1M < 0.
+		{"negative write", Response{TokensIn: 10, TokensOut: 1, CacheWriteTokens: -1000}, 10 / perM},
+		// Uncapped: 5010 uncached tokens less 0.1 × 5000 at Claude's read
+		// rate — 451× the prompt's cost.
+		{"negative read", Response{TokensIn: 10, TokensOut: 1, CacheReadTokens: -5000, ServedModel: "claude-sonnet-4-5"}, 10 / perM},
+		// Uncapped: (500 + 1.25 × 500) / 1M for a 100-token prompt.
+		{"oversized slices", Response{TokensIn: 100, TokensOut: 1, CacheReadTokens: 500, CacheWriteTokens: 500}, 100 / perM},
+		// Read fills 60 of 100; the write is capped at the 40 left.
+		{"write beyond the rest", Response{TokensIn: 100, TokensOut: 1, CacheReadTokens: 60, CacheWriteTokens: 90}, (60 + 1.25*40) / perM},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := tc.resp
+			m := awaitMetric(t, &auditStub{models: models, resp: &resp}, Request{Model: "m"})
+			if m.EstimatedCost < 0 {
+				t.Fatalf("EstimatedCost = %g, must never be negative", m.EstimatedCost)
+			}
+			if diff := m.EstimatedCost - tc.wantCost; diff > 1e-12 || diff < -1e-12 {
+				t.Errorf("EstimatedCost = %g, want %g", m.EstimatedCost, tc.wantCost)
+			}
+			if m.PromptTokens != tc.resp.TokensIn {
+				t.Errorf("PromptTokens = %d, want the reported total %d", m.PromptTokens, tc.resp.TokensIn)
+			}
+		})
+	}
+}

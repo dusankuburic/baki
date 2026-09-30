@@ -1,5 +1,5 @@
 import {useTranslation} from 'react-i18next'
-import {useRef, useEffect} from 'react'
+import {useRef, useEffect, useId} from 'react'
 import clsx from 'clsx'
 import {X} from 'lucide-react'
 import Portal from './Portal'
@@ -29,11 +29,25 @@ function releaseScrollLock(): void {
 type ModalProps = {
   isOpen: boolean
   onClose: () => void
+  // Rendered in the title bar and names the dialog (aria-labelledby).
   title?: string
   // Accessible name when title isn't rendered (title bar hidden). Provide
-  // title OR ariaLabel so screen readers always announce the dialog.
+  // title, labelledBy OR ariaLabel so screen readers always announce the
+  // dialog.
   ariaLabel?: string
+  // Id of an element inside the dialog that names it, for a dialog that
+  // renders its own heading (ConfirmDialog). Wins over title and ariaLabel.
+  labelledBy?: string
+  // One line under the title (or above the body when there is no title
+  // bar), announced with the name through aria-describedby.
+  description?: React.ReactNode
+  // Id(s) of elements inside the dialog that describe it (a confirm's
+  // message). Joined with the description's id.
+  describedBy?: string
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
+  // Below the breakpoint ('sm' = 640px) the panel fills the viewport: a form
+  // in a centred card leaves a phone no room once its keyboard is up.
+  fullScreenBelow?: 'sm'
   closeOnBackdrop?: boolean
   closeOnEsc?: boolean
   // 'tall' makes the panel a fixed-height flex column so its size stays
@@ -67,12 +81,25 @@ const sizeClasses: Record<string, string> = {
   '2xl': 'max-w-[75rem]',
 }
 
+// The panel becomes a full-viewport flex column (so the footer sits at the
+// bottom) and the body drops its 70vh cap to take the height in between.
+const fullScreenPanelClasses: Record<'sm', string> = {
+  sm: 'max-sm:mx-0 max-sm:h-full max-sm:max-h-none max-sm:max-w-none max-sm:rounded-none max-sm:border-0 max-sm:flex max-sm:flex-col',
+}
+const fullScreenBodyClasses: Record<'sm', string> = {
+  sm: 'max-sm:max-h-none max-sm:flex-1 max-sm:min-h-0',
+}
+
 export default function Modal({
   isOpen,
   onClose,
   title,
   ariaLabel,
+  labelledBy,
+  description,
+  describedBy,
   size = 'md',
+  fullScreenBelow,
   closeOnBackdrop = true,
   closeOnEsc = true,
   height = 'auto',
@@ -85,6 +112,9 @@ export default function Modal({
 }: ModalProps) {
   const {t} = useTranslation()
   const modalRef = useRef<HTMLDivElement>(null)
+  const titleId = useId()
+  const descriptionId = useId()
+  const describedByIds = [describedBy, description ? descriptionId : undefined].filter(Boolean).join(' ')
 
   // Focus trap, Esc-to-close and focus restoration come from the shared hook —
   // <Modal> used to carry a byte-identical private copy of all three.
@@ -116,23 +146,48 @@ export default function Modal({
             sizeClasses[size],
             height === 'tall' && 'flex flex-col h-[80vh] max-h-[820px]',
             height === 'fill' && 'flex flex-col h-[min(60rem,calc(100vh-3rem))]',
+            fullScreenBelow && fullScreenPanelClasses[fullScreenBelow],
             className,
           )}
           style={viewTransitionName ? {viewTransitionName} : undefined}
           role="dialog"
           aria-modal="true"
-          aria-label={title ?? ariaLabel}
+          // Named by the visible heading when there is one, so the name and
+          // what is on screen cannot drift apart.
+          aria-labelledby={labelledBy ?? (title ? titleId : undefined)}
+          aria-label={labelledBy || title ? undefined : ariaLabel}
+          aria-describedby={describedByIds || undefined}
         >
           {title && (
-            <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle shrink-0">
-              <h2 className="text-lg font-semibold text-text-primary">{title}</h2>
+            <div
+              className={clsx(
+                'flex justify-between px-6 py-4 border-b border-border-subtle shrink-0',
+                description ? 'items-start gap-4' : 'items-center',
+              )}
+            >
+              <div className="min-w-0">
+                <h2 id={titleId} className="text-lg font-semibold text-text-primary">
+                  {title}
+                </h2>
+                {description && (
+                  <div id={descriptionId} className="mt-1 text-sm text-text-secondary">
+                    {description}
+                  </div>
+                )}
+              </div>
               <button
+                type="button"
                 onClick={onClose}
-                className="w-7 h-7 flex items-center justify-center rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface-2 transition-colors duration-fast"
+                className="w-7 h-7 shrink-0 flex items-center justify-center rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface-2 transition-colors duration-fast"
                 aria-label={t('close')}
               >
                 <X size={16} aria-hidden="true" />
               </button>
+            </div>
+          )}
+          {!title && description && (
+            <div id={descriptionId} className="px-6 pt-4 text-sm text-text-secondary shrink-0">
+              {description}
             </div>
           )}
           <div
@@ -142,6 +197,7 @@ export default function Modal({
                   ? 'px-6 py-4 overflow-y-auto flex-1 min-h-0'
                   : 'px-6 py-4 overflow-y-auto max-h-[70vh]'
                 : 'flex-1 min-h-0 overflow-hidden',
+              fullScreenBelow && fullScreenBodyClasses[fullScreenBelow],
             )}
           >
             {children}

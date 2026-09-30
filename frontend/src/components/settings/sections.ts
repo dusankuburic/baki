@@ -112,10 +112,6 @@ export function visibleSectionIds(cloud: boolean): SettingsSection[] {
 
 // Search: every whitespace-separated token of the query has to occur in the
 // section's haystack (label, description, group label and keywords), in any
-// order and case.
-export function matchesQuery(haystack: string, query: string): boolean {
-  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  if (tokens.length === 0) return true
-  const text = haystack.toLowerCase()
-  return tokens.every(token => text.includes(token))
-}
+// order and case. The matcher lives in lib/textMatch so other lists can
+// filter the same way; it is re-exported for the nav and the tests.
+export {matchesQuery} from '@/lib/textMatch'

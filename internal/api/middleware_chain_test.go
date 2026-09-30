@@ -51,6 +51,16 @@ func TestRateLimitGroup_OtherBuckets(t *testing.T) {
 		{"POST", "/api/v1/providers/test", rlGroupChat},
 		{"GET", "/api/providers/list", rlGroupGeneral},
 		{"POST", "/api/providers/github/poll", rlGroupGeneral},
+		// The Azure AI Foundry registry (azureOutboundRoute): a test is a
+		// probe or one tiny billed call (chat bucket), a discovery the
+		// project's listings (analysis bucket) — the caller's own and an
+		// organisation's; its CRUD routes stay on general.
+		{"POST", "/api/providers/azure-foundry/test", rlGroupChat},
+		{"POST", "/api/orgs/o1/providers/azure-foundry/test", rlGroupChat},
+		{"POST", "/api/providers/azure-foundry/connections/abcdefghij/discover", rlGroupAnalysis},
+		{"POST", "/api/orgs/o1/providers/azure-foundry/connections/default/discover", rlGroupAnalysis},
+		{"POST", "/api/providers/azure-foundry/connections", rlGroupGeneral},
+		{"POST", "/api/providers/azure-foundry/models", rlGroupGeneral},
 	}
 	for _, c := range cases {
 		if got := rateLimitGroup(c.method, c.path); got != c.want {
@@ -94,6 +104,9 @@ func TestRateLimitGroup_NormalizesPath(t *testing.T) {
 		{"double slash", "POST", "/api//auth/login", rlGroupAuth},
 		{"parent segment", "POST", "/api/auth/../auth/login", rlGroupAuth},
 		{"trailing dot", "POST", "/api/chat/./stream", rlGroupChat},
+		{"v1 azure test", "POST", "/api/v1/providers/azure-foundry/test", rlGroupChat},
+		{"dot segment azure discover", "POST", "/api/providers/azure-foundry/connections/./abcdefghij/discover", rlGroupAnalysis},
+		{"v1 org azure discover", "POST", "/api/v1/orgs/o1/providers/azure-foundry/connections/abcdefghij/discover", rlGroupAnalysis},
 		// Near-misses must NOT be rewritten: /api/v1foo is a distinct path.
 		{"v1 prefix not a segment", "POST", "/api/v1foo/auth/login", rlGroupGeneral},
 	}

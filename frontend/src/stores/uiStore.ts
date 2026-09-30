@@ -102,6 +102,11 @@ interface UiState {
   // Section the settings modal opens on (deep-links: "Set one up" from the
   // welcome tour, ApiKeyMissingState, etc.). Consumed on open, then reset.
   settingsSection: SettingsSection | null
+  // One-shot target inside that section — an element id such as
+  // 'provider-azure-foundry' ("Manage models…" in the chat picker, "Manage in
+  // Organizations"). The section's panel focuses it once its own data has
+  // loaded, then clears it; it never goes into the URL.
+  settingsAnchor: string | null
   // Section the modal showed last, so reopening it (gear, Ctrl+,) lands where
   // the user left off. A deep link in settingsSection always wins. In-memory
   // only; cleared on logout with the rest of the shell state.
@@ -131,11 +136,13 @@ interface UiState {
   setSettingsOpen: (o: boolean) => void
   setSettingsSection: (s: SettingsSection | null) => void
   setLastSettingsSection: (s: SettingsSection) => void
-  // openSettings(section) is the one-call deep link (replaces the
-  // setSettingsSection + setSettingsOpen pair every caller used to repeat);
-  // closeSettings also drops a consumed deep link so the next plain open does
-  // not land on it again.
-  openSettings: (section?: SettingsSection) => void
+  // openSettings(section, anchor) is the one-call deep link (replaces the
+  // setSettingsSection + setSettingsOpen pair every caller used to repeat).
+  // It also works while the modal is already open, which follows the new
+  // section. closeSettings also drops a consumed deep link so the next plain
+  // open does not land on it again.
+  openSettings: (section?: SettingsSection, anchor?: string) => void
+  clearSettingsAnchor: () => void
   closeSettings: () => void
   setVariablePanelOpen: (o: boolean) => void
   setSelectedVariable: (v: string | null) => void
@@ -174,6 +181,7 @@ export const useUIStore = create<UiState>((set, get) => ({
   complexityMode: false,
   settingsOpen: false,
   settingsSection: null,
+  settingsAnchor: null,
   lastSettingsSection: null,
   variablePanelOpen: false,
   selectedVariable: null,
@@ -201,8 +209,10 @@ export const useUIStore = create<UiState>((set, get) => ({
   setSettingsOpen: o => set({settingsOpen: o}),
   setSettingsSection: sec => set({settingsSection: sec}),
   setLastSettingsSection: sec => set({lastSettingsSection: sec}),
-  openSettings: section => set({settingsOpen: true, settingsSection: section ?? null}),
-  closeSettings: () => set({settingsOpen: false, settingsSection: null}),
+  openSettings: (section, anchor) =>
+    set({settingsOpen: true, settingsSection: section ?? null, settingsAnchor: anchor ?? null}),
+  clearSettingsAnchor: () => set({settingsAnchor: null}),
+  closeSettings: () => set({settingsOpen: false, settingsSection: null, settingsAnchor: null}),
   setVariablePanelOpen: o => set({variablePanelOpen: o}),
   setSelectedVariable: v => set({selectedVariable: v}),
   setGraphZoom: z => set({graphZoom: z}),
@@ -234,7 +244,9 @@ export const useUIStore = create<UiState>((set, get) => ({
   // Closing through the toggle (Ctrl+, while open) must clear a consumed deep
   // link too, or the next plain open would land on it again.
   toggleSettings: () =>
-    set(s => (s.settingsOpen ? {settingsOpen: false, settingsSection: null} : {settingsOpen: true})),
+    set(s =>
+      s.settingsOpen ? {settingsOpen: false, settingsSection: null, settingsAnchor: null} : {settingsOpen: true},
+    ),
   // Entering focus mode guarantees the chat is mounted (AI tab, inspector
   // shown); leaving lands back on the AI tab so the conversation stays in view
   // even if mod+1/3 switched the tab underneath the overlay. Desktop only —
@@ -265,6 +277,7 @@ registerStoreReset(() =>
     complexityMode: false,
     settingsOpen: false,
     settingsSection: null,
+    settingsAnchor: null,
     lastSettingsSection: null,
     variablePanelOpen: false,
     selectedVariable: null,

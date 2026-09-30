@@ -1,4 +1,5 @@
 import type {ChatMessage, FixItemSnapshot, FixProposalSnapshot, ToolCallRecord} from '@/types'
+import {storableModelLabel} from './modelIds'
 
 // Known message roles the backend may send. A payload with any other role is
 // coerced to 'assistant' (the safest non-actionable default) so a malformed or
@@ -105,6 +106,12 @@ export function parseChatMessage(raw: unknown): ChatMessage | null {
   if (typeof m.tokensOut === 'number') out.tokensOut = m.tokensOut
   if (typeof m.provider === 'string' && m.provider) out.provider = m.provider as ChatMessage['provider']
   if (typeof m.model === 'string' && m.model) out.model = m.model
+  // The model's friendly name at send time. Dropping it here lost it for
+  // good: the client re-saves whole threads, and the server stores them as
+  // sent. A "label" that is only an id (a turn sent before the listing named
+  // its model) is no name: dropped, so the listing's name shows instead.
+  const modelLabel = typeof m.modelLabel === 'string' ? storableModelLabel(m.modelLabel, out.model) : undefined
+  if (modelLabel) out.modelLabel = modelLabel
   // Served model + billed rates (saved on done): the meta line and the cost
   // estimate keep them across a reload.
   if (typeof m.servedModel === 'string' && m.servedModel) out.servedModel = m.servedModel

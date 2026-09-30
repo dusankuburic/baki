@@ -20,6 +20,11 @@ func AvailableProviders() []ProviderMetadata {
 		// UI's auth-type union has no third value and the document is still
 		// user-entered, not an OAuth flow.
 		{ID: "azure-foundry", Name: "Azure AI Foundry", AuthType: "api_key"},
+		// A locally hosted OpenAI-compatible server (Foundry Local, Ollama,
+		// LM Studio): configured with a loopback base URL (see LocalConfig),
+		// desktop only, listed only once configured. "api_key" for the same
+		// reason as azure-foundry.
+		{ID: LocalProviderID, Name: "Local model (OpenAI-compatible)", AuthType: "api_key"},
 	}
 }
 

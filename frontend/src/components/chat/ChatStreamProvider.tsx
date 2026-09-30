@@ -1,7 +1,26 @@
 import {useEffect, type ReactNode} from 'react'
-import {useChatStore} from '@/stores/chatStore'
-import {useChatStreamEngine} from './hooks/useChatStreamEngine'
+import {useChatStore, threadModelOf, type ChatThread, type QueuedMessage} from '@/stores/chatStore'
+import {useSettingsStore} from '@/stores/settingsStore'
+import {useChatStreamEngine, type StreamMeta} from './hooks/useChatStreamEngine'
 import {ChatStreamContext} from './chatStreamContext'
+
+// queuedPair is the provider/model a queued follow-up is sent with: the pair
+// its thread had when it was queued — a pick made since must not redirect a
+// message the user already committed to. One queued without a pair (an older
+// build's) takes its thread's pin, else the provider for new chats.
+function queuedPair(queued: QueuedMessage, thread: ChatThread): StreamMeta {
+  if (queued.provider) {
+    return {
+      provider: queued.provider,
+      model: queued.model ?? '',
+      ...(queued.modelLabel ? {modelLabel: queued.modelLabel} : {}),
+    }
+  }
+  const pin = threadModelOf(thread)
+  if (pin) return pin
+  const ai = useSettingsStore.getState().settings.ai
+  return {provider: ai.activeProvider, model: ''}
+}
 
 // ChatStreamProvider hosts the chat stream engine for the whole signed-in
 // session. It is mounted by App around the shell — above the inspector, the
@@ -28,13 +47,15 @@ export default function ChatStreamProvider({children}: {children: ReactNode}) {
       const st = useChatStore.getState()
       for (const [threadId, queued] of Object.entries(st.queuedByThread)) {
         const now = useChatStore.getState()
-        if (now.streams[threadId] || !now.threads.some(t => t.id === threadId)) continue
+        const thread = now.threads.find(t => t.id === threadId)
+        if (now.streams[threadId] || !thread) continue
         // Guard BEFORE take (F1.7): a blocked send must stay queued.
         if (!now.canStartStream()) return
         if (!now.takeQueuedMessage(threadId)) continue
         void engine.send(threadId, queued.text, {
-          provider: queued.provider ?? now.selectedProvider,
-          model: queued.model ?? '',
+          ...queuedPair(queued, thread),
+          pinThread: queued.pinThread,
+          pinnedAs: queued.pinnedAs,
           files: queued.files.length > 0 ? queued.files : undefined,
           excludeContext: queued.excludeContext,
         })

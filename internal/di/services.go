@@ -3,6 +3,7 @@ package di
 import (
 	"context"
 	"errors"
+	"fmt"
 	"pad-core/logger"
 	"path/filepath"
 
@@ -17,6 +18,7 @@ import (
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
+	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
 	"pad-core/cache"
@@ -125,6 +127,10 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 		ExtraAllowedHosts:  cfg.Runtime.AzureFoundryAllowedHosts,
 		AllowPrivateEgress: cfg.Runtime.AIAllowPrivateEgress,
 	})
+	// F-50: the local models provider (Foundry Local, Ollama, LM Studio) is
+	// constructible only in the desktop/local single-user app, whose loopback
+	// allowance is exactly the deliberate opt-in it needs.
+	ai.ConfigureLocalModels(ai.LocalModelsOptions{Egress: policy})
 	auth := ai.NewGitHubAuth()
 	return auth, copilotAuth, factory
 }
@@ -184,9 +190,75 @@ func ProvideOrgKeyStore(keys service.KeyStore) service.OrgKeyStore {
 //
 // PAD_EMBEDDING_PROVIDER (validated at boot) pins the embedding provider for
 // the deployment; it is the only way the knowledge base embeds with Azure AI
-// Foundry.
-func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config) *rag.KnowledgeService {
-	return rag.NewKnowledgeService(backend, factory, settings, rag.WithEmbeddingProvider(cfg.Storage.EmbeddingProvider))
+// Foundry — through the model registry's "Use for knowledge base"
+// designation when azure (the registry) is wired, nil keeping the
+// single-document path.
+func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config, azure *service.AzureModelService) *rag.KnowledgeService {
+	opts := []rag.Option{rag.WithEmbeddingProvider(cfg.Storage.EmbeddingProvider)}
+	if azure != nil {
+		opts = append(opts, rag.WithAzureEmbedder(azure))
+	}
+	return rag.NewKnowledgeService(backend, factory, settings, opts...)
+}
+
+// ProvideAzureRegistry selects where the Azure AI Foundry model registry
+// lives (Part 9): Postgres when authentication is on and the backend is the
+// database one — only then are owner ids real users and organisations and
+// the foreign keys (and their cascades) hold — else the per-user config
+// directory's azure-models.json (the desktop, and a database backend with
+// auth off), whose one personal registry is owner "". Never settings.json.
+// orgKeys only decides whether organisations can hold registries (logged):
+// the org tables need the encrypted org keystore, which gates the org routes
+// too. Without a config directory (cloud mode — which always has the
+// database registry) the registry is kept in memory, with a warning.
+func ProvideAzureRegistry(cfg *config.Config, backend storageif.StorageBackend, orgKeys service.OrgKeyStore, configDir string) (storageif.AzureRegistryStore, error) {
+	if cfg.Auth.Enabled && backend != nil {
+		if p, ok := backend.(storagedb.AzureRegistryProvider); ok {
+			logger.Info("azure registry: database store", "organisationRegistries", orgKeys != nil)
+			return p.AzureRegistry(), nil
+		}
+	}
+	if configDir == "" {
+		logger.Warn("azure registry: no config directory and no database registry; Azure AI Foundry resources and models are kept in memory only")
+		return storage.NewMemoryAzureRegistry(), nil
+	}
+	reg, err := storage.NewFileAzureRegistry(configDir)
+	if err != nil {
+		return nil, fmt.Errorf("azure registry: %w", err)
+	}
+	return reg, nil
+}
+
+// ProvideAzureModelService builds the Azure AI Foundry model registry
+// service. Per-user and organisation registries exist with the database
+// store; the backend (nil on the desktop) supplies the caller's settings,
+// organisation membership, the knowledge corpus counts and user names. The
+// knowledge-base designation is offered where the knowledge base embeds with
+// Azure (cloud with PAD_EMBEDDING_PROVIDER=azure-foundry). The data-subject
+// export reads each personal resource's public configuration through it.
+func ProvideAzureModelService(registry storageif.AzureRegistryStore, secrets service.KeyStore, orgKeys service.OrgKeyStore, factory *ai.ProviderFactory, settings service.SettingsProvider, backend storageif.StorageBackend, cfg *config.Config) *service.AzureModelService {
+	_, perUser := registry.(*storagedb.PostgresAzureRegistry)
+	deps := service.AzureModelServiceDeps{
+		Registry:                  registry,
+		Secrets:                   secrets,
+		OrgKeys:                   orgKeys,
+		Factory:                   factory,
+		Settings:                  settings,
+		PerUserOwners:             perUser,
+		KnowledgeEmbeddingEnabled: cfg.Mode == config.ModeCloud && cfg.Storage.EmbeddingProvider == ai.AzureFoundryProviderID,
+	}
+	if backend != nil {
+		deps.UserSettings, deps.Orgs, deps.Corpus, deps.Users = backend, backend, backend, backend
+	}
+	svc := service.NewAzureModelService(deps)
+	if perUser {
+		if src, ok := backend.(interface {
+			SetAzureExportConfigSource(storageif.AzureExportConfigFunc)
+		}); ok {
+			src.SetAzureExportConfigSource(svc.ExportConnectionConfigs)
+		}
+	}
+	return svc
 }
 
 // ServiceModule bundles all internal services.
@@ -207,9 +279,15 @@ var ServiceModule = fx.Options(
 		// service.KeyStore itself comes from main.go's provideKeyStore (a
 		// plain fx provider, not a global) — no adapter needed here.
 		ProvideOrgKeyStore,
+		ProvideAzureRegistry,
+		ProvideAzureModelService,
 		ProvideKnowledgeService,
-		func(settings service.SettingsProvider, secrets service.KeyStore, notifier service.EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode) *service.SystemService {
-			return service.NewSystemService(settings, secrets, notifier, backend, mode)
+		func(settings service.SettingsProvider, secrets service.KeyStore, notifier service.EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode, azure *service.AzureModelService) *service.SystemService {
+			svc := service.NewSystemService(settings, secrets, notifier, backend, mode)
+			// /api/keys/has and /api/keys/delete for azure-foundry act on the
+			// model registry (any resource; resource "default").
+			svc.SetAzureModels(azure)
+			return svc
 		},
 		service.NewAuthzService,
 		service.NewFlowService,
@@ -251,9 +329,14 @@ var ServiceModule = fx.Options(
 			knowledge *rag.KnowledgeService,
 			mode config.DeploymentMode,
 			redisClient *redis.Client,
+			azure *service.AzureModelService,
 		) *service.ChatService {
 			svc := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, backend, mode)
 			svc.SetKnowledgeService(knowledge)
+			// Chat turns and context previews on azure-foundry resolve their
+			// model id on the Azure AI Foundry model registry (Part 9) and run
+			// on exactly that entry's resource.
+			svc.SetAzureModels(azure)
 			wireKnowledgeBudget(knowledge, svc)
 			// nil when PAD_REDIS_URL is unset → single-replica resume (local maps).
 			svc.SetResumeBackplane(redisClient)
@@ -269,11 +352,16 @@ var ServiceModule = fx.Options(
 			secrets service.KeyStore,
 			orgKeys service.OrgKeyStore,
 			sys *service.SystemService,
+			azure *service.AzureModelService,
 		) *service.ProviderService {
 			svc := service.NewProviderService(auth, copilot, factory, secrets)
 			// Organisation-shared credentials (G7): nil outside cloud mode,
 			// where the org routes report ORG_KEYSTORE_UNAVAILABLE.
 			svc.SetOrgKeyStore(orgKeys)
+			// The Azure AI Foundry model registry (Part 9): the
+			// single-document routes act on its resource "default", the
+			// lifecycle and "configured" checks on every resource.
+			svc.SetAzureModels(azure)
 			// POST /api/keys/save and /api/keys/delete go through SystemService
 			// (removing an Azure AI Foundry configuration too): drop that
 			// provider's cached live listing and fence off a listing in

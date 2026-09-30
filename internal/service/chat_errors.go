@@ -1,9 +1,7 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 
 	"pad-analyzer/internal/ai"
@@ -34,8 +32,40 @@ const (
 	ChatErrProviderPermission = "PROVIDER_PERMISSION"
 	// ChatErrOutputLimit: the model spent its whole completion budget (Max
 	// tokens) without writing any answer — reasoning models (o-series,
-	// GPT-5, DeepSeek-R1) count their hidden thinking against that budget.
+	// GPT-5, gpt-oss, DeepSeek-R1, Grok 4, model routers, Claude 5.x) count their hidden thinking against that budget.
 	ChatErrOutputLimit = "PROVIDER_OUTPUT_LIMIT"
+	// ChatErrModelNotAvailable: the turn's Azure AI Foundry model is not one
+	// the caller can use any more (removed, or no longer shared with them)
+	// — ErrModelNotAvailable. Normally the create request's own 400; the
+	// stream code covers a turn that learns it later. The client refreshes
+	// its model list and offers another model.
+	ChatErrModelNotAvailable = "MODEL_NOT_AVAILABLE"
+)
+
+// modelNotAvailableMsg is the ChatErrModelNotAvailable copy.
+const modelNotAvailableMsg = "this model is no longer available — it was removed, or it is no longer shared with you; choose another model"
+
+// errAzureNoCredentials marks a turn whose Azure AI Foundry registry entry
+// resolved onto a resource with no stored credentials (never entered, or
+// removed — the organisation admin who lent them was demoted). It wraps
+// ai.ErrKeyNotConfigured, so the code stays PROVIDER_NOT_CONFIGURED; only
+// the copy names the resource instead of an API key.
+var errAzureNoCredentials = errors.New("the Azure AI Foundry resource of this model has no stored credentials")
+
+// errAzureUnreadableCredentials marks a turn whose Azure AI Foundry registry
+// entry resolved onto a resource whose stored credentials the keystore cannot
+// decrypt (storage.ErrSecretDecryptFailed — the server's encryption key
+// changed; the registry shows the resource as "unreadable"). Only entering
+// the credentials again repairs it, so it is PROVIDER_NOT_CONFIGURED with
+// copy that says so — on an organisation's resource the admin's copy and the
+// shared flag — never the generic "try again in a moment" setup error.
+var errAzureUnreadableCredentials = errors.New("the stored credentials of this model's Azure AI Foundry resource could not be read")
+
+// Copy for errAzureUnreadableCredentials: the caller's own resource, and
+// (sharedCredentialFailureMsg) an organisation's.
+const (
+	azureUnreadableMsg       = "the stored credentials of this model's Azure AI Foundry resource could not be read (the server's encryption key may have changed) — enter them again under Settings → AI Accounts → Azure AI Foundry"
+	azureUnreadableSharedMsg = "the stored credentials of your organisation's shared Azure AI Foundry resource could not be read (the server's encryption key may have changed) — ask your organisation admin to enter them again under Settings → Organizations (or choose one of your own models)"
 )
 
 // outputLimitMsg is the ChatErrOutputLimit copy.
@@ -57,23 +87,16 @@ func isOutputLimitFinish(reason string) bool {
 }
 
 // truncatedToolTurn reports a turn whose tool calls must not run: the turn
-// was cut off at an output limit (a call may be missing arguments or be only
-// the first of those the model meant to make), or a call's arguments are not
-// valid JSON — a call cut mid-argument, whatever finish reason the provider
-// reported. Empty arguments are the providers' "{}" (no arguments).
+// was cut off at an output limit, so a call may be missing arguments or be
+// only the first of those the model meant to make. Malformed argument JSON
+// with a NON-limit finish used to land here too and failed the whole turn
+// with the raise-Max-tokens copy; those calls now flow through ExecuteTool,
+// which answers them with a retryable "not valid JSON" tool result so the
+// model can re-issue them (F-11 — Microsoft's function-calling guide: "the
+// JSON response might not always be valid"). Empty arguments are the
+// providers' "{}" (no arguments).
 func truncatedToolTurn(calls []ai.ToolCall, finishReason string) bool {
-	if len(calls) == 0 {
-		return false
-	}
-	if isOutputLimitFinish(finishReason) {
-		return true
-	}
-	for _, tc := range calls {
-		if in := bytes.TrimSpace(tc.Input); len(in) > 0 && !json.Valid(in) {
-			return true
-		}
-	}
-	return false
+	return len(calls) > 0 && isOutputLimitFinish(finishReason)
 }
 
 // emptyOutputLimitTurn reports a turn that ended at the token cap with no
@@ -124,21 +147,30 @@ func budgetUnavailable(scope string, cause error) error {
 }
 
 // errProviderSetup stands in for a provider that could not be resolved for a
-// reason the user cannot act on — a key-store read or decryption failure.
-// The cause is logged by providerSetupError and never shown: stream errors
-// bypass the HTTP layer's 5xx masking, so "get claude key: keystore: …" used
-// to reach the chat bubble verbatim.
+// reason the user cannot act on — a key-store read or decryption failure, an
+// Azure AI Foundry model registry that could not be read. The cause is logged
+// by providerSetupError and never shown: stream errors bypass the HTTP
+// layer's 5xx masking, so "get claude key: keystore: …" used to reach the
+// chat bubble verbatim.
 var errProviderSetup = errors.New("couldn't load the AI provider configuration — try again in a moment")
 
-// providerSetupError maps a ProviderFactory.For failure to what the client may
-// see. A missing key is the user's to fix and keeps its sentinel
-// (classifyFailure codes it PROVIDER_NOT_CONFIGURED); anything else is logged
-// and replaced by errProviderSetup.
+// providerSetupError maps a failure to set a turn's provider up — the
+// factory's (ForOrg, ForAzureConnection) or the model registry's resolution
+// (resolveAzureModel) — to what the client may see. A missing key is the
+// user's to fix and keeps its sentinel (classifyFailure codes it
+// PROVIDER_NOT_CONFIGURED), as does a registry resource whose credentials
+// cannot be decrypted (errAzureUnreadableCredentials — logged too: a key the
+// server can no longer decrypt is the operator's concern as well); anything
+// else is logged and replaced by errProviderSetup. Neither kept error's text
+// reaches the client: classifyFailure words both.
 func providerSetupError(scope, providerID string, cause error) error {
 	if errors.Is(cause, ai.ErrKeyNotConfigured) {
 		return cause
 	}
 	logger.Warn("chat: provider setup failed", "scope", scope, "provider", providerID, "error", cause)
+	if errors.Is(cause, errAzureUnreadableCredentials) {
+		return cause
+	}
 	return errProviderSetup
 }
 
@@ -147,7 +179,10 @@ func providerSetupError(scope, providerID string, cause error) error {
 // stop, the response-time cap) is reported as that — classifyFailure already
 // words it, and the timeout copy carries its own "response stopped" — with no
 // operator report. A real mid-loop budget stop gets the prefix and is worth
-// aggregating: the turn already burned budget before it was cut off.
+// aggregating: the turn already burned budget before it was cut off. The
+// shared flag is dropped here on purpose: a budget stop's code is
+// AI_BUDGET_*, never one of the shared-credential classes, so the callers
+// pass shared=false.
 func loopBudgetFailure(ctx context.Context, ctl *streamCtl, err error) (code, msg string, report bool) {
 	code, msg = ctl.classifyFailure(ctx, err)
 	if ctx.Err() != nil {
@@ -157,11 +192,18 @@ func loopBudgetFailure(ctx context.Context, ctl *streamCtl, err error) (code, ms
 }
 
 // errorEventData builds an SSE "error" payload: the message plus, when known,
-// its machine-readable code.
-func errorEventData(code, msg string) map[string]interface{} {
+// its machine-readable code — and, when the failure is one of the org-shared
+// credential classes, the shared flag (F-42) the client's error bubble uses to
+// offer the Organizations section alongside (or, for PROVIDER_NOT_CONFIGURED,
+// instead of) the member's own Accounts. Like the code, the flag is omitted
+// when not set (frontend chatEvent.ts parses `shared === true`).
+func errorEventData(code, msg string, shared bool) map[string]interface{} {
 	data := map[string]interface{}{"message": msg}
 	if code != "" {
 		data["code"] = code
+	}
+	if shared {
+		data["shared"] = true
 	}
 	return data
 }
@@ -172,32 +214,55 @@ func errorEventData(code, msg string) map[string]interface{} {
 // actionable copy — a raw "rate limited" or "provider circuit open: too many
 // recent failures" told the user nothing they could act on.
 //
-// A turn on the organisation's shared credential (sharedCredential) that the
-// provider refused — rejected credentials, a missing role, an unreadable
-// document — gets copy pointing at the org admin: the member cannot fix the
-// org's configuration in their own Settings.
+// A turn on one of the organisation's shared Azure AI Foundry resources
+// (sharedCredential) that failed on its credential — rejected credentials, a
+// missing role, no stored credentials or ones that cannot be decrypted,
+// settings that no longer validate — gets copy pointing at the org admin:
+// the member cannot fix the organisation's resource in their own Settings.
 func (c *streamCtl) classifyFailure(ctx context.Context, err error) (code, msg string) {
-	code, msg = c.classifyFailureBase(ctx, err)
-	if c.sharedCredential.Load() {
-		if shared, ok := sharedCredentialFailureMsg(code, err); ok {
-			msg = shared
-		}
-	}
+	code, msg, _ = c.classifyFailureShared(ctx, err)
 	return code, msg
 }
 
-// sharedCredentialFailureMsg is the copy for a credential failure on the
-// organisation's shared Azure AI Foundry configuration, keyed by the code
-// classifyFailureBase chose; ok is false for every other failure.
+// classifyFailureShared is classifyFailure with the shared-credential flag
+// (F-42): shared is true only when the turn ran on the organisation's
+// credential AND the failure is one of the credential errors whose copy
+// points at the org admin (sharedCredentialFailureMsg) — a budget stop, a
+// context limit or a rate limit on the same shared provider is not the
+// admin's to fix and keeps shared=false. The error event (errorEventData),
+// the stored failure and the resume/begin snapshots carry the flag, so a
+// reloaded client's error bubble offers the Organizations section too.
+func (c *streamCtl) classifyFailureShared(ctx context.Context, err error) (code, msg string, shared bool) {
+	code, msg = c.classifyFailureBase(ctx, err)
+	if c.sharedCredential.Load() {
+		if sharedMsg, ok := sharedCredentialFailureMsg(code, err); ok {
+			return code, sharedMsg, true
+		}
+	}
+	return code, msg, false
+}
+
+// sharedCredentialFailureMsg is the copy for a credential failure on one of
+// the organisation's shared Azure AI Foundry resources, keyed by the code
+// classifyFailureBase chose; ok is false for every other failure. None of
+// them is the member's to fix — a shared resource, its credentials and its
+// models are the organisation admins' (Settings → Organizations) — and the
+// member's own way out is a model of their own, which runs on their own
+// resource.
 func sharedCredentialFailureMsg(code string, err error) (string, bool) {
-	const ask = "ask your organisation admin to update the shared Azure AI Foundry configuration"
+	const ask = "ask your organisation admin to check the shared Azure AI Foundry resource under Settings → Organizations"
+	const own = " (or choose one of your own models)"
 	switch {
 	case code == ChatErrProviderPermission:
-		return "the provider accepted your organisation's shared credentials, but its service principal lacks permission for this model or agent — " + ask + " (or add your own in Settings → AI Accounts)", true
+		return "Azure accepted your organisation's shared credentials, but their identity lacks permission for this model or agent — " + ask + own, true
 	case code == ChatErrProviderAuth:
-		return "the provider rejected your organisation's shared credentials — " + ask + " (or add your own in Settings → AI Accounts)", true
+		return "Azure rejected the credentials of your organisation's shared resource — " + ask + own, true
+	case code == ChatErrProviderNotConfigured && errors.Is(err, errAzureNoCredentials):
+		return "your organisation's shared Azure AI Foundry resource has no credentials (for example, the admin who shared them is no longer an admin) — " + ask + own, true
+	case code == ChatErrProviderNotConfigured && errors.Is(err, errAzureUnreadableCredentials):
+		return azureUnreadableSharedMsg, true
 	case code == ChatErrProviderNotConfigured && errors.Is(err, ai.ErrProviderConfigInvalid):
-		return "your organisation's shared provider configuration is invalid — " + ask, true
+		return "the settings of your organisation's shared Azure AI Foundry resource are no longer valid — " + ask, true
 	}
 	return "", false
 }
@@ -240,6 +305,12 @@ func (c *streamCtl) classifyFailureBase(ctx context.Context, err error) (code, m
 		return ChatErrOutputLimit, outputLimitMsg
 	case errors.Is(err, ai.ErrProviderConfigInvalid):
 		return ChatErrProviderNotConfigured, "this provider's configuration is invalid — open Settings → AI Accounts and save it again"
+	case errors.Is(err, ai.ErrClaudeEntraOnly):
+		// Before ErrProviderPermissionDenied and ErrApiKeyInvalid, which it
+		// also matches (F-26): a valid resource key against a Claude Mythos
+		// deployment is not a key or role problem — the family accepts
+		// Microsoft Entra ID identities only.
+		return ChatErrProviderAuth, "Azure AI Foundry refused the API key for this Claude deployment — Claude Mythos deployments accept Microsoft Entra ID only — switch the Azure AI Foundry credential to Microsoft Entra ID"
 	case errors.Is(err, ai.ErrProviderPermissionDenied):
 		// Before ErrApiKeyInvalid, which it also matches: the credentials
 		// work, a role is missing.
@@ -261,6 +332,14 @@ func (c *streamCtl) classifyFailureBase(ctx context.Context, err error) (code, m
 		return ChatErrProviderAuth, "Azure rejected this provider's Microsoft Entra ID access token — check that the endpoint is the resource's own and that Entra ID authentication is enabled on it, then use Test in Settings → AI Accounts for Azure's explanation"
 	case errors.Is(err, ai.ErrApiKeyInvalid):
 		return ChatErrProviderAuth, "the API key for this provider is invalid — check it in Settings → AI Accounts"
+	case errors.Is(err, ErrModelNotAvailable):
+		return ChatErrModelNotAvailable, modelNotAvailableMsg
+	case errors.Is(err, errAzureNoCredentials):
+		// Before ErrKeyNotConfigured, which it wraps: the model's resource,
+		// not the provider, is what lacks credentials.
+		return ChatErrProviderNotConfigured, "this model's Azure AI Foundry resource has no stored credentials — enter them again under Settings → AI Accounts → Azure AI Foundry"
+	case errors.Is(err, errAzureUnreadableCredentials):
+		return ChatErrProviderNotConfigured, azureUnreadableMsg
 	case errors.Is(err, ai.ErrKeyNotConfigured):
 		return ChatErrProviderNotConfigured, "no API key is configured for this provider — add one in Settings → AI Accounts"
 	case errors.Is(err, errProviderSetup):

@@ -79,12 +79,22 @@ export interface AISettings {
   prompts: AIPromptsConfig
 }
 
+// Reasoning depth for reasoning deployments (F-19).
+export type ReasoningEffort = 'low' | 'medium' | 'high'
+
 export interface AIProviderConfig {
   enabled: boolean
   defaultModel: string
   temperature: number
   maxTokens: number
   contextTokenBudget: number
+  /**
+   * Reasoning depth for reasoning deployments: '' (or omitted) keeps the
+   * provider default; otherwise 'low' | 'medium' | 'high'. Sent with each
+   * chat turn next to temperature/maxTokens (F-19); models without
+   * reasoning ignore it (one repair round trip at worst).
+   */
+  reasoningEffort?: '' | ReasoningEffort
 }
 
 export interface ParserSettings {

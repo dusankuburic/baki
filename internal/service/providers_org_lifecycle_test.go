@@ -87,6 +87,30 @@ func TestCarryAzureSecret_EndpointHostRule(t *testing.T) {
 // R-8 on the org route: another admin cannot point the lender's stored key at
 // another host without re-entering it; a document error wins over the
 // refusal (the host itself is not allowed).
+// F-51: the Azure CLI sign-in mode is the lender's own desktop identity —
+// an org-shared document runs on every member's machine, so saving one in
+// that mode is refused with INVALID_AUTH in every deployment mode (the
+// provider-level validation refuses it only on server deployments).
+func TestSaveOrgAzureFoundryConfig_RefusesEntraCLI(t *testing.T) {
+	orgKeys := testutil.NewFakeOrgSecretStore()
+	svc := newOrgProviderService(t, testutil.NewFakeSecretStore(), orgKeys)
+	cliDoc := ai.AzureFoundryConfig{
+		Endpoint:       "https://" + azureTestHost,
+		ChatDeployment: "chat1",
+		Auth:           ai.AzureFoundryAuth{Mode: ai.AzureAuthModeEntraCLI},
+	}
+	_, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-a", "", cliDoc)
+	if code := azureCfgErrCode(t, err); code != ai.AzureCfgErrInvalidAuth {
+		t.Fatalf("entra_cli org save: code = %q (%v), want %q", code, err, ai.AzureCfgErrInvalidAuth)
+	}
+	if !strings.Contains(err.Error(), "cannot be shared with an organisation") {
+		t.Errorf("message %q must say the mode cannot be shared with an organisation", err)
+	}
+	if raw, getErr := orgKeys.GetOrg("org-1", ai.AzureFoundryProviderID); getErr == nil && raw != "" {
+		t.Error("a refused save stored an org document")
+	}
+}
+
 func TestSaveOrgAzureFoundryConfig_EndpointChangeNeedsSecret(t *testing.T) {
 	configureAzureForTests(t)
 	orgKeys := testutil.NewFakeOrgSecretStore()
@@ -240,6 +264,43 @@ func TestDisableOrgAzureFoundryConfigSavedBy(t *testing.T) {
 		t.Error("another org's credential was removed")
 	}
 
+	// F-32: an edit that CARRIED the stored secret does not make its editor
+	// a lender — their departure keeps the credential, the lender's takes it.
+	if _, err := svc.SaveOrgAzureFoundryConfig("org-carry", "lender-a", "", doc); err != nil {
+		t.Fatal(err)
+	}
+	stamp, err := svc.GetOrgAzureFoundryConfig("org-carry")
+	if err != nil || stamp.UpdatedAt == "" {
+		t.Fatalf("stamp for the carrying edit: %+v, %v", stamp, err)
+	}
+	carried := doc
+	carried.Auth.Key = "" // the editor renames a deployment without the key
+	carried.ChatDeployment = "renamed"
+	if _, err := svc.SaveOrgAzureFoundryConfig("org-carry", "editor-b", stamp.UpdatedAt, carried); err != nil {
+		t.Fatalf("carrying edit: %v", err)
+	}
+	if meta, ok, _ := orgKeys.OrgKeyMeta("org-carry", "azure-foundry"); !ok || meta.UpdatedBy != "editor-b" || meta.SecretSetBy != "lender-a" {
+		t.Fatalf("after the carrying edit: %+v (ok=%v), want editor-b as writer and lender-a as lender", meta, ok)
+	}
+	if disabled, err := svc.DisableOrgAzureFoundryConfigSavedBy("org-carry", "editor-b"); err != nil || disabled {
+		t.Errorf("the carrying editor's departure: disabled=%v err=%v, want the lender's credential kept", disabled, err)
+	}
+	if has, _ := orgKeys.HasOrg("org-carry", "azure-foundry"); !has {
+		t.Fatal("the editor's departure deleted the lender's credential")
+	}
+	if disabled, err := svc.DisableOrgAzureFoundryConfigSavedBy("org-carry", "lender-a"); err != nil || !disabled {
+		t.Errorf("the lender's departure: disabled=%v err=%v, want disabled", disabled, err)
+	}
+	if orgs, err := svc.DisableOrgCredentialsSavedBy("editor-b"); err != nil || len(orgs) != 0 {
+		t.Errorf("account erasure of a carrying editor disabled %v (%v), want none", orgs, err)
+	}
+	// Belt-and-braces: a row no save has stamped since v24 (empty
+	// secret_set_by) still matches its last writer.
+	_ = orgKeys.SaveOrg("org-unstamped", "azure-foundry", azureTestDoc, "editor-b")
+	orgKeys.ClearSecretSetBy("org-unstamped", "azure-foundry")
+	if disabled, err := svc.DisableOrgAzureFoundryConfigSavedBy("org-unstamped", "editor-b"); err != nil || !disabled {
+		t.Errorf("unstamped row's writer: disabled=%v err=%v, want disabled", disabled, err)
+	}
 	// Account erasure: every org the user lent to.
 	if _, err := svc.SaveOrgAzureFoundryConfig("org-3", "lender", "", doc); err != nil {
 		t.Fatal(err)
@@ -307,4 +368,80 @@ func TestChatService_CheckBudget(t *testing.T) {
 	if err := svc.CheckBudget(context.Background(), "u1", "org-1"); !errors.Is(err, ErrAIBudgetUnavailable) {
 		t.Errorf("unreadable spend: %v, want ErrAIBudgetUnavailable (fail closed)", err)
 	}
+}
+
+// F-12: an unreadable stored org credential (a decrypt failure after a key
+// rotation, or a document this build cannot parse) can be repaired from the
+// UI — the token-less save with a fresh secret becomes a true compare-and-
+// swap on the unreadable row's own stamp instead of the always-409
+// INSERT ... DO NOTHING branch.
+func TestSaveOrgAzureFoundryConfig_ReplacesUnreadable(t *testing.T) {
+	doc := ai.AzureFoundryConfig{Endpoint: "https://" + azureTestHost, Auth: ai.AzureFoundryAuth{Mode: "api_key", Key: "fresh-key"}, ChatDeployment: "c1"}
+
+	t.Run("decrypt failure repaired, repairing admin becomes the lender", func(t *testing.T) {
+		configureAzureForTests(t)
+		keys := testutil.NewFakeOrgSecretStore()
+		store := &unreadableOrgStore{FakeOrgSecretStore: keys}
+		svc := newOrgProviderService(t, testutil.NewFakeSecretStore(), keys)
+		svc.SetOrgKeyStore(store)
+		if _, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-a", "", doc); err != nil {
+			t.Fatal(err)
+		}
+		store.getErr = storage.ErrSecretDecryptFailed
+
+		// "Enter again": the GET cannot supply an updatedAt, the save supplies
+		// a fresh secret — that combination now repairs the row.
+		at, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-b", "", doc)
+		if err != nil || at == "" {
+			t.Fatalf("repair save: %q, %v", at, err)
+		}
+		store.getErr = nil
+		pub, err := svc.GetOrgAzureFoundryConfig("org-1")
+		if err != nil || !pub.Configured || pub.SecretSetByID != "admin-b" || pub.UpdatedByID != "admin-b" {
+			t.Fatalf("after the repair: %+v, %v; want configured, admin-b as lender and writer", pub, err)
+		}
+		if pub.UpdatedAt != at {
+			t.Errorf("GET updatedAt = %q, want the repair's token %q", pub.UpdatedAt, at)
+		}
+
+		// A secret-less token-less save over a still-unreadable row is the
+		// ordinary MISSING_SECRET: there is nothing to carry.
+		store.getErr = storage.ErrSecretDecryptFailed
+		empty := doc
+		empty.Auth.Key = ""
+		if _, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-c", "", empty); azureCfgErrCode(t, err) != ai.AzureCfgErrMissingSecret {
+			t.Errorf("secret-less save: %v, want MISSING_SECRET", err)
+		}
+	})
+
+	t.Run("unparseable stored document", func(t *testing.T) {
+		configureAzureForTests(t)
+		keys := testutil.NewFakeOrgSecretStore()
+		store := &unreadableOrgStore{FakeOrgSecretStore: keys}
+		svc := newOrgProviderService(t, testutil.NewFakeSecretStore(), keys)
+		svc.SetOrgKeyStore(store)
+		_ = store.SaveOrg("org-1", "azure-foundry", `{"endpoint":`, "admin-a")
+
+		at, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-b", "", doc)
+		if err != nil || at == "" {
+			t.Fatalf("repair of an unparseable row: %q, %v", at, err)
+		}
+		if pub, err := svc.GetOrgAzureFoundryConfig("org-1"); err != nil || !pub.Configured || pub.SecretSetByID != "admin-b" {
+			t.Fatalf("after the repair: %+v, %v", pub, err)
+		}
+	})
+
+	t.Run("a readable row still needs its token", func(t *testing.T) {
+		configureAzureForTests(t)
+		keys := testutil.NewFakeOrgSecretStore()
+		store := &unreadableOrgStore{FakeOrgSecretStore: keys}
+		svc := newOrgProviderService(t, testutil.NewFakeSecretStore(), keys)
+		svc.SetOrgKeyStore(store)
+		if _, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-a", "", doc); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-b", "", doc); !errors.Is(err, ErrOrgCredentialConflict) {
+			t.Errorf("token-less save over a readable row: %v, want ErrOrgCredentialConflict", err)
+		}
+	})
 }

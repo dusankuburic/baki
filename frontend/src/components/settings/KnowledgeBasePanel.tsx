@@ -1,6 +1,7 @@
 import {useState, useMemo, useRef, useEffect} from 'react'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
+import {azureScopeKey, useAzureFoundryStore} from '@/stores/azureFoundryStore'
 import {request, ApiError} from '@/api/client'
 import {Trash2, FileText, Loader2, Upload, RefreshCw, Square} from 'lucide-react'
 import Button from '@/components/shared/Button'
@@ -34,6 +35,13 @@ function isAbortError(e: unknown): boolean {
   return (e instanceof DOMException || e instanceof Error) && e.name === 'AbortError'
 }
 
+// isReindexCursor narrows an error envelope's details.nextCursor: an
+// object (the server sends {docId, id}), absent on errors that committed
+// nothing.
+function isReindexCursor(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object'
+}
+
 // Upload and re-index failures whose server message is the thing to show:
 // the embedding provider's own verdict (rate limit, missing role, bad key,
 // rejected input) and the corpus lock (another upload or re-index is in
@@ -53,6 +61,12 @@ const VERBATIM_ERROR_CODES = new Set([
   // The organisation's daily AI budget is spent (429); the message carries
   // the figures.
   'BUDGET_EXCEEDED',
+  // The document chunks to more passages than one upload may index
+  // (F-14): the server message carries the figures.
+  'KNOWLEDGE_DOCUMENT_TOO_LARGE',
+  // The org's shared Azure credential names no embedding deployment
+  // (F-33): the server message tells the org admin what to add.
+  'EMBEDDING_ORG_NOT_CONFIGURED',
   // The budget could not be checked (503); the server message says why.
   'BUDGET_UNAVAILABLE',
 ])
@@ -85,9 +99,27 @@ export default function KnowledgeBasePanel() {
   // Stops a running re-index: aborts the in-flight page, and with it the
   // loop. Pages already answered stay committed server-side.
   const reindexAbortRef = useRef<AbortController | null>(null)
+  // Where a stopped or failed run can continue from (F-13): the resume
+  // cursor of the last committed page — or the one the server's error
+  // details carried — plus the force the run settled on. Null while no
+  // run is resumable.
+  const [resumable, setResumable] = useState<{cursor: Record<string, unknown>; force: boolean} | null>(null)
   useEffect(() => () => reindexAbortRef.current?.abort(), [])
   const {confirm} = useConfirm()
   const {success: toastSuccess, error: toastError, info: toastInfo} = useToast()
+  // A confirmed change of the Azure AI Foundry knowledge-base model (AI
+  // Accounts, the organisation's or a personal one): the corpus refuses
+  // uploads until it is re-indexed, so the panel asks for that.
+  const modelChanged = useAzureFoundryStore(
+    s =>
+      !!activeOrgId &&
+      (!!s.knowledgeReindex[azureScopeKey({kind: 'org', orgId: activeOrgId})] ||
+        !!s.knowledgeReindex[azureScopeKey({kind: 'user'})]),
+  )
+  const clearModelChanged = () => {
+    if (!activeOrgId) return
+    useAzureFoundryStore.getState().clearKnowledgeReindex([{kind: 'org', orgId: activeOrgId}, {kind: 'user'}])
+  }
 
   const {
     data,
@@ -186,14 +218,17 @@ export default function KnowledgeBasePanel() {
     }
   }
 
-  const handleReindex = async () => {
+  const handleReindex = async (resume?: {cursor: Record<string, unknown>; force: boolean}) => {
     if (!activeOrgId) return
-    const ok = await confirm({
-      title: t('knowledge.reindexConfirmTitle'),
-      message: t('knowledge.reindexConfirmMessage'),
-      confirmLabel: t('knowledge.reindexConfirmLabel'),
-    })
-    if (!ok) return
+    if (!resume) {
+      const ok = await confirm({
+        title: t('knowledge.reindexConfirmTitle'),
+        message: t('knowledge.reindexConfirmMessage'),
+        confirmLabel: t('knowledge.reindexConfirmLabel'),
+      })
+      if (!ok) return
+    }
+    setResumable(null)
     const controller = new AbortController()
     reindexAbortRef.current = controller
     const reindex = (force: boolean, cursor?: Record<string, unknown>) =>
@@ -209,42 +244,55 @@ export default function KnowledgeBasePanel() {
     // for a single-request run only.
     let chunks = 0
     let pages = 0
+    // What a Stop or a failed page would resume from, and the force the
+    // run settled on (a resume must not re-ask the model question).
+    let force = resume?.force ?? false
+    let lastCursor: Record<string, unknown> | undefined = resume?.cursor
     try {
-      let force = false
       let res: ReindexResult
-      try {
-        res = await reindex(false)
-      } catch (e) {
-        // 409: the corpus was indexed with a different embedding model than
-        // the admin's. Re-indexing anyway strands every member on that model,
-        // so it takes a second, explicit confirmation before resending with
-        // force.
-        if (!(e instanceof ApiError && e.code === 'EMBEDDING_MODEL_CHANGED')) throw e
-        force = await confirm({
-          title: t('knowledge.reindexModelChangedTitle'),
-          message: t('knowledge.reindexModelChanged'),
-          confirmLabel: t('knowledge.reindexForceLabel'),
-          danger: true,
-        })
-        if (!force) return
-        res = await reindex(true)
+      if (lastCursor) {
+        // A resumed run already settled the model switch: straight to the
+        // cursor, with the force the run used.
+        res = await reindex(force, lastCursor)
+      } else {
+        try {
+          res = await reindex(false)
+        } catch (e) {
+          // 409: the corpus was indexed with a different embedding model than
+          // the admin's. Re-indexing anyway strands every member on that model,
+          // so it takes a second, explicit confirmation before resending with
+          // force.
+          if (!(e instanceof ApiError && e.code === 'EMBEDDING_MODEL_CHANGED')) throw e
+          force = await confirm({
+            title: t('knowledge.reindexModelChangedTitle'),
+            message: t('knowledge.reindexModelChanged'),
+            confirmLabel: t('knowledge.reindexForceLabel'),
+            danger: true,
+          })
+          if (!force) return
+          res = await reindex(true)
+        }
       }
       chunks += res?.chunks ?? 0
       pages++
       // Resumable server: each answer committed its page; keep going from
       // where it stopped until no cursor comes back.
-      while (res?.nextCursor) {
+      lastCursor = res?.nextCursor ?? undefined
+      while (lastCursor) {
         setReindexProgress(chunks)
-        res = await reindex(force, res.nextCursor)
+        res = await reindex(force, lastCursor)
         chunks += res?.chunks ?? 0
         pages++
+        lastCursor = res?.nextCursor ?? undefined
       }
       if (res?.truncated) {
         // Not a success: documents are still waiting on the next run.
         toastError(t('knowledge.reindexTruncated', {chunks}))
       } else if (chunks === 0) {
+        clearModelChanged()
         toastSuccess(t('knowledge.reindexNothing'))
       } else {
+        clearModelChanged()
         toastSuccess(
           pages === 1
             ? t('knowledge.reindexDone', {chunks, docs: res?.docs ?? 0})
@@ -255,22 +303,39 @@ export default function KnowledgeBasePanel() {
     } catch (e) {
       if (isAbortError(e)) {
         // Stopped by the admin (or the panel closed): the pages that were
-        // answered stay re-indexed; a new run starts over from the top.
-        toastInfo(t('knowledge.reindexStopped', {count: chunks}))
+        // answered stay re-indexed and resumable — no restart from the top.
+        // Stopped before the first page answered, there is no cursor to
+        // resume from: the toast says to run Re-index again instead.
+        toastInfo(
+          lastCursor
+            ? t('knowledge.reindexStopped', {count: chunks})
+            : t('knowledge.reindexStoppedRestart', {count: chunks}),
+        )
         loadDocs()
+        if (lastCursor) setResumable({cursor: lastCursor, force})
         return
       }
       logger.warn(e)
       // A later page refused because the admin's embedding model is not the one
       // that converted the earlier pages (the model changed mid-run): the run
-      // has to start over, so say that instead of a bare failure.
-      const midRunModelChange = pages > 0 && e instanceof ApiError && e.code === 'EMBEDDING_MODEL_CHANGED'
+      // has to start over, so say that instead of a bare failure. A resumed
+      // run's first page is a later page too — its earlier pages were
+      // committed by the run it resumes.
+      const midRunModelChange = (pages > 0 || !!resume) && e instanceof ApiError && e.code === 'EMBEDDING_MODEL_CHANGED'
       const verdict = midRunModelChange ? t('knowledge.reindexModelChangedMidRun') : providerVerdict(e)
       const embeddingMissing =
         (e instanceof ApiError && e.code === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
       toastError(verdict ?? (embeddingMissing ? t('knowledge.embeddingMissingReindex') : t('knowledge.reindexFailed')))
       // Earlier pages of a resumable run were committed before the failure.
       if (pages > 0) loadDocs()
+      // A failed page keeps its progress when a cursor is known: the error
+      // envelope carries one (details.nextCursor), else the last committed
+      // page's cursor. A mid-run model change must start over instead.
+      if (!midRunModelChange) {
+        const failedAt =
+          e instanceof ApiError && isReindexCursor(e.details?.nextCursor) ? e.details.nextCursor : lastCursor
+        if (failedAt) setResumable({cursor: failedAt, force})
+      }
     } finally {
       if (reindexAbortRef.current === controller) reindexAbortRef.current = null
       setReindexing(false)
@@ -297,6 +362,19 @@ export default function KnowledgeBasePanel() {
         <strong className="text-text-primary">{t('knowledge.embeddingNoticePrefix')}</strong>{' '}
         {t('knowledge.embeddingNoticeSuffix')}
       </div>
+
+      {modelChanged && docs.length > 0 && (
+        <div className="mb-6 flex flex-wrap items-center gap-2 rounded-lg border border-semantic-warning/30 bg-semantic-warning/10 px-3 py-2 text-xs text-text-secondary">
+          <p className="min-w-0 flex-1">
+            {canManage ? t('knowledge.reindexAfterModelChange') : t('knowledge.reindexAfterModelChangeMember')}
+          </p>
+          {canManage && (
+            <Button size="sm" variant="secondary" onClick={() => void handleReindex()} disabled={reindexing}>
+              {t('knowledge.reindex')}
+            </Button>
+          )}
+        </div>
+      )}
 
       {canManage && (
         <div className="bg-surface-2 rounded-lg border border-border-default p-4 mb-8">
@@ -335,6 +413,16 @@ export default function KnowledgeBasePanel() {
           <h3 className="text-sm font-medium text-text-primary">{t('knowledge.indexedTitle')}</h3>
           {canManage && docs.length > 0 && (
             <div className="flex items-center gap-2">
+              {resumable && !reindexing && (
+                <button
+                  onClick={() => void handleReindex(resumable)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-secondary hover:text-brand-400 border border-brand-500/40 hover:border-brand-500/70 rounded-md transition-colors"
+                  title={t('knowledge.reindexResumeTitle')}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  {t('knowledge.reindexResume')}
+                </button>
+              )}
               {reindexing && (
                 <button
                   onClick={() => reindexAbortRef.current?.abort()}
@@ -346,7 +434,7 @@ export default function KnowledgeBasePanel() {
                 </button>
               )}
               <button
-                onClick={handleReindex}
+                onClick={() => void handleReindex()}
                 disabled={reindexing}
                 className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-secondary hover:text-brand-400 border border-border-default hover:border-brand-500/50 rounded-md transition-colors disabled:opacity-50"
                 title={t('knowledge.reindexTitle')}

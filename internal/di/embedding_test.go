@@ -43,13 +43,13 @@ func TestProvideKnowledgeService_PinsEmbeddingProvider(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Storage.EmbeddingProvider = "azure-foundry"
-	err := ProvideKnowledgeService(&testutil.FakeBackend{}, factory, nil, cfg).AddDocument(ctx, "u1", "org-1", "a.md", "content")
+	err := ProvideKnowledgeService(&testutil.FakeBackend{}, factory, nil, cfg, nil).AddDocument(ctx, "u1", "org-1", "a.md", "content")
 	if !errors.Is(err, rag.ErrEmbeddingUnavailable) || !errors.Is(err, ai.ErrEmbeddingDeploymentMissing) {
 		t.Errorf("pinned azure-foundry: err = %v, want Azure consulted (ErrEmbeddingDeploymentMissing)", err)
 	}
 
 	cfg.Storage.EmbeddingProvider = ""
-	err = ProvideKnowledgeService(&testutil.FakeBackend{}, factory, nil, cfg).AddDocument(ctx, "u1", "org-1", "a.md", "content")
+	err = ProvideKnowledgeService(&testutil.FakeBackend{}, factory, nil, cfg, nil).AddDocument(ctx, "u1", "org-1", "a.md", "content")
 	if !errors.Is(err, rag.ErrEmbeddingUnavailable) || errors.Is(err, ai.ErrEmbeddingDeploymentMissing) {
 		t.Errorf("no pin: err = %v, want ErrEmbeddingUnavailable without consulting Azure", err)
 	}

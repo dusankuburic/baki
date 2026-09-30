@@ -4,9 +4,11 @@ import {chatApi, flowApi, analysisApi, ApiError} from '@/api'
 import {
   useChatStore,
   conversationKey,
+  threadPinKey,
   MAX_CONCURRENT_STREAMS,
   FixProposalCard,
   FixProposalItem,
+  type ChatThread,
 } from '@/stores/chatStore'
 import {useStreamingMessage} from '@/hooks/useStreamingMessage'
 import {useFlowStore} from '@/stores/flowStore'
@@ -14,10 +16,11 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {useOptionalToast} from '@/components/shared/Toast'
 import {logger} from '@/lib/logger'
+import {storableModelLabel} from '@/lib/modelIds'
 import {uuid} from '@/lib/uuid'
 import {utf8ByteLength} from '@/lib/utf8'
 import {classifyChatFailure, budgetDetail, providerErrorInfo, type ProviderErrorInfo} from '@/lib/chatErrors'
-import type {ChatEvent, DoneMeta, FixProposalPayload, ToolResultPayload} from '@/lib/chatEvent'
+import type {ChatEvent, DoneMeta, ErrorUsage, FixProposalPayload, ToolResultPayload} from '@/lib/chatEvent'
 import type {ChatMessage, ProviderID, ToolCallRecord} from '@/types'
 import {conversationHistoryEnabled} from '@/lib/chatHistory'
 import {buildChatRequest} from './useChatRequestBuilder'
@@ -30,18 +33,41 @@ function providerErrorLine(info: ProviderErrorInfo, message: string): string {
 }
 
 // StreamMeta is what produced a stream: the provider and model it was sent
-// with. Captured at send time so the committed message is labelled with the
-// model that actually answered, even if the header selection changed since.
+// with, and the model's friendly name then (an Azure AI Foundry entry's
+// display name — its "m/<id>" means nothing to a reader). Captured at send
+// time so the committed message is labelled with the model that actually
+// answered, even if the thread's pick changed since.
 export interface StreamMeta {
   provider: ProviderID
   model: string
+  modelLabel?: string
 }
+
+// resumedTurn is what a re-attached stream is labelled with: the thread's
+// record of the turn in flight (chatStore.InFlightTurn) — the model the turn
+// was actually sent to, a stand-in's included — and the message id the
+// server stores its answer under. The payload of a conversation load does
+// not say which model the in-flight turn used, so without a record nothing
+// is guessed (see resumeAfterReload).
+function resumedTurn(thread: ChatThread, streamId: string): {meta: StreamMeta; messageId?: string} | null {
+  const rec = thread.inFlight
+  if (!rec || rec.streamId !== streamId) return null
+  return {
+    meta: {provider: rec.provider, model: rec.model, ...(rec.modelLabel ? {modelLabel: rec.modelLabel} : {})},
+    ...(rec.messageId ? {messageId: rec.messageId} : {}),
+  }
+}
+
+// What an accumulator is primed with: a stream's meta — none for a
+// re-attached stream with no record of its turn — and whether the server
+// owns the answer's stored copy (see resumeAfterReload).
+type AccMeta = Partial<StreamMeta> & {serverOwned?: boolean}
 
 // StreamAcc is one in-flight stream's local accumulation state: the growing
 // text plus the RAF batching bookkeeping. Keyed by streamId in a ref so
 // multiple threads can stream concurrently; the map entry doubles as the
 // stale-event guard — a late event whose streamId has no entry is ignored.
-interface StreamAcc extends StreamMeta {
+interface StreamAcc extends AccMeta {
   threadId: string
   text: string
   raf: number | null
@@ -52,20 +78,50 @@ interface StreamAcc extends StreamMeta {
   linked: boolean
 }
 
+// The model fields a committed message (or error bubble) carries: none for
+// a stream with no known provider (a re-attached one with no record).
+function messageModel(acc: Partial<StreamMeta>): Pick<ChatMessage, 'provider' | 'model' | 'modelLabel'> {
+  if (!acc.provider) return {}
+  return {provider: acc.provider, model: acc.model ?? '', ...(acc.modelLabel ? {modelLabel: acc.modelLabel} : {})}
+}
+
 export interface SendOptions extends StreamMeta {
   files?: string[]
   excludeContext?: boolean
   // Send the thread's (locally truncated) history instead of letting the
   // server replay its stored copy — resend/regenerate.
   includeHistory?: boolean
+  // Pin the thread to this provider/model once the send is accepted (its
+  // first accepted send is what fixes a new thread's model). False while the
+  // thread's own model is only temporarily unavailable and this turn goes to
+  // the fallback: the thread keeps its pin and returns to that model once it
+  // can be used again. Default true.
+  pinThread?: boolean
+  // For a turn composed earlier (queued, previewed): the thread's pin then
+  // (chatStore.threadPinKey). The send pins only while the thread still has
+  // it — a pick made since wins over the captured pair, which is still what
+  // this turn goes to.
+  pinnedAs?: string
+  // A resend (Retry / Regenerate) took the thread's last exchange off to
+  // send it again: the thread's messages from before that. A send the
+  // server refuses (the model is gone, the per-caller cap) puts them back
+  // as they were — the old answer is not lost (and not deleted from the
+  // server by the next save), and the question needs no trip back to the
+  // composer, which may hold another draft.
+  restore?: readonly ChatMessage[]
 }
+
+// TurnModel is the model half of a send: the thread's pair as resolved when
+// the turn was composed (queued, previewed or sent).
+export type TurnModel = Pick<SendOptions, 'provider' | 'model' | 'modelLabel' | 'pinThread'>
 
 type ToastApi = NonNullable<ReturnType<typeof useOptionalToast>>
 
 // ALIAS_PROVIDERS resolve the selected model to another one at answer time
 // (Azure AI Foundry: a deployment, `model-router`, an agent). Their model
 // listing names the served model once one is known, so the first done that
-// reports one refetches /api/providers/list — once per thread, not per turn.
+// reports one refetches /api/providers/list — once per
+// thread+deployment+served-model triple, not per turn.
 const ALIAS_PROVIDERS: ReadonlySet<ProviderID> = new Set<ProviderID>(['azure-foundry'])
 
 // useChatStreamEngine owns every chat stream: sending a turn, the per-stream
@@ -99,7 +155,8 @@ export function useChatStreamEngine() {
   const bumpProviderEpoch = useChatStore(s => s.bumpProviderEpoch)
 
   const streamAccRef = useRef(new Map<string, StreamAcc>())
-  // Threads whose served model already triggered a provider-list refetch.
+  // Thread/deployment/served-model triples (joined with a NUL) whose
+  // served model already triggered a provider-list refetch.
   const servedModelSeenRef = useRef(new Set<string>())
   const teardownRef = useRef<(streamId: string) => void>(() => {})
   const cancelRef = useRef<(streamId: string) => void>(() => {})
@@ -139,6 +196,9 @@ export function useChatStreamEngine() {
       const slot = useChatStore.getState().streams[acc.threadId]
       const patch: Partial<import('@/stores/chatStore').StreamSlot> = {tokens: Math.ceil(acc.text.length / 4)}
       if (slot?.toolStatus != null) patch.toolStatus = null
+      // F-40: answer text on screen means no thinking indicator either — a
+      // re-armed one (onToolResult) can never stick past the next chunk.
+      if (slot?.isThinking) patch.isThinking = false
       if (!acc.first) {
         // First chunk: flush synchronously so the slot text appears in the same
         // React render that clears the thinking indicator — no empty-frame gap.
@@ -147,7 +207,9 @@ export function useChatStreamEngine() {
         patch.isThinking = false
         updateStream(acc.threadId, patch)
       } else {
-        if (patch.toolStatus !== undefined) updateStream(acc.threadId, {toolStatus: null})
+        if (patch.toolStatus !== undefined || patch.isThinking !== undefined) {
+          updateStream(acc.threadId, {toolStatus: null, isThinking: false})
+        }
         if (acc.raf === null) {
           acc.raf = requestAnimationFrame(() => flushAcc(streamId))
         }
@@ -190,8 +252,18 @@ export function useChatStreamEngine() {
         durationMs: record.durationMs,
         summary: record.summary,
       })
+      // The finished call's "running" label must not keep pulsing through
+      // the (possibly minutes-long) silent reasoning phase that follows.
+      // Clear it only while it is still THIS call's — a second tool may
+      // already be running under the same label — and re-arm the thinking
+      // indicator only before any answer text exists (a second indicator
+      // above an already-visible bubble would be wrong).
+      const slot = useChatStore.getState().streams[acc.threadId]
+      if (slot && slot.toolStatus === record.label) {
+        setStreamMeta(acc.threadId, {toolStatus: null, isThinking: !acc.first})
+      }
     },
-    [addToolCall],
+    [addToolCall, setStreamMeta],
   )
 
   // takeAcc removes and returns a finished stream's accumulation state,
@@ -240,7 +312,7 @@ export function useChatStreamEngine() {
 
   // beginAcc primes the accumulator for a stream that's about to start, so
   // the first chunk event finds its key.
-  const beginAcc = useCallback((streamId: string, threadId: string, meta: StreamMeta) => {
+  const beginAcc = useCallback((streamId: string, threadId: string, meta: AccMeta) => {
     const linked = useChatStore.getState().streams[threadId]?.streamId === streamId
     streamAccRef.current.set(streamId, {threadId, text: '', raf: null, first: false, linked, ...meta})
   }, [])
@@ -272,19 +344,44 @@ export function useChatStreamEngine() {
       })
   }, [])
 
+  // bumpThreadTokens adds a finished turn's usage to the thread's badge
+  // totals. Shared by the done commit and the error path (F-15), so a
+  // BILLED failure — PROVIDER_OUTPUT_LIMIT after a 16k reasoning budget —
+  // reaches the meter too. Reads the thread fresh: two streams on one
+  // thread committing close together must not drop each other's tokens.
+  const bumpThreadTokens = useCallback(
+    (threadId: string, tokensIn?: number, tokensOut?: number) => {
+      if (tokensIn == null && tokensOut == null) return
+      const thread = useChatStore.getState().threads.find(t => t.id === threadId)
+      if (!thread) return
+      updateThread(threadId, {
+        tokensIn: (thread.tokensIn ?? 0) + (tokensIn ?? 0),
+        tokensOut: (thread.tokensOut ?? 0) + (tokensOut ?? 0),
+      })
+    },
+    [updateThread],
+  )
+
   // commitAssistantMessage appends the streamed text as a permanent assistant
   // message and persists the thread. Saves under the thread's own flowId —
   // never the open document's: a done event can land after the user switched
   // documents. The stream slot's tool trail and fix-proposal outcome (if any)
   // are pinned onto the message here — the slot dies with endStream, the
   // message is what survives the reload. So are the served model and billed
-  // rates the done event reported (opts.meta).
+  // rates the done event reported (opts.meta). `save: false` leaves the
+  // server's stored copy alone (a re-attached turn the server stores itself).
   const commitAssistantMessage = useCallback(
     (
-      acc: Pick<StreamAcc, 'threadId' | 'provider' | 'model'>,
+      acc: Pick<StreamAcc, 'threadId' | 'provider' | 'model' | 'modelLabel'>,
       messageId: string | undefined,
       content: string,
-      opts: {tokensIn?: number; tokensOut?: number; finishReason: ChatMessage['finishReason']; meta?: DoneMeta},
+      opts: {
+        tokensIn?: number
+        tokensOut?: number
+        finishReason: ChatMessage['finishReason']
+        meta?: DoneMeta
+        save?: boolean
+      },
     ) => {
       const threadId = acc.threadId
       const thread = useChatStore.getState().threads.find(t => t.id === threadId)
@@ -295,8 +392,9 @@ export function useChatStreamEngine() {
         role: 'assistant',
         content,
         timestamp: new Date().toISOString(),
-        provider: acc.provider,
-        model: acc.model,
+        // The model and the name it went by when this turn was sent: history
+        // and exports keep naming a model that is later renamed or removed.
+        ...messageModel(acc),
         tokensIn: opts.tokensIn,
         tokensOut: opts.tokensOut,
         finishReason: opts.finishReason,
@@ -333,15 +431,10 @@ export function useChatStreamEngine() {
             (msg.fixProposals ?? []).some(p => p.status === 'applied' || p.status === 'applied-unresolved'),
         })
       }
-      persistThread(threadId, thread.flowId)
-      if (opts.tokensIn != null || opts.tokensOut != null) {
-        updateThread(threadId, {
-          tokensIn: (thread.tokensIn ?? 0) + (opts.tokensIn ?? 0),
-          tokensOut: (thread.tokensOut ?? 0) + (opts.tokensOut ?? 0),
-        })
-      }
+      if (opts.save !== false) persistThread(threadId, thread.flowId)
+      bumpThreadTokens(threadId, opts.tokensIn, opts.tokensOut)
     },
-    [appendMessage, persistThread, updateThread],
+    [appendMessage, bumpThreadTokens, persistThread, updateThread],
   )
 
   const onDone = useCallback(
@@ -349,14 +442,26 @@ export function useChatStreamEngine() {
       const acc = takeAcc(streamId)
       if (!acc) return
       const slot = useChatStore.getState().streams[acc.threadId]
-      commitAssistantMessage(acc, slot?.messageId, acc.text, {tokensIn, tokensOut, finishReason: 'stop', meta})
+      commitAssistantMessage(acc, slot?.messageId, acc.text, {
+        tokensIn,
+        tokensOut,
+        finishReason: 'stop',
+        meta,
+        save: !acc.serverOwned,
+      })
       endStream(acc.threadId)
       // An alias provider just revealed which model answers this thread:
       // refetch the listing so the header can name it ("dep · gpt-4o"). The
       // epoch bump makes useProviderSetup refetch past the GET micro-cache,
       // which would otherwise replay the listing from before this turn.
-      if (meta?.servedModel && ALIAS_PROVIDERS.has(acc.provider) && !servedModelSeenRef.current.has(acc.threadId)) {
-        servedModelSeenRef.current.add(acc.threadId)
+      const servedKey = `${acc.threadId}\u0000${acc.model ?? ''}\u0000${meta?.servedModel ?? ''}`
+      if (
+        meta?.servedModel &&
+        acc.provider &&
+        ALIAS_PROVIDERS.has(acc.provider) &&
+        !servedModelSeenRef.current.has(servedKey)
+      ) {
+        servedModelSeenRef.current.add(servedKey)
         bumpProviderEpoch()
       }
     },
@@ -372,7 +477,7 @@ export function useChatStreamEngine() {
   }, [])
 
   const onError = useCallback(
-    (error: string, streamId: string, code?: string) => {
+    (error: string, streamId: string, code?: string, usage?: ErrorUsage) => {
       const acc = takeAcc(streamId)
       if (!acc) return
       const slot = useChatStore.getState().streams[acc.threadId]
@@ -394,11 +499,19 @@ export function useChatStreamEngine() {
         role: 'assistant',
         content: displayContent,
         timestamp: new Date().toISOString(),
-        provider: acc.provider,
-        model: acc.model,
+        ...messageModel(acc),
         finishReason: 'error',
         ...(providerError && code ? {errorCode: code} : {}),
+        ...(usage?.shared ? {errorShared: true} : {}),
       }
+      // A billed failure reports its usage (F-15): same fields as a done, on
+      // the bubble and in the thread totals. The error bubble itself is never
+      // persisted — the thread totals are, which is what the meter reads.
+      if (usage?.tokensIn != null) msg.tokensIn = usage.tokensIn
+      if (usage?.tokensOut != null) msg.tokensOut = usage.tokensOut
+      if (usage?.meta?.servedModel) msg.servedModel = usage.meta.servedModel
+      if (usage?.meta?.inputCostPerM !== undefined) msg.inputCostPerM = usage.meta.inputCostPerM
+      if (usage?.meta?.outputCostPerM !== undefined) msg.outputCostPerM = usage.meta.outputCostPerM
       // U3: a loop that fails at iteration 5 still ran 4 tools — keep the
       // trail on the error bubble so the user sees what happened before the
       // failure (error messages are excluded from persistence by design).
@@ -409,9 +522,10 @@ export function useChatStreamEngine() {
       // being CURRENTLY loaded swallowed stream failures after the user
       // switched flows — their question appeared unanswered, silently.
       appendMessage(acc.threadId, msg)
+      bumpThreadTokens(acc.threadId, usage?.tokensIn, usage?.tokensOut)
       endStream(acc.threadId)
     },
-    [appendMessage, bumpProviderEpoch, endStream, notifyBudget, takeAcc],
+    [appendMessage, bumpProviderEpoch, bumpThreadTokens, endStream, notifyBudget, takeAcc],
   )
 
   // onAppend adds a delta-resume tail to the stream's accumulated text and
@@ -649,7 +763,7 @@ export function useChatStreamEngine() {
     ],
   )
 
-  const {registerStream, cancel, teardownStream} = useStreamingMessage(handler)
+  const {registerStream, cancel, teardownStream, resumeInto} = useStreamingMessage(handler)
   useEffect(() => {
     teardownRef.current = teardownStream
   }, [teardownStream])
@@ -702,7 +816,11 @@ export function useChatStreamEngine() {
         return false
       }
 
-      const meta: StreamMeta = {provider: opts.provider, model: opts.model}
+      // A label is only ever a name: never the id itself or a registry id —
+      // it is stored with the reply, the pin and the in-flight record, and
+      // would then beat the listing's name for good.
+      const modelLabel = storableModelLabel(opts.modelLabel, opts.model)
+      const meta: StreamMeta = {provider: opts.provider, model: opts.model, ...(modelLabel ? {modelLabel} : {})}
       const userMsg: ChatMessage = {
         id: uuid(),
         role: 'user',
@@ -738,6 +856,18 @@ export function useChatStreamEngine() {
       // No save-on-send — the backend reconstructs history; save-on-done
       // persists the full user+assistant pair.
 
+      // The accepted send pins the thread to the model it went to — a new
+      // thread keeps it from now on, whatever the Default for new chats
+      // becomes — unless it is a stand-in for the thread's own model (see
+      // SendOptions.pinThread). An empty model (the server's default) pins
+      // nothing. Pinned before the network, so a model the server then
+      // refuses is the one the thread's notice names.
+      const repickedSince = opts.pinnedAs !== undefined && opts.pinnedAs !== threadPinKey(thread)
+      if (opts.pinThread !== false && meta.model && !repickedSince) {
+        st.setThreadModel(threadId, {provider: meta.provider, model: meta.model, modelLabel: meta.modelLabel})
+      }
+      st.setModelRefusal(threadId, null)
+
       const appendErrorBubble = (content: string, errorCode?: string) =>
         appendMessage(threadId, {
           id: uuid(),
@@ -746,6 +876,7 @@ export function useChatStreamEngine() {
           timestamp: new Date().toISOString(),
           provider: meta.provider,
           model: meta.model,
+          ...(meta.modelLabel ? {modelLabel: meta.modelLabel} : {}),
           finishReason: 'error',
           ...(errorCode ? {errorCode} : {}),
         })
@@ -754,9 +885,14 @@ export function useChatStreamEngine() {
       // it must not sit on screen as a question with no answer (and be saved
       // as one), so it returns to the composer — the thread's draft, plus the
       // one-shot staged prompt an open composer consumes at once. @-files and
-      // the exclude flag are not carried back.
+      // the exclude flag are not carried back. A resend puts the exchange it
+      // took off back instead (see SendOptions.restore).
       const withdrawUserMessage = () => {
         const now = useChatStore.getState()
+        if (opts.restore) {
+          now.setThreadMessages(threadId, opts.restore)
+          return
+        }
         now.removeMessage(threadId, userMsg.id)
         if (!hadTitle) updateThread(threadId, {title: ''})
         now.setDraft(threadId, text)
@@ -767,6 +903,9 @@ export function useChatStreamEngine() {
       const sid = uuid()
       startStream(threadId, sid, msgId)
       beginAcc(sid, threadId, meta)
+      // Recorded with the thread (persisted) until the turn ends, so a reload
+      // mid-turn re-attaches it labelled with the model it went to.
+      updateThread(threadId, {inFlight: {streamId: sid, messageId: msgId, ...meta}})
 
       const run = async () => {
         try {
@@ -824,6 +963,30 @@ export function useChatStreamEngine() {
             toastRef.current?.warning(i18n.t('chat:errors.busyTitle'), {
               description: i18n.t('chat:errors.busyBody', {count: MAX_CONCURRENT_STREAMS}),
             })
+          } else if (kind === 'modelNotAvailable') {
+            // The model was removed (or stopped being shared) after the
+            // picker listed it. Nothing was generated, so — like the
+            // capacity path — the message goes back to the composer instead
+            // of leaving an error in history; the listing is refetched, and
+            // the thread's notice (raised once that listing lands, or its
+            // refetch fails) offers "Choose model". Said at once here: the
+            // text moving back to the composer is no explanation.
+            withdrawUserMessage()
+            const store = useChatStore.getState()
+            store.bumpProviderEpoch()
+            if (meta.model) {
+              store.setModelRefusal(threadId, {
+                provider: meta.provider,
+                model: meta.model,
+                ...(meta.modelLabel ? {modelLabel: meta.modelLabel} : {}),
+                epoch: useChatStore.getState().providerEpoch,
+              })
+            }
+            toastRef.current?.warning(i18n.t('chat:errors.modelNotAvailable'), {
+              description: i18n.t(
+                opts.restore ? 'chat:errors.modelNotAvailableResend' : 'chat:errors.modelNotAvailableSend',
+              ),
+            })
           } else if (kind === 'budget') {
             const detail = budgetDetail(errMsg)
             notifyBudget(detail)
@@ -859,6 +1022,62 @@ export function useChatStreamEngine() {
       startStream,
       updateThread,
     ],
+  )
+
+  // resumeAfterReload re-attaches a stream the server reports as still
+  // in-flight for a conversation the client just (re)loaded (F-21): a page
+  // reload, Tauri window reopen or crash mid-turn no longer loses the reply
+  // — the server keeps the stream resumable and persists the finished turn.
+  // Mirrors send(): slot + accumulator first, then the SSE subscription,
+  // then one authoritative full resume (the user turn is already in the
+  // loaded history — persistInitialUserTurn stored it at stream start). If
+  // the stream turns out to be gone (403/404 — retention expired or the
+  // stream finished and was evicted), drop the slot and let the caller
+  // refetch the history, where the server's persisted copy of the turn
+  // lands if it exists.
+  //
+  // The conversation payload does not say which model the in-flight turn
+  // used: the thread's record of it does (resumedTurn), and the answer is
+  // committed under the message id the server stores it under. Without a
+  // record nothing is guessed — neither the thread's pin (the turn may have
+  // gone to a stand-in) nor the settings: the answer is committed with no
+  // model, and not saved over the server's copy, which the server stored
+  // with the model the turn was sent to.
+  const resumeAfterReload = useCallback(
+    (threadId: string, streamId: string, onGone?: () => void): boolean => {
+      const st = useChatStore.getState()
+      const thread = st.threads.find(t => t.id === threadId)
+      if (!thread || st.streams[threadId] || !st.canStartStream()) return false
+      const turn = resumedTurn(thread, streamId)
+      startStream(threadId, streamId, turn?.messageId ?? uuid())
+      beginAcc(streamId, threadId, turn ? turn.meta : {serverOwned: true})
+      const gone = () => {
+        dropAcc(streamId)
+        teardownRef.current(streamId)
+        endStreamIfOwn(threadId, streamId)
+        onGone?.()
+      }
+      void (async () => {
+        // registerStream rejects when the event connection does not open in
+        // time. Unhandled, that left the slot thinking with no stream behind
+        // it — queued sends never drained and only Stop recovered.
+        let registered: boolean
+        try {
+          registered = await registerStream(streamId, /*begin*/ false)
+        } catch (e) {
+          logger.warn('chat stream reattach failed', e)
+          gone()
+          return
+        }
+        if (!registered) {
+          gone()
+          return
+        }
+        resumeInto(streamId, {mode: 'full', onGone: gone})
+      })()
+      return true
+    },
+    [beginAcc, dropAcc, endStreamIfOwn, registerStream, resumeInto, startStream],
   )
 
   // stop ends a thread's in-flight reply at the user's request, keeping the
@@ -942,6 +1161,7 @@ export function useChatStreamEngine() {
       stop,
       abandon,
       respondFixProposal,
+      resumeAfterReload,
       // Lower-level pieces, exposed for tests and the resend path.
       registerStream,
       cancelStream,
@@ -957,6 +1177,7 @@ export function useChatStreamEngine() {
       stop,
       abandon,
       respondFixProposal,
+      resumeAfterReload,
       registerStream,
       cancelStream,
       beginAcc,

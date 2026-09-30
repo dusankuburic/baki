@@ -29,38 +29,55 @@ func awaitAliasedMetric(t *testing.T, stub *auditStub, req Request) *interfaces.
 	}
 }
 
-// An alias provider's own PricePerMillionTokens is deliberately zero (the
-// deployment name says nothing about the model behind it), so a served model
-// the catalogue doesn't know used to be billed $0 — escaping the daily budget
-// except for the in-flight reservation. The zero fallback must be replaced by
-// the AliasReservationCeiling rates: overstating is the safe direction for a
-// spend cap, and the recorded cost matches what the reservation held.
-func TestAudited_UncataloguedServedModelPricedAtReservationCeiling(t *testing.T) {
+// Azure AI Foundry is unpriced (cost is read in the Azure portal): whatever
+// the served model — uncatalogued, a current pro tier, or a router's pick —
+// the usage row records the token counts, a $0 cost and the served model,
+// and the pricing-fallback metric never moves for the alias provider.
+func TestAudited_AzureTurnRecordsTokensAtZeroCost(t *testing.T) {
 	resetServedModels()
 	t.Cleanup(resetServedModels)
-	stub := &auditStub{
-		models: []ModelInfo{{ID: "my-deploy"}}, // listing entry, no price
-		resp:   &Response{TokensIn: 1_000_000, TokensOut: 1_000_000, ServedModel: "uncatalogued-served-model"},
-	}
+	for _, served := range []string{"uncatalogued-served-model", "gpt-5-pro-2025-10-06", "gpt-5.5-2026-04-24", ""} {
+		stub := &auditStub{
+			models: []ModelInfo{{ID: "my-deploy"}},
+			resp:   &Response{TokensIn: 1_000_000, TokensOut: 500_000, ServedModel: served},
+		}
+		before := countPricingFallback(t, azureFoundryProviderID, "deployment")
 
-	m := awaitAliasedMetric(t, stub, Request{Model: "my-deploy"})
+		m := awaitAliasedMetric(t, stub, Request{Model: "my-deploy"})
 
-	ceiling := AliasReservationCeiling(azureFoundryProviderID)
-	if ceiling == (Pricing{}) {
-		t.Fatal("the azure-foundry catalogue must carry priced models for this test")
-	}
-	want := ceiling.InputCostPerM + ceiling.OutputCostPerM // 1M in + 1M out
-	if m.EstimatedCost != want {
-		t.Errorf("EstimatedCost = %v, want %v (the AliasReservationCeiling rates)", m.EstimatedCost, want)
-	}
-	if m.EstimatedCost == 0 {
-		t.Error("uncatalogued served model billed $0 — it escapes the daily budget")
+		if m.PromptTokens != 1_000_000 || m.CompletionTokens != 500_000 {
+			t.Errorf("served %q: tokens = %d/%d, want 1000000/500000", served, m.PromptTokens, m.CompletionTokens)
+		}
+		if m.EstimatedCost != 0 {
+			t.Errorf("served %q: EstimatedCost = %v, want 0 (azure-foundry is unpriced)", served, m.EstimatedCost)
+		}
+		if served != "" && m.ServedModel != served {
+			t.Errorf("served %q: recorded ServedModel = %q", served, m.ServedModel)
+		}
+		if after := countPricingFallback(t, azureFoundryProviderID, "deployment"); after != before {
+			t.Errorf("served %q: pricing-fallback metric moved by %v, want 0", served, after-before)
+		}
 	}
 }
 
-// The ceiling fallback is alias-only: a provider whose fallback price is
-// legitimately unknown still records $0 exactly as before (its model ids are
-// model names, so the fallback is the provider's own statement).
+// UsagePricing / ReservationPricing for an alias provider: a zero rate that
+// counts as found (the done payload carries no price) and nothing is reserved.
+func TestAudited_AzureUsageAndReservationPricingAreZero(t *testing.T) {
+	resetServedModels()
+	t.Cleanup(resetServedModels)
+	stub := &auditStub{models: []ModelInfo{{ID: "my-deploy"}}}
+	ap := NewAuditedProvider(stub, nil, "user-1", azureFoundryProviderID).(*auditedProvider)
+	if got, ok := ap.UsagePricing(context.Background(), "my-deploy", "gpt-5.4-pro"); !ok || got != (Pricing{}) {
+		t.Errorf("UsagePricing = %+v %v, want zero found", got, ok)
+	}
+	if got := ap.ReservationPricing(context.Background(), "my-deploy"); got != (Pricing{}) {
+		t.Errorf("ReservationPricing = %+v, want zero", got)
+	}
+}
+
+// A non-alias provider whose listing does not know the model falls back to
+// its own provider-wide rate — $0 here — and records exactly that (its model
+// ids are model names, so the fallback is the provider's own statement).
 func TestAudited_ZeroFallbackNonAliasStaysZero(t *testing.T) {
 	stub := &auditStub{
 		models: []ModelInfo{{ID: "something-else"}},

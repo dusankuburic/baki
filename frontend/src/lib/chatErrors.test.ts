@@ -18,6 +18,13 @@ describe('classifyChatFailure', () => {
   it('does not treat a failed budget CHECK as the budget being reached', () => {
     expect(classifyChatFailure("couldn't verify today's AI budget — try again in a moment")).toBe('generic')
   })
+
+  // The create request refuses a model the picker listed but the server no
+  // longer offers: the engine returns the message to the composer for it.
+  it('classifies MODEL_NOT_AVAILABLE by its code', () => {
+    expect(classifyChatFailure('model not available', 'MODEL_NOT_AVAILABLE')).toBe('modelNotAvailable')
+    expect(classifyChatFailure('model not available')).toBe('generic')
+  })
 })
 
 describe('budgetDetail', () => {
@@ -46,6 +53,17 @@ describe('providerErrorInfo', () => {
     for (const code of ['PROVIDER_UNAVAILABLE', 'PROVIDER_CONTENT_FILTERED', 'PROVIDER_BALANCE']) {
       expect(providerErrorInfo(code)).not.toBeNull()
     }
+  })
+
+  it('maps MODEL_NOT_AVAILABLE to "Choose another model" and a listing refresh', () => {
+    expect(providerErrorInfo('MODEL_NOT_AVAILABLE')).toEqual({
+      titleKey: 'errors.modelNotAvailable',
+      settingsSection: 'accounts',
+      refreshProviders: true,
+      action: 'chooseModel',
+    })
+    // The settings-fixable codes keep "Open settings" (no action).
+    expect(providerErrorInfo('PROVIDER_AUTH')?.action).toBeUndefined()
   })
 
   it('is null for other or missing codes', () => {

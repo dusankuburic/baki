@@ -1,15 +1,30 @@
 import type {ChatMessage} from '@/types'
+import {modelNameOf} from './modelIds'
+
+// The name an assistant turn's model is printed with: the label it was sent
+// with (an Azure AI Foundry entry's display name — its "m/<id>" means nothing
+// to a reader), else the raw id. The chat passes its own resolver, which also
+// consults the provider listing and says "removed model" for an unlabelled
+// registry id nothing lists any more.
+export type ExportModelName = (message: ChatMessage) => string | undefined
+
+const defaultModelName: ExportModelName = m => modelNameOf(m.model, m.modelLabel) ?? undefined
 
 // conversationToMarkdown renders a chat thread as a portable Markdown
 // transcript. Works in every deployment (no backend/native dialog needed),
 // so cloud users can export history too — the server-side export endpoint is
 // desktop-only. Error turns are dropped so the transcript isn't littered with
 // transient failures.
-export function conversationToMarkdown(title: string, messages: ChatMessage[]): string {
+export function conversationToMarkdown(
+  title: string,
+  messages: ChatMessage[],
+  modelName: ExportModelName = defaultModelName,
+): string {
   const lines: string[] = [`# ${title || 'Chat conversation'}`, '']
   for (const m of messages) {
     if (m.finishReason === 'error') continue
-    const who = m.role === 'user' ? 'You' : m.role === 'assistant' ? (m.model ? `AI (${m.model})` : 'AI') : m.role
+    const name = m.role === 'assistant' ? modelName(m) : undefined
+    const who = m.role === 'user' ? 'You' : m.role === 'assistant' ? (name ? `AI (${name})` : 'AI') : m.role
     const when = formatWhen(m.timestamp)
     lines.push(`## ${who}${when ? ` · ${when}` : ''}`, '', m.content.trim(), '')
   }

@@ -98,9 +98,18 @@ export const defaultSettings: AppSettings = {
         maxTokens: 4096,
         contextTokenBudget: 4000,
       },
-      // Empty defaultModel on purpose: deployments are user-named, so the
-      // server-reported default (the saved chat deployment) wins.
+      // Empty until the user picks a model in the chat header; the
+      // server-reported default (the saved chat deployment) wins until then.
       'azure-foundry': {
+        enabled: false,
+        defaultModel: '',
+        temperature: 0.3,
+        maxTokens: 4096,
+        contextTokenBudget: 4000,
+      },
+      // Empty until the user picks one of the local server's models in the
+      // chat header; the server-reported default wins until then.
+      local: {
         enabled: false,
         defaultModel: '',
         temperature: 0.3,
@@ -156,15 +165,25 @@ interface SettingsState {
   updateParser: (parser: Partial<ParserSettings>) => Promise<void>
   updateLayout: (layout: Partial<LayoutSettings>) => Promise<void>
   updateAI: (ai: Partial<AISettings>) => Promise<void>
-  updateProvider: (id: ProviderID, config: Partial<AIProviderConfig>) => Promise<void>
+  /**
+   * Optimistically merges `config` into the provider's settings. Resolves
+   * true once saved, false when the save failed: the fields this call wrote
+   * are then rolled back — only those, and only where they still hold this
+   * call's value, so a change made meanwhile (to them or anything else) stays.
+   * Never rejects.
+   */
+  updateProvider: (id: ProviderID, config: Partial<AIProviderConfig>) => Promise<boolean>
   resetToDefaults: () => Promise<void>
 }
 
 // Persist with a debounce to prevent flooding the backend during rapid UI
 // updates (like window resizing or slider dragging). Rejects on failure so
-// callers can roll back their optimistic update. A superseded persist resolves
-// immediately: the newer call reads the latest state, so it carries this
-// call's changes too.
+// callers can roll back their optimistic update. A superseded persist settles
+// with the write that supersedes it: the newer call reads the latest state,
+// so it carries this call's changes too — and if that write fails, this
+// call's change was not saved either. The callers of one write settle newest
+// first, so their rollbacks unwind like a stack (the oldest caller's
+// snapshot restore runs last).
 //
 // An in-flight guard prevents two concurrent API calls: if a new persist
 // arrives while the previous one is still hitting the network, the new call
@@ -173,18 +192,23 @@ interface SettingsState {
 // The three pieces of queue state live on one object (persistQueue) rather than
 // three loose module-level vars so a test-only reset can clear them atomically
 // (otherwise the debounce timer / in-flight promise leak across test cases).
+interface PersistWaiter {
+  resolve: () => void
+  reject: (err: unknown) => void
+}
 interface PersistQueueState {
   timer: ReturnType<typeof setTimeout> | null
-  resolveSuperseded: (() => void) | null
+  // The callers whose changes the pending (debounced) write carries.
+  waiters: PersistWaiter[]
   inflight: Promise<void> | null
 }
 const persistQueue: PersistQueueState = {
   timer: null,
-  resolveSuperseded: null,
+  waiters: [],
   inflight: null,
 }
 
-// __resetPersistQueueForTest clears the debounce timer + in-flight/superseded
+// __resetPersistQueueForTest clears the debounce timer + in-flight/waiting
 // state so unit tests don't leak them across cases. Production code must not
 // call this: it would drop a pending write.
 export function __resetPersistQueueForTest(): void {
@@ -192,9 +216,10 @@ export function __resetPersistQueueForTest(): void {
     clearTimeout(persistQueue.timer)
   }
   persistQueue.timer = null
-  // Resolve any superseded waiter so it doesn't hang the test.
-  persistQueue.resolveSuperseded?.()
-  persistQueue.resolveSuperseded = null
+  // Resolve every waiting caller so none hangs the test.
+  const waiters = persistQueue.waiters
+  persistQueue.waiters = []
+  for (const w of waiters) w.resolve()
   persistQueue.inflight = null
 }
 
@@ -206,20 +231,23 @@ async function persist(settings: AppSettings): Promise<void> {
 
   if (persistQueue.timer) {
     clearTimeout(persistQueue.timer)
-    persistQueue.resolveSuperseded?.()
   }
 
   return new Promise((resolve, reject) => {
-    persistQueue.resolveSuperseded = resolve
+    persistQueue.waiters.push({resolve, reject})
     persistQueue.timer = setTimeout(() => {
       persistQueue.timer = null
-      persistQueue.resolveSuperseded = null
+      // Newest first (see above).
+      const waiters = [...persistQueue.waiters].reverse()
+      persistQueue.waiters = []
       persistQueue.inflight = settingsApi
         .updateSettings(settings)
-        .then(() => resolve())
+        .then(() => {
+          for (const w of waiters) w.resolve()
+        })
         .catch(err => {
           logger.warn('Failed to persist settings', err)
-          reject(err)
+          for (const w of waiters) w.reject(err)
         })
         .finally(() => {
           persistQueue.inflight = null
@@ -347,8 +375,32 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
     updateProvider: async (id, config) => {
       const prev = get().settings
-      const providers = {...prev.ai.providers, [id]: {...prev.ai.providers[id], ...config}}
-      await applyAndPersist({...prev, ai: {...prev.ai, providers}}, prev)
+      const before: AIProviderConfig | undefined = prev.ai.providers[id]
+      const next = {...prev, ai: {...prev.ai, providers: {...prev.ai.providers, [id]: {...before, ...config}}}}
+      set({settings: next})
+      try {
+        await persist(next)
+        return true
+      } catch {
+        // Unlike applyAndPersist's whole-settings snapshot, which would also
+        // undo every change made while this write was pending, restore only
+        // the fields this call wrote that still hold its value.
+        const cur = get().settings
+        const now: AIProviderConfig | undefined = cur.ai.providers[id]
+        const restored: Record<string, unknown> = {...now}
+        let rolledBack = false
+        for (const field of Object.keys(config) as (keyof AIProviderConfig)[]) {
+          if (!Object.is(now?.[field], config[field])) continue
+          rolledBack = true
+          if (before && field in before) restored[field] = before[field]
+          else delete restored[field]
+        }
+        if (rolledBack) {
+          const providers = {...cur.ai.providers, [id]: restored as unknown as AIProviderConfig}
+          set({settings: {...cur, ai: {...cur.ai, providers}}})
+        }
+        return false
+      }
     },
 
     resetToDefaults: async () => {

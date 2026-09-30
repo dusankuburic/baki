@@ -62,9 +62,7 @@ func Tokenize(text string) []Token {
 		// TrimRight'd below, but the multi-line accumulators (block comments,
 		// triple-quoted literals) append `raw` verbatim, so strip the CR here
 		// or it leaks into the middle of the accumulated value.
-		if strings.HasSuffix(raw, "\r") {
-			raw = raw[:len(raw)-1]
-		}
+		raw = strings.TrimSuffix(raw, "\r")
 
 		trimmed := strings.TrimRight(raw, " \t\r")
 		indent := computeIndent(trimmed)

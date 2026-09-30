@@ -60,8 +60,72 @@ describe('parseChatMessage', () => {
       model: 123,
       servedModel: 7,
       inputCostPerM: '2.5',
+      modelLabel: 42,
     })
     expect(m).toEqual({id: 'm1', role: 'user', content: 'x', timestamp: 't'})
+  })
+
+  it("keeps the model's friendly label and drops an empty one", () => {
+    const base = {
+      id: 'm1',
+      role: 'assistant',
+      content: 'a',
+      timestamp: 't',
+      provider: 'azure-foundry',
+      model: 'm/a1b2c3d4e5',
+    }
+    expect(parseChatMessage({...base, modelLabel: 'Docs writer'})?.modelLabel).toBe('Docs writer')
+    expect(parseChatMessage({...base, modelLabel: ''})).not.toHaveProperty('modelLabel')
+  })
+
+  // C6: a turn sent before the listing named its model was saved with the
+  // raw id as its label, which then beat the listing's name for good.
+  it('drops a label that is only an id', () => {
+    const base = {id: 'm1', role: 'assistant', content: 'a', timestamp: 't', provider: 'azure-foundry'}
+    expect(parseChatMessage({...base, model: 'm/a1b2c3d4e5', modelLabel: 'm/a1b2c3d4e5'})).not.toHaveProperty(
+      'modelLabel',
+    )
+    expect(parseChatMessage({...base, model: 'gpt-4.1', modelLabel: 'm/a1b2c3d4e5'})).not.toHaveProperty('modelLabel')
+    expect(parseChatMessage({...base, model: 'gpt-4o', modelLabel: 'gpt-4o'})).not.toHaveProperty('modelLabel')
+  })
+})
+
+// The client re-saves whole threads (full replace) and the server stores
+// them as sent, so a field the read boundary drops is lost for good after one
+// load → save cycle. Walk the wire: save body → stored → /api/chat/get → parse
+// → the next save body.
+describe('conversation round trip', () => {
+  const thread: ChatMessage[] = [
+    {id: 'u1', role: 'user', content: 'Document this flow', timestamp: '2026-09-30T10:00:00Z'},
+    {
+      id: 'a1',
+      role: 'assistant',
+      content: 'Here is the documentation…',
+      timestamp: '2026-09-30T10:00:05Z',
+      provider: 'azure-foundry',
+      model: 'm/a1b2c3d4e5',
+      modelLabel: 'Docs writer',
+      servedModel: 'gpt-4.1-2025-04-14',
+      tokensIn: 1200,
+      tokensOut: 340,
+      finishReason: 'stop',
+    },
+  ]
+
+  // What saveConversation puts on the wire, as the server reads it back.
+  const wire = (messages: ChatMessage[]) => JSON.parse(JSON.stringify({messages})).messages as unknown
+
+  it('keeps modelLabel through save → get → save', () => {
+    const stored = wire(thread)
+    const loaded = parseConversationPayload(stored)
+    expect(loaded[1].modelLabel).toBe('Docs writer')
+    expect(wire(loaded)).toEqual(stored)
+    expect(loaded).toEqual(thread)
+  })
+
+  it('keeps it through the legacy {messages} load shape too', () => {
+    const loaded = parseConversationPayload({messages: wire(thread)})
+    expect(loaded[1]).toMatchObject({model: 'm/a1b2c3d4e5', modelLabel: 'Docs writer'})
   })
 })
 

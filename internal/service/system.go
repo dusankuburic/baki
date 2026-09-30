@@ -32,7 +32,15 @@ type SystemService struct {
 	// credential (wired in di/services.go to
 	// ProviderService.InvalidateModels); nil = no hook.
 	onKeyChanged func(scope, provider string)
+	// azure is the Azure AI Foundry model registry (Part 9): with it, "has
+	// a key" means "has a resource" and deleting the azure-foundry key
+	// removes resource "default" with its models. nil = the single document.
+	azure *AzureModelService
 }
+
+// SetAzureModels wires the Azure AI Foundry model registry. Set once at
+// boot, before requests are served.
+func (s *SystemService) SetAzureModels(azure *AzureModelService) { s.azure = azure }
 
 // OnApiKeyChanged registers the hook SaveApiKey and DeleteApiKey run after
 // a successful write. Post-construction wiring (same pattern as the
@@ -243,11 +251,27 @@ func (s *SystemService) SaveApiKey(scope, provider string, key string) (err erro
 
 func (s *SystemService) HasApiKey(scope, provider string) (result bool, err error) {
 	defer logger.Guard("SystemService.HasApiKey", &err)
+	if provider == ai.AzureFoundryProviderID && s.azure != nil {
+		// Several Azure resources: any resource of the caller's own.
+		return s.azure.HasPersonalResources(context.Background(), scope)
+	}
 	return s.secrets.Has(scope, provider)
 }
 
 func (s *SystemService) DeleteApiKey(scope, provider string) (err error) {
 	defer logger.Guard("SystemService.DeleteApiKey", &err)
+	if provider == ai.AzureFoundryProviderID && s.azure != nil {
+		// Deprecated for the registry (one release): the key is resource
+		// "default"'s credential — the resource goes with its models, and
+		// its credential after the commit.
+		if err := s.azure.legacyDeleteDefault(context.Background(), s.azure.userOwner(scope), scope); err != nil {
+			return err
+		}
+		if s.onKeyChanged != nil {
+			s.onKeyChanged(scope, provider)
+		}
+		return nil
+	}
 	// The Azure AI Foundry document registers process-wide state beyond the
 	// KeyStore (its Entra ID token source and cached listing); read it before
 	// the row is gone so it can be released with it.

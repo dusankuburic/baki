@@ -17,6 +17,107 @@ definitions:
           (AzureAuthModeEntra).
         type: string
     type: object
+  ai.AzureFoundryConfig:
+    properties:
+      auth:
+        $ref: '#/definitions/ai.AzureFoundryAuth'
+      chatDeployment:
+        description: |-
+          ChatDeployment is the deployment offered as the default model;
+          EmbeddingDeployment (optional) the one used for the knowledge base.
+          Deployments (optional, ≤ azureMaxDeployments) are further chat
+          deployments offered in the model picker. No data-plane route lists an
+          API-key caller's deployments (GET /openai/v1/models is the resource's
+          model CATALOGUE), so the picker shows exactly these names — plus the
+          project's deployments with Entra ID and a project endpoint. Saving
+          requires a chat deployment (ChatDeployment or Deployments) unless
+          Entra ID + project endpoint can list them (MISSING_DEPLOYMENT).
+        type: string
+      claudeDeployments:
+        description: |-
+          ClaudeDeployments (optional, ≤ azureMaxClaudeDeployments) are the
+          resource's Claude deployments, which answer on the Anthropic Messages
+          route ({endpoint}/anthropic/v1/messages), not on /openai/v1 (404).
+          They are offered in the model picker as "claude:<name>" (see
+          azure_claude.go) and count as chat deployments for the save-time
+          rule. With Entra ID and a project endpoint the project listing also
+          discovers them (modelPublisher "Anthropic").
+        items:
+          type: string
+        type: array
+      deployments:
+        items:
+          type: string
+        type: array
+      embeddingDeployment:
+        type: string
+      endpoint:
+        description: |-
+          Endpoint is the resource endpoint, e.g. https://my-res.openai.azure.com
+          or https://my-res.services.ai.azure.com (no path).
+        type: string
+      projectEndpoint:
+        description: |-
+          ProjectEndpoint (optional) is the Foundry project endpoint,
+          https://<res>.services.ai.azure.com/api/projects/<project>, which
+          unlocks the project's agents (Entra ID only) and deployment metadata.
+        type: string
+    type: object
+  ai.AzureFoundryPublicConfig:
+    properties:
+      authMode:
+        type: string
+      chatDeployment:
+        type: string
+      claudeDeployments:
+        items:
+          type: string
+        type: array
+      clientId:
+        type: string
+      configured:
+        type: boolean
+      deployments:
+        items:
+          type: string
+        type: array
+      embeddingDeployment:
+        type: string
+      endpoint:
+        type: string
+      hasSecret:
+        type: boolean
+      projectEndpoint:
+        type: string
+      tenantId:
+        type: string
+    type: object
+  ai.LocalPublicConfig:
+    properties:
+      baseUrl:
+        type: string
+      configured:
+        type: boolean
+      contextWindow:
+        description: |-
+          ContextWindow is the STORED window in tokens, omitted when unset (the
+          provider then uses LocalDefaultContextWindow, 8192).
+        type: integer
+    type: object
+  api.conversationResponse:
+    properties:
+      activeStreamId:
+        description: |-
+          ActiveStreamID is the caller's stream on this (flow, conversation key)
+          whose question is stored and whose answer is not yet: live, or finished
+          with its answer still being stored (service.ActiveStreamFor). Omitted
+          otherwise — a finished stream whose answer is stored is not reported.
+        type: string
+      messages:
+        items:
+          $ref: '#/definitions/pad-core_models.ChatMessage'
+        type: array
+    type: object
   api.identityLinkView:
     properties:
       createdAt:
@@ -32,6 +133,15 @@ definitions:
         $ref: '#/definitions/interfaces.KnowledgeChunkCursor'
       force:
         type: boolean
+    type: object
+  api.localConfigSaveRequest:
+    properties:
+      baseUrl:
+        example: http://127.0.0.1:11434/v1
+        type: string
+      contextWindow:
+        example: 32768
+        type: integer
     type: object
   api.orgAzureFoundrySaveRequest:
     properties:
@@ -87,6 +197,14 @@ definitions:
         example: ok
         type: string
       updatedAt:
+        type: string
+    type: object
+  api.orgMemberMutationResponse:
+    properties:
+      sharedCredentialDisabled:
+        type: boolean
+      status:
+        example: ok
         type: string
     type: object
   api.roleCounts:
@@ -157,14 +275,138 @@ definitions:
       updatedAt:
         type: string
     type: object
-  pad-core_models.ProviderTestResult:
+  pad-core_models.ChatMessage:
     properties:
-      error:
+      content:
         type: string
-      latencyMs:
+      contextBlockId:
+        type: string
+      contextSubflowId:
+        type: string
+      finishReason:
+        type: string
+      fixProposal:
+        allOf:
+        - $ref: '#/definitions/pad-core_models.FixProposalSnapshot'
+        description: |-
+          FixProposal snapshots the (single) apply_fix approval record, if any.
+          LEGACY field: superseded by FixProposals; kept so conversations saved
+          before the array migration still load.
+      fixProposals:
+        description: |-
+          FixProposals snapshots every apply_fix/apply_fixes approval record on
+          this message — a stream can carry several sequential proposals, and a
+          batch carries several fixes behind one approval.
+        items:
+          $ref: '#/definitions/pad-core_models.FixProposalSnapshot'
+        type: array
+      id:
+        type: string
+      inputCostPerM:
+        type: number
+      model:
+        type: string
+      modelLabel:
+        description: |-
+          ModelLabel is the model's friendly name when the message was sent —
+          an Azure AI Foundry registry entry's display name, whose Model is the
+          opaque "m/<entryId>" — so history, bubbles and exports keep naming the
+          model after it is renamed or removed. Empty for catalogue models.
+        type: string
+      outputCostPerM:
+        type: number
+      provider:
+        type: string
+      role:
+        type: string
+      servedModel:
+        description: |-
+          ServedModel is the model that actually answered when Model is an
+          alias the provider resolves (an Azure AI Foundry deployment,
+          model-router, an agent); InputCostPerM / OutputCostPerM are the USD
+          per 1M token rates the turn was billed at. All three come from the
+          stream's done event and are saved with the message so a reloaded
+          conversation keeps its served-model tag and prices the turn at what it
+          cost, not at the current listing. Zero/empty = not reported.
+        type: string
+      timestamp:
+        type: string
+      tokensIn:
         type: integer
+      tokensOut:
+        type: integer
+      toolCalls:
+        description: ToolCalls records the tool invocations behind this assistant
+          message.
+        items:
+          $ref: '#/definitions/pad-core_models.ToolCallRecord'
+        type: array
+    type: object
+  pad-core_models.ContextPreview:
+    properties:
+      contextLimit:
+        type: integer
+      contextText:
+        type: string
+      estimatedTokens:
+        type: integer
+      systemPrompt:
+        type: string
+      userMessage:
+        type: string
+    type: object
+  pad-core_models.FixItemSnapshot:
+    properties:
+      blockLabel:
+        type: string
+      fixType:
+        type: string
+      line:
+        type: integer
+      message:
+        type: string
+      ruleId:
+        type: string
+      status:
+        type: string
+      summary:
+        type: string
+    type: object
+  pad-core_models.FixProposalSnapshot:
+    properties:
+      blockLabel:
+        type: string
+      fixType:
+        type: string
+      items:
+        items:
+          $ref: '#/definitions/pad-core_models.FixItemSnapshot'
+        type: array
+      line:
+        type: integer
+      message:
+        type: string
+      proposalId:
+        type: string
+      ruleId:
+        type: string
+      status:
+        type: string
+      summary:
+        type: string
+    type: object
+  pad-core_models.ToolCallRecord:
+    properties:
+      durationMs:
+        type: integer
+      label:
+        type: string
+      name:
+        type: string
       ok:
         type: boolean
+      summary:
+        type: string
     type: object
   rag.ReindexResult:
     properties:
@@ -181,6 +423,9 @@ definitions:
     properties:
       code:
         type: string
+      details:
+        additionalProperties: {}
+        type: object
       message:
         type: string
       requestId:
@@ -198,6 +443,411 @@ definitions:
         type: integer
       total:
         type: integer
+    type: object
+  service.AzureConnectionConfigInput:
+    properties:
+      auth:
+        $ref: '#/definitions/ai.AzureFoundryAuth'
+      endpoint:
+        type: string
+      projectEndpoint:
+        type: string
+    type: object
+  service.AzureConnectionConfigView:
+    properties:
+      authMode:
+        type: string
+      clientId:
+        type: string
+      endpoint:
+        type: string
+      hasSecret:
+        type: boolean
+      projectEndpoint:
+        type: string
+      tenantId:
+        type: string
+    type: object
+  service.AzureConnectionDeleteResult:
+    properties:
+      clearedKnowledgeEmbedding:
+        type: boolean
+      deletedModels:
+        type: integer
+      status:
+        type: string
+    type: object
+  service.AzureConnectionEnvelope:
+    properties:
+      connection:
+        $ref: '#/definitions/service.AzureConnectionView'
+    type: object
+  service.AzureConnectionInput:
+    properties:
+      config:
+        $ref: '#/definitions/service.AzureConnectionConfigInput'
+      name:
+        description: |-
+          Name is the resource's display name; "" takes the endpoint host's
+          first label.
+        type: string
+    type: object
+  service.AzureConnectionPatch:
+    properties:
+      config:
+        $ref: '#/definitions/service.AzureConnectionConfigInput'
+      credentialUpdatedAt:
+        description: |-
+          CredentialUpdatedAt (org scope) is the credentialUpdatedAt last read,
+          sent with a credential change: the compare-and-swap on the org's
+          stored credential.
+        type: string
+      dismissDiscovery:
+        description: |-
+          DismissDiscovery hides (true) or brings back (false) the "Found in
+          your project" prompt.
+        type: boolean
+      force:
+        description: |-
+          Force confirms a re-index: the endpoint change of a resource holding
+          the knowledge-base model of a non-empty corpus (else 409
+          REINDEX_REQUIRED).
+        type: boolean
+      name:
+        type: string
+      updatedAt:
+        description: |-
+          UpdatedAt is the resource's updatedAt as last read: a stale value is
+          409 CONFLICT (compare-and-swap on the registry row).
+        type: string
+    type: object
+  service.AzureConnectionView:
+    properties:
+      canDiscover:
+        description: |-
+          CanDiscover and SupportsAgents: Entra ID (or the Azure CLI) with a
+          project endpoint — deployments and agents can be discovered, agents run.
+        type: boolean
+      config:
+        $ref: '#/definitions/service.AzureConnectionConfigView'
+      credentialUpdatedAt:
+        description: |-
+          CredentialUpdatedAt (org scope) is the stored credential's
+          compare-and-swap token, sent back with a credential change.
+        type: string
+      id:
+        type: string
+      lastTest:
+        $ref: '#/definitions/service.AzureLastTestView'
+      legacy:
+        description: Legacy marks the resource the single-document configuration became.
+        type: boolean
+      modelCount:
+        type: integer
+      name:
+        description: Name is the resource's display name (1–64 characters).
+        type: string
+      orgId:
+        type: string
+      orgName:
+        type: string
+      shared:
+        description: |-
+          Shared marks an organisation's resource: always in org scope, and on
+          the "Shared with you" entries of user scope (read-only there).
+        type: boolean
+      sharedBy:
+        description: |-
+          SharedBy names who lent a shared resource's credential (display name,
+          else email); SharedByID is that admin's user id.
+        type: string
+      status:
+        type: string
+      statusReason:
+        type: string
+      suggestDiscovery:
+        description: |-
+          SuggestDiscovery shows the "Found in your project" prompt: discoverable
+          and not dismissed (never on a read-only shared entry).
+        type: boolean
+      supportsAgents:
+        type: boolean
+      updatedAt:
+        description: UpdatedAt is the registry row's compare-and-swap token (RFC 3339).
+        type: string
+    type: object
+  service.AzureConnectionsListing:
+    properties:
+      connections:
+        items:
+          $ref: '#/definitions/service.AzureConnectionView'
+        type: array
+      knowledgeEmbeddingEnabled:
+        type: boolean
+      limits:
+        $ref: '#/definitions/service.AzureRegistryLimits'
+      recoveredCopyPath:
+        description: |-
+          RecoveredCopyPath is where that copy was kept (recovered only). Only
+          the desktop list file is ever recovered, and its API is the local
+          user's own, so the path is theirs to see.
+        type: string
+      registryState:
+        description: |-
+          RegistryState is ok, read_only (a newer app wrote the desktop list
+          file) or recovered (a corrupt one was set aside, a copy kept).
+        type: string
+    type: object
+  service.AzureDiscoveryItemView:
+    properties:
+      alreadyAdded:
+        description: 'AlreadyAdded: the resource registers it already, as ModelID.'
+        type: boolean
+      contextWindow:
+        type: integer
+      deployment:
+        description: |-
+          Deployment (agents) is the project deployment the agent runs on;
+          Workflow marks a workflow agent (a preview).
+        type: string
+      kind:
+        description: |-
+          Kind is what it would be added as: chat, claude or embedding for a
+          deployment, agent for an agent.
+        type: string
+      model:
+        description: Model is the model behind it ("" when unknown).
+        type: string
+      modelId:
+        type: string
+      name:
+        type: string
+      workflow:
+        type: boolean
+    type: object
+  service.AzureDiscoveryView:
+    properties:
+      agents:
+        items:
+          $ref: '#/definitions/service.AzureDiscoveryItemView'
+        type: array
+      code:
+        type: string
+      deployments:
+        items:
+          $ref: '#/definitions/service.AzureDiscoveryItemView'
+        type: array
+      error:
+        type: string
+      warnings:
+        items:
+          type: string
+        type: array
+    type: object
+  service.AzureLastTestView:
+    properties:
+      at:
+        type: string
+      error:
+        type: string
+      latencyMs:
+        type: integer
+      ok:
+        type: boolean
+    type: object
+  service.AzureModelEnvelope:
+    properties:
+      model:
+        $ref: '#/definitions/service.AzureModelView'
+    type: object
+  service.AzureModelInput:
+    properties:
+      connectionId:
+        type: string
+      contextWindow:
+        description: |-
+          ContextWindow and MaxOutputTokens are optional overrides (0 = none;
+          never on an embedding model).
+        type: integer
+      deployment:
+        type: string
+      description:
+        type: string
+      displayName:
+        description: DisplayName defaults to the deployment name; Purpose to general.
+        type: string
+      force:
+        description: |-
+          Force confirms the re-index a new knowledge-base model needs on a
+          non-empty corpus (else 409 REINDEX_REQUIRED).
+        type: boolean
+      isDefault:
+        description: |-
+          IsDefault (org scope only) makes it the organisation's "Default for
+          members"; IsKnowledgeEmbedding (an embedding model, where the knowledge
+          base embeds with Azure) the knowledge base's model.
+        type: boolean
+      isKnowledgeEmbedding:
+        type: boolean
+      kind:
+        type: string
+      maxOutputTokens:
+        type: integer
+      purpose:
+        type: string
+      purposeCustom:
+        type: string
+    type: object
+  service.AzureModelPatch:
+    properties:
+      connectionId:
+        type: string
+      contextWindow:
+        description: |-
+          ContextWindow and MaxOutputTokens: null clears the override. On the
+          wire an integer or null (the swaggertype tags say so to the API docs:
+          OptionalInt is how the decoder tells absent, null and a value apart).
+        type: integer
+        x-nullable: true
+      deployment:
+        type: string
+      description:
+        description: 'Description: "" clears it.'
+        type: string
+      displayName:
+        type: string
+      force:
+        description: |-
+          Force confirms the re-index a knowledge-base change needs on a
+          non-empty corpus (else 409 REINDEX_REQUIRED).
+        type: boolean
+      isDefault:
+        description: |-
+          IsDefault / IsKnowledgeEmbedding: true moves the designation to this
+          model, false clears it from it.
+        type: boolean
+      isKnowledgeEmbedding:
+        type: boolean
+      kind:
+        type: string
+      maxOutputTokens:
+        type: integer
+        x-nullable: true
+      purpose:
+        description: |-
+          Purpose: a preset clears the stored custom text; "custom" takes
+          PurposeCustom (or keeps the stored text).
+        type: string
+      purposeCustom:
+        type: string
+      updatedAt:
+        description: |-
+          UpdatedAt, when sent, is the model's updatedAt as last read
+          (compare-and-swap: a stale value is 409 CONFLICT).
+        type: string
+    type: object
+  service.AzureModelView:
+    properties:
+      connectionId:
+        type: string
+      connectionName:
+        type: string
+      contextWindow:
+        description: |-
+          ContextWindow and MaxOutputTokens are the user's overrides (absent
+          when unset); ReportedContextWindow is the window the server knows from
+          the catalogue, the served model or a learned limit.
+        type: integer
+      deployment:
+        description: Deployment is the deployment name, or the agent's name.
+        type: string
+      description:
+        type: string
+      displayName:
+        type: string
+      id:
+        type: string
+      isDefault:
+        type: boolean
+      isKnowledgeEmbedding:
+        type: boolean
+      kind:
+        type: string
+      lastTest:
+        $ref: '#/definitions/service.AzureLastTestView'
+      maxOutputTokens:
+        type: integer
+      modelId:
+        type: string
+      orgId:
+        type: string
+      orgName:
+        type: string
+      purpose:
+        type: string
+      purposeCustom:
+        type: string
+      reportedContextWindow:
+        type: integer
+      shared:
+        type: boolean
+      status:
+        type: string
+      statusReason:
+        type: string
+      target:
+        description: |-
+          Target is what the server routes to: "<deployment>",
+          "claude:<deployment>" or "agent:<name>" (an embedding deployment's
+          name for an embedding model).
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  service.AzureModelsListing:
+    properties:
+      models:
+        items:
+          $ref: '#/definitions/service.AzureModelView'
+        type: array
+      serverDefault:
+        type: string
+    type: object
+  service.AzureRegistryLimits:
+    properties:
+      connections:
+        type: integer
+      models:
+        type: integer
+    type: object
+  service.AzureTestInput:
+    properties:
+      config:
+        $ref: '#/definitions/service.AzureConnectionConfigInput'
+      connectionId:
+        type: string
+      model:
+        $ref: '#/definitions/service.AzureTestModelRef'
+    type: object
+  service.AzureTestModelRef:
+    properties:
+      deployment:
+        type: string
+      id:
+        type: string
+      kind:
+        type: string
+    type: object
+  service.AzureTestResult:
+    properties:
+      code:
+        type: string
+      error:
+        type: string
+      latencyMs:
+        type: integer
+      ok:
+        type: boolean
     type: object
   service.OrgAzureFoundryConfig:
     properties:
@@ -2413,7 +3063,13 @@ paths:
     post:
       consumes:
       - application/json
-      description: Retrieves the chat history for a specific flow and provider.
+      description: 'Retrieves the chat history for a specific flow and conversation
+        key (the wire field is historically named `provider`). The body is an object
+        — {messages: [...]} (always an array) plus activeStreamId when the caller
+        has a stream on this conversation whose question is stored but whose answer
+        is not yet (live, or finished and still being stored) — so a client that reloads
+        mid-turn can re-attach via /api/chat/resume instead of losing the answer until
+        another reload. Before F-21 this route answered a bare message array.'
       parameters:
       - description: request
         in: body
@@ -2427,10 +3083,7 @@ paths:
         "200":
           description: OK
           schema:
-            items:
-              additionalProperties: true
-              type: object
-            type: array
+            $ref: '#/definitions/api.conversationResponse'
         "400":
           description: Bad Request
           schema:
@@ -2450,7 +3103,11 @@ paths:
     post:
       consumes:
       - application/json
-      description: Returns a preview of the context that will be sent to the AI provider.
+      description: 'Returns a preview of the context that will be sent to the AI provider:
+        the system prompt, the context text, the user message, an estimate of their
+        tokens and the model''s context window. The model resolves as the turn''s
+        would: for provider azure-foundry a model registry id the caller cannot use
+        is refused with 400 and code MODEL_NOT_AVAILABLE.'
       parameters:
       - description: request
         in: body
@@ -2464,14 +3121,12 @@ paths:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/pad-core_models.ContextPreview'
         "400":
-          description: Bad Request
+          description: 'Bad Request (code MODEL_NOT_AVAILABLE: the Azure AI Foundry
+            model is not available to the caller)'
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
@@ -2519,7 +3174,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: Saves the chat history for a specific flow and provider.
+      description: 'Saves the chat history for a specific flow and provider. A message''s
+        modelLabel (the model''s display name when it was sent) is stored clamped:
+        NFC-normalised, control, bidi and zero-width characters dropped, whitespace
+        collapsed, at most 64 characters.'
       parameters:
       - description: request
         in: body
@@ -2555,14 +3213,18 @@ paths:
     post:
       consumes:
       - application/json
-      description: Initiates a streaming chat session with an AI provider. The answer
+      description: 'Initiates a streaming chat session with an AI provider. The answer
         arrives on the event stream as chunk, tool, tool_result, done and error events.
         The done payload carries tokensIn, tokensOut and chunks, plus — when known
         — servedModel (the model that answered an alias such as an Azure AI Foundry
         deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token
         rates the turn was billed at). An error payload carries message and, when
         classified, code (AI_BUDGET_EXCEEDED, PROVIDER_AUTH, PROVIDER_PERMISSION,
-        PROVIDER_NOT_CONFIGURED, …).
+        PROVIDER_NOT_CONFIGURED, MODEL_NOT_AVAILABLE, …). For provider azure-foundry
+        the model is a model registry id ("m/<entryId>"; "" for the server default;
+        a pre-registry deployment, "claude:" or "agent:" id still resolves for one
+        release): one the caller cannot use — removed, another owner''s, no longer
+        shared with them — is refused before any stream starts with 400 and code MODEL_NOT_AVAILABLE.'
       parameters:
       - description: request
         in: body
@@ -2578,11 +3240,14 @@ paths:
           schema:
             type: string
         "400":
-          description: Bad Request
+          description: 'Bad Request (code MODEL_NOT_AVAILABLE: the Azure AI Foundry
+            model is not available to the caller)'
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
+        "429":
+          description: Too many concurrent chat streams (code CHAT_CAPACITY_REACHED)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
@@ -4130,7 +4795,11 @@ paths:
     post:
       consumes:
       - application/json
-      description: Deletes an API key for a given provider.
+      description: 'Deletes an API key for a given provider. For azure-foundry (deprecated
+        form, one release): removes the caller''s resource "default" — the migrated
+        single-document configuration — with its models and its stored credential;
+        the other resources stay (DELETE /api/providers/azure-foundry/connections/{connectionId}
+        removes one).'
       parameters:
       - description: request
         in: body
@@ -4166,7 +4835,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: Checks if an API key for a given provider is saved.
+      description: 'Checks if an API key for a given provider is saved. For azure-foundry
+        (deprecated form, one release): whether the caller has at least one Azure
+        AI Foundry resource of their own — GET /api/providers/azure-foundry/connections
+        lists them.'
       parameters:
       - description: request
         in: body
@@ -5007,14 +5679,16 @@ paths:
           description: 'Re-indexed this request''s pages ({chunks, docs}); nextCursor
             (with truncated=true) means chunks remain — post again with {force, cursor:
             nextCursor}. Every page is committed as it completes, so a later failure
-            keeps the earlier pages'
+            keeps the earlier pages — a request that FAILS after committing pages
+            answers its error code with details {nextCursor, chunks} to resume from'
           schema:
             $ref: '#/definitions/rag.ReindexResult'
         "400":
-          description: Embedding provider not configured (EMBEDDING_NOT_CONFIGURED),
-            rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED),
-            a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed
-            body / cursor
+          description: Embedding provider not configured (EMBEDDING_NOT_CONFIGURED;
+            EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names
+            no embedding deployment), rejected credentials (EMBEDDING_AUTH_FAILED,
+            EMBEDDING_PERMISSION_DENIED), a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)
+            or malformed body / cursor
           schema:
             additionalProperties:
               type: string
@@ -5081,9 +5755,10 @@ paths:
             additionalProperties: true
             type: object
         "400":
-          description: Embedding provider not configured (EMBEDDING_NOT_CONFIGURED),
-            rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED)
-            or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)
+          description: Embedding provider not configured (EMBEDDING_NOT_CONFIGURED;
+            EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names
+            no embedding deployment), rejected credentials (EMBEDDING_AUTH_FAILED,
+            EMBEDDING_PERMISSION_DENIED) or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)
           schema:
             additionalProperties:
               type: string
@@ -5091,6 +5766,13 @@ paths:
         "409":
           description: Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED)
             or another upload/re-index of this org is in flight (KNOWLEDGE_BUSY)
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: The document chunks to more passages than one upload may index
+            (KNOWLEDGE_DOCUMENT_TOO_LARGE)
           schema:
             additionalProperties:
               type: string
@@ -5148,11 +5830,11 @@ paths:
       - application/json
       responses:
         "200":
-          description: OK
+          description: OK; sharedCredentialDisabled is true when the removed member
+            was the lender of the org's shared Azure AI Foundry credential and it
+            was disabled
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/api.orgMemberMutationResponse'
         "403":
           description: Forbidden
           schema:
@@ -5199,17 +5881,22 @@ paths:
       - application/json
       responses:
         "200":
-          description: Updated
+          description: Updated; sharedCredentialDisabled is true when the demoted
+            member was the lender of the org's shared Azure AI Foundry credential
+            and it was disabled
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/api.orgMemberMutationResponse'
       summary: Change member role
       tags:
       - org
   /api/orgs/{id}/providers/azure-foundry/config:
     delete:
-      description: Removes the org's shared Azure AI Foundry credential. Members without
-        a configuration of their own lose the provider. Org admins only.
+      deprecated: true
+      description: 'Deprecated (one release): use DELETE /api/orgs/{id}/providers/azure-foundry/connections/{connectionId}.
+        Removes the org''s resource "default" — the migrated single-document configuration
+        — with its models and its stored credential (the organisation''s other resources
+        stay). Members without models of their own lose the ones it held. Org admins
+        only.'
       parameters:
       - description: Org ID
         in: path
@@ -5235,16 +5922,20 @@ paths:
       tags:
       - org
     get:
-      description: 'Returns the org''s shared Azure AI Foundry settings without any
-        secret: endpoint, auth mode, whether a secret is stored, the Entra ID tenant
-        and client IDs, the project endpoint and the deployment names, plus who shared
-        it (updatedBy: the display name, else email, of the admin who supplied the
-        stored secret — an edit by another admin that kept the secret does not change
-        it) and when it was last saved (updatedAt: RFC 3339 with sub-second precision
-        — send it back verbatim as the save''s compare-and-swap token). Any member,
-        viewers included (only admins and members run on it). {configured:false, shared:false}
-        when the org has none; 500 ORG_CREDENTIAL_UNREADABLE when it has one that
-        cannot be read (a deployment key rotation, a database failure).'
+      deprecated: true
+      description: 'Deprecated (one release): use GET /api/orgs/{id}/providers/azure-foundry/connections
+        and /models. Returns the org''s resource "default" (the single-document configuration
+        it migrated to) without any secret: endpoint, auth mode, whether a secret
+        is stored, the Entra ID tenant and client IDs, the project endpoint and the
+        deployment names — built from the registry''s entries of that resource, never
+        from the stored document''s old fields — plus who shared it (updatedBy: the
+        display name, else email, of the admin who supplied the stored secret — an
+        edit by another admin that kept the secret does not change it) and when it
+        was last saved (updatedAt: RFC 3339 with sub-second precision — send it back
+        verbatim as the save''s compare-and-swap token). Any member, viewers included
+        (only admins and members run on it). {configured:false, shared:false} when
+        the org has none; 500 ORG_CREDENTIAL_UNREADABLE when it has one that cannot
+        be read (a deployment key rotation, a database failure).'
       parameters:
       - description: Org ID
         in: path
@@ -5276,20 +5967,25 @@ paths:
     post:
       consumes:
       - application/json
-      description: 'Validates and stores the org''s shared Azure AI Foundry endpoint,
-        credential (API key or Microsoft Entra ID service principal), optional project
-        endpoint and deployment names, for admins and members without a configuration
-        of their own. Org admins only. An omitted secret keeps the stored one only
-        while the endpoint host (and the project endpoint''s host) is unchanged —
-        a changed endpoint needs the secret re-entered (MISSING_SECRET); the admin
-        who supplies the secret becomes the credential''s lender (it is disabled when
-        they stop being an admin), an edit that keeps it does not. The body must be
-        exactly one JSON object with known fields only (INVALID_CONFIG otherwise).
-        Compare-and-swap: send back the updatedAt the GET returned (omit it only when
-        the GET said configured:false); when the stored configuration changed since
-        — another admin saved or removed it — nothing is written and the answer is
-        409 CONFLICT (reload, then re-apply). The reply''s updatedAt is the token
-        for the next save.'
+      deprecated: true
+      description: 'Deprecated (one release): use the org registry routes (POST/PUT
+        /api/orgs/{id}/providers/azure-foundry/connections, /models). Validates and
+        stores the org''s shared Azure AI Foundry endpoint, credential (API key or
+        Microsoft Entra ID service principal), optional project endpoint and deployment
+        names as its resource "default": the credential part is saved (the stored
+        document''s old deployment fields carried over unchanged, for a rolled-back
+        binary) and the deployment fields are mapped onto that resource''s models
+        — missing ones added, removed ones deleted. Org admins only. An omitted secret
+        keeps the stored one only while the endpoint host (and the project endpoint''s
+        host) is unchanged — a changed endpoint needs the secret re-entered (MISSING_SECRET);
+        the admin who supplies the secret becomes the credential''s lender (it is
+        disabled when they stop being an admin), an edit that keeps it does not. The
+        body must be exactly one JSON object with known fields only (INVALID_CONFIG
+        otherwise). Compare-and-swap: send back the updatedAt the GET returned (omit
+        it only when the GET said configured:false); when the stored configuration
+        changed since — another admin saved or removed it — nothing is written and
+        the answer is 409 CONFLICT (reload, then re-apply). The reply''s updatedAt
+        is the token for the next save.'
       parameters:
       - description: Org ID
         in: path
@@ -5324,18 +6020,19 @@ paths:
           schema:
             $ref: '#/definitions/render.ErrorResponse'
         "409":
-          description: The stored configuration changed since it was loaded (CONFLICT)
+          description: The stored configuration changed since it was loaded (CONFLICT),
+            or the organisation's resource or model limit (TOO_MANY_CONNECTIONS, TOO_MANY_MODELS)
           schema:
             $ref: '#/definitions/render.ErrorResponse'
       summary: Save the organisation's shared Azure AI Foundry configuration
       tags:
       - org
-  /api/orgs/{id}/providers/azure-foundry/test:
-    post:
-      description: Sends a tiny chat request through the org's shared Azure AI Foundry
-        credential (never the caller's own) and reports whether it works. Org admins
-        only. The call is billed to the org (its credential, its daily budget), rides
-        the chat rate-limit bucket and is audited (providers.test).
+  /api/orgs/{id}/providers/azure-foundry/connections:
+    get:
+      description: The organisation's resources (all marked shared), as GET /api/providers/azure-foundry/connections
+        lists a caller's own — plus, for each, sharedBy (who lent its credential)
+        and credentialUpdatedAt (the compare-and-swap token of a credential change).
+        Org admins and members; 403 for viewers, guests and non-members.
       parameters:
       - description: Org ID
         in: path
@@ -5346,18 +6043,542 @@ paths:
       - application/json
       responses:
         "200":
-          description: Test result
+          description: OK
           schema:
-            $ref: '#/definitions/pad-core_models.ProviderTestResult'
+            $ref: '#/definitions/service.AzureConnectionsListing'
+        "403":
+          description: Not an admin or member of the org
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: No org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: List the organisation's Azure AI Foundry resources
+      tags:
+      - org
+    post:
+      consumes:
+      - application/json
+      description: 'POST /api/providers/azure-foundry/connections for the organisation.
+        Org admins only. The admin who supplies a resource''s secret becomes its lender:
+        the credential is disabled when they stop being an admin. The Azure CLI sign-in
+        cannot be shared (400 INVALID_AUTH, details.field mode). Audited (azure.connection_save
+        on the org).'
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: The resource
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/service.AzureConnectionInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/service.AzureConnectionEnvelope'
+        "400":
+          description: INVALID_CONFIG, INVALID_CONNECTION_NAME, INVALID_ENDPOINT,
+            HOST_NOT_ALLOWED, INVALID_PROJECT_ENDPOINT, CONFIG_TOO_LARGE, INVALID_AUTH
+            or MISSING_SECRET (details.field)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
         "403":
           description: Not an org admin
           schema:
             $ref: '#/definitions/render.ErrorResponse'
         "404":
-          description: Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)
+          description: Unknown org, or ORG_KEYSTORE_UNAVAILABLE
           schema:
             $ref: '#/definitions/render.ErrorResponse'
-      summary: Test the organisation's shared Azure AI Foundry credential
+        "409":
+          description: DUPLICATE_CONNECTION_NAME, TOO_MANY_CONNECTIONS (details.limit)
+            or CONFLICT
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Add an Azure AI Foundry resource to the organisation
+      tags:
+      - org
+  /api/orgs/{id}/providers/azure-foundry/connections/{connectionId}:
+    delete:
+      description: DELETE /api/providers/azure-foundry/connections/{connectionId}
+        for the organisation. Org admins only. Audited (azure.connection_delete on
+        the org).
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Resource id
+        in: path
+        name: connectionId
+        required: true
+        type: string
+      - description: Delete the resource's models too
+        in: query
+        name: cascade
+        type: boolean
+      - description: Confirm the knowledge-base re-index
+        in: query
+        name: force
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureConnectionDeleteResult'
+        "400":
+          description: A flag that is not true or false
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "403":
+          description: Not an org admin
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: Unknown org, CONNECTION_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: CONNECTION_IN_USE (details.modelCount) or REINDEX_REQUIRED
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Remove one of the organisation's Azure AI Foundry resources
+      tags:
+      - org
+    get:
+      description: Org admins and members.
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Resource id
+        in: path
+        name: connectionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureConnectionEnvelope'
+        "403":
+          description: Not an admin or member of the org
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: CONNECTION_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Get one of the organisation's Azure AI Foundry resources
+      tags:
+      - org
+    put:
+      consumes:
+      - application/json
+      description: 'PUT /api/providers/azure-foundry/connections/{connectionId} for
+        the organisation. Org admins only. A credential change sends credentialUpdatedAt,
+        the token the resource was read with: a stale one (another admin saved in
+        between) is 409 CONFLICT. Audited (azure.connection_save on the org).'
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Resource id
+        in: path
+        name: connectionId
+        required: true
+        type: string
+      - description: The changes
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/service.AzureConnectionPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureConnectionEnvelope'
+        "400":
+          description: INVALID_CONFIG, INVALID_CONNECTION_NAME, INVALID_ENDPOINT,
+            HOST_NOT_ALLOWED, INVALID_PROJECT_ENDPOINT, CONFIG_TOO_LARGE, INVALID_AUTH
+            or MISSING_SECRET (details.field)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "403":
+          description: Not an org admin
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: Unknown org, CONNECTION_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: DUPLICATE_CONNECTION_NAME, CONFLICT or REINDEX_REQUIRED
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Update one of the organisation's Azure AI Foundry resources
+      tags:
+      - org
+  /api/orgs/{id}/providers/azure-foundry/connections/{connectionId}/discover:
+    post:
+      description: POST /api/providers/azure-foundry/connections/{connectionId}/discover
+        for the organisation. Org admins only.
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Resource id
+        in: path
+        name: connectionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureDiscoveryView'
+        "400":
+          description: DISCOVERY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "403":
+          description: Not an org admin
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: Unknown org, CONNECTION_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Discover the deployments and agents of an organisation resource
+      tags:
+      - org
+  /api/orgs/{id}/providers/azure-foundry/models:
+    get:
+      description: The organisation's models (all marked shared; isDefault marks its
+        "Default for members"), as GET /api/providers/azure-foundry/models lists a
+        caller's own; no serverDefault. Org admins and members; 403 for viewers, guests
+        and non-members.
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureModelsListing'
+        "403":
+          description: Not an admin or member of the org
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: ORG_KEYSTORE_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: List the organisation's Azure AI Foundry models
+      tags:
+      - org
+    post:
+      consumes:
+      - application/json
+      description: POST /api/providers/azure-foundry/models for the organisation.
+        Org admins only. isDefault makes a chat, Claude or agent model the organisation's
+        "Default for members". Audited (azure.model_save on the org).
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: The model
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/service.AzureModelInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/service.AzureModelEnvelope'
+        "400":
+          description: INVALID_CONFIG, INVALID_KIND, INVALID_DEPLOYMENT, INVALID_DISPLAY_NAME,
+            INVALID_PURPOSE, INVALID_DESCRIPTION, INVALID_CONTEXT_WINDOW, INVALID_MAX_OUTPUT,
+            INVALID_DESIGNATION or KIND_REQUIRES_PROJECT
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "403":
+          description: Not an org admin
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: Unknown org, CONNECTION_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: DUPLICATE_MODEL (details.existingModelId), TOO_MANY_MODELS
+            (details.limit), CONFLICT or REINDEX_REQUIRED
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Add a model to the organisation
+      tags:
+      - org
+  /api/orgs/{id}/providers/azure-foundry/models/{modelId}:
+    delete:
+      description: DELETE /api/providers/azure-foundry/models/{modelId} for the organisation.
+        Org admins only. Audited (azure.model_delete on the org).
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Model id
+        in: path
+        name: modelId
+        required: true
+        type: string
+      - description: Confirm the knowledge-base re-index
+        in: query
+        name: force
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.statusResponse'
+        "400":
+          description: A flag that is not true or false
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "403":
+          description: Not an org admin
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: Unknown org, MODEL_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: REINDEX_REQUIRED
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Remove one of the organisation's models
+      tags:
+      - org
+    get:
+      description: Org admins and members.
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Model id
+        in: path
+        name: modelId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureModelEnvelope'
+        "403":
+          description: Not an admin or member of the org
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: MODEL_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Get one of the organisation's models
+      tags:
+      - org
+    put:
+      consumes:
+      - application/json
+      description: PUT /api/providers/azure-foundry/models/{modelId} for the organisation;
+        isDefault true makes it the "Default for members" (false clears it). Org admins
+        only. Audited (azure.model_save on the org).
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Model id
+        in: path
+        name: modelId
+        required: true
+        type: string
+      - description: The changes
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/service.AzureModelPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureModelEnvelope'
+        "400":
+          description: INVALID_CONFIG, INVALID_KIND, INVALID_DEPLOYMENT, INVALID_DISPLAY_NAME,
+            INVALID_PURPOSE, INVALID_DESCRIPTION, INVALID_CONTEXT_WINDOW, INVALID_MAX_OUTPUT,
+            INVALID_DESIGNATION or KIND_REQUIRES_PROJECT
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "403":
+          description: Not an org admin
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: Unknown org, MODEL_NOT_FOUND, CONNECTION_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: DUPLICATE_MODEL (details.existingModelId), CONFLICT or REINDEX_REQUIRED
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Update one of the organisation's models
+      tags:
+      - org
+  /api/orgs/{id}/providers/azure-foundry/test:
+    post:
+      consumes:
+      - application/json
+      description: 'POST /api/providers/azure-foundry/test for the organisation''s
+        registry, on the organisation''s credentials only (never the caller''s own):
+        {connectionId}, {config} (a draft; with connectionId the stored secret carries
+        over), optional model ({id} or a draft {kind, deployment}) — every outcome
+        a 200 service.AzureTestResult {ok, latencyMs, error?, code?}, a 4xx only for
+        an invalid request. A resource test makes no model call; a model test one
+        tiny request Azure bills to the organisation''s resource (baki''s daily budget
+        does not count Azure usage); an agent test only looks the agent up. Deprecated
+        form (one release): an EMPTY body tests the organisation''s resource "default"
+        (else its first) as a resource — an authenticated probe, no model call — and
+        answers the legacy models.ProviderTestResult {ok, latencyMs, error?} (no code).
+        Org admins only. Rides the chat rate-limit bucket; audited (providers.test).'
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 'What to test (empty: the deprecated org credential test)'
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/service.AzureTestInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: The outcome (the deprecated empty-body form answers models.ProviderTestResult)
+          schema:
+            $ref: '#/definitions/service.AzureTestResult'
+        "400":
+          description: INVALID_CONFIG, a draft's settings code (INVALID_ENDPOINT,
+            HOST_NOT_ALLOWED, INVALID_PROJECT_ENDPOINT, INVALID_AUTH or MISSING_SECRET
+            with details.field), or a draft model's INVALID_KIND or INVALID_DEPLOYMENT
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "403":
+          description: Not an org admin
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: Unknown org, CONNECTION_NOT_FOUND, MODEL_NOT_FOUND, or no org
+            keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE (a registry test on a process that
+            wired no registry)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Test one of the organisation's Azure AI Foundry resources or models
       tags:
       - org
   /api/orgs/{id}/rules:
@@ -5446,39 +6667,47 @@ paths:
       - org
   /api/providers/azure-foundry/config:
     get:
-      description: Returns the caller's Azure AI Foundry settings (endpoint, auth
-        mode, project endpoint, deployments) without any secret.
+      deprecated: true
+      description: 'Deprecated (one release): use GET /api/providers/azure-foundry/connections
+        and /models. Returns the caller''s resource "default" — the single-document
+        configuration it migrated to — without any secret: endpoint, auth mode, project
+        endpoint and the deployment names, built from the registry''s entries of that
+        resource (never from the stored document''s old fields). {configured:false}
+        when there is none.'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/ai.AzureFoundryPublicConfig'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
       summary: Get Azure AI Foundry configuration
       tags:
       - providers
     post:
       consumes:
       - application/json
-      description: Validates and stores the caller's Azure AI Foundry endpoint, credential
-        (API key or Microsoft Entra ID service principal), optional project endpoint
-        and deployment names. An omitted secret keeps the stored one. The body must
-        be exactly one JSON object with known fields only (INVALID_CONFIG otherwise).
+      deprecated: true
+      description: 'Deprecated (one release): use POST/PUT /api/providers/azure-foundry/connections
+        and /models. Validates and stores the caller''s Azure AI Foundry endpoint,
+        credential (API key or Microsoft Entra ID service principal), optional project
+        endpoint and deployment names as their resource "default": the credential
+        part is saved (the stored document''s old deployment fields carried over unchanged,
+        for a rolled-back binary) and the deployment fields are mapped onto that resource''s
+        models — missing ones added, removed ones deleted. An omitted secret keeps
+        the stored one while the endpoint host is unchanged. The body must be exactly
+        one JSON object with known fields only (INVALID_CONFIG otherwise).'
       parameters:
-      - description: request
+      - description: The configuration
         in: body
         name: request
         required: true
         schema:
-          type: object
+          $ref: '#/definitions/ai.AzureFoundryConfig'
       produces:
       - application/json
       responses:
@@ -5489,18 +6718,496 @@ paths:
               type: string
             type: object
         "400":
-          description: Bad Request
+          description: INVALID_CONFIG, INVALID_ENDPOINT, INVALID_PROJECT_ENDPOINT,
+            INVALID_AUTH, MISSING_SECRET, MISSING_DEPLOYMENT, INVALID_DEPLOYMENT,
+            CONFIG_TOO_LARGE or HOST_NOT_ALLOWED
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: The resource or model limit (TOO_MANY_CONNECTIONS, TOO_MANY_MODELS)
+            or REGISTRY_READ_ONLY
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/render.ErrorResponse'
       summary: Save Azure AI Foundry configuration
+      tags:
+      - providers
+  /api/providers/azure-foundry/connections:
+    get:
+      description: 'The caller''s Azure AI Foundry resources ("connections"; the UI
+        calls them resources), then — read-only, marked shared with orgId and orgName
+        — the resources of every organisation where the caller is an admin or member
+        (admins change those through the org routes). Each carries its public settings
+        (never a secret, never deployment fields), its status computed at read time
+        (ready, needs_credentials, unreadable, invalid_config, with statusReason)
+        and its last test. registryState is ok, read_only (the desktop list file was
+        written by a newer app version: writes answer 409 REGISTRY_READ_ONLY) or recovered
+        (a corrupt list file was set aside; recoveredCopyPath says where); limits
+        are the per-owner caps; knowledgeEmbeddingEnabled says whether "Use for knowledge
+        base" is offered. Never waits on the network.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureConnectionsListing'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: SECRET_STORAGE_UNAVAILABLE, or AZURE_REGISTRY_UNAVAILABLE (no
+            registry wired)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: List Azure AI Foundry resources
+      tags:
+      - providers
+    post:
+      consumes:
+      - application/json
+      description: 'Validates and stores a resource: a name (1 to 64 characters; empty
+        takes the endpoint host''s first label) and its settings — the endpoint, the
+        credential (an API key, a Microsoft Entra ID service principal or, on the
+        desktop, the Azure CLI sign-in) and an optional Foundry project endpoint (discovery
+        and agents). No deployment fields: models are added with POST /models. The
+        body must be exactly one JSON object with known fields only, at most 64 KiB
+        (400 INVALID_CONFIG otherwise). Audited (azure.connection_save, op create).'
+      parameters:
+      - description: The resource
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/service.AzureConnectionInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/service.AzureConnectionEnvelope'
+        "400":
+          description: 'INVALID_CONFIG, INVALID_CONNECTION_NAME, INVALID_ENDPOINT,
+            HOST_NOT_ALLOWED, INVALID_PROJECT_ENDPOINT, CONFIG_TOO_LARGE, INVALID_AUTH
+            or MISSING_SECRET (details.field: mode, key, tenantId, clientId or clientSecret)'
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: DUPLICATE_CONNECTION_NAME, TOO_MANY_CONNECTIONS (details.limit),
+            CONFLICT or REGISTRY_READ_ONLY
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: SECRET_STORAGE_UNAVAILABLE or AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Add an Azure AI Foundry resource
+      tags:
+      - providers
+  /api/providers/azure-foundry/connections/{connectionId}:
+    delete:
+      description: Deletes the resource and its stored credentials. A resource with
+        models is 409 CONNECTION_IN_USE (details.modelCount) unless cascade=true,
+        which deletes its models too; one holding the knowledge-base model of a non-empty
+        corpus is 409 REINDEX_REQUIRED unless force=true. Nothing changes in Azure.
+        Audited (azure.connection_delete, with the number of models deleted).
+      parameters:
+      - description: Resource id
+        in: path
+        name: connectionId
+        required: true
+        type: string
+      - description: Delete the resource's models too
+        in: query
+        name: cascade
+        type: boolean
+      - description: Confirm the knowledge-base re-index
+        in: query
+        name: force
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureConnectionDeleteResult'
+        "400":
+          description: A flag that is not true or false
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: CONNECTION_NOT_FOUND
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: CONNECTION_IN_USE (details.modelCount), REINDEX_REQUIRED or
+            REGISTRY_READ_ONLY
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Remove an Azure AI Foundry resource
+      tags:
+      - providers
+    get:
+      description: One of the caller's own resources (see GET /connections).
+      parameters:
+      - description: 'Resource id: default (the migrated single-document configuration)
+          or ten characters [a-z0-9]'
+        in: path
+        name: connectionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureConnectionEnvelope'
+        "404":
+          description: CONNECTION_NOT_FOUND
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: SECRET_STORAGE_UNAVAILABLE or AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Get an Azure AI Foundry resource
+      tags:
+      - providers
+    put:
+      consumes:
+      - application/json
+      description: 'Every field optional: rename it, change its settings (an omitted
+        secret is kept only for the same auth mode — the same principal for Entra
+        ID — and while the endpoint and project hosts are unchanged, else MISSING_SECRET
+        says why; the default resource keeps its legacy deployment fields unchanged
+        for a rolled-back binary), and/or hide (dismissDiscovery true) or bring back
+        the "Found in your project" prompt. updatedAt, when sent, is the resource''s
+        updatedAt as last read: a stale one is 409 CONFLICT. An endpoint change of
+        the resource that holds the knowledge-base model of a non-empty corpus is
+        409 REINDEX_REQUIRED unless force is true. Strict body, at most 64 KiB. Audited
+        (azure.connection_save, op update).'
+      parameters:
+      - description: Resource id
+        in: path
+        name: connectionId
+        required: true
+        type: string
+      - description: The changes
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/service.AzureConnectionPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureConnectionEnvelope'
+        "400":
+          description: INVALID_CONFIG, INVALID_CONNECTION_NAME, INVALID_ENDPOINT,
+            HOST_NOT_ALLOWED, INVALID_PROJECT_ENDPOINT, CONFIG_TOO_LARGE, INVALID_AUTH
+            or MISSING_SECRET (details.field)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: CONNECTION_NOT_FOUND
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: DUPLICATE_CONNECTION_NAME, CONFLICT, REINDEX_REQUIRED or REGISTRY_READ_ONLY
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: SECRET_STORAGE_UNAVAILABLE or AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Update an Azure AI Foundry resource
+      tags:
+      - providers
+  /api/providers/azure-foundry/connections/{connectionId}/discover:
+    post:
+      description: 'Lists what the saved resource''s Foundry project offers — its
+        deployments, each with the kind it would be added as, and the agents baki
+        can run — marking what the resource registers already (alreadyAdded, modelId).
+        Needs Microsoft Entra ID (or the Azure CLI) and a project endpoint: 400 DISCOVERY_UNAVAILABLE
+        otherwise, or when the resource''s credentials cannot be used. An Azure refusal
+        (a missing role, a wrong project, a sign-in Entra ID refuses) is a 200 with
+        error and code. Rides the analysis rate-limit bucket.'
+      parameters:
+      - description: Resource id
+        in: path
+        name: connectionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureDiscoveryView'
+        "400":
+          description: DISCOVERY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: CONNECTION_NOT_FOUND
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Discover a resource's deployments and agents
+      tags:
+      - providers
+  /api/providers/azure-foundry/models:
+    get:
+      description: Every chat, Claude, agent and embedding model of the caller's resources,
+        then — read-only, marked shared with orgId and orgName — those of every organisation
+        where the caller is an admin or member, in display order (purpose, then own
+        before shared, then name), each with its status and the context window the
+        server knows for it (reportedContextWindow). serverDefault is the model ("m/<id>")
+        a new chat starts on when the caller saved no default of their own; omitted
+        when there is none. Never waits on the network.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureModelsListing'
+        "503":
+          description: SECRET_STORAGE_UNAVAILABLE or AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: List Azure AI Foundry models
+      tags:
+      - providers
+    post:
+      consumes:
+      - application/json
+      description: 'Registers a deployment (kind chat, claude or embedding) or a project
+        agent (kind agent: its resource needs Entra ID and a project endpoint, else
+        400 KIND_REQUIRES_PROJECT) on one of the caller''s resources, with an optional
+        display name (the deployment name by default), purpose (general by default,
+        or custom with purposeCustom), description, context window and output cap.
+        isKnowledgeEmbedding makes an embedding model the knowledge base''s (where
+        the knowledge base embeds with Azure); on a non-empty corpus that is 409 REINDEX_REQUIRED
+        unless force is true. isDefault is for organisations only. Strict body, at
+        most 16 KiB. Audited (azure.model_save, op create).'
+      parameters:
+      - description: The model
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/service.AzureModelInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/service.AzureModelEnvelope'
+        "400":
+          description: INVALID_CONFIG, INVALID_KIND, INVALID_DEPLOYMENT, INVALID_DISPLAY_NAME,
+            INVALID_PURPOSE, INVALID_DESCRIPTION, INVALID_CONTEXT_WINDOW, INVALID_MAX_OUTPUT,
+            INVALID_DESIGNATION or KIND_REQUIRES_PROJECT
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: CONNECTION_NOT_FOUND
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: DUPLICATE_MODEL (details.existingModelId), TOO_MANY_MODELS
+            (details.limit), CONFLICT, REINDEX_REQUIRED or REGISTRY_READ_ONLY
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Add an Azure AI Foundry model
+      tags:
+      - providers
+  /api/providers/azure-foundry/models/{modelId}:
+    delete:
+      description: Removes the model from the registry (and the chat model picker);
+        nothing changes in Azure. Removing the knowledge-base model of a non-empty
+        corpus is 409 REINDEX_REQUIRED unless force=true. Audited (azure.model_delete).
+      parameters:
+      - description: Model id
+        in: path
+        name: modelId
+        required: true
+        type: string
+      - description: Confirm the knowledge-base re-index
+        in: query
+        name: force
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.statusResponse'
+        "400":
+          description: A flag that is not true or false
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: MODEL_NOT_FOUND
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: REINDEX_REQUIRED or REGISTRY_READ_ONLY
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Remove an Azure AI Foundry model
+      tags:
+      - providers
+    get:
+      description: One of the caller's own models (see GET /models).
+      parameters:
+      - description: 'Model id: ten characters [a-z0-9] (the id, not the m/ chat id)'
+        in: path
+        name: modelId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureModelEnvelope'
+        "404":
+          description: MODEL_NOT_FOUND
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: SECRET_STORAGE_UNAVAILABLE or AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Get an Azure AI Foundry model
+      tags:
+      - providers
+    put:
+      consumes:
+      - application/json
+      description: 'An omitted field keeps its value; the id is kept whatever changes
+        — its resource, kind or deployment. contextWindow and maxOutputTokens: null
+        clears the override. description: "" clears it. isKnowledgeEmbedding true
+        moves the knowledge-base designation to this model (409 REINDEX_REQUIRED on
+        a non-empty corpus unless force is true, as for changing the designated model''s
+        deployment or resource); false clears it. updatedAt, when sent, is the model''s
+        updatedAt as last read (a stale one is 409 CONFLICT). Strict body, at most
+        16 KiB. Audited (azure.model_save, op update).'
+      parameters:
+      - description: Model id
+        in: path
+        name: modelId
+        required: true
+        type: string
+      - description: The changes
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/service.AzureModelPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AzureModelEnvelope'
+        "400":
+          description: INVALID_CONFIG, INVALID_KIND, INVALID_DEPLOYMENT, INVALID_DISPLAY_NAME,
+            INVALID_PURPOSE, INVALID_DESCRIPTION, INVALID_CONTEXT_WINDOW, INVALID_MAX_OUTPUT,
+            INVALID_DESIGNATION or KIND_REQUIRES_PROJECT
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: MODEL_NOT_FOUND or CONNECTION_NOT_FOUND
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "409":
+          description: DUPLICATE_MODEL (details.existingModelId), CONFLICT, REINDEX_REQUIRED
+            or REGISTRY_READ_ONLY
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Update an Azure AI Foundry model
+      tags:
+      - providers
+  /api/providers/azure-foundry/test:
+    post:
+      consumes:
+      - application/json
+      description: 'One route for a saved or draft resource and a saved or draft model:
+        {connectionId} tests a saved resource, {config} a draft one — with connectionId
+        too, the stored secret carries over by the same host rules as a save — and
+        model ({id} of a saved model, or a draft {kind, deployment}) tests a model
+        on that resource. A resource test signs in and probes the endpoint (and the
+        project) with no model call, at no cost; a chat, Claude or embedding model
+        test sends one tiny request Azure bills; an agent test only looks the agent
+        up — it is never run. Drafts write nothing; a saved target records its last
+        test. Every test outcome is a 200 {ok, latencyMs, error?, code?}; a 4xx only
+        means an invalid request. Strict body, at most 64 KiB. Rides the chat rate-limit
+        bucket.'
+      parameters:
+      - description: What to test
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/service.AzureTestInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: The outcome
+          schema:
+            $ref: '#/definitions/service.AzureTestResult'
+        "400":
+          description: INVALID_CONFIG, a draft's settings code (INVALID_ENDPOINT,
+            HOST_NOT_ALLOWED, INVALID_PROJECT_ENDPOINT, INVALID_AUTH or MISSING_SECRET
+            with details.field), or a draft model's INVALID_KIND or INVALID_DEPLOYMENT
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "404":
+          description: CONNECTION_NOT_FOUND or MODEL_NOT_FOUND
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: SECRET_STORAGE_UNAVAILABLE or AZURE_REGISTRY_UNAVAILABLE
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+      summary: Test an Azure AI Foundry resource or model
       tags:
       - providers
   /api/providers/copilot/poll:
@@ -5726,11 +7433,84 @@ paths:
       summary: List AI providers
       tags:
       - providers
+  /api/providers/local/config:
+    get:
+      description: 'Returns whether a local OpenAI-compatible server (Foundry Local,
+        Ollama, LM Studio) is configured, its loopback base URL and the stored context
+        window in tokens (omitted when unset: 8192 applies). Desktop app only: 400
+        LOCAL_MODELS_UNAVAILABLE when the deployment does not allow loopback egress
+        (cloud), so a client hides the feature there.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ai.LocalPublicConfig'
+        "400":
+          description: LOCAL_MODELS_UNAVAILABLE
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get local models configuration
+      tags:
+      - providers
+    post:
+      consumes:
+      - application/json
+      description: Validates and stores the base URL of a locally hosted OpenAI-compatible
+        server and, optionally, the context window history is trimmed to (omitted
+        or 0 = 8192 tokens; else 1024..2000000). Loopback http(s) only (127.0.0.1
+        or [::1]; a trailing /v1 is accepted); desktop app only. 400 LOCAL_MODELS_UNAVAILABLE
+        when the deployment does not allow loopback egress (cloud), INVALID_BASE_URL
+        for a bad URL or body, INVALID_CONTEXT_WINDOW for a window out of range or
+        not a whole number. Remove with POST /api/keys/delete; test with POST /api/providers/test.
+      parameters:
+      - description: The base URL and optional context window
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.localConfigSaveRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: LOCAL_MODELS_UNAVAILABLE, INVALID_BASE_URL or INVALID_CONTEXT_WINDOW
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Save local models configuration
+      tags:
+      - providers
   /api/providers/test:
     post:
       consumes:
       - application/json
-      description: Tests the connection to a specific AI provider.
+      description: 'Tests the connection to a specific AI provider. For azure-foundry
+        this form is deprecated (one release): it tests the caller''s resource "default"
+        (else their first resource) as a resource — an authenticated probe, no model
+        call; use POST /api/providers/azure-foundry/test to test one resource or model.'
       parameters:
       - description: request
         in: body

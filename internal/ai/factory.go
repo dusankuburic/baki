@@ -1,7 +1,9 @@
 package ai
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -204,6 +206,96 @@ func (f *ProviderFactory) ForOrg(scope, orgID, providerID string) (Provider, err
 	return f.wrapChainScoped(ctor(key), scope, memoScope, credentialOrg(orgID, memoScope), providerID), nil
 }
 
+// AzureConnectionRef names one Azure AI Foundry resource's credential in the
+// model registry: the caller's own (OrgID "") or an organisation's shared
+// one. ConnID is the resource id — AzureDefaultConnectionID for the legacy
+// document's resource.
+type AzureConnectionRef struct {
+	OrgID  string
+	ConnID string
+}
+
+// ForAzureConnection builds the provider for one Azure AI Foundry resource of
+// the model registry (NewAzureFoundryConnectionProvider) from exactly the
+// credential ref names — never another: a personal ref reads the caller's
+// own KeyStore key (AzureConnectionKey) and runs its memos under scope; an
+// org ref reads the organisation's shared key and runs them under
+// OrgScope(ref.OrgID), with the org as the chain's usageOrg, so every usage
+// row lands on the org's budget and UsedOrgCredential reports it. There is no
+// member-first fallback between the two (ForOrg's rule): the registry
+// resolved which resource the request runs on, and a missing credential is
+// ErrKeyNotConfigured, not someone else's key. models is the resource's FULL
+// entry set — the model picker's too, so both share one listing cache key.
+// Whether the caller may use an org's credential (admin or member) is the
+// caller's check.
+func (f *ProviderFactory) ForAzureConnection(scope string, ref AzureConnectionRef, models []AzureRegisteredModel) (Provider, error) {
+	key, memoScope, usageOrg, err := f.resolveAzureConnectionKey(scope, ref)
+	if err != nil {
+		return nil, err
+	}
+	p := NewAzureFoundryConnectionProvider(key, models, "")
+	return f.wrapChainScoped(p, scope, memoScope, usageOrg, azureFoundryProviderID), nil
+}
+
+// ForAzureConnectionEmbedding is ForAzureConnection for the knowledge base's
+// embedder: entry is the designated embedding model on the resource (kind
+// embedding), whose deployment every Embed call is sent to, at the factory's
+// vector width. An entry that is not an embedding deployment is refused with
+// ErrEmbeddingDeploymentMissing — ErrOrgEmbeddingDeploymentMissing on an org
+// ref, which names the org admin — so the rag service's existing handling
+// (EMBEDDING_NOT_CONFIGURED, no personal fallback for an org corpus) holds.
+func (f *ProviderFactory) ForAzureConnectionEmbedding(scope string, ref AzureConnectionRef, entry AzureRegisteredModel) (Provider, error) {
+	if entry.Kind != AzureModelKindEmbedding || !azureDeploymentName.MatchString(strings.TrimSpace(entry.Deployment)) {
+		if ref.OrgID != "" {
+			return nil, fmt.Errorf("%s: %w", azureFoundryProviderID, ErrOrgEmbeddingDeploymentMissing)
+		}
+		return nil, fmt.Errorf("%s: %w", azureFoundryProviderID, ErrEmbeddingDeploymentMissing)
+	}
+	key, memoScope, usageOrg, err := f.resolveAzureConnectionKey(scope, ref)
+	if err != nil {
+		return nil, err
+	}
+	raw := newAzureFoundryConnectionProvider(key, []AzureRegisteredModel{entry}, entry.Deployment, azureHTTPClient(), processEntraSources)
+	p, err := f.prepareEmbedder(raw, azureFoundryProviderID, "")
+	if err != nil {
+		return nil, err
+	}
+	return f.wrapChainScoped(p, scope, memoScope, usageOrg, azureFoundryProviderID), nil
+}
+
+// resolveAzureConnectionKey reads the credential document ref names: the
+// caller's own key (memo scope = scope) or the org's shared one (memo scope
+// OrgScope, usage attributed to the org). A key-store failure is reported,
+// never answered with another credential; an absent document is
+// ErrKeyNotConfigured, as is an org ref on a factory without an org store.
+func (f *ProviderFactory) resolveAzureConnectionKey(scope string, ref AzureConnectionRef) (key, memoScope, usageOrg string, err error) {
+	if !ValidAzureConnectionID(ref.ConnID) {
+		return "", "", "", fmt.Errorf("%s: invalid resource id %q", azureFoundryProviderID, ref.ConnID)
+	}
+	name := AzureConnectionKey(ref.ConnID)
+	if ref.OrgID == "" {
+		key, err = f.getKey(scope, name)
+		if err != nil {
+			return "", "", "", fmt.Errorf("get %s key: %w", name, err)
+		}
+		if key == "" {
+			return "", "", "", fmt.Errorf("%s: %w", name, ErrKeyNotConfigured)
+		}
+		return key, scope, "", nil
+	}
+	if f.getOrgKey == nil {
+		return "", "", "", fmt.Errorf("%s: %w", name, ErrKeyNotConfigured)
+	}
+	key, err = f.getOrgKey(ref.OrgID, name)
+	if err != nil {
+		return "", "", "", fmt.Errorf("get %s org key: %w", name, err)
+	}
+	if key == "" {
+		return "", "", "", fmt.Errorf("%s: %w", name, ErrKeyNotConfigured)
+	}
+	return key, OrgScope(ref.OrgID), ref.OrgID, nil
+}
+
 // UsedOrgCredential reports whether p — a chain the factory built — runs on
 // an organisation's shared credential rather than the caller's own, so the
 // chat service can tell the member that a rejected credential is the org
@@ -243,6 +335,16 @@ func (f *ProviderFactory) ForOrgCredential(scope, orgID, providerID string) (Pro
 // PREFERRED over the member's: the org's knowledge base is one corpus and
 // must be embedded with one resource, whichever member uploads or searches.
 // Without an org credential the member's own is used, as ForEmbedding does.
+//
+// When the ORG's credential is the one resolved (memoScope is OrgScope) and
+// it cannot embed — an Azure AI Foundry document that names no embedding
+// deployment — the error is ErrOrgEmbeddingDeploymentMissing, which wraps
+// ErrEmbeddingDeploymentMissing (so existing errors.Is checks hold) but
+// names the org admin whose document is missing the deployment, not the
+// member's own settings; the rag service refuses the personal-key fallback
+// on it (a member's key must not seed the org corpus). A member's OWN
+// document without a deployment keeps the plain sentinel, so callers
+// scanning for an embedder move on to the next provider as before.
 func (f *ProviderFactory) ForEmbeddingOrg(scope, orgID, providerID, embeddingModel string) (Provider, error) {
 	if providerID == "copilot" {
 		return f.For(scope, providerID)
@@ -257,6 +359,9 @@ func (f *ProviderFactory) ForEmbeddingOrg(scope, orgID, providerID, embeddingMod
 	}
 	p, err := f.prepareEmbedder(ctor(key), providerID, embeddingModel)
 	if err != nil {
+		if memoScope == OrgScope(orgID) && errors.Is(err, ErrEmbeddingDeploymentMissing) {
+			return nil, fmt.Errorf("%s: %w", providerID, ErrOrgEmbeddingDeploymentMissing)
+		}
 		return nil, err
 	}
 	return f.wrapChainScoped(p, scope, memoScope, credentialOrg(orgID, memoScope), providerID), nil

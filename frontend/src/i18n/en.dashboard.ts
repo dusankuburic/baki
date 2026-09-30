@@ -123,6 +123,10 @@ export const enDashboard = {
     chat_stream: 'AI chat',
     keys_save: 'Updated API key',
     providers_test: 'Tested an AI provider connection',
+    azure_connection_save: 'Saved an Azure AI Foundry resource',
+    azure_connection_delete: 'Removed an Azure AI Foundry resource',
+    azure_model_save: 'Saved an Azure AI Foundry model',
+    azure_model_delete: 'Removed an Azure AI Foundry model',
     settings_change: 'Changed settings',
     settings_update: 'Updated settings',
     user_profile_update: 'Updated profile',
@@ -357,6 +361,10 @@ export const enDashboard = {
       byProvider: 'Cost by provider',
       byModel: 'Usage by model',
       aiEmpty: 'No AI usage in this window.',
+      // Azure AI Foundry usage is not priced by baki: its cost cells read "—"
+      // (this is their accessible name) and its bars are left out of charts.
+      costNotPriced: 'Not priced by baki',
+      costOnlyUnpriced: 'Only Azure AI Foundry was used, and baki does not price it.',
       aiScopeUser: 'Your account · not tied to flows',
       aiScopeOrg: 'This organisation · not tied to flows',
       aiScopeBoth: 'Your account and your organisations · not tied to flows',
@@ -405,6 +413,12 @@ export const enDashboard = {
       resource: 'Resource',
       yes: 'yes',
       no: 'no',
+    },
+    // How the usage tables name the internal routing ids (F-31): the model
+    // picker's labels for an Azure AI Foundry agent and a Claude deployment.
+    models: {
+      agent: 'Agent · {{name}}',
+      claude: '{{name}} · Claude',
     },
   },
 }

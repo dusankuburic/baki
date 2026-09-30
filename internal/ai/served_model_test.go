@@ -19,6 +19,7 @@ func TestCatalogEntryFor(t *testing.T) {
 		"deepseek-v3-0324":      "DeepSeek-V3-0324",
 		"gpt-4o":                "gpt-4o",
 		"o4-mini-2025-04-16":    "o4-mini",
+		"o3-deep-research-0626": "o3-deep-research",
 		"gpt-5-turbo":           "", // sibling model: never guessed
 		"gpt-4o-minipro":        "",
 		"":                      "",
@@ -60,8 +61,8 @@ func TestServedModelMemo_ScopedAndEnriching(t *testing.T) {
 	if got.ServedModel != "gpt-4o-2024-11-20" || got.DisplayName != "my-gpt4o · gpt-4o-2024-11-20" {
 		t.Errorf("enriched entry = %+v", got)
 	}
-	if got.Pricing.InputCostPerM != 2.5 || got.MaxOutputTokens != 16384 {
-		t.Errorf("pricing/limits not taken from the catalogue: %+v", got)
+	if got.Pricing != (Pricing{}) || got.MaxOutputTokens != 16384 {
+		t.Errorf("limits not taken from the catalogue (or a price appeared for the unpriced azure-foundry): %+v", got)
 	}
 	if models[1].ServedModel != "" || models[2].DisplayName != "priced" {
 		t.Errorf("unknown or already-priced entries must be untouched: %+v %+v", models[1], models[2])
@@ -100,7 +101,7 @@ func (f *servedFakeProvider) Stream(_ context.Context, req Request, onChunk func
 	return nil
 }
 
-func TestAuditedProvider_PricesDeploymentByServedModel(t *testing.T) {
+func TestAuditedProvider_AzureDeploymentRecordsServedModelAtZeroCost(t *testing.T) {
 	resetServedModels()
 	var mu sync.Mutex
 	var metrics []interfaces.UsageMetric
@@ -129,20 +130,25 @@ func TestAuditedProvider_PricesDeploymentByServedModel(t *testing.T) {
 	if len(metrics) != 2 {
 		t.Fatalf("got %d usage metrics, want 2", len(metrics))
 	}
-	want := 100.0/1e6*2.5 + 50.0/1e6*10.0 // gpt-4o list price
 	for _, m := range metrics {
 		if m.Model != "dep" {
 			t.Errorf("usage model = %q, want the request model", m.Model)
 		}
-		if diff := m.EstimatedCost - want; diff > 1e-9 || diff < -1e-9 {
-			t.Errorf("cost = %v, want %v (priced by the served model)", m.EstimatedCost, want)
+		if m.ServedModel != "gpt-4o-2024-11-20" {
+			t.Errorf("recorded served model = %q, want the model that answered", m.ServedModel)
+		}
+		if m.PromptTokens != 100 || m.CompletionTokens != 50 {
+			t.Errorf("tokens = %d/%d, want 100/50", m.PromptTokens, m.CompletionTokens)
+		}
+		if m.EstimatedCost != 0 {
+			t.Errorf("cost = %v, want 0 (azure-foundry is unpriced)", m.EstimatedCost)
 		}
 	}
 
 	// The memo learned the mapping, so a fresh listing shows it.
 	fresh := NewAuditedProvider(inner, recorder, "u1", "azure-foundry")
 	models, _ := fresh.Models(context.Background())
-	if models[0].DisplayName != "dep · gpt-4o-2024-11-20" || models[0].Pricing.InputCostPerM != 2.5 {
+	if models[0].DisplayName != "dep · gpt-4o-2024-11-20" || models[0].Pricing != (Pricing{}) {
 		t.Errorf("listing not enriched from the memo: %+v", models[0])
 	}
 }
@@ -248,16 +254,13 @@ func TestAuditedProvider_ServedModelIgnoredForNonAliasProviders(t *testing.T) {
 	assertCost(t, "openai Stream", sink.next(t).EstimatedCost, costOf(100, 50, listing))
 }
 
-// Finding #9: for alias providers a zero-priced listing entry is not "found"
-// (the counted fallback runs), and a model-router deployment is priced by the
-// model that answered THIS call, never by the memo of an earlier one. Every
-// fallback case is billed at the AliasReservationCeiling rates, not $0 — the
-// fallback must not let an unknown model escape the daily budget.
-func TestAuditedProvider_AliasPricingNeverUsesAStaleOrZeroListingPrice(t *testing.T) {
+// Finding #9 (now unpriced): a model-router deployment is recorded with the
+// model that answered THIS call. Azure AI Foundry carries no price table, so
+// every case (router or stable alias, catalogued or unknown served model,
+// served model missing) records the tokens at $0, and the pricing-fallback
+// metric never moves for the alias provider.
+func TestAuditedProvider_AzureAliasTurnsRecordZeroCostWithoutFallback(t *testing.T) {
 	resetServedModels()
-	nano, _ := catalogEntryFor("azure-foundry", "gpt-5-nano")
-	ceiling := AliasReservationCeiling("azure-foundry")
-	router := AliasRouterCeiling("azure-foundry") // routers may route to Claude
 
 	// A router alias: turn 1 was routed to gpt-5-nano; turn 2 to a model the
 	// catalogue does not know.
@@ -266,27 +269,34 @@ func TestAuditedProvider_AliasPricingNeverUsesAStaleOrZeroListingPrice(t *testin
 	sink := newUsageSink()
 	inner := &servedFakeProvider{id: "azure-foundry", served: "claude-opus-4-1", models: []ModelInfo{{ID: "router", ContextLimit: 128000}}}
 	ap := NewAuditedProvider(inner, sink.recorder(), "u1", "azure-foundry")
-	if models, _ := ap.Models(context.Background()); models[0].Pricing == (Pricing{}) {
-		t.Fatalf("fixture rot: the listing should carry the memo's price for display: %+v", models[0])
+	if models, _ := ap.Models(context.Background()); models[0].ServedModel == "" || models[0].Pricing != (Pricing{}) {
+		t.Fatalf("the listing should show the memo's served model without a price: %+v", models[0])
 	}
 	before := countPricingFallback(t, "azure-foundry", "deployment")
+	expect := func(label, served string) {
+		t.Helper()
+		m := sink.next(t)
+		assertCost(t, label, m.EstimatedCost, 0)
+		if m.PromptTokens != 100 || m.CompletionTokens != 50 {
+			t.Errorf("%s: tokens = %d/%d, want 100/50", label, m.PromptTokens, m.CompletionTokens)
+		}
+		if served != "" && m.ServedModel != served {
+			t.Errorf("%s: recorded served model = %q, want %q", label, m.ServedModel, served)
+		}
+	}
 	if _, err := ap.Chat(context.Background(), Request{Model: "router"}); err != nil {
 		t.Fatal(err)
 	}
-	assertCost(t, "router served by an uncatalogued model", sink.next(t).EstimatedCost, costOf(100, 50, router))
-	if after := countPricingFallback(t, "azure-foundry", "deployment"); after != before+1 {
-		t.Errorf("pricing-fallback metric %v → %v, want +1", before, after)
-	}
+	expect("router served by an uncatalogued model", "claude-opus-4-1")
 
-	// The same router when the response names no model (a stream cut before
-	// Done): still not the previous call's price.
+	// The same router when the response names no model (a stream cut before Done).
 	inner.served = ""
 	ap = NewAuditedProvider(inner, sink.recorder(), "u1", "azure-foundry")
 	_, _ = ap.Models(context.Background())
 	if _, err := ap.Chat(context.Background(), Request{Model: "router"}); err != nil {
 		t.Fatal(err)
 	}
-	assertCost(t, "varied alias without a served model", sink.next(t).EstimatedCost, costOf(100, 50, router))
+	expect("varied alias without a served model", "")
 
 	// Named "model-router": treated as a router from the first call.
 	recordServedModel("u1", "azure-foundry", "model-router", "gpt-5-nano-2025-08-07")
@@ -296,24 +306,18 @@ func TestAuditedProvider_AliasPricingNeverUsesAStaleOrZeroListingPrice(t *testin
 	if _, err := ap.Chat(context.Background(), Request{Model: "model-router"}); err != nil {
 		t.Fatal(err)
 	}
-	assertCost(t, "model-router without a served model", sink.next(t).EstimatedCost, costOf(100, 50, router))
+	expect("model-router without a served model", "")
 
-	// A zero-priced deployment whose served model is unknown: priced at the
-	// reservation ceiling by the counted fallback, never $0.
+	// A deployment whose served model is unknown.
 	inner.served = "brand-new-model"
 	inner.models = []ModelInfo{{ID: "dep", ContextLimit: 128000}}
 	ap = NewAuditedProvider(inner, sink.recorder(), "u1", "azure-foundry")
-	before = countPricingFallback(t, "azure-foundry", "deployment")
 	if err := ap.Stream(context.Background(), Request{Model: "dep"}, func(Chunk) {}); err != nil {
 		t.Fatal(err)
 	}
-	assertCost(t, "unknown served model", sink.next(t).EstimatedCost, costOf(100, 50, ceiling))
-	if after := countPricingFallback(t, "azure-foundry", "deployment"); after != before+1 {
-		t.Errorf("zero-priced listing entry must reach the counted fallback: metric %v → %v", before, after)
-	}
+	expect("unknown served model", "brand-new-model")
 
-	// A stable alias whose response names no model keeps the memo's price
-	// (same model as before), and a served model always wins when catalogued.
+	// A stable alias, with and without a served model.
 	recordServedModel("u1", "azure-foundry", "stable", "gpt-5-nano-2025-08-07")
 	inner.served = ""
 	inner.models = []ModelInfo{{ID: "stable", ContextLimit: 128000}}
@@ -321,40 +325,42 @@ func TestAuditedProvider_AliasPricingNeverUsesAStaleOrZeroListingPrice(t *testin
 	if _, err := ap.Chat(context.Background(), Request{Model: "stable"}); err != nil {
 		t.Fatal(err)
 	}
-	assertCost(t, "stable alias without a served model", sink.next(t).EstimatedCost, costOf(100, 50, nano.Pricing))
+	expect("stable alias without a served model", "")
+
+	if after := countPricingFallback(t, "azure-foundry", "deployment"); after != before {
+		t.Errorf("pricing-fallback metric %v -> %v, want no movement for the unpriced alias provider", before, after)
+	}
 }
 
-// Finding #39: an alias deployment named after a catalogued model (Azure's
-// portal default) is priced by that name when nothing else prices it — the
-// embedding deployment in API-key mode — while an uncatalogued name is not
-// guessed: it reaches the counted fallback, billed at the reservation
-// ceiling.
-func TestAuditedProvider_AliasDeploymentPricedByItsCataloguedName(t *testing.T) {
+// Finding #39 (now unpriced): a deployment named after a catalogued model
+// (Azure's portal default), an embedding deployment and an uncatalogued name
+// all record their tokens at $0 with no pricing-fallback metric.
+func TestAuditedProvider_AliasDeploymentNamesRecordZeroCost(t *testing.T) {
 	resetServedModels()
-	small, _ := catalogEntryFor("azure-foundry", "text-embedding-3-small")
 	sink := newUsageSink()
 	inner := &servedFakeProvider{id: "azure-foundry", models: []ModelInfo{{ID: "text-embedding-3-small"}, {ID: "gpt-4o"}, {ID: "dep"}}}
+	before := countPricingFallback(t, "azure-foundry", "deployment")
 
 	ap := NewAuditedProvider(inner, sink.recorder(), "u1", "azure-foundry").(*auditedProvider)
-	ap.record(context.Background(), "text-embedding-3-small", "", "", 1000, 0)
-	assertCost(t, "embedding deployment", sink.next(t).EstimatedCost, costOf(1000, 0, small.Pricing))
-
-	gpt4o, _ := catalogEntryFor("azure-foundry", "gpt-4o")
-	if _, err := ap.Chat(context.Background(), Request{Model: "gpt-4o"}); err != nil { // no served model reported
-		t.Fatal(err)
+	ap.record(context.Background(), "text-embedding-3-small", "", "", usage{In: 1000})
+	if m := sink.next(t); m.PromptTokens != 1000 || m.EstimatedCost != 0 {
+		t.Errorf("embedding deployment: %d tokens cost %v, want 1000 at $0", m.PromptTokens, m.EstimatedCost)
 	}
-	assertCost(t, "chat deployment named after its model", sink.next(t).EstimatedCost, costOf(100, 50, gpt4o.Pricing))
-
-	if _, err := ap.Chat(context.Background(), Request{Model: "dep"}); err != nil {
-		t.Fatal(err)
+	for _, dep := range []string{"gpt-4o", "dep"} { // no served model reported
+		if _, err := ap.Chat(context.Background(), Request{Model: dep}); err != nil {
+			t.Fatal(err)
+		}
+		assertCost(t, dep+" deployment", sink.next(t).EstimatedCost, 0)
 	}
-	assertCost(t, "uncatalogued deployment name", sink.next(t).EstimatedCost, costOf(100, 50, AliasReservationCeiling("azure-foundry")))
+	if after := countPricingFallback(t, "azure-foundry", "deployment"); after != before {
+		t.Errorf("pricing-fallback metric %v -> %v, want no movement", before, after)
+	}
 }
 
 // Finding #10: a model router (by name, or an alias seen served by more than
 // one model) must not take the last routed model's context window or output
-// cap — the next call may be routed to a smaller-window model. Price and
-// display still follow the memo.
+// cap — the next call may be routed to a smaller-window model. The served
+// model and display still follow the memo (Azure carries no price).
 func TestEnrichServedModels_RouterKeepsListingLimits(t *testing.T) {
 	resetServedModels()
 	recordServedModel("u1", "azure-foundry", "model-router", "gpt-4.1-nano-2025-04-14")
@@ -369,15 +375,14 @@ func TestEnrichServedModels_RouterKeepsListingLimits(t *testing.T) {
 			{ID: "my-gpt41", DisplayName: "my-gpt41", ContextLimit: 128000},
 		})
 	}
-	nano, _ := catalogEntryFor("azure-foundry", "gpt-4.1-nano")
 
 	models := list()
 	router := models[0]
 	if router.ContextLimit != 128000 || router.MaxOutputTokens != 0 {
 		t.Errorf("model-router took the routed model's limits: %+v", router)
 	}
-	if router.ServedModel != "gpt-4.1-nano-2025-04-14" || router.Pricing != nano.Pricing || !strings.Contains(router.DisplayName, " · ") {
-		t.Errorf("model-router must still show the routed model and its price: %+v", router)
+	if router.ServedModel != "gpt-4.1-nano-2025-04-14" || router.Pricing != (Pricing{}) || !strings.Contains(router.DisplayName, " · ") {
+		t.Errorf("model-router must still show the routed model, without a price: %+v", router)
 	}
 	if models[2].ContextLimit != 1047576 || models[2].MaxOutputTokens != 32768 {
 		t.Errorf("a stable alias keeps its model's window: %+v", models[2])

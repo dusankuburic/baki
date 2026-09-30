@@ -352,6 +352,11 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 	// metadata chunk (not on message_delta), so without this the Done chunk
 	// carries TokensIn=0 and the client-visible token accounting is wrong.
 	var tokensIn int
+	// cacheRead/cacheWrite are the cached slice OF tokensIn (message_start's
+	// cache_read_input_tokens / cache_creation_input_tokens), carried next to
+	// it so the audited wrapper prices that slice at the cached rates (reads
+	// 0.025-0.1× by family, writes 1.25×) instead of the full input rate.
+	var cacheRead, cacheWrite int
 	// servedModel is the model named by message_start ("model"), carried on
 	// every chunk after it — text, keepalives, Done and error chunks: a
 	// Claude deployment on Azure AI Foundry is called by its deployment name
@@ -411,19 +416,21 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 				parseErrors++
 				return false
 			}
-			// Cache tokens are billed separately (reads ~0.1×, writes ~1.25×)
-			// and are EXCLUDED from input_tokens — not counting them made
-			// prompt-cached tool loops (the norm on long conversations)
-			// systematically understate usage against the daily budget.
-			// Counting both at full rate errs toward overstatement, the safe
-			// direction for a spend cap.
+			// Cache tokens are billed separately (reads 0.025-0.1× by family,
+			// writes 1.25×) and are EXCLUDED from input_tokens — not counting
+			// them made prompt-cached tool loops (the norm on long
+			// conversations) systematically understate usage against the daily
+			// budget. They are folded into TokensIn as the total AND carried as
+			// the CacheRead/WriteTokens breakdown, so the audited wrapper prices
+			// the cached slice at its own rate instead of overstating it.
 			if m := strings.TrimSpace(parsed.Message.Model); m != "" {
 				servedModel = m
 			}
 			u := parsed.Message.Usage
 			if total := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens; total > 0 {
 				tokensIn = total
-				emit(Chunk{TokensIn: tokensIn})
+				cacheRead, cacheWrite = u.CacheReadInputTokens, u.CacheCreationInputTokens
+				emit(Chunk{TokensIn: tokensIn, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite})
 			}
 
 		case "content_block_start":
@@ -509,17 +516,19 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 				// the answer. The error chunk carries the usage and model (the
 				// audited wrapper bills them from any chunk).
 				doneSent = true
-				emit(Chunk{Error: claudeRefusalError(), TokensIn: tokensIn, TokensOut: parsed.Usage.OutputTokens})
+				emit(Chunk{Error: claudeRefusalError(), TokensIn: tokensIn, TokensOut: parsed.Usage.OutputTokens, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite})
 				return true
 			default:
 				doneSent = true
 				emit(Chunk{
-					Done:          true,
-					TokensIn:      tokensIn,
-					TokensOut:     parsed.Usage.OutputTokens,
-					ToolCalls:     assembleToolCalls(toolBlocks),
-					FinishReason:  parsed.Delta.StopReason,
-					ProviderItems: record(),
+					Done:             true,
+					TokensIn:         tokensIn,
+					TokensOut:        parsed.Usage.OutputTokens,
+					CacheReadTokens:  cacheRead,
+					CacheWriteTokens: cacheWrite,
+					ToolCalls:        assembleToolCalls(toolBlocks),
+					FinishReason:     parsed.Delta.StopReason,
+					ProviderItems:    record(),
 				})
 			}
 
@@ -534,7 +543,7 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 				parseErrors++
 				return false
 			}
-			emit(Chunk{Error: classifyClaudeStreamError(parsed.Error.Type, parsed.Error.Message), TokensIn: tokensIn})
+			emit(Chunk{Error: classifyClaudeStreamError(parsed.Error.Type, parsed.Error.Message), TokensIn: tokensIn, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite})
 			return true
 		}
 		return false
@@ -555,7 +564,7 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
 			if !doneSent {
-				onChunk(Chunk{Done: true, TokensIn: tokensIn, ToolCalls: assembleToolCalls(toolBlocks), ServedModel: servedModel, ProviderItems: record()})
+				onChunk(Chunk{Done: true, TokensIn: tokensIn, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite, ToolCalls: assembleToolCalls(toolBlocks), ServedModel: servedModel, ProviderItems: record()})
 			}
 			return nil
 		}
@@ -606,10 +615,18 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 		tokensOut    int
 		parseErrors  int
 		finishReason string
+		// cacheRead is the cached slice OF tokensIn
+		// (usage.prompt_tokens_details.cached_tokens — Azure reports cache
+		// hits there; prompt_tokens already includes them): carried onto the
+		// usage chunks so the audited wrapper can price it as cached input
+		// instead of full-rate. Azure documents cache hits as "a discount on
+		// input token pricing"; the per-model discount is not uniformly
+		// published, so pricing falls back to the full rate until verified.
+		cacheRead int
 		// servedModel is the concrete model name the chunks report ("model").
 		// It rides on every content chunk and on Done, not only on Done: a
 		// stream cut before Done (Stop, idle watchdog, truncation) is still
-		// priced by the model that answered instead of by the ceiling.
+		// attributed to the model that answered.
 		servedModel string
 		// toolBlocks accumulates streamed function calls keyed by their
 		// slot (see toolCallSlot); finalized onto the Done chunk. slotByID
@@ -647,12 +664,13 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 		flushThink()
 		doneSent = true
 		onChunk(Chunk{
-			Done:         true,
-			TokensIn:     tokensIn,
-			TokensOut:    tokensOut,
-			ToolCalls:    assembleToolCalls(toolBlocks),
-			FinishReason: finishReason,
-			ServedModel:  servedModel,
+			Done:            true,
+			TokensIn:        tokensIn,
+			TokensOut:       tokensOut,
+			CacheReadTokens: cacheRead,
+			ToolCalls:       assembleToolCalls(toolBlocks),
+			FinishReason:    finishReason,
+			ServedModel:     servedModel,
 		})
 	}
 
@@ -663,10 +681,11 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 	emitFiltered := func() {
 		flushThink()
 		onChunk(Chunk{
-			Error:       fmt.Errorf("%w: the response was stopped by the content filter", ErrContentFiltered),
-			TokensIn:    tokensIn,
-			TokensOut:   tokensOut,
-			ServedModel: servedModel,
+			Error:           fmt.Errorf("%w: the response was stopped by the content filter", ErrContentFiltered),
+			TokensIn:        tokensIn,
+			TokensOut:       tokensOut,
+			CacheReadTokens: cacheRead,
+			ServedModel:     servedModel,
 		})
 	}
 
@@ -711,6 +730,12 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 			Usage *struct {
 				PromptTokens     int `json:"prompt_tokens"`
 				CompletionTokens int `json:"completion_tokens"`
+				// prompt_tokens_details.cached_tokens is the cached slice of
+				// prompt_tokens (Azure's prompt caching): a breakdown, never
+				// an addition.
+				PromptTokensDetails *struct {
+					CachedTokens int `json:"cached_tokens"`
+				} `json:"prompt_tokens_details"`
 			} `json:"usage"`
 			// A server error after the 200 arrives as its own event.
 			Error *responsesError `json:"error"`
@@ -724,6 +749,11 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 		if parsed.Usage != nil {
 			tokensIn = parsed.Usage.PromptTokens
 			tokensOut = parsed.Usage.CompletionTokens
+			if d := parsed.Usage.PromptTokensDetails; d != nil {
+				// A slice of prompt_tokens, never more (as chat() caps it):
+				// the upstream's numbers are not trusted to be consistent.
+				cacheRead = min(d.CachedTokens, parsed.Usage.PromptTokens)
+			}
 		}
 		if parsed.Model != "" {
 			servedModel = parsed.Model
@@ -736,10 +766,11 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 			// user.
 			flushThink()
 			onChunk(Chunk{
-				Error:       classifyOpenAIStreamError(parsed.Error.Code, parsed.Error.Type, parsed.Error.Message),
-				TokensIn:    tokensIn,
-				TokensOut:   tokensOut,
-				ServedModel: servedModel,
+				Error:           classifyOpenAIStreamError(parsed.Error.Code, parsed.Error.Type, parsed.Error.Message),
+				TokensIn:        tokensIn,
+				TokensOut:       tokensOut,
+				CacheReadTokens: cacheRead,
+				ServedModel:     servedModel,
 			})
 			return nil
 		}

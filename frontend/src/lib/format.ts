@@ -12,6 +12,18 @@ export function formatCompact(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`
 }
 
+// A model-picker context window: integer "k" below 1M ("200k"), "1M"/"1.0M"
+// above. formatCompact would render 200000 as "200.0k" (changing every
+// existing label), and the raw Math.round(n/1000)+"k" the picker used showed
+// 1M-window models as "1000k"/"1049k"/"1048k" (F-44).
+export function formatContextWindow(n: number): string {
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`
+  }
+  return `${Math.round(n / 1000)}k`
+}
+
 export function formatCount(n: number): string {
   return n.toLocaleString()
 }

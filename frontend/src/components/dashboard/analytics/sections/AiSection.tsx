@@ -1,5 +1,6 @@
 import {useMemo} from 'react'
 import {useTranslation} from 'react-i18next'
+import type {TFunction} from 'i18next'
 import {
   ChartCard,
   ColumnChart,
@@ -18,12 +19,42 @@ interface ProviderRow extends HBarRow {
   tokensOut: number
 }
 
-// "deployment · served" when the model that answered differs from what was
-// asked for (an Azure AI Foundry deployment alias, model router or agent);
-// otherwise just the requested id. Rows are grouped by the served model, so
-// the same deployment can appear once per model it was routed to.
-export function modelLabel(r: Pick<ModelUsage, 'model' | 'servedModel'>): string {
-  return r.servedModel && r.servedModel !== r.model ? `${r.model} · ${r.servedModel}` : r.model
+// The picker's labels, not the internal routing ids: `agent:<x>` renders
+// as "Agent · <x>" and `claude:<x>` as "<x> · Claude" (F-31; no other
+// provider mints colon-prefixed model ids). "· served" is appended only
+// when the model that answered differs from what was asked for (an Azure
+// AI Foundry deployment alias, model router or agent) — compared against
+// the RAW id, not the mapped label. Rows are grouped by the served model,
+// so the same deployment can appear once per model it was routed to. The
+// CSV export uses this same label (the display IS the export); the raw id
+// stays recoverable from the model picker.
+export function modelLabel(t: TFunction<'dashboard'>, r: Pick<ModelUsage, 'model' | 'servedModel'>): string {
+  const raw = r.model
+  const id = raw.startsWith('agent:')
+    ? t('analytics.models.agent', {name: raw.slice('agent:'.length)})
+    : raw.startsWith('claude:')
+      ? t('analytics.models.claude', {name: raw.slice('claude:'.length)})
+      : raw
+  return r.servedModel && r.servedModel !== raw ? `${id} · ${r.servedModel}` : id
+}
+
+// Azure AI Foundry usage is not priced by baki (the cost lives in the Azure
+// portal): its cost cells show an em dash, named "Not priced by baki" for
+// assistive tech, instead of a misleading $0.00, and its bar is left out of
+// the cost chart (the bar's value label and tooltip would read $0.00). The
+// CSV export keeps the raw number.
+const isUnpriced = (provider: string) => provider === 'azure-foundry'
+
+function ProviderCost({provider, cost}: {provider: string; cost: number}) {
+  const {t} = useTranslation('dashboard')
+  if (!isUnpriced(provider)) return formatCurrency(cost)
+  const label = t('analytics.cards.costNotPriced')
+  return (
+    <span title={label}>
+      <span aria-hidden="true">—</span>
+      <span className="sr-only">{label}</span>
+    </span>
+  )
 }
 
 // Model calls, tokens and spend for the account and/or the scoped orgs. Usage
@@ -42,6 +73,7 @@ export function AiSection({data, refetching}: {data: DashboardAnalyticsData; ref
         .map(p => ({key: p.provider, label: p.provider, value: p.cost, tokensIn: p.tokensIn, tokensOut: p.tokensOut})),
     [ai.byProvider],
   )
+  const pricedProviders = useMemo(() => providers.filter(p => !isUnpriced(p.key)), [providers])
   const scope =
     ai.scoped === 'org'
       ? t('analytics.cards.aiScopeOrg')
@@ -139,19 +171,23 @@ export function AiSection({data, refetching}: {data: DashboardAnalyticsData; ref
               key: 'value',
               header: t('analytics.columns.cost'),
               align: 'right',
-              render: r => formatCurrency(r.value),
+              render: r => <ProviderCost provider={r.key} cost={r.value} />,
               csv: r => String(r.value),
             },
           ],
           rows: providers,
         }}
       >
-        <HBarChart
-          rows={providers}
-          valueName={t('analytics.columns.cost')}
-          valueFormatter={v => formatCurrency(v)}
-          allowDecimals
-        />
+        {pricedProviders.length > 0 ? (
+          <HBarChart
+            rows={pricedProviders}
+            valueName={t('analytics.columns.cost')}
+            valueFormatter={v => formatCurrency(v)}
+            allowDecimals
+          />
+        ) : (
+          <p className="py-8 text-center text-sm text-text-tertiary">{t('analytics.cards.costOnlyUnpriced')}</p>
+        )}
       </ChartCard>
       <ChartCard
         title={t('analytics.cards.byModel')}
@@ -169,8 +205,8 @@ export function AiSection({data, refetching}: {data: DashboardAnalyticsData; ref
             {
               key: 'model',
               header: t('analytics.columns.model'),
-              render: r => modelLabel(r),
-              csv: r => modelLabel(r),
+              render: r => modelLabel(t, r),
+              csv: r => modelLabel(t, r),
             },
             {key: 'calls', header: t('analytics.columns.calls'), align: 'right'},
             {
@@ -191,7 +227,7 @@ export function AiSection({data, refetching}: {data: DashboardAnalyticsData; ref
               key: 'cost',
               header: t('analytics.columns.cost'),
               align: 'right',
-              render: r => formatCurrency(r.cost),
+              render: r => <ProviderCost provider={r.provider} cost={r.cost} />,
               csv: r => String(r.cost),
             },
           ]}

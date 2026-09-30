@@ -41,24 +41,15 @@ func azurePricingServer(t *testing.T, servedModel string, deployments ...string)
 
 // Finding #39 end to end: Embed through the real factory chain (tracing,
 // retry and breaker wrappers hide EmbeddingModel) records the EMBEDDING
-// deployment — not the chat deployment — priced by its catalogued name in
-// API-key mode; an uncatalogued embedding deployment is not guessed: it is
-// counted by the fallback metric and billed at the EMBEDDING ceiling
-// (V-price-2: the chat ceiling overstated it 23-150×), so an unknown
-// deployment cannot bill $0 and escape the daily budget.
-func TestAuditedAzure_EmbedThroughFactoryChainPricedByDeploymentName(t *testing.T) {
+// deployment — not the chat deployment. Azure is unpriced, so the row carries
+// $0 for catalogued and uncatalogued deployments alike, and no
+// pricing-fallback metric moves.
+func TestAuditedAzure_EmbedThroughFactoryChainRecordsDeploymentUnpriced(t *testing.T) {
 	srv := azurePricingServer(t, "gpt-4o-2024-11-20", "chat", "text-embedding-3-small", "my-embed")
-	small, _ := catalogEntryFor(azureFoundryProviderID, "text-embedding-3-small")
 	texts := []string{"alpha beta gamma delta", "one two three four five six"}
 
-	for _, tc := range []struct {
-		deployment   string
-		pricing      Pricing
-		wantFallback bool
-	}{
-		{"text-embedding-3-small", small.Pricing, false},
-		{"my-embed", AliasEmbeddingCeiling(azureFoundryProviderID), true},
-	} {
+	for _, deployment := range []string{"text-embedding-3-small", "my-embed"} {
+		tc := struct{ deployment string }{deployment}
 		sink := newUsageSink()
 		f := &ProviderFactory{recorder: sink.recorder()}
 		raw := newAzureKeyProvider(t, srv, func(c *AzureFoundryConfig) {
@@ -78,10 +69,50 @@ func TestAuditedAzure_EmbedThroughFactoryChainPricedByDeploymentName(t *testing.
 		if m.Model != tc.deployment {
 			t.Errorf("usage model = %q, want the embedding deployment %q", m.Model, tc.deployment)
 		}
-		assertCost(t, tc.deployment, m.EstimatedCost, costOf(tokens, 0, tc.pricing))
-		fallbacks := countPricingFallback(t, azureFoundryProviderID, "deployment") - before
-		if tc.wantFallback != (fallbacks == 1) {
-			t.Errorf("%s: pricing-fallback metric moved by %v (fallback expected: %v)", tc.deployment, fallbacks, tc.wantFallback)
+		if m.EstimatedCost != 0 {
+			t.Errorf("%s: cost = %v, want 0 (azure-foundry is unpriced)", tc.deployment, m.EstimatedCost)
+		}
+		if m.PromptTokens != tokens {
+			t.Errorf("%s: prompt tokens = %d, want %d", tc.deployment, m.PromptTokens, tokens)
+		}
+		if fallbacks := countPricingFallback(t, azureFoundryProviderID, "deployment") - before; fallbacks != 0 {
+			t.Errorf("%s: pricing-fallback metric moved by %v, want 0", tc.deployment, fallbacks)
+		}
+	}
+}
+
+// A full Azure turn through the real factory chain and the audited wrapper
+// records the token counts the deployment reported and a $0 cost (Azure AI
+// Foundry is unpriced), with the served model recorded and no pricing-fallback
+// metric — for a catalogued served model and an unknown one alike.
+func TestAuditedAzure_FullTurnRecordsTokensAtZeroCost(t *testing.T) {
+	for _, served := range []string{"gpt-4o-2024-11-20", "brand-new-model"} {
+		srv := azurePricingServer(t, served, "chat")
+		sink := newUsageSink()
+		f := &ProviderFactory{recorder: sink.recorder()}
+		raw := newAzureKeyProvider(t, srv, func(c *AzureFoundryConfig) { c.ChatDeployment = "chat" })
+		p := f.wrapChain(raw, "u1", azureFoundryProviderID)
+		before := countPricingFallback(t, azureFoundryProviderID, "deployment")
+
+		resp, err := p.Chat(context.Background(), Request{Model: "chat", Messages: []Message{{Role: "user", Content: "hi"}}})
+		if err != nil {
+			t.Fatalf("%s: Chat: %v", served, err)
+		}
+		if resp.TokensIn != 10 || resp.TokensOut != 5 {
+			t.Fatalf("%s: response tokens = %d/%d, want the reported 10/5", served, resp.TokensIn, resp.TokensOut)
+		}
+		m := sink.next(t)
+		if m.PromptTokens != 10 || m.CompletionTokens != 5 {
+			t.Errorf("%s: recorded tokens = %d/%d, want 10/5", served, m.PromptTokens, m.CompletionTokens)
+		}
+		if m.EstimatedCost != 0 {
+			t.Errorf("%s: recorded cost = %v, want 0 (azure-foundry is unpriced)", served, m.EstimatedCost)
+		}
+		if m.Provider != azureFoundryProviderID || m.Model != "chat" || m.ServedModel != served {
+			t.Errorf("%s: recorded row = %+v, want provider/model/served model attributed", served, m)
+		}
+		if after := countPricingFallback(t, azureFoundryProviderID, "deployment"); after != before {
+			t.Errorf("%s: pricing-fallback metric moved by %v, want 0", served, after-before)
 		}
 	}
 }
@@ -145,10 +176,12 @@ func (s *slowListingEmbedStub) Models(ctx context.Context) ([]ModelInfo, error) 
 	return s.models, nil
 }
 
-// Finding #21: pricing an embedding may need the live model listing. The
-// per-turn RAG query embeds under an 800 ms budget, so Embed returns as soon
-// as the vectors arrive and prices/records on a detached, bounded context —
-// the caller's cancellation neither delays the call nor cuts the listing.
+// Finding #21: pricing an embedding may need the live model listing (for the
+// providers whose listing carries prices; Azure is unpriced and needs none).
+// The per-turn RAG query embeds under an 800 ms budget, so Embed returns as
+// soon as the vectors arrive and prices/records on a detached, bounded
+// context — the caller's cancellation neither delays the call nor cuts the
+// listing.
 func TestAuditedEmbed_PricesOnDetachedContext(t *testing.T) {
 	resetServedModels()
 	stub := &slowListingEmbedStub{
@@ -159,7 +192,8 @@ func TestAuditedEmbed_PricesOnDetachedContext(t *testing.T) {
 		release: make(chan struct{}),
 	}
 	sink := newUsageSink()
-	ap := NewAuditedProvider(stub, sink.recorder(), "u1", azureFoundryProviderID)
+	// A priced (non-alias) provider label: only those consult the listing.
+	ap := NewAuditedProvider(stub, sink.recorder(), "u1", "slow-listing")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
 	start := time.Now()

@@ -183,6 +183,18 @@ param auditSpillDir string = '/tmp/baki-audit-spill'
 @description('Block self-registration (PAD_FEATURE_DISABLE_SIGNUP). Note the FIRST registered user becomes admin, so leave this false until that account exists.')
 param disableSignUp bool = false
 
+@description('Extra hosts allowed for Azure AI Foundry endpoints, comma-separated: exact hosts or *.suffix globs such as an API Management front (PAD_AZURE_FOUNDRY_ALLOWED_HOSTS). A glob over a public multi-tenant Azure zone (*.azure-api.net, *.azurewebsites.net, ...) refuses to boot — list exact hosts there. Empty uses the built-in allow-list.')
+param azureFoundryAllowedHosts string = ''
+
+@description('Allow AI endpoints that resolve to private addresses (PAD_AI_ALLOW_PRIVATE_EGRESS): private-link Foundry resources whose hosts resolve to private addresses by design. Needs VNet integration, which this template does NOT provision — without it a private-link endpoint stays unreachable. Opens RFC 1918 and IPv6 unique-local addresses only; loopback, link-local and metadata addresses stay refused.')
+param aiAllowPrivateEgress bool = false
+
+@description('Knowledge-base embedding provider for the whole deployment (PAD_EMBEDDING_PROVIDER): one of openai, gemini, glm, github-models, azure-foundry — anything else refuses to boot. azure-foundry is the only way the knowledge base embeds with Azure AI Foundry; keep every member\'s embedding deployment on the same model. Empty uses the Embedding Assistant setting (default openai).')
+param embeddingProvider string = ''
+
+@description('Knowledge-base embedding width (PAD_EMBEDDING_DIM). Empty uses the app default of 1536. Changing it on a populated knowledge base needs a re-index.')
+param embeddingDim string = ''
+
 // ── Probes and alerting ────────────────────────────────────────────────────
 
 @description('Seconds before the first probe. A cold start runs schema migrations before it can serve, so do not set this too low.')
@@ -488,7 +500,11 @@ var optionalEnv = concat(
   empty(auditRetentionDays) ? [] : [ { name: 'PAD_AUDIT_RETENTION_DAYS', value: auditRetentionDays } ],
   empty(scanInterval) ? [] : [ { name: 'PAD_SCAN_INTERVAL', value: scanInterval } ],
   empty(notifyTeamsUrl) ? [] : [ { name: 'PAD_NOTIFY_TEAMS_URL', value: notifyTeamsUrl } ],
-  empty(notifyWebhookUrl) ? [] : [ { name: 'PAD_NOTIFY_WEBHOOK_URL', value: notifyWebhookUrl } ]
+  empty(notifyWebhookUrl) ? [] : [ { name: 'PAD_NOTIFY_WEBHOOK_URL', value: notifyWebhookUrl } ],
+  empty(azureFoundryAllowedHosts) ? [] : [ { name: 'PAD_AZURE_FOUNDRY_ALLOWED_HOSTS', value: azureFoundryAllowedHosts } ],
+  aiAllowPrivateEgress ? [ { name: 'PAD_AI_ALLOW_PRIVATE_EGRESS', value: 'true' } ] : [],
+  empty(embeddingProvider) ? [] : [ { name: 'PAD_EMBEDDING_PROVIDER', value: embeddingProvider } ],
+  empty(embeddingDim) ? [] : [ { name: 'PAD_EMBEDDING_DIM', value: embeddingDim } ]
 )
 
 // Email is all-or-nothing: without it the app silently downgrades to a log-only

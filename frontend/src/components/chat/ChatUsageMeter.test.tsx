@@ -61,6 +61,21 @@ describe('threadCostEstimate', () => {
       lowerBound: true,
     })
   })
+
+  // Azure AI Foundry is not priced by baki: its turns are left out, never
+  // billed at another model's listing, and do not make the figure a bound.
+  const azure = assistant({id: 'az', provider: 'azure-foundry', tokensIn: 3000, tokensOut: 1000})
+  const openai = assistant({id: 'oa', provider: 'openai', tokensIn: 1000, tokensOut: 500})
+
+  it('prices only the non-Azure tokens of a mixed thread at the current listing', () => {
+    // Current model OpenAI at 2/10: only its 1000/500 → 0.002 + 0.005.
+    expect(threadCostEstimate([azure, openai], 4000, 1500, 2, 10)).toEqual({cost: 0.007, lowerBound: false})
+  })
+
+  it('shows no figure when every priced-looking token is Azure', () => {
+    expect(threadCostEstimate([azure], 3000, 1000, 2, 10)).toBeNull()
+    expect(threadCostEstimate([azure, rated], 4000, 1000, 0, 0)).toEqual({cost: 0.001, lowerBound: false})
+  })
 })
 
 describe('ChatUsageMeter', () => {
@@ -100,5 +115,26 @@ describe('ChatUsageMeter', () => {
     seed([assistant({tokensIn: 1000, tokensOut: 500, inputCostPerM: 20, outputCostPerM: 100})], false)
     render(<ChatUsageMeter promptTokens={1000} completionTokens={500} inputCostPerM={2} outputCostPerM={10} />)
     expect(screen.queryByText(/\$/)).toBeNull()
+  })
+
+  it('does not price Azure turns at the current model listing in a mixed thread', () => {
+    seed([
+      assistant({id: 'a1', provider: 'azure-foundry', tokensIn: 100_000, tokensOut: 50_000}),
+      assistant({id: 'a2', provider: 'openai', tokensIn: 1000, tokensOut: 500}),
+    ])
+    render(<ChatUsageMeter promptTokens={101_000} completionTokens={50_500} inputCostPerM={2} outputCostPerM={10} />)
+    // 1000*2/1M + 500*10/1M; the Azure 100k/50k would add $0.700.
+    expect(screen.getByText(/· \$0\.007/)).toBeInTheDocument()
+  })
+
+  it('shows only token counts for an unpriced (Azure) thread: zero rates on every turn and a $0 listing', () => {
+    seed([
+      assistant({id: 'a1', tokensIn: 1000, tokensOut: 500, inputCostPerM: 0, outputCostPerM: 0, servedModel: 'gpt-4o'}),
+      assistant({id: 'a2', tokensIn: 200, tokensOut: 50, inputCostPerM: 0, outputCostPerM: 0, servedModel: 'gpt-4o'}),
+    ])
+    render(<ChatUsageMeter promptTokens={1200} completionTokens={550} inputCostPerM={0} outputCostPerM={0} />)
+    expect(screen.getByText(/tokens/)).toBeInTheDocument()
+    expect(screen.queryByText(/\$/)).toBeNull()
+    expect(screen.queryByTitle(/At least this much/)).toBeNull()
   })
 })

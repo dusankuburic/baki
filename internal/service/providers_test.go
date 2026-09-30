@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/testutil"
 	"pad-core/models"
 )
@@ -21,6 +22,67 @@ func newProviderServiceWithFakeSecrets(t *testing.T, secrets *testutil.FakeSecre
 	}
 	factory := ai.NewProviderFactory(getKey, ai.NewCopilotAuth(), nil, nil)
 	return NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
+}
+
+// setLocalModelsEgress installs the local models egress policy for the test
+// and restores the unconfigured (cloud) posture afterwards.
+func setLocalModelsEgress(t *testing.T, p egress.Policy) {
+	t.Helper()
+	ai.ConfigureLocalModels(ai.LocalModelsOptions{Egress: p})
+	t.Cleanup(func() { ai.ConfigureLocalModels(ai.LocalModelsOptions{}) })
+}
+
+// B3: where local models are unavailable (cloud) the read is refused with the
+// save's LOCAL_MODELS_UNAVAILABLE error, even over a stored document; on the
+// desktop it answers the public view.
+func TestGetLocalConfig_RefusedWhereUnavailable(t *testing.T) {
+	secrets := testutil.NewFakeSecretStore()
+	svc := newProviderServiceWithFakeSecrets(t, secrets)
+	if err := secrets.Save("u1", ai.LocalProviderID, `{"baseUrl":"http://127.0.0.1:11434","contextWindow":16384}`); err != nil {
+		t.Fatal(err)
+	}
+
+	setLocalModelsEgress(t, egress.BlockInternal)
+	cfg, err := svc.GetLocalConfig("u1")
+	var ce *ai.LocalConfigError
+	if !errors.As(err, &ce) || ce.Code != ai.LocalCfgErrUnavailable || cfg.Configured {
+		t.Errorf("cloud: cfg = %+v, err = %v, want LOCAL_MODELS_UNAVAILABLE", cfg, err)
+	}
+
+	setLocalModelsEgress(t, egress.AllowLoopback)
+	cfg, err = svc.GetLocalConfig("u1")
+	if err != nil || !cfg.Configured || cfg.BaseURL != "http://127.0.0.1:11434" || cfg.ContextWindow != 16384 {
+		t.Errorf("desktop: cfg = %+v, err = %v", cfg, err)
+	}
+	if cfg, err := svc.GetLocalConfig("u2"); err != nil || cfg.Configured {
+		t.Errorf("desktop, nothing stored: cfg = %+v, err = %v", cfg, err)
+	}
+}
+
+// B11: the context window is validated and stored with the base URL; a
+// refused window stores nothing.
+func TestSaveLocalConfig_ContextWindow(t *testing.T) {
+	setLocalModelsEgress(t, egress.AllowLoopback)
+	secrets := testutil.NewFakeSecretStore()
+	svc := newProviderServiceWithFakeSecrets(t, secrets)
+
+	_, err := svc.SaveLocalConfig("u1", "http://127.0.0.1:11434", 512)
+	var ce *ai.LocalConfigError
+	if !errors.As(err, &ce) || ce.Code != ai.LocalCfgErrInvalidContextWindow {
+		t.Errorf("512: err = %v, want INVALID_CONTEXT_WINDOW", err)
+	}
+	if has, _ := secrets.Has("u1", ai.LocalProviderID); has {
+		t.Fatal("a refused save stored a document")
+	}
+
+	cfg, err := svc.SaveLocalConfig("u1", "http://127.0.0.1:11434/v1", 65536)
+	if err != nil || cfg.ContextWindow != 65536 || cfg.BaseURL != "http://127.0.0.1:11434" {
+		t.Fatalf("save = %+v, %v", cfg, err)
+	}
+	pub, err := svc.GetLocalConfig("u1")
+	if err != nil || pub.ContextWindow != 65536 {
+		t.Errorf("GET after save = %+v, %v", pub, err)
+	}
 }
 
 // TestListProviders_GithubModels_PerUserConfigured verifies that a github-models

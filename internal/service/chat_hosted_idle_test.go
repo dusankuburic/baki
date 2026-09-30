@@ -26,7 +26,11 @@ type silentHostedProvider struct {
 	// judged at the normal idle limit (silence before a provider's first
 	// output gets the hosted limit — a reasoning model thinking silently).
 	preText bool
-	calls   atomic.Int32
+	// silentStep brackets the silence with ai.Chunk.SilentStep +1/-1 instead
+	// of a hosted ToolEvent: a Responses reasoning item with summaries off
+	// (F-08) — text already streamed, no hosted tool, nothing on the wire.
+	silentStep bool
+	calls      atomic.Int32
 }
 
 func (p *silentHostedProvider) SupportsTools() bool { return true }
@@ -46,10 +50,16 @@ func (p *silentHostedProvider) Stream(ctx context.Context, _ ai.Request, onChunk
 	if p.preText {
 		onChunk(ai.Chunk{Text: "first, "})
 	}
+	if p.silentStep {
+		onChunk(ai.Chunk{SilentStep: 1})
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-time.After(p.silence):
+	}
+	if p.silentStep {
+		onChunk(ai.Chunk{SilentStep: -1})
 	}
 	if p.openStep {
 		onChunk(ai.Chunk{ToolEvent: &ai.ToolEvent{Name: "mcp_call", Label: "Agent · MCP tool", Done: true, OK: true}})
@@ -201,6 +211,65 @@ func TestStream_SilenceBeforeFirstOutputUsesHostedLimit(t *testing.T) {
 		}
 		if took := time.Since(started); took > 2500*time.Millisecond {
 			t.Errorf("hung provider cancelled after %v, want about the hosted limit", took)
+		}
+	})
+}
+
+// TestStream_SilentReasoningStepHoldsHostedLimit (F-08): a summary-less
+// reasoning phase AFTER the first output token — a Responses reasoning item
+// with summaries off, bracketed by ai.Chunk.SilentStep — holds the
+// hosted-step idle limit like a hosted tool step, on both stream paths. The
+// 90 s watchdog used to cancel the turn mid-thinking; without the SilentStep
+// wiring this silence is judged at the normal limit (see
+// TestStream_SilenceWithoutHostedStepStillIdleCancelled).
+func TestStream_SilentReasoningStepHoldsHostedLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		useTools bool
+	}{{"plain stream path", false}, {"tool loop path", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &silentHostedProvider{FakeProvider: &testutil.FakeProvider{}, silence: 4 * testIdleLimit, preText: true, silentStep: true}
+			typ, data := runSilentHostedStream(t, p, tc.useTools, 0)
+			if typ != "done" {
+				t.Errorf("stream ended with %s %v, want done (the silent reasoning step holds the hosted limit)", typ, data)
+			}
+		})
+	}
+	// Still bounded: a reasoning phase that never ends is caught at the
+	// hosted limit, not allowed to run to the stream cap.
+	t.Run("hung silent step is still bounded", func(t *testing.T) {
+		p := &silentHostedProvider{FakeProvider: &testutil.FakeProvider{}, silence: 3 * time.Second, preText: true, silentStep: true}
+		started := time.Now()
+		typ, data := runSilentHostedStream(t, p, true, 2*testIdleLimit)
+		if msg, _ := data["message"].(string); typ != "error" || !strings.Contains(msg, providerStalled) {
+			t.Errorf("stream ended with %s %v, want the provider-stalled error", typ, data)
+		}
+		if took := time.Since(started); took > 2500*time.Millisecond {
+			t.Errorf("hung silent step cancelled after %v, want about the hosted limit", took)
+		}
+	})
+	// The control: the same silence with no step open still trips the normal
+	// idle limit once output was seen — the marker is what holds the limit.
+	t.Run("without the marker the normal limit applies", func(t *testing.T) {
+		p := &silentHostedProvider{FakeProvider: &testutil.FakeProvider{}, silence: 2 * time.Second, preText: true}
+		typ, data := runSilentHostedStream(t, p, true, 0)
+		if msg, _ := data["message"].(string); typ != "error" || !strings.Contains(msg, providerStalled) {
+			t.Errorf("stream ended with %s %v, want the provider-stalled error", typ, data)
+		}
+	})
+	// idleLimitFor toggles with the SilentStep accounting: the chunk callback
+	// maps SilentStep ±1 onto hostedStep, so the limit rises while a silent
+	// phase is open and falls at its end (or the turn's).
+	t.Run("idleLimitFor toggles with the SilentStep accounting", func(t *testing.T) {
+		svc := &ChatService{idleTimeout: 50 * time.Millisecond}
+		ctl := &streamCtl{}
+		ctl.hostedStep(true) // Chunk{SilentStep: 1}
+		if got := svc.idleLimitFor(ctl); got != hostedStepIdleTimeout {
+			t.Errorf("idle limit while a silent step is open = %v, want %v", got, hostedStepIdleTimeout)
+		}
+		ctl.hostedStep(false) // Chunk{SilentStep: -1}
+		if got := svc.idleLimitFor(ctl); got != 50*time.Millisecond {
+			t.Errorf("idle limit after the silent step = %v, want the normal limit", got)
 		}
 	})
 }

@@ -45,6 +45,18 @@ type AzureFoundryProvider struct {
 	// deployments ("claude:<name>" ids), built on first use (claudeProvider).
 	claudeOnce sync.Once
 	claude     *ClaudeProvider
+
+	// fromRegistry marks a provider built for one resource of the model
+	// registry (NewAzureFoundryConnectionProvider): its deployments are the
+	// registry's entries (registry, sorted), its listing never waits on the
+	// network (Models) and it names no default model (DefaultModel).
+	fromRegistry bool
+	registry     []AzureRegisteredModel
+	// isolated marks a provider that must leave the process-wide caches
+	// untouched — discovery and the resource and model tests: no project
+	// listing is read from or stored in azureModelsCache, and no agent kind is
+	// remembered (agentKinds).
+	isolated bool
 }
 
 // NewAzureFoundryProvider builds the provider from the stored document (see
@@ -61,6 +73,25 @@ func NewAzureFoundryProvider(raw string) *AzureFoundryProvider {
 // newAzureFoundryProvider is the constructor proper; tests hand it a parsed
 // (unvalidated) config pointing at a local server and that server's client.
 func newAzureFoundryProvider(cfg AzureFoundryConfig, cfgErr error, client *http.Client) *AzureFoundryProvider {
+	return newAzureFoundryProviderFrom(cfg, cfgErr, client, processEntraSources)
+}
+
+// entraSourceFactory resolves the Entra ID token source a provider signs in
+// with. processEntraSources shares one per principal, process-wide, across
+// every provider the factory builds (entraSourceFor); throwawayEntraSources
+// builds a private one per provider for credentials that may not be saved —
+// the resource and model tests (azure_probe.go) — which must neither enter
+// the process-wide registry nor be served a token cached in it.
+type entraSourceFactory struct {
+	secret func(tenantID, clientID, clientSecret string) (*entraTokenSource, error)
+	cli    func(tenantID string) (*entraTokenSource, error)
+}
+
+var processEntraSources = entraSourceFactory{secret: entraSourceFor, cli: entraCLISourceFor}
+
+// newAzureFoundryProviderFrom is newAzureFoundryProvider with the Entra ID
+// token sources named (see entraSourceFactory).
+func newAzureFoundryProviderFrom(cfg AzureFoundryConfig, cfgErr error, client *http.Client, sources entraSourceFactory) *AzureFoundryProvider {
 	p := &AzureFoundryProvider{}
 	if cfgErr != nil {
 		p.configErr = fmt.Errorf("%w: %w", ErrProviderConfigInvalid, cfgErr)
@@ -93,7 +124,7 @@ func newAzureFoundryProvider(cfg AzureFoundryConfig, cfgErr error, client *http.
 		p.apiKey = cfg.Auth.Key
 		p.apiKeyHeader = "api-key"
 	case AzureAuthModeEntra:
-		src, err := entraSourceFor(cfg.Auth.TenantID, cfg.Auth.ClientID, cfg.Auth.ClientSecret)
+		src, err := sources.secret(cfg.Auth.TenantID, cfg.Auth.ClientID, cfg.Auth.ClientSecret)
 		if err != nil {
 			p.configErr = fmt.Errorf("%w: %w", ErrProviderConfigInvalid, err)
 			return p
@@ -106,6 +137,30 @@ func newAzureFoundryProvider(cfg AzureFoundryConfig, cfgErr error, client *http.
 		// path; API-key mode keeps the bare invalid-key mapping; a 403 is
 		// handle403's.
 		p.handle401 = entraUnauthorized
+	case AzureAuthModeEntraCLI:
+		// F-51: the Azure CLI's signed-in user (desktop app only — the
+		// config layer refuses the mode under the cloud egress policy).
+		src, err := sources.cli(cfg.Auth.TenantID)
+		if err != nil {
+			p.configErr = fmt.Errorf("%w: %w", ErrProviderConfigInvalid, err)
+			return p
+		}
+		p.tokens = src
+		p.tokenFn = p.entraToken
+		p.handle401 = entraUnauthorized
+	}
+	// F-18: a deployment whose chat-completions request is rejected for
+	// combining function tools with reasoning (gpt-5.6) is rerouted through
+	// the resource's Responses route, which keeps reasoning with tools.
+	// Set once here; every provider instance is single-threaded by
+	// construction (the factory builds one per request).
+	p.rerouteToolsRejection = func(ctx context.Context, req Request, onChunk func(Chunk)) (bool, error) {
+		if use, known := responsesRouteFor(p.responsesRouteKey(req.Model)); known && !use {
+			return false, nil // the route refused this model: repair instead
+		}
+		return true, p.withTokenRetry(ctx, func(ctx context.Context) error {
+			return p.modelStream(ctx, req, onChunk)
+		})
 	}
 	return p
 }
@@ -206,7 +261,7 @@ func (p *AzureFoundryProvider) authorize(ctx context.Context, req *http.Request)
 	case AzureAuthModeAPIKey:
 		// Only the api-key header (see newAzureFoundryProvider).
 		req.Header.Set("api-key", p.cfg.Auth.Key)
-	case AzureAuthModeEntra:
+	case AzureAuthModeEntra, AzureAuthModeEntraCLI:
 		tok, err := p.entraToken(ctx)
 		if err != nil {
 			return err
@@ -251,17 +306,24 @@ func (p *AzureFoundryProvider) probeProject(ctx context.Context) error {
 
 // ForgetAzureFoundryCredential releases what the process keeps for a document
 // beyond the KeyStore: its Entra ID token source (credential object and
-// cached bearer token) and its cached project listing. Called when the
+// cached bearer token) and its cached project listings. Called when the
 // document is deleted or replaced by one with another credential. Memos keyed
 // by resource (served models, learned windows) hold no secret and stay.
 func ForgetAzureFoundryCredential(cfg AzureFoundryConfig) {
 	if !cfg.Configured() {
 		return
 	}
-	if cfg.Auth.Mode == AzureAuthModeEntra {
+	switch cfg.Auth.Mode {
+	case AzureAuthModeEntra:
 		forgetEntraSource(cfg.Auth.TenantID, cfg.Auth.ClientID, cfg.Auth.ClientSecret)
+	case AzureAuthModeEntraCLI:
+		forgetEntraCLISource(cfg.Auth.TenantID)
 	}
-	InvalidateAzureFoundryModels(cfg)
+	// Every listing built on the credential, not only the one the document's
+	// own deployment fields key: a registry resource's listing is keyed by
+	// its entries (NewAzureFoundryConnectionProvider), which the caller
+	// releasing a credential does not know.
+	invalidateAzureCredentialListings(cfg.Fingerprint())
 }
 
 // servedMemoResource scopes the served-model memo to this resource (and
@@ -299,10 +361,11 @@ func (p *AzureFoundryProvider) FreeModel() string { return "" }
 // calling; models that don't reject the request and the loop degrades.
 func (p *AzureFoundryProvider) SupportsTools() bool { return true }
 
-// PricePerMillionTokens is zero on purpose: the deployment name says nothing
-// about cost. Usage is priced by the model the response reports serving
-// (auditedProvider.record → catalogEntryFor); a served model the catalogue
-// does not know is metered at $0 and counted by the pricing-fallback metric.
+// PricePerMillionTokens is zero on purpose: Azure AI Foundry is not priced by
+// baki (auditedProvider.pricingFor). Usage rows record the tokens at $0 with
+// the model the response reports serving, nothing is reserved against the
+// daily budget, and no pricing-fallback metric is counted; the cost is read in
+// the Azure portal.
 func (p *AzureFoundryProvider) PricePerMillionTokens() Pricing { return Pricing{} }
 
 // DefaultModel is the configured chat deployment, else the first additional
@@ -311,8 +374,13 @@ func (p *AzureFoundryProvider) PricePerMillionTokens() Pricing { return Pricing{
 // project listing) has no default: "" lets ProviderService pick the first
 // listed chat deployment instead of a catalogue name the resource almost
 // certainly has not deployed. The unconfigured metadata provider keeps the
-// catalogue's reference default.
+// catalogue's reference default. A registry provider names none: a
+// resource's default is the registry's to pick (the server default,
+// member-first), never the first entry in sort order.
 func (p *AzureFoundryProvider) DefaultModel() string {
+	if p.fromRegistry {
+		return ""
+	}
 	if !p.cfg.Configured() {
 		return "gpt-4.1"
 	}
@@ -362,6 +430,19 @@ func (p *AzureFoundryProvider) Chat(ctx context.Context, req Request) (*Response
 		})
 		return resp, err
 	}
+	// A deployment already rerouted to the Responses route (F-18) keeps
+	// answering there on the non-streaming path too.
+	if len(req.Tools) > 0 {
+		if use, known := responsesRouteFor(p.responsesRouteKey(req.Model)); known && use {
+			var resp *Response
+			err := p.withTokenRetry(ctx, func(ctx context.Context) error {
+				var err error
+				resp, err = p.modelChat(ctx, req)
+				return err
+			})
+			return resp, err
+		}
+	}
 	var resp *Response
 	err := p.withTokenRetry(ctx, func(ctx context.Context) error {
 		var err error
@@ -382,6 +463,19 @@ func (p *AzureFoundryProvider) Stream(ctx context.Context, req Request, onChunk 
 	if IsAgentModel(req.Model) {
 		return p.withTokenRetry(ctx, func(ctx context.Context) error { return p.agentStream(ctx, req, onChunk) })
 	}
+	// A tools turn already rerouted to the Responses route (F-18): straight
+	// there, skipping the chat-completions rejection round trip. modelStream
+	// itself falls back when the route has since refused the model. A route
+	// known to refuse the model: chat completions with the built-in repair
+	// at once — escaping to the reroute would only pay the rejection twice.
+	if len(req.Tools) > 0 {
+		switch use, known := responsesRouteFor(p.responsesRouteKey(req.Model)); {
+		case known && use:
+			return p.withTokenRetry(ctx, func(ctx context.Context) error { return p.modelStream(ctx, req, onChunk) })
+		case known:
+			return p.withTokenRetry(ctx, func(ctx context.Context) error { return p.streamInner(ctx, req, onChunk, false) })
+		}
+	}
 	// A 401 arrives as the HTTP status, before any chunk, so a retry never
 	// replays a partially delivered stream.
 	return p.withTokenRetry(ctx, func(ctx context.Context) error { return p.stream(ctx, req, onChunk) })
@@ -401,10 +495,16 @@ func (p *AzureFoundryProvider) claudeRoute(model string) (string, bool) {
 
 // cachedListing is this document's cached project listing while one is live
 // (Entra ID + project endpoint). It never fetches: the chat path consults it
-// for routing and the sampling policy without paying for a listing.
+// for routing and the sampling policy without paying for a listing. A
+// registry provider, whose listing never waits on the network, also serves
+// one expired less than azureModelsStaleGrace ago; an isolated provider
+// (discovery, the tests) reads none.
 func (p *AzureFoundryProvider) cachedListing() ([]ModelInfo, bool) {
-	if p.configErr != nil || !p.cfg.Configured() || !p.cfg.listsProjectDeployments() {
+	if p.configErr != nil || p.isolated || !p.cfg.Configured() || !p.cfg.listsProjectDeployments() {
 		return nil, false
+	}
+	if p.fromRegistry {
+		return cachedAzureModelsWithin(azureModelsCacheKey(p.cfg), azureModelsStaleGrace)
 	}
 	return cachedAzureModels(azureModelsCacheKey(p.cfg))
 }
@@ -458,7 +558,14 @@ func (p *AzureFoundryProvider) claudeServedModel(deployment string) string {
 // embeddingUnavailable) so the knowledge base's embedder resolution moves on
 // and ends in the machine-readable "embedding not configured" error instead
 // of a masked 500 at Embed time.
-var ErrEmbeddingDeploymentMissing = errors.New("azure ai foundry: no embedding deployment configured — set one under Settings → AI Accounts → Azure AI Foundry")
+var ErrEmbeddingDeploymentMissing = errors.New("azure ai foundry: no embedding model for the knowledge base — add an embedding model under Settings → AI Accounts → Azure AI Foundry and mark it \"Use for knowledge base\"")
+
+// ErrOrgEmbeddingDeploymentMissing is ErrEmbeddingDeploymentMissing raised
+// against the ORG's shared credential: the member cannot fix it (their own
+// settings are ignored while the org credential exists), so the message aims
+// at an org admin. Wraps ErrEmbeddingDeploymentMissing so every existing
+// errors.Is check keeps holding.
+var ErrOrgEmbeddingDeploymentMissing = fmt.Errorf("the organisation has no Azure AI Foundry embedding model for its knowledge base — ask an org admin to mark one of the organisation's embedding models \"Use for knowledge base\" (Settings → Organizations): %w", ErrEmbeddingDeploymentMissing)
 
 // embeddingUnavailable satisfies embeddingReadiness (see ForEmbedding). It
 // runs after the deployment-wide embedding-model override was applied, so an
@@ -579,7 +686,10 @@ func pruneAzureModelsCacheLocked(now time.Time) {
 // includes both endpoints) AND the document's deployment names, which the
 // listing is built from: two users of one shared resource and key with
 // different deployments must never see each other's listing. Fingerprint()
-// itself stays credential-only (it also keys the Entra token sources).
+// itself stays credential-only (it also keys the Entra token sources). A
+// registry provider's deployment names are its entries, sorted
+// (NewAzureFoundryConnectionProvider): every caller that passes a resource's
+// full entry set — the model picker and the chat path — shares one listing.
 func azureModelsCacheKey(cfg AzureFoundryConfig) string {
 	parts := append([]string{cfg.Fingerprint(), cfg.ChatDeployment, cfg.EmbeddingDeployment}, cfg.Deployments...)
 	for _, d := range cfg.ClaudeDeployments {
@@ -607,6 +717,7 @@ func ResetAzureFoundryCaches() {
 	resetEmbedDimsRefusals()
 	resetEntraSources()
 	resetAgentKinds()
+	resetResponsesToolRoutes()
 }
 
 // InvalidateAzureFoundryModels drops the cached listing for one document
@@ -631,6 +742,13 @@ func InvalidateAzureFoundryModels(cfg AzureFoundryConfig) {
 // empty list. Unconfigured (metadata) providers return the static reference
 // catalogue without touching the network. A bad key is reported by the
 // connection test's chat call (401 → ErrApiKeyInvalid), not by the listing.
+//
+// A registry provider (NewAzureFoundryConnectionProvider) never waits on the
+// network here: the chat path and the model picker get the entries plus the
+// cached project listing (cachedListing, stale up to azureModelsStaleGrace),
+// and RefreshAzureFoundryListing fills that cache in the background — a cold
+// Entra ID + project cache used to delay a turn's first token by up to the
+// extras bound. An isolated provider lists the document alone.
 func (p *AzureFoundryProvider) Models(ctx context.Context) ([]ModelInfo, error) {
 	if p.configErr != nil {
 		return nil, p.configErr
@@ -639,7 +757,13 @@ func (p *AzureFoundryProvider) Models(ctx context.Context) ([]ModelInfo, error) 
 		return catalogModels(azureFoundryProviderID), nil
 	}
 	models := p.configuredDeployments()
-	if !p.cfg.listsProjectDeployments() {
+	if !p.cfg.listsProjectDeployments() || p.isolated {
+		return models, nil
+	}
+	if p.fromRegistry {
+		if cached, ok := p.cachedListing(); ok {
+			return cached, nil
+		}
 		return models, nil
 	}
 
@@ -662,17 +786,7 @@ func (p *AzureFoundryProvider) Models(ctx context.Context) ([]ModelInfo, error) 
 	// deployments keep chat working) but asked again soon instead of hiding
 	// the agents for the full TTL, and never re-fetched on every turn. An
 	// empty listing is not cached.
-	ch := azureModelsFlight.DoChan(key, func() (any, error) {
-		listed, complete := p.projectListing(withoutEntraTokenUse(context.WithoutCancel(ctx)), p.configuredDeployments())
-		if len(listed) > 0 {
-			ttl := azureModelsCacheTTL
-			if !complete {
-				ttl = azureModelsRetryAfter
-			}
-			storeAzureModels(key, listed, ttl)
-		}
-		return listed, nil
-	})
+	ch := azureModelsFlight.DoChan(key, p.listingFlight(ctx, key))
 	select {
 	case r := <-ch:
 		listed := r.Val.([]ModelInfo)
@@ -684,18 +798,57 @@ func (p *AzureFoundryProvider) Models(ctx context.Context) ([]ModelInfo, error) 
 	}
 }
 
+// listingFlight is the shared project listing of one document (key): run
+// once per key at a time (azureModelsFlight) — by Models, or by a registry
+// resource's refresh (refreshListing) — detached from the caller's
+// cancellation, and cached as Models describes.
+func (p *AzureFoundryProvider) listingFlight(ctx context.Context, key string) func() (any, error) {
+	return func() (any, error) {
+		listed, complete := p.projectListing(withoutEntraTokenUse(context.WithoutCancel(ctx)), p.configuredDeployments())
+		if len(listed) > 0 {
+			ttl := azureModelsCacheTTL
+			if !complete {
+				ttl = azureModelsRetryAfter
+			}
+			storeAzureModels(key, listed, ttl)
+		}
+		return listed, nil
+	}
+}
+
 // cachedAzureModels returns a copy of the cached listing for key while it is
 // live.
 func cachedAzureModels(key string) ([]ModelInfo, bool) {
+	return cachedAzureModelsWithin(key, 0)
+}
+
+// cachedAzureModelsWithin is cachedAzureModels that also returns a listing
+// expired less than grace ago (still in the cache: expired entries are only
+// dropped to make room, see pruneAzureModelsCacheLocked).
+func cachedAzureModelsWithin(key string, grace time.Duration) ([]ModelInfo, bool) {
 	azureModelsCache.mu.Lock()
 	defer azureModelsCache.mu.Unlock()
 	e, ok := azureModelsCache.m[key]
-	if !ok || !time.Now().Before(e.expires) {
+	if !ok || !time.Now().Before(e.expires.Add(grace)) {
 		return nil, false
 	}
 	out := make([]ModelInfo, len(e.models))
 	copy(out, e.models)
 	return out, true
+}
+
+// invalidateAzureCredentialListings drops every cached listing built on one
+// credential set (Fingerprint), whatever deployment names keyed it: every
+// key starts with the fingerprint (azureModelsCacheKey).
+func invalidateAzureCredentialListings(fingerprint string) {
+	prefix := fingerprint + "\x00"
+	azureModelsCache.mu.Lock()
+	defer azureModelsCache.mu.Unlock()
+	for k := range azureModelsCache.m {
+		if strings.HasPrefix(k, prefix) {
+			delete(azureModelsCache.m, k)
+		}
+	}
 }
 
 // storeAzureModels caches a listing for ttl, making room first when the
@@ -746,7 +899,8 @@ func (p *AzureFoundryProvider) configuredDeployments() []ModelInfo {
 // deploymentEntry is the listing entry for one deployment name. When the
 // name is itself a catalogued model — the portal's default deployment names
 // ("gpt-4o", "Phi-4", "text-embedding-3-small") — the entry carries that
-// model's price, context window and output cap up front, so a small-window
+// model's context window and output cap up front (no price: Azure AI Foundry
+// is not priced by baki), so a small-window
 // deployment is sized correctly before any call succeeded. A model-router
 // name keeps the conservative default window (each call may be routed to a
 // different model). Anything else starts at the provider-wide window and is

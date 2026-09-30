@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // F2 (Foundry OpenAI v1 route): non-streaming fallback, the Model Inference
@@ -227,8 +229,10 @@ func TestAzureFoundry_APIKeyModeSendsOnlyAPIKeyHeader(t *testing.T) {
 	}
 }
 
-// Item 15: the learned reasoning_effort repair is not pre-applied to a
-// model-router deployment (the next routed model may reject it).
+// Item 15: the learned reasoning_effort repairs are not pre-applied to a
+// model-router deployment (the next routed model may reject "none", or take
+// the effort the last one refused) — neither the tools "none" marker nor the
+// generic drop.
 func TestOpenAICompat_ReasoningEffortMemoSkipsModelRouter(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, _ map[string]any) {
 		writeJSON(w, 200, chatCompletionJSON("ok", "gpt-5"))
@@ -236,8 +240,14 @@ func TestOpenAICompat_ReasoningEffortMemoSkipsModelRouter(t *testing.T) {
 	p := newAzureKeyProvider(t, srv, nil)
 	tools := []ToolDefinition{{Name: "search_flow", InputSchema: json.RawMessage(`{"type":"object"}`)}}
 	for _, model := range []string{"model-router", "gpt-56"} {
-		rememberRepairs(p.repairsKey(model), map[string]bool{reasoningEffortParam: true})
+		rememberRepairs(p.repairsKey(model), map[string]bool{reasoningEffortNoneRepair: true})
 		if _, err := p.Chat(context.Background(), Request{Model: model, Tools: tools, Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
+			t.Fatalf("Chat %s: %v", model, err)
+		}
+	}
+	for _, model := range []string{"model-router", "gpt-4o"} {
+		rememberRepairs(p.repairsKey(model), map[string]bool{reasoningEffortParam: true})
+		if _, err := p.Chat(context.Background(), Request{Model: model, ReasoningEffort: "high", Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
 			t.Fatalf("Chat %s: %v", model, err)
 		}
 	}
@@ -247,6 +257,12 @@ func TestOpenAICompat_ReasoningEffortMemoSkipsModelRouter(t *testing.T) {
 	}
 	if reqs[1].Body[reasoningEffortParam] != "none" {
 		t.Errorf("a plain deployment keeps the learned repair: %v", reqs[1].Body)
+	}
+	if reqs[2].Body[reasoningEffortParam] != "high" {
+		t.Errorf("model router lost the user's effort to the learned drop: %v", reqs[2].Body)
+	}
+	if _, ok := reqs[3].Body[reasoningEffortParam]; ok {
+		t.Errorf("a plain deployment keeps the learned drop: %v", reqs[3].Body)
 	}
 }
 
@@ -287,5 +303,164 @@ func TestOpenAICompat_TemperatureSet(t *testing.T) {
 		case tc.want != nil && (body.Temperature == nil || *body.Temperature != *tc.want):
 			t.Errorf("%+v: temperature = %v, want %v (%s)", tc.req, body.Temperature, *tc.want, raw)
 		}
+	}
+}
+
+// F-07: the non-streaming fallback runs on the Azure transport, whose
+// ResponseHeaderTimeout is raised so a slow-header reasoning answer survives.
+// Scaled down: a raw transport with the shared client's short floor aborts a
+// 300 ms-header answer; azureTransport's raised floor carries it.
+func TestAzureTransport_HeaderTimeoutOutlivesASlowNonStreamingAnswer(t *testing.T) {
+	prev := azureResponseHeaderTimeout
+	azureResponseHeaderTimeout = 400 * time.Millisecond
+	t.Cleanup(func() { azureResponseHeaderTimeout = prev })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		writeJSON(w, 200, map[string]any{"model": "o1", "choices": []map[string]any{
+			{"finish_reason": "stop", "message": map[string]any{"role": "assistant", "content": "late"}}}})
+	}))
+	t.Cleanup(srv.Close)
+
+	raw := http.DefaultTransport.(*http.Transport).Clone()
+	raw.ResponseHeaderTimeout = 100 * time.Millisecond // the shared client's floor, scaled
+	post := func() *http.Request {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return req
+	}
+	if _, err := (&http.Client{Transport: raw}).Do(post()); err == nil || !strings.Contains(err.Error(), "timeout awaiting response headers") {
+		t.Errorf("raw transport: want the header timeout, got %v", err)
+	}
+	if _, err := (&http.Client{Transport: azureTransport(raw)}).Do(post()); err != nil {
+		t.Errorf("azureTransport: the delayed headers must survive, got %v", err)
+	}
+}
+
+// F-07: while the non-streaming fallback waits, streamViaChat emits empty
+// keepalive chunks so the chat service's idle watchdog does not cancel a long
+// silent reasoning turn.
+func TestOpenAICompat_StreamFallbackEmitsKeepalivesWhileWaiting(t *testing.T) {
+	prev := streamViaChatKeepalive
+	streamViaChatKeepalive = 10 * time.Millisecond
+	t.Cleanup(func() { streamViaChatKeepalive = prev })
+
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ int, body map[string]any) {
+		if body["stream"] == true {
+			writeJSON(w, 400, map[string]any{"error": map[string]any{"param": "stream", "code": "unsupported_value", "message": "no streaming"}})
+			return
+		}
+		time.Sleep(80 * time.Millisecond)
+		writeJSON(w, 200, map[string]any{"model": "o1", "choices": []map[string]any{
+			{"finish_reason": "stop", "message": map[string]any{"role": "assistant", "content": "done"}}},
+			"usage": map[string]any{"prompt_tokens": 3, "completion_tokens": 2}})
+	})
+	p := newAzureKeyProvider(t, srv, nil)
+	var chunks []Chunk
+	if err := p.Stream(context.Background(), Request{Model: "my-o1", Messages: []Message{{Role: "user", Content: "hi"}}}, func(c Chunk) {
+		chunks = append(chunks, c)
+	}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	keepalive := func(c Chunk) bool {
+		return c.Text == "" && c.Reasoning == "" && !c.Done && c.Error == nil &&
+			c.ToolEvent == nil && !c.ServerStep && c.SilentStep == 0 &&
+			c.ToolCalls == nil && c.TokensIn == 0 && c.TokensOut == 0
+	}
+	keepalives := 0
+	for _, c := range chunks {
+		if keepalive(c) {
+			keepalives++
+		}
+	}
+	if keepalives == 0 {
+		t.Errorf("no keepalive chunks while the non-streaming answer was pending: %+v", chunks)
+	}
+	if !keepalive(chunks[0]) {
+		t.Errorf("first chunk = %+v, want an empty keepalive", chunks[0])
+	}
+	last := chunks[len(chunks)-1]
+	if !last.Done || last.Text != "" {
+		t.Errorf("last chunk = %+v, want the Done chunk", last)
+	}
+}
+
+// A11: the non-streaming fallback replays the cached-input slice on the Done
+// chunk and on a content-filter error chunk — it used to drop it, so the
+// audited wrapper priced every cached token at the full input rate.
+func TestOpenAICompat_StreamFallbackCarriesCachedTokens(t *testing.T) {
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ int, body map[string]any) {
+		if body["stream"] == true {
+			writeJSON(w, 400, map[string]any{"error": map[string]any{"param": "stream", "code": "unsupported_value", "message": "no streaming"}})
+			return
+		}
+		finish := "stop"
+		if body["model"] == "my-o1-filtered" {
+			finish = "content_filter"
+		}
+		writeJSON(w, 200, map[string]any{"model": "o1", "choices": []map[string]any{
+			{"finish_reason": finish, "message": map[string]any{"role": "assistant", "content": "done"}}},
+			"usage": map[string]any{"prompt_tokens": 100, "completion_tokens": 2,
+				"prompt_tokens_details": map[string]any{"cached_tokens": 64}}})
+	})
+	p := newAzureKeyProvider(t, srv, nil)
+	for _, tc := range []struct {
+		model string
+		pick  func(Chunk) bool
+	}{
+		{"my-o1", func(c Chunk) bool { return c.Done }},
+		{"my-o1-filtered", func(c Chunk) bool { return c.Error != nil }},
+	} {
+		var got *Chunk
+		if err := p.Stream(context.Background(), Request{Model: tc.model, Messages: []Message{{Role: "user", Content: "hi"}}}, func(c Chunk) {
+			if tc.pick(c) {
+				got = &c
+			}
+		}); err != nil {
+			t.Fatalf("%s: Stream: %v", tc.model, err)
+		}
+		if got == nil || got.TokensIn != 100 || got.CacheReadTokens != 64 {
+			t.Errorf("%s: usage chunk = %+v, want TokensIn 100 with CacheReadTokens 64", tc.model, got)
+		}
+	}
+}
+
+// A11: the fallback's keepalives are synthesised while the request waits —
+// no evidence the provider billed anything. A non-streaming request failing
+// after them (like a stream's HTTP error) records no usage; it used to be
+// billed an input-token estimate once the wait passed one keepalive period.
+func TestAudited_StreamFallbackKeepalivesAreNotBillingEvidence(t *testing.T) {
+	prev := streamViaChatKeepalive
+	streamViaChatKeepalive = 5 * time.Millisecond
+	t.Cleanup(func() { streamViaChatKeepalive = prev })
+
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ int, body map[string]any) {
+		if body["stream"] == true {
+			writeJSON(w, 400, map[string]any{"error": map[string]any{"param": "stream", "code": "unsupported_value", "message": "no streaming"}})
+			return
+		}
+		time.Sleep(60 * time.Millisecond)
+		writeJSON(w, 500, map[string]any{"error": map[string]any{"code": "server_error", "message": "boom"}})
+	})
+	raw := newAzureKeyProvider(t, srv, nil)
+	rec := &countedRecorder{}
+	ap := newAuditedProvider(raw, rec.record, "user-1", azureFoundryProviderID)
+	keepalives := 0
+	err := ap.Stream(context.Background(), Request{Model: "my-o1", Messages: []Message{{Role: "user", Content: "a prompt worth billing"}}}, func(c Chunk) {
+		if c.LocalKeepalive {
+			keepalives++
+		}
+	})
+	if !errors.Is(err, ErrProviderDown) {
+		t.Fatalf("Stream = %v, want the 500", err)
+	}
+	if keepalives == 0 {
+		t.Fatal("the fallback emitted no keepalive — the test proves nothing")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := rec.count(); n != 0 {
+		t.Errorf("%d usage row(s) recorded for a request that failed before any upstream chunk, want 0", n)
 	}
 }

@@ -32,6 +32,27 @@ describe('conversationToMarkdown', () => {
     const md = conversationToMarkdown('t', [msg({role: 'assistant', content: 'partial', finishReason: 'interrupted'})])
     expect(md).toContain('partial')
   })
+
+  // An Azure AI Foundry reply is sent as "m/<id>", which means nothing to a
+  // reader: the transcript names the model by the label it was sent with.
+  it('prints the model label instead of a registry id', () => {
+    const md = conversationToMarkdown('t', [
+      msg({role: 'assistant', content: 'docs', model: 'm/a1b2c3d4e5', modelLabel: 'Docs writer'}),
+    ])
+    expect(md).toContain('## AI (Docs writer)')
+    expect(md).not.toContain('m/a1b2c3d4e5')
+  })
+
+  it('never prints a bare registry id, and takes the chat’s own names when given', () => {
+    const unlabelled = msg({role: 'assistant', content: 'old', provider: 'azure-foundry', model: 'm/zzzzzzzzzz'})
+    const plain = conversationToMarkdown('t', [unlabelled])
+    expect(plain).toContain('## AI')
+    expect(plain).not.toContain('m/zzzzzzzzzz')
+    // The chat resolves names against the listing ("removed model" for one
+    // nothing lists any more).
+    const named = conversationToMarkdown('t', [unlabelled], () => 'removed model')
+    expect(named).toContain('## AI (removed model)')
+  })
 })
 
 describe('safeFilename', () => {

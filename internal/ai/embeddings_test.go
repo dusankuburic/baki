@@ -164,7 +164,7 @@ func TestEmbed_Gemini_BatchEmbedContentsShape(t *testing.T) {
 }
 
 // Gemini's batchEmbedContents caps inputs per call, but callers embed up to
-// maxKnowledgeChunks (500) at once. Embed must split into ≤100-item sub-batches
+// maxKnowledgeChunks (2500) at once. Embed must split into ≤100-item sub-batches
 // and concatenate the results in input order.
 func TestEmbed_Gemini_BatchesLargeInputAndPreservesOrder(t *testing.T) {
 	var callCount int

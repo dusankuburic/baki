@@ -42,6 +42,12 @@ interface Props {
   outputCostPerM?: number
   // The selected model's context window, for the prompt-size warning.
   contextLimit?: number
+  // Why nothing can be sent right now, and what fixes it — the thread's
+  // Azure AI Foundry scope has no model to chat with (none added, or every
+  // resource needs its credentials again). Shown in the composer, and Send
+  // stays off meanwhile: the request would otherwise go out with no model.
+  // Typing stays possible.
+  guidance?: {text: string; actionLabel: string; onAction: () => void} | null
 }
 
 export default function ChatInput({
@@ -61,6 +67,7 @@ export default function ChatInput({
   inputCostPerM,
   outputCostPerM,
   contextLimit,
+  guidance,
 }: Props) {
   const [value, setValue] = useState('')
   const {t} = useTranslation('chat')
@@ -196,7 +203,9 @@ export default function ChatInput({
   // ArrowUp history recall stay live while a reply generates; Enter routes
   // to the queue instead. `isDisabled` now only gates send-style actions.
   const isDisabled = disabled
-  const canQueue = streaming && !disabled && !!onQueue
+  // Guidance (no model to send to) blocks sending and queueing, not typing.
+  const sendBlocked = !!guidance
+  const canQueue = streaming && !disabled && !sendBlocked && !!onQueue
   const capTooltip = atCap && !streaming ? t('composer.atCap', {count: MAX_CONCURRENT_STREAMS}) : undefined
 
   // NOTE: `taggedFiles` is deliberately NOT mirrored into the thread's
@@ -272,7 +281,7 @@ export default function ChatInput({
   const handleSend = useCallback((): boolean => {
     const trimmed = value.trim()
     if (!trimmed && taggedFiles.length === 0) return false
-    if (isDisabled) return false
+    if (isDisabled || sendBlocked) return false
     if (canQueue) {
       onQueue?.(trimmed, taggedFiles, excludeContext)
       resetComposer()
@@ -296,6 +305,7 @@ export default function ChatInput({
     value,
     taggedFiles,
     isDisabled,
+    sendBlocked,
     canQueue,
     atCap,
     onQueue,
@@ -325,9 +335,9 @@ export default function ChatInput({
 
   const handlePreview = useCallback(() => {
     const trimmed = value.trim()
-    if ((!trimmed && taggedFiles.length === 0) || isDisabled || !onPreview) return
+    if ((!trimmed && taggedFiles.length === 0) || isDisabled || sendBlocked || !onPreview) return
     onPreview(trimmed, taggedFiles, excludeContext, resetComposer)
-  }, [value, taggedFiles, isDisabled, onPreview, excludeContext, resetComposer])
+  }, [value, taggedFiles, isDisabled, sendBlocked, onPreview, excludeContext, resetComposer])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -565,6 +575,19 @@ export default function ChatInput({
           </div>
         )}
 
+        {guidance && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 bg-semantic-warning/5 border-b border-border-subtle/50 first:rounded-t-xl text-2xs text-text-secondary">
+            <p className="flex-1 min-w-[10rem]">{guidance.text}</p>
+            <button
+              type="button"
+              onClick={guidance.onAction}
+              className="shrink-0 min-h-6 font-medium text-brand-400 hover:text-brand-300 transition-colors"
+            >
+              {guidance.actionLabel}
+            </button>
+          </div>
+        )}
+
         {queued && (
           <div className="flex items-center gap-2 px-3 py-1.5 bg-brand-500/5 border-b border-border-subtle/50 first:rounded-t-xl text-2xs text-text-secondary">
             <span className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-soft shrink-0" />
@@ -633,7 +656,7 @@ export default function ChatInput({
               inputCostPerM={inputCostPerM}
               outputCostPerM={outputCostPerM}
             />
-            {onPreview && hasContent && !isDisabled && (
+            {onPreview && hasContent && !isDisabled && !sendBlocked && (
               <ComposerIconButton icon={Eye} label={t('composer.previewContext')} onClick={handlePreview} />
             )}
             <ComposerIconButton
@@ -643,7 +666,7 @@ export default function ChatInput({
             />
             <SendButton
               mode={streaming ? 'stop' : 'send'}
-              disabled={!hasContent || isDisabled || atCap}
+              disabled={!hasContent || isDisabled || atCap || sendBlocked}
               title={capTooltip}
               onClick={streaming ? onCancel : handleSend}
             />
@@ -665,7 +688,7 @@ export default function ChatInput({
           onClose={() => setIsExpanded(false)}
           excludeContext={excludeContext}
           onExcludeContextChange={setExcludeContext}
-          canSend={hasContent && !isDisabled && (canQueue || !atCap)}
+          canSend={hasContent && !isDisabled && !sendBlocked && (canQueue || !atCap)}
           menus={menus}
           onInsertTrigger={insertTrigger}
           tokenLabel={hasContent ? t('composer.tokenEstimate', {count: tokenEstimate}) : undefined}

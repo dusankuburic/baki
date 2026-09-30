@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"pad-core/logger"
+	"pad-core/models"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -55,8 +56,12 @@ type ResumeResult struct {
 	// ErrorCode is Error's machine-readable class (see chat_errors.go), so a
 	// client that missed the live error event still gets the same handling.
 	ErrorCode string `json:"errorCode,omitempty"`
-	TokensIn  int    `json:"tokensIn"`
-	TokensOut int    `json:"tokensOut"`
+	// ErrorShared marks a failure on the organisation's shared credential
+	// (F-42) — the reloaded client's error bubble offers the Organizations
+	// section, not just the member's own Accounts.
+	ErrorShared bool `json:"errorShared,omitempty"`
+	TokensIn    int  `json:"tokensIn"`
+	TokensOut   int  `json:"tokensOut"`
 	// ServedModel is the model that answered (alias providers), so a client
 	// that missed the live done event still learns it — and with it the USD
 	// per 1M token rates the turn was billed at (omitted when not reported).
@@ -76,6 +81,7 @@ type resumeSnapshot struct {
 	Done           bool           `json:"done"`
 	Error          string         `json:"error"`
 	ErrorCode      string         `json:"errorCode,omitempty"`
+	ErrorShared    bool           `json:"errorShared,omitempty"`
 	TokensIn       int            `json:"tokensIn"`
 	TokensOut      int            `json:"tokensOut"`
 	ServedModel    string         `json:"servedModel,omitempty"`
@@ -370,6 +376,98 @@ func (s *ChatService) OwnerOf(ctx context.Context, streamID string) string {
 	return ""
 }
 
+// ActiveStreamFor returns the caller's stream on a conversation whose answer
+// a reloading client cannot get from the stored history yet — what GET
+// conversation reports as activeStreamId (F-21), so a client that reloads
+// mid-turn re-attaches through /api/chat/resume instead of showing a thread
+// whose server-side answer appears only after another reload. Reported:
+//
+//   - a live stream whose question is already stored (userTurnStored) — a
+//     client that re-attached before then would save a history without it;
+//   - failing that, a finished stream whose cleanup has not settled: its
+//     answer is still being stored (persistAssistantTurn runs after the
+//     stream left the active set), so the history does not carry it yet.
+//
+// A settled finished stream is not reported (its answer, if any, is in the
+// history, and resuming it would commit the answer a second time), nor is a
+// stream whose client sent its own history. "" when there is no such stream.
+// GET conversation reads it through ConversationWithActiveStream, which also
+// drops a stream whose answer the history already ends with.
+func (s *ChatService) ActiveStreamFor(scope, flowID, convKey string) string {
+	if c := s.activeStreamCtl(scope, flowID, convKey); c != nil {
+		return c.streamID
+	}
+	return ""
+}
+
+// activeStreamCtl is ActiveStreamFor's control (nil = none reported).
+func (s *ChatService) activeStreamCtl(scope, flowID, convKey string) *streamCtl {
+	mine := func(v interface{}) *streamCtl {
+		c, ok := v.(*streamCtl)
+		if !ok || c.ownerID != scope || c.flowID != flowID || c.convKey != convKey || !c.userTurnStored.Load() {
+			return nil
+		}
+		return c
+	}
+	var found *streamCtl
+	s.activeStreams.Range(func(_, v interface{}) bool {
+		found = mine(v)
+		return found == nil
+	})
+	if found != nil {
+		return found
+	}
+	s.finishedStreams.Range(func(_, v interface{}) bool {
+		c := mine(v)
+		if c == nil || c.settled == nil {
+			return true
+		}
+		select {
+		case <-c.settled:
+			return true // the answer (if any) is stored and arrives with the history
+		default:
+			found = c
+			return false
+		}
+	})
+	return found
+}
+
+// ConversationWithActiveStream is GET conversation's read: the stored
+// messages plus the stream ActiveStreamFor reports, resolved so that a reload
+// racing the stream's two writes neither loses nor duplicates a turn. The
+// stream is looked up BEFORE the history is read: it is only reported once
+// its question is stored, so a history read after the lookup carries the
+// question. A stream whose answer the history read already ends with (it
+// finished and persistAssistantTurn stored the answer between the two reads)
+// is dropped — the client would otherwise show, and save, the answer twice.
+func (s *ChatService) ConversationWithActiveStream(ctx context.Context, scope string, doc *models.FlowDocument, convKey string) ([]models.ChatMessage, string, error) {
+	var ctl *streamCtl
+	if doc != nil {
+		ctl = s.activeStreamCtl(scope, doc.ID, convKey)
+	}
+	msgs, err := s.GetConversation(ctx, doc, convKey)
+	if err != nil {
+		return nil, "", err
+	}
+	if ctl == nil || answerStored(ctl, msgs) {
+		return msgs, "", nil
+	}
+	return msgs, ctl.streamID, nil
+}
+
+// answerStored reports whether history already ends with ctl's finished
+// answer — the same last-message test persistAssistantTurn de-dupes with.
+func answerStored(ctl *streamCtl, history []models.ChatMessage) bool {
+	n := len(history)
+	if n == 0 || history[n-1].Role != "assistant" {
+		return false
+	}
+	ctl.mu.Lock()
+	defer ctl.mu.Unlock()
+	return ctl.done && history[n-1].Content == ctl.buffer.String()
+}
+
 // ResumeStream returns a stream's buffered state. It prefers the live local
 // stream; when the stream ran on a different replica it falls back to the shared
 // backplane so the client can still resume after reconnecting elsewhere.
@@ -398,6 +496,7 @@ func (s *ChatService) ResumeStream(ctx context.Context, streamID string, from in
 			Done:           ctl.done,
 			Error:          ctl.errMsg,
 			ErrorCode:      ctl.errCode,
+			ErrorShared:    ctl.errShared,
 			TokensIn:       ctl.tokensIn,
 			TokensOut:      ctl.tokensOut,
 			ServedModel:    ctl.servedModel,
@@ -423,6 +522,7 @@ func (snap resumeSnapshot) result(text string) *ResumeResult {
 		Done:           snap.Done,
 		Error:          snap.Error,
 		ErrorCode:      snap.ErrorCode,
+		ErrorShared:    snap.ErrorShared,
 		TokensIn:       snap.TokensIn,
 		TokensOut:      snap.TokensOut,
 		ServedModel:    snap.ServedModel,

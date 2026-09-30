@@ -105,6 +105,21 @@
   --info: #3b82f6;
   --info-bg: rgba(59, 130, 246, 0.1);
 
+  /* === TEXT ON TONE FILLS ===
+     The error foreground is the text on a solid error fill (the danger
+     button of a confirm); the badge foregrounds are the text of each
+     shared/Badge tone. The tone colours fail as text on their own tints in
+     many themes, so every theme block sets all of these to values that pass
+     4.5:1 on surface-1, surface-2 and the badge fill over either one
+     (lib/themeContrast.test.ts measures each theme). */
+  --error-foreground: #0a0a0b;
+  --badge-neutral-fg: #a1a1aa;
+  --badge-brand-fg: #818cf8;
+  --badge-info-fg: #5592f7;
+  --badge-success-fg: #22c55e;
+  --badge-warning-fg: #eab308;
+  --badge-error-fg: #f26363;
+
   /* === GLASS / BLUR === */
   --glass-bg: rgba(28, 28, 33, 0.72);
   --glass-border: rgba(255, 255, 255, 0.06);
@@ -288,6 +303,13 @@
   --error-bg: rgba(220, 38, 38, 0.08);
   --info: #2563eb;
   --info-bg: rgba(37, 99, 235, 0.08);
+  --error-foreground: #ffffff;
+  --badge-neutral-fg: #3f3f46;
+  --badge-brand-fg: #4f46e5;
+  --badge-info-fg: #1554e1;
+  --badge-success-fg: #0f7334;
+  --badge-warning-fg: #885d03;
+  --badge-error-fg: #ba1e1e;
 
   --brand-50: #eef2ff;
   --brand-100: #e0e7ff;
@@ -362,6 +384,13 @@
   --error-bg: rgba(248, 113, 113, 0.1);
   --info: #38bdf8;
   --info-bg: rgba(56, 189, 248, 0.1);
+  --error-foreground: #070d1a;
+  --badge-neutral-fg: #a8b8d4;
+  --badge-brand-fg: #22d3ee;
+  --badge-info-fg: #38bdf8;
+  --badge-success-fg: #10d97e;
+  --badge-warning-fg: #fbbf24;
+  --badge-error-fg: #f87171;
 
   /* === GLASS / BLUR === */
   --glass-bg: rgba(13, 24, 41, 0.78);
@@ -440,6 +469,13 @@
   --error-bg: rgba(248, 113, 113, 0.1);
   --info: #60a5fa;
   --info-bg: rgba(96, 165, 250, 0.1);
+  --error-foreground: #110e0a;
+  --badge-neutral-fg: #b09880;
+  --badge-brand-fg: #fbbf24;
+  --badge-info-fg: #60a5fa;
+  --badge-success-fg: #22c55e;
+  --badge-warning-fg: #f59e0b;
+  --badge-error-fg: #f87171;
 
   /* === GLASS / BLUR === */
   --glass-bg: rgba(26, 22, 18, 0.78);
@@ -507,6 +543,13 @@
   --error-bg: rgba(247, 118, 142, 0.1);
   --info: #7aa2f7;
   --info-bg: rgba(122, 162, 247, 0.1);
+  --error-foreground: #16161e;
+  --badge-neutral-fg: #a9b1d6;
+  --badge-brand-fg: #8fb5f8;
+  --badge-info-fg: #7aa2f7;
+  --badge-success-fg: #9ece6a;
+  --badge-warning-fg: #e0af68;
+  --badge-error-fg: #f7768e;
 
   --glass-bg: rgba(26, 27, 38, 0.78);
   --glass-border: rgba(192, 202, 245, 0.05);
@@ -571,6 +614,13 @@
   --error-bg: rgba(224, 108, 117, 0.1);
   --info: #61afef;
   --info-bg: rgba(97, 175, 239, 0.1);
+  --error-foreground: #1e2227;
+  --badge-neutral-fg: #9ba3b0;
+  --badge-brand-fg: #82c1ee;
+  --badge-info-fg: #67b2f0;
+  --badge-success-fg: #98c379;
+  --badge-warning-fg: #e5c07b;
+  --badge-error-fg: #e78c93;
 
   --glass-bg: rgba(33, 37, 43, 0.78);
   --glass-border: rgba(171, 178, 191, 0.06);
@@ -635,6 +685,13 @@
   --error-bg: rgba(255, 85, 85, 0.1);
   --info: #8be9fd;
   --info-bg: rgba(139, 233, 253, 0.1);
+  --error-foreground: #1e1f29;
+  --badge-neutral-fg: #fdfcfe;
+  --badge-brand-fg: #ffb5e7;
+  --badge-info-fg: #8be9fd;
+  --badge-success-fg: #50fa7b;
+  --badge-warning-fg: #f1fa8c;
+  --badge-error-fg: #ffb0b0;
 
   --glass-bg: rgba(40, 42, 54, 0.78);
   --glass-border: rgba(248, 248, 242, 0.06);
@@ -699,6 +756,13 @@
   --error-bg: rgba(191, 97, 106, 0.1);
   --info: #88c0d0;
   --info-bg: rgba(136, 192, 208, 0.1);
+  --error-foreground: #0f1115;
+  --badge-neutral-fg: #d8dee9;
+  --badge-brand-fg: #9dd2db;
+  --badge-info-fg: #a6d0dc;
+  --badge-success-fg: #bccfab;
+  --badge-warning-fg: #ebcb8b;
+  --badge-error-fg: #dfafb4;
 
   --glass-bg: rgba(46, 52, 64, 0.78);
   --glass-border: rgba(236, 239, 244, 0.06);
@@ -764,6 +828,13 @@
   --error-bg: rgba(251, 73, 52, 0.1);
   --info: #83a598;
   --info-bg: rgba(131, 165, 152, 0.1);
+  --error-foreground: #1d2021;
+  --badge-neutral-fg: #d5c4a1;
+  --badge-brand-fg: #ef9a49;
+  --badge-info-fg: #98b5aa;
+  --badge-success-fg: #b8bb26;
+  --badge-warning-fg: #fabd2f;
+  --badge-error-fg: #fc8375;
   --glass-bg: rgba(40, 40, 40, 0.78);
   --glass-border: rgba(235, 219, 178, 0.06);
   --glass-blur: blur(16px) saturate(1.2);
@@ -828,6 +899,13 @@
   --error-bg: rgba(204, 36, 20, 0.08);
   --info: #076678;
   --info-bg: rgba(7, 102, 120, 0.08);
+  --error-foreground: #ffffff;
+  --badge-neutral-fg: #504945;
+  --badge-brand-fg: #8f3002;
+  --badge-info-fg: #065a6a;
+  --badge-success-fg: #5a560a;
+  --badge-warning-fg: #784e0d;
+  --badge-error-fg: #a11c10;
   --glass-bg: rgba(251, 241, 199, 0.78);
   --glass-border: rgba(60, 56, 54, 0.06);
   --glass-blur: blur(16px) saturate(1.2);
@@ -892,6 +970,13 @@
   --error-bg: rgba(243, 139, 168, 0.1);
   --info: #89b4fa;
   --info-bg: rgba(137, 180, 250, 0.1);
+  --error-foreground: #11111b;
+  --badge-neutral-fg: #bac2de;
+  --badge-brand-fg: #c3b1f0;
+  --badge-info-fg: #89b4fa;
+  --badge-success-fg: #a6e3a1;
+  --badge-warning-fg: #f9e2af;
+  --badge-error-fg: #f38ba8;
   --glass-bg: rgba(30, 30, 46, 0.78);
   --glass-border: rgba(205, 214, 244, 0.06);
   --glass-blur: blur(16px) saturate(1.3);
@@ -956,6 +1041,13 @@
   --error-bg: rgba(210, 15, 57, 0.08);
   --info: #1e66f5;
   --info-bg: rgba(30, 102, 245, 0.08);
+  --error-foreground: #ffffff;
+  --badge-neutral-fg: #54566c;
+  --badge-brand-fg: #6c2dc4;
+  --badge-info-fg: #094acb;
+  --badge-success-fg: #29661b;
+  --badge-warning-fg: #7f5111;
+  --badge-error-fg: #a60c2d;
   --glass-bg: rgba(239, 241, 245, 0.78);
   --glass-border: rgba(76, 79, 105, 0.06);
   --glass-blur: blur(16px) saturate(1.2);
@@ -1020,6 +1112,13 @@
   --error-bg: rgba(235, 111, 146, 0.1);
   --info: #31748f;
   --info-bg: rgba(49, 116, 143, 0.1);
+  --error-foreground: #191724;
+  --badge-neutral-fg: #cdc9e4;
+  --badge-brand-fg: #ea919d;
+  --badge-info-fg: #51a2c3;
+  --badge-success-fg: #9ccfd8;
+  --badge-warning-fg: #f6c177;
+  --badge-error-fg: #ed7c9c;
   --glass-bg: rgba(31, 29, 46, 0.78);
   --glass-border: rgba(224, 222, 244, 0.06);
   --glass-blur: blur(16px) saturate(1.2);
@@ -1084,6 +1183,13 @@
   --error-bg: rgba(235, 111, 146, 0.1);
   --info: #3e8fb0;
   --info-bg: rgba(62, 143, 176, 0.1);
+  --error-foreground: #1f1d2e;
+  --badge-neutral-fg: #cdcbe0;
+  --badge-brand-fg: #e69299;
+  --badge-info-fg: #63abc8;
+  --badge-success-fg: #9ccfd8;
+  --badge-warning-fg: #f6c177;
+  --badge-error-fg: #ee84a2;
   --glass-bg: rgba(35, 33, 54, 0.78);
   --glass-border: rgba(224, 222, 244, 0.06);
   --glass-blur: blur(16px) saturate(1.2);
@@ -1148,6 +1254,13 @@
   --error-bg: rgba(180, 99, 122, 0.08);
   --info: #286983;
   --info-bg: rgba(40, 105, 131, 0.08);
+  --error-foreground: #0e0d13;
+  --badge-neutral-fg: #635e7c;
+  --badge-brand-fg: #984944;
+  --badge-info-fg: #25627a;
+  --badge-success-fg: #3b666d;
+  --badge-warning-fg: #8b560e;
+  --badge-error-fg: #91465b;
   --glass-bg: rgba(255, 250, 243, 0.78);
   --glass-border: rgba(87, 82, 121, 0.06);
   --glass-blur: blur(16px) saturate(1.2);
@@ -1212,6 +1325,13 @@
   --error-bg: rgba(248, 81, 73, 0.1);
   --info: #2f81f7;
   --info-bg: rgba(47, 129, 247, 0.1);
+  --error-foreground: #010409;
+  --badge-neutral-fg: #c9d1d9;
+  --badge-brand-fg: #5a9bf8;
+  --badge-info-fg: #4991f8;
+  --badge-success-fg: #3fb950;
+  --badge-warning-fg: #d29922;
+  --badge-error-fg: #f85c54;
   --glass-bg: rgba(13, 17, 23, 0.78);
   --glass-border: rgba(230, 237, 243, 0.06);
   --glass-blur: blur(16px) saturate(1.2);
@@ -1276,6 +1396,13 @@
   --error-bg: rgba(207, 34, 46, 0.08);
   --info: #0969da;
   --info-bg: rgba(9, 105, 218, 0.08);
+  --error-foreground: #ffffff;
+  --badge-neutral-fg: #24292f;
+  --badge-brand-fg: #0856b3;
+  --badge-info-fg: #085abb;
+  --badge-success-fg: #166c2f;
+  --badge-warning-fg: #805600;
+  --badge-error-fg: #b11d27;
   --glass-bg: rgba(255, 255, 255, 0.8);
   --glass-border: rgba(31, 35, 40, 0.06);
   --glass-blur: blur(16px) saturate(1.2);
@@ -1340,6 +1467,13 @@
   --error-bg: rgba(228, 104, 118, 0.1);
   --info: #7aa2f7;
   --info-bg: rgba(122, 162, 247, 0.1);
+  --error-foreground: #16161d;
+  --badge-neutral-fg: #c8c2a8;
+  --badge-brand-fg: #88aadc;
+  --badge-info-fg: #82a8f8;
+  --badge-success-fg: #98bb6c;
+  --badge-warning-fg: #e6c384;
+  --badge-error-fg: #ea8792;
   --glass-bg: rgba(31, 31, 40, 0.78);
   --glass-border: rgba(220, 215, 186, 0.06);
   --glass-blur: blur(16px) saturate(1.2);
@@ -1404,6 +1538,13 @@
   --error-bg: rgba(230, 126, 128, 0.1);
   --info: #7fbbb3;
   --info-bg: rgba(127, 187, 179, 0.1);
+  --error-foreground: #22272a;
+  --badge-neutral-fg: #c5b498;
+  --badge-brand-fg: #a6ce94;
+  --badge-info-fg: #9dcbc5;
+  --badge-success-fg: #b5ca94;
+  --badge-warning-fg: #dec28a;
+  --badge-error-fg: #eea9aa;
   --glass-bg: rgba(45, 53, 59, 0.78);
   --glass-border: rgba(211, 198, 170, 0.06);
   --glass-blur: blur(16px) saturate(1.2);
@@ -2308,12 +2449,9 @@ pre,
   font-size: var(--chat-font-size, var(--text-sm));
 }
 
-/* Narrow (< 340px): the header chip only has room for the provider name, and
-   the composer's context toggle relies on its checkbox alone. */
+/* Narrow (< 340px): the composer's context toggle relies on its checkbox
+   alone, and thread tabs and prompt chips shrink. */
 @container chat (max-width: 339px) {
-  .cq-model {
-    display: none;
-  }
   /* Visually hidden, NOT display:none — the label is the checkbox's
      accessible name, which display:none removed along with the text. */
   .cq-exclude-label {
@@ -3166,6 +3304,173 @@ pre,
   }
   .settings-content-body {
     padding: 1rem;
+  }
+}
+
+/* === AZURE AI FOUNDRY MODEL LIST ===
+
+   AI Accounts' model rows (components/settings/azure/AzureModelList): a
+   ul/li grid, not a scrolling table, that answers to the list's own width —
+   the Settings body, a card inside an organisation's block — never the
+   viewport's. From 720px every cell has its column; below that the context
+   window moves under the name; below 560px the purpose joins it there and
+   the last test shrinks to an icon and a word; below 440px the cells stack.
+   The header row is aria-hidden: each cell carries a label that screen
+   readers always get and that shows while no header names its column.
+   Usable at 320px without horizontal scrolling. */
+.azure-models {
+  container: azure-models / inline-size;
+  --azure-actions: 6.25rem;
+}
+.azure-models--readonly {
+  --azure-actions: 0px;
+}
+.azure-models-head {
+  display: none;
+}
+.azure-model-row {
+  /* Contains the sr-only cell labels (absolutely positioned). */
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'main actions'
+    'facts facts'
+    'test test';
+  column-gap: 0.75rem;
+  row-gap: 0.25rem;
+  align-items: start;
+}
+.azure-model-main {
+  grid-area: main;
+  min-width: 0;
+}
+.azure-model-facts {
+  grid-area: facts;
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.75rem;
+  row-gap: 0.125rem;
+  min-width: 0;
+}
+.azure-model-test {
+  grid-area: test;
+  min-width: 0;
+}
+.azure-model-actions {
+  grid-area: actions;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
+.azure-cell-label {
+  color: var(--text-tertiary);
+}
+@container azure-models (min-width: 440px) {
+  .azure-models-head,
+  .azure-model-row {
+    grid-template-columns: minmax(0, 1fr) 7.5rem var(--azure-actions);
+  }
+  .azure-models-head {
+    display: grid;
+    column-gap: 0.75rem;
+    grid-template-areas: 'main test actions';
+  }
+  .azure-model-row {
+    grid-template-areas:
+      'main test actions'
+      'facts facts facts';
+  }
+  .azure-col-model {
+    grid-area: main;
+  }
+  .azure-col-test {
+    grid-area: test;
+  }
+  .azure-col-purpose,
+  .azure-col-context,
+  .azure-test-when {
+    display: none;
+  }
+  .azure-model-test .azure-cell-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+}
+@container azure-models (min-width: 560px) {
+  .azure-models-head,
+  .azure-model-row {
+    grid-template-columns: minmax(0, 1fr) 8.5rem 9rem var(--azure-actions);
+  }
+  .azure-models-head {
+    grid-template-areas: 'main purpose test actions';
+  }
+  .azure-model-row {
+    grid-template-areas:
+      'main purpose test actions'
+      'context context context context';
+  }
+  .azure-col-purpose {
+    display: block;
+    grid-area: purpose;
+  }
+  .azure-model-facts {
+    display: contents;
+  }
+  .azure-model-purpose {
+    grid-area: purpose;
+  }
+  .azure-model-context {
+    grid-area: context;
+  }
+  .azure-test-when {
+    display: inline;
+  }
+  .azure-model-purpose .azure-cell-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+}
+@container azure-models (min-width: 720px) {
+  .azure-models-head,
+  .azure-model-row {
+    grid-template-columns: minmax(0, 1fr) 8.5rem 4.5rem 9rem var(--azure-actions);
+  }
+  .azure-models-head {
+    grid-template-areas: 'main purpose context test actions';
+  }
+  .azure-model-row {
+    grid-template-areas: 'main purpose context test actions';
+  }
+  .azure-col-context {
+    display: block;
+    grid-area: context;
+  }
+  .azure-model-context .azure-cell-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
   }
 }
 

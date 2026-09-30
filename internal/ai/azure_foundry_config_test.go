@@ -136,9 +136,10 @@ func TestAzureFoundryConfig_Validate(t *testing.T) {
 		{"project dot", AzureFoundryConfig{Endpoint: "https://my-res.services.ai.azure.com", Auth: entra, ProjectEndpoint: "https://my-res.services.ai.azure.com/api/projects/."}, AzureCfgErrInvalidProject},
 		{"project leading dash", AzureFoundryConfig{Endpoint: "https://my-res.services.ai.azure.com", Auth: entra, ProjectEndpoint: "https://my-res.services.ai.azure.com/api/projects/-p"}, AzureCfgErrInvalidProject},
 		{"project digit first", AzureFoundryConfig{Endpoint: "https://my-res.services.ai.azure.com", Auth: entra, ProjectEndpoint: "https://my-res.services.ai.azure.com/api/projects/1proj.v2"}, ""},
-		// Serverless (MaaS) endpoints; Microsoft's other *.ai.azure.com
-		// hosts are no resource's endpoint.
-		{"serverless models host", AzureFoundryConfig{Endpoint: "https://phi-4-xyz.eastus2.models.ai.azure.com", Auth: apiKey}, ""},
+		// Serverless (MaaS) endpoints are refused outright (F-09): the
+		// provider speaks only /openai/v1, which they do not serve;
+		// Microsoft's other *.ai.azure.com hosts are no resource's endpoint.
+		{"serverless models host", AzureFoundryConfig{Endpoint: "https://phi-4-xyz.eastus2.models.ai.azure.com", Auth: apiKey}, AzureCfgErrInvalidEndpoint},
 		{"portal host", AzureFoundryConfig{Endpoint: "https://ai.azure.com", Auth: apiKey}, AzureCfgErrHostNotAllowed},
 		{"other ai.azure.com host", AzureFoundryConfig{Endpoint: "https://foo.ai.azure.com", Auth: apiKey}, AzureCfgErrHostNotAllowed},
 		{"unknown mode", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: "managed"}}, AzureCfgErrInvalidAuth},
@@ -340,7 +341,7 @@ func TestAzureHostPolicy(t *testing.T) {
 		"my-res.openai.azure.com":            true,
 		"my-res.services.ai.azure.com":       true,
 		"my-res.cognitiveservices.azure.com": true,
-		"dep.eastus2.models.ai.azure.com":    true,
+		"dep.eastus2.models.ai.azure.com":    false,
 		"models.ai.azure.com":                false,
 		"foo.ai.azure.com":                   false,
 		"ai.azure.com":                       false,
@@ -425,8 +426,9 @@ func TestGuardedAzureTransport_BehindAPrivateProxy(t *testing.T) {
 }
 
 // ConfigureAzureFoundry keeps the shared transport's proxy selection
-// (HTTP(S)_PROXY) on the guarded cloud client and installs the guard; the
-// permissive modes use the shared client's transport as is.
+// (HTTP(S)_PROXY) on the guarded cloud client and installs the guard; every
+// mode's transport is a distinct clone carrying the Azure
+// ResponseHeaderTimeout while the shared client keeps its 30 s floor.
 func TestConfigureAzureFoundry_GuardedClientKeepsTheProxy(t *testing.T) {
 	azureRuntime.mu.RLock()
 	prevOpts, prevClient := azureRuntime.opts, azureRuntime.client
@@ -445,6 +447,9 @@ func TestConfigureAzureFoundry_GuardedClientKeepsTheProxy(t *testing.T) {
 	if tr.Proxy == nil || tr.DialContext == nil {
 		t.Error("the guarded transport must keep a proxy function and install the dial guard")
 	}
+	if tr.ResponseHeaderTimeout != azureResponseHeaderTimeout {
+		t.Errorf("guarded transport ResponseHeaderTimeout = %v, want %v", tr.ResponseHeaderTimeout, azureResponseHeaderTimeout)
+	}
 	if _, err := tr.DialContext(context.Background(), "tcp", "169.254.169.254:443"); !errors.Is(err, egress.ErrInternalAddress) {
 		t.Errorf("direct dials must stay guarded, got %v", err)
 	}
@@ -456,6 +461,9 @@ func TestConfigureAzureFoundry_GuardedClientKeepsTheProxy(t *testing.T) {
 	tr, ok = azureHTTPClient().Transport.(*http.Transport)
 	if !ok || tr == sharedHTTPClient.Transport || tr.DialContext == nil {
 		t.Fatalf("PAD_AI_ALLOW_PRIVATE_EGRESS must keep a guarded transport, got %T", azureHTTPClient().Transport)
+	}
+	if tr.ResponseHeaderTimeout != azureResponseHeaderTimeout {
+		t.Errorf("PAD_AI_ALLOW_PRIVATE_EGRESS transport ResponseHeaderTimeout = %v, want %v", tr.ResponseHeaderTimeout, azureResponseHeaderTimeout)
 	}
 	for _, addr := range []string{"169.254.169.254:443", "127.0.0.1:443", "[::1]:443", "0.0.0.0:443", "168.63.129.16:443", "[fe80::1]:443"} {
 		if _, err := tr.DialContext(context.Background(), "tcp", addr); !errors.Is(err, egress.ErrInternalAddress) {
@@ -471,8 +479,24 @@ func TestConfigureAzureFoundry_GuardedClientKeepsTheProxy(t *testing.T) {
 	}
 
 	ConfigureAzureFoundry(AzureFoundryOptions{Egress: egress.AllowLoopback})
-	if azureHTTPClient().Transport != sharedHTTPClient.Transport {
-		t.Error("desktop/local mode uses the shared transport")
+	local, ok := azureHTTPClient().Transport.(*http.Transport)
+	if !ok || local == sharedHTTPClient.Transport {
+		t.Fatalf("desktop/local mode needs its own Azure transport, got %T", azureHTTPClient().Transport)
+	}
+	if local.Proxy == nil {
+		t.Error("the local transport must keep the proxy function")
+	}
+	// No dial guard in local mode: the transport keeps the shared client's
+	// DialContext (nil = the default dialer), which never answers with the
+	// egress refusal.
+	if local.DialContext != nil {
+		t.Error("desktop/local mode installs no dial guard")
+	}
+	if local.ResponseHeaderTimeout != azureResponseHeaderTimeout {
+		t.Errorf("local transport ResponseHeaderTimeout = %v, want %v", local.ResponseHeaderTimeout, azureResponseHeaderTimeout)
+	}
+	if shared, ok := sharedHTTPClient.Transport.(*http.Transport); !ok || shared.ResponseHeaderTimeout != 30*time.Second {
+		t.Error("the shared client must keep its 30 s ResponseHeaderTimeout")
 	}
 }
 
@@ -496,8 +520,9 @@ func saveAzureRuntime(t *testing.T, opts AzureFoundryOptions) {
 
 // Before ConfigureAzureFoundry runs (non-DI entrypoints) the runtime used to
 // hand out the raw sharedHTTPClient — no guard AND redirects followed. The
-// zero-value posture is now the local-mode one (shared transport, redirects
-// refused), and using it says so in the operator's log exactly once.
+// zero-value posture is now the local-mode one (an unguarded clone of the
+// shared transport with the Azure header timeout, redirects refused), and
+// using it says so in the operator's log exactly once.
 func TestAzureRuntimeZeroValueClientIsNoRedirectsAndWarnsOnce(t *testing.T) {
 	azureRuntime.mu.Lock()
 	prevOpts, prevClient := azureRuntime.opts, azureRuntime.client
@@ -513,8 +538,15 @@ func TestAzureRuntimeZeroValueClientIsNoRedirectsAndWarnsOnce(t *testing.T) {
 	})
 
 	client := azureHTTPClient()
-	if client.Transport != sharedHTTPClient.Transport {
-		t.Errorf("zero-value transport = %T, want the shared transport (local-mode posture)", client.Transport)
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok || tr == sharedHTTPClient.Transport {
+		t.Fatalf("zero-value transport = %T, want a clone of the shared transport (local-mode posture)", client.Transport)
+	}
+	if tr.ResponseHeaderTimeout != azureResponseHeaderTimeout {
+		t.Errorf("zero-value transport ResponseHeaderTimeout = %v, want %v", tr.ResponseHeaderTimeout, azureResponseHeaderTimeout)
+	}
+	if tr.DialContext != nil {
+		t.Error("the zero-value transport installs no dial guard")
 	}
 	if client.CheckRedirect == nil || !errors.Is(client.CheckRedirect(nil, nil), http.ErrUseLastResponse) {
 		t.Error("the zero-value client must refuse redirects")
@@ -529,4 +561,73 @@ func TestAzureRuntimeZeroValueClientIsNoRedirectsAndWarnsOnce(t *testing.T) {
 	if !warned {
 		t.Error("the warn flag must stay set (the log fires once, not per request)")
 	}
+}
+
+// F-09: serverless *.models.ai.azure.com endpoints are refused with the
+// migration message even when an operator lists the zone in
+// PAD_AZURE_FOUNDRY_ALLOWED_HOSTS — the provider only speaks /openai/v1,
+// which those endpoints never serve.
+func TestAzureFoundry_ServerlessModelsHostRefusedEvenWhenAllowListed(t *testing.T) {
+	cfg := AzureFoundryConfig{Endpoint: "https://phi-4-xyz.eastus2.models.ai.azure.com",
+		Auth: AzureFoundryAuth{Mode: AzureAuthModeAPIKey, Key: "k"}, ChatDeployment: "phi-4"}
+	cfg.normalize()
+	for name, policy := range map[string]azureHostPolicy{
+		"default policy":  {},
+		"operator glob":   {extra: []string{"*.models.ai.azure.com"}},
+		"operator exact ": {extra: []string{"phi-4-xyz.eastus2.models.ai.azure.com"}},
+	} {
+		err := cfg.Validate(policy)
+		var cfgErr *AzureConfigError
+		if !errors.As(err, &cfgErr) || cfgErr.Code != AzureCfgErrInvalidEndpoint {
+			t.Errorf("%s: err = %v, want code %s", name, err, AzureCfgErrInvalidEndpoint)
+			continue
+		}
+		if !strings.Contains(cfgErr.Message, "services.ai.azure.com") {
+			t.Errorf("%s: message = %q, want the migration hint", name, cfgErr.Message)
+		}
+	}
+}
+
+// F-51: the Azure CLI sign-in mode (entra_cli) — the desktop user's own
+// identity, no app registration, no secret.
+func TestAzureFoundry_EntraCLIMode(t *testing.T) {
+	valid := AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com",
+		Auth: AzureFoundryAuth{Mode: AzureAuthModeEntraCLI}, ChatDeployment: "gpt-4o"}
+	valid.normalize()
+
+	saveAzureRuntime(t, AzureFoundryOptions{Egress: egress.AllowLoopback})
+	if err := valid.Validate(azureHostPolicy{}); err != nil {
+		t.Fatalf("desktop mode: %v", err)
+	}
+	withTenant := valid
+	withTenant.Auth.TenantID = "contoso.onmicrosoft.com"
+	if err := withTenant.Validate(azureHostPolicy{}); err != nil {
+		t.Fatalf("with a tenant: %v", err)
+	}
+	badTenant := valid
+	badTenant.Auth.TenantID = "common"
+	if err := badTenant.Validate(azureHostPolicy{}); !isAzureCode(err, AzureCfgErrInvalidAuth) {
+		t.Errorf("pseudo-tenant: %v", err)
+	}
+	withSecret := valid
+	withSecret.Auth.ClientSecret = "s"
+	if err := withSecret.Validate(azureHostPolicy{}); !isAzureCode(err, AzureCfgErrInvalidAuth) {
+		t.Errorf("a secret in CLI mode: %v", err)
+	}
+
+	// A cloud deployment refuses the mode outright: a server-side `az login`
+	// would be the operator's identity, not the user's.
+	saveAzureRuntime(t, AzureFoundryOptions{Egress: egress.BlockInternal})
+	err := valid.Validate(azureHostPolicy{})
+	if !isAzureCode(err, AzureCfgErrInvalidAuth) || !strings.Contains(err.Error(), "desktop app only") {
+		t.Errorf("cloud mode: %v", err)
+	}
+	if !valid.HasSecret() {
+		t.Error("the CLI credential needs no stored secret, so HasSecret must hold")
+	}
+}
+
+func isAzureCode(err error, code string) bool {
+	var ce *AzureConfigError
+	return errors.As(err, &ce) && ce.Code == code
 }

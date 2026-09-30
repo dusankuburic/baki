@@ -15,6 +15,7 @@ import {
   ToolResultPayload,
   ChatEvent,
   DoneMeta,
+  ErrorUsage,
 } from '@/lib/chatEvent'
 import {subscribeToEvents, subscribeConnectionState, EventConnectionState, getEventConnectionState} from '@/api/client'
 
@@ -43,7 +44,11 @@ export interface StreamHandler {
   onDone: (tokensOut: number, tokensIn: number, streamId: string, meta?: DoneMeta) => void
   // `code` is the failure's machine-readable class (AI_BUDGET_EXCEEDED, …)
   // when the backend sent one — see internal/service/chat_errors.go.
-  onError: (error: string, streamId: string, code?: string) => void
+  // `usage` carries what a BILLED failure reports (F-15: token counts that
+  // must reach the meter, plus the served model / rates as done-meta) and
+  // `shared` when the failure came from the organisation's shared
+  // credential (F-42). Undefined for a plain unbilled error.
+  onError: (error: string, streamId: string, code?: string, usage?: ErrorUsage) => void
   onToolStatus?: (label: string, streamId: string) => void
   // One finished tool execution (transparency trail record).
   onToolResult?: (record: ToolResultPayload, streamId: string) => void
@@ -94,6 +99,32 @@ function doneArg(src: DoneMeta, resumed?: DoneMeta): DoneMeta | undefined {
   return Object.keys(meta).length > 0 ? meta : undefined
 }
 
+// errorUsageFromEvent wraps a parsed SSE error event's usage fields: present
+// only when the backend sent at least one, so an unbilled error stays a
+// three-argument onError call. Zero counts are dropped — a resume/begin
+// result reports 0/0 for a failure the server never counted (its
+// streamCtl was never markDone'd), and 0 adds nothing to any total.
+function errorUsageFromEvent(ev: ErrorUsage): ErrorUsage | undefined {
+  const out: ErrorUsage = {}
+  if (ev.tokensIn) out.tokensIn = ev.tokensIn
+  if (ev.tokensOut) out.tokensOut = ev.tokensOut
+  if (ev.shared) out.shared = true
+  if (ev.meta) out.meta = ev.meta
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+// errorUsageFromResult is errorUsageFromEvent for a /begin or /resume
+// result: the same information travels flat (tokens, errorShared, served
+// model and billed rates).
+function errorUsageFromResult(res: {tokensIn?: number; tokensOut?: number; errorShared?: boolean} & DoneMeta) {
+  return errorUsageFromEvent({
+    tokensIn: res.tokensIn,
+    tokensOut: res.tokensOut,
+    shared: res.errorShared,
+    meta: doneArg(res),
+  })
+}
+
 // Per-stream live state: SSE unsubscriber + dropped-chunk bookkeeping. The
 // done event carries the emitted chunk count; a mismatch (or a reconnect)
 // triggers an authoritative resume before finishing.
@@ -135,7 +166,14 @@ export function useStreamingMessage(handler: StreamHandler) {
   const resumeInto = useCallback(
     (
       streamId: string,
-      opts?: {finish?: {tokensOut: number; tokensIn: number; meta?: DoneMeta}; mode?: 'delta' | 'full'},
+      opts?: {
+        finish?: {tokensOut: number; tokensIn: number; meta?: DoneMeta}
+        mode?: 'delta' | 'full'
+        // F-21: called when the stream turns out to be gone (403/404 —
+        // retention expired) and no done-verification `finish` applies; the
+        // reload-reattach path drops its slot and refetches the history.
+        onGone?: () => void
+      },
     ) => {
       const finish = opts?.finish
       const mode = opts?.mode ?? 'full'
@@ -172,7 +210,7 @@ export function useStreamingMessage(handler: StreamHandler) {
             handlerRef.current.onResumeState?.(parseResumeEvents(res.events), streamId)
           }
           if (res.error) {
-            handlerRef.current.onError(res.error, streamId, res.errorCode)
+            handlerRef.current.onError(res.error, streamId, res.errorCode, errorUsageFromResult(res))
           } else if (res.done || finish) {
             handlerRef.current.onDone(
               res.tokensOut || finish?.tokensOut || 0,
@@ -186,9 +224,11 @@ export function useStreamingMessage(handler: StreamHandler) {
         })
         .catch(() => {
           // Stream gone: a done-verification pass still finishes with what
-          // accumulated; reconnect probes just drop.
+          // accumulated; reconnect probes just drop; the reload-reattach
+          // path (no finish) reports the loss so the caller can refetch.
           if (!subsRef.current.has(streamId)) return
           if (finish) handlerRef.current.onDone(finish.tokensOut, finish.tokensIn, streamId, finish.meta)
+          else opts?.onGone?.()
         })
     },
     [armStall],
@@ -246,7 +286,7 @@ export function useStreamingMessage(handler: StreamHandler) {
         .then(res => {
           if (!subsRef.current.has(streamId)) return
           if (res.error) {
-            handlerRef.current.onError(res.error, streamId, res.errorCode)
+            handlerRef.current.onError(res.error, streamId, res.errorCode, errorUsageFromResult(res))
             return
           }
           if (res.text) handlerRef.current.onReplace(res.text, streamId)
@@ -340,7 +380,7 @@ export function useStreamingMessage(handler: StreamHandler) {
               clearTimeout(sub.stallTimer)
               sub.stallTimer = null
             }
-            handlerRef.current.onError(parsed.message, streamId, parsed.code)
+            handlerRef.current.onError(parsed.message, streamId, parsed.code, errorUsageFromEvent(parsed))
             break
           case 'heartbeat':
             // The server is alive but silent (awaiting a fix decision, running
@@ -433,7 +473,7 @@ export function useStreamingMessage(handler: StreamHandler) {
           handlerRef.current.onReplace(res.text, streamId)
         }
         if (res.error) {
-          handlerRef.current.onError(res.error, streamId, res.errorCode)
+          handlerRef.current.onError(res.error, streamId, res.errorCode, errorUsageFromResult(res))
         } else if (res.done) {
           handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId, doneArg(res))
         }
@@ -464,5 +504,7 @@ export function useStreamingMessage(handler: StreamHandler) {
     }
   }, [])
 
-  return {registerStream, cancel, teardownStream}
+  // resumeInto is exposed for the engine's reload-reattach path (F-21);
+  // everything else consumes it through reconnects and probes.
+  return {registerStream, cancel, teardownStream, resumeInto}
 }

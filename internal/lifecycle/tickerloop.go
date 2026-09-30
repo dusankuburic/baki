@@ -12,6 +12,17 @@ import (
 	"time"
 )
 
+// stopDrainBudget bounds how long Stop waits for an in-flight fn to return.
+//
+// Stop used to return the instant it signalled, so fx would proceed to close the
+// database pool while a governance sweep or an ingest pass was still querying
+// it — the tick then failed on a closed pool during every shutdown, which looks
+// like a transient error and is actually a guaranteed one. The budget is well
+// inside the app's 25s fx.StopTimeout, leaving room for the HTTP and WebSocket
+// drains that follow; a tick that outlasts it is abandoned (the root context is
+// already cancelled) rather than blocking shutdown indefinitely.
+const stopDrainBudget = 5 * time.Second
+
 // TickerLoop runs a function on a fixed interval in a background goroutine
 // until Stop, with panic recovery so one bad tick can't crash the process.
 //
@@ -25,18 +36,12 @@ import (
 // before Stop has any effect; calling Stop before Start (or on a TickerLoop
 // that never started, e.g. because the caller's own enable-check short-
 // circuited) is safe and a no-op.
-// stopDrainBudget bounds how long Stop waits for an in-flight fn to return.
-//
-// Stop used to return the instant it signalled, so fx would proceed to close the
-// database pool while a governance sweep or an ingest pass was still querying
-// it — the tick then failed on a closed pool during every shutdown, which looks
-// like a transient error and is actually a guaranteed one. The budget is well
-// inside the app's 25s fx.StopTimeout, leaving room for the HTTP and WebSocket
-// drains that follow; a tick that outlasts it is abandoned (the root context is
-// already cancelled) rather than blocking shutdown indefinitely.
-const stopDrainBudget = 5 * time.Second
-
 type TickerLoop struct {
+	// drainBudget overrides stopDrainBudget when non-zero (tests: proving
+	// that Stop gives up on a stuck tick need not take the full 5 s). Set
+	// before Start; read only by Stop.
+	drainBudget time.Duration
+
 	// mu guards the fields below. sync.Once orders other Do calls, NOT a
 	// concurrent reader — so Stop reading rootCancel/stop while Start writes
 	// them inside startOnce.Do was a genuine data race. It is latent today
@@ -134,9 +139,13 @@ func (l *TickerLoop) Stop() {
 		}
 		// Wait for the in-flight tick so the caller's dependencies (the DB pool,
 		// the blob client) are still alive while it unwinds.
+		budget := stopDrainBudget
+		if l.drainBudget > 0 {
+			budget = l.drainBudget
+		}
 		select {
 		case <-done:
-		case <-time.After(stopDrainBudget):
+		case <-time.After(budget):
 		}
 	})
 }

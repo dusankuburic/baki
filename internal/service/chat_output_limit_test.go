@@ -40,6 +40,14 @@ func (p *scriptedChunkProvider) Stream(_ context.Context, _ ai.Request, onChunk 
 // usage metrics the audited wrapper recorded.
 func runScriptedStream(t *testing.T, p *scriptedChunkProvider, useTools bool) (types []string, payloads []map[string]interface{}, usage <-chan *interfaces.UsageMetric) {
 	t.Helper()
+	_, _, types, payloads, usage = runScriptedStreamCtl(t, p, useTools)
+	return types, payloads, usage
+}
+
+// runScriptedStreamCtl is runScriptedStream plus the service and stream id,
+// for callers that also check the resumable state (F-15).
+func runScriptedStreamCtl(t *testing.T, p *scriptedChunkProvider, useTools bool) (svc *ChatService, streamID string, types []string, payloads []map[string]interface{}, usage <-chan *interfaces.UsageMetric) {
+	t.Helper()
 	// One registry entry, re-pointed per run (subtests run sequentially).
 	const id = "scripted-fake"
 	ai.RegisterProvider(id, func(string) ai.Provider { return p })
@@ -50,7 +58,7 @@ func runScriptedStream(t *testing.T, p *scriptedChunkProvider, useTools bool) (t
 			recorded <- m
 			return nil
 		}, nil)
-	svc := &ChatService{
+	svc = &ChatService{
 		notifier:      notifier,
 		configDir:     t.TempDir(),
 		flowCache:     &FlowService{},
@@ -72,7 +80,7 @@ func runScriptedStream(t *testing.T, p *scriptedChunkProvider, useTools bool) (t
 	// TempDir cleanup race the write ("directory is not empty" on Windows).
 	waitStreamFinished(t, svc, streamID)
 	types, payloads = eventTypes(notifier)
-	return types, payloads, recorded
+	return svc, streamID, types, payloads, recorded
 }
 
 var chatPaths = []struct {
@@ -98,7 +106,7 @@ func TestStream_EmptyAnswerAtTokenCapIsOutputLimitError(t *testing.T) {
 				{}, // keepalive
 				{Done: true, FinishReason: "length", TokensIn: 50, TokensOut: 4096},
 			}}}
-			types, payloads, usage := runScriptedStream(t, p, path.useTools)
+			svc, streamID, types, payloads, usage := runScriptedStreamCtl(t, p, path.useTools)
 
 			errAt := indexOf(types, "error")
 			if errAt < 0 {
@@ -109,6 +117,17 @@ func TestStream_EmptyAnswerAtTokenCapIsOutputLimitError(t *testing.T) {
 			}
 			if payloads[errAt]["code"] != ChatErrOutputLimit || payloads[errAt]["message"] != outputLimitMsg {
 				t.Errorf("error event = %v", payloads[errAt])
+			}
+			// F-15: the failure is billed, so the error event carries the
+			// same usage keys a done event would (minus chunks), and a client
+			// that missed the live event gets them from the resume snapshot
+			// instead of 0/0.
+			if payloads[errAt]["tokensIn"] != 50 || payloads[errAt]["tokensOut"] != 4096 {
+				t.Errorf("error event usage = %v/%v, want the reported 50/4096", payloads[errAt]["tokensIn"], payloads[errAt]["tokensOut"])
+			}
+			res, err := svc.ResumeStream(context.Background(), streamID, 0)
+			if err != nil || res.TokensOut != 4096 || res.TokensIn != 50 || res.ErrorCode != ChatErrOutputLimit {
+				t.Errorf("resume snapshot = %+v (%v), want the billed 50/4096 with the error code", res, err)
 			}
 			select {
 			case m := <-usage:

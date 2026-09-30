@@ -49,6 +49,20 @@ func TestValidate_AzureFoundryAllowedHosts(t *testing.T) {
 		{"rejects parent of a zone", []string{"*.core.windows.net"}, "blob.core.windows.net"},
 		{"rejects azure.com glob", []string{"*.azure.com"}, "cloudapp.azure.com"},
 		{"rejects apim regional glob", []string{"*.regional.azure-api.net"}, "azure-api.net"},
+		// F-27: zones where any customer runs HTTPS code (Azure ML online
+		// endpoints, Databricks, App Proxy, ASE, HDInsight, Spring Apps).
+		{"rejects aml online endpoint glob", []string{"*.inference.ml.azure.com"}, "inference.ml.azure.com"},
+		{"rejects regional aml glob", []string{"*.eastus.inference.ml.azure.com"}, "inference.ml.azure.com"},
+		{"rejects aml parent glob", []string{"*.ml.azure.com"}, "inference.ml.azure.com"},
+		{"rejects databricks glob", []string{"*.azuredatabricks.net"}, "azuredatabricks.net"},
+		{"rejects app proxy glob", []string{"*.msappproxy.net"}, "msappproxy.net"},
+		{"rejects hdi gateway glob", []string{"*.azurehdinsight.net"}, "azurehdinsight.net"},
+		{"rejects spring apps glob", []string{"*.azuremicroservices.io"}, "azuremicroservices.io"},
+		{"rejects ase glob", []string{"*.appserviceenvironment.net"}, "appserviceenvironment.net"},
+		// Already refused via the PSL private section, not the zone list.
+		{"rejects service bus glob via psl", []string{"*.servicebus.windows.net"}, "public suffix"},
+		{"exact aml endpoint ok", []string{"my-ep.eastus.inference.ml.azure.com"}, ""},
+		{"exact databricks host ok", []string{"adb-123.4.azuredatabricks.net"}, ""},
 		{"exact apim host ok", []string{"contoso-ai.azure-api.net"}, ""},
 		{"exact web app host ok", []string{"contoso-ai.azurewebsites.net"}, ""},
 		{"exact front door host ok", []string{"contoso-ai-abc123.z01.azurefd.net"}, ""},

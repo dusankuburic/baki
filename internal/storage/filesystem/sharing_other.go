@@ -2,23 +2,18 @@
 
 package filesystem
 
-// isSharingViolation is the non-Windows arm of the retry predicate in
-// renameOverOpenReader: POSIX rename atomically replaces a destination that
-// other processes/goroutines hold open, so there is no sharing violation to
-// detect and the answer is always false. Implemented (rather than dropped from
-// the shared call site) so the predicate compiles identically on every
-// platform and stays exhaustively testable.
-func isSharingViolation(err error) bool {
-	return false
-}
+import "pad-analyzer/internal/storage/atomicfile"
 
-// transientSharingConflict is the non-Windows arm of renameOverOpenReader's retry
-// predicate, and it is unconditionally false: POSIX rename over an open
-// destination succeeds outright, so the only errors left are genuine,
-// permanent failures — fs.ErrPermission on POSIX means the caller really lacks
-// permission (there is no transient Windows-style ERROR_ACCESS_DENIED shape),
-// and retrying it burned 20×100 ms while the caller (often holding flowMu)
-// serialized every other flow save behind a hopeless retry.
+// transientSharingConflict is atomicfile.TransientSharingConflict,
+// unconditionally false off Windows: POSIX rename atomically replaces a
+// destination that other processes/goroutines hold open, and
+// fs.ErrPermission on POSIX is a genuine, permanent denial, never worth a
+// retry. The predicates and their rationale live in
+// internal/storage/atomicfile, shared with the Azure AI Foundry registry
+// file; the name stays so this package's tests pin the implementation
+// renameOverOpenReader and readFileTolerant actually run. (The Windows-only
+// isSharingViolation has no caller here, so it has no non-Windows twin;
+// atomicfile.IsSharingViolation keeps one for every platform.)
 func transientSharingConflict(err error) bool {
-	return false
+	return atomicfile.TransientSharingConflict(err)
 }

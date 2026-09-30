@@ -15,6 +15,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/service"
 )
 
 // TestAzureFoundryE2E drives baki's Azure AI Foundry integration end to end,
@@ -66,28 +67,52 @@ func TestAzureFoundryE2E(t *testing.T) {
 			}
 		}
 
+		// The listing is the model registry's: the document's deployments
+		// became models of its resource "default" — "m/<id>" ids answering
+		// for their pre-registry ids (aliases, one release) — and the
+		// embedding deployment is not offered for chat.
 		p := env.providerInfo(t, u.bearer, "")
-		if p["configured"] != true || p["shared"] == true {
-			t.Errorf("listing configured/shared = %v/%v, want true/false", p["configured"], p["shared"])
+		if p["configured"] != true || p["shared"] == true || p["suggestDiscovery"] == true {
+			t.Errorf("listing configured/shared/suggestDiscovery = %v/%v/%v, want true/false/false", p["configured"], p["shared"], p["suggestDiscovery"])
 		}
-		if ids := azE2EModelIDs(p); !reflect.DeepEqual(ids, []string{"gpt-4o", "model-router", "claude:claude-sonnet-4-6"}) {
-			t.Errorf("listed models = %v, want exactly [gpt-4o model-router claude:claude-sonnet-4-6] (embedding hidden)", ids)
+		ids := azE2EModelIDs(p)
+		if len(ids) != 3 {
+			t.Errorf("listed models = %v, want the three chat and Claude deployments (embedding hidden)", ids)
 		}
-		if p["defaultModel"] != "gpt-4o" {
-			t.Errorf("defaultModel = %v, want gpt-4o", p["defaultModel"])
+		for _, id := range ids {
+			if !strings.HasPrefix(id, "m/") {
+				t.Errorf("listed model id %q is not a registry id", id)
+			}
 		}
-		gpt := azE2EModel(p, "gpt-4o")
-		if gpt == nil || azE2ENum(gpt, "inputCostPerM") != 2.5 || azE2ENum(gpt, "outputCostPerM") != 10 || azE2ENum(gpt, "contextLimit") != 128000 {
-			t.Errorf("gpt-4o entry = %v, want catalogue pricing 2.5/10 per 1M and a 128000 window", gpt)
+		gpt := azE2EModelByAlias(p, "gpt-4o")
+		router := azE2EModelByAlias(p, "model-router")
+		cl := azE2EModelByAlias(p, "claude:claude-sonnet-4-6")
+		if gpt == nil || router == nil || cl == nil || azE2EModelByAlias(p, "text-embedding-3-small") != nil {
+			t.Fatalf("models = %v, want gpt-4o, model-router and claude:claude-sonnet-4-6 by alias, no embedding", p["models"])
 		}
-		if router := azE2EModel(p, "model-router"); router == nil || azE2ENum(router, "inputCostPerM") != 0 {
-			t.Errorf("model-router entry = %v, want unpriced (billed by the routed model)", router)
+		// The server default (plan 9.2, rule 1): the single-document save
+		// stores its document as saved, so its chat deployment gpt-4o is
+		// the default — not claude-sonnet-4-6, which display order (purpose,
+		// then name) would put first.
+		if p["defaultModel"] != gpt["id"] || gpt["isDefault"] != true || cl["isDefault"] == true {
+			t.Errorf("defaultModel = %v (gpt-4o isDefault %v, claude isDefault %v), want gpt-4o's %v",
+				p["defaultModel"], gpt["isDefault"], cl["isDefault"], gpt["id"])
 		}
-		if cl := azE2EModel(p, "claude:claude-sonnet-4-6"); cl == nil || azE2ENum(cl, "inputCostPerM") != 3 || azE2ENum(cl, "outputCostPerM") != 15 {
-			t.Errorf("claude entry = %v, want catalogue pricing 3/15", cl)
+		if gpt["kind"] != "chat" || gpt["displayName"] != "gpt-4o" || gpt["purpose"] != "general" || gpt["status"] != "ready" ||
+			gpt["connectionId"] != "default" || gpt["connectionName"] != "s1-res" || gpt["shared"] == true {
+			t.Errorf("gpt-4o entry = %v", gpt)
+		}
+		if azE2ENum(gpt, "inputCostPerM") != 0 || azE2ENum(gpt, "outputCostPerM") != 0 || azE2ENum(gpt, "contextLimit") != 128000 {
+			t.Errorf("gpt-4o entry = %v, want no price (Azure is unpriced by baki) and a 128000 window", gpt)
+		}
+		if router["kind"] != "chat" || azE2ENum(router, "inputCostPerM") != 0 {
+			t.Errorf("model-router entry = %v, want an unpriced chat model", router)
+		}
+		if cl["kind"] != "claude" || azE2ENum(cl, "inputCostPerM") != 0 || azE2ENum(cl, "outputCostPerM") != 0 {
+			t.Errorf("claude entry = %v, want an unpriced Claude model (Azure is unpriced by baki)", cl)
 		}
 		if got := env.fake.requests(host); len(got) != 0 {
-			t.Errorf("an API-key listing must not call the resource (no data-plane route lists deployments); got %d request(s): %s %s", len(got), got[0].Method, got[0].Path)
+			t.Errorf("the listing must never call the resource; got %d request(s): %s %s", len(got), got[0].Method, got[0].Path)
 		}
 	})
 
@@ -96,21 +121,45 @@ func TestAzureFoundryE2E(t *testing.T) {
 		const key = "s2-secret-key"
 		u := env.newUser(t, "u-s2")
 		env.saveConfig(t, u, azE2EAPIKeyDoc(host, key))
-		env.fake.handle(host, func(w http.ResponseWriter, _ *http.Request, _ azE2ERequest, _ int) {
+		env.fake.handle(host, func(w http.ResponseWriter, _ *http.Request, rec azE2ERequest, _ int) {
+			if rec.Method == http.MethodGet && rec.Path == "/openai/v1/models" {
+				azE2EWriteJSON(w, http.StatusOK, `{"object":"list","data":[{"id":"gpt-4o-2024-11-20","object":"model"}]}`)
+				return
+			}
 			azE2EWriteJSON(w, http.StatusOK, azE2ECompletionJSON("Hello! How can I help you today?", 8, 9))
 		})
 
+		// The Test button (/api/providers/test, deprecated with the model
+		// registry) tests resource "default": an authenticated probe of its
+		// v1 model route — no model call, nothing billed.
 		var res map[string]any
 		env.mustDo(t, http.MethodPost, "/api/providers/test", u.bearer, map[string]any{"provider": ai.AzureFoundryProviderID}, http.StatusOK, &res)
 		if res["ok"] != true || res["error"] != nil {
 			t.Fatalf("connection test = %v, want ok", res)
 		}
-
 		reqs := env.fake.requests(host)
 		if len(reqs) != 1 {
 			t.Fatalf("resource received %d requests, want exactly 1", len(reqs))
 		}
-		r := reqs[0]
+		if probe := reqs[0]; probe.Method != http.MethodGet || probe.Path != "/openai/v1/models" || probe.RawQuery != "" ||
+			probe.Header.Get("api-key") != key || len(probe.Body) != 0 {
+			t.Errorf("resource test = %s %s?%s api-key %q body %q, want the key-authenticated GET /openai/v1/models probe",
+				probe.Method, probe.Path, probe.RawQuery, probe.Header.Get("api-key"), probe.Body)
+		}
+
+		// A model test (the registry's POST /test with a saved model) sends
+		// the deployment one tiny, non-streaming chat request.
+		entryID := strings.TrimPrefix(env.modelIDFor(t, u, "gpt-4o"), "m/")
+		res = nil
+		env.mustDo(t, http.MethodPost, "/api/providers/azure-foundry/test", u.bearer, map[string]any{"model": map[string]any{"id": entryID}}, http.StatusOK, &res)
+		if res["ok"] != true || res["error"] != nil {
+			t.Fatalf("model test = %v, want ok", res)
+		}
+		reqs = env.fake.requests(host)
+		if len(reqs) != 2 {
+			t.Fatalf("resource received %d requests, want 2 (the resource probe and the model test)", len(reqs))
+		}
+		r := reqs[1]
 		if r.Method != http.MethodPost || r.Path != "/openai/v1/chat/completions" {
 			t.Errorf("request = %s %s, want POST /openai/v1/chat/completions", r.Method, r.Path)
 		}
@@ -137,10 +186,10 @@ func TestAzureFoundryE2E(t *testing.T) {
 			t.Errorf("max_tokens must not be sent next to max_completion_tokens: %s", r.Body)
 		}
 		if body["stream"] == true {
-			t.Errorf("the connection test is a non-streaming call: %s", r.Body)
+			t.Errorf("the model test is a non-streaming call: %s", r.Body)
 		}
 		msgs := azE2EMessages(body)
-		if len(msgs) == 0 || msgs[len(msgs)-1]["role"] != "user" || msgs[len(msgs)-1]["content"] != "Hi" {
+		if len(msgs) == 0 || msgs[len(msgs)-1]["role"] != "user" || msgs[len(msgs)-1]["content"] != "ping" {
 			t.Errorf("messages = %v, want the one-word user probe", msgs)
 		}
 	})
@@ -163,8 +212,11 @@ func TestAzureFoundryE2E(t *testing.T) {
 			)
 		})
 
+		// The picker sends the model's registry id; the wire carries its
+		// deployment.
+		gptID := env.modelIDFor(t, u, "gpt-4o")
 		conv := uuid.NewString()
-		out := env.chat(t, u, azE2EChatReq{Model: "gpt-4o", Message: "Explain this flow", ConversationID: conv})
+		out := env.chat(t, u, azE2EChatReq{Model: gptID, Message: "Explain this flow", ConversationID: conv})
 		if out.Err != nil {
 			t.Fatalf("chat failed: %v", out.Err)
 		}
@@ -178,8 +230,8 @@ func TestAzureFoundryE2E(t *testing.T) {
 		if d["servedModel"] != served {
 			t.Errorf("done servedModel = %v, want %s", d["servedModel"], served)
 		}
-		if azE2ENum(d, "inputCostPerM") != 2.5 || azE2ENum(d, "outputCostPerM") != 10 {
-			t.Errorf("done rates = %v/%v, want gpt-4o's 2.5/10", d["inputCostPerM"], d["outputCostPerM"])
+		if azE2ENum(d, "inputCostPerM") != 0 || azE2ENum(d, "outputCostPerM") != 0 {
+			t.Errorf("done rates = %v/%v, want zero (Azure is unpriced by baki)", d["inputCostPerM"], d["outputCostPerM"])
 		}
 
 		reqs := env.fake.requests(host)
@@ -224,16 +276,19 @@ func TestAzureFoundryE2E(t *testing.T) {
 		if msgs[0]["role"] != "user" || msgs[0]["content"] != "Explain this flow" || ans["role"] != "assistant" || ans["content"] != "Hello from Azure AI Foundry." {
 			t.Errorf("reloaded messages = %v", msgs)
 		}
-		if ans["servedModel"] != served || azE2ENum(ans, "inputCostPerM") != 2.5 || azE2ENum(ans, "outputCostPerM") != 10 ||
-			azE2ENum(ans, "tokensIn") != 123 || azE2ENum(ans, "tokensOut") != 9 || ans["model"] != "gpt-4o" || ans["provider"] != ai.AzureFoundryProviderID {
-			t.Errorf("persisted answer = %v, want servedModel %s, rates 2.5/10, tokens 123/9", ans, served)
+		// Stored with the id the client asked with — never the deployment it
+		// resolved to — and the model's display name at send time.
+		if ans["servedModel"] != served || azE2ENum(ans, "inputCostPerM") > 0 || azE2ENum(ans, "outputCostPerM") > 0 ||
+			azE2ENum(ans, "tokensIn") != 123 || azE2ENum(ans, "tokensOut") != 9 || ans["model"] != gptID || ans["modelLabel"] != "gpt-4o" ||
+			ans["provider"] != ai.AzureFoundryProviderID {
+			t.Errorf("persisted answer = %v, want model %s labelled gpt-4o, servedModel %s, no rates, tokens 123/9", ans, gptID, served)
 		}
 
 		// A client that missed the live events gets the same from resume.
 		var res map[string]any
 		env.mustDo(t, http.MethodPost, "/api/chat/resume", u.bearer, map[string]any{"id": out.StreamID}, http.StatusOK, &res)
 		if res["done"] != true || res["text"] != "Hello from Azure AI Foundry." || res["servedModel"] != served ||
-			azE2ENum(res, "inputCostPerM") != 2.5 || azE2ENum(res, "outputCostPerM") != 10 {
+			azE2ENum(res, "inputCostPerM") > 0 || azE2ENum(res, "outputCostPerM") > 0 {
 			t.Errorf("resume = %v", res)
 		}
 	})
@@ -259,6 +314,9 @@ func TestAzureFoundryE2E(t *testing.T) {
 
 		conv := uuid.NewString()
 		sse := env.subscribe(t, u.bearer)
+		// A pre-registry id (a stale tab, an API client) still resolves
+		// through its alias for one release; the thread then switches to a
+		// registry id.
 		first := env.chatOn(t, sse, u, azE2EChatReq{Model: "gpt-4o", Message: "First question", ConversationID: conv})
 		if first.Err != nil || first.Text != "First answer." {
 			t.Fatalf("first turn = err %v text %q", first.Err, first.Text)
@@ -268,12 +326,13 @@ func TestAzureFoundryE2E(t *testing.T) {
 			t.Fatalf("after the first turn the conversation holds %d messages, want 2", len(msgs))
 		}
 
-		second := env.chatOn(t, sse, u, azE2EChatReq{Model: "model-router", Message: "Second question", ConversationID: conv})
+		routerID := env.modelIDFor(t, u, "model-router")
+		second := env.chatOn(t, sse, u, azE2EChatReq{Model: routerID, Message: "Second question", ConversationID: conv})
 		if second.Err != nil || second.Text != "Routed answer." {
 			t.Fatalf("second turn = err %v text %q", second.Err, second.Text)
 		}
-		if d := second.Done; d["servedModel"] != routed || azE2ENum(d, "inputCostPerM") != 0.4 || azE2ENum(d, "outputCostPerM") != 1.6 {
-			t.Errorf("router turn done = %v, want servedModel %s priced at gpt-4.1-mini's 0.4/1.6", d, routed)
+		if d := second.Done; d["servedModel"] != routed || azE2ENum(d, "inputCostPerM") != 0 || azE2ENum(d, "outputCostPerM") != 0 {
+			t.Errorf("router turn done = %v, want servedModel %s and no rates", d, routed)
 		}
 
 		reqs := env.fake.requests(host)
@@ -301,11 +360,12 @@ func TestAzureFoundryE2E(t *testing.T) {
 		if len(msgs) != 4 {
 			t.Fatalf("reloaded conversation holds %d messages, want 4", len(msgs))
 		}
-		if last := msgs[3]; last["servedModel"] != routed || last["model"] != "model-router" ||
-			azE2ENum(last, "inputCostPerM") != 0.4 || azE2ENum(last, "outputCostPerM") != 1.6 {
+		if last := msgs[3]; last["servedModel"] != routed || last["model"] != routerID || last["modelLabel"] != "model-router" ||
+			azE2ENum(last, "inputCostPerM") > 0 || azE2ENum(last, "outputCostPerM") > 0 {
 			t.Errorf("persisted router answer = %v", last)
 		}
-		if prev := msgs[1]; prev["servedModel"] != "gpt-4o-2024-11-20" || azE2ENum(prev, "inputCostPerM") != 2.5 {
+		// The raw id is stored as it was sent.
+		if prev := msgs[1]; prev["servedModel"] != "gpt-4o-2024-11-20" || prev["model"] != "gpt-4o" || azE2ENum(prev, "inputCostPerM") > 0 {
 			t.Errorf("persisted first answer = %v (a later turn must not rewrite it)", prev)
 		}
 	})
@@ -337,7 +397,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 			)
 		})
 
-		out := env.chat(t, u, azE2EChatReq{Model: "claude:claude-sonnet-4-6", Message: "Say hi"})
+		out := env.chat(t, u, azE2EChatReq{Model: env.modelIDFor(t, u, "claude:claude-sonnet-4-6"), Message: "Say hi"})
 		if out.Err != nil {
 			t.Fatalf("chat failed: %v", out.Err)
 		}
@@ -351,8 +411,8 @@ func TestAzureFoundryE2E(t *testing.T) {
 		if azE2ENum(d, "tokensIn") != 150 || azE2ENum(d, "tokensOut") != 12 {
 			t.Errorf("done tokens = %v/%v, want 150/12", d["tokensIn"], d["tokensOut"])
 		}
-		if azE2ENum(d, "inputCostPerM") != 3 || azE2ENum(d, "outputCostPerM") != 15 {
-			t.Errorf("done rates = %v/%v, want Sonnet 4.6's 3/15", d["inputCostPerM"], d["outputCostPerM"])
+		if azE2ENum(d, "inputCostPerM") != 0 || azE2ENum(d, "outputCostPerM") != 0 {
+			t.Errorf("done rates = %v/%v, want zero (Azure is unpriced by baki)", d["inputCostPerM"], d["outputCostPerM"])
 		}
 
 		reqs := env.fake.requests(host)
@@ -381,6 +441,134 @@ func TestAzureFoundryE2E(t *testing.T) {
 		}
 		if !bytes.Contains(r.Body, []byte("Say hi")) {
 			t.Errorf("the user's message is not in the request: %s", r.Body)
+		}
+	})
+
+	// F-47: a near-window Claude prompt is re-checked by the provider's own
+	// tokenizer (Anthropic count_tokens on the Foundry resource). The route is
+	// optional: whatever it answers, the chat turn still succeeds.
+	claudeReply := func(w http.ResponseWriter, text string) {
+		azE2EWriteSSE(w,
+			azE2EEvent("message_start", map[string]any{"type": "message_start", "message": map[string]any{
+				"id": "msg_01CNT", "type": "message", "role": "assistant", "model": "claude-haiku-4-5", "content": []any{},
+				"stop_reason": nil, "stop_sequence": nil, "usage": map[string]any{"input_tokens": 170000, "output_tokens": 1},
+			}}),
+			azE2EEvent("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}}),
+			azE2EEvent("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": text}}),
+			azE2EEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0}),
+			azE2EEvent("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]any{"output_tokens": 4}}),
+			azE2EEvent("message_stop", map[string]any{"type": "message_stop"}),
+		)
+	}
+	// Claude Haiku 4.5's 200k window; "a " is one cl100k token per two bytes,
+	// so ~300 KB of prompt estimates at ~150k tokens — with the completion
+	// reserve above 70% of the window (and under it), the band in which the
+	// estimate's ~30% Claude undercount could hide an overflow and the
+	// provider's tokenizer is asked. (The bytes alone decide nothing: review
+	// #4 B4 gates the count on the estimate, so a prompt whose BYTES merely
+	// crossed 80% of the window — 168 KB of "lorem " is ~28k tokens — no
+	// longer pays a round trip.)
+	nearWindow := strings.Repeat("a ", 150000)
+	claudeCountDoc := func(host, key string) map[string]any {
+		doc := azE2EAPIKeyDoc(host, key)
+		doc["claudeDeployments"] = []string{"claude-haiku-4-5"}
+		return doc
+	}
+	countCalls := func(host string) (counts, messages []azE2ERequest) {
+		for _, r := range env.fake.requests(host) {
+			switch r.Path {
+			case "/anthropic/v1/messages/count_tokens":
+				counts = append(counts, r)
+			case "/anthropic/v1/messages":
+				messages = append(messages, r)
+			}
+		}
+		return counts, messages
+	}
+
+	t.Run("4b_claude_count_tokens_route_served", func(t *testing.T) {
+		host := "s4b-res" + azE2EHostSuffix
+		const key = "s4b-secret-key"
+		u := env.newUser(t, "u-s4b")
+		env.saveConfig(t, u, claudeCountDoc(host, key))
+		env.fake.handle(host, func(w http.ResponseWriter, _ *http.Request, rec azE2ERequest, _ int) {
+			if rec.Path == "/anthropic/v1/messages/count_tokens" {
+				// Exact count: the prompt fits the window, so nothing is trimmed.
+				azE2EWriteJSON(w, http.StatusOK, `{"input_tokens": 150000}`)
+				return
+			}
+			claudeReply(w, "Counted and answered.")
+		})
+
+		out := env.chat(t, u, azE2EChatReq{Model: "claude:claude-haiku-4-5", Message: nearWindow})
+		if out.Err != nil || out.Text != "Counted and answered." {
+			t.Fatalf("chat = err %v text %q, want the answer", out.Err, out.Text)
+		}
+		counts, messages := countCalls(host)
+		if len(counts) != 1 || len(messages) != 1 {
+			t.Fatalf("count_tokens/messages requests = %d/%d, want 1/1", len(counts), len(messages))
+		}
+		c := counts[0]
+		if c.Method != http.MethodPost || c.RawQuery != "" {
+			t.Errorf("count request = %s ?%s, want a POST without a query", c.Method, c.RawQuery)
+		}
+		if c.Header.Get("api-key") != key || c.Header.Get("anthropic-version") != "2023-06-01" {
+			t.Errorf("count request auth/version headers = %q/%q", c.Header.Get("api-key"), c.Header.Get("anthropic-version"))
+		}
+		body := c.JSON()
+		if body["model"] != "claude-haiku-4-5" {
+			t.Errorf("count model = %v, want the deployment without the claude: prefix", body["model"])
+		}
+		for _, absent := range []string{"max_tokens", "stream", "temperature", "top_p"} {
+			if _, ok := body[absent]; ok {
+				t.Errorf("count_tokens body carries %q: %s", absent, c.Body)
+			}
+		}
+		if !bytes.Contains(c.Body, []byte("a a a a")) {
+			t.Error("the count request does not carry the prompt")
+		}
+		// The count came before the turn it guarded.
+		if !counts[0].At.Before(messages[0].At) && !counts[0].At.Equal(messages[0].At) {
+			t.Errorf("count_tokens at %v after messages at %v", counts[0].At, messages[0].At)
+		}
+	})
+
+	t.Run("4c_claude_count_tokens_404_falls_back_without_repeats", func(t *testing.T) {
+		host := "s4c-res" + azE2EHostSuffix
+		u := env.newUser(t, "u-s4c")
+		env.saveConfig(t, u, claudeCountDoc(host, "s4c-secret-key"))
+		env.fake.handle(host, func(w http.ResponseWriter, _ *http.Request, rec azE2ERequest, _ int) {
+			if rec.Path == "/anthropic/v1/messages/count_tokens" {
+				// The gateway's route-level 404 (no count_tokens route on this
+				// resource). Anthropic's own not_found_error envelope names one
+				// request's unknown model instead and is not memoised (A6).
+				azE2EWriteJSON(w, http.StatusNotFound, `{"error":{"code":"404","message":"Resource not found"}}`)
+				return
+			}
+			claudeReply(w, "Answered without a count.")
+		})
+
+		sse := env.subscribe(t, u.bearer)
+		first := env.chatOn(t, sse, u, azE2EChatReq{Model: "claude:claude-haiku-4-5", Message: nearWindow})
+		if first.Err != nil || first.Text != "Answered without a count." {
+			t.Fatalf("first turn = err %v text %q, want the estimate's verdict and an answer", first.Err, first.Text)
+		}
+		if counts, messages := countCalls(host); len(counts) != 1 || len(messages) != 1 {
+			t.Fatalf("after turn 1: count_tokens/messages = %d/%d, want 1/1", len(counts), len(messages))
+		}
+
+		// A second near-window turn on the same endpoint: the 404 is
+		// memoised, so the turn runs without paying the rejection again.
+		second := env.chatOn(t, sse, u, azE2EChatReq{Model: "claude:claude-haiku-4-5", Message: nearWindow})
+		if second.Err != nil || second.Text != "Answered without a count." {
+			t.Fatalf("second turn = err %v text %q", second.Err, second.Text)
+		}
+		counts, messages := countCalls(host)
+		if len(counts) != 1 {
+			t.Errorf("count_tokens requests = %d after two turns, want 1 (the 404 is memoised per endpoint)", len(counts))
+		}
+		if len(messages) != 2 {
+			t.Errorf("messages requests = %d, want 2", len(messages))
 		}
 	})
 
@@ -449,7 +637,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 		const hint = 150 * time.Millisecond
 		rateLimited := func(w http.ResponseWriter) {
 			azE2EWriteJSON(w, http.StatusTooManyRequests, azE2ERateLimitJSON,
-				"retry-after-ms", "150", "retry-after", "1",
+				"retry-after-ms", "150", "retry-after", "5",
 				"x-ratelimit-remaining-requests", "0", "x-ratelimit-remaining-tokens", "0")
 		}
 
@@ -485,10 +673,11 @@ func TestAzureFoundryE2E(t *testing.T) {
 				}
 			}
 			// The first backoff is at most 500 ms of jitter or the 150 ms
-			// hint: a wait of the coarse retry-after (1 s) means the ms hint
-			// was ignored.
-			if gap := reqs[1].At.Sub(reqs[0].At); gap >= time.Second {
-				t.Errorf("first retry waited %s: the retry-after-ms hint must win over the coarse retry-after", gap)
+			// hint: a wait of the coarse retry-after (5 s) means the ms hint
+			// was ignored. Asserting against the 5 s coarse value keeps the
+			// guard while leaving headroom for -race CI scheduling stalls.
+			if gap := reqs[1].At.Sub(reqs[0].At); gap >= 5*time.Second {
+				t.Errorf("first retry waited %s: the retry-after-ms hint must win over the coarse retry-after (5 s)", gap)
 			}
 		})
 
@@ -539,7 +728,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 			)
 		})
 
-		out := env.chat(t, u, azE2EChatReq{Model: "gpt-4o", Message: "What is wrong with this flow?", UseTools: true})
+		out := env.chat(t, u, azE2EChatReq{Model: env.modelIDFor(t, u, "gpt-4o"), Message: "What is wrong with this flow?", UseTools: true})
 		if out.Err != nil {
 			t.Fatalf("chat failed: %v", out.Err)
 		}
@@ -606,6 +795,10 @@ func TestAzureFoundryE2E(t *testing.T) {
 				azE2EWriteJSON(w, http.StatusOK, azE2EProjectDeploymentsJSON)
 			case r.Method == http.MethodGet && rec.Path == project+"/agents":
 				azE2EWriteJSON(w, http.StatusOK, azE2EProjectAgentsJSON)
+			case r.Method == http.MethodGet && rec.Path == project+"/agents/helper":
+				azE2EWriteJSON(w, http.StatusOK, azE2EProjectAgentJSON)
+			case r.Method == http.MethodGet && rec.Path == "/openai/v1/models":
+				azE2EWriteJSON(w, http.StatusOK, `{"object":"list","data":[]}`)
 			case r.Method == http.MethodPost && rec.Path == project+"/openai/v1/responses":
 				azE2EWriteSSE(w, azE2EResponsesStream(served, "Hello from ", "the helper agent.", 42, 7)...)
 			case r.Method == http.MethodPost && rec.Path == "/openai/v1/chat/completions":
@@ -615,25 +808,52 @@ func TestAzureFoundryE2E(t *testing.T) {
 			}
 		})
 
+		// The picker offers only the models the user added: an Entra ID +
+		// project resource with none yet lists nothing, suggests
+		// discovering its project, and costs no request.
+		signInsBefore := len(env.fake.requests(azE2EAADHost))
 		p := env.providerInfo(t, u.bearer, "")
-		agent := azE2EModel(p, "agent:helper")
-		if agent == nil {
-			t.Fatalf("listing = %v, want agent:helper", azE2EModelIDs(p))
+		if p["configured"] != true || len(azE2EModelIDs(p)) != 0 || p["defaultModel"] != "" || p["suggestDiscovery"] != true {
+			t.Errorf("listing = configured %v models %v default %v suggestDiscovery %v, want a configured resource with no models that suggests discovery",
+				p["configured"], azE2EModelIDs(p), p["defaultModel"], p["suggestDiscovery"])
 		}
-		if dn, _ := agent["displayName"].(string); !strings.HasPrefix(dn, "Agent · helper") {
-			t.Errorf("agent displayName = %q, want \"Agent · helper…\"", dn)
-		}
-		if azE2EModel(p, "gpt-4o") == nil {
-			t.Errorf("listing = %v, want the project's gpt-4o deployment", azE2EModelIDs(p))
-		}
-		if azE2EModel(p, "text-embedding-3-small") != nil {
-			t.Errorf("listing = %v: the project's embedding deployment must not be offered for chat", azE2EModelIDs(p))
-		}
-		if p["defaultModel"] != "gpt-4o" {
-			t.Errorf("defaultModel = %v, want the first listed chat deployment (the document names none)", p["defaultModel"])
+		if n := len(env.fake.requests(host)) + len(env.fake.requests(azE2EAADHost)) - signInsBefore; n != 0 {
+			t.Errorf("the listing made %d request(s)", n)
 		}
 
-		// Entra ID sign-in: client credentials with the Foundry scope.
+		// The user adds the project's agent and its gpt-4o deployment.
+		agent := env.addModel(t, u, map[string]any{"connectionId": "default", "kind": "agent", "deployment": "helper", "displayName": "Flow reviewer", "purpose": "review"})
+		gpt := env.addModel(t, u, map[string]any{"connectionId": "default", "kind": "chat", "deployment": "gpt-4o"})
+		agentID, _ := agent["modelId"].(string)
+		gptID, _ := gpt["modelId"].(string)
+		p = env.providerInfo(t, u.bearer, "")
+		if ids := azE2EModelIDs(p); len(ids) != 2 || azE2EModel(p, agentID) == nil || azE2EModel(p, gptID) == nil {
+			t.Fatalf("listing = %v, want the agent and gpt-4o", ids)
+		}
+		if a := azE2EModel(p, agentID); a["kind"] != "agent" || a["displayName"] != "Flow reviewer" || a["purpose"] != "review" || a["status"] != "ready" {
+			t.Errorf("agent entry = %v", a)
+		}
+		// The server default: the first chat model, before any agent.
+		if p["defaultModel"] != gptID {
+			t.Errorf("defaultModel = %v, want gpt-4o's %s", p["defaultModel"], gptID)
+		}
+
+		// The listing never waits on Azure; it refreshes the project's own
+		// listing in the background: an Entra ID sign-in (client
+		// credentials, the Foundry scope), then the deployments and the
+		// agents on the Entra bearer.
+		var sawDeployments, sawAgents bool
+		deadline := time.Now().Add(5 * time.Second)
+		for (!sawDeployments || !sawAgents) && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			for _, r := range env.fake.requests(host) {
+				sawDeployments = sawDeployments || (r.Method == http.MethodGet && r.Path == project+"/deployments")
+				sawAgents = sawAgents || (r.Method == http.MethodGet && r.Path == project+"/agents")
+			}
+		}
+		if !sawDeployments || !sawAgents {
+			t.Errorf("background project listing calls: deployments %v agents %v", sawDeployments, sawAgents)
+		}
 		var tokenReq *azE2ERequest
 		for _, r := range env.fake.requests(azE2EAADHost) {
 			if r.Method == http.MethodPost && strings.HasSuffix(r.Path, "/oauth2/v2.0/token") {
@@ -650,48 +870,68 @@ func TestAzureFoundryE2E(t *testing.T) {
 			!strings.Contains(form.Get("scope"), "https://ai.azure.com/.default") {
 			t.Errorf("token request = %s %s", tokenReq.Path, tokenReq.Body)
 		}
-		var sawDeployments, sawAgents bool
 		for _, r := range env.fake.requests(host) {
-			if r.Method != http.MethodGet {
+			if r.Method != http.MethodGet || (r.Path != project+"/deployments" && r.Path != project+"/agents") {
 				continue
 			}
 			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "+azE2EEntraToken) || r.Header.Get("api-key") != "" {
 				t.Errorf("%s: Authorization %q api-key %q, want only the Entra bearer", r.Path, r.Header.Get("Authorization"), r.Header.Get("api-key"))
 			}
-			if r.RawQuery != "api-version=v1" {
-				t.Errorf("%s query = %q, want api-version=v1", r.Path, r.RawQuery)
+			want := "api-version=v1"
+			if r.Path == project+"/agents" {
+				want = "api-version=v1&limit=100" // the List Agents page size
 			}
-			sawDeployments = sawDeployments || r.Path == project+"/deployments"
-			sawAgents = sawAgents || r.Path == project+"/agents"
-		}
-		if !sawDeployments || !sawAgents {
-			t.Errorf("project listing calls: deployments %v agents %v", sawDeployments, sawAgents)
+			if r.RawQuery != want {
+				t.Errorf("%s query = %q, want %q", r.Path, r.RawQuery, want)
+			}
 		}
 
-		// The Test button: the document names no chat deployment, so the
-		// connection test chats with the first one the project lists, on the
-		// Entra bearer (never an api-key) and the v1 route.
+		// The Test button tests resource "default" without a model call: a
+		// sign-in, the v1 model route and the project, on the Entra bearer
+		// (never an api-key).
+		before := len(env.fake.requests(host))
 		var res map[string]any
 		env.mustDo(t, http.MethodPost, "/api/providers/test", u.bearer, map[string]any{"provider": ai.AzureFoundryProviderID}, http.StatusOK, &res)
 		if res["ok"] != true {
 			t.Errorf("Entra connection test = %v", res)
 		}
 		var probe *azE2ERequest
-		for _, r := range env.fake.requests(host) {
-			if r.Method == http.MethodPost && r.Path == "/openai/v1/chat/completions" {
+		for _, r := range env.fake.requests(host)[before:] {
+			if r.Method == http.MethodPost {
+				t.Errorf("the resource test called %s: a resource test never calls a model", r.Path)
+			}
+			if r.Method == http.MethodGet && r.Path == "/openai/v1/models" {
 				r := r
 				probe = &r
 			}
 		}
 		if probe == nil {
-			t.Errorf("the connection test sent no chat request")
-		} else if b := probe.JSON(); b["model"] != "gpt-4o" || probe.RawQuery != "" ||
-			!strings.HasPrefix(probe.Header.Get("Authorization"), "Bearer "+azE2EEntraToken) || probe.Header.Get("api-key") != "" {
-			t.Errorf("connection test request = model %v query %q Authorization %q api-key %q", b["model"], probe.RawQuery, probe.Header.Get("Authorization"), probe.Header.Get("api-key"))
+			t.Errorf("the resource test did not probe the v1 model route")
+		} else if !strings.HasPrefix(probe.Header.Get("Authorization"), "Bearer "+azE2EEntraToken) || probe.Header.Get("api-key") != "" || probe.RawQuery != "" {
+			t.Errorf("resource probe = query %q Authorization %q api-key %q", probe.RawQuery, probe.Header.Get("Authorization"), probe.Header.Get("api-key"))
+		}
+
+		// Testing the agent only looks it up: it is never run.
+		before = len(env.fake.requests(host))
+		res = nil
+		env.mustDo(t, http.MethodPost, "/api/providers/azure-foundry/test", u.bearer,
+			map[string]any{"model": map[string]any{"id": agent["id"]}}, http.StatusOK, &res)
+		if res["ok"] != true {
+			t.Errorf("agent test = %v", res)
+		}
+		var lookedUp bool
+		for _, r := range env.fake.requests(host)[before:] {
+			if r.Method == http.MethodPost {
+				t.Errorf("the agent test sent POST %s: an agent test never runs the agent", r.Path)
+			}
+			lookedUp = lookedUp || (r.Method == http.MethodGet && r.Path == project+"/agents/helper")
+		}
+		if !lookedUp {
+			t.Error("the agent test did not look the agent up")
 		}
 
 		conv := uuid.NewString()
-		out := env.chat(t, u, azE2EChatReq{Model: "agent:helper", Message: "Review my flow", ConversationID: conv})
+		out := env.chat(t, u, azE2EChatReq{Model: agentID, Message: "Review my flow", ConversationID: conv})
 		if out.Err != nil {
 			t.Fatalf("agent chat failed: %v", out.Err)
 		}
@@ -702,13 +942,13 @@ func TestAzureFoundryE2E(t *testing.T) {
 		if d["servedModel"] != served || azE2ENum(d, "tokensIn") != 42 || azE2ENum(d, "tokensOut") != 7 {
 			t.Errorf("done = %v, want servedModel %s and tokens 42/7", d, served)
 		}
-		if azE2ENum(d, "inputCostPerM") != 2.5 || azE2ENum(d, "outputCostPerM") != 10 {
-			t.Errorf("done rates = %v/%v, want gpt-4o's 2.5/10", d["inputCostPerM"], d["outputCostPerM"])
+		if azE2ENum(d, "inputCostPerM") != 0 || azE2ENum(d, "outputCostPerM") != 0 {
+			t.Errorf("done rates = %v/%v, want zero (Azure is unpriced by baki)", d["inputCostPerM"], d["outputCostPerM"])
 		}
 
-		if msgs := env.conversation(t, u, u.flowID, conv, 2); len(msgs) != 2 ||
-			msgs[1]["model"] != "agent:helper" || msgs[1]["servedModel"] != served || azE2ENum(msgs[1], "inputCostPerM") != 2.5 {
-			t.Errorf("persisted agent turn = %v, want model agent:helper served by %s at 2.5/10", msgs, served)
+		if msgs := env.conversation(t, u, u.flowID, conv, 2); len(msgs) != 2 || msgs[1]["model"] != agentID ||
+			msgs[1]["modelLabel"] != "Flow reviewer" || msgs[1]["servedModel"] != served || azE2ENum(msgs[1], "inputCostPerM") > 0 {
+			t.Errorf("persisted agent turn = %v, want model %s labelled Flow reviewer, served by %s with no rates", msgs, agentID, served)
 		}
 
 		var resp *azE2ERequest
@@ -777,6 +1017,9 @@ func TestAzureFoundryE2E(t *testing.T) {
 			}
 		})
 
+		// The agent is a model of the resource; its pre-registry id still
+		// resolves to it (an alias, one release).
+		env.addModel(t, u, map[string]any{"connectionId": "default", "kind": "agent", "deployment": "helper"})
 		out := env.chat(t, u, azE2EChatReq{Model: "agent:helper", Message: "Any issues?"})
 		if out.Err != nil {
 			t.Fatalf("agent chat failed: %v", out.Err)
@@ -938,17 +1181,27 @@ func TestAzureFoundryE2E(t *testing.T) {
 			t.Errorf("org connection test = %v", test)
 		}
 
-		// A member without a key of their own gets the org's, flagged shared.
+		// A member without a resource of their own is offered the org's
+		// models, flagged shared: the saved configuration became the org's
+		// resource "default", its chat deployment the org's default for
+		// members (and, for a member without a "default" of their own, the
+		// answer to the pre-registry id gpt-4o).
 		p := env.providerInfo(t, memberU.bearer, org.ID)
-		if p["configured"] != true || p["shared"] != true || azE2EModel(p, "gpt-4o") == nil || p["defaultModel"] != "gpt-4o" {
-			t.Errorf("member listing with orgId = configured %v shared %v models %v default %v", p["configured"], p["shared"], azE2EModelIDs(p), p["defaultModel"])
+		sharedModel := azE2EModelByAlias(p, "gpt-4o")
+		sharedID, _ := sharedModel["id"].(string)
+		if p["configured"] != true || p["shared"] != true || len(azE2EModelIDs(p)) != 1 || sharedModel == nil || p["defaultModel"] != sharedID {
+			t.Fatalf("member listing with orgId = configured %v shared %v models %v default %v", p["configured"], p["shared"], azE2EModelIDs(p), p["defaultModel"])
 		}
-		if p := env.providerInfo(t, memberU.bearer, ""); p["configured"] != false {
-			t.Errorf("member listing without orgId = configured %v, want false (no own key)", p["configured"])
+		if sharedModel["shared"] != true || sharedModel["isOrgDefault"] != true || sharedModel["orgId"] != org.ID || sharedModel["orgName"] != "Acme" {
+			t.Errorf("shared model = %v", sharedModel)
+		}
+		if p := env.providerInfo(t, memberU.bearer, ""); p["configured"] != false || len(azE2EModelIDs(p)) != 0 {
+			t.Errorf("member listing without orgId = configured %v models %v, want nothing (no resource of their own)", p["configured"], azE2EModelIDs(p))
 		}
 
 		before9 := len(env.fake.requests(host))
-		out := env.chat(t, memberU, azE2EChatReq{Model: "gpt-4o", Message: "Shared question"})
+		conv := uuid.NewString()
+		out := env.chat(t, memberU, azE2EChatReq{Model: sharedID, Message: "Shared question", ConversationID: conv})
 		if out.Err != nil || out.Text != "Shared answer." {
 			t.Fatalf("member chat on the org flow = err %v text %q", out.Err, out.Text)
 		}
@@ -962,18 +1215,135 @@ func TestAzureFoundryE2E(t *testing.T) {
 		if got := reqs[len(reqs)-1].Header.Get("api-key"); got != orgKey {
 			t.Errorf("member's turn api-key = %q, want the org's shared key", got)
 		}
+		if msgs := env.conversation(t, memberU, orgFlow, conv, 2); len(msgs) != 2 || msgs[1]["model"] != sharedID || msgs[1]["modelLabel"] != "gpt-4o" {
+			t.Errorf("persisted shared turn = %v, want model %s labelled gpt-4o", msgs, sharedID)
+		}
+		// The pre-registry id still reaches the org's model through its alias.
+		if out := env.chat(t, memberU, azE2EChatReq{Model: "gpt-4o", Message: "Shared question again"}); out.Err != nil || out.Text != "Shared answer." {
+			t.Errorf("member chat by the pre-registry id = err %v text %q", out.Err, out.Text)
+		}
+		if reqs := env.fake.requests(host); reqs[len(reqs)-1].Header.Get("api-key") != orgKey {
+			t.Errorf("the pre-registry id's turn ran on api-key %q", reqs[len(reqs)-1].Header.Get("api-key"))
+		}
 
-		// A viewer is not offered the shared credential and cannot run on it.
-		if p := env.providerInfo(t, viewerU.bearer, org.ID); p["configured"] != false || p["shared"] == true {
-			t.Errorf("viewer listing with orgId = configured %v shared %v, want neither", p["configured"], p["shared"])
+		// A viewer is not offered the organisation's models and cannot run
+		// on them: the send is refused before any stream starts.
+		if p := env.providerInfo(t, viewerU.bearer, org.ID); p["configured"] != false || p["shared"] == true || len(azE2EModelIDs(p)) != 0 {
+			t.Errorf("viewer listing with orgId = configured %v shared %v models %v, want nothing", p["configured"], p["shared"], azE2EModelIDs(p))
 		}
 		before9 = len(env.fake.requests(host))
-		out = env.chat(t, viewerU, azE2EChatReq{Model: "gpt-4o", Message: "Viewer question"})
-		if out.Err == nil || out.Err["code"] != "PROVIDER_NOT_CONFIGURED" {
-			t.Errorf("viewer chat = err %v done %v, want PROVIDER_NOT_CONFIGURED", out.Err, out.Done)
-		}
+		env.chatRefused(t, viewerU, azE2EChatReq{Model: sharedID, Message: "Viewer question"})
+		env.chatRefused(t, viewerU, azE2EChatReq{Model: "gpt-4o", Message: "Viewer question"})
 		if n := len(env.fake.requests(host)) - before9; n != 0 {
-			t.Errorf("the viewer's turn reached the resource %d time(s)", n)
+			t.Errorf("the viewer's turns reached the resource %d time(s)", n)
+		}
+	})
+
+	t.Run("10_model_not_available_and_preview", func(t *testing.T) {
+		host := "s10-res" + azE2EHostSuffix
+		u := env.newUser(t, "u-s10")
+		env.saveConfig(t, u, map[string]any{
+			"endpoint":       "https://" + host,
+			"auth":           map[string]any{"mode": "api_key", "key": "s10-secret-key"},
+			"chatDeployment": "gpt-4o",
+		})
+		env.fake.handle(host, func(w http.ResponseWriter, _ *http.Request, _ azE2ERequest, _ int) {
+			const served = "gpt-4o-2024-11-20"
+			azE2EWriteSSE(w,
+				azE2EData(azE2EChunk(served, map[string]any{"role": "assistant", "content": "Default answer."}, nil)),
+				azE2EData(azE2EChunk(served, map[string]any{}, "stop")),
+				azE2EData(azE2EUsageFrame(served, 10, 2)),
+				azE2EData("[DONE]"),
+			)
+		})
+		distilled := env.addModel(t, u, map[string]any{"connectionId": "default", "kind": "chat", "deployment": "distilled",
+			"displayName": "Distilled", "purpose": "documentation", "contextWindow": 20000, "maxOutputTokens": 1024})
+		distilledID, _ := distilled["modelId"].(string)
+		gptID := env.modelIDFor(t, u, "gpt-4o")
+
+		// An unknown or removed model is refused at create time — 400
+		// MODEL_NOT_AVAILABLE, the text goes back to the composer — and by
+		// the preview alike; neither reaches the resource.
+		env.chatRefused(t, u, azE2EChatReq{Model: "m/zzzzzzzzzz", Message: "q"})
+		var refused map[string]any
+		env.mustDo(t, http.MethodPost, "/api/chat/preview-context", u.bearer, map[string]any{
+			"flowId": u.flowID, "provider": ai.AzureFoundryProviderID, "model": "m/zzzzzzzzzz", "userMessage": "q",
+		}, http.StatusBadRequest, &refused)
+		if refused["code"] != service.AzureCodeModelNotAvailable {
+			t.Errorf("preview of an unknown model = %v, want code %s", refused, service.AzureCodeModelNotAvailable)
+		}
+
+		// The preview's window is the model's own: the distilled model's
+		// 20000-token override, gpt-4o's catalogue 128000.
+		for id, want := range map[string]float64{distilledID: 20000, gptID: 128000} {
+			var preview map[string]any
+			env.mustDo(t, http.MethodPost, "/api/chat/preview-context", u.bearer, map[string]any{
+				"flowId": u.flowID, "provider": ai.AzureFoundryProviderID, "model": id, "userMessage": "q",
+			}, http.StatusOK, &preview)
+			if azE2ENum(preview, "contextLimit") != want {
+				t.Errorf("preview of %s = contextLimit %v, want %v", id, preview["contextLimit"], want)
+			}
+		}
+		if n := len(env.fake.requests(host)); n != 0 {
+			t.Errorf("refusals and previews made %d request(s) to the resource", n)
+		}
+
+		// model "" is the server default — the first chat model in display
+		// order, gpt-4o (general before documentation) — stored with its
+		// registry id.
+		conv := uuid.NewString()
+		if out := env.chat(t, u, azE2EChatReq{Message: "Which model?", ConversationID: conv}); out.Err != nil || out.Text != "Default answer." {
+			t.Fatalf("default model turn = err %v text %q", out.Err, out.Text)
+		}
+		if reqs := env.fake.requests(host); len(reqs) != 1 || reqs[0].JSON()["model"] != "gpt-4o" {
+			t.Errorf("default model request = %v", reqs)
+		}
+		if msgs := env.conversation(t, u, u.flowID, conv, 2); len(msgs) != 2 || msgs[1]["model"] != gptID || msgs[1]["modelLabel"] != "gpt-4o" {
+			t.Errorf("persisted default turn = %v, want model %s", msgs, gptID)
+		}
+
+		// A distilled model's output cap bounds the request.
+		if out := env.chat(t, u, azE2EChatReq{Model: distilledID, Message: "Short answer please"}); out.Err != nil {
+			t.Fatalf("distilled turn = err %v", out.Err)
+		}
+		if reqs := env.fake.requests(host); len(reqs) != 2 || reqs[1].JSON()["model"] != "distilled" || azE2ENum(reqs[1].JSON(), "max_completion_tokens") != 1024 {
+			t.Errorf("distilled request = model %v max_completion_tokens %v, want distilled capped at 1024",
+				reqs[len(reqs)-1].JSON()["model"], reqs[len(reqs)-1].JSON()["max_completion_tokens"])
+		}
+
+		// Removed after the list loaded (a stale tab): refused, nothing sent.
+		env.mustDo(t, http.MethodDelete, "/api/providers/azure-foundry/models/"+distilled["id"].(string), u.bearer, nil, http.StatusOK, nil)
+		env.chatRefused(t, u, azE2EChatReq{Model: distilledID, Message: "Still there?"})
+		if n := len(env.fake.requests(host)); n != 2 {
+			t.Errorf("the refused send reached the resource (%d requests)", n)
+		}
+	})
+
+	t.Run("11_save_keeps_a_clamped_model_label", func(t *testing.T) {
+		u := env.newUser(t, "u-s11")
+		conv := uuid.NewString()
+		now := time.Now().UTC().Format(time.RFC3339)
+		env.mustDo(t, http.MethodPost, "/api/chat/save", u.bearer, map[string]any{
+			"flowId": u.flowID, "provider": conv,
+			"messages": []map[string]any{
+				{"id": uuid.NewString(), "role": "user", "content": "q", "timestamp": now},
+				{"id": uuid.NewString(), "role": "assistant", "content": "a", "timestamp": now,
+					"provider": ai.AzureFoundryProviderID, "model": "m/abcdefghij", "modelLabel": "Docs writer"},
+				{"id": uuid.NewString(), "role": "assistant", "content": "b", "timestamp": now,
+					"provider": ai.AzureFoundryProviderID, "model": "m/abcdefghij",
+					"modelLabel": "  Docs\u202e\twriter\u200b \n" + strings.Repeat("x", 80)},
+			},
+		}, http.StatusOK, nil)
+		msgs := env.conversation(t, u, u.flowID, conv, 3)
+		if len(msgs) != 3 {
+			t.Fatalf("saved conversation = %v", msgs)
+		}
+		if msgs[1]["modelLabel"] != "Docs writer" || msgs[1]["model"] != "m/abcdefghij" {
+			t.Errorf("round-tripped label = %v, want Docs writer", msgs[1])
+		}
+		want := "Docs writer " + strings.Repeat("x", 52) // 64 characters
+		if msgs[2]["modelLabel"] != want {
+			t.Errorf("clamped label = %q, want %q", msgs[2]["modelLabel"], want)
 		}
 	})
 
@@ -1041,8 +1411,12 @@ const azE2EProjectDeploymentsJSON = `{"value":[` +
 	`{"type":"ModelDeployment","name":"text-embedding-3-small","modelName":"text-embedding-3-small","modelVersion":"1","modelPublisher":"OpenAI","capabilities":{"embeddings":"true"},"sku":{"name":"Standard","capacity":120},"connectionName":null}` +
 	`]}`
 
-// azE2EProjectAgentsJSON is GET {project}/agents?api-version=v1.
-const azE2EProjectAgentsJSON = `{"object":"list","data":[{"object":"agent","id":"helper","name":"helper","versions":{"latest":{"metadata":{},"object":"agent.version","id":"helper:1","name":"helper","version":"1","description":"","created_at":1759000000,"definition":{"kind":"prompt","model":"gpt-4o","instructions":"You review Power Automate Desktop flows."}}}}],"first_id":"helper","last_id":"helper","has_more":false}`
+// azE2EProjectAgentJSON is GET {project}/agents/helper?api-version=v1: one
+// prompt agent, as the list below carries it.
+const azE2EProjectAgentJSON = `{"object":"agent","id":"helper","name":"helper","versions":{"latest":{"metadata":{},"object":"agent.version","id":"helper:1","name":"helper","version":"1","description":"","created_at":1759000000,"definition":{"kind":"prompt","model":"gpt-4o","instructions":"You review Power Automate Desktop flows."}}}}`
+
+// azE2EProjectAgentsJSON is GET {project}/agents?api-version=v1&limit=100.
+const azE2EProjectAgentsJSON = `{"object":"list","data":[` + azE2EProjectAgentJSON + `],"first_id":"helper","last_id":"helper","has_more":false}`
 
 // azE2EResponsesStream is a Responses API stream for an agent run: created,
 // a message item streamed in two deltas, and response.completed with usage.

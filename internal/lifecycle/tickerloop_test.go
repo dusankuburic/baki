@@ -143,7 +143,10 @@ func TestTickerLoop_StopWaitsForInFlightTick(t *testing.T) {
 // TestTickerLoop_StopIsBoundedByTheDrainBudget is the other half: a tick that
 // ignores cancellation must not be able to hold shutdown open forever.
 func TestTickerLoop_StopIsBoundedByTheDrainBudget(t *testing.T) {
-	var l TickerLoop
+	// A short budget proves the bound without waiting the production 5 s
+	// (stopDrainBudget is the default only; the waiting logic is the same).
+	const budget = 200 * time.Millisecond
+	l := TickerLoop{drainBudget: budget}
 	started := make(chan struct{})
 	release := make(chan struct{})
 	defer close(release)
@@ -163,11 +166,11 @@ func TestTickerLoop_StopIsBoundedByTheDrainBudget(t *testing.T) {
 
 	select {
 	case elapsed := <-done:
-		if elapsed < stopDrainBudget {
-			t.Errorf("Stop returned after %v, before the %v budget — it did not wait at all", elapsed, stopDrainBudget)
+		if elapsed < budget {
+			t.Errorf("Stop returned after %v, before the %v budget — it did not wait at all", elapsed, budget)
 		}
-	case <-time.After(stopDrainBudget + 3*time.Second):
-		t.Fatalf("Stop did not return within the %v budget — a stuck tick blocks shutdown", stopDrainBudget)
+	case <-time.After(budget + 3*time.Second):
+		t.Fatalf("Stop did not return within the %v budget — a stuck tick blocks shutdown", budget)
 	}
 }
 

@@ -153,6 +153,16 @@ func rlsExemptPath(path string) bool {
 	if isOrgProviderTestPath(path) {
 		return true
 	}
+	// The Azure AI Foundry registry's test and discovery routes (the
+	// caller's own and an organisation's) dial Azure — a sign-in, a probe or
+	// one tiny model call, a project's listings — for up to 30 s. Their
+	// registry reads and writes carry explicit owner predicates, the role
+	// checks are Go-layer authz and the credentials come through the
+	// keystore's own connection; the registry's CRUD routes keep their
+	// transaction.
+	if _, outbound := azureOutboundRoute(path); outbound {
+		return true
+	}
 	// The knowledge-base re-index walks up to 10 000 chunks through the
 	// embedding provider (minutes) and must commit page by page — inside
 	// the request transaction a failure on page 3 rolled back the paid-for

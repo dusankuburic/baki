@@ -79,6 +79,7 @@ var migrations = []migration{
 	{version: 22, name: "usage_served_model", sql: usageServedModelSQL, downSQL: usageServedModelDownSQL},
 	{version: 23, name: "org_provider_keys", sql: orgProviderKeysSQL, downSQL: orgProviderKeysDownSQL},
 	{version: 24, name: "org_provider_keys_secret_set_by", sql: orgProviderKeysSecretSetBySQL, downSQL: orgProviderKeysSecretSetByDownSQL},
+	{version: 25, name: "azure_registry", sql: azureRegistrySQL, downSQL: azureRegistryDownSQL},
 }
 
 // flowBlockCountIndexSQL adds an expression index matching the FlowSortBlocksDesc
@@ -1604,8 +1605,11 @@ DROP TABLE IF EXISTS org_provider_keys;
 // updated_by, so when the admin whose secret it was left the admin role the
 // disable-on-departure delete (matched on updated_by) missed it and the
 // secret stayed live, and members were shown the wrong lender. secret_set_by
-// changes only when a new secret is supplied; the delete matches either
-// column. Existing rows are backfilled from updated_by (the best record there
+// changes only when a new secret is supplied; the departure delete matches
+// the lender — secret_set_by, with updated_by only as the fallback for a
+// row no save has stamped since the backfill — so a departing admin's edit
+// that carried the secret does not delete the lender's credential.
+// Existing rows are backfilled from updated_by (the best record there
 // is). Additive with an empty-string default.
 //
 //nolint:gosec // G101: DDL for the lender column (the name says "secret"), not a credential.
@@ -1798,5 +1802,294 @@ DO $$ BEGIN
 	END IF;
 EXCEPTION WHEN OTHERS THEN
 	RAISE NOTICE 'pgvector repair rollback skipped: %', SQLERRM;
+END $$;
+`
+
+// azureRegistrySQL (v25, Part 9) is the Azure AI Foundry model registry:
+// several resources per owner, each with its own credential, and the models
+// registered on them with a display name, purpose, description, optional
+// window overrides, designations and last-test stamps. Owners are users
+// (personal registries) and organisations (admin-curated ones), in twin
+// table sets keyed (owner, id).
+//
+//   - Credentials stay in provider_keys / org_provider_keys (key
+//     "azure-foundry" = resource "default", "azure-foundry/<id>" the
+//     others). Nothing here is secret.
+//   - No user ids in org rows. Who changed what is in the audit log and the
+//     lender is org_provider_keys.secret_set_by, so account erasure never
+//     has to rewrite an org row: it deletes org_members, and the policies
+//     then hide the org's rows from the erased account. Never add a *_by
+//     column with a foreign key to users here.
+//   - Status is not stored (the service computes it at read time), and
+//     there is no sort_order (a fixed display sort).
+//   - The *_registry_state tables hold the legacy-import marker. It
+//     outlives the "default" resource, so deleting that resource never
+//     re-imports it from the old single document.
+//   - CHECKs mirror interfaces.ValidateAzure*Record (lengths in characters,
+//     never bytes). The unique indexes are the source of truth for
+//     duplicates — Go's strings.ToLower and Postgres lower() can disagree —
+//     and the store maps SQLSTATE 23505 to typed errors by index name, so
+//     the names below are part of the contract. Claude deployments share
+//     the chat namespace in the deployment index.
+//   - RLS ENABLE + FORCE on all six (FORCE, or the owning app role is
+//     exempt — the B8/v19 lesson). User tables: the caller's own rows. Org
+//     tables: the org_custom_rules membership predicate; admin-only writes
+//     are enforced in Go. The store also puts an explicit owner predicate
+//     in every query, because /api/chat/* runs without the RLS transaction.
+const azureRegistrySQL = `
+CREATE TABLE IF NOT EXISTS user_azure_connections (
+	user_id                TEXT        NOT NULL,
+	id                     TEXT        NOT NULL,
+	name                   TEXT        NOT NULL,
+	discovery_dismissed_at TIMESTAMPTZ,
+	last_test_ok           BOOLEAN,
+	last_test_at           TIMESTAMPTZ,
+	last_test_latency_ms   INTEGER,
+	last_test_error        TEXT        NOT NULL DEFAULT '',
+	created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	CONSTRAINT user_azure_connections_pkey PRIMARY KEY (user_id, id),
+	CONSTRAINT user_azure_connections_user_fk FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+	CONSTRAINT user_azure_connections_id_check CHECK (id = 'default' OR id ~ '^[a-z0-9]{10}$'),
+	CONSTRAINT user_azure_connections_name_check CHECK (char_length(name) BETWEEN 1 AND 64),
+	CONSTRAINT user_azure_connections_last_test_check CHECK (
+		(last_test_ok IS NULL) = (last_test_at IS NULL)
+		AND (last_test_latency_ms IS NULL OR last_test_latency_ms >= 0)
+		AND char_length(last_test_error) <= 500)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS user_azure_connections_name_idx ON user_azure_connections (user_id, lower(name));
+
+CREATE TABLE IF NOT EXISTS org_azure_connections (
+	org_id                 TEXT        NOT NULL,
+	id                     TEXT        NOT NULL,
+	name                   TEXT        NOT NULL,
+	discovery_dismissed_at TIMESTAMPTZ,
+	last_test_ok           BOOLEAN,
+	last_test_at           TIMESTAMPTZ,
+	last_test_latency_ms   INTEGER,
+	last_test_error        TEXT        NOT NULL DEFAULT '',
+	created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	CONSTRAINT org_azure_connections_pkey PRIMARY KEY (org_id, id),
+	CONSTRAINT org_azure_connections_org_fk FOREIGN KEY (org_id) REFERENCES organisations (id) ON DELETE CASCADE,
+	CONSTRAINT org_azure_connections_id_check CHECK (id = 'default' OR id ~ '^[a-z0-9]{10}$'),
+	CONSTRAINT org_azure_connections_name_check CHECK (char_length(name) BETWEEN 1 AND 64),
+	CONSTRAINT org_azure_connections_last_test_check CHECK (
+		(last_test_ok IS NULL) = (last_test_at IS NULL)
+		AND (last_test_latency_ms IS NULL OR last_test_latency_ms >= 0)
+		AND char_length(last_test_error) <= 500)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS org_azure_connections_name_idx ON org_azure_connections (org_id, lower(name));
+
+CREATE TABLE IF NOT EXISTS user_azure_models (
+	user_id              TEXT        NOT NULL,
+	id                   TEXT        NOT NULL,
+	connection_id        TEXT        NOT NULL,
+	kind                 TEXT        NOT NULL,
+	deployment           TEXT        NOT NULL,
+	display_name         TEXT        NOT NULL,
+	purpose              TEXT        NOT NULL DEFAULT 'general',
+	purpose_custom       TEXT        NOT NULL DEFAULT '',
+	description          TEXT        NOT NULL DEFAULT '',
+	context_window       INTEGER,
+	max_output_tokens    INTEGER,
+	is_kb_embedding      BOOLEAN     NOT NULL DEFAULT FALSE,
+	last_test_ok         BOOLEAN,
+	last_test_at         TIMESTAMPTZ,
+	last_test_latency_ms INTEGER,
+	last_test_error      TEXT        NOT NULL DEFAULT '',
+	created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	CONSTRAINT user_azure_models_pkey PRIMARY KEY (user_id, id),
+	CONSTRAINT user_azure_models_user_fk FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+	CONSTRAINT user_azure_models_connection_fk FOREIGN KEY (user_id, connection_id)
+		REFERENCES user_azure_connections (user_id, id) ON DELETE CASCADE,
+	CONSTRAINT user_azure_models_id_check CHECK (id ~ '^[a-z0-9]{10}$'),
+	CONSTRAINT user_azure_models_kind_check CHECK (kind IN ('chat', 'claude', 'agent', 'embedding')),
+	CONSTRAINT user_azure_models_deployment_check CHECK (
+		CASE WHEN kind = 'agent'
+		     THEN char_length(deployment) BETWEEN 1 AND 128 AND deployment !~ '[\x01-\x1f\x7f]'
+		     ELSE deployment ~ '^[A-Za-z0-9._-]{1,64}$'
+		END),
+	CONSTRAINT user_azure_models_display_name_check CHECK (char_length(display_name) BETWEEN 1 AND 64),
+	CONSTRAINT user_azure_models_purpose_check CHECK (
+		(purpose IN ('general', 'documentation', 'fixes', 'review', 'refactoring', 'testing') AND purpose_custom = '')
+		OR (purpose = 'custom' AND char_length(purpose_custom) BETWEEN 1 AND 32)),
+	CONSTRAINT user_azure_models_description_check CHECK (char_length(description) <= 200),
+	CONSTRAINT user_azure_models_limits_check CHECK (
+		CASE WHEN kind = 'embedding'
+		     THEN context_window IS NULL AND max_output_tokens IS NULL
+		     ELSE (context_window IS NULL OR context_window BETWEEN 1024 AND 2000000)
+		      AND (max_output_tokens IS NULL OR max_output_tokens BETWEEN 256 AND 1000000)
+		END),
+	CONSTRAINT user_azure_models_kb_check CHECK (NOT is_kb_embedding OR kind = 'embedding'),
+	CONSTRAINT user_azure_models_last_test_check CHECK (
+		(last_test_ok IS NULL) = (last_test_at IS NULL)
+		AND (last_test_latency_ms IS NULL OR last_test_latency_ms >= 0)
+		AND char_length(last_test_error) <= 500)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS user_azure_models_deployment_idx ON user_azure_models
+	(user_id, connection_id, (CASE kind WHEN 'claude' THEN 'chat' ELSE kind END), lower(deployment));
+CREATE UNIQUE INDEX IF NOT EXISTS user_azure_models_kb_idx ON user_azure_models (user_id) WHERE is_kb_embedding;
+
+CREATE TABLE IF NOT EXISTS org_azure_models (
+	org_id               TEXT        NOT NULL,
+	id                   TEXT        NOT NULL,
+	connection_id        TEXT        NOT NULL,
+	kind                 TEXT        NOT NULL,
+	deployment           TEXT        NOT NULL,
+	display_name         TEXT        NOT NULL,
+	purpose              TEXT        NOT NULL DEFAULT 'general',
+	purpose_custom       TEXT        NOT NULL DEFAULT '',
+	description          TEXT        NOT NULL DEFAULT '',
+	context_window       INTEGER,
+	max_output_tokens    INTEGER,
+	is_kb_embedding      BOOLEAN     NOT NULL DEFAULT FALSE,
+	is_default           BOOLEAN     NOT NULL DEFAULT FALSE,
+	last_test_ok         BOOLEAN,
+	last_test_at         TIMESTAMPTZ,
+	last_test_latency_ms INTEGER,
+	last_test_error      TEXT        NOT NULL DEFAULT '',
+	created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	CONSTRAINT org_azure_models_pkey PRIMARY KEY (org_id, id),
+	CONSTRAINT org_azure_models_org_fk FOREIGN KEY (org_id) REFERENCES organisations (id) ON DELETE CASCADE,
+	CONSTRAINT org_azure_models_connection_fk FOREIGN KEY (org_id, connection_id)
+		REFERENCES org_azure_connections (org_id, id) ON DELETE CASCADE,
+	CONSTRAINT org_azure_models_id_check CHECK (id ~ '^[a-z0-9]{10}$'),
+	CONSTRAINT org_azure_models_kind_check CHECK (kind IN ('chat', 'claude', 'agent', 'embedding')),
+	CONSTRAINT org_azure_models_deployment_check CHECK (
+		CASE WHEN kind = 'agent'
+		     THEN char_length(deployment) BETWEEN 1 AND 128 AND deployment !~ '[\x01-\x1f\x7f]'
+		     ELSE deployment ~ '^[A-Za-z0-9._-]{1,64}$'
+		END),
+	CONSTRAINT org_azure_models_display_name_check CHECK (char_length(display_name) BETWEEN 1 AND 64),
+	CONSTRAINT org_azure_models_purpose_check CHECK (
+		(purpose IN ('general', 'documentation', 'fixes', 'review', 'refactoring', 'testing') AND purpose_custom = '')
+		OR (purpose = 'custom' AND char_length(purpose_custom) BETWEEN 1 AND 32)),
+	CONSTRAINT org_azure_models_description_check CHECK (char_length(description) <= 200),
+	CONSTRAINT org_azure_models_limits_check CHECK (
+		CASE WHEN kind = 'embedding'
+		     THEN context_window IS NULL AND max_output_tokens IS NULL
+		     ELSE (context_window IS NULL OR context_window BETWEEN 1024 AND 2000000)
+		      AND (max_output_tokens IS NULL OR max_output_tokens BETWEEN 256 AND 1000000)
+		END),
+	CONSTRAINT org_azure_models_kb_check CHECK (NOT is_kb_embedding OR kind = 'embedding'),
+	CONSTRAINT org_azure_models_default_check CHECK (NOT is_default OR kind IN ('chat', 'claude', 'agent')),
+	CONSTRAINT org_azure_models_last_test_check CHECK (
+		(last_test_ok IS NULL) = (last_test_at IS NULL)
+		AND (last_test_latency_ms IS NULL OR last_test_latency_ms >= 0)
+		AND char_length(last_test_error) <= 500)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS org_azure_models_deployment_idx ON org_azure_models
+	(org_id, connection_id, (CASE kind WHEN 'claude' THEN 'chat' ELSE kind END), lower(deployment));
+CREATE UNIQUE INDEX IF NOT EXISTS org_azure_models_kb_idx ON org_azure_models (org_id) WHERE is_kb_embedding;
+CREATE UNIQUE INDEX IF NOT EXISTS org_azure_models_default_idx ON org_azure_models (org_id) WHERE is_default;
+
+CREATE TABLE IF NOT EXISTS user_azure_registry_state (
+	user_id     TEXT        NOT NULL,
+	imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	CONSTRAINT user_azure_registry_state_pkey PRIMARY KEY (user_id),
+	CONSTRAINT user_azure_registry_state_user_fk FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS org_azure_registry_state (
+	org_id      TEXT        NOT NULL,
+	imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	CONSTRAINT org_azure_registry_state_pkey PRIMARY KEY (org_id),
+	CONSTRAINT org_azure_registry_state_org_fk FOREIGN KEY (org_id) REFERENCES organisations (id) ON DELETE CASCADE
+);
+
+ALTER TABLE user_azure_connections    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_azure_connections    FORCE  ROW LEVEL SECURITY;
+ALTER TABLE org_azure_connections     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE org_azure_connections     FORCE  ROW LEVEL SECURITY;
+ALTER TABLE user_azure_models         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_azure_models         FORCE  ROW LEVEL SECURITY;
+ALTER TABLE org_azure_models          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE org_azure_models          FORCE  ROW LEVEL SECURITY;
+ALTER TABLE user_azure_registry_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_azure_registry_state FORCE  ROW LEVEL SECURITY;
+ALTER TABLE org_azure_registry_state  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE org_azure_registry_state  FORCE  ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS rls_user_azure_connections_visible ON user_azure_connections;
+CREATE POLICY rls_user_azure_connections_visible ON user_azure_connections FOR ALL USING (
+    NOT app_rls_active() OR user_id = app_current_user_id()
+) WITH CHECK (
+    NOT app_rls_active() OR user_id = app_current_user_id()
+);
+
+DROP POLICY IF EXISTS rls_user_azure_models_visible ON user_azure_models;
+CREATE POLICY rls_user_azure_models_visible ON user_azure_models FOR ALL USING (
+    NOT app_rls_active() OR user_id = app_current_user_id()
+) WITH CHECK (
+    NOT app_rls_active() OR user_id = app_current_user_id()
+);
+
+DROP POLICY IF EXISTS rls_user_azure_registry_state_visible ON user_azure_registry_state;
+CREATE POLICY rls_user_azure_registry_state_visible ON user_azure_registry_state FOR ALL USING (
+    NOT app_rls_active() OR user_id = app_current_user_id()
+) WITH CHECK (
+    NOT app_rls_active() OR user_id = app_current_user_id()
+);
+
+DROP POLICY IF EXISTS rls_org_azure_connections_visible ON org_azure_connections;
+CREATE POLICY rls_org_azure_connections_visible ON org_azure_connections FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = org_azure_connections.org_id AND om.user_id = app_current_user_id())
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = org_azure_connections.org_id AND om.user_id = app_current_user_id())
+);
+
+DROP POLICY IF EXISTS rls_org_azure_models_visible ON org_azure_models;
+CREATE POLICY rls_org_azure_models_visible ON org_azure_models FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = org_azure_models.org_id AND om.user_id = app_current_user_id())
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = org_azure_models.org_id AND om.user_id = app_current_user_id())
+);
+
+DROP POLICY IF EXISTS rls_org_azure_registry_state_visible ON org_azure_registry_state;
+CREATE POLICY rls_org_azure_registry_state_visible ON org_azure_registry_state FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = org_azure_registry_state.org_id AND om.user_id = app_current_user_id())
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = org_azure_registry_state.org_id AND om.user_id = app_current_user_id())
+);
+`
+
+// azureRegistryDownSQL reverses v25. Data-lossy by design: all registry
+// metadata, the knowledge-base and org-default designations, and every
+// NON-default resource's credential. The v24 binary knows only the exact
+// "azure-foundry" key — its lender-disable path cannot see the
+// "azure-foundry/<id>" rows, so they would sit as orphans, and a later
+// roll-forward would revive credentials whose lender was demoted meanwhile.
+// So they go too — and only they: starts_with(provider, 'azure-foundry/')
+// never matches the exact "azure-foundry" key (the default resource, which
+// the old binary still runs on) or a different provider such as
+// "azure-foundryX". The counts go to the server log (RAISE LOG is logged at
+// the default log_min_messages).
+const azureRegistryDownSQL = `
+DROP TABLE IF EXISTS user_azure_models;
+DROP TABLE IF EXISTS org_azure_models;
+DROP TABLE IF EXISTS user_azure_connections;
+DROP TABLE IF EXISTS org_azure_connections;
+DROP TABLE IF EXISTS user_azure_registry_state;
+DROP TABLE IF EXISTS org_azure_registry_state;
+
+DO $$
+DECLARE
+	personal integer;
+	shared   integer;
+BEGIN
+	DELETE FROM provider_keys WHERE starts_with(provider, 'azure-foundry/');
+	GET DIAGNOSTICS personal = ROW_COUNT;
+	DELETE FROM org_provider_keys WHERE starts_with(provider, 'azure-foundry/');
+	GET DIAGNOSTICS shared = ROW_COUNT;
+	RAISE LOG 'migration v25 down: deleted % personal and % organisation azure-foundry/<id> credentials', personal, shared;
 END $$;
 `

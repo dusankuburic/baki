@@ -141,8 +141,15 @@ func TestReindexOrg_PageFailureKeepsEarlierPages(t *testing.T) {
 			seedManyChunks(store, 2, 10)
 			svc := guardService(store, tc.setup(store))
 
-			if _, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{}); err == nil {
+			res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{})
+			if err == nil {
 				t.Fatal("re-index succeeded, want the page-3 failure")
+			}
+			// F-13: the failure still answers the committed pages with a
+			// resume cursor, so the client continues instead of re-buying them.
+			order := walkOrder(store)
+			if res.Chunks != 6 || res.NextCursor == nil || res.NextCursor.ID != order[5] || !res.Truncated {
+				t.Errorf("partial result = %+v, want 6 chunks and a cursor at %s", res, order[5])
 			}
 			for i, id := range walkOrder(store) {
 				converted := len(store.KnowledgeChunks[id].Embedding) == 1
@@ -322,5 +329,64 @@ func TestReindexOrg_ResumeWithNothingConvertedIsAFirstRequest(t *testing.T) {
 	res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, before)
 	if err != nil || res.Chunks != 4 {
 		t.Fatalf("forced = %+v, %v; want all 4 chunks", res, err)
+	}
+}
+
+// TestReindexOrg_RequestBudgetStopsWithCursor pins the wall-clock budget
+// (F-13): a request that would run past reindexRequestBudget stops after a
+// COMMITTED page and answers with a cursor well inside the platform's
+// request cap; the resumed loop finishes the corpus without re-embedding
+// anything already converted, and a corpus that fits one page needs no
+// cursor even though the budget is spent.
+func TestReindexOrg_RequestBudgetStopsWithCursor(t *testing.T) {
+	prev := reindexRequestBudget
+	reindexRequestBudget = 0 // every page boundary exceeds it
+	t.Cleanup(func() { reindexRequestBudget = prev })
+	lowerReindexLimits(t, 3, 10000)
+
+	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	seedManyChunks(store, 2, 10)
+	emb := &countingEmbedder{}
+	svc := guardService(store, emb)
+
+	res, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{})
+	if err != nil {
+		t.Fatalf("budget stop: %v", err)
+	}
+	order := walkOrder(store)
+	if res.Chunks != reindexPageSize || !res.Truncated || res.NextCursor == nil || res.NextCursor.ID != order[reindexPageSize-1] {
+		t.Fatalf("first request = %+v, want exactly the first page (%d chunks) and a cursor at %s", res, reindexPageSize, order[reindexPageSize-1])
+	}
+
+	// The resumed loop finishes without re-buying the converted page.
+	cursor := *res.NextCursor
+	total := res.Chunks
+	for range 10 {
+		next, err := svc.ReindexOrg(context.Background(), "scope", "org-1", true, cursor)
+		if err != nil {
+			t.Fatalf("resume from %+v: %v", cursor, err)
+		}
+		total += next.Chunks
+		if next.NextCursor == nil {
+			break
+		}
+		cursor = *next.NextCursor
+	}
+	if total != 10 {
+		t.Fatalf("re-indexed %d chunks in total, want 10", total)
+	}
+	// 10 chunks once, plus each resumed request's guard sample of 3: nothing
+	// converted was embedded a second time.
+	if want := 10 + corpusSampleSize*3; len(emb.inputs) != want {
+		t.Errorf("embedded %d inputs, want %d (each chunk once + the resumed guards)", len(emb.inputs), want)
+	}
+
+	// A corpus that fits one page is complete: the budget must not add a
+	// cursor (the short-page break lands before it).
+	small := &testutil.FakeBackend{EmbeddingDim: 1}
+	seedManyChunks(small, 1, 2)
+	done, err := guardService(small, &countingEmbedder{}).ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{})
+	if err != nil || done.Chunks != 2 || done.NextCursor != nil || done.Truncated {
+		t.Fatalf("one-page corpus = %+v, %v; want 2 chunks and no cursor", done, err)
 	}
 }

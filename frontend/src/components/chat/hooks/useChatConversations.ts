@@ -12,6 +12,12 @@ interface UseChatConversationsOptions {
   doc: FlowDocument | null
   flowThreads: ChatThread[]
   activeThreadId: string | null
+  /**
+   * Re-attach a stream the conversation load reports as still in-flight
+   * (F-21) — the chat stream engine's resumeAfterReload. Optional so tests
+   * and non-panel hosts can mount the hook without the engine.
+   */
+  resumeActiveStream?: (threadId: string, streamId: string, onGone: () => void) => boolean
 }
 
 // loadThreadHistory fetches a thread's server-side conversation under a
@@ -21,15 +27,40 @@ interface UseChatConversationsOptions {
 // thread in 'error', which blocks every full-replace save of it — the server
 // copy is never overwritten with just the turns on screen. AITab shows the
 // failure inline, with Retry.
-function loadThreadHistory(threadId: string): void {
+function loadThreadHistory(
+  threadId: string,
+  resumeActiveStream?: (threadId: string, streamId: string, onGone: () => void) => boolean,
+): void {
   const st = useChatStore.getState()
   const thread = st.threads.find(t => t.id === threadId)
   if (!thread) return
   const token = st.beginHistoryLoad(threadId)
   chatApi
     .getConversation(thread.flowId, conversationKey(thread))
-    .then(messages => {
-      useChatStore.getState().finishHistoryLoad(threadId, token, messages)
+    .then(load => {
+      // A stale load (the thread was cleared, reloaded or closed meanwhile)
+      // neither applies nor re-attaches: a newer load owns the thread.
+      if (!useChatStore.getState().finishHistoryLoad(threadId, token, load.messages)) return
+      // A turn recorded as in flight (chatStore.InFlightTurn) that the
+      // server no longer reports ended while this page was away: its record
+      // goes, as it does when a turn ends here.
+      const now = useChatStore.getState()
+      const inFlight = now.threads.find(t => t.id === threadId)?.inFlight
+      if (inFlight && !now.streams[threadId] && inFlight.streamId !== load.activeStreamId) {
+        now.updateThread(threadId, {inFlight: undefined})
+      }
+      // F-21: the server says a stream for this conversation is still
+      // in-flight (a reload / reopen happened mid-turn): re-attach to it
+      // instead of showing the thread without its answer. The user turn is
+      // already in `messages` — the server persisted it at stream start. If
+      // the stream turns out to be gone, the engine drops it and refetches
+      // here, where the server's persisted reply (if any) lands. That refetch
+      // does not re-attach again (one shot): the engine reports any resume
+      // failure as gone, and a server still listing the stream would
+      // otherwise loop GET → SSE → resume without limit.
+      if (load.activeStreamId && !useChatStore.getState().streams[threadId]) {
+        resumeActiveStream?.(threadId, load.activeStreamId, () => loadThreadHistory(threadId))
+      }
     })
     .catch(err => {
       logger.warn('Failed to load thread conversation', err)
@@ -49,7 +80,8 @@ function importLegacyConversation(flowId: string, threadId: string): void {
   const token = useChatStore.getState().beginHistoryLoad(threadId)
   chatApi
     .getConversation(flowId, LEGACY_FLOW_SCOPE)
-    .then(messages => {
+    .then(load => {
+      const messages = load.messages
       if (!useChatStore.getState().finishHistoryLoad(threadId, token, messages)) return
       // A turn already in flight saves the merged list itself on done.
       if (messages.length === 0 || !conversationHistoryEnabled() || useChatStore.getState().streams[threadId]) return
@@ -73,8 +105,19 @@ function importLegacyConversation(flowId: string, threadId: string): void {
     })
 }
 
-export function useChatConversations({doc, flowThreads, activeThreadId}: UseChatConversationsOptions) {
+export function useChatConversations({
+  doc,
+  flowThreads,
+  activeThreadId,
+  resumeActiveStream,
+}: UseChatConversationsOptions) {
   const [sourceFiles, setSourceFiles] = useState<SourceFileInfo[]>(EMPTY_SOURCE_FILES)
+  // Read through a ref so a host's inline callback cannot change the history
+  // effect's deps and re-fetch the conversation on every render.
+  const resumeActiveStreamRef = useRef(resumeActiveStream)
+  useEffect(() => {
+    resumeActiveStreamRef.current = resumeActiveStream
+  })
 
   const createThread = useChatStore(s => s.createThread)
   const hydrateThreads = useChatStore(s => s.hydrateThreads)
@@ -188,11 +231,11 @@ export function useChatConversations({doc, flowThreads, activeThreadId}: UseChat
     if (!activeThreadId || !docId) return
     const status = useChatStore.getState().historyStatus[activeThreadId]
     if (status && status.state !== 'error') return
-    loadThreadHistory(activeThreadId)
+    loadThreadHistory(activeThreadId, resumeActiveStreamRef.current)
   }, [activeThreadId, docId])
 
   const retryHistoryLoad = useCallback(() => {
-    if (activeThreadId) loadThreadHistory(activeThreadId)
+    if (activeThreadId) loadThreadHistory(activeThreadId, resumeActiveStreamRef.current)
   }, [activeThreadId])
 
   return {sourceFiles, historyState, retryHistoryLoad}

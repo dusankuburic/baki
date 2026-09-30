@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -49,7 +50,46 @@ const ragGuidelinesTokenCap = 1200
 
 // contextReserve is the number of tokens kept free for the prompt/context when
 // clamping a caller-supplied MaxTokens against the model's context window.
+// On a small window it is scaled down (outputBackstop, truncationReserve).
 const contextReserve = 4000
+
+// outputBackstop is the most max tokens normalizeChatParams lets a request ask
+// of a ctxLimit-token window whatever the model's output ceiling: the window
+// less contextReserve kept for the prompt — at most half the window, so a
+// small one keeps room for an answer. A flat contextReserve took all of a
+// small window: an Azure AI Foundry registry entry's window override (the
+// form allows 1024 tokens and up) or a local server's 2k–8k context was
+// capped at 0 (the provider's own default then went out) or a few dozen
+// tokens, and the truncation refused every turn. From 8000 tokens up it is
+// ctxLimit-contextReserve, as it always was.
+func outputBackstop(ctxLimit int) int {
+	return ctxLimit - min(contextReserve, ctxLimit/2)
+}
+
+// truncationReserve is the room truncateForContextWindow keeps free beside
+// the prompt of a request whose completion cap is maxTokens: the larger of
+// the cap itself (providers reject prompt + max_tokens > window) and
+// contextReserve, the estimate's margin — a quarter of the window when that
+// is less. An unset cap reserves contextReserve on every window: the provider
+// then sends its own default (maxOutputTokens: 4096 on most), which has to
+// fit beside the prompt too; turnGenerationParams sets the cap explicitly on
+// a window that small (outputBackstop below the default). From 16000 tokens
+// up it is max(contextReserve, maxTokens), as it always was.
+func truncationReserve(ctxLimit, maxTokens int) int {
+	if maxTokens <= 0 {
+		return contextReserve
+	}
+	return max(min(contextReserve, ctxLimit/4), maxTokens)
+}
+
+// exactCountBandPercent is the share of the window (in percent) above which
+// truncateForContextWindow has a prompt's ESTIMATE (plus the reserve)
+// re-checked by the provider's own tokenizer (F-47). The cl100k estimate
+// undercounts Claude 4.7+/Fable/Mythos prompts by ~30 %, so an estimate at
+// 70 % of the window can already be over it by the exact count, and one
+// below cannot — which keeps the count call (a network round trip) off every
+// mid-size turn.
+const exactCountBandPercent = 70
 
 // normalizeChatParams clamps caller-supplied generation params into safe ranges
 // so an out-of-range value can't reach the provider (some reject Temperature
@@ -58,9 +98,10 @@ const contextReserve = 4000
 //
 // maxTokens is an *output* cap, so it must be bounded by the model's output
 // ceiling (maxOutput) — not the input context window. We still keep the older
-// ctxLimit-contextReserve guard as a backstop for models whose output ceiling
-// is unknown (maxOutput == 0). A value of 0 for either limit means "unknown" and
-// that particular clamp is skipped.
+// window guard (outputBackstop: ctxLimit-contextReserve, at most half a small
+// window) as a backstop for models whose output ceiling is unknown
+// (maxOutput == 0). A value of 0 for either limit means "unknown" and that
+// particular clamp is skipped.
 func normalizeChatParams(temperature float64, maxTokens, ctxLimit, maxOutput int) (float64, int) {
 	if temperature < 0 {
 		temperature = 0
@@ -75,13 +116,10 @@ func normalizeChatParams(temperature float64, maxTokens, ctxLimit, maxOutput int
 		maxTokens = maxOutput
 	}
 	// Backstop: never let MaxTokens approach the input window (only meaningful
-	// when the output ceiling is unknown, but harmless otherwise).
+	// when the output ceiling is unknown, but harmless otherwise). Positive
+	// for every positive window.
 	if ctxLimit > 0 {
-		cap := ctxLimit - contextReserve
-		if cap < 0 {
-			cap = 0
-		}
-		if maxTokens > cap {
+		if cap := outputBackstop(ctxLimit); maxTokens > cap {
 			maxTokens = cap
 		}
 	}
@@ -297,19 +335,30 @@ func (s *ChatService) isOrgMember(ctx context.Context, orgID, userID string) boo
 // same narrow lookup as isOrgMember, whose rows carry the members); ok is
 // false outside the org, in local mode, and on a store error (fail closed).
 func (s *ChatService) orgRole(ctx context.Context, orgID, userID string) (role auth.Role, ok bool) {
-	if s.backend == nil || orgID == "" || userID == "" {
+	role, ok, err := s.lookupOrgRole(ctx, orgID, userID)
+	if err != nil {
+		logger.Warn("chat: org role lookup failed; not using the org's shared credential", "error", err)
 		return "", false
+	}
+	return role, ok
+}
+
+// lookupOrgRole is orgRole with a failed store read reported as err instead
+// of folded into "not a member": ok is false outside the org, in local mode
+// and on a backend without the org store.
+func (s *ChatService) lookupOrgRole(ctx context.Context, orgID, userID string) (role auth.Role, ok bool, err error) {
+	if s.backend == nil || orgID == "" || userID == "" {
+		return "", false, nil
 	}
 	orgs, isLister := s.backend.(interface {
 		ListOrgsForUser(ctx context.Context, userID string) ([]*interfaces.Organisation, error)
 	})
 	if !isLister {
-		return "", false
+		return "", false, nil
 	}
 	list, err := orgs.ListOrgsForUser(ctx, userID)
 	if err != nil {
-		logger.Warn("chat: org role lookup failed; not using the org's shared credential", "error", err)
-		return "", false
+		return "", false, err
 	}
 	for _, o := range list {
 		if o == nil || o.ID != orgID {
@@ -317,11 +366,11 @@ func (s *ChatService) orgRole(ctx context.Context, orgID, userID string) (role a
 		}
 		for _, m := range o.Members {
 			if m.UserID == userID {
-				return m.Role, true
+				return m.Role, true, nil
 			}
 		}
 	}
-	return "", false
+	return "", false, nil
 }
 
 // credentialOrg is the organisation whose shared credential (G7) the caller
@@ -338,6 +387,27 @@ func (s *ChatService) credentialOrg(ctx context.Context, orgID, scope string) st
 		return orgID
 	}
 	return ""
+}
+
+// registryCredentialOrg is credentialOrg for the Azure AI Foundry model
+// registry's resolution (resolveAzureModel), where failing closed to "" is
+// not neutral: the organisation's entries are then never consulted, and one
+// of them reads as removed (ErrModelNotAvailable — the client marks the
+// model "Removed" and may re-pin the thread). A store failure is therefore
+// returned, never folded into "not a member"; a caller who is not one of the
+// org's admins or members is still "", nil.
+func (s *ChatService) registryCredentialOrg(ctx context.Context, orgID, scope string) (string, error) {
+	if orgID == "" {
+		return "", nil
+	}
+	role, ok, err := s.lookupOrgRole(ctx, orgID, scope)
+	if err != nil {
+		return "", fmt.Errorf("look up the caller's role in the flow's organisation: %w", err)
+	}
+	if ok && OrgRoleUsesSharedCredential(role) {
+		return orgID, nil
+	}
+	return "", nil
 }
 
 // cachedContextCore returns the memoised scrub+BuildContext result, computing
@@ -442,6 +512,10 @@ func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowD
 // "developer", "tool", anything unknown — is dropped. A client-supplied
 // system or developer message would otherwise reach OpenAI-compatible and
 // Claude models with operator authority over the app's own system prompt.
+// A history message whose scrubbed content is whitespace-only is dropped too
+// (F-10): an empty 'stop' answer persisted as an empty assistant message used
+// to be forwarded as {"role":"assistant","content":""}, which the Claude
+// Messages API rejects on every later turn of the thread.
 func buildMessages(req models.ChatRequest, contextText, guidelines string) []ai.Message {
 	messages := make([]ai.Message, 0, len(req.Messages)+1)
 	for i, m := range req.Messages {
@@ -450,7 +524,12 @@ func buildMessages(req models.ChatRequest, contextText, guidelines string) []ai.
 			logger.Debug("chat: dropping a history message with a role history may not carry", "role", oneLineRole(m.Role), "index", i)
 			continue
 		}
-		messages = append(messages, ai.Message{Role: role, Content: scrubber.ScrubText(m.Content)})
+		content := scrubber.ScrubText(m.Content)
+		if strings.TrimSpace(content) == "" {
+			logger.Debug("chat: dropping an empty history message", "role", role, "index", i)
+			continue
+		}
+		messages = append(messages, ai.Message{Role: role, Content: content})
 	}
 	userContent := scrubber.ScrubText(req.UserMessage)
 	// The per-turn RAG guidelines ride in the user turn (included regardless
@@ -499,16 +578,24 @@ func oneLineRole(role string) string {
 // pass — ~100 ms and ~50 MB of garbage per 400 KB, run again on every tool
 // iteration — can be skipped. The per-message and per-tool framing matches
 // truncateForContextWindow's own estimate.
+//
+// A message carrying a provider replay record (ProviderItems: encrypted
+// reasoning, hosted tool outputs) is re-sent verbatim, so the bound takes the
+// MAXIMUM of its content/ToolCalls bytes and the record's bytes — additive,
+// never substitutive (F-28). Base64 encrypted reasoning over-counts its true
+// context cost, which is the safe direction; the byte-bound invariant
+// (ceiling >= real tokens) must hold for the fast path to stay sound.
 func promptTokenCeiling(req *ai.Request) int {
 	n := len(req.SystemPrompt)
 	for _, td := range req.Tools {
 		n += len(td.InputSchema) + 8
 	}
 	for _, m := range req.Messages {
-		n += len(m.Content) + 4
+		c := len(m.Content)
 		for _, tc := range m.ToolCalls {
-			n += len(tc.Input)
+			c += len(tc.Input)
 		}
+		n += max(c, len(m.ProviderItems)) + 4
 	}
 	return n
 }
@@ -538,9 +625,23 @@ func promptTokenCeiling(req *ai.Request) int {
 // question it could no longer see.
 //
 // The reserve is the request's own completion cap when it exceeds the default
-// (providers reject prompt + max_tokens > window), and the prompt is checked
-// in bytes first (promptTokenCeiling) so the common case never tokenises.
-func truncateForContextWindow(provider ai.Provider, req *ai.Request, ctxLimit int, pin int) (int, error) {
+// (providers reject prompt + max_tokens > window) — the default scaled down
+// on a small window (truncationReserve) — and the prompt is checked in bytes
+// first (promptTokenCeiling) so the common case never tokenises.
+//
+// A provider with its own tokenizer (ai.TokenCounter — Anthropic's free
+// count_tokens endpoint) re-checks whatever the estimate would send once that
+// estimate plus the reserve is above exactCountBandPercent of the window —
+// whether the estimate admitted the whole history or already dropped some of
+// it: the cl100k-based estimate undercounts Claude 4.7+/Fable/Mythos prompts
+// by ~30%, and near-window prompts (and trims sized by the estimate) were
+// sent only to be refused by the provider, every turn (F-47). A count that
+// says over scales the estimate's costs — the system prompt and tool schemas
+// included — to the count and drops again; a second count verifies the trim.
+// At most two count calls per truncation; any error falls back silently to
+// the estimate's verdict — the endpoint is optional, and truncation must
+// never fail a turn the estimate says fits.
+func truncateForContextWindow(ctx context.Context, provider ai.Provider, req *ai.Request, ctxLimit int, pin int) (int, error) {
 	if ctxLimit <= 0 || len(req.Messages) == 0 {
 		return pin, nil // unknown limit — can't enforce; nothing to truncate
 	}
@@ -548,10 +649,28 @@ func truncateForContextWindow(provider ai.Provider, req *ai.Request, ctxLimit in
 	if pin < 0 || pin >= len(msgs) {
 		pin = len(msgs) - 1 // the current turn is the last message the caller built
 	}
-	reserve := max(contextReserve, req.MaxTokens)
-	if promptTokenCeiling(req)+reserve <= ctxLimit {
-		return pin, nil // fits in bytes, so it fits in tokens — no tiktoken pass
+	// One reserve for the byte bound, the estimate and the count below, so
+	// the fast paths stay exactly as sound as the drop loop.
+	reserve := truncationReserve(ctxLimit, req.MaxTokens)
+	ceiling := promptTokenCeiling(req)
+	if ceiling+reserve <= (ctxLimit*4)/5 {
+		return pin, nil // fits in bytes with 20% margin, so it fits in tokens — no tiktoken pass, no count call
 	}
+	// Past the byte bound. While the bytes still fit the window (80–100% of
+	// it) every estimator yields at most one token per byte, so the ESTIMATE
+	// fits too and the drop loop below would be a no-op — only the provider's
+	// own tokenizer can overrule, and a provider without one keeps the fast
+	// path's verdict without a single estimate call (PERF-7). With one, the
+	// estimate — not the bytes, ~4× the tokens — decides whether the count is
+	// worth a round trip (nearWindow).
+	_, canCount := provider.(ai.TokenCounter)
+	if ceiling+reserve <= ctxLimit && !canCount {
+		return pin, nil
+	}
+	nearWindow := func(estimate int) bool {
+		return canCount && (estimate+reserve)*100 > ctxLimit*exactCountBandPercent
+	}
+
 	// Fixed component (system prompt + tool schemas) — constant across the
 	// drop loop, precomputed once (B1.4).
 	fixed := provider.EstimateTokens(req.SystemPrompt)
@@ -561,12 +680,23 @@ func truncateForContextWindow(provider ai.Provider, req *ai.Request, ctxLimit in
 	// Per-message costs + SUFFIX SUMS: suffix[i] = tokens of messages[i:].
 	// The old loop re-estimated every remaining message per drop — O(n²)
 	// token scanning in the per-turn hot path on long histories.
+	//
+	// A message carrying a provider replay record (ProviderItems) is re-sent
+	// verbatim, so it is bounded by the MAXIMUM of its content/ToolCalls
+	// estimate and the record's estimate — additive, never substitutive
+	// (F-28): a recorded Claude turn's text already lives in the record, but
+	// skipping the content side would double-discount Responses turns whose
+	// real context IS the record. Base64 encrypted reasoning over-counts,
+	// which is the safe direction.
 	msgCost := func(m ai.Message) int {
 		// Per-message framing (~4 tokens) + each assistant tool_use's
 		// argument JSON verbatim (R4b undercount fix).
 		c := provider.EstimateTokens(m.Content) + 4
 		for _, tc := range m.ToolCalls {
 			c += provider.EstimateTokens(string(tc.Input))
+		}
+		if len(m.ProviderItems) > 0 {
+			c = max(c, provider.EstimateTokens(string(m.ProviderItems)))
 		}
 		return c
 	}
@@ -575,41 +705,124 @@ func truncateForContextWindow(provider ai.Provider, req *ai.Request, ctxLimit in
 		suffix[i] = suffix[i+1] + msgCost(msgs[i])
 	}
 	curCost := suffix[pin] - suffix[pin+1]
+	// keptEstimate is the unscaled estimate of the request that keeps history
+	// from b and post-turn exchanges from a.
+	keptEstimate := func(b, a int) int {
+		return fixed + (suffix[b] - suffix[pin]) + curCost + suffix[a]
+	}
+	// keep sets req.Messages to that kept set. Nothing dropped leaves the
+	// caller's own slice in place (sameMessages compares identity).
+	keep := func(b, a int) {
+		if b == 0 && a == pin+1 {
+			req.Messages = msgs
+			return
+		}
+		kept := make([]ai.Message, 0, (pin-b)+1+(len(msgs)-a))
+		kept = append(kept, msgs[b:pin]...)
+		kept = append(kept, msgs[pin])
+		kept = append(kept, msgs[a:]...)
+		req.Messages = kept
+	}
+	// drop runs the drop loop against the estimate's costs multiplied by
+	// scale (<= 1 keeps them as they are) — the per-message suffix sums AND
+	// the fixed part, rounded up so a scaled estimate never under-counts.
 	// b: first kept history index; a: first kept post-turn exchange index.
-	b, a := 0, pin+1
-	fits := func() bool {
-		return fixed+(suffix[b]-suffix[pin])+curCost+suffix[a]+reserve <= ctxLimit
-	}
-	for !fits() && b < pin { // oldest history turns; kept prefix starts with a user turn
-		b++
-		for b < pin && msgs[b].Role != "user" {
+	drop := func(scale float64) (b, a int, ok bool) {
+		s, f := suffix, fixed
+		if scale > 1 {
+			s = make([]int, len(suffix))
+			for i, v := range suffix {
+				s[i] = int(math.Ceil(float64(v) * scale))
+			}
+			f = int(math.Ceil(float64(fixed) * scale))
+		}
+		b, a = 0, pin+1
+		fits := func() bool {
+			return f+(s[b]-s[pin])+(s[pin]-s[pin+1])+s[a]+reserve <= ctxLimit
+		}
+		for !fits() && b < pin { // oldest history turns; kept prefix starts with a user turn
 			b++
+			for b < pin && msgs[b].Role != "user" {
+				b++
+			}
 		}
-	}
-	for !fits() && a < len(msgs) { // oldest exchange after the current turn (assistant + its results)
-		a++
-		for a < len(msgs) && msgs[a].Role != "assistant" {
+		for !fits() && a < len(msgs) { // oldest exchange after the current turn (assistant + its results)
 			a++
+			for a < len(msgs) && msgs[a].Role != "assistant" {
+				a++
+			}
 		}
+		return b, a, fits()
 	}
-	if !fits() {
+	b, a, ok := drop(1)
+	if !ok {
 		// Even the current turn (+ system prompt and tools) exceeds the window.
 		return pin, ai.ErrContextLimit
 	}
-	if b == 0 && a == pin+1 {
-		return pin, nil
+	keep(b, a)
+	if est := keptEstimate(b, a); est > 0 && nearWindow(est) {
+		// Whatever the estimate would send — the whole history or its own
+		// trim — is inside the estimate's error band: the provider's
+		// tokenizer gets the last word before the prompt ships (F-47). Over
+		// → scale the costs to the count (the ~30% Claude undercount,
+		// whatever the true factor is) and drop against them.
+		if n, has := countPromptTokens(ctx, provider, req); has && n+reserve > ctxLimit {
+			scale := float64(n) / float64(est)
+			if b, a, ok = drop(scale); !ok {
+				return pin, ai.ErrContextLimit
+			}
+			keep(b, a)
+			// Verify the trimmed request once more (the second and last count
+			// call): the scaled costs keep the estimate's shape, not the
+			// tokenizer's truth. Still over → tighten the scale to what the
+			// count says about the KEPT set and drop again, without further
+			// counting.
+			if n, has := countPromptTokens(ctx, provider, req); has && n+reserve > ctxLimit {
+				if est := keptEstimate(b, a); est > 0 {
+					if b2, a2, ok2 := drop(max(scale, float64(n)/float64(est))); ok2 && (b2 != b || a2 != a) {
+						b, a = b2, a2
+						keep(b, a)
+					}
+				}
+			}
+		}
 	}
-	kept := make([]ai.Message, 0, (pin-b)+1+(len(msgs)-a))
-	kept = append(kept, msgs[b:pin]...)
-	kept = append(kept, msgs[pin])
-	kept = append(kept, msgs[a:]...)
-	req.Messages = kept
 	return pin - b, nil
+}
+
+// countPromptTokens asks the provider's own tokenizer (ai.TokenCounter, when
+// the provider exposes one) how many prompt tokens req consumes. ok is false
+// for providers without the capability, on any error, and for a non-positive
+// count: the caller falls back silently to its estimate (count_tokens is a
+// free but optional endpoint, and a counting problem must never fail a turn
+// the estimate says fits).
+func countPromptTokens(ctx context.Context, provider ai.Provider, req *ai.Request) (tokens int, ok bool) {
+	counter, canCount := provider.(ai.TokenCounter)
+	if !canCount {
+		return 0, false
+	}
+	n, err := counter.CountTokens(ctx, *req)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 // PreviewContext returns what would be sent to the provider for a turn (system
 // prompt, context text, user message, and an estimated/limit token pair) without
 // actually issuing a chat call, so the UI can show the caller what's in-scope.
+// The estimate covers the system prompt + context + user message only — history
+// and tool schemas are added by the real turn. ContextLimit is the MODEL's
+// window (ai.ContextLimitFor: the listing entry, so a 1M-window deployment no
+// longer shows the provider-wide 128000 placeholder, and a learned narrower
+// window after a rejection shrinks it), matching what the turn truncates
+// against (F-29); the reserve is deliberately NOT folded in — the UI labels
+// the value as the model's window.
+//
+// Azure AI Foundry on the model registry resolves the model id exactly as the
+// turn does (resolveAzureModel): a model the caller can no longer use is
+// ErrModelNotAvailable (400 MODEL_NOT_AVAILABLE), and the window is the
+// resolved entry's on its own resource.
 func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (res *models.ContextPreview, err error) {
 	defer logger.Guard("App.PreviewContext", &err)
 
@@ -620,10 +833,15 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 	if doc != nil {
 		orgID = doc.OrganizationID
 	}
-	provider, err := s.factory.ForOrg(scope, s.credentialOrg(ctx, orgID, scope), req.Provider)
+	azure, err := s.resolveAzureModel(ctx, scope, doc, req)
 	if err != nil {
 		return nil, err
 	}
+	provider, err := s.turnProvider(ctx, scope, orgID, req, azure)
+	if err != nil {
+		return nil, err
+	}
+	model := newTurnModel(req, azure)
 
 	_, sysPrompt, contextText, guidelines := s.buildScrubbedContext(ctx, scope, provider, doc, report, req)
 	scrubbedUserMsg := scrubber.ScrubText(req.UserMessage)
@@ -639,7 +857,7 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 		ContextText:     contextText,
 		UserMessage:     scrubbedUserMsg,
 		EstimatedTokens: total,
-		ContextLimit:    provider.ContextLimit(),
+		ContextLimit:    ai.ContextLimitFor(ctx, provider, model.resolved),
 	}, nil
 }
 

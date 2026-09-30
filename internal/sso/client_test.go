@@ -263,11 +263,17 @@ func TestClient_BoundedExternalCallsTimeout(t *testing.T) {
 		IssuerURL: "http://" + ln.Addr().String(),
 		ClientID:  "x",
 	})
+	if got := c.callTimeout(); got != externalTimeout {
+		t.Fatalf("default call timeout = %v, want externalTimeout (%v)", got, externalTimeout)
+	}
+	// The bound under test is the per-call deadline, whatever its length:
+	// a short one proves it without waiting the production 15 s.
+	c.timeout = 200 * time.Millisecond
 
-	// ensureProvider (discovery) should time out within externalTimeout+slack,
-	// NOT hang forever. We bound the test's own ctx so a regression that
-	// removes the timeout causes a test failure rather than a CI hang.
-	ctx, cancel := context.WithTimeout(context.Background(), externalTimeout+2*time.Second)
+	// ensureProvider (discovery) should time out within the call timeout plus
+	// slack, NOT hang forever. We bound the test's own ctx so a regression
+	// that removes the timeout causes a test failure rather than a CI hang.
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout+2*time.Second)
 	defer cancel()
 
 	start := time.Now()
@@ -277,7 +283,7 @@ func TestClient_BoundedExternalCallsTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected discovery to fail against a hanging IdP, got nil")
 	}
-	if elapsed > externalTimeout+2*time.Second {
-		t.Errorf("discovery took %v, expected to be bounded by %v+slack", elapsed, externalTimeout)
+	if elapsed > c.timeout+time.Second {
+		t.Errorf("discovery took %v, expected to be bounded by %v+slack", elapsed, c.timeout)
 	}
 }

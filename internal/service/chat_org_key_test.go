@@ -70,7 +70,7 @@ func TestPrepareTurn_UsesOrgCredentialWhenMemberHasNone(t *testing.T) {
 	orgDoc := &models.FlowDocument{ID: "f1", OrganizationID: "org-A"}
 
 	ctl := &streamCtl{ownerID: "u-none", orgID: "org-A"}
-	ts, err := svc.prepareTurn(context.Background(), "u-none", orgDoc, models.ChatRequest{Provider: "fake"}, ctl)
+	ts, err := svc.prepareTurn(context.Background(), "u-none", orgDoc, models.ChatRequest{Provider: "fake"}, nil, ctl)
 	if err != nil {
 		t.Fatalf("member without a key on an org flow: %v (want the org's credential)", err)
 	}
@@ -86,7 +86,7 @@ func TestPrepareTurn_UsesOrgCredentialWhenMemberHasNone(t *testing.T) {
 
 	orgCalls = 0
 	ownCtl := &streamCtl{ownerID: "u-own", orgID: "org-A"}
-	if _, err := svc.prepareTurn(context.Background(), "u-own", orgDoc, models.ChatRequest{Provider: "fake"}, ownCtl); err != nil {
+	if _, err := svc.prepareTurn(context.Background(), "u-own", orgDoc, models.ChatRequest{Provider: "fake"}, nil, ownCtl); err != nil {
 		t.Fatalf("member with their own key: %v", err)
 	}
 	if orgCalls != 0 {
@@ -98,7 +98,7 @@ func TestPrepareTurn_UsesOrgCredentialWhenMemberHasNone(t *testing.T) {
 
 	orgCalls = 0
 	personal := &models.FlowDocument{ID: "f2"}
-	_, err = svc.prepareTurn(context.Background(), "u-none", personal, models.ChatRequest{Provider: "fake"}, &streamCtl{ownerID: "u-none"})
+	_, err = svc.prepareTurn(context.Background(), "u-none", personal, models.ChatRequest{Provider: "fake"}, nil, &streamCtl{ownerID: "u-none"})
 	if !errors.Is(err, ai.ErrKeyNotConfigured) {
 		t.Errorf("personal flow without a key: err = %v, want ErrKeyNotConfigured", err)
 	}
@@ -106,7 +106,7 @@ func TestPrepareTurn_UsesOrgCredentialWhenMemberHasNone(t *testing.T) {
 		t.Errorf("personal flow consulted the org store %d times", orgCalls)
 	}
 
-	_, err = svc.prepareTurn(context.Background(), "u-none", &models.FlowDocument{ID: "f3", OrganizationID: "org-B"}, models.ChatRequest{Provider: "fake"}, &streamCtl{ownerID: "u-none", orgID: "org-B"})
+	_, err = svc.prepareTurn(context.Background(), "u-none", &models.FlowDocument{ID: "f3", OrganizationID: "org-B"}, models.ChatRequest{Provider: "fake"}, nil, &streamCtl{ownerID: "u-none", orgID: "org-B"})
 	if !errors.Is(err, ai.ErrKeyNotConfigured) {
 		t.Errorf("org without a credential: err = %v, want ErrKeyNotConfigured", err)
 	}
@@ -146,7 +146,7 @@ func TestPrepareTurn_SharedCredentialOnlyForAdminsAndMembers(t *testing.T) {
 			orgCalls := 0
 			svc := orgKeyChatService(keys, &orgCalls, &roleBackend{})
 			ctl := &streamCtl{ownerID: tc.caller, orgID: "org-A"}
-			ts, err := svc.prepareTurn(context.Background(), tc.caller, orgDoc, models.ChatRequest{Provider: "fake"}, ctl)
+			ts, err := svc.prepareTurn(context.Background(), tc.caller, orgDoc, models.ChatRequest{Provider: "fake"}, nil, ctl)
 			if tc.wantErr {
 				if !errors.Is(err, ai.ErrKeyNotConfigured) {
 					t.Fatalf("err = %v, want ErrKeyNotConfigured (own key only)", err)
@@ -174,7 +174,7 @@ func TestPrepareTurn_SharedCredentialOnlyForAdminsAndMembers(t *testing.T) {
 	t.Run("membership lookup failure fails closed", func(t *testing.T) {
 		orgCalls := 0
 		svc := orgKeyChatService(nil, &orgCalls, &roleBackend{listErr: errors.New("store down")})
-		_, err := svc.prepareTurn(context.Background(), "u-member", orgDoc, models.ChatRequest{Provider: "fake"}, &streamCtl{ownerID: "u-member", orgID: "org-A"})
+		_, err := svc.prepareTurn(context.Background(), "u-member", orgDoc, models.ChatRequest{Provider: "fake"}, nil, &streamCtl{ownerID: "u-member", orgID: "org-A"})
 		if !errors.Is(err, ai.ErrKeyNotConfigured) || orgCalls != 0 {
 			t.Errorf("err = %v, org consulted %d times; want own key only", err, orgCalls)
 		}
@@ -200,27 +200,38 @@ func TestPreviewContext_SharedCredentialRoleRule(t *testing.T) {
 
 // A credential failure on the org's shared credential tells the member to
 // ask their org admin; the same failure on their own key keeps the
-// Settings copy.
+// Settings copy. F-42: classifyFailureShared sets the shared flag for
+// exactly those three credential errors and nothing else.
 func TestClassifyFailure_SharedCredentialCopy(t *testing.T) {
 	for _, err := range []error{ai.ErrApiKeyInvalid, ai.ErrProviderPermissionDenied, ai.ErrProviderConfigInvalid} {
 		own := &streamCtl{}
-		_, ownMsg := own.classifyFailure(context.Background(), err)
+		_, ownMsg, ownShared := own.classifyFailureShared(context.Background(), err)
 		shared := &streamCtl{}
 		shared.sharedCredential.Store(true)
-		code, msg := shared.classifyFailure(context.Background(), err)
-		if !strings.Contains(msg, "ask your organisation admin to update the shared Azure AI Foundry configuration") {
+		code, msg, flag := shared.classifyFailureShared(context.Background(), err)
+		if !strings.Contains(msg, "ask your organisation admin to check the shared Azure AI Foundry resource") {
 			t.Errorf("%v on the shared credential: %q", err, msg)
+		}
+		if !flag {
+			t.Errorf("%v on the shared credential: the shared flag is not set", err)
 		}
 		if strings.Contains(ownMsg, "organisation admin") {
 			t.Errorf("%v on the member's own key: %q must not blame the org", err, ownMsg)
 		}
-		if ownCode, _ := own.classifyFailure(context.Background(), err); ownCode != code {
+		if ownShared {
+			t.Errorf("%v on the member's own key: the shared flag is set", err)
+		}
+		if ownCode, _, _ := own.classifyFailureShared(context.Background(), err); ownCode != code {
 			t.Errorf("%v: code changed with the credential (%q vs %q)", err, ownCode, code)
 		}
 	}
 	shared := &streamCtl{}
 	shared.sharedCredential.Store(true)
-	if _, msg := shared.classifyFailure(context.Background(), ai.ErrRateLimited); strings.Contains(msg, "organisation admin") {
+	_, msg, flag := shared.classifyFailureShared(context.Background(), ai.ErrRateLimited)
+	if strings.Contains(msg, "organisation admin") {
 		t.Errorf("a rate limit is not the admin's to fix: %q", msg)
+	}
+	if flag {
+		t.Errorf("a rate limit on the shared credential must not set the shared flag")
 	}
 }

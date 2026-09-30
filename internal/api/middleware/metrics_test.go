@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -49,6 +50,31 @@ func TestNormalizeRoute(t *testing.T) {
 		// never reach a scraped, retained label.
 		{"/api/invites/s3cret-invite-token/accept", "/api/invites/:token/accept"},
 
+		// The Azure AI Foundry registry: per-resource and per-model routes
+		// collapse, the static ones map to themselves, anything else under
+		// it is no route.
+		{"/api/providers/azure-foundry/connections", "/api/providers/azure-foundry/connections"},
+		{"/api/providers/azure-foundry/connections/abcdefghij", "/api/providers/azure-foundry/connections/:id"},
+		{"/api/providers/azure-foundry/connections/default", "/api/providers/azure-foundry/connections/:id"},
+		{"/api/providers/azure-foundry/connections/abcdefghij/discover", "/api/providers/azure-foundry/connections/:id/discover"},
+		{"/api/providers/azure-foundry/models", "/api/providers/azure-foundry/models"},
+		{"/api/providers/azure-foundry/models/abcdefghij", "/api/providers/azure-foundry/models/:id"},
+		{"/api/providers/azure-foundry/test", "/api/providers/azure-foundry/test"},
+		{"/api/providers/azure-foundry/config", "/api/providers/azure-foundry/config"},
+		{"/api/providers/azure-foundry/connections/abcdefghij/other", routeOther},
+		{"/api/providers/azure-foundry/models/a/b", routeOther},
+		{"/api/providers/azure-foundry/connections/", routeOther},
+		{"/api/providers/azure-foundry/whatever", routeOther},
+		// An organisation's: the same fixed set under /api/orgs/:id.
+		{"/api/orgs/org-1/providers/azure-foundry/connections", "/api/orgs/:id/providers/azure-foundry/connections"},
+		{"/api/orgs/org-1/providers/azure-foundry/connections/abcdefghij", "/api/orgs/:id/providers/azure-foundry/connections/:id"},
+		{"/api/orgs/org-1/providers/azure-foundry/connections/abcdefghij/discover", "/api/orgs/:id/providers/azure-foundry/connections/:id/discover"},
+		{"/api/orgs/org-1/providers/azure-foundry/models/abcdefghij", "/api/orgs/:id/providers/azure-foundry/models/:id"},
+		{"/api/orgs/org-1/providers/azure-foundry/test", "/api/orgs/:id/providers/azure-foundry/test"},
+		{"/api/orgs/org-1/providers/azure-foundry/config", "/api/orgs/:id/providers/azure-foundry/config"},
+		{"/api/orgs/org-1/providers/azure-foundry/models/a/b", "/api/orgs/:id"},
+		{"/api/orgs/org-1/x/providers/azure-foundry/models", "/api/orgs/:id"},
+
 		// Root
 		{"/", "/"},
 		{"", "/"},
@@ -94,6 +120,29 @@ func TestNormalizeRoute_UnknownAPIPathsAreBounded(t *testing.T) {
 	}
 	if len(seen) != 1 {
 		t.Errorf("unknown paths produced %d distinct labels, want 1", len(seen))
+	}
+
+	// The Azure AI Foundry registry's ids never reach a label: any number of
+	// resources and models, personal or an organisation's, collapse to a
+	// fixed set of patterns.
+	azure := map[string]struct{}{}
+	for i := 0; i < 50; i++ {
+		id := fmt.Sprintf("id%08d", i)
+		for _, p := range []string{
+			"/api/providers/azure-foundry/connections/" + id,
+			"/api/providers/azure-foundry/connections/" + id + "/discover",
+			"/api/providers/azure-foundry/models/" + id,
+			"/api/providers/azure-foundry/" + id,
+			"/api/orgs/" + id + "/providers/azure-foundry/connections/" + id,
+			"/api/orgs/" + id + "/providers/azure-foundry/connections/" + id + "/discover",
+			"/api/orgs/" + id + "/providers/azure-foundry/models/" + id,
+			"/api/orgs/" + id + "/providers/azure-foundry/" + id,
+		} {
+			azure[normalizeRoute(p, known)] = struct{}{}
+		}
+	}
+	if len(azure) != 8 {
+		t.Errorf("the registry's paths produced %d labels, want 8: %v", len(azure), azure)
 	}
 
 	// A nil set is fail-closed: unrecognized rather than unbounded.

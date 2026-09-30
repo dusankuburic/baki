@@ -78,6 +78,14 @@ func normalizeRoute(path string, known map[string]struct{}) string {
 		return "/api/invites/:token/accept"
 	case strings.HasPrefix(path, "/api/system/settings/org/"):
 		return "/api/system/settings/org/:id"
+	case strings.HasPrefix(path, azureRegistryPrefix):
+		// The Azure AI Foundry registry: its per-resource and per-model
+		// routes collapse to their patterns; anything else under it is no
+		// route (the static ones map to themselves).
+		if route, ok := azureRegistryRoute(strings.TrimPrefix(path, azureRegistryPrefix)); ok {
+			return "/api/providers/azure-foundry" + route
+		}
+		return routeOther
 	case strings.HasPrefix(path, "/api/orgs/"):
 		// /api/orgs/:orgId or /api/orgs/:orgId/members[/:userId]
 		switch {
@@ -85,6 +93,13 @@ func normalizeRoute(path string, known map[string]struct{}) string {
 			return "/api/orgs/:id/members/:userId"
 		case strings.HasSuffix(path, "/members"):
 			return "/api/orgs/:id/members"
+		}
+		// An organisation's Azure AI Foundry registry: the same fixed set of
+		// patterns as the caller's own.
+		if orgID, tail, ok := strings.Cut(strings.TrimPrefix(path, "/api/orgs/"), "/providers/azure-foundry/"); ok && orgID != "" && !strings.Contains(orgID, "/") {
+			if route, ok := azureRegistryRoute(tail); ok {
+				return "/api/orgs/:id/providers/azure-foundry" + route
+			}
 		}
 		return "/api/orgs/:id"
 	case strings.HasPrefix(path, "/swagger/"):
@@ -106,4 +121,34 @@ func normalizeRoute(path string, known map[string]struct{}) string {
 		return "/"
 	}
 	return "/static/*"
+}
+
+// azureRegistryPrefix starts a caller's own Azure AI Foundry registry routes.
+const azureRegistryPrefix = "/api/providers/azure-foundry/"
+
+// azureRegistryRoute collapses the rest of an Azure AI Foundry registry path
+// (after ".../providers/azure-foundry/") to its route pattern — one of a
+// fixed set, so the label stays bounded whatever the ids; false for a path
+// that is no registry route.
+func azureRegistryRoute(tail string) (string, bool) {
+	segs := strings.Split(tail, "/")
+	switch len(segs) {
+	case 1:
+		switch segs[0] {
+		case "config", "connections", "models", "test":
+			return "/" + segs[0], true
+		}
+	case 2:
+		switch {
+		case segs[0] == "connections" && segs[1] != "":
+			return "/connections/:id", true
+		case segs[0] == "models" && segs[1] != "":
+			return "/models/:id", true
+		}
+	case 3:
+		if segs[0] == "connections" && segs[1] != "" && segs[2] == "discover" {
+			return "/connections/:id/discover", true
+		}
+	}
+	return "", false
 }

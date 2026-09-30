@@ -39,17 +39,15 @@ func gatherCounter(t *testing.T, name string, labels map[string]string) float64 
 	return 0
 }
 
-// TestAuditedReservationPricing_RouterReservesAtCeiling (D-13): the
-// in-flight reservation rate follows pricingFor's rule — the listing price
-// only for a stable alias; a router (by name, or observed varying) reserves at
-// the ceiling even though its listing still DISPLAYS the last routed model's
-// price. Non-alias providers keep their provider-wide rate.
-func TestAuditedReservationPricing_RouterReservesAtCeiling(t *testing.T) {
+// TestAuditedReservationPricing_AzureReservesNothing (D-13): Azure AI
+// Foundry is unpriced, so the in-flight reservation is zero for every alias —
+// stable, varied or a router — while the router's listing still shows the
+// last routed model (display only, no price) and non-alias providers keep
+// their provider-wide rate.
+func TestAuditedReservationPricing_AzureReservesNothing(t *testing.T) {
 	resetServedModels()
 	t.Cleanup(resetServedModels)
 	az := azureFoundryProviderID
-	nano, _ := catalogEntryFor(az, "gpt-5-nano")
-	ceiling := AliasRouterCeiling(az) // routers may route to Claude
 
 	recordServedModel("u1", az, "model-router", "gpt-5-nano-2025-08-07")
 	recordServedModel("u1", az, "smart", "gpt-5-nano-2025-08-07")
@@ -67,20 +65,18 @@ func TestAuditedReservationPricing_RouterReservesAtCeiling(t *testing.T) {
 	}
 	ctx := context.Background()
 	models, _ := ap.Models(ctx)
-	if models[0].Pricing != nano.Pricing {
-		t.Errorf("the router's listing must keep the memo's price for display: %+v", models[0])
+	for _, m := range models {
+		if m.Pricing != (Pricing{}) {
+			t.Errorf("%s listing carries pricing %+v, want none (azure-foundry is unpriced)", m.ID, m.Pricing)
+		}
 	}
-	if got := rp.ReservationPricing(ctx, "model-router"); got != ceiling {
-		t.Errorf("model-router reserves at %+v, want the ceiling %+v", got, ceiling)
+	if models[0].ServedModel != "gpt-5-nano-2025-08-07" {
+		t.Errorf("the router's listing must still show the memo's served model: %+v", models[0])
 	}
-	if got := rp.ReservationPricing(ctx, "smart"); got != ceiling {
-		t.Errorf("a varied alias reserves at %+v, want the ceiling %+v", got, ceiling)
-	}
-	if got := rp.ReservationPricing(ctx, "stable"); got != nano.Pricing {
-		t.Errorf("a stable alias reserves at %+v, want its listing price %+v", got, nano.Pricing)
-	}
-	if got := rp.ReservationPricing(ctx, ""); got != AliasReservationCeiling(az) {
-		t.Errorf("an unknown plain default deployment reserves at %+v, want the Azure (non-router) ceiling", got)
+	for _, id := range []string{"model-router", "smart", "stable", ""} {
+		if got := rp.ReservationPricing(ctx, id); got != (Pricing{}) {
+			t.Errorf("%q reserves at %+v, want zero", id, got)
+		}
 	}
 
 	other := NewAuditedProvider(&auditStub{price: Pricing{InputCostPerM: 1, OutputCostPerM: 2}}, nil, "u1", "stub").(ReservationPricer)
@@ -90,29 +86,27 @@ func TestAuditedReservationPricing_RouterReservesAtCeiling(t *testing.T) {
 }
 
 // TestAuditedUsagePricing_ResolvesLikeTheUsageRow (D-38): UsagePricing is the
-// rate the turn was billed at — the served model first, the ceiling for an
-// unknown model (the embedding ceiling for an embedding deployment), a free
-// listing still "found" at $0, and false only when nothing prices the call.
+// rate the turn was billed at. Azure is unpriced: a zero rate that counts as
+// found for every served/unknown model and embedding deployment. A free
+// listing on a non-alias provider is still "found" at $0, and false only when
+// nothing prices the call.
 func TestAuditedUsagePricing_ResolvesLikeTheUsageRow(t *testing.T) {
 	resetServedModels()
 	t.Cleanup(resetServedModels)
 	ctx := context.Background()
 	az := azureFoundryProviderID
-	gpt4o, _ := catalogEntryFor(az, "gpt-4o")
 
 	inner := &servedFakeProvider{id: az, models: []ModelInfo{{ID: "dep"}, {ID: "vectors", Embedding: true}}}
 	up, ok := NewAuditedProvider(inner, nil, "u1", az).(UsagePricer)
 	if !ok {
 		t.Fatal("the audited wrapper must implement UsagePricer")
 	}
-	if got, ok := up.UsagePricing(ctx, "dep", "gpt-4o-2024-11-20"); !ok || got != gpt4o.Pricing {
-		t.Errorf("served gpt-4o: got %+v %v, want the catalogue price", got, ok)
-	}
-	if got, ok := up.UsagePricing(ctx, "dep", "brand-new-model"); !ok || got != AliasReservationCeiling(az) {
-		t.Errorf("unknown served model: got %+v %v, want the chat ceiling", got, ok)
-	}
-	if got, ok := up.UsagePricing(ctx, "vectors", ""); !ok || got != AliasEmbeddingCeiling(az) {
-		t.Errorf("embedding deployment flagged by the listing: got %+v %v, want the embedding ceiling", got, ok)
+	for _, tc := range []struct{ model, served string }{
+		{"dep", "gpt-4o-2024-11-20"}, {"dep", "brand-new-model"}, {"dep", ""}, {"vectors", ""},
+	} {
+		if got, ok := up.UsagePricing(ctx, tc.model, tc.served); !ok || got != (Pricing{}) {
+			t.Errorf("%s served %q: got %+v %v, want zero and found", tc.model, tc.served, got, ok)
+		}
 	}
 
 	gh := NewAuditedProvider(&auditStub{models: []ModelInfo{{ID: "gpt-4o"}}}, nil, "u1", "github-models").(UsagePricer)
@@ -125,20 +119,12 @@ func TestAuditedUsagePricing_ResolvesLikeTheUsageRow(t *testing.T) {
 	}
 }
 
-// TestAuditedAzure_CustomEmbeddingDeploymentFallsBackToEmbeddingCeiling
-// (D-12 / V-price-2): a custom-named Azure embedding deployment in API-key
-// mode is billed at the EMBEDDING ceiling ($0.13/M), not the chat ceiling
-// ($3/M) that let one knowledge-base index exhaust the daily budget.
-func TestAuditedAzure_CustomEmbeddingDeploymentFallsBackToEmbeddingCeiling(t *testing.T) {
+// TestAuditedAzure_CustomEmbeddingDeploymentRecordsZeroCost (D-12): a
+// custom-named Azure embedding deployment in API-key mode records the
+// embedding deployment, its token count and $0 — and no pricing-fallback
+// metric moves.
+func TestAuditedAzure_CustomEmbeddingDeploymentRecordsZeroCost(t *testing.T) {
 	az := azureFoundryProviderID
-	ceiling := AliasEmbeddingCeiling(az)
-	if ceiling.InputCostPerM != 0.13 || ceiling.OutputCostPerM != 0 {
-		t.Fatalf("AliasEmbeddingCeiling(azure) = %+v, want text-embedding-3-large's 0.13 in / 0 out", ceiling)
-	}
-	if AliasEmbeddingCeiling("openai") != (Pricing{}) {
-		t.Error("the embedding ceiling is alias-only")
-	}
-
 	srv := azurePricingServer(t, "gpt-4o-2024-11-20", "chat", "kb-embed")
 	sink := newUsageSink()
 	raw := newAzureKeyProvider(t, srv, func(c *AzureFoundryConfig) {
@@ -152,6 +138,7 @@ func TestAuditedAzure_CustomEmbeddingDeploymentFallsBackToEmbeddingCeiling(t *te
 	}
 	ap := newAuditedProvider(raw, sink.recorder(), "u1", az)
 	ap.adoptRawHints(raw)
+	before := countPricingFallback(t, az, "deployment")
 	if _, err := ap.Embed(context.Background(), texts); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -159,9 +146,11 @@ func TestAuditedAzure_CustomEmbeddingDeploymentFallsBackToEmbeddingCeiling(t *te
 	if m.Model != "kb-embed" {
 		t.Errorf("usage model = %q, want the embedding deployment", m.Model)
 	}
-	assertCost(t, "custom embedding deployment", m.EstimatedCost, costOf(tokens, 0, ceiling))
-	if chat := costOf(tokens, 0, Pricing{InputCostPerM: 3.0}); m.EstimatedCost >= chat {
-		t.Errorf("EstimatedCost %v is not below the chat ceiling's %v", m.EstimatedCost, chat)
+	if m.PromptTokens != tokens || m.EstimatedCost != 0 {
+		t.Errorf("recorded %d tokens at cost %v, want %d tokens at $0", m.PromptTokens, m.EstimatedCost, tokens)
+	}
+	if after := countPricingFallback(t, az, "deployment"); after != before {
+		t.Errorf("pricing-fallback metric moved by %v, want 0", after-before)
 	}
 }
 
@@ -232,7 +221,7 @@ func TestAudited_NegativeUsageClampedToZero(t *testing.T) {
 	if _, err := ap.Chat(context.Background(), Request{Model: "m"}); err != nil {
 		t.Fatal(err)
 	}
-	ap.recordDetached(context.Background(), "m", "", "", -3, 0)
+	ap.recordDetached(context.Background(), "m", "", "", usage{In: -3})
 	time.Sleep(30 * time.Millisecond)
 }
 
@@ -285,11 +274,11 @@ func (s *lazyStreamStub) Models(context.Context) ([]ModelInfo, error) {
 	return []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}}, nil
 }
 
-// TestAuditedAzure_TruncatedRouterStreamPricedByRoutedModel (D-40): the served
+// TestAuditedAzure_TruncatedRouterStreamRecordsRoutedModel (D-40): the served
 // model rides on every content chunk, so a stream cut before Done (Stop,
-// watchdog, truncation) is priced by the model that answered — not by the
-// ceiling — and still teaches the memo.
-func TestAuditedAzure_TruncatedRouterStreamPricedByRoutedModel(t *testing.T) {
+// watchdog, truncation) still teaches the memo and records the routed model
+// with the estimated tokens; Azure is unpriced, so the cost is $0.
+func TestAuditedAzure_TruncatedRouterStreamRecordsRoutedModel(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ int, _ map[string]any) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(`data: {"id":"x","model":"gpt-5-nano-2025-08-07","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}]}` + "\n\n" +
@@ -306,10 +295,14 @@ func TestAuditedAzure_TruncatedRouterStreamPricedByRoutedModel(t *testing.T) {
 		t.Fatalf("want the truncation error, got %v", err)
 	}
 	m := sink.next(t)
-	nano, _ := catalogEntryFor(azureFoundryProviderID, "gpt-5-nano")
-	assertCost(t, "truncated router stream", m.EstimatedCost, costOf(m.PromptTokens, m.CompletionTokens, nano.Pricing))
-	if ceil := costOf(m.PromptTokens, m.CompletionTokens, AliasReservationCeiling(azureFoundryProviderID)); m.EstimatedCost == ceil {
-		t.Errorf("priced at the ceiling %v instead of the routed model", ceil)
+	if m.EstimatedCost != 0 {
+		t.Errorf("truncated router stream cost = %v, want 0 (azure-foundry is unpriced)", m.EstimatedCost)
+	}
+	if m.PromptTokens == 0 || m.CompletionTokens == 0 {
+		t.Errorf("recorded %d/%d tokens, want the estimates", m.PromptTokens, m.CompletionTokens)
+	}
+	if m.ServedModel != "gpt-5-nano-2025-08-07" {
+		t.Errorf("recorded served model = %q, want the routed model", m.ServedModel)
 	}
 	if served, ok := lookupServedModel(ap.memoScope, azureFoundryProviderID, "model-router"); !ok || served != "gpt-5-nano-2025-08-07" {
 		t.Errorf("memo after the truncated stream = %q %v, want the routed model", served, ok)

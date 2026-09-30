@@ -33,6 +33,11 @@ func TestAzureFoundry_ModelsIncludeProjectDeploymentsAndAgents(t *testing.T) {
 				{"name": "vec", "type": "ModelDeployment", "modelName": "Cohere-v3-english", "capabilities": map[string]any{"embeddings": true}},
 			}})
 		case "/api/projects/p1/agents":
+			// F-24: both the first page and the after= continuation ask for
+			// the List Agents maximum page size, not the default 20.
+			if got := r.URL.Query().Get("limit"); got != "100" {
+				t.Errorf("agents listing limit = %q, want 100", got)
+			}
 			if r.URL.Query().Get("after") != "" {
 				writeJSON(w, 200, map[string]any{"data": []map[string]any{{"name": "Second"}}, "has_more": false})
 				return
@@ -62,7 +67,7 @@ func TestAzureFoundry_ModelsIncludeProjectDeploymentsAndAgents(t *testing.T) {
 	if got := strings.Join(ids, ","); got != "chat1,emb1,extra,vec,agent:Helper,agent:Second" {
 		t.Errorf("listing = %s, want the document's deployments, the project's others in listing order, then the agents", got)
 	}
-	if m := byID["chat1"]; m.DisplayName != "chat1 · gpt-4o" || m.Pricing.InputCostPerM != 2.5 || m.ServedModel != "gpt-4o" || m.Embedding {
+	if m := byID["chat1"]; m.DisplayName != "chat1 · gpt-4o" || m.Pricing != (Pricing{}) || m.ServedModel != "gpt-4o" || m.Embedding {
 		t.Errorf("chat1 = %+v", m)
 	}
 	if m := byID["emb1"]; !m.Embedding || m.ServedModel != "text-embedding-3-small" {
@@ -74,7 +79,7 @@ func TestAzureFoundry_ModelsIncludeProjectDeploymentsAndAgents(t *testing.T) {
 	if m := byID["vec"]; !m.Embedding {
 		t.Errorf("project deployment whose capabilities say embeddings = %+v, want the embedding flag", m)
 	}
-	if m := byID["agent:Helper"]; m.DisplayName != "Agent · Helper · gpt-4.1" || m.ServedModel != "gpt-4.1" || m.Pricing.InputCostPerM != 2.0 {
+	if m := byID["agent:Helper"]; m.DisplayName != "Agent · Helper · gpt-4.1" || m.ServedModel != "gpt-4.1" || m.Pricing != (Pricing{}) {
 		t.Errorf("agent entry = %+v", m)
 	}
 
@@ -576,7 +581,7 @@ func TestAzureFoundry_AgentOnCustomDeploymentResolvesItsModel(t *testing.T) {
 		byID[m.ID] = m
 	}
 	if m := byID["agent:triage"]; m.ServedModel != "gpt-4.1" || m.ContextLimit != 1047576 || m.MaxOutputTokens != 32768 ||
-		m.Pricing.InputCostPerM != 2.0 || m.Pricing.OutputCostPerM != 8.0 || m.DisplayName != "Agent · triage · gpt-4.1" {
+		m.Pricing != (Pricing{}) || m.DisplayName != "Agent · triage · gpt-4.1" {
 		t.Errorf("agent on a custom-named deployment = %+v, want the deployment's model", m)
 	}
 	if m := byID["agent:named"]; m.ServedModel != "Phi-4" || m.ContextLimit != 16384 {
@@ -595,4 +600,129 @@ func TestAzureFoundry_AgentOnCustomDeploymentResolvesItsModel(t *testing.T) {
 			t.Errorf("memo did not enrich the agent: %+v", m)
 		}
 	}
+}
+
+// F-49: the deployments listing follows nextLink continuation pages — a
+// regression that stops following them silently hides every deployment
+// beyond the first page from the model picker. The page-1 nextLink is built
+// from the test server's own https URL because the continuation guard
+// (sameProjectHost) only follows links that stay on the project host over
+// https.
+func TestAzureFoundry_ProjectDeploymentsFollowNextLink(t *testing.T) {
+	var srv *azureTestServer
+	srv = newAzureTLSTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, _ map[string]any) {
+		switch r.URL.Path {
+		case "/api/projects/p1/deployments":
+			if r.URL.Query().Get("skipToken") != "" {
+				// Page 2: the continuation the page-1 nextLink asked for.
+				if r.URL.Query().Get("skipToken") != "2" {
+					t.Errorf("page 2 skipToken = %q, want 2", r.URL.Query().Get("skipToken"))
+				}
+				writeJSON(w, 200, map[string]any{"value": []map[string]any{
+					{"name": "page2-phi4", "modelName": "Phi-4"},
+				}})
+				return
+			}
+			writeJSON(w, 200, map[string]any{
+				"value": []map[string]any{
+					{"name": "page1-gpt4o", "modelName": "gpt-4o", "modelPublisher": "OpenAI", "capabilities": map[string]any{"chat_completion": "true"}},
+				},
+				"nextLink": srv.URL + "/api/projects/p1/deployments?api-version=v1&skipToken=2",
+			})
+		case "/api/projects/p1/agents":
+			writeJSON(w, 200, map[string]any{"data": []map[string]any{}})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	})
+	p := newAzureAgentProvider(t, srv)
+	models, err := p.Models(context.Background())
+	if err != nil {
+		t.Fatalf("Models: %v", err)
+	}
+	if !hasModel(models, "page1-gpt4o") || !hasModel(models, "page2-phi4") {
+		t.Errorf("listing = %+v, want the deployments of both pages", models)
+	}
+	deployments := 0
+	for _, r := range srv.requests() {
+		if r.Path == "/api/projects/p1/deployments" {
+			deployments++
+		}
+	}
+	if deployments != 2 {
+		t.Errorf("deployments GETs = %d, want exactly the first page and its nextLink continuation", deployments)
+	}
+}
+
+// F-49: a continuation link that does not stay on the https project host —
+// an off-host https link or a same-host plain-http one — is dropped, so the
+// Entra bearer never leaves the project host. The truncated listing counts
+// as complete: page 1 only, one deployments GET, cached for the full TTL.
+func TestAzureFoundry_ProjectDeploymentsRejectOffHostNextLink(t *testing.T) {
+	rejectedNextLink := func(t *testing.T, linkFor func(r *http.Request) string) {
+		t.Helper()
+		srv := newAzureTLSTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, _ map[string]any) {
+			switch r.URL.Path {
+			case "/api/projects/p1/deployments":
+				writeJSON(w, 200, map[string]any{
+					"value": []map[string]any{
+						{"name": "page1-gpt4o", "modelName": "gpt-4o", "modelPublisher": "OpenAI", "capabilities": map[string]any{"chat_completion": "true"}},
+					},
+					"nextLink": linkFor(r),
+				})
+			case "/api/projects/p1/agents":
+				writeJSON(w, 200, map[string]any{"data": []map[string]any{}})
+			default:
+				t.Errorf("unexpected path %s", r.URL.Path)
+				w.WriteHeader(404)
+			}
+		})
+		p := newAzureAgentProvider(t, srv)
+		models, err := p.Models(context.Background())
+		if err != nil {
+			t.Fatalf("Models: %v", err)
+		}
+		if !hasModel(models, "page1-gpt4o") || hasModel(models, "page2-phi4") {
+			t.Errorf("listing = %+v, want page 1 only", models)
+		}
+		deployments := 0
+		for _, r := range srv.requests() {
+			if r.Path == "/api/projects/p1/deployments" {
+				deployments++
+			}
+		}
+		if deployments != 1 {
+			t.Errorf("deployments GETs = %d, want the rejected continuation to end the listing after page 1", deployments)
+		}
+		// The listing is complete, not degraded: the second Models call is a
+		// cache hit and the cache keeps the full TTL.
+		n := len(srv.requests())
+		if _, err := p.Models(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(srv.requests()) != n {
+			t.Error("a listing whose continuation was rejected is complete and must be cached")
+		}
+		azureModelsCache.mu.Lock()
+		entry, cached := azureModelsCache.m[azureModelsCacheKey(p.cfg)]
+		azureModelsCache.mu.Unlock()
+		if !cached {
+			t.Fatal("the listing must be cached")
+		}
+		if ttl := time.Until(entry.expires); ttl <= azureModelsRetryAfter {
+			t.Errorf("the truncated listing is complete, want the full cache TTL, got %v", ttl)
+		}
+	}
+
+	t.Run("off_host_https_link", func(t *testing.T) {
+		rejectedNextLink(t, func(_ *http.Request) string {
+			return "https://evil.example/api/projects/p1/deployments?api-version=v1&skipToken=2"
+		})
+	})
+	t.Run("same_host_http_link", func(t *testing.T) {
+		rejectedNextLink(t, func(r *http.Request) string {
+			return "http://" + r.Host + "/api/projects/p1/deployments?api-version=v1&skipToken=2"
+		})
+	})
 }

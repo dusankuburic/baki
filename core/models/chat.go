@@ -56,6 +56,11 @@ type ChatMessage struct {
 	TokensOut        int       `json:"tokensOut,omitempty"`
 	Provider         string    `json:"provider,omitempty"`
 	Model            string    `json:"model,omitempty"`
+	// ModelLabel is the model's friendly name when the message was sent —
+	// an Azure AI Foundry registry entry's display name, whose Model is the
+	// opaque "m/<entryId>" — so history, bubbles and exports keep naming the
+	// model after it is renamed or removed. Empty for catalogue models.
+	ModelLabel string `json:"modelLabel,omitempty"`
 	// ServedModel is the model that actually answered when Model is an
 	// alias the provider resolves (an Azure AI Foundry deployment,
 	// model-router, an agent); InputCostPerM / OutputCostPerM are the USD
@@ -90,6 +95,13 @@ type ChatRequest struct {
 	SystemPrompt        string        `json:"systemPrompt,omitempty"`
 	Temperature         float64       `json:"temperature,omitempty"`
 	MaxTokens           int           `json:"maxTokens,omitempty"`
+	// ReasoningEffort is the per-provider choice of reasoning depth for
+	// reasoning deployments (Settings → AI Behavior): "", "low", "medium" or
+	// "high" — anything else is refused. Merged onto the request by the
+	// client's request builder from the persisted provider setting; ""
+	// keeps the provider default. Only reasoning models use it; the wire
+	// repair path drops it again for models that reject the parameter.
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	// UseTools opts this request into the read-only tool/agent loop. It only
 	// takes effect when the resolved provider supports tools; otherwise the
 	// normal streaming path runs.
@@ -186,6 +198,41 @@ type ModelDetail struct {
 	// per-model support (GitHub Models) report true — the runtime degrades
 	// gracefully per model (ErrToolsUnsupported).
 	SupportsTools bool `json:"supportsTools"`
+
+	// The fields below describe an Azure AI Foundry model registry entry (ID
+	// "m/<entryId>"); catalogue models leave them empty. Embedding entries
+	// are never listed.
+	//
+	// Kind is the entry's kind: "chat", "claude" or "agent".
+	Kind string `json:"kind,omitempty"`
+	// Purpose is a preset key (general, documentation, fixes, review,
+	// refactoring, testing) or "custom" with PurposeCustom's text; the
+	// picker groups by it.
+	Purpose       string `json:"purpose,omitempty"`
+	PurposeCustom string `json:"purposeCustom,omitempty"`
+	// Description is shown under the name in the picker. Admin-written for
+	// shared entries: clients render it as plain text only.
+	Description string `json:"description,omitempty"`
+	// Shared marks an organisation's entry (not the caller's own); OrgID and
+	// OrgName name that organisation.
+	Shared  bool   `json:"shared,omitempty"`
+	OrgID   string `json:"orgId,omitempty"`
+	OrgName string `json:"orgName,omitempty"`
+	// ConnectionID / ConnectionName name the entry's resource.
+	ConnectionID   string `json:"connectionId,omitempty"`
+	ConnectionName string `json:"connectionName,omitempty"`
+	// Status is "ready", or why the entry cannot be used right now
+	// (needs_credentials, unreadable, invalid_config, unsupported);
+	// StatusReason carries the copy.
+	Status       string `json:"status,omitempty"`
+	StatusReason string `json:"statusReason,omitempty"`
+	// Aliases are the pre-registry ids the entry answers for ("gpt-4.1",
+	// "claude:x", "agent:y") — only entries of the resource "default".
+	Aliases []string `json:"aliases,omitempty"`
+	// IsDefault marks the server default for new chats; IsOrgDefault the
+	// organisation's "Default for members".
+	IsDefault    bool `json:"isDefault,omitempty"`
+	IsOrgDefault bool `json:"isOrgDefault,omitempty"`
 }
 
 type ProviderInfo struct {
@@ -199,6 +246,10 @@ type ProviderInfo struct {
 	DefaultModel string        `json:"defaultModel"`
 	ContextLimit int           `json:"contextLimit"`
 	AuthType     string        `json:"authType"`
+	// SuggestDiscovery (Azure AI Foundry) offers the "your project has models
+	// you haven't added" prompt: the caller's migrated resource can list its
+	// project and the prompt was not dismissed.
+	SuggestDiscovery bool `json:"suggestDiscovery,omitempty"`
 }
 
 type ProviderTestResult struct {

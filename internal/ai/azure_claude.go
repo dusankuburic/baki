@@ -3,8 +3,11 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -54,8 +57,11 @@ const (
 	claudeOnFoundryContextLimit = 200000
 	// claudeOnFoundryDefaultOutput is the output cap of a Claude deployment
 	// whose model the catalogue does not know (a custom-named deployment
-	// before its first answer).
-	claudeOnFoundryDefaultOutput = 8192
+	// before its first answer): the smallest output cap of any Claude model
+	// Foundry serves, so the reasoning floor is not clipped for an unlisted
+	// deployment (audit #9 F-04). The chat service still caps at the user's
+	// Max tokens and at the served model's own cap once known.
+	claudeOnFoundryDefaultOutput = 64000
 	// anthropicModelPublisher is the project deployments listing's
 	// modelPublisher for Claude deployments.
 	anthropicModelPublisher = "Anthropic"
@@ -122,7 +128,7 @@ func newClaudeOnFoundry(cfg AzureFoundryConfig, client *http.Client, tokenFn fun
 		p.unauthorized = func(_ int, body []byte) error {
 			return claudeUnauthorized(decodeAzureError(body), body)
 		}
-	case AzureAuthModeEntra:
+	case AzureAuthModeEntra, AzureAuthModeEntraCLI:
 		p.authorize = func(ctx context.Context, req *http.Request) error {
 			tok, err := tokenFn(ctx)
 			if err != nil {
@@ -160,6 +166,57 @@ func claudeUnauthorized(apiErr openAIErrorResp, body []byte) error {
 	return unauthorizedError(apiErr)
 }
 
+// claudeEntraOnlyRe matches a Mythos model or deployment name ("claude-mythos-5-1",
+// a custom deployment serving "claude-mythos-preview"). Mythos ONLY: every
+// other Claude deployment on Foundry accepts an API key too, and Fable —
+// which claudeAlwaysThinkingFamilyRe also matches — is not Entra-gated.
+var claudeEntraOnlyRe = regexp.MustCompile(`(?:^|[^a-z])mythos(?:[^a-z]|$)`)
+
+// ErrClaudeEntraOnly marks a 401/403 an API-key credential got against a
+// Claude Mythos deployment: Foundry serves Mythos to Microsoft Entra ID
+// identities only, so the key is valid for the resource yet can never use
+// this deployment. The chat service renders its own copy for it (the
+// connection-test and settings-hint halves of audit #9 F-26); it also
+// unwraps to ErrApiKeyInvalid, keeping the no-retry/no-breaker rules of any
+// auth failure.
+var ErrClaudeEntraOnly = errors.New("this Claude deployment accepts Microsoft Entra ID only")
+
+// claudeEntraOnlyError is the concrete remap of an API-key refusal on a
+// Mythos deployment: names the deployment and tells the user to switch the
+// Azure AI Foundry credential to Entra ID.
+type claudeEntraOnlyError struct{ deployment string }
+
+func (e *claudeEntraOnlyError) Error() string {
+	return "azure ai foundry refused the API key for Claude deployment " + e.deployment + ": Claude Mythos deployments accept Microsoft Entra ID only — switch the Azure AI Foundry credential to Entra ID"
+}
+
+func (e *claudeEntraOnlyError) Unwrap() []error {
+	return []error{ErrClaudeEntraOnly, ErrApiKeyInvalid}
+}
+
+// claudeMythosEntraOnly remaps an API-key 401/403 that hit a Mythos
+// deployment (by name, or by the model the served-model memo says it serves)
+// onto claudeEntraOnlyError, so the user is told "this model requires Entra
+// ID" instead of "invalid API key" — the key is valid for every other
+// deployment on the resource. Only in API-key mode, only when the refusal was
+// NOT already a permission denial (which carries Azure's own explanation),
+// and only after the retry wrapper is done: nothing about the call is
+// retried differently. Foundry's exact status/body for a key against Mythos
+// is undocumented, so ANY 401/403 on the invalid-key path matches.
+func (p *AzureFoundryProvider) claudeMythosEntraOnly(deployment string, err error) error {
+	if err == nil || p.cfg.Auth.Mode != AzureAuthModeAPIKey {
+		return err
+	}
+	if errors.Is(err, ErrProviderPermissionDenied) || !errors.Is(err, ErrApiKeyInvalid) {
+		return err
+	}
+	if claudeEntraOnlyRe.MatchString(strings.ToLower(deployment)) ||
+		claudeEntraOnlyRe.MatchString(strings.ToLower(p.claudeServedModel(deployment))) {
+		return &claudeEntraOnlyError{deployment: deployment}
+	}
+	return err
+}
+
 // decodeAzureError reads the error envelope of an Anthropic-format response
 // ({"type":"error","error":{"type","message"}}) into the shape the shared
 // Azure auth helpers take; API Management's {"statusCode","message"} shape
@@ -173,9 +230,8 @@ func decodeAzureError(body []byte) openAIErrorResp {
 // claudeDeploymentEntry is the listing entry for one Claude deployment. A
 // deployment named after its model (the portal default, optionally with a
 // trailing version date such as "claude-sonnet-4-6-20260301") carries that
-// model's price and output cap up front; any other name starts unpriced
-// (reserved and billed at AliasClaudeCeiling) with the default output cap
-// until the served-model memo or the project listing names its model.
+// model's window and output cap up front; any other name starts with the
+// default window and output cap until the served-model memo or the project listing names its model.
 func claudeDeploymentEntry(name string) ModelInfo {
 	m := ModelInfo{
 		ID:              claudeModelPrefix + name,
@@ -184,7 +240,7 @@ func claudeDeploymentEntry(name string) ModelInfo {
 		MaxOutputTokens: claudeOnFoundryDefaultOutput,
 	}
 	if entry, ok := catalogEntryFor("claude", name); ok {
-		m.Pricing = entry.Pricing
+		// No price: Foundry deployments are unpriced (the Azure portal shows the cost).
 		if entry.ContextLimit > 0 {
 			m.ContextLimit = entry.ContextLimit
 		}
@@ -223,14 +279,40 @@ func (p *AzureFoundryProvider) claudeChat(ctx context.Context, req Request) (*Re
 		resp, err = p.claudeProvider().Chat(ctx, claudeDeploymentRequest(req))
 		return err
 	})
-	return resp, err
+	return resp, p.claudeMythosEntraOnly(claudeDeploymentName(req.Model), err)
 }
 
 // claudeStream runs a Stream against a Claude deployment under the Entra ID
 // token retry. A 401 arrives as the HTTP status, before any chunk, so a
 // retry never replays a partially delivered stream.
 func (p *AzureFoundryProvider) claudeStream(ctx context.Context, req Request, onChunk func(Chunk)) error {
-	return p.withTokenRetry(ctx, func(ctx context.Context) error {
-		return p.claudeProvider().Stream(ctx, claudeDeploymentRequest(req), onChunk)
+	return p.claudeMythosEntraOnly(claudeDeploymentName(req.Model),
+		p.withTokenRetry(ctx, func(ctx context.Context) error {
+			return p.claudeProvider().Stream(ctx, claudeDeploymentRequest(req), onChunk)
+		}))
+}
+
+// CountTokens counts a Claude deployment's prompt exactly through the
+// Anthropic count_tokens route (ai.TokenCounter): same host as the Messages
+// route, same credential (api-key/x-api-key or a Bearer Entra token), the
+// deployment name as `model`. Non-Claude deployments are refused — the
+// OpenAI route has no count endpoint — and callers fall back to the
+// estimate. An invalid stored document is refused like every other network
+// method: its credential must never reach a host Validate rejected.
+func (p *AzureFoundryProvider) CountTokens(ctx context.Context, req Request) (int, error) {
+	if p.configErr != nil {
+		return 0, p.configErr
+	}
+	id, ok := p.claudeRoute(req.Model)
+	if !ok {
+		return 0, fmt.Errorf("count_tokens is only available for Claude deployments, not %q", req.Model)
+	}
+	req.Model = id
+	var n int
+	err := p.withTokenRetry(ctx, func(ctx context.Context) error {
+		var err error
+		n, err = p.claudeProvider().CountTokens(ctx, claudeDeploymentRequest(req))
+		return err
 	})
+	return n, err
 }

@@ -69,6 +69,27 @@ export const common = {
     health: 'Health:',
     empty: 'No findings detected.',
   },
+  // Model registry labels shared by Settings (AI Accounts) and the chat model
+  // picker, defined once here; other namespaces read them with
+  // {ns: 'common'}. Keys: lib/modelPurpose (purposeLabelKey) and
+  // types/providers AzureModelKind.
+  models: {
+    purpose: {
+      general: 'General',
+      documentation: 'Documentation',
+      fixes: 'Fixes & debugging',
+      review: 'Review & analysis',
+      refactoring: 'Refactoring',
+      testing: 'Testing',
+      custom: 'Custom…',
+    },
+    kind: {
+      chat: 'Chat',
+      claude: 'Claude',
+      agent: 'Agent',
+      embedding: 'Embedding',
+    },
+  },
 }
 
 export const shell = {
@@ -840,6 +861,9 @@ export const chat = {
     close: 'Close thread',
     confirmCloseTitle: 'Close this thread?',
     confirmClose: "You won't be able to reopen “{{name}}” or its messages.",
+    // A thread tab's tooltip: its title and the model it uses.
+    tabTooltip: '{{title}} — {{model}}',
+    modelPurpose: '{{model}} · {{purpose}}',
   },
   toolbar: {
     newChat: 'New chat',
@@ -856,6 +880,11 @@ export const chat = {
     searchClose: 'Close message search',
     toolsOn: 'Tools on',
     toolsOff: 'Tools off',
+    // F-39: shown (disabled) for Foundry agents, whose portal definition owns
+    // the tool list — the on/off toggle would be inert. The reason is read
+    // with it (the item stays reachable by keyboard).
+    toolsAgent: 'Tools: defined by the agent',
+    toolsAgentReason: 'An agent runs the tools set up in its Azure AI Foundry definition',
     help: 'Keyboard shortcuts & commands',
     moreActions: 'More actions',
     textSize: 'Text size: {{size}}',
@@ -945,18 +974,80 @@ export const chat = {
     send: 'Send',
   },
   provider: {
-    select: 'Select provider',
-    groupLabel: 'Provider',
-    notConfigured: '{{name}} — configure…',
-    manage: 'Manage providers ({{connected}}/{{total}})',
     noNativeTools: 'no native tools',
     exportConversation: 'Export conversation',
-    model: 'Model',
     slowToolProtocol: 'This provider runs tools through a slower text-marker protocol',
     using: 'Using',
     // Badge on a provider whose credentials come from the active organisation.
     shared: 'shared',
     sharedTitle: "Using your organisation's shared credentials",
+  },
+  // The chat header's model picker (ModelPicker): each thread keeps its own
+  // model; the trigger names it, the popup lists the models by purpose.
+  picker: {
+    dialog: 'Choose a model for this chat',
+    // The trigger's accessible name.
+    triggerName: 'Model for this chat: {{model}}, {{provider}}',
+    triggerNamePurpose: 'Model for this chat: {{model}}, {{purpose}}, {{provider}}',
+    triggerNameShared: 'Model for this chat: {{model}}, {{provider}}, shared by {{org}}',
+    triggerNamePurposeShared: 'Model for this chat: {{model}}, {{purpose}}, {{provider}}, shared by {{org}}',
+    triggerNameSharedCredentials:
+      "Model for this chat: {{model}}, {{provider}}, using your organisation's shared credentials",
+    triggerNameNone: 'Model for this chat: none available, {{provider}}',
+    noModel: 'No model',
+    yourOrg: 'your organisation',
+    provider: 'Provider',
+    search: 'Search models',
+    searchPlaceholder: 'Search models…',
+    list: 'Models',
+    // The group of models without a purpose (a catalogue provider's).
+    plainGroup: 'Models',
+    contextWindow: '{{window}} context window',
+    price: '${{input}} / ${{output}} per 1M tokens',
+    noMatches: 'No models match “{{query}}”.',
+    emptyAzure: 'No Azure AI Foundry models yet…',
+    emptyProvider: '{{provider}} lists no models.',
+    addModels: 'Add models…',
+    manage: 'Manage models…',
+    // Legacy Entra + project resources used to list every deployment and
+    // agent; now only added models show.
+    reviewPrompt: "Your project has models you haven't added",
+    review: 'Review',
+  },
+  // Badges on a model in the picker and the header.
+  modelBadge: {
+    default: 'Default',
+    defaultSr: 'Default for new chats',
+    shared: 'Shared',
+    sharedSr: 'Shared by {{org}}',
+    sharedCredentialsSr: "Using your organisation's shared credentials",
+  },
+  // Why a listed model cannot be used right now (keyed by its status).
+  modelStatus: {
+    needs_credentials: "Its resource's credentials need to be entered again",
+    unreadable: "Its resource's stored credentials can't be read — enter them again",
+    invalid_config: "Its resource's settings are no longer valid",
+    unsupported: 'Agents need Microsoft Entra ID and a project endpoint',
+    unknown: "Can't be used right now",
+  },
+  // ModelUnavailableNotice: the thread's model cannot be used.
+  modelNotice: {
+    removed: '“{{wanted}}” is no longer available. This chat now uses “{{fallback}}”.',
+    removedNone: '“{{wanted}}” is no longer available, and no other model can be used here.',
+    credentials: "“{{wanted}}” is unavailable until its resource's credentials are entered again.",
+    config: "“{{wanted}}” is unavailable until its resource's settings are fixed.",
+    unsupported: "“{{wanted}}” can't run on its resource: agents need Microsoft Entra ID and a project endpoint.",
+    provider: "“{{wanted}}” is unavailable here: {{provider}} isn't set up for this flow.",
+    unavailable: '“{{wanted}}” is unavailable right now.',
+    // The second sentence of an unavailable notice with a stand-in.
+    meanwhile: 'This chat uses “{{fallback}}” until then.',
+    refused: "“{{wanted}}” isn't available any more. Choose another model to send your message.",
+    legacyDefault:
+      'Your saved default model “{{saved}}” is no longer in your model list, so new Azure AI Foundry chats start on “{{fallback}}”.',
+    legacyDefaultNone: 'Your saved default model “{{saved}}” is no longer in your model list.',
+    chooseModel: 'Choose model',
+    dismiss: 'Dismiss',
+    manage: 'Manage models…',
   },
   trail: {
     usedTools_one: 'Used {{count}} tool',
@@ -1020,6 +1111,15 @@ export const chat = {
     insertCommandHint: 'Run a command (/)',
     hintSend: 'send',
     hintNewline: 'new line',
+    // Shown in place of sending when the thread's Azure AI Foundry scope has
+    // nothing to chat with.
+    noAzureModels:
+      "No Azure AI Foundry models yet. Add the deployments you want to chat with, and they'll appear here.",
+    addModels: 'Add models…',
+    azureNeedsCredentials:
+      'Every Azure AI Foundry resource needs its credentials entered again before you can chat with its models.',
+    azureUnusable: 'None of your Azure AI Foundry models can be used right now.',
+    openAccounts: 'Open AI Accounts',
   },
   message: {
     roleUser: 'You',
@@ -1036,6 +1136,9 @@ export const chat = {
     regenerate: 'Regenerate',
     // Tooltip on the served-model tag: the model that actually answered.
     servedBy: 'Answered by {{model}}',
+    // An Azure AI Foundry model ("m/<id>") that nothing lists any more and
+    // whose name the message did not keep.
+    removedModel: 'removed model',
   },
   fixCard: {
     includeFix: 'Include fix for {{name}}',
@@ -1081,7 +1184,11 @@ export const chat = {
     openai: 'GPT is ready — ask questions about your flow or request analysis.',
     gemini: 'Gemini is ready to help you explore your PAD flow.',
     'azure-foundry': 'Azure AI Foundry is ready — ask about your flow, request analysis, or explore findings.',
+    local: 'Your local model is ready — ask about your flow, request analysis, or explore findings.',
     fallback: 'AI assistant is ready — ask about your flow, request analysis, or explore findings.',
+    // Above the line: the model this thread uses, and what it is for.
+    model: 'This chat uses {{model}}',
+    modelPurpose: 'This chat uses {{model}} · {{purpose}}',
   },
   errors: {
     busyTitle: 'Chats are busy',
@@ -1089,6 +1196,9 @@ export const chat = {
     busyBody: '{{count}} chats are already generating — wait for one to finish or stop it, then try again.',
     noStream: '*Error: No response stream was created. Please check your connection and try again.*',
     sendFailed: 'Failed to send message',
+    // F-42: offered next to (or instead of) openSettings when the failure
+    // came from the organisation's shared credential.
+    openOrgSettings: 'Open organisation settings',
     budgetTitle: "You've reached today's AI budget{{detail}}",
     budgetBody:
       'AI requests are capped per day per organization. The budget resets at midnight UTC; contact an admin to raise it.',
@@ -1104,6 +1214,15 @@ export const chat = {
     providerContentFilteredTitle: "The provider's content filter blocked this reply",
     providerOutputLimitTitle: 'The reply hit the Max tokens limit',
     providerBalanceTitle: 'The provider account is out of credit',
+    // MODEL_NOT_AVAILABLE: the thread's model was removed (or stopped being
+    // shared) after the picker listed it.
+    modelNotAvailable: 'This model is no longer available',
+    // The toast when a send is refused for it, right away (the notice waits
+    // for the model list to refresh).
+    modelNotAvailableSend: 'Your message is back in the composer. Choose another model to send it.',
+    modelNotAvailableResend: 'Nothing was sent, and the last answer is kept. Choose another model, then try again.',
+    chooseModel: 'Choose another model',
+    previewModelNotAvailable: "This chat's model is no longer available — your message wasn't sent.",
     openSettings: 'Open settings',
     stalled: 'The response stalled — the connection to the backend may have been lost.',
     cannotConnect: 'Could not connect to the event stream — the backend may still be starting. Please try again.',

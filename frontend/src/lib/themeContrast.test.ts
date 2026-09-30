@@ -1,6 +1,7 @@
 import {describe, it, expect} from 'vitest'
 import {readFileSync} from 'node:fs'
 import {THEME_REGISTRY} from './themeRegistry'
+import {BADGE_TONES} from '@/components/shared/Badge'
 
 // Self-verifying WCAG AA contrast: parses index.css, extracts every theme's
 // design tokens, and asserts that text-on-surface pairs meet AA thresholds.
@@ -194,6 +195,70 @@ describe('semantic tone tokens per theme', () => {
   it('every theme defines all tone tokens (no inherited-wrong-palette fallback)', () => {
     for (const [id, tokens] of Object.entries(perTheme)) {
       for (const tok of TONE_TOKENS) {
+        expect(tokens[tok], `theme "${id}" missing ${tok}`).toBeTruthy()
+      }
+    }
+  })
+})
+
+// ---- Text on tone fills (Badge, danger button) -----------------------------
+// A badge's text sits on the badge's own fill: its tone colour laid over the
+// surface the badge is on. The tone colours fail as text on those tints in
+// many themes (a `text-brand-400` badge measured 1.2–2.5:1 in the light
+// themes), so each tone has a per-theme --badge-<tone>-fg token that must pass
+// AA normal on surface-1, surface-2 and the fill over either. The specs are
+// the component's own (BADGE_TONES), so a new tone or a changed fill is
+// measured here rather than eyeballed.
+
+/** The colour the eye sees: `alpha` of `fill` laid over `surface`. */
+function composite(fill: string, surface: string, alpha: number): string {
+  const f = hexToRgb(fill)
+  const s = hexToRgb(surface)
+  if (!f || !s) throw new Error(`cannot composite ${fill} over ${surface}`)
+  return (
+    '#' +
+    f
+      .map((c, i) =>
+        Math.round(c * alpha + s[i] * (1 - alpha))
+          .toString(16)
+          .padStart(2, '0'),
+      )
+      .join('')
+  )
+}
+
+const BADGE_BACKGROUNDS: [string, (tokens: Record<string, string>) => string][] = [
+  ['surface-1', tokens => tokens['--surface-1']],
+  ['surface-2', tokens => tokens['--surface-2']],
+]
+
+describe('badge text on its fill (WCAG AA)', () => {
+  describe.each(themeEntries)('theme: %s', (_themeId, tokens) => {
+    describe.each(Object.entries(BADGE_TONES))('%s badge', (_tone, spec) => {
+      it.each(BADGE_BACKGROUNDS)(`≥ ${AA_NORMAL}:1 on %s and on its fill over it`, (_name, surfaceOf) => {
+        const fg = tokens[spec.fg]
+        // contrastRatio() skips what it cannot parse (Infinity), so a var()
+        // or a missing token would pass silently: insist on a hex colour.
+        expect(hexToRgb(fg ?? ''), `${spec.fg} must be a hex colour`).not.toBeNull()
+        const surface = surfaceOf(tokens)
+        expect(contrastRatio(fg, surface)).toBeGreaterThanOrEqual(AA_NORMAL)
+        const fill = composite(tokens[spec.fill], surface, spec.fillAlpha)
+        expect(contrastRatio(fg, fill)).toBeGreaterThanOrEqual(AA_NORMAL)
+      })
+    })
+
+    // The danger button of a confirm: text on the solid error fill.
+    it(`error-foreground on error ≥ ${AA_NORMAL}:1`, () => {
+      expect(hexToRgb(tokens['--error-foreground'] ?? ''), '--error-foreground must be a hex colour').not.toBeNull()
+      expect(contrastRatio(tokens['--error-foreground'], tokens['--error'])).toBeGreaterThanOrEqual(AA_NORMAL)
+    })
+  })
+
+  it('every theme block sets every text-on-fill token itself (no dark-palette fallback)', () => {
+    const own = ['--error-foreground', ...Object.values(BADGE_TONES).map(spec => spec.fg)]
+    for (const tok of own) expect(root[tok], `:root missing ${tok}`).toBeTruthy()
+    for (const [id, tokens] of Object.entries(perTheme)) {
+      for (const tok of own) {
         expect(tokens[tok], `theme "${id}" missing ${tok}`).toBeTruthy()
       }
     }

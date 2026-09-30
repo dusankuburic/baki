@@ -208,6 +208,7 @@ func (b *PostgresStorageBackend) ExportUserData(ctx context.Context, userID stri
 		TriageDecisions: sections.triage,
 		Organisations:   sections.orgs,
 		Sessions:        sections.sessions,
+		AzureRegistry:   sections.azure,
 		ExportedAt:      time.Now().UTC(),
 	}, nil
 }
@@ -232,13 +233,15 @@ func (b *PostgresStorageBackend) exportAuditEvents(ctx context.Context, userID s
 
 // userExportSections are the bundle sections that follow the flows: chat
 // history on the user's own flows, the comments and triage decisions they
-// authored, their organisations and their active sessions.
+// authored, their organisations, their active sessions and their personal
+// Azure AI Foundry resources and models.
 type userExportSections struct {
 	conversations []*interfaces.ExportedConversation
 	comments      []*interfaces.FindingComment
 	triage        []*interfaces.FindingStatus
 	orgs          []*interfaces.Organisation
 	sessions      []interfaces.RefreshTokenInfo
+	azure         *interfaces.ExportedAzureRegistry
 }
 
 // exportUserSections loads userExportSections for both export paths, so the
@@ -263,6 +266,9 @@ func (b *PostgresStorageBackend) exportUserSections(ctx context.Context, userID 
 	}
 	if out.sessions, err = b.ListUserRefreshTokens(ctx, userID); err != nil {
 		return nil, fmt.Errorf("export: sessions: %w", err)
+	}
+	if out.azure, err = b.exportAzureRegistry(ctx, userID); err != nil {
+		return nil, fmt.Errorf("export: azure registry: %w", err)
 	}
 	// Empty sections serialise as [] rather than null, so a consumer of the
 	// bundle can tell "none" from "section missing".
@@ -465,6 +471,7 @@ func (b *PostgresStorageBackend) ExportUserDataTo(ctx context.Context, userID st
 		{`,"triageDecisions":`, sections.triage},
 		{`,"organisations":`, sections.orgs},
 		{`,"sessions":`, sections.sessions},
+		{`,"azureRegistry":`, sections.azure},
 	} {
 		if err := writeField(field.prefix, field.value); err != nil {
 			return err

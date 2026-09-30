@@ -39,6 +39,13 @@ const (
 	// principal (client-credentials flow, scope https://ai.azure.com/.default).
 	// Required for agents; works for everything.
 	AzureAuthModeEntra = "entra"
+	// AzureAuthModeEntraCLI authenticates as the Azure CLI's signed-in USER
+	// (azidentity.NewAzureCLICredential — the CLI's first-party, tenant-
+	// pre-consented public client: no app registration, no client secret;
+	// MFA and Conditional Access are handled by `az login`, the token cache
+	// is the CLI's own). Desktop app only: a server-side `az login` would be
+	// the operator's identity, not the user's (F-51).
+	AzureAuthModeEntraCLI = "entra_cli"
 
 	// azureConfigMaxBytes bounds the stored document. The Windows Credential
 	// Manager (desktop keyring) rejects secrets above 2560 bytes; a real
@@ -160,6 +167,9 @@ func (c AzureFoundryConfig) HasSecret() bool {
 		return c.Auth.Key != ""
 	case AzureAuthModeEntra:
 		return c.Auth.ClientSecret != ""
+	case AzureAuthModeEntraCLI:
+		// No secret of its own: the CLI's signed-in user is the credential.
+		return true
 	}
 	return false
 }
@@ -198,7 +208,16 @@ func (c AzureFoundryConfig) chatDeployments() []string {
 // reachable: it needs a project endpoint and Entra ID (the project data plane
 // rejects API keys).
 func (c AzureFoundryConfig) listsProjectDeployments() bool {
-	return c.ProjectEndpoint != "" && c.Auth.Mode == AzureAuthModeEntra
+	return c.ProjectEndpoint != "" && (c.Auth.Mode == AzureAuthModeEntra || c.Auth.Mode == AzureAuthModeEntraCLI)
+}
+
+// azureEgressBlocksInternal reports whether the operator's runtime policy is
+// the cloud one (the desktop/local app installs egress.AllowLoopback): the
+// CLI-sign-in auth mode is refused under it.
+func azureEgressBlocksInternal() bool {
+	azureRuntime.mu.RLock()
+	defer azureRuntime.mu.RUnlock()
+	return azureRuntime.configured && azureRuntime.opts.Egress == egress.BlockInternal
 }
 
 // Encode serialises the document for the KeyStore, enforcing the size cap.
@@ -319,19 +338,20 @@ func normalizeAzureURL(raw string) string {
 var (
 	// azureFoundryHostSuffixes are the DNS suffixes Microsoft documents for
 	// Foundry / Azure OpenAI resources in the Azure public cloud (the only
-	// cloud supported): the Azure OpenAI and Foundry resource hosts, the
-	// Cognitive Services custom subdomain, and serverless (MaaS) model
-	// endpoints (<deployment>.<region>.models.ai.azure.com). A user-supplied
-	// endpoint outside them is refused (the credential would otherwise be
-	// posted to an arbitrary host of the user's choosing — with the server's
-	// egress). The broader ".ai.azure.com" is deliberately not listed: it
-	// covers Microsoft's own portal and service hosts, which are no
-	// resource's endpoint.
+	// cloud supported): the Azure OpenAI and Foundry resource hosts and the
+	// Cognitive Services custom subdomain. Serverless (MaaS) model endpoints
+	// (<deployment>.<region>.models.ai.azure.com) are NOT listed and actively
+	// refused (see validateAzureEndpoint): this provider speaks only
+	// /openai/v1, which those endpoints do not serve — every call would 404.
+	// A user-supplied endpoint outside the suffixes is refused (the credential
+	// would otherwise be posted to an arbitrary host of the user's choosing —
+	// with the server's egress). The broader ".ai.azure.com" is deliberately
+	// not listed: it covers Microsoft's own portal and service hosts, which
+	// are no resource's endpoint.
 	azureFoundryHostSuffixes = []string{
 		".openai.azure.com",
 		".services.ai.azure.com",
 		".cognitiveservices.azure.com",
-		".models.ai.azure.com",
 	}
 	azureDeploymentName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 	// azureProjectPath: the project name starts with a letter or digit, so
@@ -399,8 +419,22 @@ func (c AzureFoundryConfig) Validate(hosts azureHostPolicy) error {
 		if len(c.Auth.ClientSecret) > 512 {
 			return azureCfgErr(AzureCfgErrInvalidAuth, "the client secret is too long")
 		}
+	case AzureAuthModeEntraCLI:
+		// The CLI's signed-in user is the credential: an optional tenant,
+		// never a client id or secret (F-51). Desktop only — a server-side
+		// `az login` would be the operator's identity, not the user's, so a
+		// cloud deployment's egress policy refuses the mode outright.
+		if azureEgressBlocksInternal() {
+			return azureCfgErr(AzureCfgErrInvalidAuth, "the Azure CLI sign-in mode is available in the desktop app only — use a Microsoft Entra ID service principal on a server deployment")
+		}
+		if c.Auth.TenantID != "" && !validAzureTenantID(c.Auth.TenantID) {
+			return azureCfgErr(AzureCfgErrInvalidAuth, "the tenant ID must be the directory (tenant) ID GUID or a domain name of the tenant such as contoso.onmicrosoft.com (common, organizations and consumers are not tenants)")
+		}
+		if c.Auth.ClientID != "" || c.Auth.ClientSecret != "" {
+			return azureCfgErr(AzureCfgErrInvalidAuth, "the Azure CLI sign-in mode takes no client ID or client secret — leave them empty (an optional tenant ID is all it accepts)")
+		}
 	default:
-		return azureCfgErr(AzureCfgErrInvalidAuth, "unknown authentication mode %q (use %q or %q)", c.Auth.Mode, AzureAuthModeAPIKey, AzureAuthModeEntra)
+		return azureCfgErr(AzureCfgErrInvalidAuth, "unknown authentication mode %q (use %q, %q or %q)", c.Auth.Mode, AzureAuthModeAPIKey, AzureAuthModeEntra, AzureAuthModeEntraCLI)
 	}
 	if len(c.Deployments) > azureMaxDeployments {
 		return azureCfgErr(AzureCfgErrInvalidDeploy, "at most %d additional deployments can be listed", azureMaxDeployments)
@@ -459,6 +493,14 @@ func validateAzureEndpoint(raw string, hosts azureHostPolicy, project bool) erro
 	} else if u.Path != "" {
 		return azureCfgErr(code, "the endpoint must be the resource root, without a path (https://<resource>.openai.azure.com)")
 	}
+	// The serverless refusal runs BEFORE the allow-list on purpose: the
+	// provider only speaks /openai/v1, which a *.models.ai.azure.com endpoint
+	// never serves (every call would 404), so an operator listing the zone in
+	// PAD_AZURE_FOUNDRY_ALLOWED_HOSTS must still get the migration message
+	// instead of a saved document that cannot work.
+	if !project && strings.HasSuffix(strings.ToLower(u.Hostname()), ".models.ai.azure.com") {
+		return azureCfgErr(code, "serverless API endpoints (*.models.ai.azure.com) are not supported: deploy the model to a Foundry resource and use https://<resource>.services.ai.azure.com")
+	}
 	if !hosts.allows(u.Hostname()) {
 		if project {
 			// Its own code: HOST_NOT_ALLOWED is mapped by the client to fixed
@@ -466,7 +508,7 @@ func validateAzureEndpoint(raw string, hosts azureHostPolicy, project bool) erro
 			// resource endpoint is fine that it is wrong.
 			return azureCfgErr(AzureCfgErrInvalidProject, "the project endpoint host %q is not an Azure AI Foundry host (expected <resource>.services.ai.azure.com; the operator can allow other hosts with PAD_AZURE_FOUNDRY_ALLOWED_HOSTS)", u.Hostname())
 		}
-		return azureCfgErr(AzureCfgErrHostNotAllowed, "host %q is not an Azure AI Foundry endpoint (expected *.openai.azure.com, *.services.ai.azure.com, *.cognitiveservices.azure.com or *.models.ai.azure.com in the Azure public cloud; the operator can allow other hosts with PAD_AZURE_FOUNDRY_ALLOWED_HOSTS)", u.Hostname())
+		return azureCfgErr(AzureCfgErrHostNotAllowed, "host %q is not an Azure AI Foundry endpoint (expected *.openai.azure.com, *.services.ai.azure.com or *.cognitiveservices.azure.com in the Azure public cloud; the operator can allow other hosts with PAD_AZURE_FOUNDRY_ALLOWED_HOSTS)", u.Hostname())
 	}
 	return nil
 }
@@ -544,6 +586,36 @@ type AzureFoundryOptions struct {
 	Transport http.RoundTripper
 }
 
+// azureResponseHeaderTimeout is the ResponseHeaderTimeout of every transport
+// the Azure client is built on, raised from the shared client's 30 s: a
+// deployment that refuses stream:true (o1) is memoised into the
+// non-streaming streamViaChat fallback, and such an answer routinely reasons
+// for minutes before the first header — the shared floor aborted it while the
+// tokens were billed, unretried (Go's header timeout satisfies
+// context.DeadlineExceeded, which the retry wrapper excludes). SSE streams
+// deliver headers at once, so the raise costs nothing there. Kept under the
+// chat layer's 10-minute stream cap, which stays the real bound. A variable
+// so tests can shorten it.
+var azureResponseHeaderTimeout = 5 * time.Minute
+
+// azureTransport clones base with the Azure ResponseHeaderTimeout applied
+// (azureResponseHeaderTimeout); a clone so the shared client and every other
+// provider keep their own settings.
+func azureTransport(base *http.Transport) *http.Transport {
+	t := base.Clone()
+	t.ResponseHeaderTimeout = azureResponseHeaderTimeout
+	return t
+}
+
+// sharedTransportBase is the shared client's transport as an *http.Transport,
+// falling back to http.DefaultTransport when it is not one.
+func sharedTransportBase() *http.Transport {
+	if t, ok := sharedHTTPClient.Transport.(*http.Transport); ok {
+		return t
+	}
+	return http.DefaultTransport.(*http.Transport)
+}
+
 // unconfiguredAzureClient is the zero-value client, served until
 // ConfigureAzureFoundry runs (DI at boot; tests and non-DI entrypoints may
 // never call it): the shared transport with redirects refused. The zero value
@@ -557,7 +629,7 @@ type AzureFoundryOptions struct {
 // client ConfigureAzureFoundry builds for desktop/local mode, so an
 // unconfigured runtime behaves like a local one instead of a fail-open one.
 func unconfiguredAzureClient() *http.Client {
-	return &http.Client{Timeout: 0, Transport: sharedHTTPClient.Transport, CheckRedirect: egress.NoRedirects}
+	return &http.Client{Timeout: 0, Transport: azureTransport(sharedTransportBase()), CheckRedirect: egress.NoRedirects}
 }
 
 var azureRuntime = struct {
@@ -582,10 +654,7 @@ func ConfigureAzureFoundry(opts AzureFoundryOptions) {
 		// Tests only (see AzureFoundryOptions.Transport): no dial guard.
 		client = &http.Client{Timeout: 0, Transport: opts.Transport, CheckRedirect: egress.NoRedirects}
 	case opts.Egress == egress.BlockInternal:
-		base, ok := sharedHTTPClient.Transport.(*http.Transport)
-		if !ok {
-			base = http.DefaultTransport.(*http.Transport)
-		}
+		base := sharedTransportBase()
 		policy := egress.BlockInternal
 		if opts.AllowPrivateEgress {
 			policy = egress.AllowPrivateNetwork
@@ -593,7 +662,7 @@ func ConfigureAzureFoundry(opts AzureFoundryOptions) {
 		t := guardedAzureTransport(base, &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}, policy)
 		client = &http.Client{Timeout: 0, Transport: t, CheckRedirect: egress.NoRedirects}
 	default:
-		client = &http.Client{Timeout: 0, Transport: sharedHTTPClient.Transport, CheckRedirect: egress.NoRedirects}
+		client = &http.Client{Timeout: 0, Transport: azureTransport(sharedTransportBase()), CheckRedirect: egress.NoRedirects}
 	}
 	azureRuntime.mu.Lock()
 	azureRuntime.opts = opts
@@ -603,7 +672,8 @@ func ConfigureAzureFoundry(opts AzureFoundryOptions) {
 }
 
 // guardedAzureTransport clones base (keeping its pool settings and its Proxy
-// function — HTTP(S)_PROXY for the shared client) and installs the egress
+// function — HTTP(S)_PROXY for the shared client), raises the Azure
+// ResponseHeaderTimeout (azureTransport) and installs the egress
 // guard under policy (egress.BlockInternal, or egress.AllowPrivateNetwork
 // for PAD_AI_ALLOW_PRIVATE_EGRESS) with d as the dialer: a direct connection is judged on the concrete
 // IP at connect time; a proxied request is judged on the Azure host in the
@@ -614,7 +684,7 @@ func ConfigureAzureFoundry(opts AzureFoundryOptions) {
 // allow-listed hosts whose DNS no tenant controls; tenant-supplied targets
 // (notify webhooks) use egress.GuardTransport, which fails closed instead.
 func guardedAzureTransport(base *http.Transport, d *net.Dialer, policy egress.Policy) *http.Transport {
-	t := base.Clone()
+	t := azureTransport(base)
 	egress.GuardAllowListedTransport(t, d, policy)
 	return t
 }

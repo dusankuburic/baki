@@ -291,6 +291,15 @@ func TestHub_Shutdown_DrainsAllClients(t *testing.T) {
 		conns[i] = dial(t, srv, flowID)
 		_ = readEnvelope(t, conns[i]) // presence join
 	}
+	// Keep the client ends referenced until the test returns (and close them
+	// then): a *websocket.Conn nothing refers to any more can be garbage-
+	// collected mid-test, and the net.Conn finalizer then closes the socket —
+	// the server reads EOF and that client leaves before the count below.
+	defer func() {
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	}()
 	// Snapshot client count via the hub's room structure.
 	hub.mu.RLock()
 	totalClients := 0

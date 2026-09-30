@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/storage/atomicfile"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
 )
@@ -110,19 +111,11 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 // POSIX rename is atomic over open files, and fs.ErrPermission there means a
 // genuine, permanent permission problem — retrying it just burned 20×100 ms
 // while the caller (often holding flowMu) serialized every other save.
+//
+// The implementation lives in internal/storage/atomicfile, shared with the
+// Azure AI Foundry registry file.
 func renameOverOpenReader(oldpath, newpath string) error {
-	const attempts = 20 // ~2 s of 100 ms waits at worst
-	var err error
-	for range attempts {
-		if err = os.Rename(oldpath, newpath); err == nil {
-			return nil
-		}
-		if !transientSharingConflict(err) {
-			return err
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return err
+	return atomicfile.RenameOverOpenReader(oldpath, newpath)
 }
 
 // readFileTolerant is the read-side mirror of renameOverOpenReader: while a
@@ -131,24 +124,9 @@ func renameOverOpenReader(oldpath, newpath string) error {
 // Save — the mirror of the race the writer retry handles). The replacement
 // completes within microseconds, so the same bounded retry applies. On
 // non-Windows transientSharingConflict is false and reads fail through
-// immediately.
+// immediately. Every caller passes a dataDir-relative path it validated.
 func readFileTolerant(path string) ([]byte, error) {
-	const attempts = 20 // ~2 s of 100 ms waits at worst; matches the writer
-	var (
-		data []byte
-		err  error
-	)
-	for range attempts {
-		data, err = os.ReadFile(path) // #nosec G304 -- every caller passes a dataDir-relative path it validated (see the #nosec notes at the call sites)
-		if err == nil {
-			return data, nil
-		}
-		if !transientSharingConflict(err) {
-			return nil, err
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return nil, err
+	return atomicfile.ReadFileTolerant(path)
 }
 
 // safePathSegment reports whether s is safe to use as a single on-disk path

@@ -470,16 +470,51 @@ func (m *Manager) keyFunc(token *jwt.Token) (any, error) {
 	return m.secret, nil
 }
 
-// bcryptCost trades hash strength against login/registration latency: cost 12
-// keeps hashing in the tens of milliseconds on typical server hardware while
-// staying above the OWASP minimum of 10. Existing hashes created at a higher
-// cost keep verifying (bcrypt embeds the cost in the hash).
-const bcryptCost = 12
+// defaultBcryptCost trades hash strength against login/registration latency:
+// cost 12 takes ~0.2 s per hash and per verification on typical server
+// hardware while staying above the OWASP minimum of 10. Existing hashes
+// created at a higher cost keep verifying (bcrypt embeds the cost in the hash).
+const defaultBcryptCost = 12
+
+// bcryptCost is the cost new hashes are created with: defaultBcryptCost, or
+// the cost a test binary set with SetBcryptCostForTesting.
+var bcryptCost = defaultBcryptCost
+
+// dummyBcryptHash is a bcrypt hash at bcryptCost that a login for an
+// unknown account is checked against (CheckDummyPassword), so it takes as
+// long as a wrong password for a real account. Precomputed for
+// defaultBcryptCost; TestDummyBcryptHash_MatchesDefaultCost keeps the two
+// in step, or the timing equalisation would drift away from real hashes.
+var dummyBcryptHash = "$2a$12$R.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v"
+
+// SetBcryptCostForTesting makes new hashes, and the dummy hash unknown-account
+// logins are checked against, use cost; the returned func restores both. Test
+// binaries only, from TestMain before any test runs (it is not safe to call
+// while anything hashes): at the production cost every register, login and
+// password-change test pays ~0.2 s per bcrypt operation, many times that
+// under -race. Verification always runs at the cost a hash embeds, so this
+// cannot weaken a stored hash.
+func SetBcryptCostForTesting(cost int) (restore func()) {
+	prevCost, prevDummy := bcryptCost, dummyBcryptHash
+	bcryptCost = cost
+	if h, err := bcrypt.GenerateFromPassword([]byte("dummy-password"), cost); err == nil {
+		dummyBcryptHash = string(h)
+	}
+	return func() { bcryptCost, dummyBcryptHash = prevCost, prevDummy }
+}
 
 // HashPassword returns the bcrypt hash of the password.
 func HashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	return string(bytes), err
+}
+
+// CheckDummyPassword spends the time of a password verification against the
+// dummy hash (see dummyBcryptHash) and discards the result: the unknown-
+// account branch of a login calls it so that branch cannot be told apart from
+// a wrong password by its response time.
+func CheckDummyPassword(password string) {
+	_ = bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(password))
 }
 
 // CheckPasswordHash compares a bcrypt hashed password with its possible

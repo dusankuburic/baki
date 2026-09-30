@@ -1,13 +1,19 @@
 import {useState, useEffect, useCallback} from 'react'
 import ApiKeyInput from './ApiKeyInput'
-import AzureFoundrySection from './AzureFoundrySection'
+import AzureFoundryPanel from './azure/AzureFoundryPanel'
+import {AZURE_SECTION_ANCHOR} from './azure/registryView'
+import LocalModelsSection from './LocalModelsSection'
 import GitHubLoginButton from '@/components/chat/GitHubLoginButton'
 import CopilotLoginButton from '@/components/chat/CopilotLoginButton'
 import {providersApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {useChatStore} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
+import {useSystemStore} from '@/stores/systemStore'
+import type {AzureScope, ProviderID} from '@/types'
 import {useTranslation} from 'react-i18next'
+
+const USER_SCOPE: AzureScope = {kind: 'user'}
 
 export default function ProvidersPanel() {
   const {t} = useTranslation('settings')
@@ -16,6 +22,14 @@ export default function ProvidersPanel() {
   const bumpProviderEpoch = useChatStore(s => s.bumpProviderEpoch)
   const setProvider = useChatStore(s => s.setProvider)
   const updateAI = useSettingsStore(s => s.updateAI)
+  // A cloud server does not offer local models: the section is not rendered
+  // once /api/system/info says the backend is not local (the signal the rest
+  // of Settings uses: capabilities.sessionAnalytics), and before that info
+  // loads the section's own GET answers LOCAL_MODELS_UNAVAILABLE, which it
+  // reports so the heading goes with it.
+  const [localUnavailable, setLocalUnavailable] = useState(false)
+  const markLocalUnavailable = useCallback(() => setLocalUnavailable(true), [])
+  const knownRemoteBackend = useSystemStore(s => (s.info ? !s.info.capabilities.sessionAnalytics : false))
 
   // refreshLocal reloads the signed-in OAuth users without bumping the
   // provider epoch. Used for the initial mount load (no config changed yet);
@@ -53,37 +67,71 @@ export default function ProvidersPanel() {
     void updateAI({activeProvider: 'github-models'})
   }, [refresh, setProvider, updateAI])
 
+  // The first Azure AI Foundry chat model makes Azure the active provider —
+  // but only when the current one cannot chat (not configured), so a working
+  // setup is never switched away from. The registry store already relisted
+  // the chat picker. A failed lookup leaves the provider as it is.
+  const handleFirstAzureChatModel = useCallback(async () => {
+    const current = useSettingsStore.getState().settings.ai.activeProvider
+    if (current === 'azure-foundry') return
+    let currentConfigured: boolean
+    try {
+      const providers = await providersApi.listProviders(undefined, {noDedup: true})
+      currentConfigured = providers.some(p => p.id === current && p.configured)
+    } catch (err) {
+      logger.warn('Failed to check the active provider', err)
+      return
+    }
+    if (currentConfigured) return
+    setProvider('azure-foundry')
+    void updateAI({activeProvider: 'azure-foundry'})
+  }, [setProvider, updateAI])
+
   useEffect(() => {
     refreshLocal()
   }, [refreshLocal])
 
   return (
     <div className="space-y-8">
-      <ProviderSection name="Claude" color="#d4a574">
+      <ProviderSection id="claude" name="Claude" color="#d4a574">
         <ApiKeyInput provider="claude" label={t('providers.anthropicKey')} onConfigured={refresh} />
       </ProviderSection>
 
-      <ProviderSection name="OpenAI" color="#10a37f">
+      <ProviderSection id="openai" name="OpenAI" color="#10a37f">
         <ApiKeyInput provider="openai" label={t('providers.openaiKey')} onConfigured={refresh} />
       </ProviderSection>
 
-      <ProviderSection name="Gemini" color="#4285f4">
+      <ProviderSection id="gemini" name="Gemini" color="#4285f4">
         <ApiKeyInput provider="gemini" label={t('providers.googleKey')} onConfigured={refresh} />
       </ProviderSection>
 
-      <ProviderSection name="xAI (Grok)" color="#f43f5e">
+      <ProviderSection id="xai" name="xAI (Grok)" color="#f43f5e">
         <ApiKeyInput provider="xai" label={t('providers.xaiKey')} onConfigured={refresh} />
       </ProviderSection>
 
-      <ProviderSection name="GLM (z.ai)" color="#06b6d4">
+      <ProviderSection id="glm" name="GLM (z.ai)" color="#06b6d4">
         <ApiKeyInput provider="glm" label={t('providers.zaiKey')} onConfigured={refresh} />
       </ProviderSection>
 
-      <ProviderSection name="Azure AI Foundry" color="#0078d4">
-        <AzureFoundrySection onConfigured={refresh} />
+      {/* Its heading is the "Manage models…" deep link's anchor
+          (AZURE_SECTION_ANCHOR = provider-azure-foundry): the panel focuses
+          it once its resources and models have loaded. */}
+      <ProviderSection id="azure-foundry" name="Azure AI Foundry" color="#0078d4">
+        <AzureFoundryPanel
+          scope={USER_SCOPE}
+          headingLevel={4}
+          anchorId={AZURE_SECTION_ANCHOR}
+          onFirstChatModel={() => void handleFirstAzureChatModel()}
+        />
       </ProviderSection>
 
-      <ProviderSection name="GitHub Models" color="#8b5cf6">
+      {!localUnavailable && !knownRemoteBackend && (
+        <ProviderSection id="local" name={t('providers.localName')} color="#f59e0b">
+          <LocalModelsSection onConfigured={refresh} onUnavailable={markLocalUnavailable} />
+        </ProviderSection>
+      )}
+
+      <ProviderSection id="github-models" name="GitHub Models" color="#8b5cf6">
         <div className="space-y-2">
           {githubUser ? (
             <div className="flex items-center gap-3">
@@ -110,10 +158,10 @@ export default function ProvidersPanel() {
         </div>
       </ProviderSection>
 
-      <ProviderSection name="GitHub Copilot" color="#6e40c9">
+      <ProviderSection id="copilot" name="GitHub Copilot" color="#6e40c9">
         <div className="space-y-2.5">
           <p className="text-xs text-text-tertiary leading-relaxed">
-            Requires a GitHub account with an active{' '}
+            {t('providers.copilotRequires')}{' '}
             <a
               href="https://github.com/features/copilot"
               target="_blank"
@@ -162,12 +210,27 @@ export default function ProvidersPanel() {
   )
 }
 
-function ProviderSection({name, color, children}: {name: string; color: string; children: React.ReactNode}) {
+// A provider's block under an h3 (the panel's title is the Settings h2).
+// The heading's id, provider-<id>, is a Settings deep-link anchor; it takes
+// focus programmatically only (tabIndex -1).
+function ProviderSection({
+  id,
+  name,
+  color,
+  children,
+}: {
+  id: ProviderID
+  name: string
+  color: string
+  children: React.ReactNode
+}) {
   return (
     <div>
       <div className="flex items-center gap-2 mb-3">
-        <span className="w-3 h-3 rounded-full" style={{backgroundColor: color}} />
-        <span className="text-base font-medium text-text-primary">{name}</span>
+        <span aria-hidden="true" className="w-3 h-3 rounded-full" style={{backgroundColor: color}} />
+        <h3 id={`provider-${id}`} tabIndex={-1} className="text-base font-medium text-text-primary">
+          {name}
+        </h3>
       </div>
       {children}
     </div>

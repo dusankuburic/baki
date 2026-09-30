@@ -46,6 +46,9 @@ export default function Button({
   children,
   onClick,
   className,
+  // A <button> without a type is a SUBMIT button: dropped into a form it
+  // submitted the form on every click. Submit buttons say so explicitly.
+  type = 'button',
   ...rest
 }: ButtonProps) {
   const isDisabled = disabled || loading
@@ -53,6 +56,7 @@ export default function Button({
 
   return (
     <button
+      type={type}
       className={clsx(
         'inline-flex items-center justify-center rounded-md font-medium transition-colors duration-fast select-none',
         'focus-visible:ring-2 focus-visible:ring-brand-500/40 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0',

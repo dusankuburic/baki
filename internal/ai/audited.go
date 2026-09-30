@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,9 @@ type auditedProvider struct {
 	scope      string
 	providerID string
 	recordSem  chan struct{}
+	// countTimeout overrides countTokensTimeout when non-zero (tests: proving
+	// the bound on a hung count endpoint need not take the full 5 s).
+	countTimeout time.Duration
 	// memoScope keys the served-model memo: the user scope, plus — for alias
 	// providers whose raw provider names its resource (servedMemoResourcer) —
 	// the resource, so a new resource's same-named deployment never inherits
@@ -39,6 +43,16 @@ type auditedProvider struct {
 	// the factory hands it over for alias providers (adoptRawHints); nil falls
 	// back to a type assertion on inner (direct wrapping) and DefaultModel.
 	embedNamer embedModelNamer
+	// tokenCounter is the RAW provider's exact prompt-token count capability
+	// (TokenCounter), adopted before the resilience and tracing wrappers hid
+	// optional methods; nil when the provider cannot count, and CountTokens
+	// answers an error the caller falls back from (to the estimate).
+	tokenCounter TokenCounter
+	// registry is the RAW provider's model registry (registryModelSource —
+	// an Azure AI Foundry resource built by NewAzureFoundryConnectionProvider),
+	// adopted before the wrappers hid it: Models lists the entries the live
+	// listing lacks and applies their overrides. nil for every other provider.
+	registry []registryModel
 	// modelsOnce memoises the inner provider's model list for this instance's
 	// lifetime. The factory builds a fresh audited chain per request, and one
 	// request can consult Models() up to ~8 times (pricing per tool-loop
@@ -59,6 +73,28 @@ const maxConcurrentRecords = 16
 
 func NewAuditedProvider(inner Provider, recorder UsageRecorder, scope, providerID string) Provider {
 	return newAuditedProvider(inner, recorder, scope, providerID)
+}
+
+// usage is one call's token usage as the audited wrapper records it: In/Out
+// are the totals (Response.TokensIn/TokensOut, the usage chunks), CacheRead/
+// CacheWrite the cached-input slice INCLUDED in In (see Response). The totals
+// drive the meter, the in-flight ledger and the usage row; the cache slice is
+// priced at the cached rates in usageMetric.
+type usage struct {
+	In, Out, CacheRead, CacheWrite int
+}
+
+// clamped bounds a call's usage before it is priced. The counts are whatever
+// the upstream reported (an operator-allow-listed non-Microsoft host can
+// answer anything): a negative total or cached slice would record a negative
+// cost and lower the caller's daily spend, and a cached slice beyond the
+// total it is part of would price tokens that were never sent. CacheRead is
+// kept within [0, In], CacheWrite within [0, In-CacheRead].
+func (u usage) clamped() usage {
+	u.In, u.Out = max(u.In, 0), max(u.Out, 0)
+	u.CacheRead = min(max(u.CacheRead, 0), u.In)
+	u.CacheWrite = min(max(u.CacheWrite, 0), u.In-u.CacheRead)
+	return u
 }
 
 func newAuditedProvider(inner Provider, recorder UsageRecorder, scope, providerID string) *auditedProvider {
@@ -84,6 +120,9 @@ type servedMemoResourcer interface {
 // memo is scoped to and the embedding model name usage is priced by. Every
 // other provider is left exactly as NewAuditedProvider built it.
 func (p *auditedProvider) adoptRawHints(raw Provider) {
+	if tc, ok := raw.(TokenCounter); ok {
+		p.tokenCounter = tc
+	}
 	if !aliasModelProviders[p.providerID] {
 		return
 	}
@@ -96,6 +135,9 @@ func (p *auditedProvider) adoptRawHints(raw Provider) {
 	}
 	if n, ok := raw.(embedModelNamer); ok {
 		p.embedNamer = n
+	}
+	if r, ok := raw.(registryModelSource); ok {
+		p.registry = r.registryModels()
 	}
 }
 
@@ -115,14 +157,20 @@ func (p *auditedProvider) Chat(ctx context.Context, req Request) (*Response, err
 		if in, out, served, ok := usageOf(err); ok && (in > 0 || out > 0) {
 			recordServedModel(p.memoScope, p.providerID, req.Model, served)
 			metrics.RecordAITokens(p.providerID, in, out)
-			p.record(ctx, req.Model, served, req.OrgID, in, out)
+			cr, cw := cacheUsageOf(err)
+			p.record(ctx, req.Model, served, req.OrgID, usage{In: in, Out: out, CacheRead: cr, CacheWrite: cw})
 		}
 		return resp, err
 	}
 	if resp != nil {
 		metrics.RecordAITokens(p.providerID, resp.TokensIn, resp.TokensOut)
 		recordServedModel(p.memoScope, p.providerID, req.Model, resp.ServedModel)
-		p.record(ctx, req.Model, resp.ServedModel, req.OrgID, resp.TokensIn, resp.TokensOut)
+		p.record(ctx, req.Model, resp.ServedModel, req.OrgID, usage{
+			In:         resp.TokensIn,
+			Out:        resp.TokensOut,
+			CacheRead:  resp.CacheReadTokens,
+			CacheWrite: resp.CacheWriteTokens,
+		})
 	}
 	return resp, err
 }
@@ -130,8 +178,11 @@ func (p *auditedProvider) Chat(ctx context.Context, req Request) (*Response, err
 func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	start := time.Now()
 	var tokensIn, tokensOut int
-	// sawAny: any chunk at all — a keepalive proves a 200 body was being
-	// parsed. sawContent: text or reasoning was delivered. estOut is the
+	var cacheRead, cacheWrite int
+	// sawAny: any upstream chunk — a keepalive proves a 200 body was being
+	// parsed (a LocalKeepalive, synthesised while a non-streaming request
+	// waits, proves nothing). sawContent: text or reasoning was delivered.
+	// estOut is the
 	// running token estimate of that content, counted per delta instead of
 	// buffering the whole stream (a long-reasoning deployment can emit tens
 	// of MB that nobody sees); per-delta BPE counting over-counts slightly
@@ -141,12 +192,17 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 	var servedModel string
 
 	wrappedOnChunk := func(c Chunk) {
-		sawAny = true
+		if !c.LocalKeepalive {
+			sawAny = true
+		}
 		if c.TokensIn > 0 {
 			tokensIn = c.TokensIn
 		}
 		if c.TokensOut > 0 {
 			tokensOut = c.TokensOut
+		}
+		if c.CacheReadTokens > 0 || c.CacheWriteTokens > 0 {
+			cacheRead, cacheWrite = c.CacheReadTokens, c.CacheWriteTokens
 		}
 		if c.ServedModel != "" {
 			servedModel = c.ServedModel
@@ -185,7 +241,7 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 				tokensIn = p.estimateRequestTokens(req)
 			}
 			metrics.RecordAITokens(p.providerID, tokensIn, tokensOut)
-			p.record(ctx, req.Model, servedModel, req.OrgID, tokensIn, tokensOut)
+			p.record(ctx, req.Model, servedModel, req.OrgID, usage{In: tokensIn, Out: tokensOut, CacheRead: cacheRead, CacheWrite: cacheWrite})
 		}
 		onChunk(c)
 	}
@@ -212,14 +268,17 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 			if served != "" {
 				servedModel = served
 			}
+			if cr, cw := cacheUsageOf(err); cr > 0 || cw > 0 {
+				cacheRead, cacheWrite = cr, cw
+			}
 		}
 	}
 	// A stream that ended without a Done chunk (truncation, mid-stream error,
 	// cancel) still consumed provider tokens; usage arrives on the Done chunk.
 	// Record whatever the provider reported, falling back to estimates, so the
 	// cost still counts against the daily budget. Gated on evidence that the
-	// request actually reached the provider — any chunk, including the
-	// keepalives Azure's prompt-filter annotation and role delta arrive as
+	// request actually reached the provider — any upstream chunk, including
+	// the keepalives Azure's prompt-filter annotation and role delta arrive as
 	// (a Stop during a reasoning deployment's silent thinking phase is billed
 	// the prompt and, by Azure, the reasoning), or an upstream error event —
 	// so failures before the request was accepted (circuit open, connection
@@ -233,11 +292,11 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 			tokensIn = p.estimateRequestTokens(req)
 		}
 		// The model that answered rides on every content chunk, so a stream
-		// cut before Done still teaches the memo and is priced by that model
-		// rather than by the ceiling.
+		// cut before Done still teaches the memo and records that model (Azure
+		// is unpriced, so the row carries the tokens at $0).
 		recordServedModel(p.memoScope, p.providerID, req.Model, servedModel)
 		metrics.RecordAITokens(p.providerID, tokensIn, tokensOut)
-		p.record(ctx, req.Model, servedModel, req.OrgID, tokensIn, tokensOut)
+		p.record(ctx, req.Model, servedModel, req.OrgID, usage{In: tokensIn, Out: tokensOut, CacheRead: cacheRead, CacheWrite: cacheWrite})
 	}
 	return err
 }
@@ -248,10 +307,17 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 func (p *auditedProvider) estimateRequestTokens(req Request) int {
 	total := p.inner.EstimateTokens(req.SystemPrompt)
 	for _, m := range req.Messages {
-		total += p.inner.EstimateTokens(m.Content)
+		c := p.inner.EstimateTokens(m.Content)
 		for _, tc := range m.ToolCalls {
-			total += p.inner.EstimateTokens(string(tc.Input))
+			c += p.inner.EstimateTokens(string(tc.Input))
 		}
+		// A replayed provider record (ProviderItems) is re-sent verbatim and
+		// its bytes bound the message's real context cost — take the max, not
+		// the sum (audit #9 F-28).
+		if len(m.ProviderItems) > 0 {
+			c = max(c, p.inner.EstimateTokens(string(m.ProviderItems)))
+		}
+		total += c
 	}
 	return total
 }
@@ -260,15 +326,12 @@ func (p *auditedProvider) estimateRequestTokens(req Request) int {
 // recordDetached (a provider model listing at worst).
 const detachedPricingTimeout = 10 * time.Second
 
-func (p *auditedProvider) record(ctx context.Context, modelID, servedModel, orgID string, tokensIn, tokensOut int) {
-	// Usage is whatever the upstream reported; a negative count (an
-	// operator-allow-listed non-Microsoft host answering anything) would
-	// record a negative cost and lower the caller's daily spend.
-	tokensIn, tokensOut = max(tokensIn, 0), max(tokensOut, 0)
-	if p.recorder == nil || (tokensIn == 0 && tokensOut == 0) {
+func (p *auditedProvider) record(ctx context.Context, modelID, servedModel, orgID string, u usage) {
+	u = u.clamped()
+	if p.recorder == nil || (u.In == 0 && u.Out == 0) {
 		return
 	}
-	metric := p.usageMetric(ctx, modelID, servedModel, orgID, tokensIn, tokensOut)
+	metric := p.usageMetric(ctx, modelID, servedModel, orgID, u)
 
 	// Asynchronously record the usage so it doesn't block the caller.
 	//
@@ -305,9 +368,9 @@ func (p *auditedProvider) record(ctx context.Context, modelID, servedModel, orgI
 // on a context detached from the caller's cancellation (values kept) with its
 // own timeout: the caller's deadline is never spent on a listing, and a
 // listing is never cut short (and cached truncated) by the caller's deadline.
-func (p *auditedProvider) recordDetached(ctx context.Context, modelID, servedModel, orgID string, tokensIn, tokensOut int) {
-	tokensIn, tokensOut = max(tokensIn, 0), max(tokensOut, 0) // see record
-	if p.recorder == nil || (tokensIn == 0 && tokensOut == 0) {
+func (p *auditedProvider) recordDetached(ctx context.Context, modelID, servedModel, orgID string, u usage) {
+	u = u.clamped()
+	if p.recorder == nil || (u.In == 0 && u.Out == 0) {
 		return
 	}
 	if !p.acquireRecordSlot(modelID) {
@@ -317,7 +380,7 @@ func (p *auditedProvider) recordDetached(ctx context.Context, modelID, servedMod
 	go func() {
 		defer cancel()
 		defer p.releaseRecordSlot(modelID)
-		metric := p.usageMetric(pctx, modelID, servedModel, orgID, tokensIn, tokensOut)
+		metric := p.usageMetric(pctx, modelID, servedModel, orgID, u)
 		p.save(&metric)
 	}()
 }
@@ -364,38 +427,25 @@ func (p *auditedProvider) save(metric *interfaces.UsageMetric) {
 // usage is still priced — recording $0 would silently let the daily budget
 // never trip for that model. The fallback is counted by the pricing-fallback
 // metric and logged so the catalogue gap is visible.
-func (p *auditedProvider) usageMetric(ctx context.Context, modelID, servedModel, orgID string, tokensIn, tokensOut int) interfaces.UsageMetric {
+func (p *auditedProvider) usageMetric(ctx context.Context, modelID, servedModel, orgID string, u usage) interfaces.UsageMetric {
 	pricing, found := p.pricingFor(ctx, modelID, servedModel)
 	if !found {
 		pricing = p.inner.PricePerMillionTokens()
 		metrics.RecordPricingFallback(p.providerID, pricingMetricModel(p.providerID, modelID))
-		// Alias providers' PricePerMillionTokens is deliberately zero (the
-		// deployment name says nothing about the model behind it), so an
-		// uncatalogued served model used to record $0 and escape the daily
-		// budget — only the in-flight reservation covered it. Overstating is
-		// the safe direction for a spend cap: bill the same worst-case rates
-		// the reservation holds (AliasReservationCeiling, zero for non-alias
-		// providers, which keep their own fallback) — for an embedding
-		// deployment the embedding ceiling: the chat ceiling overstated a
-		// custom-named embedding deployment 23-150× and let one knowledge-base
-		// index exhaust the daily budget.
-		if pricing == (Pricing{}) {
-			if ceiling := p.aliasCeiling(ctx, modelID); ceiling != (Pricing{}) {
-				pricing = ceiling
-			}
-		}
-		if aliasModelProviders[p.providerID] {
-			// Expected for a deployment of an uncatalogued model: counted by
-			// the metric above, not warned on every call.
-			logger.Debug("AI usage priced from provider default — served model not in catalog",
-				"provider", p.providerID, "model", modelID, "servedModel", servedModel)
-		} else {
-			logger.Warn("AI usage priced from provider default — model not in catalog",
-				"provider", p.providerID, "model", modelID, "servedModel", servedModel)
-		}
+		logger.Warn("AI usage priced from provider default — model not in catalog",
+			"provider", p.providerID, "model", modelID, "servedModel", servedModel)
 	}
-	inputCost := (float64(tokensIn) / 1000000.0) * pricing.InputCostPerM
-	outputCost := (float64(tokensOut) / 1000000.0) * pricing.OutputCostPerM
+	// Cached input tokens are billed at their own rates — Claude reads at
+	// 0.025-0.1× the input rate by family and 5-minute cache writes at 1.25×
+	// (cacheReadMultiplier; every other route keeps 1.0, and Azure AI Foundry
+	// is unpriced) — so price the cached slice of u.In at those rates instead
+	// of the full input rate, which overstated a cached Claude session up to
+	// 40× against the daily budget (and understated the writes). u.In stays
+	// the TOTAL the meter and the usage row record.
+	uncached := max(u.In-u.CacheRead-u.CacheWrite, 0)
+	readMul := cacheReadMultiplier(p.providerID, modelID, servedModel)
+	inputCost := (float64(uncached) + readMul*float64(u.CacheRead) + cacheWriteMultiplier*float64(u.CacheWrite)) / 1000000.0 * pricing.InputCostPerM
+	outputCost := (float64(u.Out) / 1000000.0) * pricing.OutputCostPerM
 
 	if orgID == "" {
 		// A chain built from an org's shared credential bills the org even
@@ -415,8 +465,8 @@ func (p *auditedProvider) usageMetric(ctx context.Context, modelID, servedModel,
 		Model:    modelID,
 		// What answered, next to what was asked for (see usageServedModel).
 		ServedModel:      usageServedModel(p.providerID, modelID, servedModel),
-		PromptTokens:     tokensIn,
-		CompletionTokens: tokensOut,
+		PromptTokens:     u.In,
+		CompletionTokens: u.Out,
 		EstimatedCost:    inputCost + outputCost,
 		CreatedAt:        time.Now(),
 	}
@@ -460,81 +510,14 @@ func usageServedModel(providerID, modelID, servedModel string) string {
 	return served
 }
 
-// aliasCeiling is the worst-case rate an alias provider's unknown model is
-// billed at: the chat ceiling — the Claude ceiling for a Claude deployment —
-// or the (far lower) embedding ceiling for an embedding deployment. Zero for
-// non-alias providers.
-func (p *auditedProvider) aliasCeiling(ctx context.Context, modelID string) Pricing {
-	if !aliasModelProviders[p.providerID] {
-		return Pricing{}
-	}
-	if IsClaudeModel(modelID) {
-		return AliasClaudeCeiling(p.providerID)
-	}
-	if p.isEmbeddingAlias(ctx, modelID) {
-		return AliasEmbeddingCeiling(p.providerID)
-	}
-	return p.aliasChatCeiling(modelID)
-}
-
-// aliasChatCeiling is the reservation ceiling for a chat alias: the Claude
-// ceiling for a Claude deployment, the router ceiling (own table and Claude)
-// for a model router or any alias whose served model has varied, else the
-// provider's own catalogue ceiling.
-func (p *auditedProvider) aliasChatCeiling(modelID string) Pricing {
-	if IsClaudeModel(modelID) {
-		return AliasClaudeCeiling(p.providerID)
-	}
-	if isModelRouterAlias(modelID) || servedModelVaries(p.memoScope, p.providerID, modelID) {
-		return AliasRouterCeiling(p.providerID)
-	}
-	return AliasReservationCeiling(p.providerID)
-}
-
-// isEmbeddingAlias reports whether modelID is an embedding deployment: the
-// listing flags it Embedding, or its name says so.
-func (p *auditedProvider) isEmbeddingAlias(ctx context.Context, modelID string) bool {
-	if isEmbeddingModelName(modelID) {
-		return true
-	}
-	if models, err := p.Models(ctx); err == nil {
-		for _, m := range models {
-			if m.ID == modelID {
-				return m.Embedding
-			}
-		}
-	}
-	return false
-}
-
 // ReservationPricing is the rate the chat service reserves in-flight budget
-// at for model. Alias providers: the listing price while the alias has been
-// served by one model; a router (by name, or an alias observed with more than
-// one served model) reserves at the catalogue ceiling — its listing price is
-// the memo of an EARLIER routed call (the rule pricingFor applies), and
-// under-reserving disabled the concurrent-stream and tool-loop overspend
-// guards (25-37× under for a nano→gpt-5 route). Every other provider keeps
-// its provider-wide rate.
+// at for model. Alias providers (Azure AI Foundry) are unpriced, so nothing
+// is reserved against the budget (the inner provider's zero rate). Every
+// other provider keeps its provider-wide rate.
 func (p *auditedProvider) ReservationPricing(ctx context.Context, model string) Pricing {
-	if !aliasModelProviders[p.providerID] {
-		return p.inner.PricePerMillionTokens()
-	}
-	if model == "" {
-		model = p.inner.DefaultModel()
-	}
-	if !servedModelVaries(p.memoScope, p.providerID, model) {
-		if models, err := p.Models(ctx); err == nil {
-			for _, m := range models {
-				if m.ID == model {
-					if m.Pricing != (Pricing{}) {
-						return m.Pricing
-					}
-					break
-				}
-			}
-		}
-	}
-	return p.aliasChatCeiling(model)
+	// Alias providers (Azure AI Foundry) carry no price table: their cost is
+	// read in the Azure portal, so nothing is reserved against the budget.
+	return p.inner.PricePerMillionTokens()
 }
 
 // UsagePricing is the rate a finished turn on model (answered by served) was
@@ -549,9 +532,6 @@ func (p *auditedProvider) UsagePricing(ctx context.Context, model, served string
 	}
 	if pricing := p.inner.PricePerMillionTokens(); pricing != (Pricing{}) {
 		return pricing, true
-	}
-	if ceiling := p.aliasCeiling(ctx, model); ceiling != (Pricing{}) {
-		return ceiling, true
 	}
 	return Pricing{}, false
 }
@@ -568,46 +548,20 @@ func (p *auditedProvider) UsagePricing(ctx context.Context, model, served string
 // answers a free call as "gpt-4o-2024-11-20", which the catalogue would price
 // at list rates.
 //
-// Alias providers (Azure AI Foundry deployments, model-router, agents):
-//  1. the model THIS response reports serving, when catalogued with a price;
-//  2. only when the response named no model: the listing entry, when it has
-//     a real price and the alias is not a router — a router's listing price
-//     is the memo of an EARLIER call's routed model;
-//  3. the deployment name itself when it is a catalogued, priced model
-//     (Azure's portal default names deployments after their model — this also
-//     prices embedding deployments in API-key mode);
-//  4. otherwise not found: a zero price is never "found" for them, so an
-//     unknown served model reaches the counted fallback instead of silently
-//     recording $0.
+// Alias providers (Azure AI Foundry deployments, model-router, agents) are
+// unpriced: baki keeps no price table for them (cost is read in the Azure
+// portal), so the result is always a zero price that counts as found — no
+// fallback metric or warning.
 func (p *auditedProvider) pricingFor(ctx context.Context, modelID, servedModel string) (Pricing, bool) {
-	if !aliasModelProviders[p.providerID] {
-		if models, err := p.Models(ctx); err == nil {
-			for _, m := range models {
-				if m.ID == modelID {
-					return m.Pricing, true
-				}
+	if aliasModelProviders[p.providerID] {
+		return Pricing{}, true
+	}
+	if models, err := p.Models(ctx); err == nil {
+		for _, m := range models {
+			if m.ID == modelID {
+				return m.Pricing, true
 			}
 		}
-		return Pricing{}, false
-	}
-	if servedModel != "" {
-		if entry, ok := catalogEntryFor(p.providerID, servedModel); ok && entry.Pricing != (Pricing{}) {
-			return entry.Pricing, true
-		}
-	} else if !servedModelVaries(p.memoScope, p.providerID, modelID) {
-		if models, err := p.Models(ctx); err == nil {
-			for _, m := range models {
-				if m.ID == modelID {
-					if m.Pricing != (Pricing{}) {
-						return m.Pricing, true
-					}
-					break
-				}
-			}
-		}
-	}
-	if entry, ok := catalogEntryFor(p.providerID, modelID); ok && entry.Pricing != (Pricing{}) {
-		return entry.Pricing, true
 	}
 	return Pricing{}, false
 }
@@ -660,24 +614,73 @@ func (p *auditedProvider) Embed(ctx context.Context, text []string) ([][]float32
 		metrics.RecordAITokens(p.providerID, tokensIn, 0)
 		// Pricing may need the live model listing; the per-turn RAG query
 		// embeds under an 800 ms budget, which must never be spent on it.
-		p.recordDetached(ctx, model, "", "", tokensIn, 0)
+		p.recordDetached(ctx, model, "", "", usage{In: tokensIn})
 	}
 	return res, err
 }
 func (p *auditedProvider) EstimateTokens(t string) int { return p.inner.EstimateTokens(t) }
+
+// countTokensTimeout bounds one exact prompt-token count. The count runs on
+// the turn's context ahead of the model call, and the transports' header
+// timeouts are sized for a long first token (Azure's is minutes): a stalled
+// count endpoint must cost the turn seconds, then the estimate, not the turn.
+const countTokensTimeout = 5 * time.Second
+
+// CountTokens forwards the RAW provider's exact prompt-token count (TokenCounter,
+// adopted in adoptRawHints — the resilience and tracing wrappers in between hide
+// optional methods, so a type assertion on this chain's inner providers would
+// never match), bounded by countTokensTimeout. An error means "no exact count
+// available" (the raw provider cannot count, the endpoint refused or did not
+// answer in time): callers fall back to the estimate.
+func (p *auditedProvider) CountTokens(ctx context.Context, req Request) (int, error) {
+	if p.tokenCounter == nil {
+		return 0, fmt.Errorf("%s: no exact token counting available", p.providerID)
+	}
+	timeout := countTokensTimeout
+	if p.countTimeout > 0 {
+		timeout = p.countTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return p.tokenCounter.CountTokens(ctx, req)
+}
 func (p *auditedProvider) Models(ctx context.Context) ([]ModelInfo, error) {
 	p.modelsOnce.Do(func() {
 		p.models, p.modelsErr = p.inner.Models(ctx)
 		if p.modelsErr == nil {
+			registry := p.appliedRegistry()
+			// A registered model is listed whatever the live listing returned
+			// (an agent beyond its cap, a failed or partial project listing),
+			// so it is sized like a listed one below.
+			p.models = addUnlistedRegistryModels(p.models, registry)
 			// Deployment aliases (Azure AI Foundry) learn their served model,
 			// price and — for a stable alias — context window from the model
 			// that served them last on the same resource, and are clamped to
 			// the window their own context-length rejection stated.
 			p.models = enrichServedModels(p.memoScope, p.providerID, p.models)
+			// The user's own sizing of a registered model (a small distilled
+			// model nothing else can size) beats the catalogue, the project
+			// listing and the memo — but not the model's own rejection: the
+			// learned window below still clamps it.
+			p.models = applyRegistryOverrides(p.models, registry)
 			p.models = applyLearnedWindows(p.memoScope, p.providerID, p.models)
 		}
 	})
 	return p.models, p.modelsErr
 }
+
+// appliedRegistry is the model registry Models applies: the one adopted from
+// the raw provider (factory chains), else the inner provider's own when it
+// was wrapped directly (NewAuditedProvider).
+func (p *auditedProvider) appliedRegistry() []registryModel {
+	if p.registry != nil {
+		return p.registry
+	}
+	if r, ok := p.inner.(registryModelSource); ok {
+		return r.registryModels()
+	}
+	return nil
+}
+
 func (p *auditedProvider) DefaultModel() string { return p.inner.DefaultModel() }
 func (p *auditedProvider) FreeModel() string    { return p.inner.FreeModel() }

@@ -380,6 +380,8 @@ func projectWithClaude(t *testing.T) *azureTestServer {
 			writeJSON(w, 200, map[string]any{"data": []map[string]any{{"name": "helper", "definition": map[string]any{"kind": "prompt", "model": "c1"}}}})
 		case "/anthropic/v1/messages":
 			writeJSON(w, 200, claudeMessageJSON("from claude", "claude-sonnet-4-6"))
+		case "/anthropic/v1/messages/count_tokens":
+			writeJSON(w, 200, map[string]any{"input_tokens": 77})
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			w.WriteHeader(404)
@@ -449,7 +451,7 @@ func TestAnnotateServedModel_ClaudeOnFoundryUsesCatalogueWindow(t *testing.T) {
 	}
 	m := ModelInfo{ID: "bare", DisplayName: "bare", ContextLimit: 128000}
 	applyServedModel(azureFoundryProviderID, &m, "claude-opus-4-6")
-	if m.ContextLimit != 1000000 || m.MaxOutputTokens != 128000 || m.Pricing.InputCostPerM != 5.0 {
+	if m.ContextLimit != 1000000 || m.MaxOutputTokens != 128000 || m.Pricing != (Pricing{}) {
 		t.Errorf("bare deployment serving Opus 4.6 = %+v", m)
 	}
 	g := ModelInfo{ID: "g", DisplayName: "g", ContextLimit: 128000}
@@ -494,41 +496,44 @@ func TestAzureFoundry_TokenRetryInvalidatesTheCallsOwnToken(t *testing.T) {
 	}
 }
 
-// The catalogue carries the Foundry-sold Claude models at their published
-// prices, and the reservation ceilings cover them.
-func TestClaudeCatalogue_FoundryModelsAndCeilings(t *testing.T) {
+// The catalogue carries the Foundry-sold Claude models: the direct Claude
+// provider keeps their published prices, while the same models on Azure
+// Foundry resolve with the window/output cap and no price (Azure is unpriced).
+func TestClaudeCatalogue_FoundryModelsAreUnpricedOnAzure(t *testing.T) {
 	for id, want := range map[string]Pricing{
-		"claude-opus-4-5":   {InputCostPerM: 5, OutputCostPerM: 25},
-		"claude-opus-4-6":   {InputCostPerM: 5, OutputCostPerM: 25},
-		"claude-opus-4-7":   {InputCostPerM: 5, OutputCostPerM: 25},
-		"claude-sonnet-4-5": {InputCostPerM: 3, OutputCostPerM: 15},
-		"claude-opus-5-5":   {InputCostPerM: 4, OutputCostPerM: 20},
-		"claude-sonnet-5":   {InputCostPerM: 2, OutputCostPerM: 10},
-		"claude-mythos-5-1": {InputCostPerM: 10, OutputCostPerM: 50},
+		"claude-opus-4-5":       {InputCostPerM: 5, OutputCostPerM: 25},
+		"claude-opus-4-6":       {InputCostPerM: 5, OutputCostPerM: 25},
+		"claude-opus-4-7":       {InputCostPerM: 5, OutputCostPerM: 25},
+		"claude-sonnet-4-5":     {InputCostPerM: 3, OutputCostPerM: 15},
+		"claude-opus-5-5":       {InputCostPerM: 4, OutputCostPerM: 20},
+		"claude-sonnet-5":       {InputCostPerM: 2, OutputCostPerM: 10},
+		"claude-mythos-5-1":     {InputCostPerM: 10, OutputCostPerM: 50},
+		"claude-mythos-preview": {InputCostPerM: 10, OutputCostPerM: 50},
 	} {
+		direct, ok := catalogEntryFor("claude", id)
+		if !ok || direct.Pricing != want {
+			t.Errorf("direct %s: %+v %v, want %+v", id, direct.Pricing, ok, want)
+		}
 		entry, ok := catalogEntryFor(azureFoundryProviderID, id)
-		if !ok || entry.Pricing != want {
-			t.Errorf("%s: %+v %v, want %+v", id, entry.Pricing, ok, want)
+		if !ok || entry.Pricing != (Pricing{}) || entry.ContextLimit != direct.ContextLimit || entry.MaxOutputTokens != direct.MaxOutputTokens {
+			t.Errorf("azure %s: %+v %v, want the direct window/cap %d/%d with no price", id, entry, ok, direct.ContextLimit, direct.MaxOutputTokens)
+		}
+		if dep := claudeDeploymentEntry(id); dep.Pricing != (Pricing{}) {
+			t.Errorf("claudeDeploymentEntry(%s) carries pricing %+v", id, dep.Pricing)
 		}
 	}
 	if e, ok := catalogEntryFor("claude", "claude-opus-5-5-20261001"); !ok || e.ID != "claude-opus-5-5" {
 		t.Errorf("a dated Opus 5.5 must resolve to Opus 5.5, not Opus 5: %+v %v", e, ok)
 	}
-	claude := AliasClaudeCeiling(azureFoundryProviderID)
-	router := AliasRouterCeiling(azureFoundryProviderID)
-	if claude != (Pricing{InputCostPerM: 10, OutputCostPerM: 50}) || router.InputCostPerM < claude.InputCostPerM || router.OutputCostPerM < claude.OutputCostPerM {
-		t.Errorf("ceilings: claude %+v router %+v — a router can route to Claude", claude, router)
+	// F-25: a portal-default mythos-preview deployment is catalogued at its
+	// real 1M/128K limits and stays out of the direct provider's picker.
+	if e, ok := catalogEntryFor("claude", "claude-mythos-preview"); !ok || e.ContextLimit != 1000000 || e.MaxOutputTokens != 128000 {
+		t.Errorf("claude-mythos-preview entry = %+v %v, want 1M / 128K", e, ok)
 	}
-	// A plain (non-router, non-Claude) deployment keeps the Azure table's
-	// ceiling: an unknown GPT deployment must not reserve at Fable/Mythos rates.
-	if plain := AliasReservationCeiling(azureFoundryProviderID); plain.InputCostPerM >= claude.InputCostPerM {
-		t.Errorf("plain deployment ceiling %+v must stay below the Claude ceiling %+v", plain, claude)
+	if dep := claudeDeploymentEntry("claude-mythos-preview"); dep.ContextLimit != 1000000 || dep.MaxOutputTokens != 128000 {
+		t.Errorf("claude-mythos-preview deployment entry = %+v, want 1M / 128K", dep)
 	}
-	p := &auditedProvider{providerID: azureFoundryProviderID}
-	if got := p.aliasChatCeiling("model-router"); got != router {
-		t.Errorf("model-router reserves at %+v, want the router ceiling %+v", got, router)
-	}
-	if got := p.aliasChatCeiling("my-gpt"); got != AliasReservationCeiling(azureFoundryProviderID) {
-		t.Errorf("plain deployment reserves at %+v, want the Azure ceiling", got)
+	if !claudeInviteOnly["claude-mythos-preview"] {
+		t.Error("claude-mythos-preview must be invite-only (hidden from the direct picker)")
 	}
 }

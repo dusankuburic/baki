@@ -79,6 +79,18 @@ func TestRLSExemptPath_matching(t *testing.T) {
 		{"/api/providers/github/revoke", false},
 		{"/api/providers/copilot/revoke", false},
 		{"/api/providers/azure-foundry/config", false},
+		// The Azure AI Foundry registry: its test and discovery routes dial
+		// Azure (the caller's own and an organisation's); its CRUD routes
+		// keep their transaction.
+		{"/api/providers/azure-foundry/test", true},
+		{"/api/providers/azure-foundry/connections/abcdefghij/discover", true},
+		{"/api/orgs/org-1/providers/azure-foundry/test", true},
+		{"/api/orgs/org-1/providers/azure-foundry/connections/default/discover", true},
+		{"/api/providers/azure-foundry/connections", false},
+		{"/api/providers/azure-foundry/connections/abcdefghij", false},
+		{"/api/providers/azure-foundry/models/abcdefghij", false},
+		{"/api/orgs/org-1/providers/azure-foundry/models", false},
+		{"/api/orgs/org-1/providers/azure-foundry/connections/abcdefghij", false},
 		// And a path under the provider tree that is no route at all.
 		{"/api/providers/other", false},
 		// Blob-content library routes: exempt (blob transfer must not pin the

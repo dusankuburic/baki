@@ -481,8 +481,8 @@ func TestAzureFoundry_AgentChatReadsRefusal(t *testing.T) {
 
 // D-40: the served model is seeded from the first event that carries the
 // response object (response.created) and rides on every text delta and on
-// error chunks, so a run cut before response.completed is still priced by
-// the model that answered instead of the fallback ceiling.
+// error chunks, so a run cut before response.completed still records the
+// model that answered.
 func TestParseResponsesSSE_ServedModelRidesOnDeltasAndErrors(t *testing.T) {
 	created := `{"type":"response.created","response":{"id":"resp_1","status":"in_progress","model":"gpt-4.1"}}`
 	delta := `{"type":"response.output_text.delta","item_id":"msg_1","delta":"hi"}`
@@ -621,6 +621,33 @@ func TestHostedToolSummary_ScrubsAndCutsOnRuneBoundary(t *testing.T) {
 	if got := hostedToolSummary(responsesOutputItem{Output: json.RawMessage(`{ "summary": "ok" }`), Error: json.RawMessage(`null`)}); got != `{"summary":"ok"}` {
 		t.Errorf("object output summary = %q", got)
 	}
+	// F-20: finished hosted search steps without an outcome text show what
+	// they searched for.
+	if got := hostedToolSummary(responsesOutputItem{Type: "web_search_call",
+		Action: responsesToolAction{Type: "search", Query: "PAD run flow action"}}); got != "PAD run flow action" {
+		t.Errorf("web search action.query summary = %q", got)
+	}
+	if got := hostedToolSummary(responsesOutputItem{Type: "web_search_call",
+		Action: responsesToolAction{Type: "visit", URL: "https://learn.microsoft.com/pad"}}); got != "https://learn.microsoft.com/pad" {
+		t.Errorf("web search action.url summary = %q", got)
+	}
+	if got := hostedToolSummary(responsesOutputItem{Type: "file_search_call",
+		Queries: []string{"invoice totals", "  ", "Q3 report"}}); got != "invoice totals; Q3 report" {
+		t.Errorf("file search queries summary = %q", got)
+	}
+	if got := hostedToolSummary(responsesOutputItem{Type: "bing_grounding_call",
+		Arguments: `{"url":"https://api.bing.microsoft.com/v7.0/search?q=power+automate+desktop+actions","request_method":"GET"}`}); got != "power automate desktop actions" {
+		t.Errorf("bing grounding query summary = %q", got)
+	}
+	if got := hostedToolSummary(responsesOutputItem{Type: "bing_custom_search_preview_call",
+		Arguments: `customss=`}); got != "customss=" {
+		t.Errorf("unparsable bing arguments must surface verbatim, got %q", got)
+	}
+	// An outcome text still wins over the query.
+	if got := hostedToolSummary(responsesOutputItem{Type: "web_search_call", Output: jsonString("3 results"),
+		Action: responsesToolAction{Query: "the query"}}); got != "3 results" {
+		t.Errorf("output must win over the query, got %q", got)
+	}
 }
 
 // TestAzureFoundry_FetchAgentsSkipsKindsTheSharedRouteCannotRun: hosted,
@@ -667,5 +694,148 @@ func TestAzureFoundry_FetchAgentsSkipsKindsTheSharedRouteCannotRun(t *testing.T)
 	}
 	if len(agents) != 3 {
 		t.Errorf("listed %d agents, want only the 3 runnable ones: %v", len(agents), got)
+	}
+}
+
+// TestAzureFoundry_ReasoningRouteFallbackOnModelNotSupported (F-18): when the
+// resource's /openai/v1/responses route does not serve the model (404 or a
+// 400 "Model not supported"), the rerouted turn falls back to chat
+// completions' built-in reasoning_effort "none" repair — announced by the
+// reasoning_off notice — and the refusal is memoised so later turns answer
+// on chat completions at once.
+func TestAzureFoundry_ReasoningRouteFallbackOnModelNotSupported(t *testing.T) {
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, body map[string]any) {
+		if strings.HasSuffix(r.URL.Path, "/responses") {
+			writeJSON(w, 400, map[string]any{"error": map[string]any{
+				"code": "UnsupportedModelVersion", "message": "Model not supported: gpt-5.6-sol. The API version required is not enabled for this resource."}})
+			return
+		}
+		if _, has := body["tools"]; has && body["reasoning_effort"] != "none" {
+			writeJSON(w, 400, map[string]any{"error": map[string]any{
+				"message": gpt56ToolsRejection, "type": "invalid_request_error", "param": "reasoning_effort"}})
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(azureStreamFixture))
+	})
+	p := newAzureKeyProvider(t, srv, nil)
+	var chunks []Chunk
+	if err := p.Stream(context.Background(), toolsRequest(0), func(c Chunk) { chunks = append(chunks, c) }); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var notice, done *Chunk
+	for i := range chunks {
+		if chunks[i].Notice != nil && chunks[i].Notice.Name == "reasoning_off" {
+			notice = &chunks[i]
+		}
+		if chunks[i].ToolEvent != nil {
+			t.Errorf("the reasoning_off notice must not be a hosted tool step: %+v", chunks[i].ToolEvent)
+		}
+		if chunks[i].Done {
+			done = &chunks[i]
+		}
+	}
+	if notice == nil {
+		t.Errorf("no reasoning_off notice on the none-repair fallback: %+v", chunks)
+	}
+	if done == nil || len(done.ToolCalls) != 1 {
+		t.Errorf("done = %+v, want the tool call from the repaired turn", done)
+	}
+	reqs := srv.requests()
+	// The rejection, the refused reroute, and the fallback's own rejection
+	// plus its repaired request — the fallback restarts the repair dance, so
+	// the first refused turn costs one extra round trip; the memos make every
+	// later turn a single request.
+	if len(reqs) != 4 {
+		t.Fatalf("%d requests, want 4", len(reqs))
+	}
+	if reqs[3].Body["reasoning_effort"] != "none" || reqs[3].Body["tools"] == nil {
+		t.Errorf("repaired request = %v, want reasoning_effort none with tools kept", reqs[3].Body)
+	}
+	// Memoised: the next tools turn answers on chat completions at once.
+	if err := p.Stream(context.Background(), toolsRequest(0), func(Chunk) {}); err != nil {
+		t.Fatalf("second Stream: %v", err)
+	}
+	reqs = srv.requests()
+	if len(reqs) != 5 || !strings.HasSuffix(reqs[4].Path, "/chat/completions") || reqs[4].Body["reasoning_effort"] != "none" {
+		t.Errorf("memoised turn: %d requests, last = %s %v", len(reqs), reqs[len(reqs)-1].Path, reqs[len(reqs)-1].Body)
+	}
+}
+
+// TestAzureFoundry_ResponsesFunctionToolsAreFlat (F-18): the ephemeral-model
+// reroute sends baki's tools in the Responses API's FLAT function shape, not
+// chat-completions' nested {type, function} pair.
+func TestAzureFoundry_ResponsesFunctionToolsAreFlat(t *testing.T) {
+	var seen map[string]any
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, body map[string]any) {
+		if strings.HasSuffix(r.URL.Path, "/responses") {
+			seen = body
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"model\":\"gpt-5.6-sol\"}}\n\n"))
+			return
+		}
+		writeJSON(w, 400, map[string]any{"error": map[string]any{
+			"message": gpt56ToolsRejection, "type": "invalid_request_error", "param": "reasoning_effort"}})
+	})
+	p := newAzureKeyProvider(t, srv, nil)
+	if err := p.Stream(context.Background(), toolsRequest(0), func(Chunk) {}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if seen == nil {
+		t.Fatal("the reroute never reached /openai/v1/responses")
+	}
+	tools, _ := seen["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %v, want one", seen["tools"])
+	}
+	tool, _ := tools[0].(map[string]any)
+	if tool["type"] != "function" || tool["name"] != "search_flow" {
+		t.Errorf("the function tool must be flat (type+name at the top level): %v", tool)
+	}
+	if _, nested := tool["function"]; nested {
+		t.Errorf("the Responses function tool must not nest a function object: %v", tool)
+	}
+	if seen["model"] != "gpt56" || seen["agent_reference"] != nil || seen["store"] != false {
+		t.Errorf("rerouted request = %v, want the model with store:false and no agent_reference", seen)
+	}
+}
+
+// A10: a tools turn whose Responses route is KNOWN to refuse the model goes
+// to chat completions with the built-in repair at once. It used to leave the
+// rejection unrepaired for the reroute hook, which declined (route refused)
+// and restarted the repair — three requests where two suffice. The route
+// memo can outlive the repair memo: any repaired 200 overwrites the latter.
+func TestAzureFoundry_KnownRefusedRouteSkipsTheEscape(t *testing.T) {
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, body map[string]any) {
+		if strings.HasSuffix(r.URL.Path, "/responses") {
+			t.Errorf("a route known to refuse the model must not be tried")
+			w.WriteHeader(404)
+			return
+		}
+		if _, has := body["tools"]; has && body["reasoning_effort"] != "none" {
+			writeJSON(w, 400, map[string]any{"error": map[string]any{
+				"message": gpt56ToolsRejection, "type": "invalid_request_error", "param": "reasoning_effort"}})
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(azureStreamFixture))
+	})
+	p := newAzureKeyProvider(t, srv, nil)
+	p.rememberResponsesRoute("gpt56", false)
+	var notice bool
+	if err := p.Stream(context.Background(), toolsRequest(0), func(c Chunk) {
+		notice = notice || (c.Notice != nil && c.Notice.Name == "reasoning_off")
+	}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	reqs := srv.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("%d requests, want 2 (the rejection and the repaired request)", len(reqs))
+	}
+	if reqs[1].Body["reasoning_effort"] != "none" {
+		t.Errorf("repaired request = %v, want reasoning_effort none", reqs[1].Body)
+	}
+	if !notice {
+		t.Error("the none repair must announce reasoning_off")
 	}
 }

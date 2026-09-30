@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"math"
 	"testing"
 
 	"pad-analyzer/internal/ai"
@@ -34,12 +33,10 @@ func (p *aliasPricedProvider) Stream(ctx context.Context, req ai.Request, onChun
 	return p.FakeProvider.Stream(ctx, req, onChunk)
 }
 
-func approxEqual(a, b float64) bool { return math.Abs(a-b) < 1e-12 }
-
-// Finding #8: Azure's provider-wide price is $0 on purpose, so pricing the
-// in-flight reservation by PricePerMillionTokens reserved nothing and the
-// concurrent-stream / tool-loop overspend guards were off for azure-foundry.
-func TestInFlightPricing_AliasProviderReservesDeploymentPriceOrCeiling(t *testing.T) {
+// Azure AI Foundry is not priced by baki (its cost is read in the Azure
+// portal and the daily budget does not count it), so an alias provider
+// reserves $0 whatever its listing carries.
+func TestInFlightPricing_AliasProviderReservesNothing(t *testing.T) {
 	ctx := context.Background()
 	azure := &aliasPricedProvider{
 		FakeProvider: &testutil.FakeProvider{},
@@ -49,31 +46,13 @@ func TestInFlightPricing_AliasProviderReservesDeploymentPriceOrCeiling(t *testin
 			{ID: "unpriced"},
 		},
 	}
-
-	// The chosen deployment's listing price.
-	if got := inFlightPricing(ctx, azure, "dep"); got != (ai.Pricing{InputCostPerM: 2, OutputCostPerM: 8}) {
-		t.Errorf("priced deployment reserves at %+v, want its listing price", got)
-	}
-	if got, want := inFlightCost(inFlightPricing(ctx, azure, "dep"), 0, 4096), 4096*8/1e6; !approxEqual(got, want) {
-		t.Errorf("reservation = %v, want %v", got, want)
-	}
-	// An empty request model means the provider default deployment.
-	if got := inFlightPricing(ctx, azure, ""); got.OutputCostPerM != 8 {
-		t.Errorf("default deployment reserves at %+v, want the listing price of %q", got, azure.DefaultModel())
-	}
-
-	// Unknown price (unpriced or unlisted deployment): the catalogue ceiling.
-	ceiling := ai.AliasReservationCeiling(ai.AzureFoundryProviderID)
-	if ceiling.InputCostPerM <= 0 || ceiling.OutputCostPerM <= 0 {
-		t.Fatalf("ceiling must be a real rate, got %+v", ceiling)
-	}
-	for _, model := range []string{"unpriced", "missing"} {
-		if got := inFlightPricing(ctx, azure, model); got != ceiling {
-			t.Errorf("%s reserves at %+v, want the ceiling %+v", model, got, ceiling)
+	for _, model := range []string{"dep", "unpriced", "missing", ""} {
+		if got := inFlightPricing(ctx, azure, model); got != (ai.Pricing{}) {
+			t.Errorf("%q reserves at %+v, want no price", model, got)
 		}
-	}
-	if inFlightCost(inFlightPricing(ctx, azure, "unpriced"), 0, 4096) <= 0 {
-		t.Error("an Azure stream must reserve a non-zero amount")
+		if got := inFlightCost(inFlightPricing(ctx, azure, model), 1000, 4096); got != 0 {
+			t.Errorf("%q reservation = %v, want 0", model, got)
+		}
 	}
 }
 
@@ -99,15 +78,12 @@ func TestInFlightPricing_OtherProvidersKeepProviderRate(t *testing.T) {
 			t.Errorf("%s reserves at %+v, want its provider-wide %+v", tc.id, got, tc.price)
 		}
 	}
-	if ai.AliasReservationCeiling("openai") != (ai.Pricing{}) {
-		t.Error("the ceiling applies to alias providers only")
-	}
 }
 
-// End to end through the tool loop: an Azure stream publishes a non-zero
-// reservation on the concurrent-stream ledger, so another org member's turn
-// near the cap is refused while the stream itself may continue.
-func TestRunToolLoop_AzureStreamReservesInFlightBudget(t *testing.T) {
+// End to end through the tool loop: an Azure stream reserves nothing on the
+// concurrent-stream ledger, so another org member's turn near the cap is not
+// refused on its account, and the stream itself is not refused either.
+func TestRunToolLoop_AzureStreamReservesNothing(t *testing.T) {
 	svc := &ChatService{
 		analysisCache: &AnalysisService{},
 		backend:       &testutil.FakeBackend{DailyUsage: 0.95},
@@ -122,7 +98,7 @@ func TestRunToolLoop_AzureStreamReservesInFlightBudget(t *testing.T) {
 	azure := &aliasPricedProvider{
 		FakeProvider: &testutil.FakeProvider{Turns: []testutil.FakeTurn{{Text: "done", TokensIn: 10, TokensOut: 5}}},
 		id:           ai.AzureFoundryProviderID,
-		listing:      []ai.ModelInfo{{ID: "chat1"}}, // model not known yet
+		listing:      []ai.ModelInfo{{ID: "chat1"}},
 	}
 	azure.onStream = func() {
 		seenInflight = ctl.inflight()
@@ -133,30 +109,25 @@ func TestRunToolLoop_AzureStreamReservesInFlightBudget(t *testing.T) {
 	svc.runToolLoop(ctx, azure, ai.Request{Model: "chat1", OrgID: "org-1", Messages: []ai.Message{{Role: "user", Content: "hi"}}},
 		"user-1", &ai.ToolContext{Ctx: ctx, Doc: toolLoopDoc()}, ctl, func() bool { return true }, emit, func() int { return 0 })
 
-	want := inFlightCost(ai.AliasReservationCeiling(ai.AzureFoundryProviderID), 0, maxOutputTokens(ai.Request{}))
-	if want <= 0.05 {
-		t.Fatalf("fixture rot: ceiling reservation %v no longer crosses the $1 cap from $0.95", want)
+	if seenInflight != 0 {
+		t.Errorf("published reservation = %v, want 0 (Azure is unpriced)", seenInflight)
 	}
-	if !approxEqual(seenInflight, want) {
-		t.Errorf("published reservation = %v, want %v (catalogue ceiling × one max response)", seenInflight, want)
-	}
-	if otherErr == nil {
-		t.Error("another org member near the cap must be refused while the Azure stream's reservation is in flight")
+	if otherErr != nil {
+		t.Errorf("an unpriced Azure stream must not push another member over the cap: %v", otherErr)
 	}
 	for _, ev := range events() {
 		if ev.typ == "error" {
-			t.Errorf("the reserving stream itself must not be refused: %+v", ev.data)
+			t.Errorf("the stream itself must not be refused: %+v", ev.data)
 		}
 	}
 }
 
 // Through a real Azure AI Foundry provider (unresolvable test host, so the
-// listing degrades to the configured deployment): the unpriced configured
-// deployment reserves at the ceiling, never $0.
-func TestInFlightPricing_RealAzureProviderNeverReservesZero(t *testing.T) {
+// listing degrades to the configured deployment): it reserves nothing.
+func TestInFlightPricing_RealAzureProviderReservesNothing(t *testing.T) {
 	configureAzureForTests(t)
 	p := ai.NewAzureFoundryProvider(azureTestDoc)
-	if got, want := inFlightPricing(context.Background(), p, "chat1"), ai.AliasReservationCeiling(ai.AzureFoundryProviderID); got != want {
-		t.Errorf("reservation price = %+v, want the ceiling %+v", got, want)
+	if got := inFlightPricing(context.Background(), p, "chat1"); got != (ai.Pricing{}) {
+		t.Errorf("reservation price = %+v, want none", got)
 	}
 }

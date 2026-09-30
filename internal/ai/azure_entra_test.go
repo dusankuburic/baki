@@ -108,7 +108,8 @@ func TestEntraTokenSource_EarlyRefreshRunsInTheBackground(t *testing.T) {
 		t.Error("the background refresh must fill the cache for the next caller")
 	}
 
-	// A failing refresh keeps serving the cached token.
+	// A failing refresh keeps serving the cached token, and (F-46) it is not
+	// retried by every caller while the cooldown lasts.
 	flaky := &flakyCred{ttl: 2 * time.Minute}
 	src = newEntraTokenSource(flaky)
 	tok, err := src.Token(context.Background())
@@ -121,6 +122,43 @@ func TestEntraTokenSource_EarlyRefreshRunsInTheBackground(t *testing.T) {
 			t.Fatalf("a failed background refresh must not fail the caller: %q %v", got, err)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for flaky.calls.Load() != 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := flaky.calls.Load(); n != 2 {
+		t.Fatalf("token fetches = %d after the failed refresh, want 2", n)
+	}
+	for range 5 {
+		if got, err := src.Token(context.Background()); err != nil || got != tok {
+			t.Fatalf("within the cooldown the cached token must be served: %q %v", got, err)
+		}
+	}
+	if n := flaky.calls.Load(); n != 2 {
+		t.Errorf("token fetches = %d across five more turns, want 2 (the cooldown holds the failed refresh back)", n)
+	}
+	// Once the cooldown lapses, the next turn refreshes again.
+	src.mu.Lock()
+	src.refreshFailedAt = time.Now().Add(-2 * entraRebuildCooldown)
+	src.mu.Unlock()
+	if got, err := src.Token(context.Background()); err != nil || got != tok {
+		t.Fatalf("after the cooldown the cached token is still served: %q %v", got, err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for flaky.calls.Load() != 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := flaky.calls.Load(); n != 3 {
+		t.Fatalf("token fetches = %d after the cooldown, want 3", n)
+	}
+	// Below entraTokenMinRemaining a caller still waits for a real fetch and
+	// surfaces its error.
+	src.mu.Lock()
+	src.expires = time.Now().Add(entraTokenMinRemaining / 2)
+	src.mu.Unlock()
+	if _, err := src.Token(context.Background()); err == nil {
+		t.Error("a caller below the minimum remaining must see the refresh error")
 	}
 }
 
@@ -621,5 +659,122 @@ func TestOneLine(t *testing.T) {
 	}
 	if got := oneLine("ééé", 3); got != "é…" {
 		t.Errorf("a cut must fall on a rune boundary: %q", got)
+	}
+}
+
+// F-51: the CLI credential's token source is shared per tenant and its
+// "not signed in" failure becomes the az-login instruction.
+func TestEntraCLISourceAndUnavailableMessage(t *testing.T) {
+	t.Cleanup(resetEntraSources)
+	src, err := entraCLISourceFor("")
+	if err != nil {
+		t.Fatalf("entraCLISourceFor: %v", err)
+	}
+	if again, _ := entraCLISourceFor(""); again != src {
+		t.Error("one token source per (empty) tenant")
+	}
+	tenant, err := entraCLISourceFor("contoso.onmicrosoft.com")
+	if err != nil || tenant == src {
+		t.Errorf("a named tenant needs its own source: %v", err)
+	}
+	forgetEntraCLISource("contoso.onmicrosoft.com")
+
+	classified := classifyEntraTokenError(errors.New("AzureCLICredential: executable not found on path"))
+	if _, ok := EntraRejectionReason(classified); ok {
+		t.Error("an unavailable CLI is not a credential rejection")
+	}
+	if !strings.Contains(classified.Error(), "az login") {
+		t.Errorf("unavailable CLI = %q, want the az login instruction", classified.Error())
+	}
+	if !errors.Is(classified, errEntraToken) || !errors.Is(classified, ErrEntraTokenUnavailable) {
+		t.Errorf("the unavailable CLI must be a token-unavailable failure, got %v", classified)
+	}
+}
+
+// A1: the CLI registry prunes its own map under its own lock. It used to
+// run the service-principal prune — iterating and deleting entraSources.m
+// while holding only entraCLISources.mu — so a CLI provider built while a
+// service-principal credential resolved crashed the process with
+// "concurrent map iteration and map write". Run under -race.
+func TestEntraCLISourceFor_ConcurrentWithServicePrincipal(t *testing.T) {
+	resetEntraSources()
+	t.Cleanup(resetEntraSources)
+	const tenant = "11111111-2222-3333-4444-555555555555"
+	const client = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	var wg sync.WaitGroup
+	for i := range 4 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := range 25 {
+				if _, err := entraCLISourceFor(fmt.Sprintf("tenant-%d.onmicrosoft.com", j%5)); err != nil {
+					t.Errorf("entraCLISourceFor: %v", err)
+					return
+				}
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := range 25 {
+				if _, err := entraSourceFor(tenant, client, fmt.Sprintf("s-%d-%d", i, j)); err != nil {
+					t.Errorf("entraSourceFor: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	entraSources.mu.Lock()
+	sp := len(entraSources.m)
+	entraSources.mu.Unlock()
+	entraCLISources.mu.Lock()
+	cli := len(entraCLISources.m)
+	entraCLISources.mu.Unlock()
+	if sp != 100 || cli != 5 {
+		t.Errorf("registries = %d service-principal / %d CLI sources, want 100 / 5", sp, cli)
+	}
+}
+
+// A1: a CLI source nobody built a provider from for entraSourceIdleTTL is
+// reclaimed on the next CLI registry access (the CLI map was never pruned).
+func TestEntraCLISources_IdleEntriesArePruned(t *testing.T) {
+	resetEntraSources()
+	t.Cleanup(resetEntraSources)
+	stale, err := entraCLISourceFor("stale.onmicrosoft.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := entraCLISourceFor("fresh.onmicrosoft.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entraCLISources.mu.Lock()
+	for k, e := range entraCLISources.m {
+		if e.src == stale {
+			e.lastUsed = time.Now().Add(-entraSourceIdleTTL - time.Minute)
+			entraCLISources.m[k] = e
+		}
+	}
+	entraCLISources.mu.Unlock()
+
+	if _, err := entraCLISourceFor("third.onmicrosoft.com"); err != nil {
+		t.Fatal(err)
+	}
+	entraCLISources.mu.Lock()
+	var staleKept, freshKept bool
+	for _, e := range entraCLISources.m {
+		staleKept = staleKept || e.src == stale
+		freshKept = freshKept || e.src == fresh
+	}
+	size := len(entraCLISources.m)
+	entraCLISources.mu.Unlock()
+	if staleKept {
+		t.Error("a CLI source idle past entraSourceIdleTTL must be pruned")
+	}
+	if !freshKept || size != 2 {
+		t.Errorf("fresh CLI sources must survive the prune: kept=%v size=%d", freshKept, size)
+	}
+	if again, _ := entraCLISourceFor("stale.onmicrosoft.com"); again == stale {
+		t.Error("a pruned CLI source must not be handed out again")
 	}
 }

@@ -1,6 +1,6 @@
 import {describe, it, expect, beforeEach} from 'vitest'
 import {stageFindingFix, stageBlockPrompt} from './fixWithAI'
-import {useChatStore} from '@/stores/chatStore'
+import {useChatStore, threadModelOf} from '@/stores/chatStore'
 import {useUIStore} from '@/stores/uiStore'
 import type {Finding} from '@/types'
 
@@ -65,5 +65,25 @@ describe('stageBlockPrompt', () => {
     expect(st.threads).toHaveLength(1)
     expect(st.stagedPrompt?.threadId).toBe(id)
     expect(st.threads[0].contextBlockId).toBe('blk-2')
+  })
+})
+
+// Per-thread model memory: a header pick pins only its own thread, so the
+// thread "Fix with AI" opens starts on the Default for new chats — not on the
+// docs model another thread was switched to.
+describe('Fix with AI and per-thread models', () => {
+  it("starts its thread unpinned, never inheriting another thread's pick", () => {
+    const docsThread = useChatStore.getState().createThread('flow1')
+    useChatStore
+      .getState()
+      .setThreadModel(docsThread, {provider: 'azure-foundry', model: 'm/docs000000', modelLabel: 'Docs writer'})
+
+    stageFindingFix(finding(), 'flow1')
+
+    const st = useChatStore.getState()
+    const fixThread = st.threads.find(t => t.id === st.activeThreadId)!
+    expect(fixThread.id).not.toBe(docsThread)
+    expect(threadModelOf(fixThread)).toBeNull()
+    expect(threadModelOf(st.threads.find(t => t.id === docsThread)!)).toMatchObject({model: 'm/docs000000'})
   })
 })

@@ -325,7 +325,7 @@ func TestProviderSetupError_HidesKeystoreFailures(t *testing.T) {
 func TestResumeAndBegin_CarryTheErrorCode(t *testing.T) {
 	svc := &ChatService{}
 	ctl := &streamCtl{ownerID: "user-1", streamID: "s1", started: make(chan struct{})}
-	ctl.setFailure(ChatErrBudgetExceeded, "daily AI budget exceeded ($2.00 / $1.00)")
+	ctl.setFailure(ChatErrBudgetExceeded, "daily AI budget exceeded ($2.00 / $1.00)", false)
 	svc.activeStreams.Store("s1", ctl)
 
 	res, err := svc.ResumeStream(context.Background(), "s1", 0)
@@ -478,9 +478,9 @@ func TestPersistedTurns_UseTheClientMessageIDs(t *testing.T) {
 	svc.persistInitialUserTurn(ctx, doc, req)
 	ctl := &streamCtl{done: true}
 	ctl.buffer.WriteString("the answer")
-	svc.persistAssistantTurn(ctx, doc, req, ctl)
+	svc.persistAssistantTurn(ctx, doc, req, ctl, req.Model, "")
 	// Idempotent: a second pass (retry) must not append again.
-	svc.persistAssistantTurn(ctx, doc, req, ctl)
+	svc.persistAssistantTurn(ctx, doc, req, ctl, req.Model, "")
 
 	got, err := svc.GetConversation(ctx, doc, req.ConversationKey())
 	if err != nil {
@@ -513,7 +513,7 @@ func TestPersistAssistantTurn_RespectsTheClientsCopyOfTheTurn(t *testing.T) {
 	}
 	ctl := &streamCtl{done: true}
 	ctl.buffer.WriteString("the answer, in full")
-	svc.persistAssistantTurn(ctx, doc, req, ctl)
+	svc.persistAssistantTurn(ctx, doc, req, ctl, req.Model, "")
 
 	got, _ := svc.GetConversation(ctx, doc, req.ConversationKey())
 	if len(got) != 2 {
@@ -541,7 +541,7 @@ func TestPersistAssistantTurn_DedupesByIDAnywhereInTheHistory(t *testing.T) {
 	}
 	ctl := &streamCtl{done: true}
 	ctl.buffer.WriteString("the answer")
-	svc.persistAssistantTurn(ctx, doc, req, ctl)
+	svc.persistAssistantTurn(ctx, doc, req, ctl, req.Model, "")
 
 	got, _ := svc.GetConversation(ctx, doc, req.ConversationKey())
 	if len(got) != 3 {

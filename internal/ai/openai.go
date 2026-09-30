@@ -94,6 +94,10 @@ type openAIRequest struct {
 	Tools         []openAITool    `json:"tools,omitempty"`
 	Stream        bool            `json:"stream,omitempty"`
 	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
+	// ReasoningEffort is the user-chosen reasoning depth (low|medium|high;
+	// F-19), omitted for the provider default. The gpt-5.6 tools repair
+	// replaces it with "none" in sendWith's generic map.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 type openAITool struct {
@@ -149,6 +153,10 @@ type openAIResponse struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
+		// The cached slice of PromptTokens (a breakdown, never an addition).
+		PromptTokensDetails *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 }
 

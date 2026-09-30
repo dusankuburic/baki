@@ -87,8 +87,8 @@ beforeEach(() => {
   // so test-specific overrides from a previous test would otherwise leak.
   vi.mocked(providersApi.listProviders).mockResolvedValue([])
   vi.mocked(chatApi.getSuggestedPrompts).mockResolvedValue([])
-  // The real endpoint returns a bare message array (see api/chat.ts).
-  vi.mocked(chatApi.getConversation).mockResolvedValue([])
+  // The real endpoint returns the message list (see api/chat.ts).
+  vi.mocked(chatApi.getConversation).mockResolvedValue({messages: []})
   vi.mocked(flowApi.getSourceFiles).mockResolvedValue([])
   useUIStore.setState({chatFocus: false})
 })

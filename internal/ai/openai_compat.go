@@ -73,6 +73,14 @@ type openaiBase struct {
 	// accepted, so it is not an invalid key and a fresh token cannot help
 	// (see azureForbidden).
 	handle403 func(apiErr openAIErrorResp, respBody []byte) error
+	// rerouteToolsRejection, when set (Azure AI Foundry), owns a stream turn
+	// whose chat-completions request was rejected for combining function
+	// tools with reasoning (gpt-5.6): sendWith leaves the rejection
+	// unrepaired and the hook reroutes the request through the Responses
+	// API, which keeps reasoning with tools (F-18). Returning false falls
+	// back to the built-in reasoning_effort "none" repair. Set once at
+	// construction.
+	rerouteToolsRejection func(ctx context.Context, req Request, onChunk func(Chunk)) (bool, error)
 	// apiKeyHeader, when set, is the header the static apiKey travels in
 	// INSTEAD of Authorization: Bearer (Azure AI Foundry's `api-key`); a
 	// tokenFn provider always uses the bearer header.
@@ -85,6 +93,11 @@ func (b *openaiBase) setAuth(ctx context.Context, req *http.Request) error {
 	token, err := b.resolveToken(ctx)
 	if err != nil {
 		return fmt.Errorf("get %s token: %w", b.providerLabel, err)
+	}
+	if b.apiKey == "" && b.tokenFn == nil && b.apiKeyHeader == "" {
+		// No credential at all (the local models provider): send no auth
+		// header rather than an empty "Authorization: Bearer ".
+		return nil
 	}
 	if b.apiKeyHeader != "" && b.tokenFn == nil {
 		req.Header.Set(b.apiKeyHeader, token)
@@ -166,6 +179,12 @@ func (b *openaiBase) buildRequest(req Request, stream bool) openAIRequest {
 	} else {
 		body.MaxTokens = limit
 	}
+	// A user-chosen reasoning depth (validated low|medium|high upstream;
+	// "" is the provider default). The gpt-5.6 tools repair assigns
+	// reasoning_effort "none" unconditionally and overrides it.
+	if req.ReasoningEffort != "" {
+		body.ReasoningEffort = req.ReasoningEffort
+	}
 	if stream {
 		body.Stream = true
 		body.StreamOptions = usageStreamOptions
@@ -215,15 +234,39 @@ func (b *openaiBase) post(ctx context.Context, jsonBody []byte, model string, st
 // round trip — a full re-upload of the prompt — is paid once per deployment
 // rather than on every turn and every tool-loop iteration. A remembered
 // repair the model has stopped agreeing with (a re-pointed deployment) is
-// forgotten and the parameter repaired afresh.
+// forgotten and the parameter repaired afresh. The chat-completions path
+// refreshes an entry's TTL on every repaired 200 (a model's refusal of a
+// parameter is stable); postResponses' memo is fixed-TTL instead — a replay
+// rejection is often transient, so only a newly learned repair restarts it.
 //
 // The request is encoded once; the generic map a repair rewrites is decoded
 // only when a repair is needed (encoding, decoding and re-encoding every
 // request cost ~3 ms and 1.5 MB of garbage per turn for nothing).
 func (b *openaiBase) send(ctx context.Context, body openAIRequest, stream bool) (*http.Response, []byte, error) {
+	resp, errBody, err, _ := b.sendWith(ctx, body, stream, sendOptions{})
+	return resp, errBody, err
+}
+
+// sendOptions tweaks sendWith's repair behaviour.
+type sendOptions struct {
+	// escapeToolsReasoning leaves a tools-with-reasoning rejection (gpt-5.6)
+	// UNREPAIRED and returns it to the caller, which reroutes the turn
+	// through the Responses API (rerouteToolsRejection, F-18) instead of
+	// losing reasoning to the built-in reasoning_effort "none" repair.
+	escapeToolsReasoning bool
+}
+
+// sendWith is send with options; its last return value reports whether the
+// request this call ends up returning was sent with reasoning_effort "none"
+// because of the tools-with-reasoning rejection — freshly repaired or
+// pre-applied from the memo — so the caller can tell the user their tool
+// turn runs without reasoning. The generic repair that drops a
+// reasoning_effort the model refuses outright does not count: that model
+// never reasoned, so nothing was turned off.
+func (b *openaiBase) sendWith(ctx context.Context, body openAIRequest, stream bool, opts sendOptions) (*http.Response, []byte, error, bool) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		return nil, nil, fmt.Errorf("marshal request: %w", err)
+		return nil, nil, fmt.Errorf("marshal request: %w", err), false
 	}
 	var payload map[string]any // built only when a repair needs it
 	ensurePayload := func() bool {
@@ -240,29 +283,38 @@ func (b *openaiBase) send(ctx context.Context, body openAIRequest, stream bool) 
 	hasTools := len(body.Tools) > 0
 	// repaired guards the loop (each parameter at most once) and is what a
 	// 200 memoises; learned marks the entries pre-applied from the memo.
+	// toolsNone: the payload carries reasoning_effort "none" for the
+	// tools-with-reasoning repair (see sendWith's result).
 	repaired := map[string]bool{}
 	learned := map[string]bool{}
+	toolsNone := false
 	memoKey := b.repairsKey(body.Model)
 	if params := repairsFor(memoKey); len(params) > 0 && ensurePayload() {
 		for _, param := range params {
-			if param == reasoningEffortParam {
+			if (param == reasoningEffortParam || param == reasoningEffortNoneRepair) && isModelRouterAlias(body.Model) {
 				// A model router picks the model per request: the model that
-				// needed reasoning_effort "none" last time says nothing about
-				// the next one, which may reject the parameter outright. The
-				// router relearns it from the rejection when it has to.
-				if hasTools && !isModelRouterAlias(body.Model) {
+				// needed reasoning_effort "none" (or refused the parameter)
+				// last time says nothing about the next one. The router
+				// relearns it from the rejection when it has to.
+				continue
+			}
+			if param == reasoningEffortNoneRepair {
+				if hasTools {
 					payload[reasoningEffortParam] = "none"
 					repaired[param], learned[param] = true, true
+					toolsNone = true
 				}
 				continue
 			}
+			// Every other entry — the generic reasoning_effort drop included
+			// — removes (or swaps) the parameter the model refused.
 			if repairParam(payload, param) {
 				repaired[param], learned[param] = true, true
 			}
 		}
 		if len(learned) > 0 {
 			if err := remarshal(); err != nil {
-				return nil, nil, err
+				return nil, nil, err, false
 			}
 		}
 	}
@@ -280,46 +332,82 @@ func (b *openaiBase) send(ctx context.Context, body openAIRequest, stream bool) 
 	for {
 		resp, err := b.post(ctx, jsonBody, body.Model, stream)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, err, false
 		}
 		if resp.StatusCode == http.StatusOK {
 			if len(repaired) > 0 && !memoStale {
 				rememberRepairs(memoKey, repaired)
 			}
-			return resp, nil, nil
+			return resp, nil, nil, toolsNone
 		}
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		resp.Body.Close()
 		b.logUpstreamRejection(resp, body.Model)
 		if roundTrips >= maxSendRepairs {
-			return resp, errBody, nil
+			return resp, errBody, nil, false
 		}
 		// Before the generic repair (and before the caller's
 		// detectToolsUnsupportedError, which would drop the tools): the
 		// model accepts function tools once reasoning is off.
-		if hasTools && !repaired[reasoningEffortParam] &&
+		if hasTools && !toolsNone && !repaired[reasoningEffortParam] &&
 			reasoningToolsRejected(resp.StatusCode, errBody) && ensurePayload() {
+			if opts.escapeToolsReasoning {
+				// The caller reroutes the turn (F-18): hand it the rejection
+				// instead of repairing reasoning away.
+				return resp, errBody, nil, false
+			}
 			payload[reasoningEffortParam] = "none"
-			repaired[reasoningEffortParam] = true
+			repaired[reasoningEffortNoneRepair] = true
+			toolsNone = true
 			toolsResp, toolsBody = resp, errBody
 			logger.Debug("model rejects function tools with reasoning on chat completions — retrying with reasoning_effort=none",
 				"provider", b.providerLabel, "model", body.Model)
 			if err := remarshal(); err != nil {
-				return nil, nil, err
+				return nil, nil, err, false
 			}
 			roundTrips++
 			continue
 		}
 		param, ok := unsupportedParam(resp.StatusCode, errBody)
 		if !ok {
-			return resp, errBody, nil
+			return resp, errBody, nil, false
 		}
-		if param == reasoningEffortParam && toolsBody != nil {
-			// The model refuses reasoning_effort "none" as well: report the
-			// original tools rejection, which the caller classifies as
-			// ErrToolsUnsupported so the tool loop degrades to an answer
-			// without tools instead of failing the turn.
-			return toolsResp, toolsBody, nil
+		if param == reasoningEffortParam && toolsNone {
+			if toolsBody != nil {
+				// The model refuses reasoning_effort "none" as well: report
+				// the original tools rejection, which the caller classifies
+				// as ErrToolsUnsupported so the tool loop degrades to an
+				// answer without tools instead of failing the turn.
+				return toolsResp, toolsBody, nil, false
+			}
+			// The memo's "none" is what the model refuses now (a re-pointed
+			// deployment): forget the memo and let the repairs below drop
+			// the parameter, as if freshly rejected.
+			forgetRepairs(memoKey)
+			memoStale = true
+			delete(learned, reasoningEffortNoneRepair)
+			delete(repaired, reasoningEffortNoneRepair)
+			toolsNone = false
+		}
+		// A user-chosen reasoning_effort VALUE the model refuses
+		// (unsupported_value) is retried without the field but NOT memoised
+		// (F-19): the memo is keyed by parameter, so a value today's model
+		// rejects would make every later valid value vanish too. The
+		// built-in gpt-5.6 "none" repair above still memoises (under its
+		// own marker), and so does the drop of a parameter the model refuses
+		// outright (unsupported_parameter, below).
+		if param == reasoningEffortParam && !repaired[param] &&
+			parameterValueRejected(resp.StatusCode, errBody) && ensurePayload() {
+			if _, present := payload[reasoningEffortParam]; present {
+				delete(payload, reasoningEffortParam)
+				logger.Warn("the model refused the configured reasoning effort — retrying without it (the provider default applies)",
+					"provider", b.providerLabel, "model", body.Model)
+				if err := remarshal(); err != nil {
+					return nil, nil, err, false
+				}
+				roundTrips++
+				continue
+			}
 		}
 		if learned[param] {
 			// The memo's rewrite of this parameter is what the model rejects
@@ -336,12 +424,12 @@ func (b *openaiBase) send(ctx context.Context, body openAIRequest, stream bool) 
 			logger.Debug("AI request parameter rejected by the model — retrying without it",
 				"provider", b.providerLabel, "model", body.Model, "param", param)
 			if err := remarshal(); err != nil {
-				return nil, nil, err
+				return nil, nil, err, false
 			}
 			roundTrips++
 			continue
 		}
-		return resp, errBody, nil
+		return resp, errBody, nil, false
 	}
 }
 
@@ -433,8 +521,17 @@ func resetLearnedRepairs() {
 	streamRefusals.Unlock()
 }
 
-// reasoningEffortParam is the chat-completions reasoning control.
+// reasoningEffortParam is the chat-completions reasoning control. As a
+// learnedRepairs entry it is the generic repair: the model refuses the
+// parameter outright, so it is dropped from every later request.
 const reasoningEffortParam = "reasoning_effort"
+
+// reasoningEffortNoneRepair is the learnedRepairs marker of the
+// tools-with-reasoning repair (gpt-5.6): tools requests go out with
+// reasoning_effort "none". A marker of its own, so the memo tells "sent
+// none" (reasoning off — the user is told) from "dropped" (the model never
+// reasoned), and neither is pre-applied as the other.
+const reasoningEffortNoneRepair = "reasoning_effort=none"
 
 // reasoningToolsRejection matches gpt-5.6's (and later models') chat
 // completions rejection of function tools while reasoning is on: "Function
@@ -453,6 +550,18 @@ var reasoningToolsRejection = regexp.MustCompile(`(?i)function tools with reason
 // removes a parameter the model refused.
 func parameterRejectionStatus(status int) bool {
 	return status == http.StatusBadRequest || status == http.StatusUnprocessableEntity
+}
+
+// parameterValueRejected reports whether a parameter rejection is about the
+// parameter's VALUE (unsupported_value), not its existence: for
+// reasoning_effort the value is the user's choice, so a refused value must
+// not memoise the parameter away (F-19).
+func parameterValueRejected(status int, errBody []byte) bool {
+	if !parameterRejectionStatus(status) {
+		return false
+	}
+	apiErr, ok := decodeOpenAIError(errBody)
+	return ok && apiErr.Error.Code == "unsupported_value"
 }
 
 // reasoningToolsRejected reports whether a parameter rejection is that one.
@@ -642,11 +751,16 @@ func (b *openaiBase) chat(ctx context.Context, req Request) (*Response, error) {
 	// OpenAI / Foundry); say so instead of returning the fragment. The usage
 	// rides on the error (as the stream path's error chunk carries it), so
 	// the tokens the blocked completion spent can still be billed.
+	cacheRead := 0
+	if d := parsed.Usage.PromptTokensDetails; d != nil {
+		cacheRead = min(d.CachedTokens, parsed.Usage.PromptTokens)
+	}
 	if choice.FinishReason == "content_filter" {
 		return nil, &heldUsageError{
 			err:         fmt.Errorf("%w: the response was stopped by the content filter", ErrContentFiltered),
 			tokensIn:    parsed.Usage.PromptTokens,
 			tokensOut:   parsed.Usage.CompletionTokens,
+			cacheRead:   cacheRead,
 			servedModel: parsed.Model,
 		}
 	}
@@ -663,13 +777,14 @@ func (b *openaiBase) chat(ctx context.Context, req Request) (*Response, error) {
 	}
 
 	return &Response{
-		Content:      content,
-		Reasoning:    reasoning,
-		TokensIn:     parsed.Usage.PromptTokens,
-		TokensOut:    parsed.Usage.CompletionTokens,
-		FinishReason: choice.FinishReason,
-		ToolCalls:    openAIToolCallsToNeutral(choice.Message.ToolCalls),
-		ServedModel:  parsed.Model,
+		Content:         content,
+		Reasoning:       reasoning,
+		TokensIn:        parsed.Usage.PromptTokens,
+		TokensOut:       parsed.Usage.CompletionTokens,
+		CacheReadTokens: cacheRead,
+		FinishReason:    choice.FinishReason,
+		ToolCalls:       openAIToolCallsToNeutral(choice.Message.ToolCalls),
+		ServedModel:     parsed.Model,
 	}, nil
 }
 
@@ -790,11 +905,20 @@ func (b *openaiBase) logUpstreamRejection(resp *http.Response, model string) {
 }
 
 func (b *openaiBase) stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
+	// A provider with a reroute hook (Azure AI Foundry, F-18) leaves a
+	// tools-with-reasoning rejection unrepaired so the hook can move the
+	// turn to the Responses API; every other request repairs as usual.
+	return b.streamInner(ctx, req, onChunk, b.rerouteToolsRejection != nil && len(req.Tools) > 0)
+}
+
+// streamInner is stream with the reroute escape (see sendOptions.
+// escapeToolsReasoning).
+func (b *openaiBase) streamInner(ctx context.Context, req Request, onChunk func(Chunk), escape bool) error {
 	key := b.repairsKey(req.Model)
 	if streamRefused(key) {
 		return b.streamViaChat(ctx, req, onChunk)
 	}
-	resp, errBody, err := b.send(ctx, b.buildRequest(req, true), true)
+	resp, errBody, err, reasoningOff := b.sendWith(ctx, b.buildRequest(req, true), true, sendOptions{escapeToolsReasoning: escape})
 	if err != nil {
 		return err
 	}
@@ -810,24 +934,77 @@ func (b *openaiBase) stream(ctx context.Context, req Request, onChunk func(Chunk
 				"provider", b.providerLabel, "model", req.Model)
 			return b.streamViaChat(ctx, req, onChunk)
 		}
+		if escape && reasoningToolsRejected(resp.StatusCode, errBody) {
+			// The model rejects function tools under reasoning (gpt-5.6): the
+			// hook reroutes the turn through the Responses API, which keeps
+			// reasoning with tools.
+			if handled, err := b.rerouteToolsRejection(ctx, req, onChunk); handled {
+				return err
+			}
+			// The Responses route refused the model (memoised): answer this
+			// turn on chat completions with the built-in repair, as every
+			// later turn will.
+			return b.streamInner(ctx, req, onChunk, false)
+		}
 		return b.handleStreamError(resp, errBody)
+	}
+	if reasoningOff {
+		// The turn runs on the reasoning_effort "none" repair (gpt-5.6 with
+		// tools): say so — the user otherwise pays for reasoning-backed
+		// quality that silently is not there.
+		onChunk(Chunk{Notice: &Notice{Name: "reasoning_off",
+			Label: "This model can't reason while using tools — answering with reasoning off"}})
 	}
 	defer drainAndClose(resp.Body)
 	return parseOpenAISSE(resp.Body, onChunk)
 }
 
+// streamViaChatKeepalive is how often streamViaChat emits an empty keepalive
+// while its non-streaming request runs: a reasoning model can spend minutes
+// before the first header with no chunk in between, and the chat service's
+// idle watchdog only sees chunks. Well under the 90 s stream idle timeout; a
+// variable so tests can shorten it.
+var streamViaChatKeepalive = 20 * time.Second
+
 // streamViaChat serves a Stream call with one non-streaming request and
 // replays the reply as chunks: the answer (and split-off reasoning) as one
 // text chunk, then the Done chunk with tool calls, usage, finish reason and
-// the served model. A content-filter stop becomes an error chunk carrying
-// its usage, as the streaming parser emits it; every other failure is
-// returned before any chunk, like a stream's HTTP error.
+// the served model. While the request runs, an empty LocalKeepalive chunk is
+// emitted per streamViaChatKeepalive so a long silent reasoning phase is not
+// cancelled by the idle watchdog (the per-request context and the transport's
+// header timeout remain the bounds); being synthesised here, not sent by the
+// upstream, it is no evidence for the audited wrapper that the request was
+// billed. A content-filter stop becomes an error chunk carrying its usage, as
+// the streaming parser emits it; every other failure is returned before any
+// upstream chunk, like a stream's HTTP error.
 func (b *openaiBase) streamViaChat(ctx context.Context, req Request, onChunk func(Chunk)) error {
-	resp, err := b.chat(ctx, req)
+	type chatResult struct {
+		resp *Response
+		err  error
+	}
+	done := make(chan chatResult, 1)
+	go func() {
+		resp, err := b.chat(ctx, req)
+		done <- chatResult{resp: resp, err: err}
+	}()
+	ticker := time.NewTicker(streamViaChatKeepalive)
+	defer ticker.Stop()
+	var res chatResult
+	for {
+		select {
+		case res = <-done:
+		case <-ticker.C:
+			onChunk(Chunk{LocalKeepalive: true})
+			continue
+		}
+		break
+	}
+	resp, err := res.resp, res.err
 	if err != nil {
 		var held *heldUsageError
 		if errors.As(err, &held) {
-			onChunk(Chunk{Error: held.err, TokensIn: held.tokensIn, TokensOut: held.tokensOut, ServedModel: held.servedModel})
+			onChunk(Chunk{Error: held.err, TokensIn: held.tokensIn, TokensOut: held.tokensOut,
+				CacheReadTokens: held.cacheRead, CacheWriteTokens: held.cacheWrite, ServedModel: held.servedModel})
 			return nil
 		}
 		return err
@@ -836,12 +1013,14 @@ func (b *openaiBase) streamViaChat(ctx context.Context, req Request, onChunk fun
 		onChunk(Chunk{Text: resp.Content, Reasoning: resp.Reasoning, ServedModel: resp.ServedModel})
 	}
 	onChunk(Chunk{
-		Done:         true,
-		TokensIn:     resp.TokensIn,
-		TokensOut:    resp.TokensOut,
-		ToolCalls:    resp.ToolCalls,
-		FinishReason: resp.FinishReason,
-		ServedModel:  resp.ServedModel,
+		Done:             true,
+		TokensIn:         resp.TokensIn,
+		TokensOut:        resp.TokensOut,
+		CacheReadTokens:  resp.CacheReadTokens,
+		CacheWriteTokens: resp.CacheWriteTokens,
+		ToolCalls:        resp.ToolCalls,
+		FinishReason:     resp.FinishReason,
+		ServedModel:      resp.ServedModel,
 	})
 	return nil
 }
@@ -1042,12 +1221,14 @@ func resetEmbedDimsRefusals() {
 	embedDimsRefusals.mu.Unlock()
 }
 
-// rejectsEmbeddingDimensions reports whether an /embeddings failure is the
-// model refusing the `dimensions` parameter — OpenAI's and Azure's "This
-// model does not support specifying dimensions.", a structured
-// `param: "dimensions"`, or a width it cannot produce.
+// rejectsEmbeddingDimensions reports whether an /embeddings failure (400, or
+// the Azure AI Model Inference layer's 422 parameter_not_supported with
+// detail.loc naming the parameter) is the model refusing the `dimensions`
+// parameter — OpenAI's and Azure's "This model does not support specifying
+// dimensions.", a structured `param: "dimensions"`, or a width it cannot
+// produce.
 func rejectsEmbeddingDimensions(status int, errBody []byte) bool {
-	if status != http.StatusBadRequest {
+	if !parameterRejectionStatus(status) {
 		return false
 	}
 	apiErr, ok := decodeOpenAIError(errBody)
@@ -1066,8 +1247,9 @@ func rejectsEmbeddingDimensions(status int, errBody []byte) bool {
 // embeddings model), so no network call is attempted for providers known to
 // lack the endpoint.
 //
-// Like send(), it makes at most one repair round trip: a 400 refusing the
-// `dimensions` parameter (a model outside the text-embedding-3 family behind
+// Like send(), it makes at most one repair round trip: a 400 (or a Model
+// Inference 422) refusing the `dimensions` parameter (a model outside the
+// text-embedding-3 family behind
 // an Azure deployment name, or a width above its native size) is retried once
 // without it, so the model returns its native vectors. A 400 saying the batch
 // carried more inputs than the resource accepts is split and retried instead

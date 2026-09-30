@@ -279,11 +279,34 @@ func registerRoutes(rt *Router, r chi.Router) {
 			r.Post("/revoke", h.Provider.handleRevokeCopilotAuth)
 			r.Get("/user", h.Provider.handleGetCopilotUser)
 		})
-		// Azure AI Foundry: an endpoint + credential document instead of a
-		// bare key (see ai.AzureFoundryConfig). has/delete use /api/keys.
+		// Azure AI Foundry: the caller's model registry (Part 9) — resources
+		// ("connections": an endpoint + credential document each, see
+		// ai.AzureFoundryConfig) and the models registered on them. /test and
+		// /connections/{connectionId}/discover dial Azure (their own rate
+		// buckets, outside the RLS transaction: azureOutboundRoute).
+		// /config is the deprecated single-document form (resource
+		// "default"); has/delete use /api/keys.
 		r.Route("/azure-foundry", func(r chi.Router) {
 			r.Get("/config", h.Provider.handleGetAzureFoundryConfig)
 			r.Post("/config", h.Provider.handleSaveAzureFoundryConfig)
+			r.Get("/connections", h.Provider.handleAzureConnectionList)
+			r.Post("/connections", h.Provider.handleAzureConnectionCreate)
+			r.Get("/connections/{connectionId}", h.Provider.handleAzureConnectionGet)
+			r.Put("/connections/{connectionId}", h.Provider.handleAzureConnectionUpdate)
+			r.Delete("/connections/{connectionId}", h.Provider.handleAzureConnectionDelete)
+			r.Post("/connections/{connectionId}/discover", h.Provider.handleAzureConnectionDiscover)
+			r.Get("/models", h.Provider.handleAzureModelList)
+			r.Post("/models", h.Provider.handleAzureModelCreate)
+			r.Get("/models/{modelId}", h.Provider.handleAzureModelGet)
+			r.Put("/models/{modelId}", h.Provider.handleAzureModelUpdate)
+			r.Delete("/models/{modelId}", h.Provider.handleAzureModelDelete)
+			r.Post("/test", h.Provider.handleAzureTest)
+		})
+		// Local models (Foundry Local / Ollama / LM Studio): a loopback base
+		// URL document, desktop only. has/delete use /api/keys.
+		r.Route("/local", func(r chi.Router) {
+			r.Get("/config", h.Provider.handleGetLocalConfig)
+			r.Post("/config", h.Provider.handleSaveLocalConfig)
 		})
 	})
 
@@ -355,13 +378,28 @@ func registerRoutes(rt *Router, r chi.Router) {
 				r.Post("/reindex", h.Org.handleKnowledgeReindex)
 				r.Delete("/{docId}", h.Org.handleKnowledgeDelete)
 			})
-			// Organisation-shared provider credentials (G7). Read: member
-			// (public form only). Write, delete, test: admin.
+			// Organisation-shared Azure AI Foundry resources and models (G7,
+			// Part 9): the same sub-paths as the caller's own registry. Read:
+			// admin or member. Write, delete, test, discover: admin. /config
+			// is the deprecated single-document form (resource "default",
+			// read by any member); /test also serves its body-less org
+			// credential test.
 			r.Route("/providers/azure-foundry", func(r chi.Router) {
 				r.Get("/config", h.Org.handleOrgAzureFoundryConfigGet)
 				r.Post("/config", h.Org.handleOrgAzureFoundryConfigSave)
 				r.Delete("/config", h.Org.handleOrgAzureFoundryConfigDelete)
 				r.Post("/test", h.Org.handleOrgAzureFoundryTest)
+				r.Get("/connections", h.Org.handleOrgAzureConnectionList)
+				r.Post("/connections", h.Org.handleOrgAzureConnectionCreate)
+				r.Get("/connections/{connectionId}", h.Org.handleOrgAzureConnectionGet)
+				r.Put("/connections/{connectionId}", h.Org.handleOrgAzureConnectionUpdate)
+				r.Delete("/connections/{connectionId}", h.Org.handleOrgAzureConnectionDelete)
+				r.Post("/connections/{connectionId}/discover", h.Org.handleOrgAzureConnectionDiscover)
+				r.Get("/models", h.Org.handleOrgAzureModelList)
+				r.Post("/models", h.Org.handleOrgAzureModelCreate)
+				r.Get("/models/{modelId}", h.Org.handleOrgAzureModelGet)
+				r.Put("/models/{modelId}", h.Org.handleOrgAzureModelUpdate)
+				r.Delete("/models/{modelId}", h.Org.handleOrgAzureModelDelete)
 			})
 			r.Route("/invites", func(r chi.Router) {
 				r.Get("/", h.Org.handleOrgInviteList)

@@ -338,8 +338,10 @@ type azE2EEnv struct {
 
 // newAzureE2EEnv wires the router the way DI does in cloud mode (JWT auth,
 // cloud document provider, backend conversations, org credential store, the
-// EventManager as the services' notifier) on in-memory secrets and a
-// temp-dir filesystem backend, and serves it over real HTTP.
+// EventManager as the services' notifier, the Azure AI Foundry model
+// registry on the provider, system and chat services) on in-memory secrets,
+// an in-memory registry and a temp-dir filesystem backend, and serves it
+// over real HTTP.
 func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	t.Helper()
 	fake := newAzureE2EFake(t)
@@ -396,6 +398,26 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	providerSvc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
 	providerSvc.SetOrgKeyStore(orgKeys)
 	sysSvc := service.NewSystemService(settings, secrets, events, fs, config.ModeCloud)
+	// The Azure AI Foundry model registry (Part 9) as di.ProvideAzureModelService
+	// builds it in cloud mode — one registry per user and per organisation
+	// (the Postgres store's owners, kept in memory here), the backend for the
+	// caller's settings, organisation membership, corpus counts and user
+	// names — and wired into the same three services.
+	azure := service.NewAzureModelService(service.AzureModelServiceDeps{
+		Registry:      storage.NewMemoryAzureRegistry(),
+		Secrets:       secrets,
+		OrgKeys:       orgKeys,
+		Factory:       factory,
+		Settings:      settings,
+		UserSettings:  fs,
+		Orgs:          fs,
+		Corpus:        fs,
+		Users:         fs,
+		PerUserOwners: true,
+	})
+	providerSvc.SetAzureModels(azure)
+	sysSvc.SetAzureModels(azure)
+	chatSvc.SetAzureModels(azure)
 
 	security := &SecurityConfig{
 		JWTEnabled:     true,
@@ -725,8 +747,11 @@ func (e *azE2EEnv) awaitStoredAnswer(t *testing.T, u azE2EUser, flowID, convID, 
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		var msgs []map[string]any
-		e.mustDo(t, http.MethodPost, "/api/chat/get", u.bearer, map[string]any{"flowId": flowID, "provider": convID}, http.StatusOK, &msgs)
+		var body struct {
+			Messages []map[string]any `json:"messages"`
+		}
+		e.mustDo(t, http.MethodPost, "/api/chat/get", u.bearer, map[string]any{"flowId": flowID, "provider": convID}, http.StatusOK, &body)
+		msgs := body.Messages
 		for _, m := range msgs {
 			if m["role"] == "assistant" && m["content"] == text {
 				return
@@ -746,8 +771,11 @@ func (e *azE2EEnv) conversation(t *testing.T, u azE2EUser, flowID, convID string
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		var msgs []map[string]any
-		e.mustDo(t, http.MethodPost, "/api/chat/get", u.bearer, map[string]any{"flowId": flowID, "provider": convID}, http.StatusOK, &msgs)
+		var body struct {
+			Messages []map[string]any `json:"messages"`
+		}
+		e.mustDo(t, http.MethodPost, "/api/chat/get", u.bearer, map[string]any{"flowId": flowID, "provider": convID}, http.StatusOK, &body)
+		msgs := body.Messages
 		if len(msgs) >= want || time.Now().After(deadline) {
 			return msgs
 		}
@@ -796,6 +824,76 @@ func azE2EModel(p map[string]any, id string) map[string]any {
 		}
 	}
 	return nil
+}
+
+// azE2EModelByAlias returns the provider entry's model that answers for a
+// pre-registry id — one of its aliases, which only the entries of the
+// migrated resource "default" carry — or nil.
+func azE2EModelByAlias(p map[string]any, alias string) map[string]any {
+	models, _ := p["models"].([]any)
+	for _, m := range models {
+		mm, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		aliases, _ := mm["aliases"].([]any)
+		for _, a := range aliases {
+			if a == alias {
+				return mm
+			}
+		}
+	}
+	return nil
+}
+
+// modelIDFor is the "m/" id of the caller's listed model that answers for a
+// pre-registry id (a deployment the legacy document named).
+func (e *azE2EEnv) modelIDFor(t *testing.T, u azE2EUser, alias string) string {
+	t.Helper()
+	p := e.providerInfo(t, u.bearer, "")
+	id, _ := azE2EModelByAlias(p, alias)["id"].(string)
+	if !strings.HasPrefix(id, "m/") {
+		t.Fatalf("no listed model answers for %q (models %v)", alias, azE2EModelIDs(p))
+	}
+	return id
+}
+
+// addModel registers a model on one of the caller's resources through the
+// registry API (POST /api/providers/azure-foundry/models) and returns its
+// view (id, modelId "m/<id>", kind, deployment, displayName, …).
+func (e *azE2EEnv) addModel(t *testing.T, u azE2EUser, body map[string]any) map[string]any {
+	t.Helper()
+	var out struct {
+		Model map[string]any `json:"model"`
+	}
+	e.mustDo(t, http.MethodPost, "/api/providers/azure-foundry/models", u.bearer, body, http.StatusCreated, &out)
+	if id, _ := out.Model["modelId"].(string); !strings.HasPrefix(id, "m/") {
+		t.Fatalf("POST /api/providers/azure-foundry/models answered %v", out.Model)
+	}
+	return out.Model
+}
+
+// chatRefused sends a chat turn the server must refuse before any stream
+// starts, with 400 and the MODEL_NOT_AVAILABLE code (the client then puts
+// the text back in the composer); it returns the error envelope.
+func (e *azE2EEnv) chatRefused(t *testing.T, u azE2EUser, req azE2EChatReq) map[string]any {
+	t.Helper()
+	if req.FlowID == "" {
+		req.FlowID = u.flowID
+	}
+	var body map[string]any
+	e.mustDo(t, http.MethodPost, "/api/chat/stream", u.bearer, map[string]any{
+		"flowId":         req.FlowID,
+		"provider":       ai.AzureFoundryProviderID,
+		"model":          req.Model,
+		"userMessage":    req.Message,
+		"clientStreamId": uuid.NewString(),
+		"conversationId": uuid.NewString(),
+	}, http.StatusBadRequest, &body)
+	if body["code"] != service.AzureCodeModelNotAvailable {
+		t.Errorf("refused chat = %v, want code %s", body, service.AzureCodeModelNotAvailable)
+	}
+	return body
 }
 
 // azE2EMessages returns a chat-completions body's messages.

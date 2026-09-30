@@ -22,10 +22,21 @@ export interface DoneMeta {
   outputCostPerM?: number
 }
 
+// ErrorUsage is what a BILLED failure reports beyond its message (F-15):
+// the token counts (they reach the thread totals / the meter) plus the same
+// done-meta a done event carries, and the shared-credential flag (F-42).
+// Every field is optional; an unbilled error carries none of them.
+export interface ErrorUsage {
+  tokensIn?: number
+  tokensOut?: number
+  shared?: boolean
+  meta?: DoneMeta
+}
+
 export type ChatEvent =
   | {kind: 'chunk'; content: string}
   | ({kind: 'done'; tokensOut: number; tokensIn: number; chunks?: number} & DoneMeta)
-  | {kind: 'error'; message: string; code?: string}
+  | ({kind: 'error'; message: string; code?: string} & ErrorUsage)
   // Keepalive during a silent server phase; carries no data.
   | {kind: 'heartbeat'}
   | {kind: 'tool'; label: string}
@@ -103,7 +114,18 @@ export function parseChatEvent(raw: unknown): ChatEvent | null {
       }
     case 'error': {
       const code = asString(data.code)
-      return {kind: 'error', message: asString(data.message) ?? 'Unknown error', ...(code ? {code} : {})}
+      const tokensIn = asNumber(data.tokensIn)
+      const tokensOut = asNumber(data.tokensOut)
+      const meta = doneMeta(data)
+      return {
+        kind: 'error',
+        message: asString(data.message) ?? 'Unknown error',
+        ...(code ? {code} : {}),
+        ...(tokensIn !== null ? {tokensIn} : {}),
+        ...(tokensOut !== null ? {tokensOut} : {}),
+        ...(data.shared === true ? {shared: true} : {}),
+        ...(Object.keys(meta).length > 0 ? {meta} : {}),
+      }
     }
     case 'heartbeat':
       return {kind: 'heartbeat'}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/storage"
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
 )
@@ -61,6 +61,12 @@ type ProviderService struct {
 	// orgKeys holds organisations' shared credentials (G7); nil on the
 	// desktop and in local mode, where the org routes report it missing.
 	orgKeys OrgKeyStore
+	// azure is the Azure AI Foundry model registry (Part 9). With it, every
+	// call site that knew only the single "azure-foundry" document acts on
+	// the registry — its resource "default", or every resource; nil (a
+	// service built without it, in tests) keeps the single-document
+	// behaviour.
+	azure *AzureModelService
 
 	modelMu    sync.Mutex
 	modelCache map[string]modelCacheEntry // key: scope + "\x00" + providerID
@@ -99,6 +105,14 @@ func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factor
 // boot, before requests are served; nil leaves the org methods reporting
 // ErrOrgKeyStoreUnavailable and ListProviders ignoring the org.
 func (s *ProviderService) SetOrgKeyStore(store OrgKeyStore) { s.orgKeys = store }
+
+// SetAzureModels wires the Azure AI Foundry model registry (Part 9). Set
+// once at boot, before requests are served.
+func (s *ProviderService) SetAzureModels(azure *AzureModelService) { s.azure = azure }
+
+// AzureModels is the wired Azure AI Foundry model registry (nil without
+// one).
+func (s *ProviderService) AzureModels() *AzureModelService { return s.azure }
 
 // OrgKeysAvailable reports whether this deployment can hold organisation
 // credentials (cloud mode with the database keystore).
@@ -455,9 +469,20 @@ func awaitLiveListing(wait context.Context, ch <-chan liveListing) liveListing {
 
 // isConfigured reports whether the caller has credentials for a provider.
 // OAuth device-flow tokens and manual API keys are both resolved under the
-// caller's scope (per-user in cloud mode).
+// caller's scope (per-user in cloud mode). Azure AI Foundry with the model
+// registry: at least one resource of the caller's own.
 func (s *ProviderService) isConfigured(scope, providerID string) bool {
 	switch providerID {
+	case ai.AzureFoundryProviderID:
+		if s.azure != nil {
+			ok, err := s.azure.HasPersonalResources(context.Background(), scope)
+			if err != nil {
+				logger.Warn("azure ai foundry: reading the caller's resources failed", "error", err)
+			}
+			return ok
+		}
+		ok, _ := s.secrets.Has(scope, providerID)
+		return ok
 	case "github-models":
 		ok, _ := s.secrets.Has(scope, "github-models-token")
 		return ok
@@ -473,6 +498,8 @@ func (s *ProviderService) isConfigured(scope, providerID string) bool {
 
 // isOrgConfigured reports whether the organisation holds a shared credential
 // for a provider. Copilot is per member only (OAuth or PAT), never shared.
+// Azure AI Foundry with the model registry: the organisation holds at least
+// one resource.
 func (s *ProviderService) isOrgConfigured(orgID, providerID string) bool {
 	if s.orgKeys == nil || orgID == "" {
 		return false
@@ -480,6 +507,16 @@ func (s *ProviderService) isOrgConfigured(orgID, providerID string) bool {
 	switch providerID {
 	case "copilot":
 		return false
+	case ai.AzureFoundryProviderID:
+		if s.azure != nil && s.azure.OrgRegistriesAvailable() {
+			ok, err := s.azure.OrgHasResources(context.Background(), orgID)
+			if err != nil {
+				logger.Warn("azure ai foundry: reading the organisation's resources failed", "org", orgID, "error", err)
+			}
+			return ok
+		}
+		ok, _ := s.orgKeys.HasOrg(orgID, providerID)
+		return ok
 	case "github-models":
 		ok, _ := s.orgKeys.HasOrg(orgID, "github-models-token")
 		return ok
@@ -513,6 +550,13 @@ func (s *ProviderService) resolveListing(scope, orgID, providerID string) (ls li
 // the org's credential. The caller must already be verified an admin or
 // member of orgID (OrgRoleUsesSharedCredential — the handler does); this
 // method does not check.
+//
+// Azure AI Foundry with the model registry is listed from the registry
+// (azureProviderInfo), never from a live listing: its models are the
+// caller's registered entries and orgID's shared ones, and nothing about it
+// waits on the network. A registry that cannot be read fails the listing —
+// an Azure entry without its models would read as "every model was
+// removed" to a client, which then re-pins its threads.
 func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string) (providers []models.ProviderInfo, err error) {
 	defer logger.Guard("App.ListProviders", &err)
 
@@ -522,9 +566,18 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 	shared := make([]bool, len(metas))
 	live := make([]<-chan liveListing, len(metas))
 	for i, meta := range metas {
+		// The local models provider is listed only when this process may use
+		// it (desktop) and the caller configured it: an unconfigured card
+		// would offer a server nobody set up.
+		if meta.ID == ai.LocalProviderID && (!ai.LocalModelsAvailable() || !s.isConfigured(scope, meta.ID)) {
+			continue
+		}
 		metaProviders[i] = ai.GetMetadataProvider(meta.ID)
 		if metaProviders[i] == nil {
 			continue
+		}
+		if s.fromAzureRegistry(meta.ID) {
+			continue // listed from the registry below: no live listing
 		}
 		var ls listingScope
 		ls, configured[i] = s.resolveListing(scope, orgID, meta.ID)
@@ -539,6 +592,14 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 	for i, meta := range metas {
 		p := metaProviders[i]
 		if p == nil {
+			continue
+		}
+		if s.fromAzureRegistry(meta.ID) {
+			info, err := s.azureProviderInfo(ctx, scope, orgID, meta, p)
+			if err != nil {
+				return nil, err
+			}
+			providers = append(providers, info)
 			continue
 		}
 
@@ -580,6 +641,14 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 			})
 		}
 
+		contextLimit := p.ContextLimit()
+		// The local provider's window is the caller's configured one, which
+		// the key-less metadata provider cannot know; the live listing
+		// carries it on every entry.
+		if meta.ID == ai.LocalProviderID && len(modelInfos) > 0 && modelInfos[0].ContextLimit > 0 {
+			contextLimit = modelInfos[0].ContextLimit
+		}
+
 		providers = append(providers, models.ProviderInfo{
 			ID:           meta.ID,
 			Name:         meta.Name,
@@ -587,12 +656,48 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 			Shared:       shared[i],
 			Models:       modelDetails,
 			DefaultModel: defaultModel,
-			ContextLimit: p.ContextLimit(),
+			ContextLimit: contextLimit,
 			AuthType:     meta.AuthType,
 		})
 	}
 
 	return providers, nil
+}
+
+// fromAzureRegistry reports whether providerID's listing entry comes from
+// the Azure AI Foundry model registry (azureProviderInfo) rather than a live
+// listing: Azure AI Foundry, with the registry wired.
+func (s *ProviderService) fromAzureRegistry(providerID string) bool {
+	return s.azure != nil && providerID == ai.AzureFoundryProviderID
+}
+
+// azureProviderInfo is the Azure AI Foundry listing entry built from the
+// model registry (AzureModelService.PickerListing, network-free): the
+// caller's chat, Claude and agent entries and orgID's shared ones — "m/<id>"
+// ids with purpose, status, window and aliases, in display order — the
+// server default ("" when no entry can run), and whether to suggest
+// discovering the models of the caller's migrated project. Configured and
+// Shared keep the listing contract of every other provider (the member-first
+// rule of resolveListing): configured when the caller has a resource of
+// their own OR runs on the organisation's shared ones, shared in the second
+// case only. The name, auth type and provider-wide window stay the
+// catalogue's.
+func (s *ProviderService) azureProviderInfo(ctx context.Context, scope, orgID string, meta ai.ProviderMetadata, p ai.MetadataProvider) (models.ProviderInfo, error) {
+	listing, err := s.azure.PickerListing(ctx, scope, orgID)
+	if err != nil {
+		return models.ProviderInfo{}, fmt.Errorf("list the Azure AI Foundry models: %w", err)
+	}
+	return models.ProviderInfo{
+		ID:               meta.ID,
+		Name:             meta.Name,
+		Configured:       listing.Configured || listing.Shared,
+		Shared:           listing.Shared,
+		Models:           listing.Models,
+		DefaultModel:     listing.DefaultModel,
+		ContextLimit:     p.ContextLimit(),
+		AuthType:         meta.AuthType,
+		SuggestDiscovery: listing.SuggestDiscovery,
+	}, nil
 }
 
 // TestProviderConnection sends a tiny chat request to the candidates of
@@ -610,6 +715,12 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 func (s *ProviderService) TestProviderConnection(ctx context.Context, scope, providerID string) (result *models.ProviderTestResult, err error) {
 	defer logger.Guard("App.TestProviderConnection", &err)
 
+	if providerID == ai.AzureFoundryProviderID && s.azure != nil {
+		// Deprecated for Azure AI Foundry (the registry's test route tests
+		// one resource or model): resource "default", else the first one,
+		// probed as a resource — no model call.
+		return s.azure.legacyTest(ctx, AzureScope{Scope: scope})
+	}
 	provider, err := s.factory.For(scope, providerID)
 	if err != nil {
 		return &models.ProviderTestResult{Ok: false, Error: connectionTestError(providerID, "", err)}, nil
@@ -632,6 +743,10 @@ func (s *ProviderService) TestOrgProviderConnection(ctx context.Context, scope, 
 	defer logger.Guard("App.TestOrgProviderConnection", &err)
 	if s.orgKeys == nil {
 		return nil, ErrOrgKeyStoreUnavailable
+	}
+	if providerID == ai.AzureFoundryProviderID && s.azure != nil && s.azure.OrgRegistriesAvailable() {
+		// Deprecated: the organisation's resource "default", else its first.
+		return s.azure.legacyTest(ctx, AzureScope{Scope: scope, OrgID: orgID})
 	}
 	provider, err := s.factory.ForOrgCredential(scope, orgID, providerID)
 	if err != nil {
@@ -656,7 +771,13 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 
 	testModels := s.connectionTestModels(ctx, provider, providerID)
 	if len(testModels) == 0 {
-		msg := "no model to test: name a chat deployment in the provider settings"
+		msg := "no model to test: add a chat model to the provider under Settings → AI Accounts"
+		if providerID == ai.LocalProviderID {
+			msg = "no model found: start the local server, load a model and check the base URL"
+			if !ai.LocalModelsAvailable() {
+				msg = "local models are available in the desktop app only"
+			}
+		}
 		if providerID == ai.AzureFoundryProviderID {
 			// An Entra ID + project document may name nothing and rely on the
 			// project listing; when that listing is empty, its failure
@@ -683,12 +804,14 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 			latency := int(time.Since(start).Milliseconds())
 			return &models.ProviderTestResult{Ok: true, Latency: latency}
 		}
-		if errors.Is(chatErr, ai.ErrProviderPermissionDenied) || errors.Is(chatErr, ai.ErrEntraCredentialsRejected) || errors.Is(chatErr, ai.ErrEntraTokenRejected) {
+		if errors.Is(chatErr, ai.ErrProviderPermissionDenied) || errors.Is(chatErr, ai.ErrEntraCredentialsRejected) || errors.Is(chatErr, ai.ErrEntraTokenRejected) || errors.Is(chatErr, ai.ErrClaudeEntraOnly) {
 			// Auth failures (they also match ErrApiKeyInvalid) whose one-line
 			// text is what the user needs: the principal and the data action
-			// its missing role grants, Entra ID's AADSTS code, or Azure's
-			// explanation for a rejected Entra ID access token. "invalid
-			// API key" named a key an Entra ID principal does not have.
+			// its missing role grants, Entra ID's AADSTS code, Azure's
+			// explanation for a rejected Entra ID access token, or the
+			// Entra-only refusal a key gets against a Claude Mythos
+			// deployment. "invalid API key" named a key an Entra ID
+			// principal does not have.
 			latency := int(time.Since(start).Milliseconds())
 			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: connectionTestError(providerID, "", chatErr)}
 		}
@@ -889,13 +1012,65 @@ func (s *ProviderService) GetCopilotUser(ctx context.Context, scope string) (use
 	return s.auth.GetUser(ctx, token)
 }
 
+// --- Local models configuration ---
+
+// GetLocalConfig returns the caller's stored local models configuration (base
+// URL and stored context window). An absent or unreadable document is the
+// unconfigured state. Where local models are unavailable (cloud) it refuses
+// with the *ai.LocalConfigError a save gets (LOCAL_MODELS_UNAVAILABLE), so
+// the settings UI drops the section instead of offering an unusable form.
+func (s *ProviderService) GetLocalConfig(scope string) (cfg ai.LocalPublicConfig, err error) {
+	defer logger.Guard("App.GetLocalConfig", &err)
+	if err := ai.CheckLocalModelsAvailable(); err != nil {
+		return ai.LocalPublicConfig{}, err
+	}
+	raw, getErr := s.secrets.Get(scope, ai.LocalProviderID)
+	if getErr != nil || raw == "" {
+		return ai.LocalPublicConfig{}, nil
+	}
+	parsed, parseErr := ai.ParseLocalConfig(raw)
+	if parseErr != nil {
+		logger.Warn("local models: stored configuration unreadable", "error", parseErr)
+		return ai.LocalPublicConfig{}, nil
+	}
+	return parsed.Public(), nil
+}
+
+// SaveLocalConfig validates the base URL (loopback http(s) server root, and
+// only where the runtime egress policy allows loopback) and the context
+// window (0 = the default, else 1024..2000000 tokens), and stores the
+// document. Refusals are *ai.LocalConfigError values carrying a client code.
+// The cached listing of the previous configuration is dropped (its entries
+// carry the previous window).
+func (s *ProviderService) SaveLocalConfig(scope, baseURL string, contextWindow int) (cfg ai.LocalConfig, err error) {
+	defer logger.Guard("App.SaveLocalConfig", &err)
+	cfg, err = ai.NewLocalConfigForSave(baseURL, contextWindow)
+	if err != nil {
+		return ai.LocalConfig{}, err
+	}
+	raw, err := cfg.Encode()
+	if err != nil {
+		return ai.LocalConfig{}, err
+	}
+	if err := s.secrets.Save(scope, ai.LocalProviderID, raw); err != nil {
+		return ai.LocalConfig{}, err
+	}
+	s.InvalidateModels(scope, ai.LocalProviderID)
+	return cfg, nil
+}
+
 // --- Azure AI Foundry configuration ---
 
 // GetAzureFoundryConfig returns the caller's stored Azure AI Foundry document
 // with the secrets removed. A missing or unreadable document reads as
-// unconfigured (the user re-enters it).
+// unconfigured (the user re-enters it). Deprecated with the model registry
+// (one release): it reads resource "default", its deployment fields built
+// from the registry's entries, never from the document's stale ones.
 func (s *ProviderService) GetAzureFoundryConfig(scope string) (cfg ai.AzureFoundryPublicConfig, err error) {
 	defer logger.Guard("App.GetAzureFoundryConfig", &err)
+	if s.azure != nil {
+		return s.azure.legacyGetConfig(context.Background(), scope)
+	}
 	raw, getErr := s.secrets.Get(scope, ai.AzureFoundryProviderID)
 	if getErr != nil || raw == "" {
 		return ai.AzureFoundryPublicConfig{}, nil
@@ -921,9 +1096,20 @@ func (s *ProviderService) GetAzureFoundryConfig(scope string) (cfg ai.AzureFound
 // failures are *ai.AzureConfigError values carrying a client code. When the
 // saved document's credential differs from the previous one's, what the
 // process kept for the previous credential (its Entra ID token source and
-// cached listing) is released with it.
+// cached listing) is released with it. Deprecated with the model registry
+// (one release): the deployment fields are mapped onto resource "default"'s
+// entries (missing ones created, removed ones deleted) and only the
+// credential part is saved, the document's old deployment fields carried
+// over unchanged (a rolled-back binary still reads them).
 func (s *ProviderService) SaveAzureFoundryConfig(scope string, cfg ai.AzureFoundryConfig) (err error) {
 	defer logger.Guard("App.SaveAzureFoundryConfig", &err)
+	if s.azure != nil {
+		if err := s.azure.legacySaveConfig(context.Background(), scope, cfg); err != nil {
+			return err
+		}
+		s.InvalidateModels(scope, ai.AzureFoundryProviderID)
+		return nil
+	}
 	cfg.Normalize()
 	prev, hadPrev := storedAzureConfig(func() (string, error) { return s.secrets.Get(scope, ai.AzureFoundryProviderID) })
 	if refusal := carryAzureSecret(&cfg, prev, hadPrev); refusal != nil {
@@ -947,113 +1133,6 @@ func (s *ProviderService) SaveAzureFoundryConfig(scope string, cfg ai.AzureFound
 	return nil
 }
 
-// storedAzureConfig reads and parses a stored document; hadPrev is false
-// when there is none or it is unreadable (then nothing is carried over).
-func storedAzureConfig(get func() (string, error)) (prev ai.AzureFoundryConfig, hadPrev bool) {
-	raw, err := get()
-	if err != nil || raw == "" {
-		return ai.AzureFoundryConfig{}, false
-	}
-	p, parseErr := ai.ParseAzureFoundryConfig(raw)
-	if parseErr != nil {
-		return ai.AzureFoundryConfig{}, false
-	}
-	return p, true
-}
-
-// carryAzureSecret keeps the stored secret for a save that omits it — an API
-// key whenever the auth mode matches, an Entra ID client secret only for the
-// same principal (see SaveAzureFoundryConfig) — and only while the document
-// still sends it to the hosts it was entered for: the endpoint's host
-// unchanged, and a project endpoint (if any) on the previous project's or
-// endpoint's host. Otherwise anyone able to edit the document — another org
-// admin, for a shared one — could point the stored key at another
-// allow-listed host without ever knowing it. A refusal for that reason is a
-// MISSING_SECRET error saying why; nil means carried, or nothing to carry
-// (validation then reports a missing secret the usual way).
-func carryAzureSecret(cfg *ai.AzureFoundryConfig, prev ai.AzureFoundryConfig, hadPrev bool) error {
-	if cfg.HasSecret() || !hadPrev || prev.Auth.Mode != cfg.Auth.Mode {
-		return nil
-	}
-	switch cfg.Auth.Mode {
-	case ai.AzureAuthModeAPIKey:
-		// The resource key is not principal-bound.
-	case ai.AzureAuthModeEntra:
-		if prev.Auth.TenantID != cfg.Auth.TenantID || prev.Auth.ClientID != cfg.Auth.ClientID {
-			return nil // another principal: its own secret is required
-		}
-	default:
-		return nil
-	}
-	if !azureSecretHostsKept(prev, *cfg) {
-		return &ai.AzureConfigError{
-			Code:    ai.AzureCfgErrMissingSecret,
-			Message: "the endpoint changed: re-enter the " + azureSecretName(cfg.Auth.Mode) + " — a stored secret is only kept for the endpoint it was entered for",
-		}
-	}
-	if cfg.Auth.Mode == ai.AzureAuthModeEntra {
-		cfg.Auth.ClientSecret = prev.Auth.ClientSecret
-	} else {
-		cfg.Auth.Key = prev.Auth.Key
-	}
-	return nil
-}
-
-// azureSecretName is how a save error names the secret a mode needs.
-func azureSecretName(mode string) string {
-	if mode == ai.AzureAuthModeEntra {
-		return "client secret"
-	}
-	return "API key"
-}
-
-// azureSecretHostsKept reports whether next sends its credential only to
-// hosts prev already sent it to: the same endpoint host, and no project
-// endpoint or one on prev's project or endpoint host (the same resource). A
-// removed project endpoint, another project path on the same host or a
-// changed deployment name keeps the secret.
-func azureSecretHostsKept(prev, next ai.AzureFoundryConfig) bool {
-	prevHost, nextHost := azureURLHost(prev.Endpoint), azureURLHost(next.Endpoint)
-	if nextHost == "" || nextHost != prevHost {
-		return false
-	}
-	if next.ProjectEndpoint == "" {
-		return true
-	}
-	project := azureURLHost(next.ProjectEndpoint)
-	return project != "" && (project == prevHost || project == azureURLHost(prev.ProjectEndpoint))
-}
-
-// azureURLHost is the lower-cased host[:port] of an Azure URL, "" when it
-// has none or does not parse.
-func azureURLHost(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	return strings.ToLower(u.Host)
-}
-
-// saveCarryError is what a save whose secret was not carried reports: a
-// validation failure of the document itself (a host that is not allowed, a
-// missing deployment) wins over the refusal, which is only worth acting on
-// once the rest of the document is right.
-func saveCarryError(cfg ai.AzureFoundryConfig, refusal error) error {
-	probe := cfg
-	if probe.Auth.Mode == ai.AzureAuthModeEntra {
-		probe.Auth.ClientSecret = "placeholder"
-	} else {
-		probe.Auth.Key = "placeholder"
-	}
-	if err := ai.ValidateAzureFoundryConfig(probe); err != nil {
-		return err
-	}
-	return refusal
-}
-
 // --- Organisation-shared Azure AI Foundry configuration (G7) ---
 //
 // Trust model: an org admin is untrusted (anyone can create an org), so the
@@ -1062,13 +1141,14 @@ func saveCarryError(cfg ai.AzureFoundryConfig, refusal error) error {
 // members — never viewers, guests or outside collaborators — may run on it,
 // a member's own document winning over it for chat (ProviderFactory.ForOrg),
 // while the knowledge base prefers it (one corpus, one resource). Usage on
-// it is attributed to the org and capped by the org's daily budget like
-// every org-scoped turn, and the row goes with the organisation. When the
-// admin who supplied its secret (the lender, secret_set_by) or last saved it
-// stops being an admin — demoted, removed, account deleted — it is disabled
+// it is attributed to the org but never budget-gated: Azure deployments are
+// not priced by baki (their cost is read in the Azure portal), so the org's
+// daily budget does not count them. The row goes with the organisation.
+// When the admin who supplied its secret (the lender, secret_set_by) stops
+// being an admin — demoted, removed, account deleted — it is disabled
 // (DisableOrgAzureFoundryConfigSavedBy): the credential was theirs to lend,
 // and an edit by another admin that kept the stored secret does not make it
-// theirs.
+// theirs (it moves updated_by only, never secret_set_by).
 
 // OrgAzureFoundryConfig is an organisation's shared Azure AI Foundry
 // document in its public form, with who shared it and when. UpdatedBy is the
@@ -1092,10 +1172,15 @@ type OrgAzureFoundryConfig struct {
 // false, Shared false). One that exists but cannot be read (a decrypt or
 // database failure, an unparseable document) is ErrOrgCredentialUnreadable,
 // not "unconfigured": the org HAS a credential its members are failing on.
+// Deprecated with the model registry (one release): the organisation's
+// resource "default", its deployment fields built from the registry.
 func (s *ProviderService) GetOrgAzureFoundryConfig(orgID string) (cfg OrgAzureFoundryConfig, err error) {
 	defer logger.Guard("App.GetOrgAzureFoundryConfig", &err)
 	if s.orgKeys == nil {
 		return OrgAzureFoundryConfig{}, ErrOrgKeyStoreUnavailable
+	}
+	if s.azure != nil && s.azure.OrgRegistriesAvailable() {
+		return s.azure.legacyOrgGetConfig(context.Background(), orgID)
 	}
 	raw, getErr := s.orgKeys.GetOrg(orgID, ai.AzureFoundryProviderID)
 	if errors.Is(getErr, storage.ErrSecretNotFound) || (getErr == nil && raw == "") {
@@ -1126,25 +1211,6 @@ func (s *ProviderService) GetOrgAzureFoundryConfig(orgID string) (cfg OrgAzureFo
 	return out, nil
 }
 
-// formatOrgKeyStamp renders an org credential's updated_at as the
-// compare-and-swap token the org GET returns and a save sends back:
-// RFC 3339 in UTC with every sub-second digit the store kept.
-func formatOrgKeyStamp(at time.Time) string { return at.UTC().Format(time.RFC3339Nano) }
-
-// parseOrgKeyStamp reads a save's updatedAt token; "" is the zero time (the
-// caller saw no document).
-func parseOrgKeyStamp(s string) (time.Time, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return time.Time{}, nil
-	}
-	t, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		return time.Time{}, &ai.AzureConfigError{Code: ai.AzureCfgErrInvalidConfig, Message: "updatedAt must be the RFC 3339 timestamp the configuration was loaded with"}
-	}
-	return t, nil
-}
-
 // SaveOrgAzureFoundryConfig is SaveAzureFoundryConfig for the organisation's
 // shared document: the same validation, the same carry-over of an omitted
 // secret from the stored document (endpoint hosts unchanged), the same
@@ -1170,6 +1236,47 @@ func (s *ProviderService) SaveOrgAzureFoundryConfig(orgID, updatedBy, expectedUp
 		return "", err
 	}
 	cfg.Normalize()
+	// The Azure CLI sign-in mode is a personal, desktop-only credential: it
+	// runs as whoever is signed into `az` on the machine that chats. An
+	// org-shared document is used by every member on their own machines, so
+	// it must be an API key or a service principal. Refused here, at save
+	// time, in every deployment mode — the provider-level validation only
+	// refuses the mode on server deployments (F-51).
+	if cfg.Auth.Mode == ai.AzureAuthModeEntraCLI {
+		return "", &ai.AzureConfigError{Code: ai.AzureCfgErrInvalidAuth,
+			Message: "the Azure CLI sign-in mode cannot be shared with an organisation — save it as your own Azure AI Foundry configuration, or share an API key or Microsoft Entra ID service principal"}
+	}
+	if s.azure != nil && s.azure.OrgRegistriesAvailable() {
+		// Deprecated with the model registry: the credential part is saved
+		// (the same compare-and-swap and repair as below), the deployment
+		// fields are mapped onto the organisation's resource "default".
+		at, err := s.azure.legacyOrgSaveConfig(context.Background(), orgID, updatedBy, expected, cfg)
+		if err != nil {
+			return "", err
+		}
+		s.InvalidateScope(ai.OrgScope(orgID))
+		return at, nil
+	}
+	// A token-less save that supplies a fresh secret may be the repair of
+	// an unreadable stored row (a decrypt failure after a key rotation, a
+	// document this build cannot parse): its GET fails with
+	// ErrOrgCredentialUnreadable and hands back no compare-and-swap token,
+	// so the zero-expected branch below would answer 409 against the very
+	// row the save is meant to replace. The row's OrgKeyMeta stamp becomes
+	// the token instead — a true compare-and-swap, so two admins repairing
+	// at once cannot overwrite each other — and hadPrev stays false (the
+	// stored document is unusable, nothing is carried and the repairing
+	// admin becomes the new lender). Any other stored state (no row, a
+	// readable document, a store error) keeps today's path.
+	if expected.IsZero() && cfg.HasSecret() {
+		stamp, repair, rerr := unreadableOrgStamp(s.orgKeys, orgID, ai.AzureFoundryProviderID)
+		if rerr != nil {
+			return "", rerr
+		}
+		if repair {
+			expected = stamp
+		}
+	}
 	prev, hadPrev := storedAzureConfig(func() (string, error) { return s.orgKeys.GetOrg(orgID, ai.AzureFoundryProviderID) })
 	supplied := cfg.HasSecret()
 	if refusal := carryAzureSecret(&cfg, prev, hadPrev); refusal != nil {
@@ -1204,11 +1311,20 @@ func (s *ProviderService) SaveOrgAzureFoundryConfig(orgID, updatedBy, expectedUp
 
 // DeleteOrgAzureFoundryConfig removes the organisation's shared document,
 // releases what the process kept for its credential and drops the org's
-// cached listings. Deleting a missing document is a no-op.
+// cached listings. Deleting a missing document is a no-op. Deprecated with
+// the model registry (one release): it removes the organisation's resource
+// "default" with its models (the credential after the commit).
 func (s *ProviderService) DeleteOrgAzureFoundryConfig(orgID string) (err error) {
 	defer logger.Guard("App.DeleteOrgAzureFoundryConfig", &err)
 	if s.orgKeys == nil {
 		return ErrOrgKeyStoreUnavailable
+	}
+	if s.azure != nil && s.azure.OrgRegistriesAvailable() {
+		if err := s.azure.legacyDeleteDefault(context.Background(), storageif.AzureOrgOwner(orgID), ""); err != nil {
+			return err
+		}
+		s.InvalidateScope(ai.OrgScope(orgID))
+		return nil
 	}
 	prev, hadPrev := storedAzureConfig(func() (string, error) { return s.orgKeys.GetOrg(orgID, ai.AzureFoundryProviderID) })
 	if err := s.orgKeys.DeleteOrg(orgID, ai.AzureFoundryProviderID); err != nil {
@@ -1221,95 +1337,87 @@ func (s *ProviderService) DeleteOrgAzureFoundryConfig(orgID string) (err error) 
 	return nil
 }
 
-// DisableOrgAzureFoundryConfigSavedBy deletes the organisation's shared
-// document when userID is the admin who supplied its secret (the lender) or
-// last saved it — called when that admin is demoted, removed from the org or
-// deletes their account: the credential was theirs to lend, and a key its
-// owner can no longer manage must not stay live for the org. Another admin's
-// later edit that kept the stored secret does not save it from its lender's
-// departure. The delete is conditional on the stored secret_set_by /
-// updated_by, so a newer save by another admin with their own secret is
-// kept. disabled reports whether a document was removed; the process state
-// kept for it is released and the org's cached listings dropped, as
-// DeleteOrgAzureFoundryConfig does. A deployment without an org store has
-// nothing to disable.
+// DisableOrgAzureFoundryConfigSavedBy disables the organisation's shared
+// Azure AI Foundry credentials when userID is the admin who supplied their
+// secret — the lender, secret_set_by (updated_by only for a row no save has
+// stamped since the v24 backfill) — called when that admin is demoted,
+// removed from the org or deletes their account: the credential was theirs
+// to lend, and a key its owner can no longer manage must not stay live for
+// the org. Another admin's later edit that kept the stored secret does not
+// save it from its lender's departure, and does not make the editor a
+// lender either. The delete is conditional on the stored secret_set_by, so a
+// newer save by another admin with their own secret is kept. Family-wide:
+// every resource's credential userID lent goes (see
+// DisableOrgAzureCredentialsSavedBy, which names the keys for the audit
+// rows); disabled reports whether any did — the F-48 sharedCredentialDisabled
+// flag. A deployment without an org store has nothing to disable.
 func (s *ProviderService) DisableOrgAzureFoundryConfigSavedBy(orgID, userID string) (disabled bool, err error) {
 	defer logger.Guard("App.DisableOrgAzureFoundryConfigSavedBy", &err)
-	if s.orgKeys == nil || orgID == "" || userID == "" {
-		return false, nil
-	}
-	prev, hadPrev := storedAzureConfig(func() (string, error) { return s.orgKeys.GetOrg(orgID, ai.AzureFoundryProviderID) })
-	deleted, err := s.orgKeys.DeleteOrgIfSavedBy(orgID, ai.AzureFoundryProviderID, userID)
-	if err != nil || !deleted {
-		return false, err
-	}
-	if hadPrev {
-		ai.ForgetAzureFoundryCredential(prev)
-	}
-	s.InvalidateScope(ai.OrgScope(orgID))
-	return true, nil
+	keys, err := s.DisableOrgAzureCredentialsSavedBy(orgID, userID)
+	return len(keys) > 0, err
 }
 
 // DisableOrgCredentialsSavedBy is DisableOrgAzureFoundryConfigSavedBy for
-// every organisation whose shared document userID lent or last saved
-// (account erasure: the membership rows go with the account, the credential
-// rows do not). Returns the orgs disabled; an org that fails is logged and skipped
-// so the others are still disabled.
+// every organisation whose shared credentials userID lent (account erasure:
+// the membership rows go with the account, the credential rows do not).
+// Returns the orgs disabled; an org that fails is logged and skipped so the
+// others are still disabled. DisableOrgAzureCredentialsLentBy names the keys.
 func (s *ProviderService) DisableOrgCredentialsSavedBy(userID string) (orgIDs []string, err error) {
 	defer logger.Guard("App.DisableOrgCredentialsSavedBy", &err)
-	if s.orgKeys == nil || userID == "" {
-		return nil, nil
-	}
-	candidates, err := s.orgKeys.OrgsWithKeySavedBy(ai.AzureFoundryProviderID, userID)
+	refs, err := s.DisableOrgAzureCredentialsLentBy(userID)
 	if err != nil {
 		return nil, err
 	}
-	for _, orgID := range candidates {
-		disabled, derr := s.DisableOrgAzureFoundryConfigSavedBy(orgID, userID)
-		if derr != nil {
-			logger.Warn("azure ai foundry: disabling a departed admin's shared credential failed", "org", orgID, "error", derr)
-			continue
-		}
-		if disabled {
-			orgIDs = append(orgIDs, orgID)
+	for _, r := range refs {
+		if len(orgIDs) == 0 || orgIDs[len(orgIDs)-1] != r.OrgID {
+			orgIDs = append(orgIDs, r.OrgID)
 		}
 	}
 	return orgIDs, nil
 }
 
 // PrepareOrgDeletion reads what the process must release when orgID is
-// deleted — the shared document's credential (its Entra ID token source and
-// cached listing) — while the row still exists (it cascades with the
-// organisation), and returns the release to run once the delete succeeded:
-// forget that credential and drop the org's cached listings.
+// deleted — every Azure AI Foundry credential of the organisation (each one's
+// Entra ID token source and cached listings) — while the rows still exist
+// (they cascade with the organisation, as do its registry rows), and returns
+// the release to run once the delete succeeded: forget those credentials,
+// drop the org's cached listings and what the registry remembers of it.
 func (s *ProviderService) PrepareOrgDeletion(orgID string) (release func()) {
-	var prev ai.AzureFoundryConfig
-	hadPrev := false
+	var docs []string
 	if s.orgKeys != nil && orgID != "" {
-		prev, hadPrev = storedAzureConfig(func() (string, error) { return s.orgKeys.GetOrg(orgID, ai.AzureFoundryProviderID) })
+		docs = orgAzureDocuments(s.orgKeys, orgID)
 	}
 	return func() {
-		if hadPrev {
-			ai.ForgetAzureFoundryCredential(prev)
+		for _, raw := range docs {
+			forgetAzureDocument(raw)
 		}
 		s.InvalidateScope(ai.OrgScope(orgID))
+		if s.azure != nil && orgID != "" {
+			s.azure.forgetOwner(storageif.AzureOrgOwner(orgID))
+		}
 	}
 }
 
 // PrepareAccountErasure is PrepareOrgDeletion for a user's own credentials:
-// it reads the user's Azure AI Foundry document before the erasure cascades
-// it away and returns the release that forgets its credential and drops the
-// scope's cached listings.
+// it reads every Azure AI Foundry credential of the user before the erasure
+// cascades them away (with the user's registry rows) and returns the release
+// that forgets them and drops the scope's cached listings.
 func (s *ProviderService) PrepareAccountErasure(scope string) (release func()) {
-	var prev ai.AzureFoundryConfig
-	hadPrev := false
+	var docs []string
 	if s.secrets != nil {
-		prev, hadPrev = storedAzureConfig(func() (string, error) { return s.secrets.Get(scope, ai.AzureFoundryProviderID) })
+		var ids []string
+		if s.azure != nil {
+			ids = s.azure.registryConnectionIDs(context.Background(), s.azure.userOwner(scope))
+		}
+		docs = userAzureDocuments(s.secrets, scope, ids)
 	}
 	return func() {
-		if hadPrev {
-			ai.ForgetAzureFoundryCredential(prev)
+		for _, raw := range docs {
+			forgetAzureDocument(raw)
 		}
 		s.InvalidateScope(scope)
+		if s.azure != nil {
+			s.azure.forgetOwner(s.azure.userOwner(scope))
+		}
 	}
 }

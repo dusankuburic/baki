@@ -40,9 +40,13 @@ interface OrgState {
   // when the invite email cannot be delivered (no SMTP configured).
   inviteMember: (orgId: string, email: string, role: OrgRole) => Promise<string | undefined>
   acceptInvite: (token: string) => Promise<void>
-  // Also how a member leaves: the server lets a non-admin remove their own row.
-  removeMember: (orgId: string, userId: string) => Promise<void>
-  setMemberRole: (orgId: string, userId: string, role: OrgRole) => Promise<void>
+  // Also how a member leaves: the server lets a non-admin remove their own
+  // row. Both membership actions resolve the server's reply, whose
+  // sharedCredentialDisabled says the departure disabled the org's shared
+  // Azure AI Foundry credential (the member was its lender) — the panel
+  // explains the disappearance instead of leaving a support ticket.
+  removeMember: (orgId: string, userId: string) => Promise<{sharedCredentialDisabled: boolean}>
+  setMemberRole: (orgId: string, userId: string, role: OrgRole) => Promise<{sharedCredentialDisabled: boolean}>
   deleteOrg: (orgId: string) => Promise<void>
   clearError: () => void
 }
@@ -158,7 +162,10 @@ export const useOrgStore = create<OrgState>()(
         set({isBusy: true, error: null})
         try {
           const wasActive = get().activeOrgId === orgId
-          await request(`/api/orgs/${orgId}/members/${userId}`, {method: 'DELETE'})
+          const reply = await request<{status?: string; sharedCredentialDisabled?: boolean}>(
+            `/api/orgs/${orgId}/members/${userId}`,
+            {method: 'DELETE'},
+          )
           await get().loadOrgs()
           // The caller left (or was otherwise dropped from) the org they were
           // working in: loadOrgs already fell back to Personal, but that only
@@ -166,6 +173,7 @@ export const useOrgStore = create<OrgState>()(
           // on screen behind requests that now 403.
           if (wasActive && get().activeOrgId === null) resetOrgScopedState()
           set({isBusy: false})
+          return {sharedCredentialDisabled: reply?.sharedCredentialDisabled === true}
         } catch (err) {
           set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to remove member'})
           throw err
@@ -176,9 +184,13 @@ export const useOrgStore = create<OrgState>()(
         if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
         set({isBusy: true, error: null})
         try {
-          await request(`/api/orgs/${orgId}/members/${userId}/role`, {body: {role}, method: 'PUT'})
+          const reply = await request<{status?: string; sharedCredentialDisabled?: boolean}>(
+            `/api/orgs/${orgId}/members/${userId}/role`,
+            {body: {role}, method: 'PUT'},
+          )
           await get().loadOrgs()
           set({isBusy: false})
+          return {sharedCredentialDisabled: reply?.sharedCredentialDisabled === true}
         } catch (err) {
           set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to update member role'})
           throw err

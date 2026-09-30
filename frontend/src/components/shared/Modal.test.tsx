@@ -158,4 +158,70 @@ describe('Modal size and frame variants', () => {
     expect(dialog).toHaveClass('h-[min(60rem,calc(100vh-3rem))]')
     expect(dialog).toHaveClass('settings-dialog')
   })
+
+  it('goes full screen below 640px when asked, and only then', () => {
+    const {rerender} = render(
+      <Modal isOpen onClose={noopOuter} title="Add model" fullScreenBelow="sm" footer={<button>Save</button>}>
+        <p>body</p>
+      </Modal>,
+    )
+    const dialog = screen.getByRole('dialog', {name: 'Add model'})
+    for (const cls of ['max-sm:h-full', 'max-sm:max-w-none', 'max-sm:rounded-none', 'max-sm:flex-col']) {
+      expect(dialog).toHaveClass(cls)
+    }
+    // The body drops its 70vh cap and takes the height between header and footer.
+    expect(screen.getByText('body').parentElement).toHaveClass('max-sm:max-h-none', 'max-sm:flex-1')
+
+    rerender(
+      <Modal isOpen onClose={noopOuter} title="Add model">
+        <p>body</p>
+      </Modal>,
+    )
+    expect(screen.getByRole('dialog', {name: 'Add model'}).className).not.toContain('max-sm:')
+  })
+})
+
+describe('Modal naming', () => {
+  it('is named by its visible title and described by its description', () => {
+    render(
+      <Modal isOpen onClose={noopOuter} title="Add model" description="Sends one tiny request to test it.">
+        <p>body</p>
+      </Modal>,
+    )
+    const dialog = screen.getByRole('dialog', {name: 'Add model'})
+    expect(dialog).toHaveAttribute('aria-labelledby', screen.getByRole('heading', {name: 'Add model'}).id)
+    expect(dialog).not.toHaveAttribute('aria-label')
+    expect(dialog).toHaveAccessibleDescription('Sends one tiny request to test it.')
+  })
+
+  it('can be named and described by elements the caller renders', () => {
+    render(
+      <Modal isOpen onClose={noopOuter} labelledBy="own-heading" describedBy="own-text" ariaLabel="Unused">
+        <h2 id="own-heading">Remove resource?</h2>
+        <p id="own-text">Its models go with it.</p>
+      </Modal>,
+    )
+    const dialog = screen.getByRole('dialog', {name: 'Remove resource?'})
+    expect(dialog).toHaveAccessibleDescription('Its models go with it.')
+  })
+
+  it('falls back to ariaLabel without a title, and shows a description above the body', () => {
+    render(
+      <Modal isOpen onClose={noopOuter} ariaLabel="Settings" description="Everything in one place.">
+        <p>body</p>
+      </Modal>,
+    )
+    expect(screen.getByRole('dialog', {name: 'Settings'})).toHaveAccessibleDescription('Everything in one place.')
+  })
+
+  // A <button> without a type submits the form around it — here, a form a
+  // caller wraps the whole dialog content in.
+  it('renders the Close button as a plain button', () => {
+    render(
+      <Modal isOpen onClose={noopOuter} title="Edit">
+        <p>body</p>
+      </Modal>,
+    )
+    expect(screen.getByRole('button', {name: 'Close'})).toHaveAttribute('type', 'button')
+  })
 })

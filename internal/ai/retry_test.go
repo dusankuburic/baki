@@ -397,3 +397,100 @@ func TestBackoff_LargeAttemptDoesNotPanic(t *testing.T) {
 		_ = backoff(ctx, attempt, nil, retryBaseDelay)
 	}
 }
+
+// TestRetry_Stream_SilentStepDoesNotBlockRetry (F-08): a SilentStep marker is
+// an idle-watchdog bracket, not a hosted step the provider already ran — a
+// stream that emits one and then a retryable error is still replayed.
+func TestRetry_Stream_SilentStepDoesNotBlockRetry(t *testing.T) {
+	stub := &retryStub{streamPlan: []func(onChunk func(Chunk)) error{
+		func(onChunk func(Chunk)) error {
+			onChunk(Chunk{SilentStep: 1})
+			onChunk(Chunk{Error: fmt.Errorf("%w: slow down", ErrRateLimited)})
+			return nil
+		},
+		func(onChunk func(Chunk)) error {
+			onChunk(Chunk{SilentStep: -1})
+			onChunk(Chunk{Text: "replayed"})
+			onChunk(Chunk{Done: true})
+			return nil
+		},
+	}}
+	rp := NewRetryingProviderWithConfig(stub, 3, time.Millisecond)
+	var errs []error
+	err := rp.Stream(context.Background(), Request{}, func(c Chunk) {
+		if c.Error != nil {
+			errs = append(errs, c.Error)
+		}
+	})
+	if err != nil {
+		t.Fatalf("expected nil return (the replay finished the turn), got %v", err)
+	}
+	if stub.streamCall != 2 {
+		t.Errorf("expected the retry (2 Stream calls), got %d", stub.streamCall)
+	}
+	// The held error chunk never reached the client: the retry succeeded.
+	if len(errs) != 0 {
+		t.Errorf("the held error must be dropped by the successful retry, got %v", errs)
+	}
+}
+
+// namedRetryStub is a retryStub the traced and audited wrappers can sit on
+// (they read the provider's ID and token estimate).
+type namedRetryStub struct{ retryStub }
+
+func (s *namedRetryStub) ID() string                  { return "stub" }
+func (s *namedRetryStub) EstimateTokens(t string) int { return len(t) / 4 }
+
+// TestRetry_Stream_NoticeDoesNotBlockRetry (A3): a provider Notice (the
+// reasoning_off status line) is not delivered content — a stream that emits
+// one and then a retryable server_error before any text is still replayed —
+// and the notice reaches the caller unchanged through the traced, retry and
+// audited wrappers.
+func TestRetry_Stream_NoticeDoesNotBlockRetry(t *testing.T) {
+	notice := &Notice{Name: "reasoning_off", Label: "answering with reasoning off"}
+	stub := &namedRetryStub{retryStub{streamPlan: []func(onChunk func(Chunk)) error{
+		func(onChunk func(Chunk)) error {
+			onChunk(Chunk{Notice: notice})
+			onChunk(Chunk{Error: fmt.Errorf("%w: server_error", ErrProviderDown)})
+			return nil
+		},
+		func(onChunk func(Chunk)) error {
+			onChunk(Chunk{Notice: notice})
+			onChunk(Chunk{Text: "replayed"})
+			onChunk(Chunk{Done: true})
+			return nil
+		},
+	}}}
+	chain := NewAuditedProvider(NewRetryingProviderWithConfig(NewTracedProvider(stub), 3, time.Millisecond), nil, "user-1", "stub")
+	var notices []*Notice
+	var text string
+	var errs []error
+	err := chain.Stream(context.Background(), Request{Model: "m"}, func(c Chunk) {
+		if c.Notice != nil {
+			notices = append(notices, c.Notice)
+		}
+		if c.ToolEvent != nil {
+			t.Errorf("a notice must not surface as a hosted tool step: %+v", c.ToolEvent)
+		}
+		if c.Error != nil {
+			errs = append(errs, c.Error)
+		}
+		text += c.Text
+	})
+	if err != nil {
+		t.Fatalf("expected nil return (the replay finished the turn), got %v", err)
+	}
+	if stub.streamCall != 2 {
+		t.Errorf("expected the retry (2 Stream calls), got %d", stub.streamCall)
+	}
+	if len(errs) != 0 {
+		t.Errorf("the held error must be dropped by the successful retry, got %v", errs)
+	}
+	if text != "replayed" {
+		t.Errorf("text = %q, want the replayed answer", text)
+	}
+	// Both attempts' notices pass through, unchanged (same pointer).
+	if len(notices) != 2 || notices[0] != notice || notices[1] != notice {
+		t.Errorf("notices = %+v, want the provider's notice from each attempt", notices)
+	}
+}

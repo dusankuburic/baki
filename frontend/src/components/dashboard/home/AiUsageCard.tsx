@@ -13,6 +13,8 @@ interface CostRow extends HBarRow {
 // AI usage in two figures with their own windows: tokens per day over the
 // last two weeks (in/out stacked, categorical slots 1 and 2) and the cost per
 // provider over the last month (single hue). Local mode has no usage store.
+// Azure AI Foundry usage is not priced by baki, so it has no cost bar: the
+// bar's value label and tooltip would read a misleading $0.00.
 export function AiUsageCard({
   tokens,
   cost,
@@ -31,12 +33,13 @@ export function AiUsageCard({
   const hasTokens = tokens.some(d => d.tokensIn > 0 || d.tokensOut > 0)
   const costRows = useMemo<CostRow[]>(
     () =>
-      [...cost]
+      cost
+        .filter(c => c.provider !== 'azure-foundry')
         .sort((a, b) => b.cost - a.cost)
         .map(c => ({key: c.provider, label: c.provider, value: c.cost, tokensIn: c.tokensIn, tokensOut: c.tokensOut})),
     [cost],
   )
-  const hasData = hasTokens || costRows.length > 0
+  const hasData = hasTokens || cost.length > 0
   const title = t('home.aiUsage')
   return (
     <ChartCard
@@ -83,7 +86,9 @@ export function AiUsageCard({
               allowDecimals
             />
           ) : (
-            <p className="py-8 text-center text-sm text-text-tertiary">{t('common.noData')}</p>
+            <p className="py-8 text-center text-sm text-text-tertiary">
+              {cost.length > 0 ? t('analytics.cards.costOnlyUnpriced') : t('common.noData')}
+            </p>
           )}
         </div>
       </div>

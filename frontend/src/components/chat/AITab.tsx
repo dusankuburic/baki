@@ -2,10 +2,15 @@ import {useTranslation} from 'react-i18next'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useSettingsStore} from '@/stores/settingsStore'
+import {useUIStore} from '@/stores/uiStore'
 import {useProviderSetup} from './hooks/useProviderSetup'
 import {useAIChat} from './hooks/useAIChat'
 import {logger} from '@/lib/logger'
 import {buildBlockLookup} from '@/lib/tree'
+import {findModel, modelNameOf, storableModelLabel} from '@/lib/modelIds'
+import {isRegistryEntry} from '@/lib/modelGroups'
+import {purposeLabel, purposeLabelKey, type PurposeLabelOf} from '@/lib/modelPurpose'
+import {resolveThreadModel} from '@/lib/modelSelection'
 import {
   MessageBubble,
   ChatMessageList,
@@ -21,16 +26,18 @@ import {AlertTriangle, RefreshCw} from 'lucide-react'
 import {useKeyboard} from '@/hooks/useKeyboard'
 import {useConfirm, useToast, Spinner} from '@/components/shared'
 import {isImeKeydown} from '@/lib/imeKey'
-import {useChatStore} from '@/stores/chatStore'
+import {useChatStore, threadModelOf} from '@/stores/chatStore'
 import {chatApi} from '@/api'
 import LiveToolTrail from './LiveToolTrail'
 import StreamingBubble from './StreamingBubble'
-import type {ChatTextSize, ProviderID} from '@/types'
+import type {ChatMessage, ChatTextSize, ModelDetail} from '@/types'
 import ChatHeader from './ChatHeader'
 import ChatContextBar from './ChatContextBar'
 import EmptyChatState from './EmptyChatState'
 import ChatErrorBoundary from './ChatErrorBoundary'
 import ChatSearchBar from './ChatSearchBar'
+import {AZURE_ACCOUNTS_ANCHOR, type PickerProvider} from './ModelPicker'
+import ModelUnavailableNotice, {modelNoticeSentences, type ModelNoticeView} from './ModelUnavailableNotice'
 import {useChatPanel} from './ChatPanelShell'
 
 // Rarely-rendered overlays load on first open: the context-preview modal only
@@ -41,10 +48,14 @@ const ContextPreviewModal = lazy(() => import('./ContextPreviewModal'))
 const ChatHelpPopover = lazy(() => import('./ChatHelpPopover'))
 
 // Welcome copy is keyed by provider id under chat:welcome.*, with a fallback
-// for providers that have no dedicated line.
+// for providers that have no dedicated line; above it, the thread's model and
+// what it is for.
+
+const EMPTY_MODELS: ModelDetail[] = []
 
 export default function AITab() {
   const {t} = useTranslation('chat')
+  const {t: tc} = useTranslation('common')
   const _selectedBlockId = useFlowStore(s => s.selectedBlockId)
   const _document = useFlowStore(s => s.document)
   const _analysisReport = useAnalysisStore(s => (_document ? s.reports.get(_document.id) : undefined))
@@ -57,20 +68,98 @@ export default function AITab() {
   )
   const chatTextSize = useSettingsStore(s => s.settings.appearance.chatTextSize)
   const updateAppearance = useSettingsStore(s => s.updateAppearance)
-  const provider = useChatStore(s => s.selectedProvider)
   const chatPanel = useChatPanel()
 
+  // Per-thread model memory: `selection` is the ACTIVE thread's provider and
+  // model (its pin, else its last reply's pair, else the Default for new
+  // chats) — every turn this panel sends goes there.
   const {
     configured,
     providersError,
     retryProviders,
     providers,
-    selectedModel,
-    setSelectedModel,
-    handleSetProvider,
-    currentModels,
-    currentModelDetail,
+    listingLoaded,
+    selection,
+    notice,
+    dismissNotice,
+    turnModel,
+    pickModel,
+    threadModelDetail,
+    newChatDefaults,
+    orgName,
+    legacyDefaultNotice,
+    dismissLegacyDefaultNotice,
+    settings: selectionSettings,
   } = useProviderSetup()
+
+  const labelOf: PurposeLabelOf = useCallback(p => tc(purposeLabelKey(p)), [tc])
+  // A listed model's purpose label; none for a catalogue model.
+  const purposeOf = useCallback(
+    (m: ModelDetail | undefined) => (m && isRegistryEntry(m) ? purposeLabel(m, labelOf) : undefined),
+    [labelOf],
+  )
+  const providerName = useCallback((id: string) => providers.find(p => p.id === id)?.name || id, [providers])
+  const listedModels = useCallback(
+    (providerId: string | undefined) => providers.find(p => p.id === providerId)?.models ?? EMPTY_MODELS,
+    [providers],
+  )
+
+  // The header picker's list: the configured providers and their models.
+  const pickerProviders: PickerProvider[] = useMemo(
+    () =>
+      providers
+        .filter(p => p.configured)
+        .map(p => ({id: p.id, name: p.name, models: p.models, ...(p.shared ? {shared: true} : {})})),
+    [providers],
+  )
+
+  // The listing's name for a message's model, for a message that kept no
+  // label of its own (one that is only an id counts as none).
+  const listedModelName = useCallback(
+    (m: ChatMessage): string | undefined => {
+      if (m.role !== 'assistant' || !m.model || storableModelLabel(m.modelLabel, m.model)) return undefined
+      const entry = findModel(m.model, listedModels(m.provider))
+      return entry ? entry.displayName || entry.id : undefined
+    },
+    [listedModels],
+  )
+  // An exported turn names its model the same way ("removed model" for a
+  // registry id nothing names any more), never by its "m/<id>".
+  const exportModelName = useCallback(
+    (m: ChatMessage): string | undefined => {
+      if (!m.model) return undefined
+      return modelNameOf(m.model, m.modelLabel, listedModels(m.provider)) ?? t('message.removedModel')
+    },
+    [listedModels, t],
+  )
+
+  const openAzureAccounts = useCallback(() => useUIStore.getState().openSettings('accounts', AZURE_ACCOUNTS_ANCHOR), [])
+
+  // The composer's guidance: the thread is on Azure AI Foundry, and Azure
+  // offers nothing to chat with — no model added yet, or none usable (every
+  // resource needs its credentials again). Sending would go out with no
+  // model at all, so while it holds nothing sends: not the composer, and not
+  // the suggested prompts, templates or Retry/Regenerate either (they are
+  // disabled with the same reason).
+  const azure = providers.find(p => p.id === 'azure-foundry')
+  const guidance = useMemo(() => {
+    if (!listingLoaded || selection.provider !== 'azure-foundry' || selection.model || !azure?.configured) return null
+    const chatModels = azure.models.filter(m => m.kind !== 'embedding')
+    if (chatModels.length === 0) {
+      return {text: t('composer.noAzureModels'), actionLabel: t('composer.addModels'), onAction: openAzureAccounts}
+    }
+    const needCredentials = chatModels.every(m => m.status === 'needs_credentials' || m.status === 'unreadable')
+    return {
+      text: needCredentials ? t('composer.azureNeedsCredentials') : t('composer.azureUnusable'),
+      actionLabel: t('composer.openAccounts'),
+      onAction: openAzureAccounts,
+    }
+  }, [listingLoaded, selection.provider, selection.model, azure, t, openAzureAccounts])
+  const sendBlockedReason = guidance?.text
+
+  // The model picker's trigger: focus goes back to it when a notice's
+  // Dismiss takes the row (and the focused button) away.
+  const pickerTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   const {
     doc,
@@ -109,7 +198,43 @@ export default function AITab() {
     handleCancelStream,
     clearContextPreview,
     confirmContextPreview,
-  } = useAIChat({selectedModel})
+  } = useAIChat({turnModel, exportModelName, sendBlocked: guidance !== null})
+
+  // Each tab's tooltip names its thread's model: the active thread's as
+  // resolved above, the others' from their pins, else — a thread from before
+  // per-thread memory — from their own loaded history (an unpinned one with
+  // none starts on the Default for new chats).
+  const conversations = useChatStore(s => s.conversations)
+  const threadModelLabels = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const th of flowThreads) {
+      const sel =
+        th.id === activeThreadId
+          ? selection
+          : resolveThreadModel({
+              pin: threadModelOf(th),
+              messages: conversations.get(th.id),
+              settings: selectionSettings,
+              providers,
+              listingLoaded,
+            })
+      if (!sel.label) continue
+      const purpose = sel.model ? purposeOf(findModel(sel.model, listedModels(sel.provider))) : undefined
+      out[th.id] = purpose ? t('threads.modelPurpose', {model: sel.label, purpose}) : sel.label
+    }
+    return out
+  }, [
+    flowThreads,
+    activeThreadId,
+    selection,
+    conversations,
+    selectionSettings,
+    providers,
+    listingLoaded,
+    purposeOf,
+    listedModels,
+    t,
+  ])
 
   const [suggestedPrompts, setSuggestedPrompts] = useState<string[]>([])
   const [msgSearch, setMsgSearch] = useState('')
@@ -340,44 +465,82 @@ export default function AITab() {
     [showThinking, isCurrentThreadStreaming, fixProposals, activeThreadId, respondFixProposal],
   )
 
+  // The notice row: the thread's own (removed / unavailable / refused), else
+  // the one-time word about a saved Azure default that names nothing.
+  const noticeView: ModelNoticeView | null =
+    notice ?? (legacyDefaultNotice ? {kind: 'legacyDefault', ...legacyDefaultNotice} : null)
+  // Announced through the status region below — the row is not a live
+  // region — so a notice is read once, when it is raised (and only while
+  // the row is on screen: not over the "add an API key" state).
+  const noticeText =
+    configured && activeThread && noticeView ? modelNoticeSentences(t, noticeView, providerName).join(' ') : ''
+  // Rendered by EVERY branch below, at the same place, so it is mounted —
+  // empty — from the panel's first render on: a live region inserted
+  // already holding its text (a notice raised as the listing first loads) is
+  // not announced.
+  const statusRegion = (
+    <div role="status" className="sr-only">
+      {noticeText}
+    </div>
+  )
+
   if (configured === null) {
     // Still checking the providers — render nothing rather than flash the
     // "add an API key" screen; a failed check gets a way to retry.
     if (!providersError) {
       return (
-        <div className="flex-1 flex items-center justify-center">
-          <Spinner />
-        </div>
+        <>
+          {statusRegion}
+          <div className="flex-1 flex items-center justify-center">
+            <Spinner />
+          </div>
+        </>
       )
     }
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 p-6 text-center" role="alert">
-        <AlertTriangle size={20} className="text-semantic-warning" />
-        <div>
-          <p className="text-sm font-medium text-text-primary">{t('empty.providersFailedTitle')}</p>
-          <p className="text-xs text-text-tertiary mt-1">{t('empty.providersFailedBody')}</p>
+      <>
+        {statusRegion}
+        <div className="flex flex-col items-center justify-center h-full gap-3 p-6 text-center" role="alert">
+          <AlertTriangle size={20} className="text-semantic-warning" />
+          <div>
+            <p className="text-sm font-medium text-text-primary">{t('empty.providersFailedTitle')}</p>
+            <p className="text-xs text-text-tertiary mt-1">{t('empty.providersFailedBody')}</p>
+          </div>
+          <button
+            onClick={retryProviders}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-3 border border-border-default text-xs text-text-secondary hover:text-text-primary hover:bg-surface-4 transition-colors"
+          >
+            <RefreshCw size={12} />
+            {t('empty.retry')}
+          </button>
         </div>
-        <button
-          onClick={retryProviders}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-3 border border-border-default text-xs text-text-secondary hover:text-text-primary hover:bg-surface-4 transition-colors"
-        >
-          <RefreshCw size={12} />
-          {t('empty.retry')}
-        </button>
-      </div>
+      </>
     )
   }
   if (!configured) {
-    return <ApiKeyMissingState />
+    return (
+      <>
+        {statusRegion}
+        <ApiKeyMissingState />
+      </>
+    )
   }
 
   const selectedSourceFiles = activeThread?.selectedSourceFiles ?? []
-  const configuredProviders = providers.filter(p => p.configured)
   const messages = activeThreadMessages
   const historyLoading = historyState === 'loading' && messages.length === 0
   const showWelcome = messages.length === 0 && !isCurrentThreadStreaming && !historyLoading
+  const threadPurpose = purposeOf(threadModelDetail)
 
-  return (
+  // Dismiss takes the row away with the button that has focus: focus moves
+  // to the model picker's trigger, which names the model the thread now uses.
+  const dismissModelNotice = () => {
+    if (notice) dismissNotice()
+    else dismissLegacyDefaultNotice()
+    pickerTriggerRef.current?.focus()
+  }
+
+  const main = (
     // The thread-keyed boundary wraps only the scroll region below: keying
     // this outer one remounted the header, tab bar and composer on every
     // thread switch, which threw keyboard focus off the thread tabs.
@@ -396,18 +559,16 @@ export default function AITab() {
       >
         <div className="flex-shrink-0">
           <ChatHeader
-            providers={configuredProviders.map(p => ({
-              id: p.id as ProviderID,
-              name: p.name,
-              configured: p.configured,
-              authType: p.authType,
-              shared: p.shared,
-            }))}
-            selectedProvider={provider}
-            onSelectProvider={handleSetProvider}
-            models={currentModels}
-            selectedModel={selectedModel}
-            onSelectModel={setSelectedModel}
+            providers={pickerProviders}
+            provider={selection.provider}
+            model={selection.model}
+            modelLabel={selection.label}
+            modelDetail={threadModelDetail}
+            defaultModels={newChatDefaults}
+            onPickModel={pickModel}
+            orgName={orgName}
+            reviewPrompt={!!azure?.suggestDiscovery}
+            pickerDisabled={!activeThread}
             isStreaming={isCurrentThreadStreaming}
             messageCount={messages.length}
             useTools={activeThread?.useTools ?? false}
@@ -423,6 +584,7 @@ export default function AITab() {
             onToggleFocus={chatPanel?.canFocus ? chatPanel.toggleFocus : undefined}
             chatTextSize={chatTextSize}
             onCycleTextSize={cycleTextSize}
+            pickerTriggerRef={pickerTriggerRef}
           />
 
           <ChatThreadBar
@@ -432,7 +594,18 @@ export default function AITab() {
             onCreate={handleCreateThread}
             onClose={confirmCloseThread}
             onRename={handleRenameThread}
+            modelLabels={threadModelLabels}
           />
+
+          {activeThread && noticeView && (
+            <ModelUnavailableNotice
+              notice={noticeView}
+              providerName={providerName}
+              onChooseModel={() => useChatStore.getState().openModelPicker()}
+              onDismiss={dismissModelNotice}
+              onManage={openAzureAccounts}
+            />
+          )}
 
           {activeThread && (doc || contextBlockId) && (
             <ChatContextBar
@@ -491,16 +664,28 @@ export default function AITab() {
                 <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
                   <div>
                     <div className="chat-gutter pt-4 pb-2">
+                      {selection.label && (
+                        <p className="text-xs font-medium text-text-secondary leading-relaxed [overflow-wrap:anywhere]">
+                          {threadPurpose
+                            ? t('welcome.modelPurpose', {model: selection.label, purpose: threadPurpose})
+                            : t('welcome.model', {model: selection.label})}
+                        </p>
+                      )}
                       <p className="text-xs text-text-tertiary leading-relaxed">
-                        {t(`welcome.${provider}`, {defaultValue: t('welcome.fallback')})}
+                        {t(`welcome.${selection.provider}`, {defaultValue: t('welcome.fallback')})}
                       </p>
                     </div>
-                    <SuggestedPrompts prompts={suggestedPrompts} onSelect={onSelectPrompt} />
+                    <SuggestedPrompts
+                      prompts={suggestedPrompts}
+                      onSelect={onSelectPrompt}
+                      disabledReason={sendBlockedReason}
+                    />
                     <PromptTemplates
                       onSelect={onSelectPrompt}
                       hasBlock={!!contextBlockId}
                       flowName={doc?.name}
                       blockName={selectedBlock?.name}
+                      disabledReason={sendBlockedReason}
                     />
                   </div>
                 </div>
@@ -513,12 +698,14 @@ export default function AITab() {
                   renderMessage={(i, m) => (
                     <MessageBubble
                       message={m}
+                      modelLabel={listedModelName(m)}
                       isLastAssistant={m.id === lastAssistantId}
                       onRegenerate={m.id === lastAssistantId ? handleResend : undefined}
                       // Retry resends the LAST exchange, so only the last
                       // reply may offer it: on an older error bubble it
                       // deleted the latest answer and resent the wrong question.
                       onRetry={m.finishReason === 'error' && m.id === lastAssistantId ? handleResend : undefined}
+                      resendDisabledReason={sendBlockedReason}
                       highlight={searchQuery || undefined}
                       isActiveMatch={i === activeMatchIndex}
                     />
@@ -549,9 +736,10 @@ export default function AITab() {
               sourceFiles={sourceFiles}
               promptTokens={activeThread.tokensIn ?? 0}
               completionTokens={activeThread.tokensOut ?? 0}
-              contextLimit={currentModelDetail?.contextLimit || undefined}
-              inputCostPerM={currentModelDetail?.inputCostPerM}
-              outputCostPerM={currentModelDetail?.outputCostPerM}
+              contextLimit={threadModelDetail?.contextLimit || undefined}
+              inputCostPerM={threadModelDetail?.inputCostPerM}
+              outputCostPerM={threadModelDetail?.outputCostPerM}
+              guidance={guidance}
             />
           </div>
         )}
@@ -573,5 +761,12 @@ export default function AITab() {
         )}
       </div>
     </ChatErrorBoundary>
+  )
+
+  return (
+    <>
+      {statusRegion}
+      {main}
+    </>
   )
 }

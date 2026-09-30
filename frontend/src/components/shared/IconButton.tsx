@@ -1,16 +1,19 @@
+import {forwardRef} from 'react'
 import {type LucideIcon} from 'lucide-react'
 import clsx from 'clsx'
 import Tooltip from './Tooltip'
 
-type IconButtonProps = {
+// Every other <button> attribute passes through to the element — aria-*
+// (Dropdown clones aria-haspopup/aria-expanded/aria-controls onto its
+// trigger), data-*, id — and the ref lands on the <button>, so a caller can
+// move focus back to it.
+type IconButtonProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'children' | 'onClick'> & {
   icon: LucideIcon
   variant?: 'ghost' | 'solid' | 'outline'
   size?: 'sm' | 'md' | 'lg'
   label: string
   active?: boolean
-  disabled?: boolean
-  onClick?: () => void
-  className?: string
+  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void
 }
 
 const variantClasses: Record<string, string> = {
@@ -31,18 +34,26 @@ const iconSizes: Record<string, number> = {
   lg: 20,
 }
 
-export default function IconButton({
-  icon: Icon,
-  variant = 'ghost',
-  size = 'md',
-  label,
-  active = false,
-  disabled = false,
-  onClick,
-  className,
-}: IconButtonProps) {
+const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
+  {
+    icon: Icon,
+    variant = 'ghost',
+    size = 'md',
+    label,
+    active = false,
+    disabled = false,
+    onClick,
+    className,
+    // Not a submit button unless the caller says so (see Button).
+    type = 'button',
+    ...rest
+  },
+  ref,
+) {
   const button = (
     <button
+      ref={ref}
+      type={type}
       className={clsx(
         'inline-flex items-center justify-center rounded-md transition-colors duration-fast select-none',
         'focus-visible:ring-2 focus-visible:ring-brand-500/40 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0',
@@ -55,10 +66,13 @@ export default function IconButton({
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
+      {...rest}
     >
-      <Icon size={iconSizes[size]} />
+      <Icon size={iconSizes[size]} aria-hidden="true" />
     </button>
   )
 
   return <Tooltip content={label}>{button}</Tooltip>
-}
+})
+
+export default IconButton

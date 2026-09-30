@@ -110,3 +110,24 @@ func TestEmbedder_PinnedProviderOrgFirst_DefaultStaysPersonal(t *testing.T) {
 		t.Errorf("org store consulted %d times for an unpinned provider, want 0", orgCalls)
 	}
 }
+
+// F-33: the org's shared Azure credential without an embedding deployment
+// refuses instead of falling back to the member's personal key — a member's
+// key must not seed the org corpus, and the error names the org admin's fix.
+func TestEmbedder_OrgCredentialWithoutEmbeddingDeployment_RefusesFallback(t *testing.T) {
+	ai.ResetAzureFoundryCaches()
+	memberCalls, orgCalls := 0, 0
+	f := orgKeysFactory(map[string]string{"openai": "member-openai-key"}, map[string]string{"azure-foundry": azureDoc("")}, &memberCalls, &orgCalls)
+	svc := NewKnowledgeService(nil, f, stubSettings{&models.AppSettings{}}, WithEmbeddingProvider("azure-foundry"))
+
+	p, err := svc.embedder("u-own", "org-1")
+	if p != nil {
+		t.Fatalf("embedder = %v, want none", p)
+	}
+	if !errors.Is(err, ErrEmbeddingUnavailable) || !errors.Is(err, ai.ErrOrgEmbeddingDeploymentMissing) {
+		t.Fatalf("err = %v, want ErrEmbeddingUnavailable wrapping ai.ErrOrgEmbeddingDeploymentMissing", err)
+	}
+	if orgCalls != 1 || memberCalls != 0 {
+		t.Errorf("org consulted %d times, member %d; want the org's document once and no personal fallback", orgCalls, memberCalls)
+	}
+}

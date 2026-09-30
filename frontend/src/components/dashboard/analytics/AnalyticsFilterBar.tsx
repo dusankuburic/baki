@@ -134,10 +134,13 @@ export function AnalyticsFilterBar({
   return (
     <div className="analytics-filters" aria-busy={busy || undefined}>
       <div className="analytics-filter-row">
+        {/* Manual activation: a preset refetches the analytics, so arrowing
+            across them only moves focus; Space or Enter picks one. */}
         <SegmentedControl<RangePreset>
           value={draftPreset}
           onChange={onPreset}
           size="sm"
+          activation="manual"
           label={t('analytics.filters.range')}
           options={[
             {value: '7d', label: t('analytics.filters.preset7')},

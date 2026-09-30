@@ -11,14 +11,23 @@ import {useSettingsStore} from '@/stores/settingsStore'
 import type {StreamHandler} from '@/hooks/useStreamingMessage'
 
 let capturedHandler: StreamHandler | null = null
+// The engine's reload-reattach path (F-21) calls resumeInto; tests capture
+// the call and replay what a resume would deliver through the handler.
+let capturedResume: {streamId: string; opts: {mode?: 'delta' | 'full'; onGone?: () => void} | undefined} | null = null
+// Resolves "registered" so paths that await it can proceed; a test swaps in a
+// rejecting one (the event connection never opened).
+let registerStreamImpl: () => Promise<boolean> = async () => true
 
 vi.mock('@/hooks/useStreamingMessage', () => ({
   useStreamingMessage: (handler: StreamHandler) => {
     capturedHandler = handler
     return {
-      registerStream: vi.fn(),
+      registerStream: () => registerStreamImpl(),
       cancel: vi.fn(),
       teardownStream: vi.fn(),
+      resumeInto: (streamId: string, opts?: {mode?: 'delta' | 'full'; onGone?: () => void}) => {
+        capturedResume = {streamId, opts}
+      },
     }
   },
 }))
@@ -64,6 +73,8 @@ const LOADED = {state: 'loaded' as const, token: 1}
 beforeEach(() => {
   vi.clearAllMocks()
   capturedHandler = null
+  capturedResume = null
+  registerStreamImpl = async () => true
   vi.stubGlobal('requestAnimationFrame', (cb: () => void) => {
     cb()
     return 0
@@ -1221,5 +1232,524 @@ describe('useChatStreamEngine', () => {
       expect(msg.content).toBe('*Error: timed out*')
       expect(msg.errorCode).toBeUndefined()
     })
+  })
+})
+
+// Seeds a thread with a live slot for `streamId` and returns the StreamMeta
+// to begin its accumulator with (module-scope twin of the describe-local
+// seedThread above, for the describes appended below it).
+function seedSlotThread(threadId: string, streamId: string, provider: string) {
+  const st = useChatStore.getState()
+  useChatStore.setState({
+    threads: [
+      ...st.threads,
+      {
+        id: threadId,
+        flowId: 'flow-1',
+        title: 't',
+        createdAt: '2024',
+        contextBlockId: null,
+        selectedSourceFiles: [],
+        tokensIn: 0,
+        tokensOut: 0,
+      },
+    ],
+    conversations: new Map([...st.conversations, [threadId, []]]),
+    streams: {
+      ...st.streams,
+      [threadId]: {
+        streamId,
+        messageId: `m-${streamId}`,
+        text: '',
+        isThinking: true,
+        tokens: 0,
+        toolStatus: null,
+        toolCalls: [],
+        fixProposals: [],
+      },
+    },
+  })
+  return {provider: provider as never, model: 'my-deployment'}
+}
+
+// F-40: a finished tool's "running" label must not pulse through the silent
+// reasoning phase that follows it.
+describe('useChatStreamEngine tool-result status clearing (F-40)', () => {
+  it('clears its own running label and re-arms thinking before any text', () => {
+    const {result} = renderEngine()
+    act(() => {
+      result.current.beginAcc('streamA', 'threadA', seedSlotThread('threadA', 'streamA', 'azure-foundry'))
+    })
+    act(() => {
+      capturedHandler!.onToolStatus!('Agent - web search', 'streamA')
+    })
+    let slot = useChatStore.getState().streams.threadA
+    expect(slot?.toolStatus).toBe('Agent - web search')
+    expect(slot?.isThinking).toBe(false)
+
+    act(() => {
+      capturedHandler!.onToolResult!(
+        {kind: 'tool-result', name: 'web_search', label: 'Agent - web search', ok: true, durationMs: 5, summary: ''},
+        'streamA',
+      )
+    })
+    slot = useChatStore.getState().streams.threadA
+    expect(slot?.toolStatus).toBeNull()
+    // No answer text yet: the post-tool reasoning phase shows the indicator.
+    expect(slot?.isThinking).toBe(true)
+    expect(slot?.toolCalls).toHaveLength(1)
+
+    // The next chunk must turn the re-armed indicator off again.
+    act(() => {
+      capturedHandler!.onChunk('answer', 'streamA')
+    })
+    expect(useChatStore.getState().streams.threadA?.isThinking).toBe(false)
+  })
+
+  it('keeps isThinking off when answer text already exists', () => {
+    const {result} = renderEngine()
+    act(() => {
+      result.current.beginAcc('streamA', 'threadA', seedSlotThread('threadA', 'streamA', 'azure-foundry'))
+      capturedHandler!.onChunk('preamble ', 'streamA')
+      capturedHandler!.onToolStatus!('Using search_flow', 'streamA')
+    })
+    act(() => {
+      capturedHandler!.onToolResult!(
+        {kind: 'tool-result', name: 'search_flow', label: 'Using search_flow', ok: true, durationMs: 1, summary: ''},
+        'streamA',
+      )
+    })
+    const slot = useChatStore.getState().streams.threadA
+    expect(slot?.toolStatus).toBeNull()
+    // The visible bubble is the liveness signal - no second indicator.
+    expect(slot?.isThinking).toBe(false)
+  })
+
+  it('keeps a newer tool label when an older same-phase result lands', () => {
+    const {result} = renderEngine()
+    act(() => {
+      result.current.beginAcc('streamA', 'threadA', seedSlotThread('threadA', 'streamA', 'azure-foundry'))
+      capturedHandler!.onToolStatus!('step A', 'streamA')
+      capturedHandler!.onToolStatus!('step B', 'streamA')
+    })
+    act(() => {
+      capturedHandler!.onToolResult!(
+        {kind: 'tool-result', name: 'a', label: 'step A', ok: true, durationMs: 1, summary: ''},
+        'streamA',
+      )
+    })
+    // B is still running: its label stays lit.
+    expect(useChatStore.getState().streams.threadA?.toolStatus).toBe('step B')
+    act(() => {
+      capturedHandler!.onToolResult!(
+        {kind: 'tool-result', name: 'b', label: 'step B', ok: true, durationMs: 1, summary: ''},
+        'streamA',
+      )
+    })
+    expect(useChatStore.getState().streams.threadA?.toolStatus).toBeNull()
+  })
+})
+
+// F-15: a billed failure's usage reaches the error bubble and the thread
+// totals; F-42: the shared-credential flag rides the bubble.
+describe('useChatStreamEngine error usage (F-15/F-42)', () => {
+  it('counts a billed failure: usage and rates land on the bubble and the totals move', () => {
+    const {result} = renderEngine()
+    act(() => {
+      result.current.beginAcc('streamA', 'threadA', seedSlotThread('threadA', 'streamA', 'azure-foundry'))
+      capturedHandler!.onChunk('partial ', 'streamA')
+    })
+    act(() => {
+      capturedHandler!.onError('raise Max tokens', 'streamA', 'PROVIDER_OUTPUT_LIMIT', {
+        tokensIn: 50,
+        tokensOut: 4096,
+        meta: {servedModel: 'gpt-5.1', inputCostPerM: 1.25, outputCostPerM: 10},
+      })
+    })
+    const st = useChatStore.getState()
+    const msgs = st.conversations.get('threadA')!
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]).toMatchObject({
+      finishReason: 'error',
+      errorCode: 'PROVIDER_OUTPUT_LIMIT',
+      tokensIn: 50,
+      tokensOut: 4096,
+      servedModel: 'gpt-5.1',
+      inputCostPerM: 1.25,
+      outputCostPerM: 10,
+    })
+    const thread = st.threads.find(t => t.id === 'threadA')!
+    expect(thread.tokensIn).toBe(50)
+    expect(thread.tokensOut).toBe(4096)
+  })
+
+  it('an unbilled error carries no usage keys and moves no totals', () => {
+    const {result} = renderEngine()
+    act(() => {
+      result.current.beginAcc('streamA', 'threadA', seedSlotThread('threadA', 'streamA', 'azure-foundry'))
+      capturedHandler!.onError('timed out', 'streamA')
+    })
+    const st = useChatStore.getState()
+    const msgs = st.conversations.get('threadA')!
+    expect('tokensIn' in msgs[0]).toBe(false)
+    expect('tokensOut' in msgs[0]).toBe(false)
+    expect('servedModel' in msgs[0]).toBe(false)
+    expect(st.threads.find(t => t.id === 'threadA')!.tokensIn).toBe(0)
+  })
+
+  it('flags a shared-credential failure on the error bubble', () => {
+    const {result} = renderEngine()
+    act(() => {
+      result.current.beginAcc('streamA', 'threadA', seedSlotThread('threadA', 'streamA', 'azure-foundry'))
+      capturedHandler!.onError('ask your organisation admin', 'streamA', 'PROVIDER_NOT_CONFIGURED', {shared: true})
+    })
+    expect(useChatStore.getState().conversations.get('threadA')![0].errorShared).toBe(true)
+  })
+})
+
+// F-21: re-attaching a stream the conversation load reports as in-flight.
+describe('useChatStreamEngine resumeAfterReload (F-21)', () => {
+  function seedIdleThread(threadId: string) {
+    const st = useChatStore.getState()
+    useChatStore.setState({
+      threads: [
+        ...st.threads,
+        {
+          id: threadId,
+          flowId: 'flow-1',
+          title: 't',
+          createdAt: '2024',
+          contextBlockId: null,
+          selectedSourceFiles: [],
+          tokensIn: 0,
+          tokensOut: 0,
+        },
+      ],
+      conversations: new Map([...st.conversations, [threadId, []]]),
+    })
+  }
+
+  it('re-attaches an in-flight stream and commits the resumed done with its served model and rates', async () => {
+    const {result} = renderEngine()
+    seedIdleThread('threadA')
+    const gone = vi.fn()
+
+    let accepted: boolean | undefined
+    await act(async () => {
+      accepted = result.current.resumeAfterReload('threadA', 'live-1', gone)
+    })
+    expect(accepted).toBe(true)
+    // The slot exists and thinks; the SSE registration ran without the
+    // legacy /begin handshake; one authoritative FULL resume was requested.
+    const slot = useChatStore.getState().streams.threadA
+    expect(slot?.streamId).toBe('live-1')
+    expect(slot?.isThinking).toBe(true)
+    expect(capturedResume?.streamId).toBe('live-1')
+    expect(capturedResume?.opts?.mode).toBe('full')
+
+    // What the resume delivers: the buffered text, then the done.
+    await act(async () => {
+      capturedHandler!.onReplace('the answer', 'live-1')
+      capturedHandler!.onDone(7, 5, 'live-1', {servedModel: 'gpt-4o', inputCostPerM: 2.5, outputCostPerM: 10})
+    })
+    const st = useChatStore.getState()
+    const committed = st.conversations.get('threadA')![0]
+    expect(committed).toMatchObject({
+      content: 'the answer',
+      servedModel: 'gpt-4o',
+      inputCostPerM: 2.5,
+      outputCostPerM: 10,
+      tokensIn: 5,
+      tokensOut: 7,
+    })
+    expect(st.streams.threadA).toBeUndefined()
+    expect(gone).not.toHaveBeenCalled()
+  })
+
+  it('drops the slot and reports the loss when the stream is gone (403/404)', async () => {
+    const {result} = renderEngine()
+    seedIdleThread('threadA')
+    const gone = vi.fn()
+    await act(async () => {
+      result.current.resumeAfterReload('threadA', 'live-2', gone)
+    })
+    expect(useChatStore.getState().streams.threadA?.streamId).toBe('live-2')
+
+    // The resume rejects (retention expired): the caller refetches history.
+    act(() => {
+      capturedResume?.opts?.onGone?.()
+    })
+    expect(useChatStore.getState().streams.threadA).toBeUndefined()
+    expect(gone).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops the slot and reports the loss when the event connection never opens', async () => {
+    registerStreamImpl = () => Promise.reject(new Error('cannot connect'))
+    const {result} = renderEngine()
+    seedIdleThread('threadA')
+    const gone = vi.fn()
+    await act(async () => {
+      result.current.resumeAfterReload('threadA', 'live-4', gone)
+    })
+    // No thinking slot is left behind (queued sends drain again), no resume
+    // was requested, and the caller refetches the history.
+    expect(useChatStore.getState().streams.threadA).toBeUndefined()
+    expect(capturedResume).toBeNull()
+    expect(gone).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses to re-attach a thread that already streams', async () => {
+    const {result} = renderEngine()
+    seedSlotThread('threadA', 'streamA', 'azure-foundry')
+    let accepted: boolean | undefined
+    await act(async () => {
+      accepted = result.current.resumeAfterReload('threadA', 'live-3')
+    })
+    expect(accepted).toBe(false)
+    expect(capturedResume).toBeNull()
+    expect(useChatStore.getState().streams.threadA?.streamId).toBe('streamA')
+  })
+})
+
+// F-43: the served-model listing refetch is keyed by thread AND deployment
+// AND served model, so a second deployment in the same thread is annotated
+// too.
+describe('useChatStreamEngine served-model refetch key (F-43)', () => {
+  it('refetches for a second deployment and for a router that changes served model', () => {
+    const {result} = renderEngine()
+    const epoch0 = useChatStore.getState().providerEpoch
+    act(() => {
+      result.current.beginAcc('streamA', 'threadA', seedSlotThread('threadA', 'streamA', 'azure-foundry'))
+    })
+    act(() => {
+      capturedHandler!.onDone(1, 1, 'streamA', {servedModel: 'gpt-4o'})
+    })
+    expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
+
+    // Same thread, a DIFFERENT deployment: one more refetch.
+    act(() => {
+      useChatStore.setState({
+        streams: {
+          threadA: {
+            streamId: 'streamB',
+            messageId: 'mB',
+            text: '',
+            isThinking: true,
+            tokens: 0,
+            toolStatus: null,
+            toolCalls: [],
+            fixProposals: [],
+          },
+        },
+      })
+      result.current.beginAcc('streamB', 'threadA', {provider: 'azure-foundry' as never, model: 'other-deployment'})
+    })
+    act(() => {
+      capturedHandler!.onDone(1, 1, 'streamB', {servedModel: 'gpt-4o'})
+    })
+    expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 2)
+
+    // The model router re-points per turn: each new served model refetches.
+    act(() => {
+      useChatStore.setState({
+        streams: {
+          threadA: {
+            streamId: 'streamC',
+            messageId: 'mC',
+            text: '',
+            isThinking: true,
+            tokens: 0,
+            toolStatus: null,
+            toolCalls: [],
+            fixProposals: [],
+          },
+        },
+      })
+      result.current.beginAcc('streamC', 'threadA', {provider: 'azure-foundry' as never, model: 'model-router'})
+    })
+    act(() => {
+      capturedHandler!.onDone(1, 1, 'streamC', {servedModel: 'gpt-4o'})
+    })
+    expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 3)
+    act(() => {
+      useChatStore.setState({
+        streams: {
+          threadA: {
+            streamId: 'streamD',
+            messageId: 'mD',
+            text: '',
+            isThinking: true,
+            tokens: 0,
+            toolStatus: null,
+            toolCalls: [],
+            fixProposals: [],
+          },
+        },
+      })
+      result.current.beginAcc('streamD', 'threadA', {provider: 'azure-foundry' as never, model: 'model-router'})
+    })
+    act(() => {
+      capturedHandler!.onDone(1, 1, 'streamD', {servedModel: 'gpt-4o-mini'})
+    })
+    expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 4)
+
+    // Repeating an already-seen triple never bumps again.
+    act(() => {
+      useChatStore.setState({
+        streams: {
+          threadA: {
+            streamId: 'streamE',
+            messageId: 'mE',
+            text: '',
+            isThinking: true,
+            tokens: 0,
+            toolStatus: null,
+            toolCalls: [],
+            fixProposals: [],
+          },
+        },
+      })
+      result.current.beginAcc('streamE', 'threadA', {provider: 'azure-foundry' as never, model: 'model-router'})
+    })
+    act(() => {
+      capturedHandler!.onDone(1, 1, 'streamE', {servedModel: 'gpt-4o-mini'})
+    })
+    expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 4)
+  })
+})
+
+// Per-thread model memory: a reply names the model it was sent with (an
+// Azure entry's display name — its "m/<id>" means nothing to a reader), and
+// a re-attached stream is labelled with ITS thread's pair.
+describe('useChatStreamEngine model labels', () => {
+  const DOCS = {provider: 'azure-foundry' as never, model: 'm/docs000000', modelLabel: 'Docs writer'}
+
+  it('commits the reply and the error bubble with the label they were sent with', () => {
+    const {result} = renderEngine()
+    act(() => {
+      seedSlotThread('threadA', 'streamA', 'azure-foundry')
+      result.current.beginAcc('streamA', 'threadA', DOCS)
+      capturedHandler!.onChunk('the docs', 'streamA')
+      capturedHandler!.onDone(3, 2, 'streamA')
+    })
+    expect(useChatStore.getState().conversations.get('threadA')![0]).toMatchObject({
+      provider: 'azure-foundry',
+      model: 'm/docs000000',
+      modelLabel: 'Docs writer',
+      content: 'the docs',
+    })
+
+    act(() => {
+      seedSlotThread('threadB', 'streamB', 'azure-foundry')
+      result.current.beginAcc('streamB', 'threadB', DOCS)
+      capturedHandler!.onError('boom', 'streamB')
+    })
+    expect(useChatStore.getState().conversations.get('threadB')![0]).toMatchObject({
+      finishReason: 'error',
+      modelLabel: 'Docs writer',
+    })
+  })
+
+  it('a stream reports MODEL_NOT_AVAILABLE: a coded bubble (Choose another model) and a listing refresh', () => {
+    const {result} = renderEngine()
+    const epoch0 = useChatStore.getState().providerEpoch
+    act(() => {
+      seedSlotThread('threadA', 'streamA', 'azure-foundry')
+      result.current.beginAcc('streamA', 'threadA', DOCS)
+      capturedHandler!.onError('the model is not available', 'streamA', 'MODEL_NOT_AVAILABLE')
+    })
+    const msg = useChatStore.getState().conversations.get('threadA')![0]
+    expect(msg.errorCode).toBe('MODEL_NOT_AVAILABLE')
+    expect(msg.content).toBe('**This model is no longer available** — the model is not available')
+    expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
+  })
+
+  function seedIdle(threadId: string, extra: Record<string, unknown> = {}, messages: object[] = []) {
+    const st = useChatStore.getState()
+    useChatStore.setState({
+      threads: [
+        ...st.threads,
+        {
+          id: threadId,
+          flowId: 'flow-1',
+          title: 't',
+          createdAt: '2024',
+          contextBlockId: null,
+          selectedSourceFiles: [],
+          tokensIn: 0,
+          tokensOut: 0,
+          ...extra,
+        },
+      ],
+      conversations: new Map([...st.conversations, [threadId, messages as never]]),
+    })
+  }
+
+  // C11: a re-attached stream used to be labelled with the thread's pin —
+  // wrong for a turn that went to a stand-in — else the settings' default,
+  // and the save after done then overwrote the server's correct copy.
+  it('labels a re-attached stream with its turn’s record: the model it went to, not the thread’s pin', async () => {
+    const {result} = renderEngine()
+    seedIdle('threadA', {
+      ...DOCS,
+      inFlight: {
+        streamId: 'live-1',
+        messageId: 'a-live-1',
+        provider: 'azure-foundry',
+        model: 'm/gpt4100000',
+        modelLabel: 'GPT-4.1',
+      },
+    })
+    useChatStore.setState({historyStatus: {threadA: LOADED}})
+    await act(async () => {
+      result.current.resumeAfterReload('threadA', 'live-1')
+    })
+    await act(async () => {
+      capturedHandler!.onReplace('resumed', 'live-1')
+      capturedHandler!.onDone(1, 1, 'live-1')
+    })
+    // Under the id the server stores its copy with, so the two are one.
+    expect(useChatStore.getState().conversations.get('threadA')!.at(-1)).toMatchObject({
+      id: 'a-live-1',
+      provider: 'azure-foundry',
+      model: 'm/gpt4100000',
+      modelLabel: 'GPT-4.1',
+    })
+    expect(chatApi.saveConversation).toHaveBeenCalledTimes(1)
+    // The turn is over: its record goes, the thread keeps its own pin.
+    const thread = useChatStore.getState().threads.find(t => t.id === 'threadA')!
+    expect(thread.inFlight).toBeUndefined()
+    expect(thread).toMatchObject(DOCS)
+  })
+
+  it('guesses nothing without a record: no model on the answer, and no save over the server’s copy', async () => {
+    const s = useSettingsStore.getState().settings
+    useSettingsStore.setState({settings: {...s, ai: {...s.ai, activeProvider: 'claude'}}})
+    const {result} = renderEngine()
+    seedIdle(
+      'threadA',
+      // A record of another turn is no record of this one.
+      {inFlight: {streamId: 'older', provider: 'openai', model: 'gpt-5'}},
+      [
+        {id: 'u1', role: 'user', content: 'q', timestamp: 't'},
+        {id: 'a1', role: 'assistant', content: 'a', timestamp: 't', provider: 'openai', model: 'gpt-5'},
+        {id: 'u2', role: 'user', content: 'q2', timestamp: 't'},
+      ],
+    )
+    useChatStore.setState({historyStatus: {threadA: LOADED}})
+    await act(async () => {
+      result.current.resumeAfterReload('threadA', 'live-2')
+    })
+    await act(async () => {
+      capturedHandler!.onReplace('resumed', 'live-2')
+      capturedHandler!.onDone(1, 1, 'live-2')
+    })
+    const answer = useChatStore.getState().conversations.get('threadA')!.at(-1)!
+    expect(answer.content).toBe('resumed')
+    expect(answer).not.toHaveProperty('provider')
+    expect(answer).not.toHaveProperty('model')
+    expect(answer).not.toHaveProperty('modelLabel')
+    // The server stored the finished turn itself, with the model it went to.
+    expect(chatApi.saveConversation).not.toHaveBeenCalled()
   })
 })

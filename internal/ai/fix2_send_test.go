@@ -266,8 +266,8 @@ func TestSend_ForgetsARejectedLearnedRepair(t *testing.T) {
 		t.Fatalf("phase 1 cost %d requests, want 2", n)
 	}
 	key := p.repairsKey("chat")
-	if got := repairsFor(key); len(got) != 1 || got[0] != reasoningEffortParam {
-		t.Fatalf("memo = %v, want [reasoning_effort]", got)
+	if got := repairsFor(key); len(got) != 1 || got[0] != reasoningEffortNoneRepair {
+		t.Fatalf("memo = %v, want [%s]", got, reasoningEffortNoneRepair)
 	}
 
 	// Phase 2: the deployment now points at a model that rejects

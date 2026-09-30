@@ -2,6 +2,29 @@ import {request} from './client'
 import {parseConversationPayload} from '@/lib/chatMessage'
 import type {ChatRequest, ChatMessage, ContextPreview} from '@/types'
 
+// ConversationLoad is a /api/chat/get response: the validated message list
+// plus, while the server tracks an in-flight (or still-resumable) stream for
+// this conversation, the id a reloaded client can re-attach to (F-21). The
+// backend historically answers a bare array — that shape carries no id.
+export interface ConversationLoad {
+  messages: ChatMessage[]
+  activeStreamId?: string
+}
+
+// parseConversationLoad keeps parseConversationPayload as the validator (an
+// unexpected payload shape must still count as a failed load) and only lifts
+// activeStreamId off the object form. `{"messages": null}` (a server that
+// serialised an empty Go slice as null) is an empty history, not a failure.
+function parseConversationLoad(raw: unknown): ConversationLoad {
+  const isObject = raw != null && typeof raw === 'object' && !Array.isArray(raw)
+  const messages = isObject && (raw as {messages?: unknown}).messages === null ? [] : parseConversationPayload(raw)
+  if (isObject) {
+    const activeStreamId = (raw as {activeStreamId?: unknown}).activeStreamId
+    if (typeof activeStreamId === 'string' && activeStreamId) return {messages, activeStreamId}
+  }
+  return {messages}
+}
+
 // BeginStreamResult reports whether the stream is live (events arrive over
 // SSE) or already finished — a fail-fast pre-stream error emits its terminal
 // event before the client subscribes, so /begin returns that state directly.
@@ -12,6 +35,9 @@ export interface BeginStreamResult {
   error?: string
   // Machine-readable class of `error` (AI_BUDGET_EXCEEDED, …), when known.
   errorCode?: string
+  // True when the failure came from the organisation's shared credential
+  // (F-42) — the error bubble then also offers the Organizations section.
+  errorShared?: boolean
   tokensIn?: number
   tokensOut?: number
   // The model that answered, when the provider resolved an alias, and the
@@ -46,10 +72,11 @@ export const chatApi = {
     done: boolean
     error: string
     errorCode?: string
+    errorShared?: boolean
     tokensIn: number
     tokensOut: number
     // Same as BeginStreamResult: the served model and billed rates of a
-    // finished turn, when known.
+    // finished turn (or, with error, a BILLED failed one — F-15), when known.
     servedModel?: string
     inputCostPerM?: number
     outputCostPerM?: number
@@ -63,8 +90,8 @@ export const chatApi = {
   // Resolves the validated message list; rejects when the response is not a
   // conversation (see parseConversationPayload) so callers treat it as a
   // failed load rather than an empty history.
-  getConversation: (flowId: string, conversationKey: string): Promise<ChatMessage[]> =>
-    request<unknown>('/api/chat/get', {body: {flowId, provider: conversationKey}}).then(parseConversationPayload),
+  getConversation: (flowId: string, conversationKey: string): Promise<ConversationLoad> =>
+    request<unknown>('/api/chat/get', {body: {flowId, provider: conversationKey}}).then(parseConversationLoad),
 
   saveConversation: (flowId: string, conversationKey: string, messages: ChatMessage[]): Promise<void> =>
     request('/api/chat/save', {body: {flowId, provider: conversationKey, messages}}),

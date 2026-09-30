@@ -22,7 +22,8 @@ var _ service.OrgKeyStore = (*database.EncryptedKeyStore)(nil)
 // updated_at token survives the RFC 3339 round trip the API gives it,
 // a stale or missing token writes nothing, a save that carries the secret
 // keeps its lender (secret_set_by, migration v24), and DeleteOrgIfSavedBy /
-// OrgsWithKeySavedBy only touch the rows the named admin lent or last wrote.
+// OrgsWithKeySavedBy only touch the rows the named admin lent — a carrying
+// edit does not make its editor a lender.
 // Gated on DATABASE_URL (the podman harness).
 func TestOrgProviderKeys_CompareAndSwap_Postgres(t *testing.T) {
 	dsn := os.Getenv("DATABASE_URL")
@@ -105,14 +106,22 @@ func TestOrgProviderKeys_CompareAndSwap_Postgres(t *testing.T) {
 	if err != nil || len(orgs) != 1 || orgs[0] != orgA.ID {
 		t.Errorf("OrgsWithKeySavedBy(lender) = %v, %v; want only org A", orgs, err)
 	}
-	if orgs, err := ks.OrgsWithKeySavedBy(provider, editor); err != nil || len(orgs) != 1 || orgs[0] != orgA.ID {
-		t.Errorf("OrgsWithKeySavedBy(editor) = %v, %v; want only org A", orgs, err)
+	if orgs, err := ks.OrgsWithKeySavedBy(provider, editor); err != nil || len(orgs) != 0 {
+		t.Errorf("OrgsWithKeySavedBy(editor) = %v, %v; want none (a carrying edit does not make the editor a lender)", orgs, err)
 	}
 	if orgs, err := ks.OrgsWithKeySavedBy(provider, ""); err != nil || len(orgs) != 0 {
 		t.Errorf("OrgsWithKeySavedBy(empty) = %v, %v; want none", orgs, err)
 	}
 	if deleted, err := ks.DeleteOrgIfSavedBy(orgB.ID, provider, lender); err != nil || deleted {
 		t.Errorf("delete of another admin's row: deleted=%v err=%v", deleted, err)
+	}
+	// The editor's departure must NOT delete the lender's still-valid
+	// credential (F-32: an edit that carried the secret is not a loan).
+	if deleted, err := ks.DeleteOrgIfSavedBy(orgA.ID, provider, editor); err != nil || deleted {
+		t.Errorf("delete by the carrying editor: deleted=%v err=%v, want the lender's credential kept", deleted, err)
+	}
+	if has, _ := ks.HasOrg(orgA.ID, provider); !has {
+		t.Fatal("the editor's departure removed the lender's credential")
 	}
 	// The lender's departure disables the credential another admin edited.
 	if deleted, err := ks.DeleteOrgIfSavedBy(orgA.ID, provider, lender); err != nil || !deleted {

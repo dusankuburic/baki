@@ -1,9 +1,9 @@
-import {describe, it, expect, beforeEach} from 'vitest'
+import {describe, it, expect, expectTypeOf, beforeEach} from 'vitest'
 import {renderHook} from '@testing-library/react'
 import {useChatRequestBuilder} from './useChatRequestBuilder'
 import {useChatStore} from '@/stores/chatStore'
 import type {ChatThread} from '@/stores/chatStore'
-import type {AISettings, ChatMessage, FlowDocument} from '@/types'
+import type {AISettings, ChatMessage, ChatRequest, FlowDocument} from '@/types'
 
 const doc = {
   id: 'flow1',
@@ -102,7 +102,11 @@ describe('useChatRequestBuilder', () => {
     expect(req).not.toHaveProperty('messages')
   })
 
-  it('falls back to the provider default model when selectedModel is empty', () => {
+  // Per-thread model memory: the thread's resolved pair is sent as is. The
+  // saved "Default for new chats" may name a model this scope no longer
+  // offers, so an empty model is left for the server's own default rather
+  // than replaced with it; temperature and Max tokens stay per provider.
+  it('sends an empty model as is (the server default), never the saved default', () => {
     const thread = makeThread()
     useChatStore.setState({threads: [thread]})
     const {result} = renderHook(() =>
@@ -116,7 +120,9 @@ describe('useChatRequestBuilder', () => {
       }),
     )
     const req = result.current.buildRequest('hi')
-    expect(req?.model).toBe('gpt-default')
+    expect(req?.model).toBe('')
+    expect(req?.temperature).toBe(0.3)
+    expect(req?.maxTokens).toBe(4096)
   })
 
   it('includes messages only when includeHistory is true', () => {
@@ -222,5 +228,36 @@ describe('useChatRequestBuilder', () => {
       }),
     )
     expect(result.current.buildRequest('hi')?.useTools).toBe(true)
+  })
+})
+
+describe('useChatRequestBuilder reasoning effort (F-19)', () => {
+  it('sends the configured effort next to temperature/maxTokens and omits the default', () => {
+    const settings = makeAISettings()
+    const {result} = renderHook(() =>
+      useChatRequestBuilder({
+        doc,
+        activeThread: makeThread(),
+        provider: 'openai',
+        selectedModel: 'gpt-5',
+        aiSettings: settings,
+        getMessages: () => [],
+      }),
+    )
+    // ChatRequest types the field (it used to ride past the excess-property
+    // check as an untyped spread), with only the values the server accepts.
+    expectTypeOf<ChatRequest['reasoningEffort']>().toEqualTypeOf<'low' | 'medium' | 'high' | undefined>()
+    expectTypeOf<NonNullable<AISettings['providers']['openai']>['reasoningEffort']>().toEqualTypeOf<
+      '' | 'low' | 'medium' | 'high' | undefined
+    >()
+    // No effort configured: nothing on the wire (the provider default).
+    const plain = result.current.buildRequest('hi')
+    expect(plain && 'reasoningEffort' in plain).toBe(false)
+
+    settings.providers.openai = {...settings.providers.openai, reasoningEffort: 'low'}
+    const req = result.current.buildRequest('deep question')
+    expect(req?.reasoningEffort).toBe('low')
+    expect(req?.temperature).toBe(0.3)
+    expect(req?.maxTokens).toBe(4096)
   })
 })

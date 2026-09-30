@@ -3,13 +3,15 @@ import {useTranslation} from 'react-i18next'
 // so its copy goes through the i18next instance rather than the hook.
 import i18n from '@/i18n'
 import clsx from 'clsx'
-import {Copy, Check, RefreshCw, RotateCcw, Bot, User, CircleSlash, Settings} from 'lucide-react'
-import {useCallback, memo} from 'react'
+import {Copy, Check, RefreshCw, RotateCcw, Bot, User, CircleSlash, Settings, Users, ListFilter} from 'lucide-react'
+import {useCallback, useId, memo} from 'react'
 import ReactMarkdown, {defaultUrlTransform} from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {ChatMessage as ChatMessageType} from '@/types'
 import {useCopy} from '@/hooks/useCopy'
 import {providerErrorInfo} from '@/lib/chatErrors'
+import {isRegistryModelId, storableModelLabel} from '@/lib/modelIds'
+import {useChatStore} from '@/stores/chatStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
@@ -19,11 +21,19 @@ import {ToolTrail, FixOutcomeStrip} from './ToolTrail'
 
 interface Props {
   message: ChatMessageType
+  // The provider listing's current name for the message's model, for a
+  // message that kept no label of its own (one saved before labels, or a
+  // pre-registry Azure id the listing still answers for). The message's own
+  // label — the name at send time — always wins.
+  modelLabel?: string
   isStreaming?: boolean
   isThinking?: boolean
   isLastAssistant?: boolean
   onRegenerate?: () => void
   onRetry?: () => void
+  // Why nothing can be sent right now (the composer's guidance): Retry and
+  // Regenerate stay reachable, marked unavailable, and say so.
+  resendDisabledReason?: string
   // Active search query — occurrences are <mark>ed in the rendered text.
   highlight?: string
   // True for the match the search bar is currently stepping through.
@@ -421,11 +431,13 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean, 
 
 function MessageBubble({
   message,
+  modelLabel,
   isStreaming,
   isThinking,
   isLastAssistant,
   onRegenerate,
   onRetry,
+  resendDisabledReason,
   highlight,
   isActiveMatch,
 }: Props) {
@@ -436,12 +448,28 @@ function MessageBubble({
   const providerError = isError ? providerErrorInfo(message.errorCode) : null
   const openSettings = useUIStore(s => s.openSettings)
   const {copied, copy} = useCopy()
+  const resendReasonId = useId()
 
   const handleCopy = useCallback(() => {
     copy(message.content)
   }, [message.content, copy])
 
   const time = formatTime(message.timestamp)
+  // The model's name as the reader knows it: the label it was sent with,
+  // else the listing's, else the id — except an Azure registry id ("m/…")
+  // nothing names any more, which reads "removed model". A label that is
+  // only an id is no name (storableModelLabel).
+  const modelName = message.model
+    ? storableModelLabel(message.modelLabel, message.model) ||
+      modelLabel ||
+      (isRegistryModelId(message.model) ? t('message.removedModel') : message.model)
+    : ''
+  // Retry / Regenerate while nothing can be sent: reachable, unavailable,
+  // with the reason read as their description.
+  const resendProps = resendDisabledReason
+    ? {'aria-disabled': true, 'aria-describedby': resendReasonId, title: resendDisabledReason}
+    : {}
+  const showsResend = (isError && !!onRetry) || (isLastAssistant && !isError && !!onRegenerate)
 
   if (isThinking) return <ThinkingIndicator />
 
@@ -460,19 +488,22 @@ function MessageBubble({
         <span className="text-2xs font-medium text-text-tertiary">
           {isUser ? t('message.roleUser') : t('message.roleAssistant')}
         </span>
-        {message.model && !isUser && <span className="text-2xs text-text-tertiary/60">· {message.model}</span>}
+        {modelName && !isUser && <span className="text-2xs text-text-tertiary/60">· {modelName}</span>}
         {/* The model that actually answered, when the provider resolved the
             selected one (a deployment, model-router, an agent) to another. */}
-        {message.servedModel && !isUser && message.servedModel !== message.model && (
-          <span
-            className="text-2xs text-text-tertiary/60"
-            role="img"
-            aria-label={t('message.servedBy', {model: message.servedModel})}
-            title={t('message.servedBy', {model: message.servedModel})}
-          >
-            · {message.servedModel}
-          </span>
-        )}
+        {message.servedModel &&
+          !isUser &&
+          message.servedModel !== message.model &&
+          message.servedModel !== modelName && (
+            <span
+              className="text-2xs text-text-tertiary/60"
+              role="img"
+              aria-label={t('message.servedBy', {model: message.servedModel})}
+              title={t('message.servedBy', {model: message.servedModel})}
+            >
+              · {message.servedModel}
+            </span>
+          )}
         {time && <span className="text-2xs text-text-tertiary/40">{time}</span>}
       </div>
 
@@ -494,15 +525,49 @@ function MessageBubble({
         {renderContent(message.content, isUser, isStreaming, highlight)}
       </div>
 
-      {isError && providerError && (
-        // Always visible (not in the hover row): the fix lives in Settings.
+      {isError && providerError?.action === 'chooseModel' && (
+        // The model is gone: the fix is another model, not Settings. Opens
+        // the header's model picker.
         <button
           type="button"
           className="flex items-center gap-1 px-1 text-2xs text-brand-400 hover:text-brand-300 transition-colors"
-          onClick={() => openSettings(providerError.settingsSection)}
+          onClick={() => useChatStore.getState().openModelPicker()}
         >
-          <Settings size={11} />
-          <span>{t('errors.openSettings')}</span>
+          <ListFilter size={11} aria-hidden="true" />
+          <span>{t('errors.chooseModel')}</span>
+        </button>
+      )}
+
+      {isError &&
+        providerError &&
+        !providerError.action &&
+        !(message.errorShared && message.errorCode === 'PROVIDER_NOT_CONFIGURED') && (
+          // Always visible (not in the hover row): the fix lives in Settings.
+          <button
+            type="button"
+            className="flex items-center gap-1 px-1 text-2xs text-brand-400 hover:text-brand-300 transition-colors"
+            onClick={() => openSettings(providerError.settingsSection)}
+          >
+            <Settings size={11} />
+            <span>{t('errors.openSettings')}</span>
+          </button>
+        )}
+
+      {isError && message.errorShared && (
+        // F-42: the failure came from the organisation's shared credential —
+        // the member cannot fix it under their own Accounts. For AUTH and
+        // PERMISSION the server copy still offers adding personal
+        // credentials, so the Accounts action above stays; for
+        // NOT_CONFIGURED there is nothing to fix there and this is the only
+        // action. The org section is where an admin acts ('orgs' is the
+        // SettingsSection id).
+        <button
+          type="button"
+          className="flex items-center gap-1 px-1 text-2xs text-brand-400 hover:text-brand-300 transition-colors"
+          onClick={() => openSettings('orgs')}
+        >
+          <Users size={11} />
+          <span>{t('errors.openOrgSettings')}</span>
         </button>
       )}
 
@@ -547,8 +612,12 @@ function MessageBubble({
           </button>
           {isError && onRetry && (
             <button
-              className="flex items-center gap-1 p-1 rounded hover:bg-surface-2 text-text-tertiary hover:text-red-400 transition-colors text-2xs"
-              onClick={onRetry}
+              className={clsx(
+                'flex items-center gap-1 p-1 rounded text-text-tertiary transition-colors text-2xs',
+                resendDisabledReason ? 'opacity-50 cursor-not-allowed' : 'hover:bg-surface-2 hover:text-red-400',
+              )}
+              {...resendProps}
+              onClick={resendDisabledReason ? undefined : onRetry}
             >
               <RotateCcw size={11} />
               <span>{t('message.retry')}</span>
@@ -556,12 +625,21 @@ function MessageBubble({
           )}
           {isLastAssistant && !isError && onRegenerate && (
             <button
-              className="flex items-center gap-1 p-1 rounded hover:bg-surface-2 text-text-tertiary hover:text-text-secondary transition-colors text-2xs"
-              onClick={onRegenerate}
+              className={clsx(
+                'flex items-center gap-1 p-1 rounded text-text-tertiary transition-colors text-2xs',
+                resendDisabledReason ? 'opacity-50 cursor-not-allowed' : 'hover:bg-surface-2 hover:text-text-secondary',
+              )}
+              {...resendProps}
+              onClick={resendDisabledReason ? undefined : onRegenerate}
             >
               <RefreshCw size={11} />
               <span>{t('message.regenerate')}</span>
             </button>
+          )}
+          {resendDisabledReason && showsResend && (
+            <span id={resendReasonId} className="sr-only">
+              {resendDisabledReason}
+            </span>
           )}
         </div>
       )}
@@ -576,8 +654,11 @@ export default memo(MessageBubble, (prevProps, nextProps) => {
     prevProps.message.content === nextProps.message.content &&
     prevProps.message.finishReason === nextProps.message.finishReason &&
     prevProps.message.errorCode === nextProps.message.errorCode &&
+    prevProps.message.errorShared === nextProps.message.errorShared &&
     // The header names the model and the one that actually answered.
     prevProps.message.model === nextProps.message.model &&
+    prevProps.message.modelLabel === nextProps.message.modelLabel &&
+    prevProps.modelLabel === nextProps.modelLabel &&
     prevProps.message.servedModel === nextProps.message.servedModel &&
     prevProps.message.timestamp === nextProps.message.timestamp &&
     prevProps.message.toolCalls === nextProps.message.toolCalls &&
@@ -588,6 +669,7 @@ export default memo(MessageBubble, (prevProps, nextProps) => {
     prevProps.isLastAssistant === nextProps.isLastAssistant &&
     prevProps.onRegenerate === nextProps.onRegenerate &&
     prevProps.onRetry === nextProps.onRetry &&
+    prevProps.resendDisabledReason === nextProps.resendDisabledReason &&
     prevProps.highlight === nextProps.highlight &&
     prevProps.isActiveMatch === nextProps.isActiveMatch
   )

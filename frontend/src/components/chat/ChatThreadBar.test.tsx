@@ -167,3 +167,25 @@ describe('ChatThreadBar agentic badges', () => {
     expect(screen.queryByRole('img', {name: /this thread/i})).not.toBeInTheDocument()
   })
 })
+
+// Each thread keeps its own model: the tab's tooltip says which.
+describe('ChatThreadBar model tooltip', () => {
+  it("names the thread's model (and its purpose) next to the title", () => {
+    render(
+      <ChatThreadBar
+        threads={[makeThread('t1', 'Docs pass'), makeThread('t2', '')]}
+        activeThreadId="t1"
+        onSelect={() => {}}
+        onCreate={() => {}}
+        onClose={() => {}}
+        onRename={() => {}}
+        modelLabels={{t1: 'Docs writer · Documentation'}}
+      />,
+    )
+    expect(screen.getByTitle('Docs pass — Docs writer · Documentation')).toHaveTextContent('Docs pass')
+    // No label known: the title alone.
+    expect(screen.getByTitle('New chat')).toBeInTheDocument()
+    // The tab's name stays its title (the tooltip is a description).
+    expect(screen.getByRole('tab', {name: /Docs pass/})).toBeInTheDocument()
+  })
+})

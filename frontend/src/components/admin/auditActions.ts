@@ -10,6 +10,8 @@ export const AUDIT_GROUPS = [
   'chat',
   'settings',
   'keys',
+  // Azure AI Foundry resources and models (azure.connection_save, …).
+  'azure',
   'org',
   'user',
   'token',

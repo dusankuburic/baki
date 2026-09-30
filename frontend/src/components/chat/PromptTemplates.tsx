@@ -1,5 +1,6 @@
 import {useTranslation} from 'react-i18next'
-import {useState} from 'react'
+import {useId, useState} from 'react'
+import clsx from 'clsx'
 import {BookOpen, ChevronDown, ChevronRight} from 'lucide-react'
 
 export type TemplateId =
@@ -40,11 +41,18 @@ interface Props {
   hasBlock: boolean
   flowName?: string
   blockName?: string
+  /**
+   * Why nothing can be sent right now (the composer's guidance). The
+   * templates stay reachable, marked unavailable, with this as their
+   * description.
+   */
+  disabledReason?: string
 }
 
-export default function PromptTemplates({onSelect, hasBlock, flowName, blockName}: Props) {
+export default function PromptTemplates({onSelect, hasBlock, flowName, blockName, disabledReason}: Props) {
   const {t} = useTranslation('chat')
   const [expanded, setExpanded] = useState(false)
+  const reasonId = useId()
 
   const interpolate = (prompt: string) => {
     let result = prompt
@@ -83,6 +91,11 @@ export default function PromptTemplates({onSelect, hasBlock, flowName, blockName
 
       {expanded && (
         <div className="mt-2 space-y-2">
+          {disabledReason && (
+            <span id={reasonId} className="sr-only">
+              {disabledReason}
+            </span>
+          )}
           {Object.entries(grouped).map(([cat, templates]) => (
             <div key={cat}>
               <span className="text-2xs font-medium text-text-tertiary uppercase tracking-wider">
@@ -92,9 +105,17 @@ export default function PromptTemplates({onSelect, hasBlock, flowName, blockName
                 {templates.map(tpl => (
                   <button
                     key={tpl.id}
-                    className="bg-surface-2 hover:bg-surface-3 text-xs px-2.5 py-1 rounded-md whitespace-nowrap transition-colors border border-border-default"
-                    onClick={() => onSelect(interpolate(tpl.prompt))}
-                    title={tpl.prompt}
+                    type="button"
+                    aria-disabled={disabledReason ? true : undefined}
+                    aria-describedby={disabledReason ? reasonId : undefined}
+                    className={clsx(
+                      'bg-surface-2 text-xs px-2.5 py-1 rounded-md whitespace-nowrap transition-colors border border-border-default',
+                      disabledReason ? 'opacity-50 cursor-not-allowed' : 'hover:bg-surface-3',
+                    )}
+                    onClick={() => {
+                      if (!disabledReason) onSelect(interpolate(tpl.prompt))
+                    }}
+                    title={disabledReason ?? tpl.prompt}
                   >
                     {tpl.label}
                   </button>

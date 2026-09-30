@@ -594,7 +594,10 @@ func TestNormalizeChatParams(t *testing.T) {
 		{"negative maxtokens clamps to 0", 0.5, -10, 0, 0, 0.5, 0},
 		{"maxtokens over context window is capped", 0.5, 999999, 8000, 0, 0.5, 8000 - contextReserve},
 		{"unknown ctxlimit leaves maxtokens", 0.5, 999999, 0, 0, 0.5, 999999},
-		{"tiny context window floors cap at 0", 0.5, 100, 1000, 0, 0.5, 0},
+		// A small window keeps half of itself for the prompt, not all of it:
+		// capping at 0 sent the provider's own default instead (R1).
+		{"tiny context window keeps a cap under half of it", 0.5, 100, 1000, 0, 0.5, 100},
+		{"tiny context window caps at half of it", 0.5, 999999, 1000, 0, 0.5, 500},
 		{"output cap bounds maxtokens below input window", 0.5, 200000, 200000, 64000, 0.5, 64000},
 		{"output cap ignored when maxtokens already under it", 0.5, 1000, 200000, 64000, 0.5, 1000},
 		{"unknown output cap falls back to context backstop", 0.5, 999999, 8000, 0, 0.5, 8000 - contextReserve},

@@ -1,7 +1,9 @@
 package testutil
 
 import (
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,13 +107,16 @@ func (s *FakeOrgSecretStore) SaveOrgIfUnchanged(orgID, provider, key, updatedBy 
 	return now, true, nil
 }
 
-// savedBy reports whether userID lent the row's secret or last wrote it.
+// savedBy reports whether userID lent the row's secret — secretSetBy,
+// with updatedBy only for a row no save has stamped since v24 (the
+// keystore's DeleteOrgIfSavedBy rule: an edit that carried the stored
+// secret does not make its editor a lender).
 func (r orgSecretRow) savedBy(userID string) bool {
-	return userID != "" && (r.updatedBy == userID || r.secretSetBy == userID)
+	return userID != "" && (r.secretSetBy == userID || (r.secretSetBy == "" && r.updatedBy == userID))
 }
 
-// DeleteOrgIfSavedBy deletes the row only while userID is its lender or its
-// last writer.
+// DeleteOrgIfSavedBy deletes the row only while userID is its lender
+// (see savedBy).
 func (s *FakeOrgSecretStore) DeleteOrgIfSavedBy(orgID, provider, userID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -123,8 +128,8 @@ func (s *FakeOrgSecretStore) DeleteOrgIfSavedBy(orgID, provider, userID string) 
 	return true, nil
 }
 
-// OrgsWithKeySavedBy lists the orgs whose provider row userID lent or last
-// wrote.
+// OrgsWithKeySavedBy lists the orgs whose provider row userID lent (see
+// savedBy).
 func (s *FakeOrgSecretStore) OrgsWithKeySavedBy(provider, userID string) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -137,6 +142,156 @@ func (s *FakeOrgSecretStore) OrgsWithKeySavedBy(provider, userID string) ([]stri
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// ClearSecretSetBy empties a row's secret_set_by, standing in for a row
+// no save has stamped since the v24 backfill (the disable path's
+// updated_by fallback); a no-op on a missing row.
+func (s *FakeOrgSecretStore) ClearSecretSetBy(orgID, provider string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if row, ok := s.rows[s.key(orgID, provider)]; ok {
+		row.secretSetBy = ""
+		s.rows[s.key(orgID, provider)] = row
+	}
+}
+
+var _ storageif.OrgSecretFamilyStore = (*FakeOrgSecretStore)(nil)
+
+// validOrgFamily mirrors the database keystore's family-name check.
+func validOrgFamily(family string) error {
+	if family == "" || strings.Contains(family, "/") {
+		return fmt.Errorf("keystore: invalid key family %q", family)
+	}
+	return nil
+}
+
+// ListOrgKeyFamily returns the org's keys in family (the key itself or
+// family/…), ordered by provider, with each row's metadata.
+func (s *FakeOrgSecretStore) ListOrgKeyFamily(orgID, family string) ([]storageif.OrgKeyFamilyEntry, error) {
+	if err := validOrgFamily(family); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []storageif.OrgKeyFamilyEntry{}
+	for k, row := range s.rows {
+		org, prov, ok := splitOrgKey(k)
+		if !ok || org != orgID || !storageif.InSecretFamily(prov, family) {
+			continue
+		}
+		out = append(out, storageif.OrgKeyFamilyEntry{Provider: prov, OrgKeyInfo: storageif.OrgKeyInfo{
+			UpdatedBy: row.updatedBy, SecretSetBy: row.secretSetBy, UpdatedAt: row.updatedAt,
+		}})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
+	return out, nil
+}
+
+// OrgKeyFamilySavedBy lists every (org, key) in family that userID lent
+// (see savedBy), ordered by org then provider.
+func (s *FakeOrgSecretStore) OrgKeyFamilySavedBy(family, userID string) ([]storageif.OrgKeyRef, error) {
+	if err := validOrgFamily(family); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []storageif.OrgKeyRef
+	for k, row := range s.rows {
+		org, prov, ok := splitOrgKey(k)
+		if ok && storageif.InSecretFamily(prov, family) && row.savedBy(userID) {
+			out = append(out, storageif.OrgKeyRef{OrgID: org, Provider: prov})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].OrgID != out[j].OrgID {
+			return out[i].OrgID < out[j].OrgID
+		}
+		return out[i].Provider < out[j].Provider
+	})
+	return out, nil
+}
+
+// DeleteOrgKeyFamilyIfSavedBy deletes the org's keys in family that userID
+// lent (see savedBy) and returns each with the document it held, ordered by
+// provider — the database keystore's atomic DELETE … RETURNING.
+func (s *FakeOrgSecretStore) DeleteOrgKeyFamilyIfSavedBy(orgID, family, userID string) ([]storageif.DeletedOrgKey, error) {
+	if err := validOrgFamily(family); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []storageif.DeletedOrgKey
+	for k, row := range s.rows {
+		org, prov, ok := splitOrgKey(k)
+		if !ok || org != orgID || !storageif.InSecretFamily(prov, family) || !row.savedBy(userID) {
+			continue
+		}
+		delete(s.rows, k)
+		out = append(out, storageif.DeletedOrgKey{Provider: prov, Document: row.key})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
+	return out, nil
+}
+
+// DeleteOrgKeyIfUnchanged deletes the row only while its updatedAt is still
+// updatedAt — the database keystore's conditional delete.
+func (s *FakeOrgSecretStore) DeleteOrgKeyIfUnchanged(orgID, provider string, updatedAt time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row, ok := s.rows[s.key(orgID, provider)]
+	if !ok || !row.updatedAt.Equal(updatedAt) {
+		return false, nil
+	}
+	delete(s.rows, s.key(orgID, provider))
+	return true, nil
+}
+
+var _ storageif.OrgSecretRestorer = (*FakeOrgSecretStore)(nil)
+
+// SnapshotOrg reads a row as stored (the fake seals nothing: Sealed is the
+// document itself).
+func (s *FakeOrgSecretStore) SnapshotOrg(orgID, provider string) (storageif.OrgKeySnapshot, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row, ok := s.rows[s.key(orgID, provider)]
+	if !ok {
+		return storageif.OrgKeySnapshot{}, false, nil
+	}
+	return storageif.OrgKeySnapshot{
+		OrgKeyInfo: storageif.OrgKeyInfo{UpdatedBy: row.updatedBy, SecretSetBy: row.secretSetBy, UpdatedAt: row.updatedAt},
+		Sealed:     row.key,
+	}, true, nil
+}
+
+// RestoreOrgIfUnchanged writes snap back (document, writer, lender, stamp)
+// — or deletes the row for a nil snap — only while the row still carries
+// current, like the database keystore.
+func (s *FakeOrgSecretStore) RestoreOrgIfUnchanged(orgID, provider string, current time.Time, snap *storageif.OrgKeySnapshot) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row, ok := s.rows[s.key(orgID, provider)]
+	if !ok || !row.updatedAt.Equal(current) {
+		return false, nil
+	}
+	if snap == nil {
+		delete(s.rows, s.key(orgID, provider))
+		return true, nil
+	}
+	s.rows[s.key(orgID, provider)] = orgSecretRow{key: snap.Sealed, updatedBy: snap.UpdatedBy, secretSetBy: snap.SecretSetBy, updatedAt: snap.UpdatedAt}
+	return true, nil
+}
+
+// SetOrgKeyUpdatedAt back-dates (or post-dates) a row's last save, so a
+// test can place it inside or outside the orphan sweep's grace period. It
+// also moves the compare-and-swap token; a no-op on a missing row.
+func (s *FakeOrgSecretStore) SetOrgKeyUpdatedAt(orgID, provider string, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if row, ok := s.rows[s.key(orgID, provider)]; ok {
+		row.updatedAt = at
+		s.rows[s.key(orgID, provider)] = row
+	}
 }
 
 func splitOrgKey(k string) (orgID, provider string, ok bool) {

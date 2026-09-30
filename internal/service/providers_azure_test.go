@@ -150,8 +150,8 @@ func TestListProviders_AzureFoundry_ConfiguredPerUser(t *testing.T) {
 	if strings.Join(ids, ",") != "chat1,gpt-4o" {
 		t.Errorf("models = %v, want the chat deployments without the embedding deployment", ids)
 	}
-	if gpt4o := az.Models[len(az.Models)-1]; gpt4o.InputCostPerM != 2.5 || gpt4o.ContextLimit != 128000 {
-		t.Errorf("catalogued deployment name = %+v, want the catalogue's price and window", gpt4o)
+	if gpt4o := az.Models[len(az.Models)-1]; gpt4o.InputCostPerM != 0 || gpt4o.OutputCostPerM != 0 || gpt4o.ContextLimit != 128000 {
+		t.Errorf("catalogued deployment name = %+v, want the catalogue's window and no price (Azure is unpriced)", gpt4o)
 	}
 	// Alias providers cache their own listing (per document, complete only);
 	// the service never pins it.
@@ -621,6 +621,9 @@ func TestListProviders_SlowProviderFallsBackWithinBudget(t *testing.T) {
 	}
 	var want []string
 	for _, m := range ai.AvailableProviders() {
+		if m.ID == ai.LocalProviderID {
+			continue // listed only when configured (desktop)
+		}
 		want = append(want, m.ID)
 	}
 	if strings.Join(order, ",") != strings.Join(want, ",") {

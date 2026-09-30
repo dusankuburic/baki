@@ -263,6 +263,7 @@ export default function RulesPanel() {
                     value={eff.severity}
                     disabled={!canEdit}
                     onChange={v => handleSeverityChange(rule.id, v as Severity)}
+                    activation="manual"
                     options={[
                       {value: 'error', label: t('rules.severity.error'), icon: AlertCircle},
                       {value: 'warning', label: t('rules.severity.warning'), icon: AlertTriangle},

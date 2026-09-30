@@ -68,6 +68,111 @@ func failOnOpenAIRoute(t *testing.T, r *http.Request) bool {
 	return false
 }
 
+// TestAzureClaude_TopLevelCacheControlAndThinking (audit #9 F-02/F-17): a
+// claude:<name> deployment's Messages request carries the top-level
+// automatic-caching marker (the growing history and tool_results behind the
+// cached system block become cache reads on later tool-loop iterations) and
+// asks for adaptive thinking even with tools attached.
+func TestAzureClaude_TopLevelCacheControlAndThinking(t *testing.T) {
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, _ map[string]any) {
+		if failOnOpenAIRoute(t, r) {
+			w.WriteHeader(404)
+			return
+		}
+		writeJSON(w, 200, claudeMessageJSON("hello", "claude-opus-4-8"))
+	})
+	// A portal-named deployment: the sampling policy reads the model from the
+	// name itself (a custom name stays on the temperature path until its
+	// served model is memoised).
+	p := newAzureKeyProvider(t, srv, func(c *AzureFoundryConfig) { c.ClaudeDeployments = []string{"claude-opus-4-8"} })
+	_, err := p.Chat(context.Background(), Request{Model: "claude:claude-opus-4-8", MaxTokens: 256, SystemPrompt: "be brief",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+		Tools:    []ToolDefinition{{Name: "search_flow", Description: "x", InputSchema: json.RawMessage(`{"type":"object"}`)}}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	body := srv.requests()[0].Body
+	if top, _ := body["cache_control"].(map[string]any); top["type"] != "ephemeral" {
+		t.Errorf("top-level cache_control = %v, want ephemeral automatic caching", body["cache_control"])
+	}
+	if think, _ := body["thinking"].(map[string]any); think["type"] != "adaptive" {
+		t.Errorf("thinking = %v, want adaptive with tools attached", body["thinking"])
+	}
+	if _, ok := body["temperature"]; ok {
+		t.Error("temperature must be omitted on the thinking path")
+	}
+}
+
+// TestAzureClaude_MythosRequiresEntra (audit #9 F-26): a Mythos deployment
+// configured in API-key mode fails with the Entra-only explanation instead
+// of the misleading "invalid API key" (the key is valid for every other
+// deployment on the resource). The error carries BOTH sentinels so the
+// no-retry/no-breaker rules of an auth failure hold; Fable is NOT Entra-gated
+// and keeps the bare invalid-key classification; Entra mode is untouched; a
+// permission_error keeps Azure's own explanation.
+func TestAzureClaude_MythosRequiresEntra(t *testing.T) {
+	// A Mythos deployment (portal-named) in API-key mode: any 401 on the
+	// invalid-key path is remapped.
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, _ map[string]any) {
+		w.WriteHeader(401)
+		_, _ = io.WriteString(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`)
+	})
+	mythos := newAzureKeyProvider(t, srv, func(c *AzureFoundryConfig) { c.ClaudeDeployments = []string{"claude-mythos-5-1"} })
+	_, err := mythos.Chat(context.Background(), Request{Model: "claude:claude-mythos-5-1", Messages: []Message{{Role: "user", Content: "hi"}}})
+	if !errors.Is(err, ErrClaudeEntraOnly) || !errors.Is(err, ErrApiKeyInvalid) {
+		t.Fatalf("mythos 401 = %v, want the ErrClaudeEntraOnly + ErrApiKeyInvalid pair", err)
+	}
+	if !strings.Contains(err.Error(), "Entra ID") {
+		t.Errorf("error text must name Entra ID: %v", err)
+	}
+	// The stream path remaps too.
+	err = mythos.Stream(context.Background(), Request{Model: "claude:claude-mythos-5-1", Messages: []Message{{Role: "user", Content: "hi"}}}, func(Chunk) {})
+	if !errors.Is(err, ErrClaudeEntraOnly) {
+		t.Fatalf("mythos 401 on stream = %v, want ErrClaudeEntraOnly", err)
+	}
+
+	// A custom deployment name recognised through its served model.
+	custom := newAzureKeyProvider(t, srv, func(c *AzureFoundryConfig) { c.ClaudeDeployments = []string{"research"} })
+	recordServedModel("scope\x00"+srv.URL, "azure-foundry", "claude:research", "claude-mythos-preview")
+	_, err = custom.Chat(context.Background(), Request{Model: "claude:research", Messages: []Message{{Role: "user", Content: "hi"}}})
+	if !errors.Is(err, ErrClaudeEntraOnly) {
+		t.Fatalf("custom mythos-serving deployment = %v, want ErrClaudeEntraOnly", err)
+	}
+
+	// Fable is not Entra-gated: the bare invalid-key classification stays.
+	fableSrv := newAzureTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ int, _ map[string]any) {
+		w.WriteHeader(401)
+		_, _ = io.WriteString(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`)
+	})
+	fable := newAzureKeyProvider(t, fableSrv, func(c *AzureFoundryConfig) { c.ClaudeDeployments = []string{"claude-fable-5-1"} })
+	_, err = fable.Chat(context.Background(), Request{Model: "claude:claude-fable-5-1", Messages: []Message{{Role: "user", Content: "hi"}}})
+	if !errors.Is(err, ErrApiKeyInvalid) || errors.Is(err, ErrClaudeEntraOnly) {
+		t.Fatalf("fable 401 = %v, want the bare invalid-key classification", err)
+	}
+
+	// Entra mode is untouched: a rejected token stays ErrEntraTokenRejected.
+	entraSrv := newAzureTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ int, _ map[string]any) {
+		w.WriteHeader(401)
+		_, _ = io.WriteString(w, `{"error":{"code":"Unauthorized","message":"token rejected"}}`)
+	})
+	entra := newAzureClaudeEntraProvider(t, entraSrv)
+	_, err = entra.Chat(context.Background(), Request{Model: "claude:my-claude", Messages: []Message{{Role: "user", Content: "hi"}}})
+	if !errors.Is(err, ErrEntraTokenRejected) || errors.Is(err, ErrClaudeEntraOnly) {
+		t.Fatalf("entra 401 = %v, want ErrEntraTokenRejected without the Entra-only remap", err)
+	}
+
+	// An Anthropic permission_error keeps the permission-denied path.
+	permSrv := newAzureTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ int, _ map[string]any) {
+		w.WriteHeader(403)
+		_, _ = io.WriteString(w, `{"type":"error","error":{"type":"permission_error","message":"your key may not use this deployment"}}`)
+	})
+	perm := newAzureKeyProvider(t, permSrv, func(c *AzureFoundryConfig) { c.ClaudeDeployments = []string{"claude-mythos-5-1"} })
+	_, err = perm.Chat(context.Background(), Request{Model: "claude:claude-mythos-5-1", Messages: []Message{{Role: "user", Content: "hi"}}})
+	if !errors.Is(err, ErrProviderPermissionDenied) || errors.Is(err, ErrClaudeEntraOnly) {
+		t.Fatalf("permission_error on mythos = %v, want the permission-denied path", err)
+	}
+}
+
 func TestAzureClaude_ChatOnTheAnthropicRouteWithAPIKey(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, _ map[string]any) {
 		if failOnOpenAIRoute(t, r) {
@@ -331,8 +436,9 @@ func TestAzureClaude_RateLimitCarriesRetryAfter(t *testing.T) {
 
 // The listing offers each Claude deployment as "claude:<name>", sized at
 // the Claude window; a deployment named after a catalogued Claude model
-// (optionally with a trailing version date) is priced and capped from the
-// Claude catalogue, any other name starts unpriced.
+// (optionally with a trailing version date) is sized and capped from the
+// Claude catalogue, any other name starts with the defaults. Azure is
+// unpriced, so every entry carries a zero Pricing.
 func TestAzureClaude_ModelsListClaudeDeployments(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, _ map[string]any) {
 		t.Errorf("an API-key listing needs no network, got %s", r.URL.Path)
@@ -356,14 +462,20 @@ func TestAzureClaude_ModelsListClaudeDeployments(t *testing.T) {
 		t.Errorf("listing = %s", got)
 	}
 	if m := byID["claude:claude-sonnet-4-6"]; m.DisplayName != "claude-sonnet-4-6 · Claude" || m.ContextLimit != 1000000 ||
-		m.MaxOutputTokens != 128000 || m.Pricing != (Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}) || m.Embedding {
+		m.MaxOutputTokens != 128000 || m.Pricing != (Pricing{}) || m.Embedding {
 		t.Errorf("catalogued Claude deployment = %+v", m)
 	}
-	if m := byID["claude:claude-opus-4-8-20260901"]; m.Pricing != (Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}) || m.MaxOutputTokens != 128000 {
-		t.Errorf("date-suffixed Claude deployment = %+v, want Opus 4.8 pricing and cap", m)
+	if m := byID["claude:claude-opus-4-8-20260901"]; m.Pricing != (Pricing{}) || m.MaxOutputTokens != 128000 {
+		t.Errorf("date-suffixed Claude deployment = %+v, want Opus 4.8's cap and no price", m)
 	}
-	if m := byID["claude:my-claude"]; m.DisplayName != "my-claude · Claude" || m.ContextLimit != 200000 || m.MaxOutputTokens != 8192 || m.Pricing != (Pricing{}) || m.ServedModel != "" {
-		t.Errorf("custom-named Claude deployment = %+v, want the defaults and no price", m)
+	if m := byID["claude:my-claude"]; m.DisplayName != "my-claude · Claude" || m.ContextLimit != 200000 || m.MaxOutputTokens != claudeOnFoundryDefaultOutput || m.Pricing != (Pricing{}) || m.ServedModel != "" {
+		t.Errorf("custom-named Claude deployment = %+v, want the defaults (output cap %d) and no price", m, claudeOnFoundryDefaultOutput)
+	}
+	// Audit #9 F-04: the unlisted-deployment default output cap must be the
+	// smallest cap of any Claude model Foundry serves (64K), so the reasoning
+	// floor of a first turn on an unknown Opus deployment is not clipped.
+	if claudeOnFoundryDefaultOutput != 64000 {
+		t.Errorf("claudeOnFoundryDefaultOutput = %d, want 64000", claudeOnFoundryDefaultOutput)
 	}
 	if def := p.DefaultModel(); def != "gpt-4o" {
 		t.Errorf("DefaultModel = %q, want the chat deployment first", def)
@@ -413,14 +525,14 @@ func TestAzureClaude_ProjectListingDiscoversAnthropicDeployments(t *testing.T) {
 	if got := strings.Join(ids, ","); got != "chat1,claude:sonnet,claude:my-claude,claude:opus" {
 		t.Errorf("listing = %s", got)
 	}
-	if m := byID["claude:sonnet"]; m.ServedModel != "claude-sonnet-4-6" || m.Pricing.InputCostPerM != 3.0 || m.ContextLimit != 1000000 ||
+	if m := byID["claude:sonnet"]; m.ServedModel != "claude-sonnet-4-6" || m.Pricing != (Pricing{}) || m.ContextLimit != 1000000 ||
 		m.MaxOutputTokens != 128000 || m.DisplayName != "sonnet · Claude" || m.Embedding {
 		t.Errorf("re-listed Anthropic deployment = %+v", m)
 	}
-	if m := byID["claude:my-claude"]; m.ServedModel != "claude-haiku-4-5-20260101" || m.Pricing.InputCostPerM != 1.0 || m.ContextLimit != 200000 {
+	if m := byID["claude:my-claude"]; m.ServedModel != "claude-haiku-4-5-20260101" || m.Pricing != (Pricing{}) || m.ContextLimit != 200000 {
 		t.Errorf("document Claude entry enriched by the project = %+v", m)
 	}
-	if m := byID["claude:opus"]; m.ServedModel != "claude-opus-4-8" || m.Pricing.OutputCostPerM != 25.0 || m.MaxOutputTokens != 128000 {
+	if m := byID["claude:opus"]; m.ServedModel != "claude-opus-4-8" || m.Pricing != (Pricing{}) || m.MaxOutputTokens != 128000 {
 		t.Errorf("project-only Anthropic deployment = %+v", m)
 	}
 	if m := byID["chat1"]; m.ServedModel != "gpt-4o" || IsClaudeModel(m.ID) {
@@ -501,11 +613,11 @@ func TestAzureClaude_ConfigClaudeDeployments(t *testing.T) {
 	}
 }
 
-// Pricing through the audited wrapper: a Claude deployment is reserved and
-// billed at the Claude ceiling until its model is known, priced by the Claude
-// catalogue once the response names the model, and the served-model memo
-// enriches the listing after the first turn (window kept at 200k).
-func TestAzureClaude_AuditedPricingAndMemo(t *testing.T) {
+// Through the audited wrapper a Claude deployment is unpriced: reservation,
+// usage pricing and the recorded cost are all zero (tokens still recorded),
+// while the served-model memo enriches the listing (served model, window and
+// output cap) after the first turn.
+func TestAzureClaude_AuditedUnpricedAndMemo(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, _ map[string]any) {
 		if failOnOpenAIRoute(t, r) {
 			w.WriteHeader(404)
@@ -520,41 +632,29 @@ func TestAzureClaude_AuditedPricingAndMemo(t *testing.T) {
 	ap.adoptRawHints(p)
 	ctx := context.Background()
 
-	want := AliasClaudeCeiling(azureFoundryProviderID)
-	if want != (Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}) {
-		t.Fatalf("AliasClaudeCeiling = %+v, want the most expensive Claude rate", want)
+	for _, model := range []string{"claude:my-claude", "claude:claude-opus-4-8"} {
+		if got := ap.ReservationPricing(ctx, model); got != (Pricing{}) {
+			t.Errorf("reservation for %s = %+v, want zero", model, got)
+		}
+		for _, served := range []string{"", "claude-sonnet-4-6-20260301"} {
+			if got, ok := ap.UsagePricing(ctx, model, served); !ok || got != (Pricing{}) {
+				t.Errorf("usage pricing for %s served %q = %+v %v, want zero and found", model, served, got, ok)
+			}
+			if m := ap.usageMetric(ctx, model, served, "", usage{In: 1_000_000}); m.EstimatedCost != 0 || m.PromptTokens != 1_000_000 {
+				t.Errorf("usage metric for %s served %q = cost %v tokens %d, want $0 with tokens recorded", model, served, m.EstimatedCost, m.PromptTokens)
+			}
+		}
 	}
-	if AliasClaudeCeiling("openai") != (Pricing{}) {
-		t.Error("the Claude ceiling is for alias providers only")
-	}
-	if got := ap.ReservationPricing(ctx, "claude:my-claude"); got != want {
-		t.Errorf("reservation for an unknown Claude deployment = %+v, want the Claude ceiling", got)
-	}
-	if got := ap.ReservationPricing(ctx, "claude:claude-opus-4-8"); got != (Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}) {
-		t.Errorf("reservation for a catalogued Claude deployment = %+v", got)
-	}
-	if got, ok := ap.UsagePricing(ctx, "claude:my-claude", ""); !ok || got != want {
-		t.Errorf("usage with no served model = %+v %v, want the Claude ceiling", got, ok)
-	}
-	if got, ok := ap.UsagePricing(ctx, "claude:my-claude", "claude-sonnet-4-6-20260301"); !ok || got != (Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}) {
-		t.Errorf("usage priced by the served Claude model = %+v %v", got, ok)
-	}
-	if m := ap.usageMetric(ctx, "claude:my-claude", "claude-sonnet-4-6-20260301", "", 1_000_000, 0); m.EstimatedCost != 3.0 {
-		t.Errorf("usage metric cost = %v, want Sonnet's input rate", m.EstimatedCost)
-	}
-	if m := ap.usageMetric(ctx, "claude:my-claude", "", "", 1_000_000, 0); m.EstimatedCost != 10.0 {
-		t.Errorf("unknown-model usage metric cost = %v, want the Claude ceiling", m.EstimatedCost)
-	}
-	// A model router that routed to Claude is priced by the Claude catalogue too.
-	if entry, ok := catalogEntryFor(azureFoundryProviderID, "claude-haiku-4-5"); !ok || entry.Pricing.InputCostPerM != 1.0 {
-		t.Errorf("catalogEntryFor(azure-foundry, claude-haiku-4-5) = %+v %v", entry, ok)
+	// A router that routed to Claude keeps the catalogue's window and cap but no price.
+	if entry, ok := catalogEntryFor(azureFoundryProviderID, "claude-haiku-4-5"); !ok || entry.Pricing != (Pricing{}) || entry.ContextLimit == 0 {
+		t.Errorf("catalogEntryFor(azure-foundry, claude-haiku-4-5) = %+v %v, want a window and no price", entry, ok)
 	}
 	if _, ok := catalogEntryFor(azureFoundryProviderID, "claude:my-claude"); ok {
-		t.Error("a custom Claude deployment name must not be priced by guesswork")
+		t.Error("a custom Claude deployment name must not be resolved by guesswork")
 	}
 
 	// First turn: the response names the model; the next wrapper's listing
-	// carries it (price, output cap), with the window kept at 200k.
+	// carries it (served model, output cap), with the window from the model.
 	if _, err := ap.Chat(ctx, Request{Model: "claude:my-claude", Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -570,15 +670,15 @@ func TestAzureClaude_AuditedPricingAndMemo(t *testing.T) {
 			continue
 		}
 		found = true
-		if m.ServedModel != "claude-sonnet-4-6-20260301" || m.Pricing.InputCostPerM != 3.0 || m.MaxOutputTokens != 128000 || m.ContextLimit != 1000000 {
+		if m.ServedModel != "claude-sonnet-4-6-20260301" || m.Pricing != (Pricing{}) || m.MaxOutputTokens != 128000 || m.ContextLimit != 1000000 {
 			t.Errorf("memo-enriched Claude entry = %+v", m)
 		}
 	}
 	if !found {
 		t.Error("claude:my-claude missing from the listing")
 	}
-	if got := next.ReservationPricing(ctx, "claude:my-claude"); got != (Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}) {
-		t.Errorf("reservation after the memo = %+v, want the listing price", got)
+	if got := next.ReservationPricing(ctx, "claude:my-claude"); got != (Pricing{}) {
+		t.Errorf("reservation after the memo = %+v, want zero", got)
 	}
 }
 

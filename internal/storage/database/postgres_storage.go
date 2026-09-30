@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -23,6 +24,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/storage/interfaces"
 )
 
 // pgErrUniqueViolation is the SQLSTATE for a unique constraint violation.
@@ -62,6 +64,10 @@ type PostgresStorageBackend struct {
 	// knowledge_chunks.embedding_vec column exists — i.e. SearchKnowledge can
 	// push similarity ordering into the database. Detected once after migrate.
 	hasPgvector bool
+
+	// azureExportConfig supplies the data-subject export's Azure resource
+	// configuration (SetAzureExportConfigSource); nil until DI installs it.
+	azureExportConfig atomic.Pointer[interfaces.AzureExportConfigFunc]
 }
 
 // Config holds the connection settings for the PostgreSQL backend.

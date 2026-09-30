@@ -64,7 +64,7 @@ func (h *ProviderHandler) listingOrg(r *http.Request) string {
 }
 
 // @Summary      Test provider connection
-// @Description  Tests the connection to a specific AI provider.
+// @Description  Tests the connection to a specific AI provider. For azure-foundry this form is deprecated (one release): it tests the caller's resource "default" (else their first resource) as a resource — an authenticated probe, no model call; use POST /api/providers/azure-foundry/test to test one resource or model.
 // @Tags         providers
 // @Param        request body object true "request"
 // @Accept       json
@@ -233,30 +233,33 @@ func (h *ProviderHandler) handleGetCopilotUser(w http.ResponseWriter, r *http.Re
 }
 
 // @Summary      Get Azure AI Foundry configuration
-// @Description  Returns the caller's Azure AI Foundry settings (endpoint, auth mode, project endpoint, deployments) without any secret.
+// @Description  Deprecated (one release): use GET /api/providers/azure-foundry/connections and /models. Returns the caller's resource "default" — the single-document configuration it migrated to — without any secret: endpoint, auth mode, project endpoint and the deployment names, built from the registry's entries of that resource (never from the stored document's old fields). {configured:false} when there is none.
 // @Tags         providers
+// @Deprecated
 // @Produce      json
-// @Success      200 {object} map[string]interface{} "OK"
-// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Success      200 {object} ai.AzureFoundryPublicConfig "OK"
+// @Failure      500 {object} render.ErrorResponse "Internal Server Error"
 // @Router       /api/providers/azure-foundry/config [get]
 func (h *ProviderHandler) handleGetAzureFoundryConfig(w http.ResponseWriter, r *http.Request) {
 	cfg, err := h.providerSvc.GetAzureFoundryConfig(h.security.KeyScope(r))
 	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
+		renderAzureRegistryError(w, err)
 		return
 	}
 	render.JSON(w, cfg)
 }
 
 // @Summary      Save Azure AI Foundry configuration
-// @Description  Validates and stores the caller's Azure AI Foundry endpoint, credential (API key or Microsoft Entra ID service principal), optional project endpoint and deployment names. An omitted secret keeps the stored one. The body must be exactly one JSON object with known fields only (INVALID_CONFIG otherwise).
+// @Description  Deprecated (one release): use POST/PUT /api/providers/azure-foundry/connections and /models. Validates and stores the caller's Azure AI Foundry endpoint, credential (API key or Microsoft Entra ID service principal), optional project endpoint and deployment names as their resource "default": the credential part is saved (the stored document's old deployment fields carried over unchanged, for a rolled-back binary) and the deployment fields are mapped onto that resource's models — missing ones added, removed ones deleted. An omitted secret keeps the stored one while the endpoint host is unchanged. The body must be exactly one JSON object with known fields only (INVALID_CONFIG otherwise).
 // @Tags         providers
-// @Param        request body object true "request"
+// @Deprecated
+// @Param        request body ai.AzureFoundryConfig true "The configuration"
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]string "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
-// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Failure      400 {object} render.ErrorResponse "INVALID_CONFIG, INVALID_ENDPOINT, INVALID_PROJECT_ENDPOINT, INVALID_AUTH, MISSING_SECRET, MISSING_DEPLOYMENT, INVALID_DEPLOYMENT, CONFIG_TOO_LARGE or HOST_NOT_ALLOWED"
+// @Failure      409 {object} render.ErrorResponse "The resource or model limit (TOO_MANY_CONNECTIONS, TOO_MANY_MODELS) or REGISTRY_READ_ONLY"
+// @Failure      500 {object} render.ErrorResponse "Internal Server Error"
 // @Router       /api/providers/azure-foundry/config [post]
 func (h *ProviderHandler) handleSaveAzureFoundryConfig(w http.ResponseWriter, r *http.Request) {
 	var req ai.AzureFoundryConfig
@@ -268,18 +271,102 @@ func (h *ProviderHandler) handleSaveAzureFoundryConfig(w http.ResponseWriter, r 
 	// canonical auth mode and hosts, not a client's case/whitespace variant.
 	req.Normalize()
 	if err := h.providerSvc.SaveAzureFoundryConfig(h.security.KeyScope(r), req); err != nil {
-		var cfgErr *ai.AzureConfigError
-		if errors.As(err, &cfgErr) {
-			render.ErrorWithCode(w, err, http.StatusBadRequest, cfgErr.Code)
-			return
+		if _, changed := service.AzureCredentialChanged(err); changed {
+			// The save failed after the new document went in, and the
+			// previous one could not be put back: the change stands.
+			meta := azureConfigAuditMeta(req, !req.HasSecret())
+			meta["outcome"] = "failed_after_credential_change"
+			logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", ai.AzureFoundryProviderID, meta)
 		}
-		render.Error(w, err, http.StatusInternalServerError)
+		// A settings code (400), and — the save now writes the registry's
+		// resource "default" and its models — the registry's own refusals.
+		renderAzureRegistryError(w, err)
 		return
 	}
 	// A saved document always holds a secret, so one the request omitted was
 	// carried over from the stored document.
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", ai.AzureFoundryProviderID,
 		azureConfigAuditMeta(req, !req.HasSecret()))
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// @Summary      Get local models configuration
+// @Description  Returns whether a local OpenAI-compatible server (Foundry Local, Ollama, LM Studio) is configured, its loopback base URL and the stored context window in tokens (omitted when unset: 8192 applies). Desktop app only: 400 LOCAL_MODELS_UNAVAILABLE when the deployment does not allow loopback egress (cloud), so a client hides the feature there.
+// @Tags         providers
+// @Produce      json
+// @Success      200 {object} ai.LocalPublicConfig "OK"
+// @Failure      400 {object} map[string]string "LOCAL_MODELS_UNAVAILABLE"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/providers/local/config [get]
+func (h *ProviderHandler) handleGetLocalConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, err := h.providerSvc.GetLocalConfig(h.security.KeyScope(r))
+	if err != nil {
+		renderLocalConfigError(w, err)
+		return
+	}
+	render.JSON(w, cfg)
+}
+
+// renderLocalConfigError answers a refused local models read or save
+// (*ai.LocalConfigError) as a 400 carrying its client code, anything else
+// as a 500.
+func renderLocalConfigError(w http.ResponseWriter, err error) {
+	var cfgErr *ai.LocalConfigError
+	if errors.As(err, &cfgErr) {
+		render.ErrorWithCode(w, err, http.StatusBadRequest, cfgErr.Code)
+		return
+	}
+	render.Error(w, err, http.StatusInternalServerError)
+}
+
+// localConfigSaveRequest is the local models save body. ContextWindow is the
+// context length, in tokens, the local server runs its models with (Ollama
+// num_ctx, LM Studio's context length): omitted or 0 = the default (8192),
+// else 1024..2000000.
+type localConfigSaveRequest struct {
+	BaseURL       string `json:"baseUrl" example:"http://127.0.0.1:11434/v1"`
+	ContextWindow int    `json:"contextWindow,omitempty" example:"32768"`
+}
+
+// @Summary      Save local models configuration
+// @Description  Validates and stores the base URL of a locally hosted OpenAI-compatible server and, optionally, the context window history is trimmed to (omitted or 0 = 8192 tokens; else 1024..2000000). Loopback http(s) only (127.0.0.1 or [::1]; a trailing /v1 is accepted); desktop app only. 400 LOCAL_MODELS_UNAVAILABLE when the deployment does not allow loopback egress (cloud), INVALID_BASE_URL for a bad URL or body, INVALID_CONTEXT_WINDOW for a window out of range or not a whole number. Remove with POST /api/keys/delete; test with POST /api/providers/test.
+// @Tags         providers
+// @Param        request body localConfigSaveRequest true "The base URL and optional context window"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "LOCAL_MODELS_UNAVAILABLE, INVALID_BASE_URL or INVALID_CONTEXT_WINDOW"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/providers/local/config [post]
+func (h *ProviderHandler) handleSaveLocalConfig(w http.ResponseWriter, r *http.Request) {
+	// The cloud refusal comes first, whatever the body: the client drops the
+	// section on it.
+	if err := ai.CheckLocalModelsAvailable(); err != nil {
+		renderLocalConfigError(w, err)
+		return
+	}
+	var req localConfigSaveRequest
+	if err := decodeAzureConfigBody(w, r, &req); err != nil {
+		code := ai.LocalCfgErrInvalidBaseURL
+		// A fractional, string or overflowing window names the field.
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field == "contextWindow" {
+			code = ai.LocalCfgErrInvalidContextWindow
+		}
+		render.ErrorWithCode(w, fmt.Errorf("invalid local models configuration: %w", err), http.StatusBadRequest, code)
+		return
+	}
+	cfg, err := h.providerSvc.SaveLocalConfig(h.security.KeyScope(r), req.BaseURL, req.ContextWindow)
+	if err != nil {
+		renderLocalConfigError(w, err)
+		return
+	}
+	meta := map[string]string{"op": "save", "baseUrlHost": auditURLHost(cfg.BaseURL)}
+	// A token count, never a secret.
+	if cfg.ContextWindow != 0 {
+		meta["contextWindow"] = strconv.Itoa(cfg.ContextWindow)
+	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", ai.LocalProviderID, meta)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

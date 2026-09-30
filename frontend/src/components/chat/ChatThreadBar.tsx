@@ -13,9 +13,21 @@ interface Props {
   onCreate: () => void
   onClose: (threadId: string) => void
   onRename: (threadId: string, title: string) => void
+  // Per thread id: the model it uses, with its purpose ("Docs writer ·
+  // Documentation") — each thread keeps its own model, so the tab's tooltip
+  // says which.
+  modelLabels?: Record<string, string>
 }
 
-export default function ChatThreadBar({threads, activeThreadId, onSelect, onCreate, onClose, onRename}: Props) {
+export default function ChatThreadBar({
+  threads,
+  activeThreadId,
+  onSelect,
+  onCreate,
+  onClose,
+  onRename,
+  modelLabels,
+}: Props) {
   const {t} = useTranslation('chat')
   const scrollRef = useRef<HTMLDivElement>(null)
   // Streaming thread ids — a Set so the `.has()` lookup in the render loop is
@@ -66,6 +78,7 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
           <ThreadTab
             key={thread.id}
             thread={thread}
+            modelLabel={modelLabels?.[thread.id]}
             isActive={thread.id === activeThreadId}
             isStreaming={streamingIds.has(thread.id)}
             onSelect={onSelect}
@@ -89,6 +102,7 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
 
 function ThreadTab({
   thread,
+  modelLabel,
   isActive,
   isStreaming,
   onSelect,
@@ -97,6 +111,7 @@ function ThreadTab({
   onKeyDown,
 }: {
   thread: ChatThread
+  modelLabel?: string
   isActive: boolean
   isStreaming: boolean
   onSelect: (id: string) => void
@@ -192,7 +207,7 @@ function ThreadTab({
         />
       ) : (
         <span
-          title={thread.title || t('threads.untitled')}
+          title={modelLabel ? t('threads.tabTooltip', {title: label, model: modelLabel}) : label}
           className={clsx('truncate text-2xs', isActive ? 'text-text-secondary font-medium' : 'text-text-tertiary')}
         >
           {label}

@@ -30,6 +30,7 @@ var validProviders = map[string]bool{
 	"github-models": true,
 	"copilot":       true,
 	"azure-foundry": true,
+	"local":         true,
 }
 
 // readinessFailureThreshold is the number of consecutive failed readiness
@@ -274,7 +275,13 @@ func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request)
 	// key; accepting raw text here would let an unvalidated endpoint bypass
 	// the host allow-list. has/delete keep working for it.
 	if req.Provider == ai.AzureFoundryProviderID {
-		render.ErrorWithCode(w, fmt.Errorf("this provider is configured through /api/providers/azure-foundry/config"), http.StatusBadRequest, "USE_PROVIDER_CONFIG")
+		render.ErrorWithCode(w, fmt.Errorf("this provider is configured through /api/providers/azure-foundry/connections"), http.StatusBadRequest, "USE_PROVIDER_CONFIG")
+		return
+	}
+	// The local models provider likewise stores a validated document (a
+	// loopback base URL), never a bare key.
+	if req.Provider == ai.LocalProviderID {
+		render.ErrorWithCode(w, fmt.Errorf("this provider is configured through /api/providers/local/config"), http.StatusBadRequest, "USE_PROVIDER_CONFIG")
 		return
 	}
 	if err := h.sysSvc.SaveApiKey(h.security.KeyScope(r), req.Provider, req.Key); err != nil {
@@ -287,7 +294,7 @@ func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request)
 }
 
 // @Summary      Check if API key exists
-// @Description  Checks if an API key for a given provider is saved.
+// @Description  Checks if an API key for a given provider is saved. For azure-foundry (deprecated form, one release): whether the caller has at least one Azure AI Foundry resource of their own — GET /api/providers/azure-foundry/connections lists them.
 // @Tags         keys
 // @Param        request body object true "request"
 // @Accept       json
@@ -312,7 +319,7 @@ func (h *SystemHandler) handleHasApiKey(w http.ResponseWriter, r *http.Request) 
 }
 
 // @Summary      Delete API key
-// @Description  Deletes an API key for a given provider.
+// @Description  Deletes an API key for a given provider. For azure-foundry (deprecated form, one release): removes the caller's resource "default" — the migrated single-document configuration — with its models and its stored credential; the other resources stay (DELETE /api/providers/azure-foundry/connections/{connectionId} removes one).
 // @Tags         keys
 // @Param        request body object true "request"
 // @Accept       json
@@ -333,6 +340,12 @@ func (h *SystemHandler) handleDeleteApiKey(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := h.sysSvc.DeleteApiKey(h.security.KeyScope(r), req.Provider); err != nil {
+		if req.Provider == ai.AzureFoundryProviderID {
+			// Resource "default" with its models: the registry's refusals
+			// (REGISTRY_READ_ONLY, SECRET_STORAGE_UNAVAILABLE, …).
+			renderAzureRegistryError(w, err)
+			return
+		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

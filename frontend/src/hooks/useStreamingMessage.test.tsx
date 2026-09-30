@@ -1,7 +1,8 @@
-import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
+import {describe, it, expect, expectTypeOf, vi, beforeEach, afterEach} from 'vitest'
 import {renderHook} from '@testing-library/react'
-import {useStreamingMessage} from './useStreamingMessage'
+import {useStreamingMessage, type StreamHandler} from './useStreamingMessage'
 import {chatApi} from '@/api'
+import type {ErrorUsage} from '@/lib/chatEvent'
 
 // Failure-path tests for useStreamingMessage: the bounded open-wait (a send
 // against an unreachable backend errors instead of hanging forever) and the
@@ -153,7 +154,9 @@ describe('stall probe', () => {
 
     // The failure's code travels with it, so a recovered error gets the same
     // handling as a live one.
-    expect(handler.onError).toHaveBeenCalledWith('provider exploded', 's1', 'PROVIDER_UNAVAILABLE')
+    // F-15: a fourth usage argument travels even when the failure carried
+    // none (undefined = unbilled).
+    expect(handler.onError).toHaveBeenCalledWith('provider exploded', 's1', 'PROVIDER_UNAVAILABLE', undefined)
   })
 
   it("passes a live error event's code to the handler", async () => {
@@ -170,7 +173,12 @@ describe('stall probe', () => {
       },
     })
 
-    expect(handler.onError).toHaveBeenCalledWith('daily AI budget exceeded ($1.02 / $1.00)', 's1', 'AI_BUDGET_EXCEEDED')
+    expect(handler.onError).toHaveBeenCalledWith(
+      'daily AI budget exceeded ($1.02 / $1.00)',
+      's1',
+      'AI_BUDGET_EXCEEDED',
+      undefined,
+    )
   })
 
   it('keeps a stream alive through heartbeats during a long silent phase', async () => {
@@ -399,6 +407,14 @@ describe('done meta (served model + billed rates)', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {servedModel: 'gpt-4o', inputCostPerM: 3})
+  })
+})
+
+// One ErrorUsage shape (lib/chatEvent) for the parsed error event and the
+// handler's usage argument: separate copies could drift apart unnoticed.
+describe('error usage type', () => {
+  it("types onError's usage as lib/chatEvent's ErrorUsage", () => {
+    expectTypeOf<Parameters<StreamHandler['onError']>[3]>().toEqualTypeOf<ErrorUsage | undefined>()
   })
 })
 

@@ -467,3 +467,32 @@ describe('ChatInput toolbar', () => {
     expect(send).toBeEnabled()
   })
 })
+
+// Azure AI Foundry with nothing to chat with (no model added, or every
+// resource needs its credentials again): the composer says so instead of
+// sending a request with no model.
+describe('ChatInput guidance', () => {
+  it('shows the guidance with its action, and blocks sending — not typing', async () => {
+    const onSend = vi.fn()
+    const onAction = vi.fn()
+    render(
+      <ChatInput
+        onSend={onSend}
+        onPreview={vi.fn()}
+        guidance={{text: 'No Azure AI Foundry models yet.', actionLabel: 'Add models…', onAction}}
+      />,
+    )
+    expect(screen.getByText('No Azure AI Foundry models yet.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Add models…'}))
+    expect(onAction).toHaveBeenCalledTimes(1)
+
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    await userEvent.type(textarea, 'hello')
+    expect(textarea.value).toBe('hello')
+    fireEvent.keyDown(textarea, {key: 'Enter'})
+    expect(onSend).not.toHaveBeenCalled()
+    expect(textarea.value).toBe('hello')
+    expect(screen.getByRole('button', {name: 'Send message'})).toBeDisabled()
+    expect(screen.queryByRole('button', {name: 'Preview context'})).toBeNull()
+  })
+})

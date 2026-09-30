@@ -28,14 +28,6 @@ const (
 	accountLockDuration      = 15 * time.Minute
 )
 
-// dummyBcryptHash is checked against an incoming password when no matching
-// user exists, so a login attempt for a non-existent account takes the same
-// time as one for a real account with a wrong password. Without this, a
-// missing-user response returns in ~1ms (no bcrypt) while a real account's
-// wrong-password response takes ~50ms (bcrypt runs), letting an attacker
-// enumerate valid emails purely from response timing.
-const dummyBcryptHash = "$2a$12$R.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v"
-
 var (
 	// ErrInvalidOldPassword is returned by ChangePassword when oldPassword
 	// doesn't match the account's current password.
@@ -206,7 +198,12 @@ type LoginResult struct {
 func (s *AuthService) Authenticate(ctx context.Context, email, password string) LoginResult {
 	user, err := s.backend.LoadUserByEmail(ctx, email)
 	if err != nil {
-		auth.CheckPasswordHash(password, dummyBcryptHash)
+		// A login for a non-existent account still runs a bcrypt check (against
+		// a dummy hash), so it takes as long as one for a real account with a
+		// wrong password. Without it a missing-user response returns in ~1 ms
+		// while a real account's takes ~0.2 s, letting an attacker enumerate
+		// valid emails purely from response timing.
+		auth.CheckDummyPassword(password)
 		return LoginResult{Outcome: LoginUserNotFound}
 	}
 

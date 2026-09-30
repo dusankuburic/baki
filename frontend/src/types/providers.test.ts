@@ -14,6 +14,7 @@ describe('PROVIDER_OPTIONS', () => {
       'github-models',
       'copilot',
       'azure-foundry',
+      'local',
     ])
     for (const o of PROVIDER_OPTIONS) {
       expect(o.label).toBe(PROVIDERS[o.value].label)

@@ -104,23 +104,27 @@ func TestClaude_OpusOmitsTemperatureUsesThinking(t *testing.T) {
 	}
 }
 
-// TestClaude_OpusOmitsThinkingWithTools pins the agentic-loop setting: with
-// tools attached the thinking field stays unset (Opus 4.7/4.8 then run the
-// loop without thinking; on 5.x/Fable/Mythos an omitted field is adaptive
-// thinking, whose blocks the chat service's loop replays verbatim).
-// Temperature stays omitted regardless.
-func TestClaude_OpusOmitsThinkingWithTools(t *testing.T) {
-	body := captureClaudeBody(t, Request{
-		Model:       "claude-opus-4-8",
-		Temperature: 0.7,
-		Messages:    []Message{{Role: "user", Content: "hi"}},
-		Tools:       []ToolDefinition{{Name: "search_flow", Description: "x", InputSchema: schema(`{"type":"object"}`)}},
-	})
-	if _, ok := body["temperature"]; ok {
-		t.Error("temperature must be omitted for Opus 4.7+")
-	}
-	if _, ok := body["thinking"]; ok {
-		t.Error("thinking must be omitted when tools are present")
+// TestClaude_OpusThinksWithTools (audit #9 F-17, flipped): adaptive thinking
+// is requested on the tool-loop path too — on Opus 4.7/4.8 an omitted
+// thinking field means thinking OFF, and the chat service always attaches the
+// flow tools, so the loop used to run without reasoning while a tool-less
+// question thought. The blocks are replayed verbatim within the loop
+// (Message.ProviderItems). Temperature stays omitted regardless.
+func TestClaude_OpusThinksWithTools(t *testing.T) {
+	for _, model := range []string{"claude-opus-4-7", "claude-opus-4-8", "claude-opus-5-5"} {
+		body := captureClaudeBody(t, Request{
+			Model:       model,
+			Temperature: 0.7,
+			Messages:    []Message{{Role: "user", Content: "hi"}},
+			Tools:       []ToolDefinition{{Name: "search_flow", Description: "x", InputSchema: schema(`{"type":"object"}`)}},
+		})
+		if _, ok := body["temperature"]; ok {
+			t.Errorf("%s: temperature must be omitted for a thinking model", model)
+		}
+		think, _ := body["thinking"].(map[string]any)
+		if think["type"] != "adaptive" {
+			t.Errorf("%s: expected adaptive thinking with tools attached, got %v", model, body["thinking"])
+		}
 	}
 }
 
@@ -157,5 +161,12 @@ func TestClaude_SystemCarriesCacheControl(t *testing.T) {
 	cc, ok := block["cache_control"].(map[string]any)
 	if !ok || cc["type"] != "ephemeral" {
 		t.Errorf("expected ephemeral cache_control on system block, got %v", block["cache_control"])
+	}
+	// Audit #9 F-02: the request also carries the TOP-LEVEL automatic-caching
+	// marker, so the growing history and tool_results behind the system block
+	// are cache reads on later tool-loop iterations instead of full-price
+	// input. Compatible with the explicit system-block marker above.
+	if top, ok := body["cache_control"].(map[string]any); !ok || top["type"] != "ephemeral" {
+		t.Errorf("expected top-level ephemeral cache_control, got %v", body["cache_control"])
 	}
 }

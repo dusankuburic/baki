@@ -96,6 +96,16 @@ const (
 	// organisation's shared provider credential, a billed call on the
 	// org's resource (the per-user test of one's own key is not audited).
 	AuditActionProvidersTest = "providers.test"
+	// The Azure AI Foundry model registry (Part 9): a resource ("connection")
+	// or a model created, updated or removed — the caller's own (resource
+	// type azure_connection / azure_model, the id) or an organisation's
+	// (resource type org, the org's id; the ids in the meta). The meta never
+	// carries a secret, a description or any credential setting beyond the
+	// auth mode.
+	AuditActionAzureConnectionSave   = "azure.connection_save"
+	AuditActionAzureConnectionDelete = "azure.connection_delete"
+	AuditActionAzureModelSave        = "azure.model_save"
+	AuditActionAzureModelDelete      = "azure.model_delete"
 )
 
 // AllAuditActions is the closed set of audit action strings the handlers
@@ -120,6 +130,8 @@ func AllAuditActions() []string {
 		AuditActionScanNow, AuditActionAlertDismiss, AuditActionAlertClear, AuditActionOrgChannelSave,
 		AuditActionOrgChannelDelete, AuditActionOrgRuleSave, AuditActionOrgRuleDelete,
 		AuditActionSSOLink, AuditActionSSOUnlink, AuditActionProvidersTest,
+		AuditActionAzureConnectionSave, AuditActionAzureConnectionDelete,
+		AuditActionAzureModelSave, AuditActionAzureModelDelete,
 	}
 }
 

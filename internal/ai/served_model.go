@@ -10,12 +10,13 @@ import (
 // aliasModelProviders lists the providers whose model IDs are ALIASES chosen by
 // the user rather than model names: an Azure AI Foundry deployment called
 // "my-gpt4o" (or a model-router deployment) tells the catalogue nothing about
-// pricing or context window. For these providers the concrete model each
-// alias served last is remembered (recordServedModel) and folded back into
-// the model list (enrichServedModels). Usage is priced by the model each
-// response reports (auditedProvider.record), never by the memo of an earlier
-// call. Every other provider's IDs are the model names themselves, so nothing
-// is memoised for them and their pricing never consults the served model.
+// the model's context window or output cap. For these providers the concrete
+// model each alias served last is remembered (recordServedModel) and folded
+// back into the model list (enrichServedModels). They are unpriced
+// (auditedProvider.pricingFor): usage rows record the tokens at $0 with the
+// model each response reports, never the memo of an earlier call. Every other
+// provider's IDs are the model names themselves, so nothing is memoised for
+// them and their pricing never consults the served model.
 var aliasModelProviders = map[string]bool{
 	"azure-foundry": true,
 }
@@ -160,17 +161,6 @@ func lookupServedModel(scope, providerID, requestModel string) (string, bool) {
 	return e.model, ok
 }
 
-// servedModelVaries reports whether requestModel's served model changes from
-// call to call (a model router, by name or by observation): the memo's price
-// for it describes an EARLIER call, never the current one.
-func servedModelVaries(scope, providerID, requestModel string) bool {
-	if isModelRouterAlias(requestModel) {
-		return true
-	}
-	e, ok := lookupServedEntry(scope, providerID, requestModel)
-	return ok && e.varied
-}
-
 // resetServedModels clears the memo (tests).
 func resetServedModels() {
 	servedMu.Lock()
@@ -180,20 +170,19 @@ func resetServedModels() {
 
 // enrichServedModels fills in, for alias providers, what the memo knows about
 // each entry: the served model (ServedModel, and " · <model>" appended to the
-// display name) and, when that model is catalogued, its pricing and — only
-// for an alias that has always been served by the same model — its context
-// window and output cap. A model router (by name, or an alias observed with
-// more than one served model) keeps the listing's conservative window: the
-// next call may be routed to a smaller-window model than the last one.
-// Entries that already carry pricing or a served model (learned from a
-// deployments listing) are left alone.
+// display name) and — when that model is catalogued, only for an alias that
+// has always been served by the same model — its context window and output
+// cap. A model router (by name, or an alias observed with more than one
+// served model) keeps the listing's conservative window: the next call may be
+// routed to a smaller-window model than the last one. Entries that already
+// carry a served model (learned from a deployments listing) are left alone.
 func enrichServedModels(scope, providerID string, models []ModelInfo) []ModelInfo {
 	if !aliasModelProviders[providerID] {
 		return models
 	}
 	for i := range models {
 		m := &models[i]
-		if m.ServedModel != "" || m.Pricing != (Pricing{}) {
+		if m.ServedModel != "" {
 			continue
 		}
 		e, ok := lookupServedEntry(scope, providerID, m.ID)
@@ -212,13 +201,12 @@ func applyServedModel(providerID string, m *ModelInfo, served string) {
 	annotateServedModel(providerID, m, served, true)
 }
 
-// annotateServedModel sets the served model, its catalogue price and the
-// display suffix; withLimits also copies the catalogue context window and
-// output cap.
+// annotateServedModel sets the served model and the display suffix;
+// withLimits also copies the catalogue context window and output cap. No
+// price: alias providers are unpriced (catalogEntryFor).
 func annotateServedModel(providerID string, m *ModelInfo, served string, withLimits bool) {
 	m.ServedModel = served
 	if entry, ok := catalogEntryFor(providerID, served); ok {
-		m.Pricing = entry.Pricing
 		// Claude on Azure AI Foundry uses the catalogue window too: Anthropic's
 		// Foundry page gives the same windows as the Claude API (1M for
 		// Opus/Sonnet 4.6+ and 5.x, 200k for the rest).
@@ -253,83 +241,6 @@ type ReservationPricer interface {
 // answered and its rate on the done payload without a listing refetch.
 type UsagePricer interface {
 	UsagePricing(ctx context.Context, model, served string) (Pricing, bool)
-}
-
-// AliasReservationCeiling is the most expensive catalogued input and output
-// rate in an alias provider's own table (Claude deployments use
-// AliasClaudeCeiling, model routers AliasRouterCeiling). It is used to reserve in-flight
-// budget for a deployment whose model is not known yet (no listing price)
-// and as the billing fallback for an uncatalogued served model: reserving
-// too much is the safe direction for a spend cap, reserving $0 disables the
-// concurrent-stream and tool-loop overspend guards. Zero for other providers.
-func AliasReservationCeiling(providerID string) Pricing {
-	var c Pricing
-	if !aliasModelProviders[providerID] {
-		return c
-	}
-	for _, m := range modelCatalog[providerID] {
-		if m.Pricing.InputCostPerM > c.InputCostPerM {
-			c.InputCostPerM = m.Pricing.InputCostPerM
-		}
-		if m.Pricing.OutputCostPerM > c.OutputCostPerM {
-			c.OutputCostPerM = m.Pricing.OutputCostPerM
-		}
-	}
-	return c
-}
-
-// AliasRouterCeiling is the reservation and billing fallback for a model
-// router alias (a deployment named like one, or any alias whose served model
-// has varied): the router can route to any model on the resource, Claude
-// included, so it takes the higher of the provider's own ceiling and the
-// Claude ceiling. Plain deployments keep AliasReservationCeiling so an
-// unknown GPT deployment is not reserved at Fable/Mythos rates.
-func AliasRouterCeiling(providerID string) Pricing {
-	c := AliasReservationCeiling(providerID)
-	claude := AliasClaudeCeiling(providerID)
-	c.InputCostPerM = max(c.InputCostPerM, claude.InputCostPerM)
-	c.OutputCostPerM = max(c.OutputCostPerM, claude.OutputCostPerM)
-	return c
-}
-
-// AliasClaudeCeiling is the most expensive catalogued Claude input and
-// output rate — the reservation and billing fallback for a Claude deployment
-// ("claude:<name>") of an alias provider whose model is not known yet: the
-// Azure table's ceiling is a Grok/GPT rate and would under-reserve an Opus
-// deployment (the same reason AliasReservationCeiling exists). Zero for
-// other providers.
-func AliasClaudeCeiling(providerID string) Pricing {
-	var c Pricing
-	if !aliasModelProviders[providerID] {
-		return c
-	}
-	for _, m := range modelCatalog["claude"] {
-		if m.Pricing.InputCostPerM > c.InputCostPerM {
-			c.InputCostPerM = m.Pricing.InputCostPerM
-		}
-		if m.Pricing.OutputCostPerM > c.OutputCostPerM {
-			c.OutputCostPerM = m.Pricing.OutputCostPerM
-		}
-	}
-	return c
-}
-
-// AliasEmbeddingCeiling is the most expensive catalogued EMBEDDING input
-// rate of an alias provider — the fallback for an embedding deployment whose
-// model is unknown (a custom-named deployment in API-key mode). The chat
-// ceiling ($3/M input) would overstate embedding spend 23-150× and let one
-// knowledge-base index exhaust the daily budget. Zero for other providers.
-func AliasEmbeddingCeiling(providerID string) Pricing {
-	var c Pricing
-	if !aliasModelProviders[providerID] {
-		return c
-	}
-	for _, m := range modelCatalog[providerID] {
-		if isEmbeddingModelName(m.ID) && m.Pricing.InputCostPerM > c.InputCostPerM {
-			c.InputCostPerM = m.Pricing.InputCostPerM
-		}
-	}
-	return c
 }
 
 // pricingMetricModel keeps the pricing-fallback metric's model label bounded:

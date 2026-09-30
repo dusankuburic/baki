@@ -93,11 +93,16 @@ type AISettings struct {
 }
 
 type AIProviderConfig struct {
-	Enabled            bool    `json:"enabled"`
-	DefaultModel       string  `json:"defaultModel"`
-	Temperature        float64 `json:"temperature"`
-	MaxTokens          int     `json:"maxTokens"`
-	ContextTokenBudget int     `json:"contextTokenBudget"`
+	Enabled      bool    `json:"enabled"`
+	DefaultModel string  `json:"defaultModel"`
+	Temperature  float64 `json:"temperature"`
+	MaxTokens    int     `json:"maxTokens"`
+	// ReasoningEffort is the per-provider reasoning-depth choice for
+	// reasoning deployments: "", "low", "medium" or "high" ("" = provider
+	// default). The chat request builder merges it onto ChatRequest next to
+	// Temperature/MaxTokens; the per-turn validation refuses other values.
+	ReasoningEffort    string `json:"reasoningEffort,omitempty"`
+	ContextTokenBudget int    `json:"contextTokenBudget"`
 }
 
 // ParserSettings: only the size cap is read by the parser. The "Preserve
@@ -199,6 +204,13 @@ func DefaultSettings() *AppSettings {
 				// No DefaultModel: Azure AI Foundry models are the user's own
 				// deployments, so the server-reported deployment is the default.
 				"azure-foundry": {
+					Temperature:        0.3,
+					MaxTokens:          4096,
+					ContextTokenBudget: 4000,
+				},
+				// No DefaultModel: the served model ids come from the user's
+				// own local server (/v1/models).
+				"local": {
 					Temperature:        0.3,
 					MaxTokens:          4096,
 					ContextTokenBudget: 4000,

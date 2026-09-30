@@ -1,4 +1,4 @@
-import {Suspense, useEffect, useMemo, useRef, useState} from 'react'
+import {Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {X} from 'lucide-react'
 import Modal from '@/components/shared/Modal'
@@ -38,12 +38,38 @@ export default function SettingsModal({
   const setLastSettingsSection = useUIStore(s => s.setLastSettingsSection)
   useEffect(() => setLastSettingsSection(active), [active, setLastSettingsSection])
 
+  // A deep link that arrives while the dialog is open — openSettings() from
+  // inside Settings ("Manage in Organizations") or behind it — moves it to
+  // its section. The requested section is consumed once followed (the one
+  // this dialog opened on included), so asking for the same section again
+  // after the user moved on still moves the dialog. The anchor stays for the
+  // target panel, which spends it once its data has loaded.
+  useEffect(() => {
+    // The section this dialog opened on was read by the state initialiser.
+    if (useUIStore.getState().settingsSection) useUIStore.getState().setSettingsSection(null)
+    return useUIStore.subscribe((s, prev) => {
+      const section = s.settingsSection
+      if (!section || section === prev.settingsSection) return
+      if (ids.includes(section)) setActive(section)
+      s.setSettingsSection(null)
+    })
+  }, [ids])
+
+  // Choosing a section by hand drops a deep link's anchor that was never
+  // spent, so it cannot pull focus into that section later.
+  const selectSection = useCallback((section: SettingsSection) => {
+    if (useUIStore.getState().settingsAnchor) useUIStore.getState().clearSettingsAnchor()
+    setActive(section)
+  }, [])
+
   const [query, setQuery] = useState('')
   const selectedTabRef = useRef<HTMLButtonElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // The scroll container outlives the panels, so a new section would
-  // otherwise open at the previous one's scroll offset.
-  useEffect(() => {
+  // otherwise open at the previous one's scroll offset. A layout effect: it
+  // runs before any panel's (passive) effect focuses a deep link's anchor,
+  // which scrolls the anchor into view — the reset must not undo that.
+  useLayoutEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0
   }, [active])
 
@@ -66,7 +92,7 @@ export default function SettingsModal({
           groups={groups}
           footer={footer}
           active={active}
-          onSelect={setActive}
+          onSelect={selectSection}
           query={query}
           onQueryChange={setQuery}
           selectedTabRef={selectedTabRef}

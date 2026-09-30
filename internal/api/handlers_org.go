@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -113,11 +114,13 @@ func (h *OrgHandler) orgProviderKeysAvailable(w http.ResponseWriter) bool {
 // every member may read its public form, only admins and members (never
 // viewers, guests or outside collaborators) may run on it, and a member's
 // OWN credential always wins over it for chat (ProviderFactory.ForOrg).
-// Usage on the shared credential is attributed to the org and capped by the
-// org's daily budget like every org-scoped turn; the row goes with the
-// organisation, and it is disabled when the admin who supplied its secret
-// (the lender) or last saved it is demoted, removed or deletes their account
-// (disableLentCredential).
+// Usage on the shared credential is attributed to the org (token counts; Azure
+// AI Foundry is not priced by baki, so the org's daily budget neither counts
+// nor gates it — the cost and the quotas are the Azure resource's); the row
+// goes with the organisation, and it is disabled when the admin who supplied
+// its secret (the lender, secret_set_by — an edit that carried the stored
+// secret does not make its editor a lender) is demoted, removed or deletes
+// their account (disableLentCredential).
 
 // orgAzureFoundrySaveRequest is the org save body: the Azure AI Foundry
 // document plus the compare-and-swap token. UpdatedAt is the updatedAt the
@@ -140,9 +143,21 @@ type statusResponse struct {
 	Status string `json:"status" example:"ok"`
 }
 
+// orgMemberMutationResponse is the {"status":"ok"} reply of a membership
+// change. sharedCredentialDisabled is true when removing or demoting that
+// member disabled the org's shared Azure AI Foundry credential (they were
+// its lender — disableLentCredential), so the panel explains why the shared
+// provider vanished and offers to re-enter it instead of leaving a support
+// ticket; omitted when nothing was disabled.
+type orgMemberMutationResponse struct {
+	Status                   string `json:"status" example:"ok"`
+	SharedCredentialDisabled bool   `json:"sharedCredentialDisabled,omitempty"`
+}
+
 // @Summary      Get the organisation's shared Azure AI Foundry configuration
-// @Description  Returns the org's shared Azure AI Foundry settings without any secret: endpoint, auth mode, whether a secret is stored, the Entra ID tenant and client IDs, the project endpoint and the deployment names, plus who shared it (updatedBy: the display name, else email, of the admin who supplied the stored secret — an edit by another admin that kept the secret does not change it) and when it was last saved (updatedAt: RFC 3339 with sub-second precision — send it back verbatim as the save's compare-and-swap token). Any member, viewers included (only admins and members run on it). {configured:false, shared:false} when the org has none; 500 ORG_CREDENTIAL_UNREADABLE when it has one that cannot be read (a deployment key rotation, a database failure).
+// @Description  Deprecated (one release): use GET /api/orgs/{id}/providers/azure-foundry/connections and /models. Returns the org's resource "default" (the single-document configuration it migrated to) without any secret: endpoint, auth mode, whether a secret is stored, the Entra ID tenant and client IDs, the project endpoint and the deployment names — built from the registry's entries of that resource, never from the stored document's old fields — plus who shared it (updatedBy: the display name, else email, of the admin who supplied the stored secret — an edit by another admin that kept the secret does not change it) and when it was last saved (updatedAt: RFC 3339 with sub-second precision — send it back verbatim as the save's compare-and-swap token). Any member, viewers included (only admins and members run on it). {configured:false, shared:false} when the org has none; 500 ORG_CREDENTIAL_UNREADABLE when it has one that cannot be read (a deployment key rotation, a database failure).
 // @Tags         org
+// @Deprecated
 // @Param        id path string true "Org ID"
 // @Produce      json
 // @Success      200 {object} service.OrgAzureFoundryConfig "OK"
@@ -193,8 +208,9 @@ func (h *OrgHandler) memberLabel(ctx context.Context, userID string) string {
 }
 
 // @Summary      Save the organisation's shared Azure AI Foundry configuration
-// @Description  Validates and stores the org's shared Azure AI Foundry endpoint, credential (API key or Microsoft Entra ID service principal), optional project endpoint and deployment names, for admins and members without a configuration of their own. Org admins only. An omitted secret keeps the stored one only while the endpoint host (and the project endpoint's host) is unchanged — a changed endpoint needs the secret re-entered (MISSING_SECRET); the admin who supplies the secret becomes the credential's lender (it is disabled when they stop being an admin), an edit that keeps it does not. The body must be exactly one JSON object with known fields only (INVALID_CONFIG otherwise). Compare-and-swap: send back the updatedAt the GET returned (omit it only when the GET said configured:false); when the stored configuration changed since — another admin saved or removed it — nothing is written and the answer is 409 CONFLICT (reload, then re-apply). The reply's updatedAt is the token for the next save.
+// @Description  Deprecated (one release): use the org registry routes (POST/PUT /api/orgs/{id}/providers/azure-foundry/connections, /models). Validates and stores the org's shared Azure AI Foundry endpoint, credential (API key or Microsoft Entra ID service principal), optional project endpoint and deployment names as its resource "default": the credential part is saved (the stored document's old deployment fields carried over unchanged, for a rolled-back binary) and the deployment fields are mapped onto that resource's models — missing ones added, removed ones deleted. Org admins only. An omitted secret keeps the stored one only while the endpoint host (and the project endpoint's host) is unchanged — a changed endpoint needs the secret re-entered (MISSING_SECRET); the admin who supplies the secret becomes the credential's lender (it is disabled when they stop being an admin), an edit that keeps it does not. The body must be exactly one JSON object with known fields only (INVALID_CONFIG otherwise). Compare-and-swap: send back the updatedAt the GET returned (omit it only when the GET said configured:false); when the stored configuration changed since — another admin saved or removed it — nothing is written and the answer is 409 CONFLICT (reload, then re-apply). The reply's updatedAt is the token for the next save.
 // @Tags         org
+// @Deprecated
 // @Param        id path string true "Org ID"
 // @Param        request body orgAzureFoundrySaveRequest true "The configuration plus the updatedAt it was loaded with"
 // @Accept       json
@@ -203,7 +219,7 @@ func (h *OrgHandler) memberLabel(ctx context.Context, userID string) string {
 // @Failure      400 {object} render.ErrorResponse "INVALID_CONFIG, INVALID_ENDPOINT, INVALID_PROJECT_ENDPOINT, INVALID_AUTH, MISSING_SECRET, MISSING_DEPLOYMENT, INVALID_DEPLOYMENT, CONFIG_TOO_LARGE or HOST_NOT_ALLOWED"
 // @Failure      403 {object} render.ErrorResponse "Not an org admin"
 // @Failure      404 {object} render.ErrorResponse "Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)"
-// @Failure      409 {object} render.ErrorResponse "The stored configuration changed since it was loaded (CONFLICT)"
+// @Failure      409 {object} render.ErrorResponse "The stored configuration changed since it was loaded (CONFLICT), or the organisation's resource or model limit (TOO_MANY_CONNECTIONS, TOO_MANY_MODELS)"
 // @Router       /api/orgs/{id}/providers/azure-foundry/config [post]
 func (h *OrgHandler) handleOrgAzureFoundryConfigSave(w http.ResponseWriter, r *http.Request) {
 	if !h.orgProviderKeysAvailable(w) {
@@ -224,30 +240,33 @@ func (h *OrgHandler) handleOrgAzureFoundryConfigSave(w http.ResponseWriter, r *h
 	// canonical auth mode, not a client's case/whitespace variant.
 	req.Normalize()
 	updatedAt, err := h.providers.SaveOrgAzureFoundryConfig(org.ID, h.security.CallerID(r), req.UpdatedAt, req.AzureFoundryConfig)
-	if err != nil {
-		var cfgErr *ai.AzureConfigError
-		switch {
-		case errors.As(err, &cfgErr):
-			render.ErrorWithCode(w, err, http.StatusBadRequest, cfgErr.Code)
-		case errors.Is(err, service.ErrOrgCredentialConflict):
-			render.ErrorWithCode(w, err, http.StatusConflict, "CONFLICT")
-		default:
-			render.Error(w, err, http.StatusInternalServerError)
-		}
-		return
-	}
 	// Never the secrets: where the org's credential now goes, whose it is,
 	// and whether the stored secret was carried over (a saved document
 	// always holds one, so one the request omitted was kept).
 	meta := azureConfigAuditMeta(req.AzureFoundryConfig, !req.HasSecret())
 	meta["provider"] = ai.AzureFoundryProviderID
+	if err != nil {
+		if _, changed := service.AzureCredentialChanged(err); changed {
+			// The save failed after the new credential (and its lender) went
+			// in, and the previous one could not be put back: the change
+			// stands, so it is audited like a successful one — marked so.
+			meta["outcome"] = "failed_after_credential_change"
+			logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "org", org.ID, meta)
+		}
+		// A settings code (400), CONFLICT (409), and — the save now writes
+		// the registry's resource "default" and its models — the registry's
+		// own refusals (TOO_MANY_*, REGISTRY_READ_ONLY, …).
+		renderAzureRegistryError(w, err)
+		return
+	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "org", org.ID, meta)
 	render.JSON(w, orgAzureFoundrySaveResponse{Status: "ok", UpdatedAt: updatedAt})
 }
 
 // @Summary      Delete the organisation's shared Azure AI Foundry configuration
-// @Description  Removes the org's shared Azure AI Foundry credential. Members without a configuration of their own lose the provider. Org admins only.
+// @Description  Deprecated (one release): use DELETE /api/orgs/{id}/providers/azure-foundry/connections/{connectionId}. Removes the org's resource "default" — the migrated single-document configuration — with its models and its stored credential (the organisation's other resources stay). Members without models of their own lose the ones it held. Org admins only.
 // @Tags         org
+// @Deprecated
 // @Param        id path string true "Org ID"
 // @Produce      json
 // @Success      200 {object} statusResponse "OK"
@@ -263,7 +282,7 @@ func (h *OrgHandler) handleOrgAzureFoundryConfigDelete(w http.ResponseWriter, r 
 		return
 	}
 	if err := h.providers.DeleteOrgAzureFoundryConfig(org.ID); err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
+		renderAzureRegistryError(w, err)
 		return
 	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "org", org.ID,
@@ -271,14 +290,18 @@ func (h *OrgHandler) handleOrgAzureFoundryConfigDelete(w http.ResponseWriter, r 
 	render.JSON(w, statusResponse{Status: "ok"})
 }
 
-// @Summary      Test the organisation's shared Azure AI Foundry credential
-// @Description  Sends a tiny chat request through the org's shared Azure AI Foundry credential (never the caller's own) and reports whether it works. Org admins only. The call is billed to the org (its credential, its daily budget), rides the chat rate-limit bucket and is audited (providers.test).
+// @Summary      Test one of the organisation's Azure AI Foundry resources or models
+// @Description  POST /api/providers/azure-foundry/test for the organisation's registry, on the organisation's credentials only (never the caller's own): {connectionId}, {config} (a draft; with connectionId the stored secret carries over), optional model ({id} or a draft {kind, deployment}) — every outcome a 200 service.AzureTestResult {ok, latencyMs, error?, code?}, a 4xx only for an invalid request. A resource test makes no model call; a model test one tiny request Azure bills to the organisation's resource (baki's daily budget does not count Azure usage); an agent test only looks the agent up. Deprecated form (one release): an EMPTY body tests the organisation's resource "default" (else its first) as a resource — an authenticated probe, no model call — and answers the legacy models.ProviderTestResult {ok, latencyMs, error?} (no code). Org admins only. Rides the chat rate-limit bucket; audited (providers.test).
 // @Tags         org
 // @Param        id path string true "Org ID"
+// @Param        request body service.AzureTestInput false "What to test (empty: the deprecated org credential test)"
+// @Accept       json
 // @Produce      json
-// @Success      200 {object} models.ProviderTestResult "Test result"
+// @Success      200 {object} service.AzureTestResult "The outcome (the deprecated empty-body form answers models.ProviderTestResult)"
+// @Failure      400 {object} render.ErrorResponse "INVALID_CONFIG, a draft's settings code (INVALID_ENDPOINT, HOST_NOT_ALLOWED, INVALID_PROJECT_ENDPOINT, INVALID_AUTH or MISSING_SECRET with details.field), or a draft model's INVALID_KIND or INVALID_DEPLOYMENT"
 // @Failure      403 {object} render.ErrorResponse "Not an org admin"
-// @Failure      404 {object} render.ErrorResponse "Unknown org, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)"
+// @Failure      404 {object} render.ErrorResponse "Unknown org, CONNECTION_NOT_FOUND, MODEL_NOT_FOUND, or no org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)"
+// @Failure      503 {object} render.ErrorResponse "AZURE_REGISTRY_UNAVAILABLE (a registry test on a process that wired no registry)"
 // @Router       /api/orgs/{id}/providers/azure-foundry/test [post]
 func (h *OrgHandler) handleOrgAzureFoundryTest(w http.ResponseWriter, r *http.Request) {
 	if !h.orgProviderKeysAvailable(w) {
@@ -288,13 +311,49 @@ func (h *OrgHandler) handleOrgAzureFoundryTest(w http.ResponseWriter, r *http.Re
 	if org == nil {
 		return
 	}
-	res, err := h.providers.TestOrgProviderConnection(r.Context(), h.security.KeyScope(r), org.ID, ai.AzureFoundryProviderID)
+	body, err := readAzureRegistryBody(w, r, azureRegistryBodyLimit)
+	if err != nil {
+		renderAzureBodyError(w, err)
+		return
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		h.legacyOrgAzureTest(w, r, org.ID)
+		return
+	}
+	svc := azureModelsOf(h.providers)
+	if svc == nil {
+		renderAzureRegistryUnavailable(w)
+		return
+	}
+	if !svc.OrgRegistriesAvailable() {
+		render.ErrorWithCode(w, service.ErrOrgKeyStoreUnavailable, http.StatusNotFound, service.AzureCodeOrgKeystoreUnavailable)
+		return
+	}
+	var in service.AzureTestInput
+	if err := decodeAzureRegistryJSON(body, &in); err != nil {
+		renderAzureBodyError(w, err)
+		return
+	}
+	call := azureRegistryCall{
+		svc:     svc,
+		scope:   service.AzureScope{Scope: h.security.KeyScope(r), OrgID: org.ID},
+		backend: h.backend,
+		proxies: h.security.TrustedProxies,
+	}
+	call.test(w, r, in)
+}
+
+// legacyOrgAzureTest is the deprecated body-less org credential test: the
+// organisation's resource "default" (else its first), probed as a resource
+// when the registry is wired; the legacy ProviderTestResult answer.
+func (h *OrgHandler) legacyOrgAzureTest(w http.ResponseWriter, r *http.Request, orgID string) {
+	res, err := h.providers.TestOrgProviderConnection(r.Context(), h.security.KeyScope(r), orgID, ai.AzureFoundryProviderID)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// A billed call on the org's credential: who ran it, and the outcome.
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionProvidersTest, "org", org.ID,
+	// A call on the org's credential: who ran it, and the outcome.
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionProvidersTest, "org", orgID,
 		map[string]string{"provider": ai.AzureFoundryProviderID, "ok": testOutcome(res)})
 	render.JSON(w, res)
 }
@@ -312,43 +371,61 @@ const (
 )
 
 // disableLentCredential disables the org's shared Azure AI Foundry
-// credential when userID — who just stopped being an admin of orgID — is the
-// admin who supplied its secret (its lender, even after another admin edited
-// the document without re-entering it) or last saved it, and audits it
-// (keys.save, op "disable", like the other org credential rows). Best effort: the membership change already happened,
-// so a failure is logged, not reported to the caller.
-func disableLentCredential(r *http.Request, backend storageif.StorageBackend, trustedProxies []string, providers *service.ProviderService, orgID, userID, reason string) {
+// credentials — every resource's (the key family: "azure-foundry" for the
+// resource "default", "azure-foundry/<id>" for the others) — whose secret
+// userID supplied, when userID just stopped being an admin of orgID (its
+// lender, even after another admin edited a resource without re-entering the
+// secret; that edit does not make its editor a lender), and audits each one
+// (keys.save, op "disable", provider the key, like the other org credential
+// rows, with the departed user's id). The registry rows stay: their
+// resources read needs_credentials until an admin enters the credentials
+// again. Reports whether any credential was disabled, so the membership
+// handlers can tell the admin what disappeared. Best effort: the membership
+// change already happened, so a failure is logged, not reported to the
+// caller.
+func disableLentCredential(r *http.Request, backend storageif.StorageBackend, trustedProxies []string, providers *service.ProviderService, orgID, userID, reason string) bool {
 	if providers == nil || !providers.OrgKeysAvailable() {
-		return
+		return false
 	}
-	disabled, err := providers.DisableOrgAzureFoundryConfigSavedBy(orgID, userID)
+	keys, err := providers.DisableOrgAzureCredentialsSavedBy(orgID, userID)
 	if err != nil {
-		logger.Warn("org: disabling a departed admin's shared credential failed", "org", orgID, "error", err)
-		return
+		logger.Warn("org: disabling a departed admin's shared credentials failed", "org", orgID, "error", err)
+		return false
 	}
-	if disabled {
-		auditLentCredentialDisabled(r, backend, trustedProxies, orgID, reason)
+	for _, key := range keys {
+		auditLentCredentialDisabled(r, backend, trustedProxies, orgID, key, userID, reason)
 	}
+	return len(keys) > 0
 }
 
 // disableLentCredentials is disableLentCredential for every org whose shared
-// credential userID lent or last saved (account erasure).
+// credentials userID lent (account erasure): one audit row per disabled key.
 func disableLentCredentials(r *http.Request, backend storageif.StorageBackend, trustedProxies []string, providers *service.ProviderService, userID, reason string) {
 	if providers == nil || !providers.OrgKeysAvailable() {
 		return
 	}
-	orgIDs, err := providers.DisableOrgCredentialsSavedBy(userID)
+	refs, err := providers.DisableOrgAzureCredentialsLentBy(userID)
 	if err != nil {
 		logger.Warn("account: disabling the user's shared org credentials failed", "error", err)
 	}
-	for _, orgID := range orgIDs {
-		auditLentCredentialDisabled(r, backend, trustedProxies, orgID, reason)
+	for _, ref := range refs {
+		auditLentCredentialDisabled(r, backend, trustedProxies, ref.OrgID, ref.Provider, userID, reason)
 	}
 }
 
-func auditLentCredentialDisabled(r *http.Request, backend storageif.StorageBackend, trustedProxies []string, orgID, reason string) {
-	logAudit(r.Context(), backend, r, trustedProxies, AuditActionKeysSave, "org", orgID,
-		map[string]string{"op": "disable", "provider": ai.AzureFoundryProviderID, "reason": reason})
+// auditLentCredentialDisabled records one disabled shared credential: the
+// organisation, the credential's key (provider) and — when the key names a
+// registry resource — its connectionId. The meta carries the departed
+// user's id: the reasons name the relationship (lender_demoted /
+// lender_removed / lender_account_deleted) but not WHO left, and an auditor
+// otherwise has to correlate timestamps with the member-remove / role /
+// account-delete rows.
+func auditLentCredentialDisabled(r *http.Request, backend storageif.StorageBackend, trustedProxies []string, orgID, key, userID, reason string) {
+	meta := map[string]string{"op": "disable", "provider": key, "reason": reason, "user": userID}
+	if connID, ok := ai.ParseAzureConnectionKey(key); ok {
+		meta["connectionId"] = connID
+	}
+	logAudit(r.Context(), backend, r, trustedProxies, AuditActionKeysSave, "org", orgID, meta)
 }
 
 // requireMember verifies the caller is a member of the org identified by the
@@ -433,8 +510,9 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 // @Accept       multipart/form-data
 // @Produce      json
 // @Success      201 {object} map[string]interface{} "Uploaded"
-// @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED) or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)"
+// @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED) or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)"
 // @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED) or another upload/re-index of this org is in flight (KNOWLEDGE_BUSY)"
+// @Failure      413 {object} map[string]string "The document chunks to more passages than one upload may index (KNOWLEDGE_DOCUMENT_TOO_LARGE)"
 // @Failure      429 {object} map[string]string "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED)"
 // @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE)"
 // @Router       /api/orgs/{id}/knowledge/upload [post]
@@ -523,36 +601,63 @@ func (h *OrgHandler) handleKnowledgeDelete(w http.ResponseWriter, r *http.Reques
 // cut off by the deadline surfaces as a transport failure that would
 // otherwise read as an outage or as the provider's rejection.
 func renderKnowledgeEmbeddingError(w http.ResponseWriter, err error) bool {
+	return renderKnowledgeEmbeddingErrorDetails(w, err, nil)
+}
+
+// renderKnowledgeEmbeddingErrorDetails is renderKnowledgeEmbeddingError
+// with structured details carried on the error envelope: a re-index that
+// failed after committing pages reports its resume cursor this way
+// ({nextCursor, chunks}), so the client continues instead of restarting
+// from a zero cursor (F-13).
+func renderKnowledgeEmbeddingErrorDetails(w http.ResponseWriter, err error, details map[string]any) bool {
 	switch {
 	case errors.Is(err, service.ErrAIBudgetExceeded):
 		// The daily AI budget gate (rag.BudgetChecker) refused the billed
 		// embedding run before it started.
-		render.ErrorWithCode(w, err, http.StatusTooManyRequests, "BUDGET_EXCEEDED")
+		render.ErrorWithCodeAndDetails(w, err, http.StatusTooManyRequests, "BUDGET_EXCEEDED", details)
 	case errors.Is(err, service.ErrAIBudgetUnavailable):
-		render.ErrorWithCode(w, err, http.StatusServiceUnavailable, "BUDGET_UNAVAILABLE")
+		render.ErrorWithCodeAndDetails(w, err, http.StatusServiceUnavailable, "BUDGET_UNAVAILABLE", details)
+	case errors.Is(err, ai.ErrOrgEmbeddingDeploymentMissing):
+		// Before ErrEmbeddingUnavailable, which the rag embedder wraps it
+		// with: the org's shared Azure credential names no embedding
+		// deployment — the org admin's to fix, not the member's settings,
+		// and the personal fallback was deliberately refused (F-33).
+		render.ErrorWithCodeAndDetails(w, err, http.StatusBadRequest, "EMBEDDING_ORG_NOT_CONFIGURED", details)
 	case errors.Is(err, rag.ErrEmbeddingNotConfigured), errors.Is(err, rag.ErrEmbeddingUnavailable):
-		render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED")
+		render.ErrorWithCodeAndDetails(w, err, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED", details)
 	case errors.Is(err, rag.ErrEmbeddingModelChanged):
-		render.ErrorWithCode(w, err, http.StatusConflict, "EMBEDDING_MODEL_CHANGED")
+		render.ErrorWithCodeAndDetails(w, err, http.StatusConflict, "EMBEDDING_MODEL_CHANGED", details)
 	case errors.Is(err, rag.ErrKnowledgeBusy):
-		render.ErrorWithCode(w, err, http.StatusConflict, "KNOWLEDGE_BUSY")
+		render.ErrorWithCodeAndDetails(w, err, http.StatusConflict, "KNOWLEDGE_BUSY", details)
+	case errors.Is(err, rag.ErrDocumentTooLarge):
+		// More passages than one upload may index; the byte cap alone cannot
+		// track how a text chunks (F-14).
+		render.ErrorWithCodeAndDetails(w, err, http.StatusRequestEntityTooLarge, "KNOWLEDGE_DOCUMENT_TOO_LARGE", details)
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
-		render.ErrorWithCode(w, err, http.StatusGatewayTimeout, "KNOWLEDGE_TIMEOUT")
+		render.ErrorWithCodeAndDetails(w, err, http.StatusGatewayTimeout, "KNOWLEDGE_TIMEOUT", details)
+	case errors.Is(err, rag.ErrEmbeddingSetupUnavailable):
+		// Which model embeds could not be decided right now (the Azure AI
+		// Foundry model registry or the key store could not be read, a
+		// legacy import is still pending): no configuration gap, so not
+		// EMBEDDING_NOT_CONFIGURED — a 503 whose message is masked (the
+		// cause, which may name database hosts and roles, was logged) under
+		// the code the frontend shows its "try again" copy for.
+		render.ErrorWithCodeAndDetails(w, err, http.StatusServiceUnavailable, "EMBEDDING_PROVIDER_UNAVAILABLE", details)
 	case errors.Is(err, ai.ErrRateLimited):
 		w.Header().Set("Retry-After", embeddingRetryAfter(err))
-		render.ErrorWithCode(w, err, http.StatusTooManyRequests, "EMBEDDING_RATE_LIMITED")
+		render.ErrorWithCodeAndDetails(w, err, http.StatusTooManyRequests, "EMBEDDING_RATE_LIMITED", details)
 	case errors.Is(err, ai.ErrProviderPermissionDenied): // before ErrApiKeyInvalid, which it also matches
-		render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_PERMISSION_DENIED")
+		render.ErrorWithCodeAndDetails(w, err, http.StatusBadRequest, "EMBEDDING_PERMISSION_DENIED", details)
 	case errors.Is(err, ai.ErrApiKeyInvalid):
-		render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_AUTH_FAILED")
+		render.ErrorWithCodeAndDetails(w, err, http.StatusBadRequest, "EMBEDDING_AUTH_FAILED", details)
 	case errors.Is(err, ai.ErrProviderConfigInvalid), errors.Is(err, ai.ErrKeyNotConfigured):
-		render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED")
+		render.ErrorWithCodeAndDetails(w, err, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED", details)
 	case errors.Is(err, ai.ErrProviderDown), errors.Is(err, ai.ErrCircuitOpen):
-		render.ErrorWithCode(w, err, http.StatusServiceUnavailable, "EMBEDDING_PROVIDER_UNAVAILABLE")
+		render.ErrorWithCodeAndDetails(w, err, http.StatusServiceUnavailable, "EMBEDDING_PROVIDER_UNAVAILABLE", details)
 	case errors.Is(err, rag.ErrEmbeddingFailed):
 		// The provider's own rejection (unknown deployment, invalid input):
 		// the admin's configuration, not a server fault — keep the message.
-		render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_PROVIDER_REJECTED")
+		render.ErrorWithCodeAndDetails(w, err, http.StatusBadRequest, "EMBEDDING_PROVIDER_REJECTED", details)
 	default:
 		return false
 	}
@@ -642,8 +747,8 @@ func decodeKnowledgeReindexRequest(body io.Reader) (knowledgeReindexRequest, err
 // @Param        id path string true "Org ID"
 // @Param        request body knowledgeReindexRequest false "Optional. force=true re-indexes even when the corpus was indexed with a different embedding model (first request of a run only); cursor = the previous answer's nextCursor resumes the run after it"
 // @Produce      json
-// @Success      200 {object} rag.ReindexResult "Re-indexed this request's pages ({chunks, docs}); nextCursor (with truncated=true) means chunks remain — post again with {force, cursor: nextCursor}. Every page is committed as it completes, so a later failure keeps the earlier pages"
-// @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED), a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed body / cursor"
+// @Success      200 {object} rag.ReindexResult "Re-indexed this request's pages ({chunks, docs}); nextCursor (with truncated=true) means chunks remain — post again with {force, cursor: nextCursor}. Every page is committed as it completes, so a later failure keeps the earlier pages — a request that FAILS after committing pages answers its error code with details {nextCursor, chunks} to resume from"
+// @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED), a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed body / cursor"
 // @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force — on a resumed request: the caller's model is not the one the run converted to) or another upload/re-index of this org is in flight (KNOWLEDGE_BUSY)"
 // @Failure      429 {object} map[string]string "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED) or the daily AI budget is spent (BUDGET_EXCEEDED)"
 // @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE) or the budget could not be checked (BUDGET_UNAVAILABLE)"
@@ -679,10 +784,26 @@ func (h *OrgHandler) handleKnowledgeReindex(w http.ResponseWriter, r *http.Reque
 	// (rlsExemptPath): every page commits on its own.
 	res, err := h.knowledge.ReindexOrg(r.Context(), h.security.KeyScope(r), chi.URLParam(r, "id"), req.Force, after)
 	if err != nil {
-		if renderKnowledgeEmbeddingError(w, withRequestContextErr(r, err)) {
+		werr := withRequestContextErr(r, err)
+		if res.NextCursor != nil {
+			// The request failed after committing at least one page: the same
+			// status/code mapping, plus the resume cursor in the envelope's
+			// details so the client continues from the last committed chunk
+			// instead of restarting and re-buying the converted pages (F-13).
+			details := map[string]any{"nextCursor": res.NextCursor, "chunks": res.Chunks}
+			if !renderKnowledgeEmbeddingErrorDetails(w, werr, details) {
+				render.ErrorWithCodeAndDetails(w, werr, http.StatusInternalServerError, "INTERNAL_ERROR", details)
+			}
+			// The audit row of a partial run records that it failed midway
+			// with pages committed — the facts a later reader needs.
+			logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKnowledgeReindex, "org", chi.URLParam(r, "id"),
+				map[string]string{"truncated": "true", "failed": "true"})
 			return
 		}
-		render.Error(w, err, http.StatusInternalServerError)
+		if renderKnowledgeEmbeddingError(w, werr) {
+			return
+		}
+		render.Error(w, werr, http.StatusInternalServerError)
 		return
 	}
 	// The audit row (one per request of a resumable run) records a forced
@@ -1053,7 +1174,7 @@ func (h *OrgHandler) handleOrgMemberList(w http.ResponseWriter, r *http.Request)
 // @Param        id path string true "id"
 // @Param        userId path string true "userId"
 // @Produce      json
-// @Success      200 {object} map[string]string "OK"
+// @Success      200 {object} orgMemberMutationResponse "OK; sharedCredentialDisabled is true when the removed member was the lender of the org's shared Azure AI Foundry credential and it was disabled"
 // @Failure      403 {object} map[string]string "Forbidden"
 // @Failure      404 {object} map[string]string "Not Found"
 // @Failure      409 {object} map[string]string "Conflict"
@@ -1085,9 +1206,10 @@ func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgMemberRemove, "org", id, map[string]string{"targetUser": userID})
-	// A removed admin who lent the org its shared credential takes it along.
-	disableLentCredential(r, h.backend, h.security.TrustedProxies, h.providers, id, userID, lenderReasonRemoved)
-	render.JSON(w, map[string]string{"status": "ok"})
+	// A removed admin who lent the org its shared credential takes it along:
+	// the reply says so, so the panel explains the disappearance (F-48).
+	disabled := disableLentCredential(r, h.backend, h.security.TrustedProxies, h.providers, id, userID, lenderReasonRemoved)
+	render.JSON(w, orgMemberMutationResponse{Status: "ok", SharedCredentialDisabled: disabled})
 }
 
 // handleOrgInviteList returns all pending and resolved invites for an
@@ -1261,7 +1383,7 @@ func (h *OrgHandler) handleInviteAccept(w http.ResponseWriter, r *http.Request) 
 // @Param        userId path string true "User ID"
 // @Accept       json
 // @Produce      json
-// @Success      200 {object} map[string]interface{} "Updated"
+// @Success      200 {object} orgMemberMutationResponse "Updated; sharedCredentialDisabled is true when the demoted member was the lender of the org's shared Azure AI Foundry credential and it was disabled"
 // @Router       /api/orgs/{id}/members/{userId}/role [put]
 func (h *OrgHandler) handleOrgMemberRoleUpdate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -1287,9 +1409,11 @@ func (h *OrgHandler) handleOrgMemberRoleUpdate(w http.ResponseWriter, r *http.Re
 		return
 	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgMemberRole, "org", id, map[string]string{"targetUser": userID, "role": req.Role})
+	disabled := false
 	if role != auth.RoleAdmin {
-		// A demoted admin can no longer manage the credential they lent.
-		disableLentCredential(r, h.backend, h.security.TrustedProxies, h.providers, id, userID, lenderReasonDemoted)
+		// A demoted admin can no longer manage the credential they lent;
+		// the reply says when that took the shared credential with it (F-48).
+		disabled = disableLentCredential(r, h.backend, h.security.TrustedProxies, h.providers, id, userID, lenderReasonDemoted)
 	}
-	render.JSON(w, map[string]string{"status": "ok"})
+	render.JSON(w, orgMemberMutationResponse{Status: "ok", SharedCredentialDisabled: disabled})
 }

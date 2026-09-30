@@ -249,3 +249,103 @@ func TestEmbeddingProviderIDs_MatchRegistry(t *testing.T) {
 		}
 	}
 }
+
+// TestAzureFoundry_EmbedDimensionsRefused422ModelInference pins F-06: the
+// Model Inference layer answers a fixed-width non-OpenAI embedder's
+// `dimensions` with 422 parameter_not_supported (detail.loc naming the
+// parameter), which the one-shot repair must treat exactly like the 400.
+func TestAzureFoundry_EmbedDimensionsRefused422ModelInference(t *testing.T) {
+	reject422 := func(w http.ResponseWriter) {
+		writeJSON(w, 422, map[string]any{
+			"status":  422,
+			"code":    "parameter_not_supported",
+			"message": "One of the parameters contain invalid values.",
+			"detail":  map[string]any{"loc": []any{"body", "dimensions"}, "input": 1536},
+		})
+	}
+	srv := azureEmbedServer(t, reject422)
+	p := newAzureKeyProvider(t, srv, func(c *AzureFoundryConfig) { c.EmbeddingDeployment = "kb-embed" })
+	p.setEmbeddingDimensions(1536)
+
+	vecs, err := p.Embed(context.Background(), []string{"a"})
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(vecs) != 1 {
+		t.Fatalf("got %d vectors, want 1", len(vecs))
+	}
+	reqs := srv.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("%d requests, want exactly 2 (the 422 repaired once)", len(reqs))
+	}
+	if reqs[0].Body["dimensions"] != float64(1536) {
+		t.Errorf("first request = %v, want dimensions 1536", reqs[0].Body)
+	}
+	if _, sent := reqs[1].Body["dimensions"]; sent {
+		t.Errorf("retry still carries dimensions: %v", reqs[1].Body)
+	}
+	if !p.dimensionsRefused() {
+		t.Error("the 422 dimensions refusal must be memoised")
+	}
+
+	// A 422 naming another parameter is not a dimensions refusal: it surfaces
+	// after one request and memoises nothing.
+	other := azureEmbedServer(t, func(w http.ResponseWriter) {
+		writeJSON(w, 422, map[string]any{
+			"status":  422,
+			"code":    "parameter_not_supported",
+			"message": "One of the parameters contain invalid values.",
+			"detail":  map[string]any{"loc": []any{"body", "encoding_format"}, "input": "float"},
+		})
+	})
+	q := newAzureKeyProvider(t, other, func(c *AzureFoundryConfig) { c.EmbeddingDeployment = "kb-embed" })
+	q.setEmbeddingDimensions(1536)
+	if _, err := q.Embed(context.Background(), []string{"a"}); err == nil || !strings.Contains(err.Error(), "invalid values") {
+		t.Fatalf("want the 422 surfaced, got %v", err)
+	}
+	if n := len(other.requests()); n != 1 {
+		t.Errorf("%d requests, want 1 (not a dimensions refusal)", n)
+	}
+	if q.dimensionsRefused() {
+		t.Error("an encoding_format 422 must not memoise a dimensions refusal")
+	}
+}
+
+// TestForEmbeddingOrg_OrgWithoutEmbeddingDeployment (F-33): when the ORG's
+// shared document is the resolved credential and names no embedding
+// deployment, ForEmbeddingOrg raises the org sentinel (wrapping the plain
+// one so existing errors.Is checks hold) whose copy is aimed at the org
+// admin; the member's OWN chat-only document — and an org without a shared
+// credential — keep the plain sentinel for the fallback scan.
+func TestForEmbeddingOrg_OrgWithoutEmbeddingDeployment(t *testing.T) {
+	ResetAzureFoundryCaches()
+	chatOnly := `{"endpoint":"https://my-res.openai.azure.com","auth":{"mode":"api_key","key":"k"},"chatDeployment":"gpt-4o"}`
+	f := NewProviderFactory(func(_, provider string) (string, error) {
+		if provider == "azure-foundry" {
+			return chatOnly, nil
+		}
+		return "", nil
+	}, nil, nil, nil)
+	f.SetOrgKeyLookup(func(orgID, provider string) (string, error) {
+		if orgID == "org-1" && provider == "azure-foundry" {
+			return chatOnly, nil
+		}
+		return "", nil
+	})
+
+	_, err := f.ForEmbeddingOrg("member", "org-1", "azure-foundry", "")
+	if !errors.Is(err, ErrOrgEmbeddingDeploymentMissing) || !errors.Is(err, ErrEmbeddingDeploymentMissing) {
+		t.Errorf("org document: err = %v, want ErrOrgEmbeddingDeploymentMissing wrapping ErrEmbeddingDeploymentMissing", err)
+	}
+	if !strings.Contains(err.Error(), "ask an org admin") {
+		t.Errorf("org document: err = %v, want the copy aimed at the org admin", err)
+	}
+	_, err = f.ForEmbedding("", "azure-foundry", "")
+	if !errors.Is(err, ErrEmbeddingDeploymentMissing) || errors.Is(err, ErrOrgEmbeddingDeploymentMissing) {
+		t.Errorf("member document: err = %v, want the plain ErrEmbeddingDeploymentMissing", err)
+	}
+	_, err = f.ForEmbeddingOrg("member", "org-empty", "azure-foundry", "")
+	if !errors.Is(err, ErrEmbeddingDeploymentMissing) || errors.Is(err, ErrOrgEmbeddingDeploymentMissing) {
+		t.Errorf("org without a credential: err = %v, want the member's plain sentinel", err)
+	}
+}

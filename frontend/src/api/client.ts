@@ -5,14 +5,16 @@ import {decodeJwtPayload} from '@/lib/jwt'
 import type {z} from 'zod'
 
 // ApiError carries the backend's error envelope: status, machine-readable
-// `code` to branch on, and requestId for log correlation. Prefer code/status
-// over the message (masked on 5xx, may be reworded).
+// `code` to branch on, requestId for log correlation, and the optional
+// structured `details` object (e.g. a failed re-index's resume cursor).
+// Prefer code/status over the message (masked on 5xx, may be reworded).
 export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
     public readonly code: string | null = null,
     public readonly requestId: string | null = null,
+    public readonly details?: Record<string, unknown>,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -20,15 +22,25 @@ export class ApiError extends Error {
 }
 
 export class PermissionDeniedError extends ApiError {
-  constructor(message: string, code: string | null = null, requestId: string | null = null) {
-    super(message, 403, code, requestId)
+  constructor(
+    message: string,
+    code: string | null = null,
+    requestId: string | null = null,
+    details?: Record<string, unknown>,
+  ) {
+    super(message, 403, code, requestId, details)
     this.name = 'PermissionDeniedError'
   }
 }
 
 export class VersionConflictError extends ApiError {
-  constructor(message: string, code: string | null = null, requestId: string | null = null) {
-    super(message, 409, code, requestId)
+  constructor(
+    message: string,
+    code: string | null = null,
+    requestId: string | null = null,
+    details?: Record<string, unknown>,
+  ) {
+    super(message, 409, code, requestId, details)
     this.name = 'VersionConflictError'
   }
 }
@@ -347,6 +359,7 @@ interface ErrorEnvelope {
   message: string
   code: string | null
   requestId: string | null
+  details?: Record<string, unknown>
 }
 
 /**
@@ -360,7 +373,7 @@ interface ErrorEnvelope {
 async function parseErrorEnvelope(response: Response): Promise<ErrorEnvelope> {
   const body = await response.json().catch(() => null)
   if (body && typeof body === 'object') {
-    const b = body as {message?: unknown; error?: unknown; code?: unknown; requestId?: unknown}
+    const b = body as {message?: unknown; error?: unknown; code?: unknown; requestId?: unknown; details?: unknown}
     const message =
       typeof b.message === 'string' && b.message ? b.message : typeof b.error === 'string' && b.error ? b.error : ''
     if (message) {
@@ -368,6 +381,10 @@ async function parseErrorEnvelope(response: Response): Promise<ErrorEnvelope> {
         message,
         code: typeof b.code === 'string' && b.code ? b.code : null,
         requestId: typeof b.requestId === 'string' && b.requestId ? b.requestId : null,
+        details:
+          b.details && typeof b.details === 'object' && !Array.isArray(b.details)
+            ? (b.details as Record<string, unknown>)
+            : undefined,
       }
     }
   }
@@ -404,12 +421,12 @@ async function doRequest<T>(path: string, opts: RequestOptions): Promise<T> {
   if (!response.ok) {
     const env = await parseErrorEnvelope(response)
     if (response.status === 403) {
-      throw new PermissionDeniedError(env.message, env.code, env.requestId)
+      throw new PermissionDeniedError(env.message, env.code, env.requestId, env.details)
     }
     if (response.status === 409) {
-      throw new VersionConflictError(env.message, env.code, env.requestId)
+      throw new VersionConflictError(env.message, env.code, env.requestId, env.details)
     }
-    throw new ApiError(env.message, response.status, env.code, env.requestId)
+    throw new ApiError(env.message, response.status, env.code, env.requestId, env.details)
   }
 
   // A 200 with a non-JSON body (misconfigured proxy) must throw a clean Error.
@@ -486,9 +503,9 @@ export async function requestBlob(
     // Shared envelope→error mapping (F1.9): blob downloads deserve the same
     // PermissionDenied/VersionConflict specialization as JSON requests.
     const env = await parseErrorEnvelope(response)
-    if (response.status === 403) throw new PermissionDeniedError(env.message, env.code, env.requestId)
-    if (response.status === 409) throw new VersionConflictError(env.message, env.code, env.requestId)
-    throw new ApiError(env.message, response.status, env.code, env.requestId)
+    if (response.status === 403) throw new PermissionDeniedError(env.message, env.code, env.requestId, env.details)
+    if (response.status === 409) throw new VersionConflictError(env.message, env.code, env.requestId, env.details)
+    throw new ApiError(env.message, response.status, env.code, env.requestId, env.details)
   }
   return response.blob()
 }

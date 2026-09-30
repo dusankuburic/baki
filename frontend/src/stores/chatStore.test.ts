@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
-import {useChatStore, MAX_CONCURRENT_STREAMS} from './chatStore'
+import {useChatStore, MAX_CONCURRENT_STREAMS, threadModelOf} from './chatStore'
 import {registerCurrentUserResolver} from './storeRegistry'
 import type {ChatMessage} from '@/types'
 
@@ -706,5 +706,202 @@ describe('clearThreadMessages / setThreadMessages', () => {
     useChatStore.getState().closeThread(id)
     useChatStore.getState().setThreadMessages(id, [makeMessage('u3', 'user')])
     expect(useChatStore.getState().conversations.has(id)).toBe(false)
+  })
+})
+
+// ---- per-thread model memory ----
+
+describe('thread model pins', () => {
+  const stored: Record<string, string> = {}
+  const fakeStorage = {
+    getItem: (k: string) => stored[k] ?? null,
+    setItem: (k: string, v: string) => {
+      stored[k] = v
+    },
+    removeItem: (k: string) => {
+      delete stored[k]
+    },
+    key: (i: number) => Object.keys(stored)[i] ?? null,
+    get length() {
+      return Object.keys(stored).length
+    },
+  }
+  const KEY = (flowId: string) => `baki:chatThreads:v2:user-1:${flowId}`
+  const reload = () => useChatStore.setState({threads: [], activeThreadId: null, conversations: new Map()})
+
+  beforeEach(() => {
+    for (const k of Object.keys(stored)) delete stored[k]
+    vi.stubGlobal('localStorage', fakeStorage)
+    registerCurrentUserResolver(() => 'user-1')
+    useChatStore.setState({modelRefusals: {}, modelPickerRequest: 0})
+  })
+  afterEach(() => {
+    registerCurrentUserResolver(() => null)
+  })
+
+  it('a new thread starts unpinned (it follows the Default for new chats)', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    const thread = useChatStore.getState().threads.find(t => t.id === id)!
+    expect(threadModelOf(thread)).toBeNull()
+  })
+
+  it('pins a thread and restores the pin after a reload', () => {
+    const a = useChatStore.getState().createThread('flow1')
+    const b = useChatStore.getState().createThread('flow1')
+    useChatStore
+      .getState()
+      .setThreadModel(a, {provider: 'azure-foundry', model: 'm/docs000000', modelLabel: 'Docs writer'})
+    reload()
+    useChatStore.getState().hydrateThreads('flow1')
+    const threads = useChatStore.getState().threads
+    expect(threadModelOf(threads.find(t => t.id === a)!)).toEqual({
+      provider: 'azure-foundry',
+      model: 'm/docs000000',
+      modelLabel: 'Docs writer',
+    })
+    // Each thread keeps its own: the other one is still unpinned.
+    expect(threadModelOf(threads.find(t => t.id === b)!)).toBeNull()
+  })
+
+  it('loads a thread from before per-thread memory, or with a bad pin, unpinned', () => {
+    const base = {flowId: 'flow1', title: 't', createdAt: '2026-09-30T00:00:00Z'}
+    stored[KEY('flow1')] = JSON.stringify([
+      {...base, id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'},
+      {...base, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', provider: 'nope', model: 'x'},
+      {...base, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', provider: 'claude', model: ''},
+      {...base, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', provider: 'claude', model: 'x'.repeat(300)},
+      {
+        ...base,
+        id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        provider: 'claude',
+        model: 'claude-opus-4-1',
+        modelLabel: 7,
+      },
+    ])
+    useChatStore.getState().hydrateThreads('flow1')
+    const pins = useChatStore.getState().threads.map(threadModelOf)
+    expect(pins.slice(0, 4)).toEqual([null, null, null, null])
+    // A bad label alone is dropped; the pin stays.
+    expect(pins[4]).toEqual({provider: 'claude', model: 'claude-opus-4-1'})
+  })
+
+  it('setThreadModel is a no-op for an unchanged or incomplete pin, and null unpins', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    const st = useChatStore.getState()
+    st.setThreadModel(id, {provider: 'claude', model: 'claude-opus-4-1', modelLabel: 'Opus'})
+    const before = useChatStore.getState().threads
+    st.setThreadModel(id, {provider: 'claude', model: 'claude-opus-4-1', modelLabel: 'Opus'})
+    expect(useChatStore.getState().threads).toBe(before)
+    st.setThreadModel(id, {provider: 'not-a-provider', model: 'x'})
+    st.setThreadModel(id, {provider: 'claude', model: ''})
+    expect(useChatStore.getState().threads).toBe(before)
+    st.setThreadModel(id, null)
+    expect(threadModelOf(useChatStore.getState().threads[0])).toBeNull()
+  })
+
+  // C6: a label that is only an id would beat the listing's name for good.
+  it('never stores an id as a pin’s label, and drops one stored before', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    const st = useChatStore.getState()
+    st.setThreadModel(id, {provider: 'azure-foundry', model: 'm/docs000000', modelLabel: 'm/docs000000'})
+    expect(threadModelOf(useChatStore.getState().threads[0])).toEqual({
+      provider: 'azure-foundry',
+      model: 'm/docs000000',
+    })
+    st.setThreadModel(id, {provider: 'claude', model: 'claude-custom', modelLabel: 'claude-custom'})
+    expect(threadModelOf(useChatStore.getState().threads[0])).toEqual({provider: 'claude', model: 'claude-custom'})
+
+    const base = {flowId: 'flow1', title: 't', createdAt: '2026-09-30T00:00:00Z'}
+    stored[KEY('flow2')] = JSON.stringify([
+      {
+        ...base,
+        flowId: 'flow2',
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        provider: 'azure-foundry',
+        model: 'm/docs000000',
+        modelLabel: 'm/docs000000',
+      },
+    ])
+    useChatStore.getState().hydrateThreads('flow2')
+    const restored = useChatStore.getState().threads.find(t => t.flowId === 'flow2')!
+    expect(threadModelOf(restored)).toEqual({provider: 'azure-foundry', model: 'm/docs000000'})
+  })
+
+  // C11: the turn in flight, as it was sent, survives a reload — so the
+  // re-attached stream is labelled with the model it went to.
+  it('keeps a thread’s in-flight turn across a reload, validated', () => {
+    const a = useChatStore.getState().createThread('flow1')
+    const turn = {
+      streamId: '11111111-1111-4111-8111-111111111111',
+      messageId: '22222222-2222-4222-8222-222222222222',
+      provider: 'azure-foundry' as const,
+      model: 'm/gpt4100000',
+      modelLabel: 'GPT-4.1',
+    }
+    useChatStore.getState().updateThread(a, {inFlight: turn})
+    reload()
+    useChatStore.getState().hydrateThreads('flow1')
+    expect(useChatStore.getState().threads.find(t => t.id === a)?.inFlight).toEqual(turn)
+
+    // Anything off drops the record (the stream is then re-attached with no
+    // label, never a guessed one); a bad message id or label alone is dropped.
+    const base = {flowId: 'flow3', title: 't', createdAt: '2026-09-30T00:00:00Z'}
+    stored[KEY('flow3')] = JSON.stringify([
+      {...base, id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', inFlight: {...turn, streamId: 'not-a-uuid'}},
+      {...base, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', inFlight: {...turn, provider: 'nope'}},
+      {...base, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', inFlight: {...turn, model: 7}},
+      {...base, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', inFlight: 'x'},
+      {
+        ...base,
+        id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        inFlight: {...turn, messageId: 'x', modelLabel: 'm/gpt4100000', model: ''},
+      },
+    ])
+    useChatStore.getState().hydrateThreads('flow3')
+    const records = useChatStore
+      .getState()
+      .threads.filter(t => t.flowId === 'flow3')
+      .map(t => t.inFlight)
+    expect(records).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {streamId: turn.streamId, provider: 'azure-foundry', model: ''},
+    ])
+  })
+
+  it('ends the in-flight record with its stream — and only its own', () => {
+    const a = useChatStore.getState().createThread('flow1')
+    const turn = {streamId: 'stream-1', provider: 'claude' as const, model: 'claude-opus-4-1'}
+    useChatStore.getState().startStream(a, 'stream-2', 'msg-2')
+    useChatStore.getState().updateThread(a, {inFlight: turn})
+    // A stream that is not the recorded one ends: the record stays.
+    useChatStore.getState().endStream(a)
+    expect(useChatStore.getState().threads.find(t => t.id === a)?.inFlight).toEqual(turn)
+
+    useChatStore.getState().startStream(a, 'stream-1', 'msg-1')
+    useChatStore.getState().endStream(a)
+    expect(useChatStore.getState().threads.find(t => t.id === a)?.inFlight).toBeUndefined()
+    // …and the stored list says so.
+    const storedThread = (JSON.parse(stored[KEY('flow1')]) as {id: string}[]).find(t => t.id === a)
+    expect(storedThread).toBeDefined()
+    expect(storedThread).not.toHaveProperty('inFlight')
+  })
+
+  it('drops a thread’s refusal record with the thread, and asks the picker to open', () => {
+    const a = useChatStore.getState().createThread('flow1')
+    const b = useChatStore.getState().createThread('flow1')
+    const refusal = {provider: 'azure-foundry' as const, model: 'm/docs000000', epoch: 1}
+    useChatStore.getState().setModelRefusal(a, refusal)
+    useChatStore.getState().setModelRefusal(b, refusal)
+    useChatStore.getState().closeThread(a)
+    expect(Object.keys(useChatStore.getState().modelRefusals)).toEqual([b])
+    useChatStore.getState().setModelRefusal(b, null)
+    expect(useChatStore.getState().modelRefusals).toEqual({})
+
+    useChatStore.getState().openModelPicker()
+    useChatStore.getState().openModelPicker()
+    expect(useChatStore.getState().modelPickerRequest).toBe(2)
   })
 })

@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -68,6 +70,10 @@ type responsesRequest struct {
 	Stream          bool     `json:"stream,omitempty"`
 	Store           *bool    `json:"store,omitempty"`
 	MaxOutputTokens int      `json:"max_output_tokens,omitempty"`
+	// Reasoning, on an ephemeral-MODEL run (F-18/F-19), carries the
+	// user-chosen effort ("low"|"medium"|"high"). Never set on an
+	// agent_reference run: the agent definition owns its sampling.
+	Reasoning *responsesReasoning `json:"reasoning,omitempty"`
 	// No temperature: the agent definition (portal / CI) owns its sampling
 	// settings, and baki's provider-level temperature must not override them
 	// — it also cost reasoning-backed agents a rejection round trip per turn.
@@ -93,6 +99,41 @@ const responsesReplayParam = "input.provider_items"
 type agentRef struct {
 	Type string `json:"type"`
 	Name string `json:"name"`
+}
+
+// responsesReasoning is the Responses request's reasoning object (the
+// ephemeral-model path's reasoning_effort, F-18/F-19).
+type responsesReasoning struct {
+	Effort string `json:"effort,omitempty"`
+}
+
+// responsesFunctionTool is the Responses API's function tool: a FLAT shape
+// ({"type":"function","name","description","parameters"}), unlike chat
+// completions' nested {type,function} pair. The agent path never sends
+// request-level tools (the agent definition declares them); the
+// ephemeral-model path (F-18) does.
+type responsesFunctionTool struct {
+	Type        string          `json:"type"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+// responsesFunctionTools maps the neutral tool definitions onto that shape.
+func responsesFunctionTools(tools []ToolDefinition) []any {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, responsesFunctionTool{
+			Type:        "function",
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters:  t.InputSchema,
+		})
+	}
+	return out
 }
 
 // responsesItem is one input item: a message (string content), a replayed
@@ -383,8 +424,37 @@ func (p *AzureFoundryProvider) agentRequest(req Request, stream bool) responsesR
 	return body
 }
 
+// modelRequest builds the ephemeral-MODEL Responses request (F-18): the
+// deployment itself answers on {endpoint}/openai/v1/responses — no
+// agent_reference — so a model that rejects chat-completions requests
+// combining function tools with reasoning (gpt-5.6) keeps its reasoning
+// across tool calls. baki's flow tools ride as request-level function tools
+// (the FLAT Responses shape); the stateless replay, store:false and the
+// encrypted-reasoning include are the agent path's. No `reasoning` object
+// unless the user chose an effort.
+func (p *AzureFoundryProvider) modelRequest(req Request, stream bool) responsesRequest {
+	noStore := false
+	input, legacy := responsesInput(req.SystemPrompt, req.Messages)
+	body := responsesRequest{
+		Model:       req.Model,
+		Input:       input,
+		Include:     []string{responsesIncludeEncryptedReasoning},
+		Tools:       responsesFunctionTools(req.Tools),
+		Stream:      stream,
+		Store:       &noStore,
+		legacyInput: legacy,
+	}
+	if req.MaxTokens > 0 {
+		body.MaxOutputTokens = max(req.MaxTokens, minResponsesOutputTokens)
+	}
+	if req.ReasoningEffort != "" {
+		body.Reasoning = &responsesReasoning{Effort: req.ReasoningEffort}
+	}
+	return body
+}
+
 func (p *AzureFoundryProvider) agentConfigError() error {
-	if p.cfg.ProjectEndpoint == "" || p.cfg.Auth.Mode != AzureAuthModeEntra {
+	if p.cfg.ProjectEndpoint == "" || (p.cfg.Auth.Mode != AzureAuthModeEntra && p.cfg.Auth.Mode != AzureAuthModeEntraCLI) {
 		return fmt.Errorf("%w: Foundry agents need a project endpoint and Microsoft Entra ID credentials", ErrProviderConfigInvalid)
 	}
 	return nil
@@ -406,9 +476,15 @@ func (p *AzureFoundryProvider) postResponses(ctx context.Context, body responses
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal request: %w", err)
 	}
-	agentName := ""
+	// The endpoint and the memo key follow the turn kind: an agent turn
+	// posts to the PROJECT's Responses route keyed by agent name; an
+	// ephemeral-model turn (F-18) posts to the RESOURCE's route keyed by
+	// deployment (responsesRouteKey).
+	name := body.Model
+	endpoint := p.cfg.Endpoint + "/openai/v1/responses"
 	if body.AgentReference != nil {
-		agentName = body.AgentReference.Name
+		name = body.AgentReference.Name
+		endpoint = p.cfg.ProjectEndpoint + "/openai/v1/responses"
 	}
 	var payload map[string]any
 	ensurePayload := func() bool {
@@ -422,17 +498,18 @@ func (p *AzureFoundryProvider) postResponses(ctx context.Context, body responses
 		jsonBody = out
 		return nil
 	}
-	endpoint := p.cfg.ProjectEndpoint + "/openai/v1/responses"
 	// repaired guards the loop (each parameter at most once) and is what a
-	// 200 memoises; learned marks the entries pre-applied from the memo.
-	// Repairs learned from an earlier turn with the same agent go out up
-	// front: each used to cost a rejection round trip — a full re-upload of
-	// the history — on every turn and every tool iteration. The key (project
-	// endpoint + agent name) holds no secret; `store` is never learned (its
-	// rejection fails the turn) and never pre-applied.
+	// 200 with a FRESH repair memoises; learned marks the entries pre-applied
+	// from the memo (see the 200 branch below for why a mere re-application
+	// does not refresh it). Repairs learned from an earlier turn with the
+	// same agent go out up front: each used to cost a rejection round trip —
+	// a full re-upload of the history — on every turn and every tool
+	// iteration. The key (project endpoint + agent name) holds no secret;
+	// `store` is never learned (its rejection fails the turn) and never
+	// pre-applied.
 	repaired := map[string]bool{}
 	learned := map[string]bool{}
-	memoKey := endpoint + "\x00" + agentName
+	memoKey := endpoint + "\x00" + name
 	// legacyReplay swaps the payload to the legacy rebuild without include
 	// (responsesReplayParam), reporting whether anything changed.
 	legacyReplay := func() bool {
@@ -490,7 +567,14 @@ func (p *AzureFoundryProvider) postResponses(ctx context.Context, body responses
 			return nil, nil, err
 		}
 		if resp.StatusCode == http.StatusOK {
-			if len(repaired) > 0 && !memoStale {
+			// Only a repair learned this round (re)starts the memo's TTL: a
+			// turn that merely re-applied the memo must not keep a replay
+			// rejection — usually transient (a re-pointed deployment, a
+			// one-off verification failure) and never re-probed by the forget
+			// path, which needs a param — alive for as long as the agent is
+			// in use. learned ⊆ repaired, so the length test is "anything
+			// fresh". rememberRepairs overwrites, so the full set is passed.
+			if len(repaired) > len(learned) && !memoStale {
 				rememberRepairs(memoKey, repaired)
 			}
 			return resp, nil, nil
@@ -518,7 +602,7 @@ func (p *AzureFoundryProvider) postResponses(ctx context.Context, body responses
 			if err := remarshal(); err != nil {
 				return nil, nil, err
 			}
-			logger.Debug("azure ai foundry: responses replay rejected — retrying with the legacy history", "agent", agentName)
+			logger.Debug("azure ai foundry: responses replay rejected — retrying with the legacy history", "target", name)
 			continue
 		}
 		if !paramOK {
@@ -603,6 +687,30 @@ func (p *AzureFoundryProvider) agentChat(ctx context.Context, req Request) (*Res
 	if err != nil {
 		return nil, fmt.Errorf("azure ai foundry agent request: %w", err)
 	}
+	return p.responsesChat(ctx, resp, errBody)
+}
+
+// modelChat is the non-streaming ephemeral-model turn (F-18). When the
+// resource's /openai/v1/responses route does not serve the model (404 /
+// "Model not supported"), the turn falls back to chat completions — whose
+// built-in repair answers a tools request with reasoning_effort "none" —
+// and the refusal is memoised so later turns skip the round trip.
+func (p *AzureFoundryProvider) modelChat(ctx context.Context, req Request) (*Response, error) {
+	resp, errBody, err := p.postResponses(ctx, p.modelRequest(req, false))
+	if err != nil {
+		return nil, fmt.Errorf("azure ai foundry request: %w", err)
+	}
+	if responsesRouteRefused(resp, errBody) {
+		resp.Body.Close()
+		p.rememberResponsesRoute(req.Model, false)
+		logger.Debug("azure ai foundry: the responses route refused the model; answering on chat completions", "deployment", req.Model)
+		return p.chat(ctx, req)
+	}
+	return p.responsesChat(ctx, resp, errBody)
+}
+
+// responsesChat reads one non-streaming Responses reply (agent or model).
+func (p *AzureFoundryProvider) responsesChat(ctx context.Context, resp *http.Response, errBody []byte) (*Response, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return nil, p.handleChatError(resp, errBody)
@@ -621,16 +729,19 @@ func (p *AzureFoundryProvider) agentChat(ctx context.Context, req Request) (*Res
 	// response.model is the agent's deployment: resolve the model behind it
 	// before it reaches pricing and the served-model memo.
 	servedModel := p.deploymentModelResolver()(parsed.Model)
-	tokensIn, tokensOut := 0, 0
+	tokensIn, tokensOut, cacheRead := 0, 0, 0
 	if parsed.Usage != nil {
 		tokensIn, tokensOut = parsed.Usage.InputTokens, parsed.Usage.OutputTokens
+		if parsed.Usage.InputTokensDetails != nil {
+			cacheRead = parsed.Usage.InputTokensDetails.CachedTokens
+		}
 	}
 	if err := parsed.terminalError(); err != nil {
 		// The usage rides on the error (as the stream path's error chunk
 		// carries it), so a failed or filtered run can still be billed.
 		return nil, &heldUsageError{err: err, tokensIn: tokensIn, tokensOut: tokensOut, servedModel: servedModel}
 	}
-	out := &Response{ServedModel: servedModel, FinishReason: "stop", TokensIn: tokensIn, TokensOut: tokensOut}
+	out := &Response{ServedModel: servedModel, FinishReason: "stop", TokensIn: tokensIn, TokensOut: tokensOut, CacheReadTokens: cacheRead}
 	var text strings.Builder
 	var blockers runBlockers
 	var replay []json.RawMessage
@@ -676,6 +787,34 @@ func (p *AzureFoundryProvider) agentStream(ctx context.Context, req Request, onC
 	if err != nil {
 		return err
 	}
+	return p.responsesStream(ctx, resp, errBody, onChunk)
+}
+
+// modelStream is the streaming ephemeral-model turn (F-18): a deployment
+// whose chat-completions requests are rejected for combining function tools
+// with reasoning answers here with its reasoning intact. A route that does
+// not serve the model (404 / "Model not supported") falls back to chat
+// completions — the built-in repair answers with reasoning_effort "none"
+// and the reasoning_off notice says so — and the refusal is memoised.
+func (p *AzureFoundryProvider) modelStream(ctx context.Context, req Request, onChunk func(Chunk)) error {
+	resp, errBody, err := p.postResponses(ctx, p.modelRequest(req, true))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == http.StatusOK {
+		p.rememberResponsesRoute(req.Model, true)
+	}
+	if responsesRouteRefused(resp, errBody) {
+		resp.Body.Close()
+		p.rememberResponsesRoute(req.Model, false)
+		logger.Debug("azure ai foundry: the responses route refused the model; answering on chat completions", "deployment", req.Model)
+		return p.streamInner(ctx, req, onChunk, false)
+	}
+	return p.responsesStream(ctx, resp, errBody, onChunk)
+}
+
+// responsesStream reads one streaming Responses reply (agent or model).
+func (p *AzureFoundryProvider) responsesStream(ctx context.Context, resp *http.Response, errBody []byte, onChunk func(Chunk)) error {
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		return p.handleStreamError(resp, errBody)
@@ -684,8 +823,9 @@ func (p *AzureFoundryProvider) agentStream(ctx context.Context, req Request, onC
 	// terminator: drain the rest so the HTTP/1.1 connection goes back to the
 	// pool instead of being discarded (a new TCP + TLS handshake per turn).
 	defer drainAndClose(resp.Body)
-	// response.model is the agent's deployment: every chunk's served model is
-	// resolved to the model behind it (see deploymentModelResolver).
+	// response.model is the deployment the run answered on: every chunk's
+	// served model is resolved to the model behind it
+	// (deploymentModelResolver).
 	resolve := p.deploymentModelResolver()
 	return parseResponsesSSE(resp.Body, func(c Chunk) {
 		if c.ServedModel != "" {
@@ -693,6 +833,92 @@ func (p *AzureFoundryProvider) agentStream(ctx context.Context, req Request, onC
 		}
 		onChunk(c)
 	})
+}
+
+// --- the F-18 reroute memo ---
+
+// responsesToolRoutes memoises, per resource endpoint and deployment, the
+// outcome of rerouting a tools-with-reasoning chat-completions rejection
+// through {resource}/openai/v1/responses (F-18): use it (a 200), or never
+// again (404 / "Model not supported" — an api-version without the v1
+// Responses route). Deliberately separate from learnedRepairs: it is a route
+// choice, not a repaired parameter, and must not be swept by their forget
+// path. Keyed like postResponses' memo (endpoint + deployment, no secret);
+// same bounds and TTL.
+var responsesToolRoutes = struct {
+	sync.Mutex
+	m map[string]responsesRoute
+}{m: map[string]responsesRoute{}}
+
+type responsesRoute struct {
+	use  bool
+	seen time.Time
+}
+
+// responsesRouteFor returns the remembered route decision for key.
+func responsesRouteFor(key string) (use, known bool) {
+	responsesToolRoutes.Lock()
+	defer responsesToolRoutes.Unlock()
+	r, ok := responsesToolRoutes.m[key]
+	if !ok {
+		return false, false
+	}
+	if time.Since(r.seen) > learnedRepairsTTL {
+		delete(responsesToolRoutes.m, key)
+		return false, false
+	}
+	return r.use, true
+}
+
+// rememberResponsesRoute records the decision for key.
+func rememberResponsesRoute(key string, use bool) {
+	responsesToolRoutes.Lock()
+	defer responsesToolRoutes.Unlock()
+	if len(responsesToolRoutes.m) >= learnedRepairsMax {
+		responsesToolRoutes.m = map[string]responsesRoute{}
+	}
+	responsesToolRoutes.m[key] = responsesRoute{use: use, seen: time.Now()}
+}
+
+// resetResponsesToolRoutes clears the memo (tests,
+// ResetAzureFoundryCaches).
+func resetResponsesToolRoutes() {
+	responsesToolRoutes.Lock()
+	responsesToolRoutes.m = map[string]responsesRoute{}
+	responsesToolRoutes.Unlock()
+}
+
+// responsesRouteKey is this resource's Responses route + deployment — the
+// same key postResponses builds for an ephemeral-model turn.
+func (p *AzureFoundryProvider) responsesRouteKey(model string) string {
+	return p.cfg.Endpoint + "/openai/v1/responses\x00" + model
+}
+
+func (p *AzureFoundryProvider) rememberResponsesRoute(model string, use bool) {
+	rememberResponsesRoute(p.responsesRouteKey(model), use)
+}
+
+// responsesRouteRefused reports whether a {endpoint}/openai/v1/responses
+// answer means the route does not serve the model: 404, or a 400 whose error
+// says the model is not supported (an api-version without the v1 Responses
+// route).
+func responsesRouteRefused(resp *http.Response, errBody []byte) bool {
+	if resp == nil || resp.StatusCode == http.StatusOK {
+		return false
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return true
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	apiErr, ok := decodeOpenAIError(errBody)
+	if !ok {
+		return false
+	}
+	lower := strings.ToLower(apiErr.Error.Message + " " + apiErr.Error.Code)
+	return strings.Contains(lower, "model not supported") ||
+		strings.Contains(lower, "not supported for this api version")
 }
 
 // --- wire types ---
@@ -708,6 +934,13 @@ type responsesResponseMeta struct {
 	Usage  *struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
+		// InputTokensDetails.CachedTokens is the prompt-cache read slice —
+		// a breakdown INCLUDED in InputTokens (F-05), surfaced as
+		// CacheReadTokens like every route's (Azure AI Foundry is unpriced,
+		// so nothing is billed from it).
+		InputTokensDetails *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"input_tokens_details"`
 	} `json:"usage"`
 	IncompleteDetails *struct {
 		Reason string `json:"reason"`
@@ -736,6 +969,14 @@ func (r *responsesResponseMeta) terminalError() error {
 	return nil
 }
 
+// responsesToolAction is a hosted tool item's `action` object (today only
+// web_search_call's {"type":"search","query":…} / {"type":"visit","url":…}).
+type responsesToolAction struct {
+	Type  string `json:"type"`
+	Query string `json:"query"`
+	URL   string `json:"url"`
+}
+
 // responsesOutputItem is one output item. Output and Error stay raw: Foundry
 // tool items carry string, object or array outputs (ToolCallOutputContent)
 // and MCP items an object error — read them through rawText.
@@ -760,7 +1001,12 @@ type responsesOutputItem struct {
 	ConsentLink string `json:"consent_link"`
 	// Execution is tool_search_call's "server" | "client".
 	Execution string `json:"execution"`
-	Content   []struct {
+	// Action is a web_search_call's action ({"type":"search","query":"…"})
+	// and Queries a file_search_call's search phrases (F-20): what the agent
+	// searched for, shown as the trail step's summary.
+	Action  responsesToolAction `json:"action"`
+	Queries []string            `json:"queries"`
+	Content []struct {
 		Type    string `json:"type"`
 		Text    string `json:"text"`
 		Refusal string `json:"refusal"`
@@ -1299,8 +1545,8 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 		// carries the response object (response.created / in_progress come
 		// before any output), and carried on text and error chunks: a run cut
 		// before response.completed (Stop, the idle watchdog, a truncated
-		// stream) is still priced by the model that answered instead of the
-		// fallback ceiling.
+		// stream) still records the model that answered on its usage row and
+		// teaches the served-model memo.
 		servedModel string
 	)
 	dataPrefix := []byte("data: ")
@@ -1381,6 +1627,13 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 					c = &pendingResponsesCall{index: ev.OutputIndex, item: item}
 				}
 				indexCall(c, item.ID, item.CallID)
+			case item.Type == "reasoning":
+				// A reasoning item with its summaries off (the portal default)
+				// streams NOTHING between this added and its done; bracket the
+				// silent phase with Chunk.SilentStep so the chat service holds
+				// the hosted-step idle limit while it runs — awaitingOutput was
+				// cleared by any earlier text of the turn.
+				emit(Chunk{SilentStep: 1})
 			case clientSideItem(item.Type):
 			// observe records the item (computer calls and their outputs
 			// too, which stay trail steps); true for a blocker.
@@ -1441,6 +1694,8 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 						emit(Chunk{Text: text, ServedModel: servedModel})
 					}
 				}
+			case item.Type == "reasoning":
+				emit(Chunk{SilentStep: -1}) // closes the phase output_item.added opened
 			case clientSideItem(item.Type):
 			case blockers.observe(item):
 				emit(Chunk{ServerStep: true})
@@ -1477,18 +1732,21 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 		case "response.completed", "response.incomplete":
 			flushHeld()
 			var finish string
-			tokensIn, tokensOut := 0, 0
+			tokensIn, tokensOut, cacheRead := 0, 0, 0
 			if ev.Response != nil {
 				if ev.Response.Usage != nil {
 					tokensIn = ev.Response.Usage.InputTokens
 					tokensOut = ev.Response.Usage.OutputTokens
+					if ev.Response.Usage.InputTokensDetails != nil {
+						cacheRead = ev.Response.Usage.InputTokensDetails.CachedTokens
+					}
 				}
 				if ev.Response.IncompleteDetails != nil {
 					switch ev.Response.IncompleteDetails.Reason {
 					case "content_filter":
 						// Usage rides on the error chunk (as the blockers'
 						// branch below does) so the tokens spent are still billed.
-						emit(Chunk{Error: fmt.Errorf("%w: the response was stopped by the content filter", ErrContentFiltered), TokensIn: tokensIn, TokensOut: tokensOut, ServedModel: servedModel})
+						emit(Chunk{Error: fmt.Errorf("%w: the response was stopped by the content filter", ErrContentFiltered), TokensIn: tokensIn, TokensOut: tokensOut, CacheReadTokens: cacheRead, ServedModel: servedModel})
 						return nil
 					default:
 						// The run was cut short whatever the reason says
@@ -1504,7 +1762,7 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 				// continue (not even with function outputs replayed): explain
 				// instead of finishing with an empty answer. The usage rides
 				// on the error chunk so the tokens spent are still billed.
-				emit(Chunk{Error: err, TokensIn: tokensIn, TokensOut: tokensOut, ServedModel: servedModel})
+				emit(Chunk{Error: err, TokensIn: tokensIn, TokensOut: tokensOut, CacheReadTokens: cacheRead, ServedModel: servedModel})
 				return nil
 			}
 			toolCalls := assembleResponsesCalls(calls)
@@ -1514,17 +1772,21 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 					finish = "tool_calls"
 				}
 			}
-			emit(Chunk{Done: true, TokensIn: tokensIn, TokensOut: tokensOut, ToolCalls: toolCalls, FinishReason: finish, ServedModel: servedModel,
+			emit(Chunk{Done: true, TokensIn: tokensIn, TokensOut: tokensOut, CacheReadTokens: cacheRead, ToolCalls: toolCalls, FinishReason: finish, ServedModel: servedModel,
 				ProviderItems: providerItemsJSON(replayableItems(orderedOutputs(outputs)))})
 			return nil
 
 		case "response.failed":
 			flushHeld()
-			tokensIn, tokensOut := 0, 0
+			tokensIn, tokensOut, cacheRead := 0, 0, 0
 			var failure error
 			if ev.Response != nil {
 				if ev.Response.Usage != nil {
-					tokensIn, tokensOut = ev.Response.Usage.InputTokens, ev.Response.Usage.OutputTokens
+					tokensIn = ev.Response.Usage.InputTokens
+					tokensOut = ev.Response.Usage.OutputTokens
+					if ev.Response.Usage.InputTokensDetails != nil {
+						cacheRead = ev.Response.Usage.InputTokensDetails.CachedTokens
+					}
 				}
 				if ev.Response.Error != nil {
 					failure = classifyResponsesError(ev.Response.Error.Code, ev.Response.Error.Type, ev.Response.Error.Message)
@@ -1536,7 +1798,7 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 			// Usage rides on the error chunk (as the content-filter and
 			// blockers' branches do) so the tokens a failed run spent are
 			// still billed by Azure's numbers, not a tokenizer estimate.
-			emit(Chunk{Error: failure, TokensIn: tokensIn, TokensOut: tokensOut, ServedModel: servedModel})
+			emit(Chunk{Error: failure, TokensIn: tokensIn, TokensOut: tokensOut, CacheReadTokens: cacheRead, ServedModel: servedModel})
 			return nil
 
 		case "error":
@@ -1551,12 +1813,15 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 
 		// An event that produced no chunk — reasoning summary parts and deltas
 		// (an o-series / gpt-5 agent can reason for minutes before the first
-		// output token), silent function-call accumulation, progress
-		// notifications during hosted-tool runs (*.in_progress, *.searching,
-		// *.interpreting) — still proves the run is alive, and the chat
-		// service's idle watchdog only sees chunks: one empty keepalive per
-		// event keeps a long reasoning phase from being cancelled as a stalled
-		// stream (the chat-completions parser does the same).
+		// output token; they are keepalives only, while the reasoning item's
+		// added/done pair brackets the whole silent phase with Chunk.SilentStep,
+		// which the idle watchdog counts as a hosted step), silent function-call
+		// accumulation, progress notifications during hosted-tool runs
+		// (*.in_progress, *.searching, *.interpreting) — still proves the run is
+		// alive, and the chat service's idle watchdog only sees chunks: one
+		// empty keepalive per event keeps a long reasoning phase from being
+		// cancelled as a stalled stream (the chat-completions parser does the
+		// same).
 		if !emitted {
 			onChunk(Chunk{})
 		}
@@ -1649,6 +1914,12 @@ func hostedToolSummary(item responsesOutputItem) string {
 			if s == "" {
 				s = rawText(item.Result)
 			}
+			if s == "" {
+				// A finished hosted search step often carries no output of
+				// its own: show what it searched for instead of nothing
+				// (F-20).
+				s = hostedSearchSummary(item)
+			}
 		}
 	}
 	s = strings.TrimSpace(s)
@@ -1661,6 +1932,61 @@ func hostedToolSummary(item responsesOutputItem) string {
 		s = cut + "…"
 	}
 	return s
+}
+
+// hostedSearchSummary is the trail fallback for a finished hosted search
+// step whose item carries no outcome text: what the agent searched for
+// (F-20). A web_search_call's action.query (else its action.url), a
+// file_search_call's queries, a Bing grounding call's arguments (Bing's
+// terms require the query to be displayed with the results).
+func hostedSearchSummary(item responsesOutputItem) string {
+	switch item.Type {
+	case "web_search_call":
+		if item.Action.Query != "" {
+			return item.Action.Query
+		}
+		return item.Action.URL
+	case "file_search_call":
+		return strings.Join(nonEmptyList(item.Queries), "; ")
+	case "bing_grounding_call", "bing_custom_search_preview_call":
+		return bingQuery(item.Arguments)
+	}
+	return ""
+}
+
+// nonEmptyList drops blank entries.
+func nonEmptyList(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if strings.TrimSpace(s) != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// bingQuery is a Bing grounding call's search phrase: its arguments carry
+// the request URL — the ?q= value when it parses, else the arguments
+// verbatim (compacted by the caller's scrub/cut as any other summary).
+func bingQuery(args string) string {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" || trimmed == "{}" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		var a struct {
+			URL string `json:"url"`
+		}
+		if json.Unmarshal([]byte(trimmed), &a) == nil && a.URL != "" {
+			if u, err := url.Parse(a.URL); err == nil {
+				if q := u.Query().Get("q"); q != "" {
+					return q
+				}
+			}
+			return a.URL
+		}
+	}
+	return trimmed
 }
 
 // cutAtRune shortens s to at most n bytes without splitting a UTF-8

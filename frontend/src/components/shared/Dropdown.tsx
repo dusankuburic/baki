@@ -1,7 +1,8 @@
-import {useState, useRef, useEffect, useCallback} from 'react'
+import {useState, useRef, useEffect, useCallback, useId, cloneElement} from 'react'
 import {type LucideIcon} from 'lucide-react'
 import clsx from 'clsx'
 import Kbd from './Kbd'
+import {useAnchoredPosition} from '@/hooks/useAnchoredPosition'
 
 type DropdownItem =
   | {
@@ -15,7 +16,13 @@ type DropdownItem =
       shortcut?: string
       onSelect: () => void
       danger?: boolean
+      // Unavailable AND skipped by the arrow keys.
       disabled?: boolean
+      // Unavailable, but it says why: the item stays in the arrow-key order,
+      // is marked aria-disabled, and shows this text on a second line, which
+      // is also its accessible description. Use it wherever a user would
+      // otherwise wonder where an action went ("needs credentials").
+      disabledReason?: string
     }
   | {type: 'separator'}
   | {type: 'group'; label: string; items: DropdownItem[]}
@@ -31,7 +38,11 @@ type DropdownProps = {
 export type {DropdownItem}
 
 // Accessible menu behaviour:
-//   - trigger announces aria-haspopup="menu" + aria-expanded state,
+//   - the trigger itself announces aria-haspopup="menu", aria-expanded and
+//     (while open) aria-controls. They are cloned onto the trigger element:
+//     on the wrapper <div> they sat on a node no screen reader focuses, so
+//     the button announced none of them. A trigger component must pass
+//     aria-* props through to its <button> (Button and IconButton do),
 //   - opening moves focus onto the first selectable item,
 //   - ArrowUp/Down ROVE real DOM focus (not just a visual highlight) so
 //     screen readers track the active option,
@@ -42,7 +53,8 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
   const [activeIndex, setActiveIndex] = useState(-1)
   const triggerRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  const [position, setPosition] = useState({top: 0, left: 0})
+  const menuId = useId()
+  const position = useAnchoredPosition({open, anchorRef: triggerRef, floatingRef: menuRef, side, align})
 
   const flattenedItems = flattenItems(items)
 
@@ -75,51 +87,6 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
     })
   }, [])
 
-  const updatePosition = useCallback(() => {
-    if (!triggerRef.current || !menuRef.current) return
-    const triggerRect = triggerRef.current.getBoundingClientRect()
-    const menuRect = menuRef.current.getBoundingClientRect()
-
-    let top = side === 'bottom' ? triggerRect.bottom + 4 : triggerRect.top - menuRect.height - 4
-    let left =
-      align === 'start'
-        ? triggerRect.left
-        : align === 'end'
-          ? triggerRect.right - menuRect.width
-          : triggerRect.left + (triggerRect.width - menuRect.width) / 2
-
-    // Viewport constraints
-    if (left + menuRect.width > window.innerWidth - 8) left = window.innerWidth - menuRect.width - 8
-    if (left < 8) left = 8
-
-    if (top + menuRect.height > window.innerHeight - 8) {
-      // Flip to top if it fits better
-      if (side === 'bottom' && triggerRect.top - menuRect.height > 8) {
-        top = triggerRect.top - menuRect.height - 4
-      } else {
-        top = window.innerHeight - menuRect.height - 8
-      }
-    }
-    if (top < 8) top = 8
-
-    setPosition({top, left})
-  }, [side, align])
-
-  useEffect(() => {
-    if (!open) return
-    updatePosition()
-    // The menu is position:fixed, so it does NOT follow its trigger when an
-    // ancestor scrolls — it just floats away. Capture-phase scroll catches
-    // scrolling containers, not only the window. (SourceFilePicker already did
-    // this; Dropdown positioned once on open and never again.)
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', updatePosition, true)
-    return () => {
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', updatePosition, true)
-    }
-  }, [open, updatePosition])
-
   // Roving focus: whenever the active item changes while open, move real DOM
   // focus onto it so SRs announce the highlighted option.
   useEffect(() => {
@@ -143,8 +110,12 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (!open) return
-      const selectable = flattenedItems.filter(i => !i.disabled)
-      if (e.key === 'ArrowDown') {
+      // A disabledReason item is unavailable but still reachable, so its
+      // reason can be read; only a plain `disabled` one is skipped.
+      const selectable = flattenedItems.filter(i => !isSkipped(i))
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && selectable.length === 0) {
+        e.preventDefault()
+      } else if (e.key === 'ArrowDown') {
         e.preventDefault()
         setActiveIndex(prev => {
           const idx = selectable.findIndex(i => i._index === prev)
@@ -166,7 +137,7 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
         // Resolve by _index rather than array position: they coincide now, but
         // an identity lookup cannot silently drift again.
         const item = flattenedItems.find(i => i._index === activeIndex)
-        if (item && !item.disabled) {
+        if (item && !isUnavailable(item)) {
           item.onSelect()
           close(true)
         }
@@ -186,12 +157,17 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
 
   return (
     <div className={clsx('inline-block', className)} onKeyDown={handleKeyDown}>
-      <div ref={triggerRef} onClick={toggle} aria-haspopup="menu" aria-expanded={open}>
-        {trigger}
+      <div ref={triggerRef} onClick={toggle}>
+        {cloneElement(trigger, {
+          'aria-haspopup': 'menu',
+          'aria-expanded': open,
+          'aria-controls': open ? menuId : undefined,
+        })}
       </div>
       {open && (
         <div
           ref={menuRef}
+          id={menuId}
           className="fixed z-overlay bg-surface-2 border border-border-default rounded-lg shadow-lg py-1 min-w-[180px] animate-fade-in"
           style={{top: position.top, left: position.left}}
           role="menu"
@@ -216,6 +192,11 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
 
 type SelectableItem = Extract<DropdownItem, {type: 'item'}>
 type FlattenedDropdownItem = SelectableItem & {_index: number}
+
+// Unavailable items never run onSelect. A plain `disabled` one is also left
+// out of the arrow-key order; one with a disabledReason stays in it.
+const isUnavailable = (item: SelectableItem) => !!item.disabled || !!item.disabledReason
+const isSkipped = (item: SelectableItem) => !!item.disabled && !item.disabledReason
 
 // flattenItems numbers the SELECTABLE items in render order, and nothing else.
 //
@@ -265,29 +246,47 @@ function renderItems(
     const Icon = item.icon
     const index = counter.n++
     const isActive = index === activeIndex
+    const unavailable = isUnavailable(item)
+    const reasonId = item.disabledReason ? `menu-item-${index}-reason` : undefined
     return (
       <button
         key={i}
+        type="button"
         data-index={index}
         id={`menu-item-${index}`}
         tabIndex={-1}
         className={clsx(
-          'w-full flex items-center h-8 px-2 text-sm text-left transition-colors duration-fast',
+          'w-full flex items-center px-2 text-sm text-left transition-colors duration-fast',
+          item.disabledReason ? 'min-h-8 py-1' : 'h-8',
           isActive ? 'bg-surface-3 border-l-2 border-brand-500' : 'border-l-2 border-transparent',
-          item.danger ? 'text-semantic-error hover:bg-semantic-error/10' : 'text-text-primary hover:bg-surface-3',
-          item.disabled && 'opacity-50 cursor-not-allowed pointer-events-none',
+          item.disabledReason
+            ? 'text-text-tertiary cursor-not-allowed'
+            : item.danger
+              ? 'text-semantic-error hover:bg-semantic-error/10'
+              : 'text-text-primary hover:bg-surface-3',
+          isSkipped(item) && 'opacity-50 cursor-not-allowed pointer-events-none',
         )}
         onClick={() => {
-          if (!item.disabled) {
+          if (!unavailable) {
             item.onSelect()
             close()
           }
         }}
         role="menuitem"
-        aria-disabled={item.disabled || undefined}
+        aria-disabled={unavailable || undefined}
+        aria-describedby={reasonId}
       >
         {Icon && <Icon size={16} className="mr-2 text-text-tertiary flex-shrink-0" />}
-        <span className="flex-1">{item.label}</span>
+        <span className="flex-1">
+          {item.label}
+          {/* aria-hidden keeps the reason out of the item's NAME; the
+              aria-describedby reference still reads it as the description. */}
+          {item.disabledReason && (
+            <span id={reasonId} aria-hidden="true" className="block text-2xs">
+              {item.disabledReason}
+            </span>
+          )}
+        </span>
         {item.shortcut && <Kbd keys={[item.shortcut]} size="xs" className="ml-4" />}
       </button>
     )

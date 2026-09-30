@@ -1,12 +1,15 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {useEffect} from 'react'
-import {renderHook, render, waitFor, act} from '@testing-library/react'
+import {renderHook, render, waitFor, act, screen} from '@testing-library/react'
 import {useAIChat} from './useAIChat'
 import {useChatStore} from '@/stores/chatStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {ToastProvider} from '@/components/shared/Toast'
 import ChatStreamProvider from '../ChatStreamProvider'
 import {chatApi, flowApi, ApiError} from '@/api'
+import {threadModelOf} from '@/stores/chatStore'
+import {parseConversationPayload} from '@/lib/chatMessage'
+import type {TurnModel} from './useChatStreamEngine'
 import type {ChatMessage, ContextPreview, FlowDocument} from '@/types'
 
 // Integration test for useAIChat's send/stream/cancel/resend orchestration —
@@ -86,6 +89,9 @@ const doc = {
 const initialChatState = useChatStore.getState()
 const initialFlowState = useFlowStore.getState()
 
+// The active thread's pair, as useProviderSetup resolves it for the panel.
+const TURN: TurnModel = {provider: 'claude', model: 'gpt-4'}
+
 // The stream engine lives in ChatStreamProvider, above the chat panel.
 function wrapper({children}: {children: React.ReactNode}) {
   return (
@@ -99,7 +105,7 @@ function wrapper({children}: {children: React.ReactNode}) {
 // useChatConversations' auto-create-thread-on-mount effect to settle.
 async function renderChat() {
   useFlowStore.setState({...initialFlowState, document: doc})
-  const view = renderHook(() => useAIChat({selectedModel: 'gpt-4'}), {wrapper})
+  const view = renderHook(() => useAIChat({turnModel: TURN}), {wrapper})
   await waitFor(() => expect(view.result.current.activeThreadId).not.toBeNull())
   return view
 }
@@ -111,7 +117,7 @@ beforeEach(() => {
   capturedCb = null
   stateListeners.clear()
   vi.clearAllMocks()
-  vi.mocked(chatApi.getConversation).mockResolvedValue([])
+  vi.mocked(chatApi.getConversation).mockResolvedValue({messages: []})
   vi.mocked(flowApi.getSourceFiles).mockResolvedValue([])
   vi.mocked(chatApi.resumeStream).mockResolvedValue({text: '', done: false, error: '', tokensOut: 0, tokensIn: 0})
   vi.mocked(chatApi.cancelStream).mockResolvedValue(undefined)
@@ -321,13 +327,15 @@ function seedPersistedThread(id = 't-old') {
 
 async function renderSeeded() {
   useFlowStore.setState({...initialFlowState, document: doc})
-  return renderHook(() => useAIChat({selectedModel: 'gpt-4'}), {wrapper})
+  return renderHook(() => useAIChat({turnModel: TURN}), {wrapper})
 }
 
 describe('useAIChat history restore (H1)', () => {
   it('shows the stored conversation of a restored thread', async () => {
     seedPersistedThread()
-    vi.mocked(chatApi.getConversation).mockResolvedValue([msg('a', 'user', 'q1'), msg('b', 'assistant', 'a1')])
+    vi.mocked(chatApi.getConversation).mockResolvedValue({
+      messages: [msg('a', 'user', 'q1'), msg('b', 'assistant', 'a1')],
+    })
     const {result} = await renderSeeded()
 
     await waitFor(() => expect(useChatStore.getState().getMessages('t-old')).toHaveLength(2))
@@ -337,7 +345,7 @@ describe('useAIChat history restore (H1)', () => {
 
   it('merges history that arrives late BEFORE a message sent meanwhile', async () => {
     seedPersistedThread()
-    let resolveLoad: (m: ChatMessage[]) => void = () => {}
+    let resolveLoad: (m: {messages: ChatMessage[]}) => void = () => {}
     vi.mocked(chatApi.getConversation).mockImplementation(() => new Promise(r => (resolveLoad = r)))
     vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
     const {result} = await renderSeeded()
@@ -347,7 +355,7 @@ describe('useAIChat history restore (H1)', () => {
       result.current.handleSend('new question', [])
     })
     await act(async () => {
-      resolveLoad([msg('a', 'user', 'q1'), msg('b', 'assistant', 'a1')])
+      resolveLoad({messages: [msg('a', 'user', 'q1'), msg('b', 'assistant', 'a1')]})
     })
 
     await waitFor(() => expect(useChatStore.getState().getMessages('t-old')).toHaveLength(3))
@@ -357,6 +365,113 @@ describe('useAIChat history restore (H1)', () => {
         .getMessages('t-old')
         .map(m => m.content),
     ).toEqual(['q1', 'a1', 'new question'])
+  })
+
+  // F-21: a conversation load that reports an in-flight stream re-attaches
+  // to it through the app-wide engine (the real SSE + resume machinery).
+  it('re-attaches an in-flight stream reported by the conversation load and commits the resumed done', async () => {
+    seedPersistedThread()
+    vi.mocked(chatApi.getConversation).mockResolvedValue({
+      messages: [msg('a', 'user', 'q1')],
+      activeStreamId: 'live-1',
+    })
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'the answer',
+      done: true,
+      error: '',
+      tokensOut: 7,
+      tokensIn: 5,
+      servedModel: 'gpt-4o',
+      inputCostPerM: 2.5,
+      outputCostPerM: 10,
+    })
+    await renderSeeded()
+
+    await waitFor(() => {
+      const msgs = useChatStore.getState().getMessages('t-old')
+      expect(msgs.some(m => m.role === 'assistant' && m.content === 'the answer')).toBe(true)
+    })
+    const committed = useChatStore
+      .getState()
+      .getMessages('t-old')
+      .find(m => m.role === 'assistant')!
+    expect(committed.servedModel).toBe('gpt-4o')
+    expect(committed.inputCostPerM).toBe(2.5)
+    expect(committed.tokensIn).toBe(5)
+    expect(committed.tokensOut).toBe(7)
+    // Thread totals and the slot (committed -> ended).
+    const thread = useChatStore.getState().threads.find(t => t.id === 't-old')!
+    expect(thread.tokensIn).toBe(5)
+    expect(thread.tokensOut).toBe(7)
+    expect(useChatStore.getState().streams['t-old']).toBeUndefined()
+  })
+
+  it('drops a reload-reattached stream that is gone and refetches the history', async () => {
+    seedPersistedThread()
+    let loadCalls = 0
+    vi.mocked(chatApi.getConversation).mockImplementation(async () => {
+      loadCalls++
+      // The in-flight id is reported once; the refetch after the failed
+      // resume sees the turn the server persisted in the meantime.
+      return loadCalls <= 1
+        ? {messages: [msg('a', 'user', 'q1')], activeStreamId: 'live-2'}
+        : {messages: [msg('a', 'user', 'q1'), msg('b', 'assistant', 'persisted answer')]}
+    })
+    vi.mocked(chatApi.resumeStream).mockRejectedValue(new ApiError('stream expired', 404, 'STREAM_NOT_FOUND'))
+    await renderSeeded()
+
+    await waitFor(() => expect(loadCalls).toBeGreaterThanOrEqual(2))
+    await waitFor(() => {
+      expect(
+        useChatStore
+          .getState()
+          .getMessages('t-old')
+          .map(m => m.content),
+      ).toContain('persisted answer')
+    })
+    expect(useChatStore.getState().streams['t-old']).toBeUndefined()
+  })
+
+  it('re-attaches once: the refetch after a lost stream does not re-attach again', async () => {
+    seedPersistedThread()
+    let loadCalls = 0
+    // The server keeps listing the stream while every resume fails.
+    vi.mocked(chatApi.getConversation).mockImplementation(async () => {
+      loadCalls++
+      return {messages: [msg('a', 'user', 'q1')], activeStreamId: 'live-3'}
+    })
+    vi.mocked(chatApi.resumeStream).mockRejectedValue(new Error('network down'))
+    await renderSeeded()
+
+    await waitFor(() => expect(loadCalls).toBe(2))
+    // Give a looping re-attach time to show itself.
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 50))
+    })
+    expect(loadCalls).toBe(2)
+    expect(chatApi.resumeStream).toHaveBeenCalledTimes(1)
+    expect(useChatStore.getState().streams['t-old']).toBeUndefined()
+  })
+
+  it('does not re-attach from a stale history load', async () => {
+    seedPersistedThread()
+    let resolveLoad: (m: {messages: ChatMessage[]; activeStreamId?: string}) => void = () => {}
+    vi.mocked(chatApi.getConversation).mockImplementation(() => new Promise(r => (resolveLoad = r)))
+    const {result} = await renderSeeded()
+    await waitFor(() => expect(result.current.historyState).toBe('loading'))
+
+    // The thread is cleared meanwhile: its local state is authoritative and
+    // the load in flight is stale.
+    act(() => {
+      useChatStore.getState().markHistoryLoaded('t-old')
+    })
+    await act(async () => {
+      resolveLoad({messages: [msg('a', 'user', 'q1')], activeStreamId: 'live-4'})
+    })
+
+    expect(chatApi.resumeStream).not.toHaveBeenCalled()
+    expect(useChatStore.getState().streams['t-old']).toBeUndefined()
+    expect(useChatStore.getState().getMessages('t-old')).toHaveLength(0)
   })
 
   it('never full-replace saves a thread whose history failed to load', async () => {
@@ -597,10 +712,13 @@ describe('useAIChat model label', () => {
   it('labels the reply with the model it was sent with, not the one selected later', async () => {
     vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
     useFlowStore.setState({...initialFlowState, document: doc})
-    const {result, rerender} = renderHook(({model}: {model: string}) => useAIChat({selectedModel: model}), {
-      wrapper,
-      initialProps: {model: 'gpt-4'},
-    })
+    const {result, rerender} = renderHook(
+      ({model}: {model: string}) => useAIChat({turnModel: {provider: 'claude', model}}),
+      {
+        wrapper,
+        initialProps: {model: 'gpt-4'},
+      },
+    )
     await waitFor(() => expect(result.current.activeThreadId).not.toBeNull())
     const threadId = result.current.activeThreadId!
 
@@ -629,7 +747,7 @@ describe('useAIChat model label', () => {
 
 let panelApi: ReturnType<typeof useAIChat> | null = null
 function Panel() {
-  const api = useAIChat({selectedModel: 'gpt-4'})
+  const api = useAIChat({turnModel: TURN})
   useEffect(() => {
     panelApi = api
   })
@@ -729,5 +847,407 @@ describe('replies survive the chat panel unmounting (H2)', () => {
     view.unmount()
     await act(async () => {})
     expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Per-thread model memory: every turn goes to the thread's own pair; a send
+// pins it; queued and previewed turns keep the pair they were composed
+// under; a model removed after the picker listed it sends nothing.
+
+const DOCS: TurnModel = {provider: 'azure-foundry', model: 'm/docs000000', modelLabel: 'Docs writer'}
+const GPT: TurnModel = {provider: 'azure-foundry', model: 'm/gpt4100000', modelLabel: 'GPT-4.1'}
+
+async function renderWithTurn(turn: TurnModel) {
+  useFlowStore.setState({...initialFlowState, document: doc})
+  const view = renderHook(({turnModel}: {turnModel: TurnModel}) => useAIChat({turnModel}), {
+    wrapper,
+    initialProps: {turnModel: turn},
+  })
+  await waitFor(() => expect(view.result.current.activeThreadId).not.toBeNull())
+  return view
+}
+
+const pinOf = (threadId: string) => threadModelOf(useChatStore.getState().threads.find(t => t.id === threadId)!)
+
+describe('useAIChat per-thread model memory', () => {
+  it('pins the thread to the pair a send went to, and labels the reply with it', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {result} = await renderWithTurn(DOCS)
+    const threadId = result.current.activeThreadId!
+    expect(pinOf(threadId)).toBeNull()
+
+    await act(async () => {
+      result.current.handleSend('document this flow', [])
+    })
+    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0]
+    expect(req).toMatchObject({provider: 'azure-foundry', model: 'm/docs000000'})
+    expect(pinOf(threadId)).toEqual({provider: 'azure-foundry', model: 'm/docs000000', modelLabel: 'Docs writer'})
+
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(chunkEvent(req.clientStreamId!, 'Here are the docs'))
+    })
+    act(() => {
+      capturedCb!(doneEvent(req.clientStreamId!))
+    })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+    expect(useChatStore.getState().getMessages(threadId)[1]).toMatchObject({
+      provider: 'azure-foundry',
+      model: 'm/docs000000',
+      modelLabel: 'Docs writer',
+    })
+  })
+
+  it("a turn on the stand-in for a temporarily unavailable model keeps the thread's own pin", async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {result} = await renderWithTurn({...GPT, pinThread: false})
+    const threadId = result.current.activeThreadId!
+    act(() => {
+      useChatStore.getState().setThreadModel(threadId, DOCS)
+    })
+
+    await act(async () => {
+      result.current.handleSend('hi', [])
+    })
+    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].model).toBe('m/gpt4100000')
+    // It returns to Docs writer once that can be used again.
+    expect(pinOf(threadId)?.model).toBe('m/docs000000')
+  })
+
+  it('MODEL_NOT_AVAILABLE: the text goes back to the composer, the listing refreshes, the notice is raised', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockRejectedValue(
+      new ApiError('model m/docs000000 is not available', 400, 'MODEL_NOT_AVAILABLE'),
+    )
+    const {result} = await renderWithTurn(DOCS)
+    const threadId = result.current.activeThreadId!
+    const epoch0 = useChatStore.getState().providerEpoch
+
+    await act(async () => {
+      result.current.handleSend('document this flow', [])
+    })
+
+    await waitFor(() => expect(useChatStore.getState().stagedPrompt).toEqual({threadId, text: 'document this flow'}))
+    const st = useChatStore.getState()
+    // No question left without an answer, and no error bubble either.
+    expect(st.getMessages(threadId)).toHaveLength(0)
+    expect(st.drafts[threadId]).toBe('document this flow')
+    expect(st.streams[threadId]).toBeUndefined()
+    // The listing refetches, and the thread's notice waits for it.
+    expect(st.providerEpoch).toBe(epoch0 + 1)
+    expect(st.modelRefusals[threadId]).toEqual({...DOCS, epoch: epoch0 + 1})
+    // The thread keeps naming the model it asked for.
+    expect(pinOf(threadId)?.model).toBe('m/docs000000')
+  })
+
+  it('a queued message drains with the pair it was queued with, and a pick made since stays', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const view = await renderWithTurn(DOCS)
+    const threadId = view.result.current.activeThreadId!
+
+    await act(async () => {
+      view.result.current.handleSend('first', [])
+    })
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      view.result.current.handleQueue('follow-up', [])
+    })
+
+    // Before the reply ends, the user picks another model for the thread.
+    act(() => {
+      useChatStore.getState().setThreadModel(threadId, GPT)
+    })
+    view.rerender({turnModel: GPT})
+    act(() => {
+      capturedCb!(doneEvent(sid))
+    })
+
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[1][0]).toMatchObject({
+      userMessage: 'follow-up',
+      model: 'm/docs000000',
+    })
+    expect(pinOf(threadId)?.model).toBe('m/gpt4100000')
+  })
+
+  it('the context-preview confirm sends with the pair captured when the preview was taken', async () => {
+    vi.mocked(chatApi.previewContext).mockResolvedValue({
+      systemPrompt: 's',
+      contextText: 'c',
+      userMessage: 'q',
+      estimatedTokens: 10,
+      contextLimit: 1000,
+    })
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const view = await renderWithTurn(DOCS)
+
+    await act(async () => {
+      await view.result.current.handlePreviewContext('q', [], false)
+    })
+    expect(vi.mocked(chatApi.previewContext).mock.calls[0][0].model).toBe('m/docs000000')
+    // Something else becomes the panel's pair while the dialog is open.
+    view.rerender({turnModel: GPT})
+    act(() => {
+      view.result.current.confirmContextPreview()
+    })
+
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].model).toBe('m/docs000000')
+  })
+
+  it('a preview refused with MODEL_NOT_AVAILABLE refreshes the listing and raises the notice, sending nothing', async () => {
+    vi.mocked(chatApi.previewContext).mockRejectedValue(new ApiError('gone', 400, 'MODEL_NOT_AVAILABLE'))
+    const {result} = await renderWithTurn(DOCS)
+    const threadId = result.current.activeThreadId!
+    const epoch0 = useChatStore.getState().providerEpoch
+
+    await act(async () => {
+      await result.current.handlePreviewContext('q', [], false)
+    })
+    expect(result.current.contextPreview).toBeNull()
+    expect(chatApi.streamChatMessage).not.toHaveBeenCalled()
+    expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
+    expect(useChatStore.getState().modelRefusals[threadId]).toMatchObject({model: 'm/docs000000', epoch: epoch0 + 1})
+  })
+
+  // The client re-saves whole threads and the server stores them as sent: a
+  // label dropped anywhere on the way would be lost for good.
+  it('keeps modelLabel through save → reload → save', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const first = await renderWithTurn(DOCS)
+    const threadId = first.result.current.activeThreadId!
+    await act(async () => {
+      first.result.current.handleSend('document this flow', [])
+    })
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(doneEvent(sid))
+    })
+    await waitFor(() => expect(chatApi.saveConversation).toHaveBeenCalledTimes(1))
+    const saved = vi.mocked(chatApi.saveConversation).mock.calls[0][2]
+    expect(saved[1]).toMatchObject({role: 'assistant', modelLabel: 'Docs writer'})
+    first.unmount()
+
+    // A reload: the thread comes back from storage, its conversation from the
+    // server exactly as it was stored, through the real read boundary.
+    const thread = useChatStore.getState().threads.find(t => t.id === threadId)!
+    useChatStore.setState(initialChatState, true)
+    useChatStore.setState({threads: [thread], activeThreadId: threadId})
+    vi.mocked(chatApi.getConversation).mockResolvedValue({
+      messages: parseConversationPayload(JSON.parse(JSON.stringify(saved))),
+    })
+    vi.mocked(chatApi.saveConversation).mockClear()
+    vi.mocked(chatApi.streamChatMessage).mockClear()
+    capturedCb = null
+    const second = renderHook(() => useAIChat({turnModel: DOCS}), {wrapper})
+    await waitFor(() => expect(second.result.current.historyState).toBe('loaded'))
+
+    await act(async () => {
+      second.result.current.handleSend('and the error handling?', [])
+    })
+    const sid2 = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(doneEvent(sid2))
+    })
+    await waitFor(() => expect(chatApi.saveConversation).toHaveBeenCalledTimes(1))
+    const resaved = vi.mocked(chatApi.saveConversation).mock.calls[0][2]
+    expect(resaved[1]).toMatchObject({id: saved[1].id, modelLabel: 'Docs writer'})
+    expect(resaved[3]).toMatchObject({modelLabel: 'Docs writer'})
+  })
+
+  // C6: a turn sent before the listing named its model stored "m/…" as the
+  // label, which then beat the listing's name in bubbles and exports.
+  it('never stores an id as the label of the reply or the pin', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {result} = await renderWithTurn({
+      provider: 'azure-foundry',
+      model: 'm/docs000000',
+      modelLabel: 'm/docs000000',
+    })
+    const threadId = result.current.activeThreadId!
+    await act(async () => {
+      result.current.handleSend('document this flow', [])
+    })
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    expect(pinOf(threadId)).toEqual({provider: 'azure-foundry', model: 'm/docs000000'})
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(doneEvent(sid))
+    })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+    expect(useChatStore.getState().getMessages(threadId)[1]).not.toHaveProperty('modelLabel')
+  })
+
+  // C4: the notice waits for the model list to refresh; the toast doesn't.
+  it('says at once that a send was refused for its model', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockRejectedValue(new ApiError('gone', 400, 'MODEL_NOT_AVAILABLE'))
+    const {result} = await renderWithTurn(DOCS)
+    await act(async () => {
+      result.current.handleSend('document this flow', [])
+    })
+    expect(await screen.findByText('This model is no longer available')).toBeInTheDocument()
+    expect(
+      screen.getByText('Your message is back in the composer. Choose another model to send it.'),
+    ).toBeInTheDocument()
+  })
+})
+
+// C11: a reload mid-turn re-attaches the stream labelled from the thread's
+// record of the turn — the model it actually went to.
+describe('useAIChat in-flight turn record', () => {
+  const inFlightOf = (threadId: string) => useChatStore.getState().threads.find(t => t.id === threadId)?.inFlight
+
+  it('records the turn on the thread until it ends — a stand-in’s turn with the stand-in', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {result} = await renderWithTurn({...GPT, pinThread: false})
+    const threadId = result.current.activeThreadId!
+    act(() => {
+      useChatStore.getState().setThreadModel(threadId, DOCS)
+    })
+    await act(async () => {
+      result.current.handleSend('hi', [])
+    })
+    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0]
+    expect(inFlightOf(threadId)).toEqual({
+      streamId: req.clientStreamId,
+      messageId: req.assistantMessageId,
+      provider: 'azure-foundry',
+      model: 'm/gpt4100000',
+      modelLabel: 'GPT-4.1',
+    })
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(doneEvent(req.clientStreamId!))
+    })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+    expect(inFlightOf(threadId)).toBeUndefined()
+    expect(pinOf(threadId)?.model).toBe('m/docs000000')
+  })
+
+  it('a reload re-attaches the turn labelled with the model it went to, not the thread’s pin', async () => {
+    seedPersistedThread()
+    useChatStore.getState().updateThread('t-old', {
+      ...DOCS,
+      inFlight: {
+        streamId: 'live-1',
+        messageId: 'a-live-1',
+        provider: 'azure-foundry',
+        model: GPT.model,
+        modelLabel: 'GPT-4.1',
+      },
+    })
+    vi.mocked(chatApi.getConversation).mockResolvedValue({messages: [msg('a', 'user', 'q1')], activeStreamId: 'live-1'})
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'the answer',
+      done: true,
+      error: '',
+      tokensOut: 2,
+      tokensIn: 1,
+    })
+    await renderSeeded()
+
+    await waitFor(() => expect(useChatStore.getState().getMessages('t-old')).toHaveLength(2))
+    expect(useChatStore.getState().getMessages('t-old')[1]).toMatchObject({
+      id: 'a-live-1',
+      content: 'the answer',
+      provider: 'azure-foundry',
+      model: 'm/gpt4100000',
+      modelLabel: 'GPT-4.1',
+    })
+    expect(inFlightOf('t-old')).toBeUndefined()
+    expect(pinOf('t-old')?.model).toBe('m/docs000000')
+  })
+
+  it('drops the record of a turn that ended while the page was away', async () => {
+    seedPersistedThread()
+    useChatStore.getState().updateThread('t-old', {
+      inFlight: {streamId: 'gone-1', provider: 'azure-foundry', model: GPT.model},
+    })
+    vi.mocked(chatApi.getConversation).mockResolvedValue({
+      messages: [msg('a', 'user', 'q1'), msg('b', 'assistant', 'a1')],
+    })
+    const {result} = await renderSeeded()
+    await waitFor(() => expect(result.current.historyState).toBe('loaded'))
+    expect(inFlightOf('t-old')).toBeUndefined()
+    expect(chatApi.resumeStream).not.toHaveBeenCalled()
+  })
+})
+
+// C12: Regenerate takes the last exchange off before sending it again; a
+// refusal used to lose the old answer (and the next save deleted it on the
+// server too).
+describe('useAIChat resend refused', () => {
+  it('puts the exchange back as it was, and leaves the composer alone', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValueOnce('sid')
+    const {result} = await renderWithTurn(DOCS)
+    const threadId = result.current.activeThreadId!
+    await act(async () => {
+      result.current.handleSend('first question', [])
+    })
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(doneEvent(sid))
+    })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+    const before = useChatStore.getState().getMessages(threadId)
+    act(() => {
+      useChatStore.getState().setDraft(threadId, 'an unrelated draft')
+    })
+    const saves = vi.mocked(chatApi.saveConversation).mock.calls.length
+
+    vi.mocked(chatApi.streamChatMessage).mockRejectedValueOnce(new ApiError('gone', 400, 'MODEL_NOT_AVAILABLE'))
+    act(() => {
+      result.current.handleResend()
+    })
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(useChatStore.getState().streams[threadId]).toBeUndefined())
+
+    expect(useChatStore.getState().getMessages(threadId)).toEqual(before)
+    expect(useChatStore.getState().drafts[threadId]).toBe('an unrelated draft')
+    expect(useChatStore.getState().stagedPrompt).toBeNull()
+    expect(chatApi.saveConversation).toHaveBeenCalledTimes(saves)
+    expect(
+      await screen.findByText('Nothing was sent, and the last answer is kept. Choose another model, then try again.'),
+    ).toBeInTheDocument()
+  })
+})
+
+// C5: the composer's guidance (no Azure model to chat with) used to hold the
+// composer only; the other ways of sending went out with model ''.
+describe('useAIChat while nothing can be sent', () => {
+  it('refuses every way of sending, and Regenerate keeps the exchange', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    useFlowStore.setState({...initialFlowState, document: doc})
+    const view = renderHook(({blocked}: {blocked: boolean}) => useAIChat({turnModel: TURN, sendBlocked: blocked}), {
+      wrapper,
+      initialProps: {blocked: false},
+    })
+    await waitFor(() => expect(view.result.current.activeThreadId).not.toBeNull())
+    const threadId = view.result.current.activeThreadId!
+    await act(async () => {
+      view.result.current.handleSend('q', [])
+    })
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(doneEvent(sid))
+    })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+
+    view.rerender({blocked: true})
+    await act(async () => {
+      view.result.current.handleSend('again', [])
+      view.result.current.handleResend()
+      view.result.current.handleQueue('later', [])
+      await view.result.current.handlePreviewContext('preview', [], false)
+    })
+    expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
+    expect(chatApi.previewContext).not.toHaveBeenCalled()
+    expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2)
+    expect(useChatStore.getState().queuedByThread[threadId]).toBeUndefined()
   })
 })

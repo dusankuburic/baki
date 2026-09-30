@@ -241,6 +241,12 @@ type heldUsageError struct {
 	tokensIn    int
 	tokensOut   int
 	servedModel string
+	// cacheRead/cacheWrite are the cached-input breakdown of tokensIn the
+	// withheld chunk carried (see Chunk.CacheReadTokens), so a failed run's
+	// usage is still priced at the cached rates. Zero when the provider
+	// reported no breakdown.
+	cacheRead  int
+	cacheWrite int
 }
 
 func (e *heldUsageError) Error() string { return e.err.Error() }
@@ -255,15 +261,25 @@ func usageOf(err error) (tokensIn, tokensOut int, servedModel string, ok bool) {
 	return he.tokensIn, he.tokensOut, he.servedModel, true
 }
 
+// cacheUsageOf extracts the cached-token breakdown a Stream error carried
+// (heldUsageError), if any — the same read as usageOf for the cache slice.
+func cacheUsageOf(err error) (read, write int) {
+	var he *heldUsageError
+	if !errors.As(err, &he) {
+		return 0, 0
+	}
+	return he.cacheRead, he.cacheWrite
+}
+
 // Stream retries only when the stream fails before any content reaches the
 // caller. A provider can fail two ways: by returning an error, or by emitting
 // an error Chunk mid-SSE (e.g. Claude's `error` event) and returning nil. An
 // error chunk that arrives before any content is held back and converted into
 // a returned error so it retries like a pre-stream failure. Once content
 // (text, done, tool calls or a hosted server-side step — metadata-only chunks
-// like TokensIn, empty keepalives and split-off Reasoning, none of which the
-// user sees, don't count) has been delivered, a partial stream cannot be
-// safely replayed, so errors are passed through as-is.
+// like TokensIn, empty keepalives, split-off Reasoning and provider Notices,
+// none of which is answer content, don't count) has been delivered, a partial
+// stream cannot be safely replayed, so errors are passed through as-is.
 //
 // A withheld error chunk may be the only place a run's token usage rides (the
 // MCP-approvals error is one such); the usage is stashed and re-attached to
@@ -280,11 +296,13 @@ func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk fun
 		delivered := false
 		var heldErr error
 		var heldTokensIn, heldTokensOut int
+		var heldCacheRead, heldCacheWrite int
 		var heldServedModel string
 		err := rp.Provider.Stream(ctx, req, func(c Chunk) {
 			if c.Error != nil && !delivered {
 				heldErr = c.Error
 				heldTokensIn, heldTokensOut, heldServedModel = c.TokensIn, c.TokensOut, c.ServedModel
+				heldCacheRead, heldCacheWrite = c.CacheReadTokens, c.CacheWriteTokens
 				return
 			}
 			// A hosted tool step also counts — shown in the trail (ToolEvent)
@@ -299,7 +317,7 @@ func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk fun
 		if err == nil {
 			err = heldErr
 			if err != nil && (heldTokensIn > 0 || heldTokensOut > 0 || heldServedModel != "") {
-				err = &heldUsageError{err: err, tokensIn: heldTokensIn, tokensOut: heldTokensOut, servedModel: heldServedModel}
+				err = &heldUsageError{err: err, tokensIn: heldTokensIn, tokensOut: heldTokensOut, cacheRead: heldCacheRead, cacheWrite: heldCacheWrite, servedModel: heldServedModel}
 			}
 		}
 		if err == nil || !isRetryable(err) || delivered {

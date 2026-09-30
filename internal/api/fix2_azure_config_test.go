@@ -15,7 +15,7 @@ import (
 )
 
 // newAzureProviderHandlerWithBackend is newAzureProviderHandler with an
-// audit backend, so logAudit records the save.
+// audit backend (nil for none), so logAudit records the save.
 func newAzureProviderHandlerWithBackend(t *testing.T, backend storageif.StorageBackend) (*ProviderHandler, *testutil.FakeSecretStore) {
 	t.Helper()
 	secrets := testutil.NewFakeSecretStore()
@@ -24,6 +24,8 @@ func newAzureProviderHandlerWithBackend(t *testing.T, backend storageif.StorageB
 		return v, nil
 	}, nil, nil, nil)
 	svc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
+	azure, _ := newTestAzureModels(testAzureModelsDeps{Secrets: secrets, Factory: factory})
+	svc.SetAzureModels(azure)
 	return NewProviderHandler(svc, &SecurityConfig{}, backend), secrets
 }
 

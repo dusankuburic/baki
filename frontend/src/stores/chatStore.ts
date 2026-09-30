@@ -2,7 +2,9 @@ import {create} from 'zustand'
 import {registerStoreReset, currentUserId} from './storeRegistry'
 import {chatApi} from '@/api'
 import {uuid} from '@/lib/uuid'
+import {storableModelLabel} from '@/lib/modelIds'
 import {isTauri} from '@/platform/guards'
+import {PROVIDERS} from '@/types'
 import type {ChatMessage, ProviderID, ToolCallRecord} from '@/types'
 
 // Mirrors the backend per-caller concurrency cap in internal/service/chat.go
@@ -85,7 +87,61 @@ type StoredThread = Pick<
   | 'useTools'
   | 'usedTools'
   | 'appliedFixes'
+  | 'provider'
+  | 'model'
+  | 'modelLabel'
+  | 'inFlight'
 >
+
+export function isProviderId(value: unknown): value is ProviderID {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(PROVIDERS, value)
+}
+
+// A stored pin's strings are capped: a registry id is "m/" plus 10
+// characters and a display name at most 64 on the server, a catalogue id a
+// model name — anything longer did not come from this app.
+const MAX_PIN_MODEL_LENGTH = 256
+const MAX_PIN_LABEL_LENGTH = 200
+
+type ThreadPinFields = Pick<ChatThread, 'provider' | 'model' | 'modelLabel'>
+
+// readThreadPin validates a stored thread's model pin. Anything off — an
+// unknown provider, a missing or oversized model — loads the thread
+// unpinned (as every thread from before per-thread memory loads), and
+// lib/modelSelection resolves it; a bad label alone is just dropped (as is
+// one that is only an id — see storableModelLabel).
+function readThreadPin(t: Record<string, unknown>): ThreadPinFields {
+  const {provider, model, modelLabel} = t
+  if (!isProviderId(provider)) return {}
+  if (typeof model !== 'string' || !model.trim() || model.length > MAX_PIN_MODEL_LENGTH) return {}
+  const pin: ThreadPinFields = {provider, model}
+  const label =
+    typeof modelLabel === 'string' && modelLabel.length <= MAX_PIN_LABEL_LENGTH
+      ? storableModelLabel(modelLabel, model)
+      : undefined
+  if (label) pin.modelLabel = label
+  return pin
+}
+
+// readInFlight validates a stored thread's in-flight turn record. Anything
+// off drops the record: a reload then re-attaches the stream unlabelled
+// rather than labelled with a guess. Stream and message ids are the
+// client's own uuids; the model may be '' (the server's default).
+function readInFlight(raw: unknown): InFlightTurn | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  if (typeof r.streamId !== 'string' || !UUID_RE.test(r.streamId)) return undefined
+  if (!isProviderId(r.provider)) return undefined
+  if (typeof r.model !== 'string' || r.model.length > MAX_PIN_MODEL_LENGTH) return undefined
+  const turn: InFlightTurn = {streamId: r.streamId, provider: r.provider, model: r.model}
+  if (typeof r.messageId === 'string' && UUID_RE.test(r.messageId)) turn.messageId = r.messageId
+  const label =
+    typeof r.modelLabel === 'string' && r.modelLabel.length <= MAX_PIN_LABEL_LENGTH
+      ? storableModelLabel(r.modelLabel, r.model)
+      : undefined
+  if (label) turn.modelLabel = label
+  return turn
+}
 
 function persistFlowThreads(flowId: string, threads: ChatThread[]): void {
   const key = threadsStorageKey(flowId)
@@ -104,6 +160,10 @@ function persistFlowThreads(flowId: string, threads: ChatThread[]): void {
       useTools: t.useTools,
       usedTools: t.usedTools,
       appliedFixes: t.appliedFixes,
+      provider: t.provider,
+      model: t.model,
+      modelLabel: t.modelLabel,
+      inFlight: t.inFlight,
     }))
   try {
     if (mine.length === 0) localStorage.removeItem(key)
@@ -146,7 +206,10 @@ function readStoredThreads(flowId: string): ChatThread[] {
       useTools: t.useTools === true ? true : undefined,
       usedTools: t.usedTools === true ? true : undefined,
       appliedFixes: t.appliedFixes === true ? true : undefined,
+      ...readThreadPin(t),
     })
+    const inFlight = readInFlight(t.inFlight)
+    if (inFlight) out[out.length - 1].inFlight = inFlight
     if (out.length >= MAX_THREADS) break
   }
   return out
@@ -215,6 +278,70 @@ export interface ChatThread {
   // conversations were agentic.
   usedTools?: boolean
   appliedFixes?: boolean
+  // The thread's own model (per-thread memory): pinned on its first accepted
+  // send, on a header pick, or when a removal notice is dismissed — never by
+  // a settings change. All three or none: an unpinned thread (new, or from
+  // before per-thread memory) starts on the provider's "Default for new
+  // chats", or on its last reply's pair (lib/modelSelection). modelLabel is
+  // the model's friendly name when it was pinned (never just an id).
+  provider?: ProviderID
+  model?: string
+  modelLabel?: string
+  // The turn in flight, as it was sent (see InFlightTurn).
+  inFlight?: InFlightTurn
+}
+
+/**
+ * A thread's turn in flight as it was sent: its stream, the assistant
+ * message id the server stores the answer under, and the model it went to.
+ * Persisted with the thread list, so a reload mid-turn re-attaches the
+ * stream labelled with the model that is actually answering — which is not
+ * the thread's pin when the turn went to a stand-in (pinThread: false).
+ * Cleared when the turn ends (endStream).
+ */
+export interface InFlightTurn {
+  streamId: string
+  messageId?: string
+  provider: ProviderID
+  model: string
+  modelLabel?: string
+}
+
+/** A thread's model pin as setThreadModel takes it. */
+export interface ThreadModel {
+  provider: ProviderID
+  model: string
+  modelLabel?: string
+}
+
+/**
+ * A thread's pin as a comparable key ('' when unpinned) — what a captured
+ * turn (queued, previewed) remembers, so its send re-pins only a thread
+ * nobody re-picked since.
+ */
+export function threadPinKey(thread: Pick<ChatThread, 'provider' | 'model'> | undefined): string {
+  return thread?.provider && thread.model ? `${thread.provider}\u0000${thread.model}` : ''
+}
+
+/** The thread's pin, or null when it has none (an incomplete one counts as none). */
+export function threadModelOf(thread: Pick<ChatThread, 'provider' | 'model' | 'modelLabel'>): ThreadModel | null {
+  if (!thread.provider || !thread.model) return null
+  return {
+    provider: thread.provider,
+    model: thread.model,
+    ...(thread.modelLabel ? {modelLabel: thread.modelLabel} : {}),
+  }
+}
+
+// ModelRefusal records that the server refused a send because the thread's
+// model is not available (MODEL_NOT_AVAILABLE on the create request) — the
+// message went back to the composer and the provider listing is being
+// refetched. Once a listing at least as new as `epoch` has loaded, the panel
+// raises the model notice; normally that listing no longer offers the model
+// and lib/modelSelection's removal notice says so, and this record only
+// covers a listing that still does. Session-only.
+export interface ModelRefusal extends ThreadModel {
+  epoch: number
 }
 
 // FixProposalItem is one fix inside a (possibly batch) approval prompt, with
@@ -280,15 +407,22 @@ export interface StreamSlot {
 }
 
 // QueuedMessage is a follow-up composed while its thread was streaming, sent
-// automatically once the thread is idle. It carries the provider/model chosen
-// when it was queued so the always-mounted stream host can send it even while
-// the chat panel is hidden.
+// automatically once the thread is idle. It carries the thread's
+// provider/model as they were when it was queued (and whether the send pins
+// the thread to them) so the always-mounted stream host can send it even
+// while the chat panel is hidden — and a pick made meanwhile does not
+// redirect it.
 export interface QueuedMessage {
   text: string
   files: string[]
   excludeContext?: boolean
   provider?: ProviderID
   model?: string
+  modelLabel?: string
+  pinThread?: boolean
+  // The thread's pin when this was queued (threadPinKey): a pick made since
+  // keeps the thread's pin (see SendOptions.pinnedAs).
+  pinnedAs?: string
 }
 
 // HistoryState tracks a thread's server-history load. Only a 'loaded' thread
@@ -309,8 +443,23 @@ interface ChatState {
   conversations: Map<string, ChatMessage[]>
   // streams maps threadId → its in-flight response; absent = not streaming.
   streams: Record<string, StreamSlot>
+  // The provider for NEW chats, mirrored from settings' ai.activeProvider by
+  // the Settings panels and the start-up restore. The chat itself no longer
+  // reads it: each thread resolves its own pair (its pin, else the active
+  // provider's "Default for new chats" — lib/modelSelection), and a fallback
+  // never writes it.
   selectedProvider: ProviderID
   providerEpoch: number
+  // modelPickerRequest bumps to ask the chat header's model picker to open
+  // (a notice's "Choose model", an error bubble's "Choose another model");
+  // the picker opens on a change it sees while mounted.
+  modelPickerRequest: number
+  openModelPicker: () => void
+  // modelRefusals: per thread, the model the server last refused a send for
+  // (see ModelRefusal). Cleared by the thread's next accepted send, a pick,
+  // dismissing its notice, or closing it.
+  modelRefusals: Record<string, ModelRefusal>
+  setModelRefusal: (threadId: string, refusal: ModelRefusal | null) => void
   // stagedPrompt carries a grounded prompt (from "Explain/Fix with AI") into a
   // thread's composer for review before the user sends it — nothing auto-sends.
   // Consumed by ChatInput once its threadId is the active thread, then cleared.
@@ -400,6 +549,11 @@ interface ChatState {
   threadForFlow: (flowId: string) => string | null
   closeThread: (threadId: string) => void
   updateThread: (threadId: string, patch: Partial<ChatThread>) => void
+  // setThreadModel pins a thread to a model (null unpins it) and persists it
+  // with the thread list. A no-op when the pin is unchanged, and for an
+  // incomplete pin or an unknown provider id. A label that is only an id is
+  // not kept.
+  setThreadModel: (threadId: string, pin: {provider: string; model: string; modelLabel?: string} | null) => void
   getActiveThread: () => ChatThread | null
   getFlowThreads: (flowId: string) => ChatThread[]
   clearFlowThreads: (flowId: string) => void
@@ -420,6 +574,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   queuedByThread: {},
   selectedProvider: 'claude',
   providerEpoch: 0,
+  modelPickerRequest: 0,
+  modelRefusals: {},
   stagedPrompt: null,
   drafts: {},
   historyStatus: {},
@@ -575,13 +731,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {streams: {...state.streams, [threadId]: {...slot, fixProposals}}}
     }),
 
-  endStream: threadId =>
+  // The turn is over: its slot goes, and with it the thread's in-flight
+  // record (persisted) — only the record of THIS stream, never a newer one.
+  endStream: threadId => {
+    const slot = get().streams[threadId]
+    if (!slot) return
+    const thread = get().threads.find(t => t.id === threadId)
+    const endsTurn = !!thread?.inFlight && thread.inFlight.streamId === slot.streamId
     set(state => {
-      if (!(threadId in state.streams)) return state
       const next = {...state.streams}
       delete next[threadId]
-      return {streams: next}
-    }),
+      if (!endsTurn) return {streams: next}
+      return {streams: next, threads: state.threads.map(t => (t.id === threadId ? {...t, inFlight: undefined} : t))}
+    })
+    if (endsTurn && thread) persistFlowThreads(thread.flowId, get().threads)
+  },
 
   queueMessage: (threadId, msg) => set(state => ({queuedByThread: {...state.queuedByThread, [threadId]: msg}})),
   clearQueuedMessage: threadId =>
@@ -683,6 +847,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           if (victim.id in drafts) delete drafts[victim.id]
           const queuedByThread = victim.id in state.queuedByThread ? {...state.queuedByThread} : state.queuedByThread
           if (victim.id in queuedByThread) delete queuedByThread[victim.id]
+          const modelRefusals = victim.id in state.modelRefusals ? {...state.modelRefusals} : state.modelRefusals
+          if (victim.id in modelRefusals) delete modelRefusals[victim.id]
           delete historyStatus[victim.id]
           return {
             threads,
@@ -690,6 +856,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             conversations: nextConversations,
             drafts,
             queuedByThread,
+            modelRefusals,
             historyStatus,
             lastActiveByFlow: {...state.lastActiveByFlow, [flowId]: id},
           }
@@ -764,13 +931,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // it behind kept an unsendable message in the store for the session.
       const queuedByThread = threadId in state.queuedByThread ? {...state.queuedByThread} : state.queuedByThread
       if (threadId in queuedByThread) delete queuedByThread[threadId]
+      const modelRefusals = threadId in state.modelRefusals ? {...state.modelRefusals} : state.modelRefusals
+      if (threadId in modelRefusals) delete modelRefusals[threadId]
       const historyStatus = {...state.historyStatus}
       delete historyStatus[threadId]
       // The replacement is the flow's own newest thread; none left ⇒ null,
       // and useChatConversations creates a fresh one for the flow.
       const activeThreadId =
         state.activeThreadId === threadId ? nextThreadOfFlow(remaining, closedFlowId) : state.activeThreadId
-      return {threads: remaining, conversations: next, activeThreadId, streams, drafts, queuedByThread, historyStatus}
+      return {
+        threads: remaining,
+        conversations: next,
+        activeThreadId,
+        streams,
+        drafts,
+        queuedByThread,
+        modelRefusals,
+        historyStatus,
+      }
     })
     if (closedFlowId) persistFlowThreads(closedFlowId, get().threads)
   },
@@ -781,6 +959,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }))
     const flowId = get().threads.find(t => t.id === threadId)?.flowId
     if (flowId) persistFlowThreads(flowId, get().threads)
+  },
+
+  setThreadModel: (threadId, pin) => {
+    const thread = get().threads.find(t => t.id === threadId)
+    if (!thread) return
+    let next: ThreadPinFields
+    if (pin === null) {
+      next = {provider: undefined, model: undefined, modelLabel: undefined}
+    } else {
+      if (!isProviderId(pin.provider) || !pin.model) return
+      // Only a name is stored as the label, never an id (storableModelLabel).
+      next = {provider: pin.provider, model: pin.model, modelLabel: storableModelLabel(pin.modelLabel, pin.model)}
+    }
+    if (thread.provider === next.provider && thread.model === next.model && thread.modelLabel === next.modelLabel) {
+      return
+    }
+    get().updateThread(threadId, next)
   },
 
   getActiveThread: () => {
@@ -807,14 +1002,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const streams = {...state.streams}
       const drafts = {...state.drafts}
       const queuedByThread = {...state.queuedByThread}
+      const modelRefusals = {...state.modelRefusals}
       const historyStatus = {...state.historyStatus}
       for (const id of toRemove) {
         delete streams[id]
         delete drafts[id]
         delete queuedByThread[id]
+        delete modelRefusals[id]
         delete historyStatus[id]
       }
-      return {threads: remaining, conversations: next, activeThreadId, streams, drafts, queuedByThread, historyStatus}
+      return {
+        threads: remaining,
+        conversations: next,
+        activeThreadId,
+        streams,
+        drafts,
+        queuedByThread,
+        modelRefusals,
+        historyStatus,
+      }
     })
     persistFlowThreads(flowId, get().threads)
   },
@@ -822,6 +1028,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setProvider: p => set({selectedProvider: p}),
 
   bumpProviderEpoch: () => set(s => ({providerEpoch: s.providerEpoch + 1})),
+  openModelPicker: () => set(s => ({modelPickerRequest: s.modelPickerRequest + 1})),
+  setModelRefusal: (threadId, refusal) =>
+    set(state => {
+      if (refusal) return {modelRefusals: {...state.modelRefusals, [threadId]: refusal}}
+      if (!(threadId in state.modelRefusals)) return state
+      const modelRefusals = {...state.modelRefusals}
+      delete modelRefusals[threadId]
+      return {modelRefusals}
+    }),
   setStagedPrompt: p => set({stagedPrompt: p}),
 
   setDraft: (threadId, text) =>
@@ -848,6 +1063,8 @@ registerStoreReset(() => {
     stagedPrompt: null,
     selectedProvider: 'claude',
     providerEpoch: 0,
+    modelPickerRequest: 0,
+    modelRefusals: {},
     drafts: {},
     // Queued (unsent) follow-ups are session state — they must not survive
     // logout (F1.7).

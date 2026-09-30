@@ -19,8 +19,9 @@ import (
 // admin's edit that keeps the stored secret (a deployment name) changes the
 // last writer only. When the lender stops being an admin the credential is
 // disabled anyway — it used to survive because the delete matched the last
-// writer — and the GET names the lender, not the editor. The last writer's
-// departure keeps disabling it too.
+// writer — and the GET names the lender, not the editor. The carrying
+// editor's own departure no longer deletes the lender's credential (F-32):
+// an edit that borrowed the secret is not a loan.
 func TestOrgAzureFoundryConfig_LenderTracking(t *testing.T) {
 	configureAzureForTests(t)
 	orgKeys := testutil.NewFakeOrgSecretStore()
@@ -57,21 +58,25 @@ func TestOrgAzureFoundryConfig_LenderTracking(t *testing.T) {
 		t.Fatal("the departed lender's secret is still stored")
 	}
 
-	// The last writer's departure still disables it (org-2), and account
-	// erasure finds a credential by its lender (org-3).
+	// The carrying editor's departure keeps the lender's credential (F-32),
+	// and account erasure finds a credential by its lender — org-2 and
+	// org-3 alike, both lent by admin-a.
 	at2, _ := svc.SaveOrgAzureFoundryConfig("org-2", "admin-a", "", withSecret)
 	if _, err := svc.SaveOrgAzureFoundryConfig("org-2", "admin-b", at2, deploymentOnly); err != nil {
 		t.Fatal(err)
 	}
-	if disabled, err := svc.DisableOrgAzureFoundryConfigSavedBy("org-2", "admin-b"); err != nil || !disabled {
-		t.Errorf("last writer demoted: disabled=%v err=%v", disabled, err)
+	if disabled, err := svc.DisableOrgAzureFoundryConfigSavedBy("org-2", "admin-b"); err != nil || disabled {
+		t.Errorf("carrying editor demoted: disabled=%v err=%v, want the lender's credential kept", disabled, err)
+	}
+	if has, _ := orgKeys.HasOrg("org-2", "azure-foundry"); !has {
+		t.Fatal("the carrying editor's departure deleted the lender's credential")
 	}
 	at3, _ := svc.SaveOrgAzureFoundryConfig("org-3", "admin-a", "", withSecret)
 	if _, err := svc.SaveOrgAzureFoundryConfig("org-3", "admin-c", at3, deploymentOnly); err != nil {
 		t.Fatal(err)
 	}
-	if orgs, err := svc.DisableOrgCredentialsSavedBy("admin-a"); err != nil || strings.Join(orgs, ",") != "org-3" {
-		t.Errorf("lender's account erased: disabled %v (%v), want org-3", orgs, err)
+	if orgs, err := svc.DisableOrgCredentialsSavedBy("admin-a"); err != nil || strings.Join(orgs, ",") != "org-2,org-3" {
+		t.Errorf("lender's account erased: disabled %v (%v), want org-2 and org-3", orgs, err)
 	}
 
 	// A new secret makes its supplier the lender: the previous lender's

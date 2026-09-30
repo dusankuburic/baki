@@ -11,6 +11,7 @@ import {
   formatDateTime,
   formatTimeOfDay,
   formatDelta,
+  formatContextWindow,
 } from './format'
 
 describe('formatDateTime / formatTimeOfDay', () => {
@@ -27,6 +28,21 @@ describe('formatDateTime / formatTimeOfDay', () => {
   it('shows an unparseable value as given', () => {
     expect(formatDateTime('not a date')).toBe('not a date')
     expect(formatTimeOfDay('nope')).toBe('nope')
+  })
+})
+
+describe('formatContextWindow (F-44)', () => {
+  it('renders sub-1M windows as integer k, unchanged from the picker labels', () => {
+    expect(formatContextWindow(200_000)).toBe('200k')
+    expect(formatContextWindow(128_000)).toBe('128k')
+    expect(formatContextWindow(100_000)).toBe('100k')
+  })
+
+  it('renders 1M-and-above windows with an M suffix', () => {
+    expect(formatContextWindow(1_000_000)).toBe('1M')
+    expect(formatContextWindow(1_048_576)).toBe('1.0M')
+    expect(formatContextWindow(1_049_000)).toBe('1.0M')
+    expect(formatContextWindow(2_000_000)).toBe('2M')
   })
 })
 

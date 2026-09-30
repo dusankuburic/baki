@@ -3,6 +3,8 @@ package database
 import (
 	"context"
 	"database/sql"
+
+	"pad-analyzer/internal/storage/interfaces"
 )
 
 // This file names the Postgres-only capabilities that callers outside this
@@ -32,4 +34,12 @@ type KeyStoreProvider interface {
 // row-level-security transactions scoped to a caller.
 type RLSBeginner interface {
 	BeginRLS(ctx context.Context, userID string) (*sql.Tx, error)
+}
+
+// AzureRegistryProvider is implemented by storage backends that hold the
+// Azure AI Foundry model registry tables (migration v25). DI uses it only
+// with auth enabled — the tables' owners are real users and organisations —
+// and falls back to the <configDir>/azure-models.json file store otherwise.
+type AzureRegistryProvider interface {
+	AzureRegistry() interfaces.AzureRegistryStore
 }

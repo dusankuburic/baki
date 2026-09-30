@@ -103,7 +103,10 @@ type UserDataExport struct {
 	TriageDecisions []*FindingStatus        `json:"triageDecisions"`
 	Organisations   []*Organisation         `json:"organisations"`
 	Sessions        []RefreshTokenInfo      `json:"sessions"`
-	ExportedAt      time.Time               `json:"exportedAt"`
+	// AzureRegistry is the user's personal Azure AI Foundry resources and
+	// models (Part 9) — metadata and public configuration, never a secret.
+	AzureRegistry *ExportedAzureRegistry `json:"azureRegistry"`
+	ExportedAt    time.Time              `json:"exportedAt"`
 }
 
 // ExportedAuditEvent is an AuditEvent with the camelCase keys the rest of the
@@ -1145,6 +1148,7 @@ type ChatMessage struct {
 	TokensOut        int                   `json:"tokensOut,omitempty"`
 	Provider         string                `json:"provider,omitempty"`
 	Model            string                `json:"model,omitempty"`
+	ModelLabel       string                `json:"modelLabel,omitempty"`
 	ServedModel      string                `json:"servedModel,omitempty"`
 	InputCostPerM    float64               `json:"inputCostPerM,omitempty"`
 	OutputCostPerM   float64               `json:"outputCostPerM,omitempty"`
@@ -1199,11 +1203,15 @@ type AISettings struct {
 }
 
 type AIProviderConfig struct {
-	Enabled            bool    `json:"enabled"`
-	DefaultModel       string  `json:"defaultModel"`
-	Temperature        float64 `json:"temperature"`
-	MaxTokens          int     `json:"maxTokens"`
-	ContextTokenBudget int     `json:"contextTokenBudget"`
+	Enabled      bool    `json:"enabled"`
+	DefaultModel string  `json:"defaultModel"`
+	Temperature  float64 `json:"temperature"`
+	MaxTokens    int     `json:"maxTokens"`
+	// ReasoningEffort mirrors models.AIProviderConfig.ReasoningEffort — keep
+	// the JSON tags in parity or the settings round-trip drops the value
+	// silently.
+	ReasoningEffort    string `json:"reasoningEffort,omitempty"`
+	ContextTokenBudget int    `json:"contextTokenBudget"`
 }
 
 type ParserSettings struct {

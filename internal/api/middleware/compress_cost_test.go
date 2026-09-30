@@ -2,11 +2,11 @@ package middleware
 
 import (
 	"bytes"
+	"fmt"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/andybalholm/brotli"
 )
@@ -22,47 +22,77 @@ import (
 // effort buys literally nothing on incompressible input, and at ~0.8 MB/s a
 // few-megabyte response pins a core for seconds.
 //
-// The assertion is RELATIVE, measured in this process against q11 on the same
-// input. An absolute wall-clock budget is not usable here: the suite runs 36
-// packages in parallel under -race, where the same 65ms encode was observed at
-// 1.4s purely from contention. A ratio is immune to that.
+// The gate is deterministic: the configured level is pinned, and the
+// middleware's output must be byte-identical to a direct encode at that level
+// (brotli is deterministic for a given level and input) — so a pool built at
+// another level fails however fast the machine is. The q6-vs-q11 cost ratio
+// itself is a property of the encoder, measured by BenchmarkBrotli_AdversarialBody
+// instead of by wall clock here: under -race, which is how CI runs the suite,
+// the q11 reference encode alone took ~34 s.
 func TestCompress_AdversarialBodyIsNotEncodedAtMaxQuality(t *testing.T) {
-	// The configured level is the thing under test; pin it explicitly so a
-	// regression to q11 fails deterministically, independent of any timing.
 	if brotliQuality > 6 {
 		t.Fatalf("brotliQuality is %d — q7+ costs order-of-magnitude more CPU on incompressible "+
 			"input for no ratio gain, and response bodies carry caller-influenced text",
 			brotliQuality)
 	}
 
-	const size = 2 << 20
+	body := highEntropyBody(64 << 10)
+	h := Compress(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/x", nil)
+	req.Header.Set("Accept-Encoding", "br")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if enc := rec.Header().Get("Content-Encoding"); enc != "br" {
+		t.Fatalf("Content-Encoding = %q, want br", enc)
+	}
+
+	if got, want := rec.Body.Bytes(), brotliEncode(body, brotliQuality); !bytes.Equal(got, want) {
+		t.Errorf("the middleware's brotli output (%d bytes) differs from a q%d encode (%d bytes) — "+
+			"the writer pool is not encoding at brotliQuality", len(got), brotliQuality, len(want))
+	}
+	// The comparison has teeth: max quality encodes this body differently.
+	if bytes.Equal(rec.Body.Bytes(), brotliEncode(body, brotli.BestCompression)) {
+		t.Fatal("q11 output equals the configured level's — the byte comparison proves nothing on this input")
+	}
+}
+
+// BenchmarkBrotli_AdversarialBody measures the cost the level pin above
+// protects against — the configured level vs q11 on a 2 MB high-entropy body:
+//
+//	go test -run '^$' -bench Brotli_AdversarialBody ./internal/api/middleware/
+func BenchmarkBrotli_AdversarialBody(b *testing.B) {
+	body := highEntropyBody(2 << 20)
+	for _, level := range []int{brotliQuality, brotli.BestCompression} {
+		b.Run(fmt.Sprintf("q%d", level), func(b *testing.B) {
+			b.SetBytes(int64(len(body)))
+			for b.Loop() {
+				brotliEncode(body, level)
+			}
+		})
+	}
+}
+
+// highEntropyBody returns size bytes of base64-alphabet noise: text a JSON
+// response could carry, which no encoder level compresses much.
+func highEntropyBody(size int) []byte {
 	r := rand.New(rand.NewSource(1))
 	const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 	body := make([]byte, size)
 	for i := range body {
 		body[i] = alpha[r.Intn(len(alpha))]
 	}
+	return body
+}
 
-	encode := func(level int) time.Duration {
-		var buf bytes.Buffer
-		w := brotli.NewWriterLevel(&buf, level)
-		start := time.Now()
-		_, _ = w.Write(body)
-		_ = w.Close()
-		return time.Since(start)
-	}
-
-	configured := encode(brotliQuality)
-	maxQuality := encode(11)
-
-	t.Logf("2 MB high-entropy: q%d=%v  q11=%v", brotliQuality,
-		configured.Round(time.Millisecond), maxQuality.Round(time.Millisecond))
-
-	if configured*5 > maxQuality {
-		t.Errorf("the configured level (q%d, %v) is not materially cheaper than q11 (%v) — "+
-			"the encoder is still doing max-quality work on content that cannot compress",
-			brotliQuality, configured.Round(time.Millisecond), maxQuality.Round(time.Millisecond))
-	}
+func brotliEncode(body []byte, level int) []byte {
+	var buf bytes.Buffer
+	w := brotli.NewWriterLevel(&buf, level)
+	_, _ = w.Write(body)
+	_ = w.Close()
+	return buf.Bytes()
 }
 
 // TestCompress_StillCompressesRealPayloads keeps the change from being a

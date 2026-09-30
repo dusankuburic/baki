@@ -2,6 +2,7 @@
 // `import {useFooStore} from '@/stores'` consistently for any store.
 export {useAnalysisStore} from './analysisStore'
 export {useAuthStore} from './authStore'
+export {useAzureFoundryStore} from './azureFoundryStore'
 export {useChatStore} from './chatStore'
 export {useEditorStore} from './editorStore'
 export {useFlowStore} from './flowStore'

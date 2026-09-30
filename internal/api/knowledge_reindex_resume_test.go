@@ -261,3 +261,97 @@ func TestRenderKnowledgeEmbeddingError_ContextErrors(t *testing.T) {
 		t.Errorf("done request: err = %v, want both causes", err)
 	}
 }
+
+// rateLimitOnCallEmbedder embeds [0,1] until its failAt-th call, which it
+// refuses with a Retry-After — a throttled embedding resource mid-walk.
+type rateLimitOnCallEmbedder struct {
+	ai.Provider
+	calls, failAt int
+}
+
+func (r *rateLimitOnCallEmbedder) ID() string { return "rate-limit-embed" }
+func (r *rateLimitOnCallEmbedder) Embed(_ context.Context, text []string) ([][]float32, error) {
+	r.calls++
+	if r.calls == r.failAt {
+		return nil, &ai.RateLimitError{RetryAfter: 7 * time.Second}
+	}
+	out := make([][]float32, len(text))
+	for i := range text {
+		out[i] = []float32{0, 1}
+	}
+	return out, nil
+}
+
+// TestKnowledgeReindex_FailedPageCarriesResumeCursor (F-13): a 429 on the
+// second page keeps the 429 mapping (and Retry-After) but carries the
+// committed pages' resume cursor in the error envelope's details and audits
+// the partial run, so the client resumes instead of restarting from zero.
+func TestKnowledgeReindex_FailedPageCarriesResumeCursor(t *testing.T) {
+	prevCh := auditCh
+	auditCh = nil
+	t.Cleanup(func() { auditCh = prevCh })
+
+	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
+	org, err := orgSvc.Create(bgCtx(), "Acme", "u-admin")
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	store := &auditRecordingBackend{FakeBackend: &testutil.FakeBackend{}}
+	_ = store.SaveKnowledgeDocument(bgCtx(), &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
+	// 501 chunks: page 1 commits the first 500 (five 100-input batches), the
+	// sixth batch is throttled.
+	chunks := make([]storageif.KnowledgeChunk, 501)
+	for i := range chunks {
+		chunks[i] = storageif.KnowledgeChunk{ID: fmt.Sprintf("c-%06d", i), DocID: "doc-1", Content: fmt.Sprintf("rule %d", i), Embedding: []float32{1, 0}}
+	}
+	_ = store.SaveKnowledgeChunks(bgCtx(), "", chunks)
+	emb := &rateLimitOnCallEmbedder{failAt: 6}
+	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(emb))
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
+	r := chi.NewRouter()
+	r.Post("/api/orgs/{id}/knowledge/reindex", h.handleKnowledgeReindex)
+
+	rr := postJSON(t, r, "/api/orgs/"+org.ID+"/knowledge/reindex", `{"force":true}`)
+	if rr.Code != http.StatusTooManyRequests || errorCode(t, rr) != "EMBEDDING_RATE_LIMITED" {
+		t.Fatalf("status = %d, body = %s; want 429 EMBEDDING_RATE_LIMITED", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("Retry-After") != "7" {
+		t.Errorf("Retry-After = %q, want the provider's hint (7)", rr.Header().Get("Retry-After"))
+	}
+	var env struct {
+		Code    string          `json:"code"`
+		Details json.RawMessage `json:"details"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	var details struct {
+		NextCursor *storageif.KnowledgeChunkCursor `json:"nextCursor"`
+		Chunks     int                             `json:"chunks"`
+	}
+	if err := json.Unmarshal(env.Details, &details); err != nil {
+		t.Fatalf("details = %s: %v", env.Details, err)
+	}
+	if details.Chunks != 500 || details.NextCursor == nil || details.NextCursor.ID != "c-000499" || details.NextCursor.DocID != "doc-1" {
+		t.Errorf("details = %s, want 500 committed chunks and a cursor at c-000499", env.Details)
+	}
+	// The partial run is audited as a failed, truncated request.
+	if ev := store.lastEvent(t, AuditActionKnowledgeReindex); ev.Meta["truncated"] != "true" || ev.Meta["failed"] != "true" {
+		t.Errorf("partial audit meta = %v, want truncated+failed", ev.Meta)
+	}
+
+	// Resuming from the carried cursor finishes the corpus: the resumed
+	// guard re-embeds its 3 samples plus the one remaining chunk — page 1 is
+	// not re-bought.
+	before := emb.calls
+	res := postJSON(t, r, "/api/orgs/"+org.ID+"/knowledge/reindex", `{"force":true,"cursor":{"docId":"doc-1","id":"c-000499"}}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("resume: status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"chunks":1`) {
+		t.Errorf("resume body = %s, want the 1 remaining chunk", res.Body.String())
+	}
+	if emb.calls-before != 2 { // the resumed guard's sample (one chunk per document: 1) + the 1 remaining chunk
+		t.Errorf("resume embedded %d batches, want 2 (the guard sample + the 1 remaining chunk); page 1 must not be re-embedded", emb.calls-before)
+	}
+}

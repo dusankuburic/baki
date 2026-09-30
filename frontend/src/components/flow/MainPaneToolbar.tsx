@@ -122,6 +122,7 @@ export default function MainPaneToolbar() {
           size="sm"
           label={t('toolbar.sections')}
           collapseLabels
+          activation="manual"
         />
         <div className="flex-1 min-w-0 flex items-center">
           <span className="text-sm font-medium text-text-primary truncate">{title}</span>
@@ -289,6 +290,7 @@ export default function MainPaneToolbar() {
         size="sm"
         label={t('toolbar.views')}
         collapseLabels
+        activation="manual"
       />
 
       {/* The center breadcrumb copy is GONE (U5a.3): the interactive

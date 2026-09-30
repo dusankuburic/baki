@@ -43,6 +43,9 @@ const EXACT: Record<string, LucideIcon> = {
   'keys.save': Key,
   'token.create': Key,
   'token.revoke': Key,
+  // Azure AI Foundry resources hold credentials; models are what chats run on.
+  'azure.connection_save': Key,
+  'azure.connection_delete': Key,
 }
 
 const BY_PREFIX: Record<string, LucideIcon> = {
@@ -50,6 +53,7 @@ const BY_PREFIX: Record<string, LucideIcon> = {
   flow: FileText,
   finding: ClipboardCheck,
   chat: Bot,
+  azure: Bot,
   settings: Settings,
   user: Settings,
   org: Users,

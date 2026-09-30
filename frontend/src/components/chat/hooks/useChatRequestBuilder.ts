@@ -7,6 +7,10 @@ export interface BuildChatRequestArgs {
   // The thread as currently stored (selected files, tools toggle, scope).
   thread: ChatThread
   provider: ProviderID
+  // The model the turn is for, as resolved per thread (lib/modelSelection):
+  // sent as is. '' asks the server for its default — never the saved
+  // "Default for new chats", which may name a model this scope no longer
+  // offers (that is the resolver's call, not the request's).
   model: string
   aiSettings: AISettings
   // The thread's messages BEFORE this turn's user message.
@@ -50,10 +54,16 @@ export function buildChatRequest({
     filesToUse = overrideFiles
   }
   const sendHistory = includeHistory || aiSettings.saveConversationHistory === false
+  // F-19: the per-provider reasoning effort ('' = provider default), sent
+  // next to temperature/maxTokens; the backend ignores it on models without
+  // reasoning (one repair round trip at worst). Temperature, Max tokens and
+  // the effort stay per provider; a registry entry's own max output caps the
+  // request on the server.
+  const reasoningEffort = providerConfig?.reasoningEffort ?? ''
   return {
     flowId: thread.flowId,
     provider,
-    model: model || providerConfig?.defaultModel || '',
+    model,
     // Omit `messages` unless the caller needs to override server-side history.
     ...(sendHistory
       ? {
@@ -76,6 +86,7 @@ export function buildChatRequest({
     selectedSourceFiles: excludeContext ? undefined : filesToUse.length > 0 ? filesToUse : undefined,
     temperature: providerConfig?.temperature ?? 0.3,
     maxTokens: providerConfig?.maxTokens ?? 4096,
+    ...(reasoningEffort ? {reasoningEffort} : {}),
     excludeContext: excludeContext ?? false,
     useTools: thread.useTools ?? false,
     ...(userMessageId ? {userMessageId} : {}),
@@ -86,15 +97,16 @@ export function buildChatRequest({
 interface UseChatRequestBuilderOptions {
   doc: FlowDocument | null
   activeThread: ChatThread | null
+  // The active thread's provider/model (its resolved pair).
   provider: ProviderID
   selectedModel: string
   aiSettings: AISettings
   getMessages: (threadId: string) => readonly ChatMessage[]
 }
 
-// useChatRequestBuilder binds buildChatRequest to the active thread and the
-// panel's current provider/model — used by the context preview, which shows
-// exactly the request a send would make.
+// useChatRequestBuilder binds buildChatRequest to the active thread and its
+// provider/model — used by the context preview, which shows exactly the
+// request a send would make.
 export function useChatRequestBuilder({
   doc,
   activeThread,

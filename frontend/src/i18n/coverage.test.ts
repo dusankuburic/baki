@@ -52,17 +52,26 @@ const NO_USER_FACING_COPY = new Set([
   'src/components/settings/sections.ts',
   // Settings-row chrome: renders only the copy its callers pass in.
   'src/components/settings/SettingRow.tsx',
+  // Pure form logic of the Azure AI Foundry modals: validators return
+  // error codes and i18n keys, the callers translate them.
+  'src/components/settings/azure/connectionForm.ts',
+  'src/components/settings/azure/modelForm.ts',
+  // Pure view logic of AI Accounts' registry (ownership, limits, defaults,
+  // duplicates, focus targets): no copy, the components translate.
+  'src/components/settings/azure/registryView.ts',
 
   // --- src/components/shared ---
   // Presentational primitives: every string they render is passed in by the
   // caller, which is where it gets translated.
   'src/components/shared/index.ts',
   'src/components/shared/Avatar.tsx',
+  'src/components/shared/Badge.tsx',
   'src/components/shared/Button.tsx',
   'src/components/shared/Checkbox.tsx',
   'src/components/shared/Divider.tsx',
   'src/components/shared/Dropdown.tsx',
   'src/components/shared/EmptyState.tsx',
+  'src/components/shared/FormField.tsx',
   'src/components/shared/Icon.tsx',
   'src/components/shared/IconButton.tsx',
   'src/components/shared/Input.tsx',
@@ -70,6 +79,7 @@ const NO_USER_FACING_COPY = new Set([
   'src/components/shared/PatchPreviewText.tsx',
   'src/components/shared/Portal.tsx',
   'src/components/shared/SegmentedControl.tsx',
+  'src/components/shared/Select.tsx',
   'src/components/shared/Skeleton.tsx',
   'src/components/shared/Switch.tsx',
   'src/components/shared/Tabs.tsx',

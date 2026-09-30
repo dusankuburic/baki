@@ -2,8 +2,6 @@ import {useTranslation} from 'react-i18next'
 import {useState, useEffect, useMemo, useCallback} from 'react'
 import clsx from 'clsx'
 import {
-  Check,
-  ChevronDown,
   Download,
   HelpCircle,
   Maximize,
@@ -12,33 +10,36 @@ import {
   MoreHorizontal,
   Plus,
   Search,
-  Settings,
   Trash2,
   Type,
   Wrench,
 } from 'lucide-react'
 import {Dropdown, Tooltip, useConfirm, type DropdownItem} from '@/components/shared'
 import {shortcuts, formatShortcutParts} from '@/lib/shortcuts'
-import {useUIStore} from '@/stores/uiStore'
+import {isAgentModel} from '@/lib/modelIds'
 import {subscribeConnectionState, getEventConnectionState, type EventConnectionState} from '@/api/client'
-import type {ChatTextSize, ModelDetail, ProviderID} from '@/types'
-
-interface ProviderSummary {
-  id: ProviderID
-  name: string
-  configured: boolean
-  authType?: string
-  /** Credentials come from the active organisation (badged in the chip). */
-  shared?: boolean
-}
+import ModelPicker, {type PickerProvider} from './ModelPicker'
+import type {ChatTextSize, ModelDetail} from '@/types'
 
 interface Props {
-  providers: ProviderSummary[]
-  selectedProvider: ProviderID
-  onSelectProvider: (id: ProviderID) => void
-  models: ModelDetail[]
-  selectedModel: string
-  onSelectModel: (modelId: string) => void
+  /** The configured providers and their models (the picker's list). */
+  providers: PickerProvider[]
+  /** The active thread's provider, model ('' = nothing usable) and the model's name. */
+  provider: string
+  model: string
+  modelLabel: string
+  /** The thread model's listing entry, when listed (kind, purpose, shared, tool support). */
+  modelDetail?: ModelDetail
+  /** Per provider id: the model its new chats start on (the picker's [DEFAULT]). */
+  defaultModels: Record<string, string>
+  /** A pick from the picker: pins the active thread (only it). */
+  onPickModel: (providerId: string, model: ModelDetail) => void
+  /** The listing scope's organisation (named by the Shared badge). */
+  orgName?: string
+  /** The picker's "Your project has models you haven't added" line. */
+  reviewPrompt?: boolean
+  /** No thread to pin a pick to (no flow open). */
+  pickerDisabled?: boolean
   isStreaming?: boolean
   messageCount: number
   useTools: boolean
@@ -58,6 +59,8 @@ interface Props {
   onToggleFocus?: () => void
   chatTextSize?: ChatTextSize
   onCycleTextSize?: () => void
+  /** Receives the model picker's trigger (focus goes back to it when a notice is dismissed). */
+  pickerTriggerRef?: React.MutableRefObject<HTMLButtonElement | null>
 }
 
 type DisplayState = 'ready' | 'streaming' | 'connecting' | 'reconnecting'
@@ -70,12 +73,13 @@ function toDisplayState(sse: EventConnectionState, isStreaming?: boolean): Displ
 }
 
 // The connection state used to own a full-width row that said "Ready" for the
-// entire time nothing was happening. It is a dot on the provider chip now: the
-// only states worth a word are the ones the user can act on, and those are
-// still announced through the chip's title.
+// entire time nothing was happening. It is a dot on the model picker's
+// trigger now: the only states worth a word are the ones the user can act
+// on, and those are still announced through the trigger's title.
 function StatusDot({state}: {state: DisplayState}) {
   return (
     <span
+      aria-hidden="true"
       className={clsx(
         'w-1.5 h-1.5 rounded-full shrink-0',
         state === 'ready' && 'bg-success',
@@ -91,17 +95,20 @@ function StatusDot({state}: {state: DisplayState}) {
 // status) plus a fourth action toolbar — roughly 110px of vertical space in a
 // column that is 320px wide by default.
 //
-// Both menus are the shared <Dropdown>: it already provides roving DOM focus,
-// Escape, outside-click, viewport clamping and focus restore, which the two
-// hand-rolled chat dropdowns did not (and one of which ran an uncapped
-// requestAnimationFrame measuring loop for as long as it was open).
+// The model control is the ModelPicker (each thread keeps its own model); the
+// overflow menu is the shared <Dropdown>, which provides roving DOM focus,
+// Escape, outside-click, viewport clamping and focus restore.
 export default function ChatHeader({
   providers,
-  selectedProvider,
-  onSelectProvider,
-  models,
-  selectedModel,
-  onSelectModel,
+  provider,
+  model,
+  modelLabel,
+  modelDetail,
+  defaultModels,
+  onPickModel,
+  orgName,
+  reviewPrompt,
+  pickerDisabled,
   isStreaming,
   messageCount,
   useTools,
@@ -117,6 +124,7 @@ export default function ChatHeader({
   onToggleFocus,
   chatTextSize,
   onCycleTextSize,
+  pickerTriggerRef,
 }: Props) {
   const {t} = useTranslation('chat')
   const focusLabel = isFocused ? t('panel.exitFocus') : t('panel.focus')
@@ -129,16 +137,12 @@ export default function ChatHeader({
           .join('+')
       : undefined
   }, [])
-  const openSettings = useUIStore(s => s.openSettings)
   const {confirm} = useConfirm()
   const [sseState, setSseState] = useState<EventConnectionState>(getEventConnectionState)
 
   useEffect(() => subscribeConnectionState(setSseState), [])
 
   const display = toDisplayState(sseState, isStreaming)
-  const currentProvider = providers.find(p => p.id === selectedProvider)
-  const currentModel = models.find(m => m.id === selectedModel)
-  const connectedCount = providers.filter(p => p.configured).length
 
   // Destructive actions route through the shared confirm dialog. The old
   // inline "Cancel / Confirm" strip mutated the toolbar's width mid-decision
@@ -157,62 +161,6 @@ export default function ChatHeader({
     [confirm, t],
   )
 
-  const connectionItems = useMemo<DropdownItem[]>(() => {
-    const items: DropdownItem[] = [
-      {
-        type: 'group',
-        label: t('provider.groupLabel'),
-        items: providers.map(p => ({
-          type: 'item' as const,
-          label: p.configured
-            ? p.shared
-              ? `${p.name} · ${t('provider.shared')}`
-              : p.name
-            : t('provider.notConfigured', {name: p.name}),
-          icon: p.id === selectedProvider && p.configured ? Check : undefined,
-          onSelect: () => {
-            if (p.configured) onSelectProvider(p.id)
-            else openSettings('accounts')
-          },
-        })),
-      },
-    ]
-    if (models.length > 0) {
-      items.push({type: 'separator'})
-      items.push({
-        type: 'group',
-        label: t('provider.model'),
-        items: models.map(m => ({
-          type: 'item' as const,
-          label:
-            `${m.displayName} · ${Math.round(m.contextLimit / 1000)}k` +
-            (m.inputCostPerM > 0 ? ` · $${m.inputCostPerM}/$${m.outputCostPerM}` : '') +
-            (m.supportsTools === false ? ` · ${t('provider.noNativeTools')}` : ''),
-          icon: m.id === selectedModel ? Check : undefined,
-          onSelect: () => onSelectModel(m.id),
-        })),
-      })
-    }
-    items.push({type: 'separator'})
-    items.push({
-      type: 'item',
-      label: t('provider.manage', {connected: connectedCount, total: providers.length}),
-      icon: Settings,
-      onSelect: () => openSettings('accounts'),
-    })
-    return items
-  }, [
-    providers,
-    selectedProvider,
-    onSelectProvider,
-    models,
-    selectedModel,
-    onSelectModel,
-    connectedCount,
-    openSettings,
-    t,
-  ])
-
   const overflowItems = useMemo<DropdownItem[]>(() => {
     const items: DropdownItem[] = [{type: 'item', label: t('toolbar.newChat'), icon: Plus, onSelect: onNewChat}]
     if (onToggleSearch) {
@@ -225,19 +173,38 @@ export default function ChatHeader({
       })
     }
     if (onToggleTools) {
-      // Providers without native function calling (Copilot) still run tools:
-      // the chat service falls back to the text-marker protocol
-      // (runPromptToolLoop), so the toggle stays enabled and only says which
-      // protocol it will use — the same suffix the model list shows.
-      const viaMarkers = currentModel?.supportsTools === false
-      items.push({
-        type: 'item',
-        label:
-          (useTools ? t('toolbar.toolsOn') : t('toolbar.toolsOff')) +
-          (viaMarkers ? ` · ${t('provider.noNativeTools')}` : ''),
-        icon: Wrench,
-        onSelect: onToggleTools,
-      })
+      // A Foundry agent always runs the tool loop with the tools its portal
+      // definition carries — baki's flow tools are never sent and the
+      // per-thread useTools flag is ignored — so an on/off toggle would be
+      // inert. Offer an unavailable item that says so instead (F-39) — with
+      // its reason, so it stays reachable by keyboard and the reason is read.
+      // An agent is known by its listed kind (a registry entry is
+      // "m/<id>"), or by the pre-registry "agent:" prefix before the listing
+      // says.
+      const isAgent = provider === 'azure-foundry' && isAgentModel(model, modelDetail)
+      if (isAgent) {
+        items.push({
+          type: 'item',
+          label: t('toolbar.toolsAgent'),
+          icon: Wrench,
+          disabledReason: t('toolbar.toolsAgentReason'),
+          onSelect: onToggleTools,
+        })
+      } else {
+        // Providers without native function calling (Copilot) still run tools:
+        // the chat service falls back to the text-marker protocol
+        // (runPromptToolLoop), so the toggle stays enabled and only says which
+        // protocol it will use — the same hint the model list shows.
+        const viaMarkers = modelDetail?.supportsTools === false
+        items.push({
+          type: 'item',
+          label:
+            (useTools ? t('toolbar.toolsOn') : t('toolbar.toolsOff')) +
+            (viaMarkers ? ` · ${t('provider.noNativeTools')}` : ''),
+          icon: Wrench,
+          onSelect: onToggleTools,
+        })
+      }
     }
     if (onExport) {
       items.push({
@@ -300,7 +267,9 @@ export default function ChatHeader({
     isStreaming,
     onToggleTools,
     useTools,
-    currentModel,
+    provider,
+    model,
+    modelDetail,
     onExport,
     onToggleFocus,
     isFocused,
@@ -316,39 +285,24 @@ export default function ChatHeader({
 
   return (
     <div className="chat-bar flex items-center gap-1 py-1.5 border-b border-border-subtle">
-      <Dropdown
-        className="min-w-0 flex-1"
-        items={connectionItems}
-        trigger={
-          <button
-            type="button"
-            className="flex items-center gap-1.5 w-full min-w-0 px-2 py-1 rounded-lg text-xs hover:bg-surface-2 transition-colors"
-            title={t(`connection.${display}`)}
-          >
-            <StatusDot state={display} />
-            <span className="truncate font-medium text-text-secondary">
-              {currentProvider?.name || t('provider.select')}
-            </span>
-            {currentProvider?.shared && (
-              <span
-                className="shrink-0 px-1 py-px rounded text-2xs font-semibold uppercase tracking-wider bg-brand-500/15 text-brand-400"
-                // The tooltip is mouse-only; the name carries the meaning
-                // ("using your organisation's credentials") to screen readers.
-                role="img"
-                aria-label={t('provider.sharedTitle')}
-                title={t('provider.sharedTitle')}
-              >
-                {t('provider.shared')}
-              </span>
-            )}
-            {currentModel && (
-              // Hidden by the container query below ~340px: at that width the
-              // provider name alone is all that fits without truncating both.
-              <span className="cq-model truncate text-text-tertiary">· {currentModel.displayName}</span>
-            )}
-            <ChevronDown size={12} className="shrink-0 text-text-tertiary" />
-          </button>
-        }
+      {/* The model name comes first and is never hidden at narrow widths
+          (the default chat width is 320 px): at any width the header says
+          which model this thread talks to. */}
+      <ModelPicker
+        className="flex-1"
+        providers={providers}
+        provider={provider}
+        model={model}
+        label={modelLabel}
+        modelDetail={modelDetail}
+        defaults={defaultModels}
+        onSelect={onPickModel}
+        orgName={orgName}
+        reviewPrompt={reviewPrompt}
+        disabled={pickerDisabled}
+        leading={<StatusDot state={display} />}
+        title={t(`connection.${display}`)}
+        triggerRef={pickerTriggerRef}
       />
 
       {messageCount > 0 && (

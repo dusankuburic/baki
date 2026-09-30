@@ -1,32 +1,32 @@
 import {describe, it, expect, vi} from 'vitest'
-import {render, screen, fireEvent} from '@testing-library/react'
+import {render, screen, fireEvent, within} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ChatHeader from './ChatHeader'
 import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
-import type {ModelDetail, ProviderID} from '@/types'
+import type {PickerProvider} from './ModelPicker'
+import type {ModelDetail} from '@/types'
 
 // ChatHeader is the panel's only row of chrome — it absorbed the provider
-// selector, the model selector, the connection-status row and the whole action
-// toolbar. These cover the wiring that used to live in ChatToolbar.test.tsx.
-
-const providers = [
-  {id: 'claude' as ProviderID, name: 'Claude', configured: true},
-  {id: 'openai' as ProviderID, name: 'OpenAI', configured: false},
-]
+// selector, the model selector (now the ModelPicker: each thread keeps its
+// own model), the connection-status row and the whole action toolbar. These
+// cover the wiring that used to live in ChatToolbar.test.tsx.
 
 const models: ModelDetail[] = [
   {id: 'm1', displayName: 'Sonnet', contextLimit: 200_000, inputCostPerM: 3, outputCostPerM: 15},
   {id: 'm2', displayName: 'Haiku', contextLimit: 100_000, inputCostPerM: 1, outputCostPerM: 5},
 ]
 
+const providers: PickerProvider[] = [{id: 'claude', name: 'Claude', models}]
+
 function renderHeader(overrides: Partial<Parameters<typeof ChatHeader>[0]> = {}) {
   const props = {
     providers,
-    selectedProvider: 'claude' as ProviderID,
-    onSelectProvider: vi.fn(),
-    models,
-    selectedModel: 'm1',
-    onSelectModel: vi.fn(),
+    provider: 'claude',
+    model: 'm1',
+    modelLabel: 'Sonnet',
+    modelDetail: models[0],
+    defaultModels: {claude: 'm1'},
+    onPickModel: vi.fn(),
     messageCount: 3,
     useTools: false,
     onNewChat: vi.fn(),
@@ -46,33 +46,67 @@ async function openOverflow(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', {name: 'More actions'}))
 }
 
+const picker = () => screen.getByRole('button', {name: /^Model for this chat:/})
+
+async function openPicker(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(picker())
+  return screen.getByRole('dialog', {name: 'Choose a model for this chat'})
+}
+
 describe('ChatHeader', () => {
-  it('shows the provider and model on one line', () => {
+  it("names the thread's model first, with the provider in the trigger's name", () => {
     renderHeader()
-    expect(screen.getByText('Claude')).toBeInTheDocument()
-    expect(screen.getByText('· Sonnet')).toBeInTheDocument()
+    expect(picker()).toHaveAccessibleName('Model for this chat: Sonnet, Claude')
+    expect(within(picker()).getByText('Sonnet')).toBeVisible()
+    // The connection state stays on the trigger's hover title.
+    expect(picker()).toHaveAttribute('title', 'Ready')
   })
 
-  it('badges a provider whose credentials are shared by the organisation', async () => {
-    const user = userEvent.setup()
-    renderHeader({providers: [{id: 'claude' as ProviderID, name: 'Claude', configured: true, shared: true}]})
-    expect(screen.getByTitle("Using your organisation's shared credentials")).toHaveTextContent('shared')
-    // Named for screen readers, not only in the mouse tooltip.
-    expect(screen.getByRole('img', {name: "Using your organisation's shared credentials"})).toBeInTheDocument()
-    await user.click(screen.getByText('Claude'))
-    expect(screen.getByRole('menuitem', {name: 'Claude · shared'})).toBeInTheDocument()
+  it('badges a model an organisation shares — icon and text, the org named for screen readers', () => {
+    const shared: ModelDetail = {
+      id: 'm/review0000',
+      displayName: 'Review bot',
+      contextLimit: 128_000,
+      inputCostPerM: 0,
+      outputCostPerM: 0,
+      kind: 'agent',
+      purpose: 'review',
+      shared: true,
+    }
+    renderHeader({
+      providers: [{id: 'azure-foundry', name: 'Azure AI Foundry', models: [shared]}],
+      provider: 'azure-foundry',
+      model: shared.id,
+      modelLabel: 'Review bot',
+      modelDetail: shared,
+      orgName: 'Contoso',
+    })
+    expect(picker()).toHaveAccessibleName(
+      'Model for this chat: Review bot, Review & analysis, Azure AI Foundry, shared by Contoso',
+    )
+    expect(within(picker()).getByText('Shared')).toBeVisible()
+    expect(within(picker()).getByText('Shared by Contoso')).toHaveClass('sr-only')
   })
 
-  it('lists providers and models in a single menu and selects one', async () => {
+  it("badges a provider whose credentials are the organisation's", () => {
+    renderHeader({providers: [{id: 'claude', name: 'Claude', models, shared: true}]})
+    expect(picker()).toHaveAccessibleName(
+      "Model for this chat: Sonnet, Claude, using your organisation's shared credentials",
+    )
+    expect(within(picker()).getByText('Shared')).toBeVisible()
+  })
+
+  it('picks a model for the thread from the picker', async () => {
     const user = userEvent.setup()
     const props = renderHeader()
-    await user.click(screen.getByText('Claude'))
+    await openPicker(user)
+    await user.click(screen.getByRole('option', {name: /^Haiku/}))
+    expect(props.onPickModel).toHaveBeenCalledWith('claude', models[1])
+  })
 
-    // Unconfigured providers are offered as a route into settings, not hidden.
-    expect(screen.getByRole('menuitem', {name: /OpenAI — configure/})).toBeInTheDocument()
-
-    await user.click(screen.getByRole('menuitem', {name: /Haiku/}))
-    expect(props.onSelectModel).toHaveBeenCalledWith('m2')
+  it('shows the model but offers no picks without a thread', () => {
+    renderHeader({pickerDisabled: true})
+    expect(picker()).toBeDisabled()
   })
 
   it('runs non-destructive overflow actions directly', async () => {
@@ -99,7 +133,7 @@ describe('ChatHeader', () => {
     renderHeader({
       useTools: false,
       onToggleTools,
-      models: [{...models[0], supportsTools: false}],
+      modelDetail: {...models[0], supportsTools: false},
     })
     await openOverflow(user)
     // The chat service runs these through the text-marker fallback, so the
@@ -129,6 +163,132 @@ describe('ChatHeader', () => {
     for (const name of ['Clear', 'Compact', 'Export conversation', 'Search messages']) {
       expect(screen.getByRole('menuitem', {name})).toHaveAttribute('aria-disabled', 'true')
     }
+  })
+})
+
+describe('ChatHeader Foundry agent tools item (F-39)', () => {
+  const agent: ModelDetail = {
+    id: 'm/triage0000',
+    displayName: 'Triage',
+    contextLimit: 128000,
+    inputCostPerM: 0,
+    outputCostPerM: 0,
+    kind: 'agent',
+  }
+  const azure = (list: ModelDetail[]): PickerProvider[] => [
+    {id: 'azure-foundry', name: 'Azure AI Foundry', models: list},
+  ]
+
+  it('disables the tools toggle and explains it for a Foundry agent (by its kind)', async () => {
+    const user = userEvent.setup()
+    const onToggleTools = vi.fn()
+    renderHeader({
+      providers: azure([agent]),
+      provider: 'azure-foundry',
+      model: agent.id,
+      modelLabel: 'Triage',
+      modelDetail: agent,
+      useTools: true,
+      onToggleTools,
+    })
+    await openOverflow(user)
+    const item = screen.getByRole('menuitem', {name: 'Tools: defined by the agent'})
+    expect(item).toHaveAttribute('aria-disabled', 'true')
+    // C14: it says why — and stays in the arrow-key order, so keyboard and
+    // screen-reader users reach it (a plain `disabled` item was skipped).
+    expect(item).toHaveAccessibleDescription('An agent runs the tools set up in its Azure AI Foundry definition')
+    await user.keyboard('{ArrowDown}{ArrowDown}') // New chat → Tools
+    expect(item).toHaveFocus()
+    expect(screen.queryByRole('menuitem', {name: 'Tools on'})).toBeNull()
+    expect(screen.queryByRole('menuitem', {name: 'Tools off'})).toBeNull()
+    // Unavailable items swallow the click and Enter — the toggle stays inert.
+    await user.keyboard('{Enter}')
+    await user.click(item)
+    expect(onToggleTools).not.toHaveBeenCalled()
+  })
+
+  it('knows a pre-registry agent by its prefix before the listing says', async () => {
+    const user = userEvent.setup()
+    renderHeader({
+      providers: azure([]),
+      provider: 'azure-foundry',
+      model: 'agent:triage',
+      modelLabel: 'agent:triage',
+      modelDetail: undefined,
+      onToggleTools: vi.fn(),
+    })
+    await openOverflow(user)
+    expect(screen.getByRole('menuitem', {name: 'Tools: defined by the agent'})).toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('keeps the live on/off toggle for a non-agent model', async () => {
+    const user = userEvent.setup()
+    const onToggleTools = vi.fn()
+    const chat = {...agent, id: 'm/depa000000', kind: 'chat' as const}
+    renderHeader({
+      providers: azure([chat]),
+      provider: 'azure-foundry',
+      model: chat.id,
+      modelLabel: 'dep-a',
+      modelDetail: chat,
+      useTools: true,
+      onToggleTools,
+    })
+    await openOverflow(user)
+    expect(screen.getByRole('menuitem', {name: 'Tools on'})).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', {name: 'Tools: defined by the agent'})).toBeNull()
+  })
+})
+
+describe('ChatHeader context window formatting (F-44)', () => {
+  it('renders a 1M context window as "1M", not "1000k"', async () => {
+    const user = userEvent.setup()
+    const big: ModelDetail = {
+      id: 'big',
+      displayName: 'Fable',
+      contextLimit: 1_000_000,
+      inputCostPerM: 10,
+      outputCostPerM: 50,
+    }
+    renderHeader({providers: [{id: 'claude', name: 'Claude', models: [big]}], model: 'big', modelLabel: 'Fable'})
+    await openPicker(user)
+    expect(screen.getByRole('option', {name: /^Fable/})).toHaveAccessibleName('Fable 1M context window')
+    expect(screen.queryByText(/1000k/)).toBeNull()
+  })
+
+  it('keeps sub-1M windows as integer k', async () => {
+    const user = userEvent.setup()
+    renderHeader()
+    await openPicker(user)
+    expect(screen.getByRole('option', {name: /^Sonnet/})).toHaveAccessibleName(
+      'Sonnet Default for new chats 200k context window',
+    )
+  })
+})
+
+describe('ChatHeader unpriced models', () => {
+  // Azure AI Foundry is not priced by baki: its deployments list at 0/0 and
+  // the picker must show neither "$0" nor an estimate.
+  it('shows no price on a zero-priced model', async () => {
+    const user = userEvent.setup()
+    const gpt: ModelDetail = {
+      id: 'gpt-4o',
+      displayName: 'gpt-4o',
+      contextLimit: 128_000,
+      inputCostPerM: 0,
+      outputCostPerM: 0,
+    }
+    renderHeader({
+      providers: [{id: 'azure-foundry', name: 'Azure AI Foundry', models: [gpt]}],
+      provider: 'azure-foundry',
+      model: 'gpt-4o',
+      modelLabel: 'gpt-4o',
+      modelDetail: gpt,
+      defaultModels: {},
+    })
+    await openPicker(user)
+    const item = screen.getByRole('option', {name: /^gpt-4o/})
+    expect(item.textContent).not.toContain('$')
   })
 })
 

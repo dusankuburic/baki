@@ -44,11 +44,15 @@ func JSONStatus(w http.ResponseWriter, code int, data any) {
 
 // ErrorResponse is the standard error envelope returned by all API endpoints.
 // Code is a stable machine-readable string clients can switch on;
-// Message is human-readable; RequestID links to distributed traces.
+// Message is human-readable; RequestID links to distributed traces;
+// Details carries optional structured fields a client needs to recover
+// from the error (a failed re-index request's resume cursor), never
+// secret material — put only data that may be shown to the caller in it.
 type ErrorResponse struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"requestId,omitempty"`
+	Code      string         `json:"code"`
+	Message   string         `json:"message"`
+	RequestID string         `json:"requestId,omitempty"`
+	Details   map[string]any `json:"details,omitempty"`
 }
 
 // statusCode maps an HTTP status code to its machine-readable code string.
@@ -115,7 +119,23 @@ func ErrorWithCode(w http.ResponseWriter, err error, code int, machineCode strin
 	writeError(w, err, code, machineCode)
 }
 
+// ErrorWithCodeAndDetails is ErrorWithCode with a structured details object
+// on the envelope — machine-switchable fields the client needs to recover
+// from the error (e.g. a resumable re-index's nextCursor and the chunks it
+// committed before failing). The 5xx message masking in writeError does
+// NOT cover Details: only put data that may be shown to the caller in it.
+func ErrorWithCodeAndDetails(w http.ResponseWriter, err error, code int, machineCode string, details map[string]any) {
+	if code == 0 {
+		code = http.StatusInternalServerError
+	}
+	writeErrorWithDetails(w, err, code, machineCode, details)
+}
+
 func writeError(w http.ResponseWriter, err error, code int, machineCode string) {
+	writeErrorWithDetails(w, err, code, machineCode, nil)
+}
+
+func writeErrorWithDetails(w http.ResponseWriter, err error, code int, machineCode string, details map[string]any) {
 	if code >= 500 {
 		logger.Error("internal server error", "error", err)
 	}
@@ -136,5 +156,6 @@ func writeError(w http.ResponseWriter, err error, code int, machineCode string) 
 		Code:      machineCode,
 		Message:   msg,
 		RequestID: reqID,
+		Details:   details,
 	})
 }

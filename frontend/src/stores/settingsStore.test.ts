@@ -165,6 +165,96 @@ describe('updateProvider', () => {
     expect(useSettingsStore.getState().settings.ai.providers.claude.temperature).toBe(0.9)
     expect(useSettingsStore.getState().settings.ai.providers.claude.maxTokens).toBe(origTokens)
   })
+
+  it('resolves true once saved', async () => {
+    const p = useSettingsStore.getState().updateProvider('azure-foundry', {defaultModel: 'm/a1b2c3d4e5'})
+    await flushPersist()
+    await expect(p).resolves.toBe(true)
+    expect(mockUpdate).toHaveBeenCalledOnce()
+  })
+
+  // Make default is optimistic: a failed save must say so and undo only its
+  // own field — not restore a whole-settings snapshot that would also undo
+  // whatever changed while the write was pending.
+  it('reports a failed save and rolls back only the field it wrote', async () => {
+    mockUpdate.mockRejectedValue(new Error('disk full'))
+    const p = useSettingsStore.getState().updateProvider('azure-foundry', {defaultModel: 'm/a1b2c3d4e5'})
+    expect(useSettingsStore.getState().settings.ai.providers['azure-foundry'].defaultModel).toBe('m/a1b2c3d4e5')
+
+    // Changes made while the write is pending, outside this call's fields.
+    const s = useSettingsStore.getState().settings
+    useSettingsStore.setState({
+      settings: {
+        ...s,
+        layout: {...s.layout, sidebarWidth: 333},
+        ai: {
+          ...s.ai,
+          providers: {...s.ai.providers, 'azure-foundry': {...s.ai.providers['azure-foundry'], temperature: 0.7}},
+        },
+      },
+    })
+
+    await flushPersist()
+    await expect(p).resolves.toBe(false)
+    const after = useSettingsStore.getState().settings
+    expect(after.ai.providers['azure-foundry'].defaultModel).toBe('')
+    expect(after.ai.providers['azure-foundry'].temperature).toBe(0.7)
+    expect(after.layout.sidebarWidth).toBe(333)
+  })
+
+  it('leaves a field alone that a later change took over', async () => {
+    let failFirst: (err: Error) => void = () => {}
+    mockUpdate.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failFirst = reject
+        }),
+    )
+    const store = useSettingsStore.getState()
+    const first = store.updateProvider('claude', {defaultModel: 'first'})
+    await flushPersist() // the first write is now in flight
+
+    // A newer pick of the same field, queued behind the in-flight write.
+    const second = store.updateProvider('claude', {defaultModel: 'second'})
+    failFirst(new Error('network'))
+    await expect(first).resolves.toBe(false)
+    // The failed call must not undo the newer value.
+    expect(useSettingsStore.getState().settings.ai.providers.claude.defaultModel).toBe('second')
+
+    await flushPersist()
+    await expect(second).resolves.toBe(true)
+    expect(useSettingsStore.getState().settings.ai.providers.claude.defaultModel).toBe('second')
+  })
+
+  it('removes a field on rollback that did not exist before', async () => {
+    mockUpdate.mockRejectedValue(new Error('offline'))
+    expect(useSettingsStore.getState().settings.ai.providers.claude).not.toHaveProperty('reasoningEffort')
+    const p = useSettingsStore.getState().updateProvider('claude', {reasoningEffort: 'high'})
+    await flushPersist()
+    await expect(p).resolves.toBe(false)
+    expect(useSettingsStore.getState().settings.ai.providers.claude).not.toHaveProperty('reasoningEffort')
+  })
+
+  // A superseded persist used to resolve at once — a false success when the
+  // write that carried its change then failed.
+  it('reports the failure of the write that carried a superseded change', async () => {
+    mockUpdate.mockRejectedValue(new Error('disk full'))
+    const store = useSettingsStore.getState()
+    const origTheme = store.settings.appearance.theme
+    const provider = store.updateProvider('openai', {enabled: true})
+    // Supersedes the provider write within the debounce window; its write
+    // carries both changes.
+    const appearance = store.updateAppearance({theme: 'nord'})
+
+    await flushPersist()
+    await expect(provider).resolves.toBe(false)
+    await appearance
+    expect(mockUpdate).toHaveBeenCalledOnce()
+    // Both undone: the snapshot restore (newest first) cannot bring back the
+    // provider change it captured.
+    expect(useSettingsStore.getState().settings.ai.providers.openai.enabled).toBe(false)
+    expect(useSettingsStore.getState().settings.appearance.theme).toBe(origTheme)
+  })
 })
 
 // ---- resetToDefaults ----

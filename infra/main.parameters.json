@@ -43,6 +43,12 @@
 
     "auditRetentionDays": { "value": "365" },
     "dbMaxOpenConns":     { "value": "" },
-    "scanInterval":       { "value": "" }
+    "scanInterval":       { "value": "" },
+
+    "_ai_knobs_comment":  "Azure Foundry / knowledge-base operator knobs (see .env.example); the CI deploy (.github/workflows/deploy.yml) passes them from repository variables, not secrets — none is sensitive. aiAllowPrivateEgress needs VNet integration, which this template does not provision.",
+    "azureFoundryAllowedHosts": { "value": "" },
+    "aiAllowPrivateEgress":     { "value": false },
+    "embeddingProvider":        { "value": "" },
+    "embeddingDim":             { "value": "" }
   }
 }

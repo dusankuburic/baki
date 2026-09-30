@@ -71,7 +71,11 @@ const (
 )
 
 // entraRebuildCooldown bounds how often a refused-but-unexpired token makes
-// the (process-wide, cross-user) source sign in again (see Invalidate).
+// the (process-wide, cross-user) source sign in again (see Invalidate), and
+// how often the background refresh retries after a failure: without the
+// latter, every chat turn, tool iteration, embed and listing page in the
+// refresh-ahead window would start its own failed sign-in (AADSTS50196 loop
+// detection on fast refusals) and log a full azidentity dump.
 const entraRebuildCooldown = time.Minute
 
 // entraSourceIdleTTL reclaims a source nobody has built a provider from for a
@@ -155,6 +159,14 @@ func classifyEntraTokenError(err error) error {
 				msg: "Microsoft Entra ID rejected the tenant ID, client ID or client secret (" + detail + ")"}
 		}
 		return &entraTokenError{cause: err, msg: "the Microsoft Entra ID token request failed (" + detail + ")"}
+	}
+	// The Azure CLI credential's "not signed in / not installed" (F-51):
+	// azidentity marks it with the credential's name (an unexported error
+	// type, matched by prefix). The fix is on the user's machine, not in the
+	// document.
+	if strings.HasPrefix(oneLine(err.Error(), 64), "AzureCLICredential") {
+		return &entraTokenError{cause: err,
+			msg: "the Azure CLI is not available or not signed in — install it, run `az login` (and `az account set --tenant <tenant>` for a specific tenant), then try again"}
 	}
 	if what, ok := egress.DescribeFailure(err); ok {
 		return &entraTokenError{cause: err, msg: "could not reach Microsoft Entra ID for a token: " + what}
@@ -257,7 +269,11 @@ type entraTokenSource struct {
 	token     string
 	expires   time.Time
 	rebuiltAt time.Time
-	sf        singleflight.Group
+	// refreshFailedAt is when the last background refresh failed; while the
+	// cached token still has more than entraTokenMinRemaining left, a fresh
+	// refresh is not started before entraRebuildCooldown has passed.
+	refreshFailedAt time.Time
+	sf              singleflight.Group
 }
 
 func newEntraTokenSource(cred azcore.TokenCredential) *entraTokenSource {
@@ -278,10 +294,19 @@ func newEntraTokenSource(cred azcore.TokenCredential) *entraTokenSource {
 // that gives up leaves the fetch to finish and fill the cache for the next.
 func (s *entraTokenSource) Token(ctx context.Context) (string, error) {
 	s.mu.Lock()
-	tok, exp := s.token, s.expires
+	tok, exp, failedAt := s.token, s.expires, s.refreshFailedAt
 	s.mu.Unlock()
 	left := time.Until(exp)
 	if tok != "" && left >= entraTokenRefreshAhead {
+		return tok, nil
+	}
+	// A refresh that just failed is not retried by every caller in the
+	// refresh-ahead window: an identity-service outage or an expired secret
+	// would otherwise cost one failed sign-in (and one Warn dump) per chat
+	// turn, tool iteration, embed and listing page across every user of the
+	// principal. Callers below entraTokenMinRemaining — or without a token —
+	// still fetch (and surface the error when it fails again).
+	if tok != "" && left >= entraTokenMinRemaining && time.Since(failedAt) < entraRebuildCooldown {
 		return tok, nil
 	}
 	ch := s.sf.DoChan("token", func() (any, error) {
@@ -293,11 +318,15 @@ func (s *entraTokenSource) Token(ctx context.Context) (string, error) {
 		s.mu.Unlock()
 		at, err := cred.GetToken(fctx, policy.TokenRequestOptions{Scopes: []string{azureFoundryScope}})
 		if err != nil {
+			s.mu.Lock()
+			s.refreshFailedAt = time.Now()
+			s.mu.Unlock()
 			return "", classifyEntraTokenError(err)
 		}
 		s.mu.Lock()
 		s.token = at.Token
 		s.expires = at.ExpiresOn
+		s.refreshFailedAt = time.Time{}
 		s.mu.Unlock()
 		logger.Debug("azure ai foundry: refreshed entra id token", "expires", at.ExpiresOn)
 		return at.Token, nil
@@ -400,12 +429,26 @@ func entraSourceKey(tenantID, clientID, clientSecret string) string {
 }
 
 // pruneEntraSourcesLocked drops the sources idle for longer than
-// entraSourceIdleTTL (caller holds the mutex): one O(n ≤ entraSourcesMax)
-// pass per provider construction.
+// entraSourceIdleTTL (caller holds entraSources.mu): one O(n ≤
+// entraSourcesMax) pass per provider construction.
 func pruneEntraSourcesLocked(now time.Time) {
-	for k, e := range entraSources.m {
+	pruneIdleEntraEntries(entraSources.m, now)
+}
+
+// pruneEntraCLISourcesLocked is the same pass over the CLI registry (caller
+// holds entraCLISources.mu). It must not touch entraSources: that map is
+// guarded by the other mutex, and taking it here would invert
+// resetEntraSources' lock order.
+func pruneEntraCLISourcesLocked(now time.Time) {
+	pruneIdleEntraEntries(entraCLISources.m, now)
+}
+
+// pruneIdleEntraEntries deletes m's entries idle past entraSourceIdleTTL;
+// the caller holds the mutex guarding m.
+func pruneIdleEntraEntries(m map[string]entraSourceEntry, now time.Time) {
+	for k, e := range m {
 		if now.Sub(e.lastUsed) > entraSourceIdleTTL {
-			delete(entraSources.m, k)
+			delete(m, k)
 		}
 	}
 }
@@ -475,4 +518,62 @@ func resetEntraSources() {
 	entraSources.mu.Lock()
 	defer entraSources.mu.Unlock()
 	entraSources.m = map[string]entraSourceEntry{}
+	entraCLISources.mu.Lock()
+	entraCLISources.m = map[string]entraSourceEntry{}
+	entraCLISources.mu.Unlock()
+}
+
+// entraCLISources keeps one token source per tenant for the Azure CLI
+// credential (F-51): the credential itself holds no secret, so the tenant is
+// the whole identity. Same registry shape, bounds and idle TTL as
+// entraSources.
+var entraCLISources = struct {
+	mu sync.Mutex
+	m  map[string]entraSourceEntry
+}{m: map[string]entraSourceEntry{}}
+
+// entraCLISourceFor returns the CLI credential's token source for tenantID
+// ("" = the CLI's current tenant), building it once per process. The
+// credential shells out to `az` on every refresh — the CLI owns its token
+// cache — so no Invalidate-style rebuild exists; a refused token surfaces
+// as the sign-in message instead.
+func entraCLISourceFor(tenantID string) (*entraTokenSource, error) {
+	key := entraSourceKey(tenantID, "entra-cli", "")
+	entraCLISources.mu.Lock()
+	defer entraCLISources.mu.Unlock()
+	now := time.Now()
+	pruneEntraCLISourcesLocked(now) // same idle policy, its own map
+	if e, ok := entraCLISources.m[key]; ok {
+		e.lastUsed = now
+		entraCLISources.m[key] = e
+		return e.src, nil
+	}
+	opts := &azidentity.AzureCLICredentialOptions{}
+	if tenantID != "" {
+		opts.TenantID = tenantID
+	}
+	cred, err := azidentity.NewAzureCLICredential(opts)
+	if err != nil {
+		return nil, fmt.Errorf("azure ai foundry: azure cli credential: %w", err)
+	}
+	if len(entraCLISources.m) >= entraSourcesMax {
+		oldest, oldestUsed, first := "", time.Time{}, true
+		for k, e := range entraCLISources.m {
+			if first || e.lastUsed.Before(oldestUsed) {
+				oldest, oldestUsed, first = k, e.lastUsed, false
+			}
+		}
+		delete(entraCLISources.m, oldest)
+	}
+	s := newEntraTokenSource(cred)
+	entraCLISources.m[key] = entraSourceEntry{src: s, lastUsed: now}
+	return s, nil
+}
+
+// forgetEntraCLISource drops one tenant's CLI source (document deleted or
+// replaced).
+func forgetEntraCLISource(tenantID string) {
+	entraCLISources.mu.Lock()
+	delete(entraCLISources.m, entraSourceKey(tenantID, "entra-cli", ""))
+	entraCLISources.mu.Unlock()
 }

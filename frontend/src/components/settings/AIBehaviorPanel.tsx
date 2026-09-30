@@ -18,6 +18,10 @@ export default function AIBehaviorPanel() {
   const updateAI = useSettingsStore(s => s.updateAI)
   const updateProvider = useSettingsStore(s => s.updateProvider)
   const activeProvider = ai.activeProvider
+  // On Azure AI Foundry the knowledge base's embedding model is a registry
+  // designation ("Use for knowledge base" in AI Accounts), not a free-text
+  // override: the field gives way to a pointer there.
+  const azureEmbedding = ai.embeddingProvider === 'azure-foundry'
   // Local-mode backend (desktop sidecar OR a browser-served `PAD_MODE=local`
   // server) has no usage store: the daily-spend read returns 0 there, so a
   // budget never accumulates. /api/system/info reports that mode as
@@ -25,6 +29,10 @@ export default function AIBehaviorPanel() {
   // info has loaded — it missed the browser-served local case entirely.
   const systemInfo = useSystemStore(s => s.info)
   const localBackend = systemInfo ? systemInfo.capabilities.sessionAnalytics : isTauri()
+  // The local model provider exists only on a local backend (the server
+  // refuses it elsewhere, LOCAL_MODELS_UNAVAILABLE): offering it on a cloud
+  // server picked an assistant the chat could never use.
+  const assistantOptions = localBackend ? PROVIDER_OPTIONS : PROVIDER_OPTIONS.filter(o => o.value !== 'local')
 
   return (
     <div className="space-y-8">
@@ -40,7 +48,8 @@ export default function AIBehaviorPanel() {
             // tuned a provider the chat wasn't using).
             useChatStore.getState().setProvider(v)
           }}
-          options={PROVIDER_OPTIONS}
+          options={assistantOptions}
+          activation="manual"
           className="flex-wrap"
         />
         <p className="text-xs text-text-tertiary mt-2">{t('behavior.activeAssistantHint')}</p>
@@ -48,10 +57,13 @@ export default function AIBehaviorPanel() {
 
       <div>
         <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.embeddingAssistant')}</label>
+        {/* Embedding-capable providers only (the server's SupportsEmbeddings
+            list): never 'local', whose provider cannot embed. */}
         <SegmentedControl
           value={ai.embeddingProvider}
           onChange={v => updateAI({embeddingProvider: v as ProviderID})}
           label={t('behavior.embeddingAssistant')}
+          activation="manual"
           options={[
             {value: 'openai', label: 'OpenAI'},
             {value: 'gemini', label: 'Gemini'},
@@ -64,20 +76,30 @@ export default function AIBehaviorPanel() {
         <p className="text-xs text-text-tertiary mt-2">{t('behavior.embeddingAssistantHint')}</p>
       </div>
 
-      <div>
-        <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.embeddingModel')}</label>
-        <Input
-          value={ai.embeddingModel ?? ''}
-          onChange={e => updateAI({embeddingModel: e.target.value})}
-          placeholder={t('behavior.embeddingModelPlaceholder')}
-        />
-        <p className="text-xs text-text-tertiary mt-2">
-          {/* Split-rendered so the model name keeps its inline <code> style
-                without a Trans dependency (typed Trans + components is brittle). */}
-          {t('behavior.embeddingModelHintPrefix')} <code className="text-text-secondary">text-embedding-3-large</code>
-          {t('behavior.embeddingModelHintSuffix')}
-        </p>
-      </div>
+      {azureEmbedding ? (
+        <div>
+          <p className="text-sm font-medium text-text-primary mb-3">{t('behavior.embeddingModel')}</p>
+          <p className="text-xs text-text-tertiary">{t('behavior.embeddingModelHintAzure')}</p>
+        </div>
+      ) : (
+        <div>
+          <label htmlFor="embedding-model" className="text-sm font-medium text-text-primary block mb-3">
+            {t('behavior.embeddingModel')}
+          </label>
+          <Input
+            id="embedding-model"
+            value={ai.embeddingModel ?? ''}
+            onChange={e => updateAI({embeddingModel: e.target.value})}
+            placeholder={t('behavior.embeddingModelPlaceholder')}
+          />
+          <p className="text-xs text-text-tertiary mt-2">
+            {/* Split-rendered so the model name keeps its inline <code> style
+                  without a Trans dependency (typed Trans + components is brittle). */}
+            {t('behavior.embeddingModelHintPrefix')} <code className="text-text-secondary">text-embedding-3-large</code>
+            {t('behavior.embeddingModelHintSuffix')}
+          </p>
+        </div>
+      )}
 
       <div className="space-y-4 pt-2">
         <label className="text-sm font-medium text-text-primary block">{t('behavior.historyCosts')}</label>
@@ -216,6 +238,13 @@ function ProviderAdvancedSettings({
           value={config.maxTokens}
           onCommit={v => onUpdate({maxTokens: v})}
         />
+        {/* F-38: the server silently raises this to the 16384-token
+            reasoning floor on reasoning models — say so instead of letting a
+            lowered cap look ignored. Deliberately no clamp: the setting is
+            per provider and non-reasoning deployments keep the lower cap. */}
+        <p className="text-2xs text-text-tertiary mt-1">
+          {t('behavior.maxTokensHint', {floor: (16384).toLocaleString()})}
+        </p>
       </div>
 
       <div>
@@ -230,17 +259,46 @@ function ProviderAdvancedSettings({
         <p className="text-2xs text-text-tertiary mt-1">{t('behavior.contextBudgetHint')}</p>
       </div>
 
-      {/* Hidden for azure-foundry: deployments are user-named, so a free-text
-          model ID can only pin a non-existent deployment. The store
-          deliberately defaults it to '' there so the server-reported
-          deployment wins — this field must not fight that. */}
-      {provider !== 'azure-foundry' && (
+      {/* F-19: always visible — the panel cannot know which deployments are
+          reasoning models (the served model is server-side knowledge), so
+          the hint says who it applies to instead of a client-side regex. */}
+      <div>
+        <label htmlFor="reasoning-effort" className="text-xs font-medium text-text-secondary block mb-1.5">
+          {t('behavior.reasoningEffort')}
+        </label>
+        <select
+          id="reasoning-effort"
+          className="w-full rounded border border-border-subtle bg-surface-1 px-2 py-1.5 text-sm text-text-primary"
+          value={config.reasoningEffort ?? ''}
+          onChange={e => onUpdate({reasoningEffort: e.target.value as AIProviderConfig['reasoningEffort']})}
+        >
+          <option value="">{t('behavior.reasoningEffortDefault')}</option>
+          <option value="low">{t('behavior.reasoningEffortLow')}</option>
+          <option value="medium">{t('behavior.reasoningEffortMedium')}</option>
+          <option value="high">{t('behavior.reasoningEffortHigh')}</option>
+        </select>
+        <p className="text-2xs text-text-tertiary mt-1">{t('behavior.reasoningEffortHint')}</p>
+      </div>
+
+      {/* "Default for new chats": new chats start on it, and each chat then
+          keeps its own model. For azure-foundry it is set with Make default
+          in AI Accounts — registry ids are not typed by hand. */}
+      {provider === 'azure-foundry' ? (
         <div>
-          <label className="text-xs font-medium text-text-secondary block mb-1.5">{t('behavior.defaultModel')}</label>
+          <p className="text-xs font-medium text-text-secondary mb-1.5">{t('behavior.defaultModel')}</p>
+          <p className="text-2xs text-text-tertiary">{t('behavior.defaultModelAzureHint')}</p>
+        </div>
+      ) : (
+        <div>
+          <label htmlFor="default-model" className="text-xs font-medium text-text-secondary block mb-1.5">
+            {t('behavior.defaultModel')}
+          </label>
           <Input
+            id="default-model"
             value={config.defaultModel}
             onChange={e => onUpdate({defaultModel: e.target.value})}
             placeholder={t('behavior.defaultModelPlaceholder')}
+            hint={t('behavior.defaultModelHint')}
           />
         </div>
       )}

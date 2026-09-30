@@ -571,3 +571,55 @@ func TestAzureFoundry_AgentServedModelResolvedThroughDeployments(t *testing.T) {
 		t.Errorf("uncached served model = %+v", resp)
 	}
 }
+
+// F-23: one transient replay rejection falls back once and is memoised, but
+// later 200 turns that merely re-apply the memo must not refresh its TTL —
+// after it lapses, the replay is probed again and rejected just once more.
+func TestAzureFoundry_AgentReplayMemoNotRefreshedByEveryTurn(t *testing.T) {
+	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, body map[string]any) {
+		raw, _ := json.Marshal(body["input"])
+		if strings.Contains(string(raw), `"reasoning"`) {
+			writeJSON(w, 400, map[string]any{"error": map[string]any{"type": "invalid_request_error", "param": nil,
+				"code": "invalid_encrypted_content", "message": "The encrypted content for item rs_1 could not be verified."}})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"id": "resp_2", "status": "completed", "model": "gpt-5", "output": json.RawMessage(`[` + answerItem + `]`)})
+	})
+	p := newAzureAgentProvider(t, srv)
+	req := Request{Model: "agent:Helper", Messages: replayHistory(azureFoundryProviderID, flowCall)}
+	if _, err := p.Chat(context.Background(), req); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	key := srv.URL + "/api/projects/p1/openai/v1/responses\x00Helper"
+	learnedRepairs.Lock()
+	seen := learnedRepairs.m[key].seen
+	learnedRepairs.Unlock()
+	if seen.IsZero() {
+		t.Fatal("the rejected replay must be memoised")
+	}
+	for range 2 {
+		if _, err := p.Chat(context.Background(), req); err != nil {
+			t.Fatalf("memoised turn: %v", err)
+		}
+	}
+	learnedRepairs.Lock()
+	refreshed := !learnedRepairs.m[key].seen.Equal(seen)
+	if !refreshed {
+		e := learnedRepairs.m[key]
+		e.seen = time.Now().Add(-learnedRepairsTTL - time.Second)
+		learnedRepairs.m[key] = e
+	}
+	learnedRepairs.Unlock()
+	if refreshed {
+		t.Fatal("a 200 that merely re-applied the memo refreshed its TTL")
+	}
+	// TTL lapsed: the replay is probed again — rejected once, then the legacy
+	// retry that the memo re-learns.
+	before := len(srv.requests())
+	if _, err := p.Chat(context.Background(), req); err != nil {
+		t.Fatalf("post-TTL Chat: %v", err)
+	}
+	if n := len(srv.requests()) - before; n != 2 {
+		t.Fatalf("post-TTL turn made %d requests, want the rejected replay and the legacy retry", n)
+	}
+}

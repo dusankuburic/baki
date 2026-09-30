@@ -4,6 +4,7 @@ import MessageBubble from './MessageBubble'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
+import {useChatStore} from '@/stores/chatStore'
 import type {ChatMessage} from '@/types'
 
 function msg(partial: Partial<ChatMessage>): ChatMessage {
@@ -143,6 +144,45 @@ describe('MessageBubble — provider errors', () => {
     expect(screen.queryByRole('button', {name: 'Open settings'})).toBeNull()
   })
 
+  // F-42: a failure on the organisation's shared credential also offers the
+  // Organizations section — the member cannot fix it under their own
+  // Accounts.
+  it('a shared-credential auth failure also offers the organisation section', () => {
+    const openSettings = vi.fn()
+    const original = useUIStore.getState().openSettings
+    useUIStore.setState({openSettings})
+    render(
+      <MessageBubble
+        message={msg({content: 'ask your admin', finishReason: 'error', errorCode: 'PROVIDER_AUTH', errorShared: true})}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', {name: 'Open settings'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Open organisation settings'}))
+    expect(openSettings).toHaveBeenCalledWith('accounts')
+    expect(openSettings).toHaveBeenCalledWith('orgs')
+    useUIStore.setState({openSettings: original})
+  })
+
+  it('a shared NOT_CONFIGURED failure offers only the organisation section', () => {
+    const openSettings = vi.fn()
+    const original = useUIStore.getState().openSettings
+    useUIStore.setState({openSettings})
+    render(
+      <MessageBubble
+        message={{
+          ...msg({content: 'invalid shared config'}),
+          finishReason: 'error',
+          errorCode: 'PROVIDER_NOT_CONFIGURED',
+          errorShared: true,
+        }}
+      />,
+    )
+    expect(screen.queryByRole('button', {name: 'Open settings'})).toBeNull()
+    fireEvent.click(screen.getByRole('button', {name: 'Open organisation settings'}))
+    expect(openSettings).toHaveBeenCalledWith('orgs')
+    useUIStore.setState({openSettings: original})
+  })
+
   it('re-renders when only the served model arrives (memo comparator)', () => {
     const base = msg({content: 'hi', model: 'dep'})
     const {rerender} = render(<MessageBubble message={base} />)
@@ -151,5 +191,114 @@ describe('MessageBubble — provider errors', () => {
     expect(screen.getByTitle('Answered by gpt-4o')).toBeInTheDocument()
     rerender(<MessageBubble message={{...base, model: 'dep-2', servedModel: 'gpt-4o'}} />)
     expect(screen.getByText('· dep-2')).toBeInTheDocument()
+  })
+})
+
+// An Azure AI Foundry reply is sent as "m/<id>": the bubble names the model
+// by the label it was sent with — the history keeps naming a model that is
+// renamed or removed later.
+describe('MessageBubble — model labels', () => {
+  const azureMsg = (over: Partial<ChatMessage> = {}) =>
+    msg({content: 'the docs', provider: 'azure-foundry', model: 'm/docs000000', ...over})
+
+  it('names the model by its label, never by its registry id', () => {
+    render(<MessageBubble message={azureMsg({modelLabel: 'Docs writer', servedModel: 'gpt-4.1-2025-04-14'})} />)
+    expect(screen.getByText('· Docs writer')).toBeInTheDocument()
+    expect(screen.queryByText(/m\/docs000000/)).toBeNull()
+    // The served model still shows next to it.
+    expect(screen.getByTitle('Answered by gpt-4.1-2025-04-14')).toBeInTheDocument()
+  })
+
+  it("takes the listing's name for a message without a label, but the message's own label wins", () => {
+    const {rerender} = render(<MessageBubble message={azureMsg()} modelLabel="Docs writer" />)
+    expect(screen.getByText('· Docs writer')).toBeInTheDocument()
+    rerender(<MessageBubble message={azureMsg({modelLabel: 'Docs (at the time)'})} modelLabel="Docs writer" />)
+    expect(screen.getByText('· Docs (at the time)')).toBeInTheDocument()
+  })
+
+  it('reads "removed model" for a registry id nothing names any more', () => {
+    render(<MessageBubble message={azureMsg()} />)
+    expect(screen.getByText('· removed model')).toBeInTheDocument()
+  })
+
+  // C6: a turn sent before the listing loaded stored its raw id as the label.
+  it('takes a label that is only the id for none', () => {
+    const {rerender} = render(
+      <MessageBubble message={azureMsg({modelLabel: 'm/docs000000'})} modelLabel="Docs writer" />,
+    )
+    expect(screen.getByText('· Docs writer')).toBeInTheDocument()
+    rerender(<MessageBubble message={azureMsg({modelLabel: 'm/docs000000'})} />)
+    expect(screen.getByText('· removed model')).toBeInTheDocument()
+    expect(screen.queryByText(/m\/docs000000/)).toBeNull()
+  })
+
+  // C5: while nothing can be sent, Retry and Regenerate stay reachable and
+  // say why they do nothing.
+  it('keeps Retry and Regenerate reachable but unavailable while nothing can be sent, with the reason', () => {
+    const onRegenerate = vi.fn()
+    const onRetry = vi.fn()
+    const reason = 'No Azure AI Foundry models yet.'
+    const {rerender} = render(
+      <MessageBubble message={azureMsg()} isLastAssistant onRegenerate={onRegenerate} resendDisabledReason={reason} />,
+    )
+    const regenerate = screen.getByRole('button', {name: 'Regenerate'})
+    expect(regenerate).toHaveAttribute('aria-disabled', 'true')
+    expect(regenerate).toHaveAccessibleDescription(reason)
+    fireEvent.click(regenerate)
+    expect(onRegenerate).not.toHaveBeenCalled()
+
+    rerender(
+      <MessageBubble
+        message={azureMsg({id: 'm2', finishReason: 'error', content: 'failed'})}
+        isLastAssistant
+        onRetry={onRetry}
+        resendDisabledReason={reason}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', {name: 'Retry'}))
+    expect(onRetry).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', {name: 'Retry'})).toHaveAccessibleDescription(reason)
+
+    // The reason going away re-renders (memo comparator), and Retry works.
+    rerender(
+      <MessageBubble
+        message={azureMsg({id: 'm2', finishReason: 'error', content: 'failed'})}
+        isLastAssistant
+        onRetry={onRetry}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', {name: 'Retry'}))
+    expect(onRetry).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not repeat a served model that is the label itself', () => {
+    render(<MessageBubble message={azureMsg({modelLabel: 'gpt-4o', servedModel: 'gpt-4o'})} />)
+    expect(screen.getAllByText('· gpt-4o')).toHaveLength(1)
+  })
+
+  it('re-renders when only a label arrives (memo comparator)', () => {
+    const base = azureMsg()
+    const {rerender} = render(<MessageBubble message={base} />)
+    expect(screen.getByText('· removed model')).toBeInTheDocument()
+    rerender(<MessageBubble message={base} modelLabel="Docs writer" />)
+    expect(screen.getByText('· Docs writer')).toBeInTheDocument()
+    rerender(<MessageBubble message={{...base, modelLabel: 'Renamed'}} modelLabel="Docs writer" />)
+    expect(screen.getByText('· Renamed')).toBeInTheDocument()
+  })
+
+  it('offers "Choose another model" (not Settings) on a MODEL_NOT_AVAILABLE bubble, opening the picker', () => {
+    const before = useChatStore.getState().modelPickerRequest
+    render(
+      <MessageBubble
+        message={azureMsg({
+          content: '**This model is no longer available** — gone',
+          finishReason: 'error',
+          errorCode: 'MODEL_NOT_AVAILABLE',
+        })}
+      />,
+    )
+    expect(screen.queryByRole('button', {name: 'Open settings'})).toBeNull()
+    fireEvent.click(screen.getByRole('button', {name: 'Choose another model'}))
+    expect(useChatStore.getState().modelPickerRequest).toBe(before + 1)
   })
 })

@@ -248,11 +248,56 @@ func rateLimitGroup(method, path string) string {
 		if path == "/api/providers/test" || isOrgProviderTestPath(path) {
 			return rlGroupChat
 		}
+		if group, ok := azureOutboundRoute(path); ok {
+			return group
+		}
 		if path == "/api/flow/upload" {
 			return rlGroupUpload
 		}
 	}
 	return rlGroupGeneral
+}
+
+// azureOutboundRoute classifies the Azure AI Foundry registry routes that
+// dial Azure while the handler runs, the caller's own and an
+// organisation's (/api/orgs/{id}/…; path already canonical —
+// canonicalRequestPath):
+//
+//   - POST …/providers/azure-foundry/test — a resource probe or one tiny
+//     model call Azure bills: the chat bucket, like /api/providers/test;
+//   - POST …/providers/azure-foundry/connections/{id}/discover — the
+//     project's deployment and agent listings (a sign-in, then every page of
+//     both): the analysis bucket.
+//
+// Both are also exempt from the request-long RLS transaction (rlsExemptPath):
+// held across the upstream dial it pinned a pooled connection, while their
+// registry reads and writes carry explicit owner predicates and the handlers'
+// role checks are Go-layer authz. ok is false for every other path — the
+// registry's CRUD routes stay on the general bucket and inside the
+// transaction.
+func azureOutboundRoute(path string) (group string, ok bool) {
+	rest, found := strings.CutPrefix(path, "/api/")
+	if !found {
+		return "", false
+	}
+	if orgRest, isOrg := strings.CutPrefix(rest, "orgs/"); isOrg {
+		orgID, tail, cut := strings.Cut(orgRest, "/")
+		if !cut || orgID == "" {
+			return "", false
+		}
+		rest = tail
+	}
+	tail, found := strings.CutPrefix(rest, "providers/azure-foundry/")
+	if !found {
+		return "", false
+	}
+	if tail == "test" {
+		return rlGroupChat, true
+	}
+	if segs := strings.Split(tail, "/"); len(segs) == 3 && segs[0] == "connections" && segs[1] != "" && segs[2] == "discover" {
+		return rlGroupAnalysis, true
+	}
+	return "", false
 }
 
 // isOrgProviderTestPath matches an org admin's connection test of the

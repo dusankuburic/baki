@@ -25,12 +25,14 @@ func (budgetSettings) ClearRecentFiles() error                          { return
 
 // R-4 wiring: the knowledge base consults the chat service's daily budget,
 // so an upload on a spent budget is refused with its sentinel before any
-// embedding is attempted.
+// embedding is attempted. The embedder is a priced (non-Azure) provider: the
+// knowledge base resolves it before the budget check, and Azure AI Foundry
+// is never budget-gated.
 func TestWireKnowledgeBudget(t *testing.T) {
 	backend := testutil.NewFakeBackend()
 	backend.DailyUsage = 10
 	chat := service.NewChatService(nil, t.TempDir(), nil, nil, budgetSettings{budget: 5}, nil, backend, config.ModeCloud)
-	ks := rag.NewKnowledgeService(testutil.NewFakeBackend(), nil, nil)
+	ks := rag.NewKnowledgeService(testutil.NewFakeBackend(), nil, nil, rag.WithEmbedder(&testutil.FakeProvider{}))
 	wireKnowledgeBudget(ks, chat)
 	err := ks.AddDocument(context.Background(), "u1", "org-1", "a.md", "content")
 	if !errors.Is(err, service.ErrAIBudgetExceeded) {

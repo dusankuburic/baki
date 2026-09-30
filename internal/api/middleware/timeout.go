@@ -15,12 +15,16 @@ import (
 const StreamRequestTimeout = 15 * time.Minute
 
 // BulkRequestTimeout bounds the knowledge-base bulk routes (upload,
-// re-index): a re-index page walk is up to ~100 sequential embedding calls
-// (10 000 chunks / 100 per batch) plus a multi-statement update per page, an
-// upload up to 6, and any 429 makes the retrying provider back off — the
-// default 30 s deadline tripped after the embeddings had been bought, and
-// the deadline error rendered as a masked 500. Bounded and long, like the
-// stream deadline; the DB statement_timeout is per statement and unaffected.
+// re-index): an upload is up to 25 sequential embedding calls (2 500
+// chunks / 100 per batch), and any 429 makes the retrying provider back
+// off — the default 30 s deadline tripped after the embeddings had been
+// bought, and the deadline error rendered as a masked 500. A re-index
+// request additionally stops itself after rag's reindexRequestBudget
+// (90 s) of wall clock — the Azure Container Apps HTTP ingress caps every
+// request at 240 s with no knob, so the walk answers with a resume cursor
+// well inside the cap instead of being cut off mid-flight. Bounded and
+// long, like the stream deadline; the DB statement_timeout is per
+// statement and unaffected.
 const BulkRequestTimeout = 5 * time.Minute
 
 func RequestTimeout(d time.Duration) func(http.Handler) http.Handler {

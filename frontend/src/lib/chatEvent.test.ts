@@ -286,4 +286,55 @@ describe('parseChatEvent failure codes and keepalives', () => {
   it('parses a heartbeat', () => {
     expect(parseChatEvent({streamId: 's1', type: 'heartbeat', data: {}})).toEqual({kind: 'heartbeat'})
   })
+
+  // F-15: a BILLED failure carries its usage — the exact fields a done
+  // carries (minus chunks), so the meter can count it.
+  it('carries the usage of a billed error event', () => {
+    expect(
+      parseChatEvent({
+        streamId: 's1',
+        type: 'error',
+        data: {
+          message: 'raise Max tokens',
+          code: 'PROVIDER_OUTPUT_LIMIT',
+          tokensIn: 50,
+          tokensOut: 4096,
+          servedModel: 'gpt-5.1',
+          inputCostPerM: 1.25,
+          outputCostPerM: 10,
+        },
+      }),
+    ).toEqual({
+      kind: 'error',
+      message: 'raise Max tokens',
+      code: 'PROVIDER_OUTPUT_LIMIT',
+      tokensIn: 50,
+      tokensOut: 4096,
+      meta: {servedModel: 'gpt-5.1', inputCostPerM: 1.25, outputCostPerM: 10},
+    })
+  })
+
+  it('keeps an unbilled error event free of usage keys (F-15)', () => {
+    const parsed = parseChatEvent({
+      streamId: 's1',
+      type: 'error',
+      data: {message: 'x', code: 'PROVIDER_AUTH', tokensIn: 'junk', tokensOut: Number.NaN},
+    })
+    expect(parsed).toEqual({kind: 'error', message: 'x', code: 'PROVIDER_AUTH'})
+  })
+
+  // F-42: the shared-credential flag rides the error event.
+  it('keeps the shared flag of a shared-credential error event', () => {
+    expect(
+      parseChatEvent({
+        streamId: 's1',
+        type: 'error',
+        data: {message: 'ask your admin', code: 'PROVIDER_NOT_CONFIGURED', shared: true},
+      }),
+    ).toEqual({kind: 'error', message: 'ask your admin', code: 'PROVIDER_NOT_CONFIGURED', shared: true})
+    expect(parseChatEvent({streamId: 's1', type: 'error', data: {message: 'mine', shared: 'yes'}})).toEqual({
+      kind: 'error',
+      message: 'mine',
+    })
+  })
 })

@@ -139,15 +139,37 @@ func TestClaudeToolLoop_ReplaysThinkingVerbatim(t *testing.T) {
 	if assistant["role"] != "assistant" || !jsonEqual(t, string(got), wantBlocks) {
 		t.Errorf("replayed assistant turn = %s, want the recorded blocks %s", got, wantBlocks)
 	}
-	// Opus 5.5 with tools: no temperature, no explicit thinking (omitted IS
-	// adaptive thinking on 5.x models).
+	// Opus 5.5 with tools: no temperature, and adaptive thinking is asked
+	// for explicitly on every loop iteration (audit #9 F-17) — omitted IS
+	// adaptive on 5.x, and explicit is what Opus 4.7/4.8 need.
 	for _, b := range bodies {
 		if _, ok := b["temperature"]; ok {
 			t.Errorf("temperature sent to a model that rejects sampling: %v", b["temperature"])
 		}
-		if _, ok := b["thinking"]; ok {
-			t.Errorf("thinking must stay unset with tools, got %v", b["thinking"])
+		think, _ := b["thinking"].(map[string]any)
+		if think["type"] != "adaptive" {
+			t.Errorf("thinking must be adaptive on every loop request, got %v", b["thinking"])
 		}
+		// Audit #9 F-02: the top-level automatic-caching marker rides every
+		// loop request, so the history prefix and tool_results behind the
+		// system block are cache reads from iteration 2 on.
+		if top, _ := b["cache_control"].(map[string]any); top["type"] != "ephemeral" {
+			t.Errorf("top-level cache_control must be ephemeral, got %v", b["cache_control"])
+		}
+	}
+	// The marker never lands on the replayed assistant blocks themselves.
+	if msgs, _ := bodies[1]["messages"].([]any); len(msgs) == 3 {
+		if assistant, _ := msgs[1].(map[string]any); assistant != nil {
+			if blocks, _ := assistant["content"].([]any); len(blocks) > 0 {
+				if b0, _ := blocks[0].(map[string]any); b0 != nil {
+					if _, has := b0["cache_control"]; has {
+						t.Error("replayed assistant blocks must carry no per-block cache_control marker")
+					}
+				}
+			}
+		}
+	} else {
+		t.Fatalf("second request messages = %v", bodies[1]["messages"])
 	}
 }
 

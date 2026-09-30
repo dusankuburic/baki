@@ -166,6 +166,7 @@ export const enAdmin = {
       chat: 'AI chat',
       settings: 'Settings',
       keys: 'API keys',
+      azure: 'Azure AI Foundry',
       org: 'Organisations',
       user: 'Accounts',
       token: 'API tokens',

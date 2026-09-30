@@ -29,13 +29,14 @@ func NewChatHandler(chatSvc *service.ChatService, flowSvc *service.FlowService, 
 }
 
 // @Summary      Stream chat message
-// @Description  Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token rates the turn was billed at). An error payload carries message and, when classified, code (AI_BUDGET_EXCEEDED, PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, …).
+// @Description  Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token rates the turn was billed at). An error payload carries message and, when classified, code (AI_BUDGET_EXCEEDED, PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, MODEL_NOT_AVAILABLE, …). For provider azure-foundry the model is a model registry id ("m/<entryId>"; "" for the server default; a pre-registry deployment, "claude:" or "agent:" id still resolves for one release): one the caller cannot use — removed, another owner's, no longer shared with them — is refused before any stream starts with 400 and code MODEL_NOT_AVAILABLE.
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} string "Stream ID"
-// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      400 {object} render.ErrorResponse "Bad Request (code MODEL_NOT_AVAILABLE: the Azure AI Foundry model is not available to the caller)"
+// @Failure      429 {object} render.ErrorResponse "Too many concurrent chat streams (code CHAT_CAPACITY_REACHED)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/chat/stream [post]
 func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +62,9 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 			render.ErrorWithCode(w, err, http.StatusTooManyRequests, "CHAT_CAPACITY_REACHED")
 			return
 		}
+		if renderModelNotAvailable(w, err) {
+			return
+		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -70,6 +74,19 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 	// a non-repudiation record (no-op in local mode where backend is nil).
 	logAudit(r.Context(), h.common.Backend, r, h.common.TrustedProxies, AuditActionChatStream, "flow", req.FlowID, map[string]string{"streamId": id})
 	render.JSON(w, id)
+}
+
+// renderModelNotAvailable answers a chat request whose Azure AI Foundry model
+// the caller cannot use (service.ErrModelNotAvailable — removed, another
+// owner's, no longer shared with them) with 400 MODEL_NOT_AVAILABLE, which
+// the client answers by putting the text back in the composer, refreshing
+// its model list and offering another model. false for any other error.
+func renderModelNotAvailable(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, service.ErrModelNotAvailable) {
+		return false
+	}
+	render.ErrorWithCode(w, service.ErrModelNotAvailable, http.StatusBadRequest, service.AzureCodeModelNotAvailable)
+	return true
 }
 
 // @Summary      Begin stream
@@ -103,9 +120,10 @@ func (h *ChatHandler) handleBeginStream(w http.ResponseWriter, r *http.Request) 
 }
 
 // beginFinishedBody is the begin answer for a stream that already finished:
-// its final state, including — when reported — the served model and the
-// rates the turn was billed at (the frontend's BeginStreamResult), which the
-// client missed with the done event.
+// its final state, including — when reported — the served model, the
+// rates the turn was billed at and the shared-credential failure flag
+// (the frontend's BeginStreamResult), which the client missed with the done
+// or error event.
 func beginFinishedBody(res *service.ResumeResult) map[string]any {
 	body := map[string]any{
 		"status":    "finished",
@@ -124,6 +142,9 @@ func beginFinishedBody(res *service.ResumeResult) map[string]any {
 	}
 	if res.OutputCostPerM != 0 {
 		body["outputCostPerM"] = res.OutputCostPerM
+	}
+	if res.ErrorShared {
+		body["errorShared"] = true
 	}
 	return body
 }
@@ -242,13 +263,29 @@ func (h *ChatHandler) ownsStream(w http.ResponseWriter, r *http.Request, streamI
 	return true
 }
 
+// conversationResponse is the GET-conversation body (F-21): an object, no
+// longer the bare message array this route answered before — {messages} plus,
+// when the caller has a stream on this conversation whose answer the stored
+// history does not carry yet, activeStreamId, so a client that reloaded
+// mid-turn re-attaches through /api/chat/resume instead of waiting for
+// another reload. Messages is always an array ([] for an empty or missing
+// conversation), never null.
+type conversationResponse struct {
+	Messages []models.ChatMessage `json:"messages"`
+	// ActiveStreamID is the caller's stream on this (flow, conversation key)
+	// whose question is stored and whose answer is not yet: live, or finished
+	// with its answer still being stored (service.ActiveStreamFor). Omitted
+	// otherwise — a finished stream whose answer is stored is not reported.
+	ActiveStreamID string `json:"activeStreamId,omitempty"`
+}
+
 // @Summary      Get conversation history
-// @Description  Retrieves the chat history for a specific flow and provider.
+// @Description  Retrieves the chat history for a specific flow and conversation key (the wire field is historically named `provider`). The body is an object — {messages: [...]} (always an array) plus activeStreamId when the caller has a stream on this conversation whose question is stored but whose answer is not yet (live, or finished and still being stored) — so a client that reloads mid-turn can re-attach via /api/chat/resume instead of losing the answer until another reload. Before F-21 this route answered a bare message array.
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
 // @Produce      json
-// @Success      200 {object} []map[string]interface{} "OK"
+// @Success      200 {object} conversationResponse "OK"
 // @Failure      400 {object} map[string]string "Bad Request"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/chat/get [post]
@@ -266,16 +303,21 @@ func (h *ChatHandler) handleGetConversation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	conv, err := h.chatSvc.GetConversation(r.Context(), doc, req.Provider)
+	conv, sid, err := h.chatSvc.ConversationWithActiveStream(r.Context(), h.common.KeyScope(r), doc, req.Provider)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	render.JSON(w, conv)
+	if conv == nil {
+		// An old local file can store "messages": null; the client reads a
+		// null list as a failed load.
+		conv = []models.ChatMessage{}
+	}
+	render.JSON(w, conversationResponse{Messages: conv, ActiveStreamID: sid})
 }
 
 // @Summary      Save conversation history
-// @Description  Saves the chat history for a specific flow and provider.
+// @Description  Saves the chat history for a specific flow and provider. A message's modelLabel (the model's display name when it was sent) is stored clamped: NFC-normalised, control, bidi and zero-width characters dropped, whitespace collapsed, at most 64 characters.
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
@@ -303,6 +345,12 @@ func (h *ChatHandler) handleSaveConversation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// modelLabel is client text rendered next to every stored answer (and
+	// in exports): it gets the rules of a registry display name, clamped
+	// instead of refused so one odd label cannot fail the whole save.
+	for i := range req.Messages {
+		req.Messages[i].ModelLabel = service.ClampModelLabel(req.Messages[i].ModelLabel)
+	}
 	if err := h.chatSvc.SaveConversation(r.Context(), doc, req.Provider, req.Messages); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -342,13 +390,13 @@ func (h *ChatHandler) handleClearConversation(w http.ResponseWriter, r *http.Req
 }
 
 // @Summary      Preview AI context
-// @Description  Returns a preview of the context that will be sent to the AI provider.
+// @Description  Returns a preview of the context that will be sent to the AI provider: the system prompt, the context text, the user message, an estimate of their tokens and the model's context window. The model resolves as the turn's would: for provider azure-foundry a model registry id the caller cannot use is refused with 400 and code MODEL_NOT_AVAILABLE.
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
 // @Produce      json
-// @Success      200 {object} map[string]interface{} "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
+// @Success      200 {object} models.ContextPreview "OK"
+// @Failure      400 {object} render.ErrorResponse "Bad Request (code MODEL_NOT_AVAILABLE: the Azure AI Foundry model is not available to the caller)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/chat/preview-context [post]
 func (h *ChatHandler) handlePreviewContext(w http.ResponseWriter, r *http.Request) {
@@ -364,6 +412,9 @@ func (h *ChatHandler) handlePreviewContext(w http.ResponseWriter, r *http.Reques
 
 	res, err := h.chatSvc.PreviewContext(r.Context(), h.common.KeyScope(r), doc, nil, req)
 	if err != nil {
+		if renderModelNotAvailable(w, err) {
+			return
+		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

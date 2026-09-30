@@ -147,7 +147,7 @@ describe('uiStore chat focus mode', () => {
 
 describe('uiStore settings modal', () => {
   beforeEach(() => {
-    useUIStore.setState({settingsOpen: false, settingsSection: null, lastSettingsSection: null})
+    useUIStore.setState({settingsOpen: false, settingsSection: null, settingsAnchor: null, lastSettingsSection: null})
   })
 
   it('openSettings deep-links a section and closeSettings drops it', () => {
@@ -182,5 +182,39 @@ describe('uiStore settings modal', () => {
     expect(useUIStore.getState().lastSettingsSection).toBe('shortcuts')
     await resetAllStores()
     expect(useUIStore.getState().lastSettingsSection).toBeNull()
+  })
+
+  it('carries a one-shot anchor with the deep link until the panel clears it', () => {
+    useUIStore.getState().openSettings('accounts', 'provider-azure-foundry')
+    expect(useUIStore.getState().settingsSection).toBe('accounts')
+    expect(useUIStore.getState().settingsAnchor).toBe('provider-azure-foundry')
+    useUIStore.getState().clearSettingsAnchor()
+    expect(useUIStore.getState().settingsAnchor).toBeNull()
+    expect(useUIStore.getState().settingsSection).toBe('accounts')
+  })
+
+  // A deep link fired while the modal is already open ("Manage in
+  // Organizations" from AI Accounts) retargets it, and a plain open never
+  // inherits an earlier anchor.
+  it('retargets an open modal and drops a stale anchor on a plain open', () => {
+    useUIStore.getState().openSettings('accounts', 'provider-azure-foundry')
+    useUIStore.getState().openSettings('orgs')
+    expect(useUIStore.getState().settingsOpen).toBe(true)
+    expect(useUIStore.getState().settingsSection).toBe('orgs')
+    expect(useUIStore.getState().settingsAnchor).toBeNull()
+  })
+
+  it('closing by any route drops the anchor', async () => {
+    useUIStore.getState().openSettings('accounts', 'provider-azure-foundry')
+    useUIStore.getState().closeSettings()
+    expect(useUIStore.getState().settingsAnchor).toBeNull()
+
+    useUIStore.getState().openSettings('accounts', 'provider-azure-foundry')
+    useUIStore.getState().toggleSettings()
+    expect(useUIStore.getState().settingsAnchor).toBeNull()
+
+    useUIStore.getState().openSettings('accounts', 'provider-azure-foundry')
+    await resetAllStores()
+    expect(useUIStore.getState().settingsAnchor).toBeNull()
   })
 })

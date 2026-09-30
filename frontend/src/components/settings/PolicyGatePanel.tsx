@@ -224,6 +224,7 @@ export default function PolicyGatePanel() {
                         options={GATE_VALUES.map(o => ({label: t(`policy.gate.${o.key}`), value: o.value}))}
                         value={policy.gateSeverity ?? ''}
                         onChange={val => handleUpdate({...policy, gateSeverity: val as Severity | undefined})}
+                        activation="manual"
                       />
                     </div>
                   </div>

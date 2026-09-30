@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,11 @@ const azureProjectAPIVersion = "v1"
 const (
 	azureProjectMaxPages  = 10
 	azureProjectMaxAgents = 200
+	// azureProjectAgentsPageSize is the List Agents `limit`: the operation's
+	// documented maximum (the default page is 20 agents). A page of skipped
+	// kinds still counts against azureProjectMaxPages but not against the
+	// agent cap. The deployments route has no documented limit and sends none.
+	azureProjectAgentsPageSize = 100
 	// azureProjectMaxBody caps one project page (a page of deployments or
 	// agents is a few KB).
 	azureProjectMaxBody = 4 << 20
@@ -350,8 +356,8 @@ func definitiveProjectFailure(err error) bool {
 	return errors.As(err, &se) && se.status >= 400 && se.status < 500 && se.status != http.StatusRequestTimeout
 }
 
-// fetchAgents calls GET {project}/agents?api-version=v1 (paginated) and
-// returns each agent the shared Responses route can run — prompt and workflow
+// fetchAgents calls GET {project}/agents?api-version=v1&limit=<page size>
+// (paginated) and returns each agent the shared Responses route can run — prompt and workflow
 // agents, or no kind (older shapes). Hosted agents answer only on their own
 // endpoint, external (A2A) and voice agents are not Responses chat targets;
 // a disabled agent (state) or one whose latest version is still being
@@ -361,12 +367,28 @@ func definitiveProjectFailure(err error) bool {
 // is invoked with its preview opt-in header. agentModels turns the result
 // into model-list entries once the deployments listing is known.
 func (p *AzureFoundryProvider) fetchAgents(ctx context.Context) ([]azureAgent, error) {
+	agents, _, err := p.fetchAgentsReport(ctx)
+	return agents, err
+}
+
+// azureAgentsReport is what fetchAgentsReport reports beyond the agents, for
+// discovery's warnings: how many listed agents it skipped as not runnable
+// here (kind or state), and whether a cap stopped the listing early.
+type azureAgentsReport struct {
+	skipped   int
+	truncated bool
+}
+
+// fetchAgentsReport is fetchAgents with its report. An isolated provider
+// (discovery) remembers no agent kind.
+func (p *AzureFoundryProvider) fetchAgentsReport(ctx context.Context) ([]azureAgent, azureAgentsReport, error) {
 	var out []azureAgent
-	next := p.cfg.ProjectEndpoint + "/agents?api-version=" + azureProjectAPIVersion
+	var report azureAgentsReport
+	next := p.cfg.ProjectEndpoint + "/agents?api-version=" + azureProjectAPIVersion + "&limit=" + strconv.Itoa(azureProjectAgentsPageSize)
 	for page := 0; next != "" && page < azureProjectMaxPages && len(out) < azureProjectMaxAgents; page++ {
 		body, err := p.projectGET(ctx, next)
 		if err != nil {
-			return nil, err
+			return nil, report, err
 		}
 		var parsed struct {
 			Data     []json.RawMessage `json:"data"`
@@ -376,7 +398,7 @@ func (p *AzureFoundryProvider) fetchAgents(ctx context.Context) ([]azureAgent, e
 			NextLink string            `json:"nextLink"`
 		}
 		if err := json.Unmarshal(body, &parsed); err != nil {
-			return nil, fmt.Errorf("parse agents: %w", err)
+			return nil, report, fmt.Errorf("parse agents: %w", err)
 		}
 		items := parsed.Data
 		if len(items) == 0 {
@@ -396,14 +418,18 @@ func (p *AzureFoundryProvider) fetchAgents(ctx context.Context) ([]azureAgent, e
 			}
 			if !a.runsViaAgentReference() {
 				logger.Debug("azure ai foundry: skipping agent not callable via agent_reference", "agent", name, "kind", a.kind())
+				report.skipped++
 				continue
 			}
 			if !a.usable() {
 				logger.Debug("azure ai foundry: skipping an agent that is disabled or whose latest version is not active",
 					"agent", name, "state", a.State, "status", a.Versions.Latest.Status)
+				report.skipped++
 				continue
 			}
-			rememberAgentKind(p.cfg.ProjectEndpoint, name, a.kind())
+			if !p.isolated {
+				rememberAgentKind(p.cfg.ProjectEndpoint, name, a.kind())
+			}
 			out = append(out, a)
 			if len(out) >= azureProjectMaxAgents {
 				break
@@ -413,7 +439,7 @@ func (p *AzureFoundryProvider) fetchAgents(ctx context.Context) ([]azureAgent, e
 		case parsed.NextLink != "":
 			next = p.sameProjectHost(parsed.NextLink)
 		case parsed.HasMore && parsed.LastID != "":
-			next = p.cfg.ProjectEndpoint + "/agents?api-version=" + azureProjectAPIVersion + "&after=" + url.QueryEscape(parsed.LastID)
+			next = p.cfg.ProjectEndpoint + "/agents?api-version=" + azureProjectAPIVersion + "&limit=" + strconv.Itoa(azureProjectAgentsPageSize) + "&after=" + url.QueryEscape(parsed.LastID)
 		default:
 			next = ""
 		}
@@ -428,7 +454,8 @@ func (p *AzureFoundryProvider) fetchAgents(ctx context.Context) ([]azureAgent, e
 		logger.Warn("azure ai foundry: project agents listing stopped at the agent cap; agents beyond it are not listed",
 			"cap", azureProjectMaxAgents)
 	}
-	return out, nil
+	report.truncated = next != "" || len(out) >= azureProjectMaxAgents
+	return out, report, nil
 }
 
 // agentModels maps the listed agents to model-list entries ("agent:<name>",

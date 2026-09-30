@@ -139,7 +139,11 @@ func TestOrgLenderLosesAdmin_DisablesSharedCredential(t *testing.T) {
 		if !f.hasOrgDoc() {
 			t.Fatal("the credential was disabled without a demotion")
 		}
-		checkStatus(t, f.doOrg(t, "u-admin", http.MethodPut, "/api/orgs/"+f.orgID+"/members/u-admin2/role", map[string]string{"role": "member"}, nil), http.StatusOK)
+		rr := f.doOrg(t, "u-admin", http.MethodPut, "/api/orgs/"+f.orgID+"/members/u-admin2/role", map[string]string{"role": "member"}, nil)
+		checkStatus(t, rr, http.StatusOK)
+		if !decodeMutationFlag(t, rr) {
+			t.Error("the lender's demotion did not report the shared credential disabled")
+		}
 		if f.hasOrgDoc() {
 			t.Error("the demoted lender's credential is still live")
 		}
@@ -159,7 +163,11 @@ func TestOrgLenderLosesAdmin_DisablesSharedCredential(t *testing.T) {
 		}
 		noAudit(t, ch, isDisableAudit(f.orgID, lenderReasonRemoved))
 		// Leaving on one's own counts too.
-		checkStatus(t, f.doOrg(t, "u-admin2", http.MethodDelete, "/api/orgs/"+f.orgID+"/members/u-admin2", nil, nil), http.StatusOK)
+		rr := f.doOrg(t, "u-admin2", http.MethodDelete, "/api/orgs/"+f.orgID+"/members/u-admin2", nil, nil)
+		checkStatus(t, rr, http.StatusOK)
+		if !decodeMutationFlag(t, rr) {
+			t.Error("the removed lender's departure did not report the shared credential disabled")
+		}
 		if f.hasOrgDoc() {
 			t.Error("the removed lender's credential is still live")
 		}
@@ -191,7 +199,8 @@ func TestOrgDelete_ReleasesSharedCredential(t *testing.T) {
 	}
 }
 
-// Account erasure disables every org credential the user lent and audits it.
+// Account erasure disables every org credential the user lent — each key of
+// the Azure family, in every organisation — and audits each key.
 func TestAccountDelete_DisablesLentOrgCredentials(t *testing.T) {
 	rt, _ := newAccountTestRouter(t, "u1", "alice@example.com")
 	bearer := jwtBearer(t, rt, "u1", "alice@example.com")
@@ -201,28 +210,98 @@ func TestAccountDelete_DisablesLentOrgCredentials(t *testing.T) {
 	factory := ai.NewProviderFactory(func(string, string) (string, error) { return "", nil }, nil, nil, nil)
 	svc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
 	svc.SetOrgKeyStore(orgKeys)
+	azure, _ := newTestAzureModels(testAzureModelsDeps{Secrets: secrets, OrgKeys: orgKeys, Factory: factory, PerUser: true})
+	svc.SetAzureModels(azure)
 	doc := `{"endpoint":"https://unit-test.invalid","auth":{"mode":"api_key","key":"k"},"chatDeployment":"c"}`
+	resource := `{"endpoint":"https://unit-test.invalid","auth":{"mode":"api_key","key":"k2"}}`
+	const secondKey = ai.AzureFoundryProviderID + "/abcdefghij"
 	_ = orgKeys.SaveOrg("org-lent", ai.AzureFoundryProviderID, doc, "u1")
+	_ = orgKeys.SaveOrg("org-lent", secondKey, resource, "u1")
 	_ = orgKeys.SaveOrg("org-other", ai.AzureFoundryProviderID, doc, "u2")
+	_ = orgKeys.SaveOrg("org-other", secondKey, resource, "u1")
 	_ = secrets.Save("u1", ai.AzureFoundryProviderID, doc)
 	rt.handlers.Auth.SetProviderService(svc)
 	ch := captureAudit(t)
 
 	rr := doRequestWithAuth(t, rt, http.MethodDelete, "/api/auth/account", bearer, map[string]string{"confirmEmail": "alice@example.com"})
 	checkStatus(t, rr, http.StatusOK)
-	if has, _ := orgKeys.HasOrg("org-lent", ai.AzureFoundryProviderID); has {
-		t.Error("the erased user's lent org credential is still live")
+	for _, k := range []struct{ org, key string }{{"org-lent", ai.AzureFoundryProviderID}, {"org-lent", secondKey}, {"org-other", secondKey}} {
+		if has, _ := orgKeys.HasOrg(k.org, k.key); has {
+			t.Errorf("the erased user's lent credential %s of %s is still live", k.key, k.org)
+		}
 	}
 	if has, _ := orgKeys.HasOrg("org-other", ai.AzureFoundryProviderID); !has {
 		t.Error("another admin's org credential was removed")
 	}
-	awaitAudit(t, ch, isDisableAudit("org-lent", lenderReasonAccountDeleted))
+	// One keys.save {op: disable} row per disabled key, naming it.
+	want := map[string]bool{"org-lent " + ai.AzureFoundryProviderID: true, "org-lent " + secondKey: true, "org-other " + secondKey: true}
+	for len(want) > 0 {
+		ev := awaitAudit(t, ch, func(ev *storageif.AuditEvent) bool {
+			return ev.Action == AuditActionKeysSave && ev.Meta["op"] == "disable" && ev.Meta["reason"] == lenderReasonAccountDeleted
+		})
+		k := ev.ResourceID + " " + ev.Meta["provider"]
+		if !want[k] {
+			t.Fatalf("unexpected disable audit row %s (meta %v)", k, ev.Meta)
+		}
+		if ev.Meta["user"] != "u1" {
+			t.Errorf("disable row %s: user = %q, want u1", k, ev.Meta["user"])
+		}
+		delete(want, k)
+	}
+	noAudit(t, ch, func(ev *storageif.AuditEvent) bool { return ev.Meta["op"] == "disable" })
+}
+
+// F-48 per key: a demoted lender's every shared resource credential goes —
+// one audit row per key, naming the key and its resource — the reply flags
+// it, and another admin's resource stays.
+func TestOrgLenderLosesAdmin_DisablesEachLentKey(t *testing.T) {
+	f := newOrgProvidersFixture(t, true)
+	if err := f.orgSvc.AddMember(bgCtx(), f.orgID, "u-admin2", auth.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	const lentKey, otherKey = ai.AzureFoundryProviderID + "/lent000001", ai.AzureFoundryProviderID + "/other00001"
+	resource := `{"endpoint":"https://unit-test.invalid","auth":{"mode":"api_key","key":"k"}}`
+	f.saveOrgDoc(t, "u-admin2")
+	_ = f.orgKeys.SaveOrg(f.orgID, lentKey, resource, "u-admin2")
+	_ = f.orgKeys.SaveOrg(f.orgID, otherKey, resource, "u-admin")
+	ch := captureAudit(t)
+
+	rr := f.doOrg(t, "u-admin", http.MethodPut, "/api/orgs/"+f.orgID+"/members/u-admin2/role", map[string]string{"role": "member"}, nil)
+	checkStatus(t, rr, http.StatusOK)
+	if !decodeMutationFlag(t, rr) {
+		t.Error("the lender's demotion did not report the shared credentials disabled")
+	}
+	for _, k := range []string{ai.AzureFoundryProviderID, lentKey} {
+		if has, _ := f.orgKeys.HasOrg(f.orgID, k); has {
+			t.Errorf("the demoted lender's credential %s is still live", k)
+		}
+	}
+	if has, _ := f.orgKeys.HasOrg(f.orgID, otherKey); !has {
+		t.Error("another admin's resource credential was disabled")
+	}
+	seen := map[string]map[string]string{}
+	for len(seen) < 2 {
+		ev := awaitAudit(t, ch, func(ev *storageif.AuditEvent) bool {
+			return ev.Action == AuditActionKeysSave && ev.Meta["op"] == "disable"
+		})
+		if ev.ResourceType != "org" || ev.ResourceID != f.orgID || ev.Meta["reason"] != lenderReasonDemoted || ev.Meta["user"] != "u-admin2" {
+			t.Errorf("disable row = %+v (meta %v)", ev, ev.Meta)
+		}
+		seen[ev.Meta["provider"]] = ev.Meta
+	}
+	if m := seen[ai.AzureFoundryProviderID]; m == nil || m["connectionId"] != "default" {
+		t.Errorf("default key row = %v, want connectionId default", m)
+	}
+	if m := seen[lentKey]; m == nil || m["connectionId"] != "lent000001" {
+		t.Errorf("resource key row = %v, want connectionId lent000001", m)
+	}
+	noAudit(t, ch, func(ev *storageif.AuditEvent) bool { return ev.Meta["op"] == "disable" })
 }
 
 // The org config GET reports an unreadable document instead of "none".
 func TestOrgAzureFoundryConfigGet_Unreadable(t *testing.T) {
 	f := newOrgProvidersFixture(t, true)
-	f.svc.SetOrgKeyStore(&failingOrgStore{FakeOrgSecretStore: f.orgKeys, err: storage.ErrSecretDecryptFailed})
+	f.useOrgStore(&failingOrgStore{FakeOrgSecretStore: f.orgKeys, err: storage.ErrSecretDecryptFailed})
 	rr := f.do(t, "u-member", http.MethodGet, f.configPath(), nil)
 	checkStatus(t, rr, http.StatusInternalServerError)
 	if got := azureDecode(t, rr); got["code"] != "ORG_CREDENTIAL_UNREADABLE" {
@@ -338,10 +417,12 @@ type budgetRefusal struct{ err error }
 func (b budgetRefusal) CheckBudget(context.Context, string, string) error { return b.err }
 
 // R-4: knowledge upload and re-index over the daily budget are 429
-// BUDGET_EXCEEDED; an unreadable spend is 503 BUDGET_UNAVAILABLE.
+// BUDGET_EXCEEDED; an unreadable spend is 503 BUDGET_UNAVAILABLE. The run
+// embeds with a priced provider: the embedder is resolved before the budget
+// is consulted (an Azure AI Foundry embedder is never gated — review #4 B6).
 func TestKnowledge_BudgetRendered(t *testing.T) {
 	f := newOrgProvidersFixture(t, true)
-	ks := rag.NewKnowledgeService(testutil.NewFakeBackend(), nil, nil)
+	ks := rag.NewKnowledgeService(testutil.NewFakeBackend(), nil, nil, rag.WithEmbedder(&testutil.FakeProvider{}))
 	ks.SetBudgetChecker(budgetRefusal{err: fmt.Errorf("refused: %w", service.ErrAIBudgetExceeded)})
 	rr := f.doOrg(t, "u-admin", http.MethodPost, "/api/orgs/"+f.orgID+"/knowledge/upload", map[string]string{"filename": "a.md", "content": "text"}, ks)
 	checkStatus(t, rr, http.StatusTooManyRequests)
@@ -356,5 +437,94 @@ func TestKnowledge_BudgetRendered(t *testing.T) {
 	checkStatus(t, rr, http.StatusServiceUnavailable)
 	if got := azureDecode(t, rr); got["code"] != "BUDGET_UNAVAILABLE" {
 		t.Errorf("unavailable code = %v", got["code"])
+	}
+}
+
+// decodeMutationFlag reads a membership mutation's reply and reports whether
+// it said the org's shared credential was disabled (F-48).
+func decodeMutationFlag(t *testing.T, rr *httptest.ResponseRecorder) bool {
+	t.Helper()
+	var out struct {
+		Status                   string `json:"status"`
+		SharedCredentialDisabled bool   `json:"sharedCredentialDisabled"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode %s: %v", rr.Body.String(), err)
+	}
+	if out.Status != "ok" {
+		t.Fatalf("mutation status = %q, want ok", out.Status)
+	}
+	return out.SharedCredentialDisabled
+}
+
+// F-12 over HTTP: after the stored credential became unreadable, the admin's
+// "enter it again" save — no updatedAt, the GET could not supply one — is
+// accepted (the server CASes on the unreadable row's own stamp) and the next
+// GET shows the repaired document.
+func TestOrgAzureFoundryConfigSave_ReplacesUnreadable(t *testing.T) {
+	f := newOrgProvidersFixture(t, true)
+	f.saveOrgDoc(t, "u-admin")
+	f.useOrgStore(&failingOrgStore{FakeOrgSecretStore: f.orgKeys, err: storage.ErrSecretDecryptFailed})
+
+	rr := f.do(t, "u-admin", http.MethodPost, f.configPath(), orgAzureBody)
+	checkStatus(t, rr, http.StatusOK)
+	first := azureDecode(t, rr)
+	if first["status"] != "ok" || first["updatedAt"] == "" {
+		t.Fatalf("repair save = %v, want status ok and an updatedAt", first)
+	}
+
+	// The repaired row reads configured through the ordinary store.
+	f.useOrgStore(f.orgKeys)
+	got := azureDecode(t, f.do(t, "u-member", http.MethodGet, f.configPath(), nil))
+	if got["configured"] != true || got["chatDeployment"] != "org-chat" {
+		t.Errorf("GET after the repair = %v, want the repaired document", got)
+	}
+}
+
+// F-32 + F-48: a carrying edit does not make its editor a lender — demoting
+// the editor keeps the lender's credential (and the reply says nothing was
+// disabled), demoting the lender disables it (the reply flags it, the audit
+// row names them).
+func TestOrgLenderLosesAdmin_CarryingEditorKeepsCredential(t *testing.T) {
+	f := newOrgProvidersFixture(t, true)
+	for _, admin := range []string{"u-lender", "u-editor"} {
+		if err := f.orgSvc.AddMember(bgCtx(), f.orgID, admin, auth.RoleAdmin); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.saveOrgDoc(t, "u-lender")
+	// u-editor renames the chat deployment without re-entering the secret (a
+	// carrying edit: updated_by moves, the lender stays).
+	cfg, err := f.svc.GetOrgAzureFoundryConfig(f.orgID)
+	if err != nil || cfg.UpdatedAt == "" {
+		t.Fatalf("stamp: %+v, %v", cfg, err)
+	}
+	if _, err := f.svc.SaveOrgAzureFoundryConfig(f.orgID, "u-editor", cfg.UpdatedAt, ai.AzureFoundryConfig{
+		Endpoint: "https://unit-test.invalid", Auth: ai.AzureFoundryAuth{Mode: "api_key"}, ChatDeployment: "renamed"}); err != nil {
+		t.Fatal(err)
+	}
+	ch := captureAudit(t)
+
+	rr := f.doOrg(t, "u-admin", http.MethodPut, "/api/orgs/"+f.orgID+"/members/u-editor/role", map[string]string{"role": "member"}, nil)
+	checkStatus(t, rr, http.StatusOK)
+	if decodeMutationFlag(t, rr) {
+		t.Error("demoting a carrying editor reported the shared credential disabled")
+	}
+	if !f.hasOrgDoc() {
+		t.Fatal("demoting the editor deleted the lender's credential")
+	}
+	noAudit(t, ch, isDisableAudit(f.orgID, lenderReasonDemoted))
+
+	rr = f.doOrg(t, "u-admin", http.MethodPut, "/api/orgs/"+f.orgID+"/members/u-lender/role", map[string]string{"role": "member"}, nil)
+	checkStatus(t, rr, http.StatusOK)
+	if !decodeMutationFlag(t, rr) {
+		t.Error("demoting the lender did not report the shared credential disabled")
+	}
+	if f.hasOrgDoc() {
+		t.Error("the lender's credential is still live after their demotion")
+	}
+	ev := awaitAudit(t, ch, isDisableAudit(f.orgID, lenderReasonDemoted))
+	if ev.Meta["user"] != "u-lender" {
+		t.Errorf("disable audit meta = %v, want the departed lender's id under \"user\"", ev.Meta)
 	}
 }

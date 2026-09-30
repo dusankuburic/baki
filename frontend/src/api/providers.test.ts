@@ -1,0 +1,325 @@
+import {describe, it, expect, vi, afterEach} from 'vitest'
+
+vi.mock('@/platform/adapters', () => ({
+  createAdapter: () => ({
+    getBackendConfig: vi.fn().mockResolvedValue({
+      apiUrl: 'http://localhost:9999',
+      token: 'mock-token',
+      port: 9999,
+    }),
+  }),
+}))
+
+// A fresh Response per call (a body can be read only once), so a test may
+// make several requests against one mock.
+function respond(payload: unknown, status = 200) {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(
+    async () =>
+      new Response(JSON.stringify(payload), {
+        status,
+        headers: {'Content-Type': 'application/json'},
+      }),
+  )
+}
+
+type Call = [string, RequestInit]
+
+function call(spy: ReturnType<typeof respond>, i = 0) {
+  const [url, init] = spy.mock.calls[i] as Call
+  return {
+    path: url.replace('http://localhost:9999', ''),
+    method: init.method,
+    body: init.body === undefined ? undefined : JSON.parse(init.body as string),
+  }
+}
+
+async function load() {
+  const mod = await import('./providers')
+  const client = await import('./client')
+  return {api: mod.providersApi, azurePath: mod.azurePath, client}
+}
+
+const USER = {kind: 'user'} as const
+const ORG = {kind: 'org', orgId: 'org 1'} as const
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.resetModules()
+})
+
+describe('azurePath', () => {
+  it('builds the personal and the org routes, encoding every segment', async () => {
+    const {azurePath} = await load()
+    expect(azurePath(USER)).toBe('/api/providers/azure-foundry')
+    expect(azurePath(USER, 'connections')).toBe('/api/providers/azure-foundry/connections')
+    expect(azurePath(ORG, 'models', 'a/b')).toBe('/api/orgs/org%201/providers/azure-foundry/models/a%2Fb')
+    expect(azurePath(ORG, 'connections', 'default', 'discover')).toBe(
+      '/api/orgs/org%201/providers/azure-foundry/connections/default/discover',
+    )
+  })
+})
+
+describe('providersApi Azure registry: connections', () => {
+  it('lists with a GET that bypasses the micro-cache and reads the envelope', async () => {
+    const conn = {id: 'default', name: 'my-res'}
+    const spy = respond({
+      connections: [conn],
+      registryState: 'recovered',
+      limits: {connections: 10, models: 50},
+      knowledgeEmbeddingEnabled: true,
+    })
+    const {api} = await load()
+
+    await expect(api.listAzureConnections(USER)).resolves.toEqual({
+      connections: [conn],
+      registryState: 'recovered',
+      limits: {connections: 10, models: 50},
+      knowledgeEmbeddingEnabled: true,
+    })
+    await api.listAzureConnections(USER)
+
+    expect(call(spy)).toEqual({path: '/api/providers/azure-foundry/connections', method: 'GET', body: undefined})
+    // Two reads, two round trips: the store dedupes, not the 5 s cache.
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads a null list (an empty Go slice) and a bare envelope as empty with defaults', async () => {
+    respond({connections: null})
+    const {api} = await load()
+    await expect(api.listAzureConnections(ORG)).resolves.toEqual({
+      connections: [],
+      registryState: 'ok',
+      limits: {connections: 10, models: 50},
+      knowledgeEmbeddingEnabled: false,
+    })
+  })
+
+  it("keeps a recovered list file's backup path, and drops an empty one", async () => {
+    respond({connections: [], registryState: 'recovered', recoveredCopyPath: '/cfg/azure-models.json.bad'})
+    const {api} = await load()
+    await expect(api.listAzureConnections(USER)).resolves.toMatchObject({
+      registryState: 'recovered',
+      recoveredCopyPath: '/cfg/azure-models.json.bad',
+    })
+    vi.restoreAllMocks()
+    respond({connections: [], registryState: 'recovered', recoveredCopyPath: ''})
+    await expect(api.listAzureConnections(USER)).resolves.not.toHaveProperty('recoveredCopyPath')
+  })
+
+  it('creates with a POST and unwraps {connection}', async () => {
+    const spy = respond({connection: {id: 'abc0123456', name: 'contoso-prod'}}, 201)
+    const {api} = await load()
+    const input = {
+      name: 'contoso-prod',
+      config: {endpoint: 'https://contoso.openai.azure.com', auth: {mode: 'api_key' as const, key: 'k'}},
+    }
+
+    await expect(api.createAzureConnection(ORG, input)).resolves.toEqual({id: 'abc0123456', name: 'contoso-prod'})
+    expect(call(spy)).toEqual({
+      path: '/api/orgs/org%201/providers/azure-foundry/connections',
+      method: 'POST',
+      body: input,
+    })
+  })
+
+  it('updates with a PUT (also the way to dismiss discovery)', async () => {
+    const spy = respond({connection: {id: 'abc0123456', suggestDiscovery: false}})
+    const {api} = await load()
+
+    const conn = await api.updateAzureConnection(USER, 'abc0123456', {dismissDiscovery: true, updatedAt: 't1'})
+    expect(conn).toEqual({id: 'abc0123456', suggestDiscovery: false})
+    expect(call(spy)).toEqual({
+      path: '/api/providers/azure-foundry/connections/abc0123456',
+      method: 'PUT',
+      body: {dismissDiscovery: true, updatedAt: 't1'},
+    })
+  })
+
+  it('reads one connection in the enveloped and the bare form', async () => {
+    respond({connection: {id: 'default', name: 'a'}})
+    let {api} = await load()
+    await expect(api.getAzureConnection(USER, 'default')).resolves.toEqual({id: 'default', name: 'a'})
+
+    vi.restoreAllMocks()
+    vi.resetModules()
+    const spy = respond({id: 'default', name: 'b'})
+    ;({api} = await load())
+    await expect(api.getAzureConnection(USER, 'default')).resolves.toEqual({id: 'default', name: 'b'})
+    expect(call(spy).method).toBe('GET')
+  })
+
+  it('deletes with cascade and force only when asked', async () => {
+    const spy = respond({status: 'ok', deletedModels: 3, clearedKnowledgeEmbedding: true})
+    const {api} = await load()
+
+    await expect(api.deleteAzureConnection(USER, 'abc0123456', {cascade: true, force: true})).resolves.toEqual({
+      status: 'ok',
+      deletedModels: 3,
+      clearedKnowledgeEmbedding: true,
+    })
+    await api.deleteAzureConnection(USER, 'abc0123456', {cascade: true})
+    await api.deleteAzureConnection(USER, 'abc0123456')
+
+    expect(call(spy, 0)).toMatchObject({
+      path: '/api/providers/azure-foundry/connections/abc0123456?cascade=true&force=true',
+      method: 'DELETE',
+      body: undefined,
+    })
+    expect(call(spy, 1).path).toBe('/api/providers/azure-foundry/connections/abc0123456?cascade=true')
+    expect(call(spy, 2).path).toBe('/api/providers/azure-foundry/connections/abc0123456')
+  })
+
+  it('discovers with a POST, filling missing kinds and null lists and keeping an Azure refusal', async () => {
+    const spy = respond({
+      deployments: [
+        {name: 'gpt-4.1', model: 'gpt-4.1', alreadyAdded: true, modelId: 'm/aaaaaaaaaa'},
+        {name: 'embed', kind: 'embedding', model: 'text-embedding-3-large', alreadyAdded: false},
+      ],
+      agents: null,
+      warnings: null,
+      error: 'The caller lacks the Azure AI User role',
+    })
+    const {api} = await load()
+
+    const d = await api.discoverAzureConnection(ORG, 'default')
+    expect(call(spy)).toEqual({
+      path: '/api/orgs/org%201/providers/azure-foundry/connections/default/discover',
+      method: 'POST',
+      body: undefined,
+    })
+    expect(d).toEqual({
+      deployments: [
+        {name: 'gpt-4.1', kind: 'chat', model: 'gpt-4.1', alreadyAdded: true, modelId: 'm/aaaaaaaaaa'},
+        {name: 'embed', kind: 'embedding', model: 'text-embedding-3-large', alreadyAdded: false},
+      ],
+      agents: [],
+      warnings: [],
+      error: 'The caller lacks the Azure AI User role',
+    })
+  })
+
+  it('gives agents the agent kind, an unknown model as empty, and leaves out an absent error', async () => {
+    respond({
+      deployments: [],
+      agents: [
+        {name: 'helper', model: 'gpt-4o', alreadyAdded: false},
+        {
+          name: 'flow',
+          kind: 'agent',
+          deployment: 'router',
+          workflow: true,
+          alreadyAdded: true,
+          modelId: 'm/flow000000',
+        },
+      ],
+      warnings: ['w'],
+    })
+    const {api} = await load()
+    await expect(api.discoverAzureConnection(USER, 'abc0123456')).resolves.toEqual({
+      deployments: [],
+      agents: [
+        {name: 'helper', kind: 'agent', model: 'gpt-4o', alreadyAdded: false},
+        {
+          name: 'flow',
+          kind: 'agent',
+          model: '',
+          deployment: 'router',
+          workflow: true,
+          alreadyAdded: true,
+          modelId: 'm/flow000000',
+        },
+      ],
+      warnings: ['w'],
+    })
+  })
+})
+
+describe('providersApi Azure registry: models and test', () => {
+  it('lists models, reading {models: null} as none', async () => {
+    const spy = respond({models: null})
+    const {api} = await load()
+    await expect(api.listAzureModels(USER)).resolves.toEqual({models: []})
+    expect(call(spy)).toEqual({path: '/api/providers/azure-foundry/models', method: 'GET', body: undefined})
+  })
+
+  it("passes the user scope's server default through, and leaves out an absent or empty one", async () => {
+    const model = {id: 'bbbbbbbbbb', modelId: 'm/bbbbbbbbbb'}
+    respond({models: [model], serverDefault: 'm/bbbbbbbbbb'})
+    const {api} = await load()
+    await expect(api.listAzureModels(USER)).resolves.toEqual({models: [model], serverDefault: 'm/bbbbbbbbbb'})
+    vi.restoreAllMocks()
+    respond({models: [model], serverDefault: null})
+    await expect(api.listAzureModels(ORG)).resolves.toEqual({models: [model]})
+    vi.restoreAllMocks()
+    respond({models: [model], serverDefault: ''})
+    await expect(api.listAzureModels(USER)).resolves.toEqual({models: [model]})
+  })
+
+  it('creates, updates and deletes models on their routes', async () => {
+    const model = {id: 'bbbbbbbbbb', modelId: 'm/bbbbbbbbbb'}
+    const spy = respond({model})
+    const {api} = await load()
+    const input = {connectionId: 'default', kind: 'chat' as const, deployment: 'gpt-4.1', purpose: 'general' as const}
+
+    await expect(api.createAzureModel(ORG, input)).resolves.toEqual(model)
+    await expect(api.updateAzureModel(ORG, 'bbbbbbbbbb', {isDefault: true})).resolves.toEqual(model)
+    await api.deleteAzureModel(ORG, 'bbbbbbbbbb', {force: true})
+    await api.deleteAzureModel(ORG, 'bbbbbbbbbb')
+
+    const base = '/api/orgs/org%201/providers/azure-foundry/models'
+    expect(call(spy, 0)).toEqual({path: base, method: 'POST', body: input})
+    expect(call(spy, 1)).toEqual({path: `${base}/bbbbbbbbbb`, method: 'PUT', body: {isDefault: true}})
+    expect(call(spy, 2)).toMatchObject({path: `${base}/bbbbbbbbbb?force=true`, method: 'DELETE'})
+    expect(call(spy, 3).path).toBe(`${base}/bbbbbbbbbb`)
+  })
+
+  it('posts every test shape to the one /test route', async () => {
+    const spy = respond({ok: false, latencyMs: 12, error: 'bad key', code: 'PROVIDER_AUTH'})
+    const {api} = await load()
+    const draft = {
+      connectionId: 'abc0123456',
+      config: {endpoint: 'https://x.openai.azure.com', auth: {mode: 'api_key' as const}},
+      model: {kind: 'chat' as const, deployment: 'gpt-4.1'},
+    }
+
+    await expect(api.testAzure(USER, draft)).resolves.toEqual({
+      ok: false,
+      latencyMs: 12,
+      error: 'bad key',
+      code: 'PROVIDER_AUTH',
+    })
+    await api.testAzure(USER, {model: {id: 'bbbbbbbbbb'}})
+
+    expect(call(spy, 0)).toEqual({path: '/api/providers/azure-foundry/test', method: 'POST', body: draft})
+    expect(call(spy, 1).body).toEqual({model: {id: 'bbbbbbbbbb'}})
+  })
+})
+
+describe('providersApi Azure registry: error codes', () => {
+  it('surfaces a 409 as VersionConflictError with its code and details', async () => {
+    respond({code: 'DUPLICATE_MODEL', message: 'Already added', details: {existingModelId: 'm/cccccccccc'}}, 409)
+    const {api, client} = await load()
+
+    const err = await api
+      .createAzureModel(USER, {connectionId: 'default', kind: 'chat', deployment: 'gpt-4.1'})
+      .catch(e => e)
+    expect(err).toBeInstanceOf(client.VersionConflictError)
+    expect(err).toMatchObject({status: 409, code: 'DUPLICATE_MODEL', details: {existingModelId: 'm/cccccccccc'}})
+  })
+
+  it('surfaces a 400 validation code and a 403 as PermissionDeniedError', async () => {
+    respond({code: 'INVALID_KIND', message: 'unknown kind'}, 400)
+    let {api, client} = await load()
+    const bad = await api.updateAzureModel(USER, 'bbbbbbbbbb', {kind: 'chat'}).catch(e => e)
+    expect(bad).toBeInstanceOf(client.ApiError)
+    expect(bad).toMatchObject({status: 400, code: 'INVALID_KIND', message: 'unknown kind'})
+
+    vi.restoreAllMocks()
+    vi.resetModules()
+    respond({code: 'FORBIDDEN', message: 'admins only'}, 403)
+    ;({api, client} = await load())
+    const denied = await api.deleteAzureConnection(ORG, 'default').catch(e => e)
+    expect(denied).toBeInstanceOf(client.PermissionDeniedError)
+    expect(denied.code).toBe('FORBIDDEN')
+  })
+})

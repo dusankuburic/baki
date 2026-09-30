@@ -29,6 +29,18 @@ type Provider interface {
 	SupportsTools() bool
 }
 
+// TokenCounter is the optional exact-token-count capability a provider may
+// expose next to the Provider interface: CountTokens asks the provider's own
+// tokenizer (Anthropic's free count_tokens endpoint) how many prompt tokens
+// Request will consume, so near-window prompts can be re-checked before the
+// estimate's error band lets an oversized request through (the estimate stays
+// the fast path; callers fall back to it silently when the count errors).
+// Declared by ClaudeProvider and forwarded by the audited wrapper, so the
+// factory-returned chain still satisfies a type assertion on it.
+type TokenCounter interface {
+	CountTokens(ctx context.Context, req Request) (int, error)
+}
+
 type EmbedResponse struct {
 	Embeddings [][]float32 `json:"embeddings"`
 }
@@ -71,6 +83,10 @@ type Request struct {
 	// keeps the legacy rule: a zero Temperature means "provider default" and
 	// is omitted from the wire request.
 	TemperatureSet bool `json:"-"`
+	// ReasoningEffort is the per-user choice of reasoning depth for reasoning
+	// deployments: "low", "medium" or "high" (chat completions reasoning_effort,
+	// Claude output_config.effort). Empty means the provider default.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// Tools, when non-empty and the provider SupportsTools, are offered to the
 	// model so it can request a tool call instead of (or before) a text answer.
 	Tools []ToolDefinition `json:"tools,omitempty"`
@@ -109,10 +125,20 @@ type Message struct {
 }
 
 type Response struct {
-	Content      string `json:"content"`
-	TokensIn     int    `json:"tokensIn"`
-	TokensOut    int    `json:"tokensOut"`
-	FinishReason string `json:"finishReason"`
+	Content   string `json:"content"`
+	TokensIn  int    `json:"tokensIn"`
+	TokensOut int    `json:"tokensOut"`
+	// CacheReadTokens and CacheWriteTokens are the prompt-cache slice of the
+	// input (Claude's cache_read_input_tokens / cache_creation_input_tokens):
+	// a breakdown INCLUDED in TokensIn, never added to it. TokensIn stays the
+	// total everywhere (context view, in-flight cost, the client meter); the
+	// audited wrapper prices this slice at the provider's cached rates
+	// (Claude reads 0.025-0.1x by family, 5-minute writes 1.25x) instead of
+	// the full input rate, which overstated cached turns against the daily
+	// budget. Zero when the provider reports no cache breakdown.
+	CacheReadTokens  int    `json:"cacheReadTokens,omitempty"`
+	CacheWriteTokens int    `json:"cacheWriteTokens,omitempty"`
+	FinishReason     string `json:"finishReason"`
 	// ToolCalls is non-empty when the model requested tool execution instead of
 	// returning a final answer; the chat service runs them and continues the loop.
 	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
@@ -159,8 +185,15 @@ type Chunk struct {
 	Reasoning string `json:"reasoning,omitempty"`
 	TokensIn  int    `json:"tokensIn,omitempty"`
 	TokensOut int    `json:"tokensOut,omitempty"`
-	Done      bool   `json:"done"`
-	Error     error  `json:"error,omitempty"`
+	// CacheReadTokens / CacheWriteTokens mirror Response's cached-input
+	// breakdown on the usage-carrying chunks (Claude's message_start and the
+	// Done chunk; the chat-completions parser fills the read half from
+	// prompt_tokens_details.cached_tokens): a slice INCLUDED in TokensIn,
+	// priced by the audited wrapper at the cached rates. See Response.
+	CacheReadTokens  int   `json:"cacheReadTokens,omitempty"`
+	CacheWriteTokens int   `json:"cacheWriteTokens,omitempty"`
+	Done             bool  `json:"done"`
+	Error            error `json:"error,omitempty"`
 	// ToolCalls is populated on the terminal (Done) chunk when the model
 	// requested tool execution mid-stream instead of finishing with text. Empty
 	// for a normal text completion. The agentic tool loop reads it to decide
@@ -176,15 +209,38 @@ type Chunk struct {
 	// (Done=true). Nothing for the chat service to execute — it forwards the
 	// step to the client's tool trail so hosted work is visible.
 	ToolEvent *ToolEvent `json:"toolEvent,omitempty"`
+	// Notice is a provider status line for the chat trail (see Notice). It
+	// carries no content: RetryingProvider does not count it as delivered.
+	Notice *Notice `json:"notice,omitempty"`
 	// ServerStep marks work the provider started server-side (a hosted
 	// agent step without a trail label) that a replay of the request would
 	// repeat: RetryingProvider treats the stream as delivered; every other
 	// consumer ignores it (it carries no text).
 	ServerStep bool `json:"-"`
+	// LocalKeepalive marks an empty keepalive the provider synthesised while it
+	// waited for a non-streaming answer (streamViaChat), not one the upstream
+	// sent: it keeps the idle watchdog fed like any empty chunk, but proves
+	// nothing about the request, so the audited wrapper does not take it as
+	// evidence of a billable call.
+	LocalKeepalive bool `json:"-"`
+	// SilentStep marks the start (+1) / end (-1) of a provider phase that streams
+	// nothing while it runs but is not a hosted tool step (a Responses reasoning
+	// item with summaries off): the chat service holds the hosted-step idle limit
+	// while one is open. Carries no text; RetryingProvider and the audited
+	// wrapper ignore it.
+	SilentStep int8 `json:"-"`
 	// ProviderItems mirrors Response.ProviderItems on the Done chunk: the
 	// provider's ordered record of the turn for verbatim replay within a
 	// tool loop (see Message.ProviderItems).
 	ProviderItems json.RawMessage `json:"-"`
+}
+
+// Notice is a provider status line for the chat trail (e.g. "reasoning_off"):
+// informational only — not a hosted tool step, not delivered content, so the
+// retry wrapper and the idle watchdog's hosted-step accounting ignore it.
+type Notice struct {
+	Name  string
+	Label string
 }
 
 // ToolEvent describes one server-side tool step of a hosted agent run.

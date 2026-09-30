@@ -39,7 +39,10 @@ const maxJournalEvents = 100
 // emits and snapshots serialize). It also keeps the billed rates the done
 // event carries (doneEventData) for resume/begin (noteDoneRates).
 func (c *streamCtl) recordJournal(eventType string, data map[string]interface{}) {
-	if eventType == "done" {
+	// done and error: the error path carries the billed usage of a failed
+	// turn (failUsage, F-15), and a client that missed the live event must
+	// get the same rates from ResumeStream / BeginStream.
+	if eventType == "done" || eventType == "error" {
 		c.noteDoneRates(data)
 	}
 	if !journaledEventTypes[eventType] {
@@ -101,6 +104,7 @@ type streamCtl struct {
 	done      bool   // stream finished successfully
 	errMsg    string // non-empty if the stream ended with an error
 	errCode   string // machine-readable class of errMsg ("" = unclassified); see chat_errors.go
+	errShared bool   // the failure is one of the org-shared credential classes (F-42); see classifyFailureShared
 	tokensIn  int
 	tokensOut int
 	// servedModel is the model that answered (alias providers: the deployment's
@@ -112,14 +116,26 @@ type streamCtl struct {
 	// reported. Guarded by mu; carried on resume/begin payloads.
 	inputCostPerM  float64
 	outputCostPerM float64
-	// ownerID, orgID and streamID are IMMUTABLE after publication: the control
-	// is stored in activeStreams (tryStartStream) before the worker exists, and
-	// othersInFlight reads ownerID/orgID from every other stream lock-free, so
-	// a later write would be a data race. orgID is the budget scope the stream
-	// is attributed to ("" = personal), taken from the flow document at
-	// construction.
+	// ownerID, orgID, streamID, flowID and convKey are IMMUTABLE after
+	// publication: the control is stored in activeStreams (tryStartStream)
+	// before the worker exists, and othersInFlight / ActiveStreamFor read them
+	// from other goroutines without a lock, so a later write would be a data
+	// race. orgID is the budget scope the stream is attributed to ("" =
+	// personal), taken from the flow document at construction; flowID/convKey
+	// identify the conversation the stream belongs to, so GET conversation can
+	// report the in-flight stream to a client that reloaded mid-turn (F-21).
 	ownerID string // caller identity (scope) that created this stream
 	orgID   string
+	flowID  string // flow document the stream chats over ("" without one)
+	convKey string // conversation key (ChatRequest.ConversationKey)
+	// userTurnStored is set once the turn's question is in the stored
+	// conversation (persistInitialUserTurn stored it). ActiveStreamFor reports
+	// only such streams: a client that reloads before then would re-attach
+	// with a history lacking the question, and its full-replace save on done
+	// would erase the question the server stored meanwhile (F-21). Never set
+	// for a turn whose client sent its own history (it owns persistence), nor
+	// when the history read failed or "Save conversation history" is off.
+	userTurnStored atomic.Bool
 	// sharedCredential records that the turn's provider runs on the org's
 	// shared credential (ai.UsedOrgCredential), set by prepareTurn: an auth
 	// or permission failure is then the org admin's to fix, and
@@ -163,6 +179,26 @@ type streamCtl struct {
 	// journal records agentic events (tool/tool_result/fix_proposal/
 	// fix_decision) for replay on reconnect; guarded by mu. See journalEvent.
 	journal []journalEvent
+	// noticesShown holds the provider status lines (ai.Chunk.Notice names)
+	// already shown this turn; guarded by mu. See firstNotice.
+	noticesShown map[string]bool
+}
+
+// firstNotice reports whether a provider status line named name is new this
+// turn, and records it: a retried provider call forwards the failed
+// attempt's notice again (RetryingProvider), and every tool-loop iteration
+// on the same deployment raises the same one — the trail shows it once.
+func (c *streamCtl) firstNotice(name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.noticesShown[name] {
+		return false
+	}
+	if c.noticesShown == nil {
+		c.noticesShown = make(map[string]bool)
+	}
+	c.noticesShown[name] = true
+	return true
 }
 
 // Client keepalive timing (see heartbeatStream). ChatService.heartbeatAfter /
@@ -291,14 +327,33 @@ func (c *streamCtl) cancelWithReason(reason string) {
 }
 
 // setFailure records the stream's terminal error message under lock, together
-// with its machine-readable code (see chat_errors.go) so resume/begin can hand
-// the code to a client that missed the live error event. Shared by every
-// failure path (pre-stream, mid-stream, tool-loop) so the buffer/errMsg
-// invariant (mutex-guarded, single writer at a time) has one implementation.
-func (c *streamCtl) setFailure(code, msg string) {
+// with its machine-readable code and shared-credential flag (see
+// chat_errors.go) so resume/begin can hand them to a client that missed the
+// live error event. Shared by every failure path (pre-stream, mid-stream,
+// tool-loop) so the buffer/errMsg invariant (mutex-guarded, single writer at
+// a time) has one implementation.
+func (c *streamCtl) setFailure(code, msg string, shared bool) {
 	c.mu.Lock()
 	c.errMsg = msg
 	c.errCode = code
+	c.errShared = shared
+	c.mu.Unlock()
+}
+
+// setFailureUsage is setFailure for a turn the provider BILLED (an
+// output-limit failure whose Done usage is in hand, F-15): the token counts
+// and the model that answered are stored alongside the failure, so
+// ResumeStream and BeginStream snapshots stop reporting 0/0 for the most
+// expensive failures — up to 16384 reasoning tokens per failed turn. done
+// stays false: the stream failed, there is no answer to persist.
+func (c *streamCtl) setFailureUsage(code, msg string, shared bool, tokensIn, tokensOut int, servedModel string) {
+	c.mu.Lock()
+	c.errMsg = msg
+	c.errCode = code
+	c.errShared = shared
+	c.tokensIn = tokensIn
+	c.tokensOut = tokensOut
+	c.servedModel = servedModel
 	c.mu.Unlock()
 }
 
@@ -368,6 +423,7 @@ func (c *streamCtl) snapshot() resumeSnapshot {
 		Done:           c.done,
 		Error:          c.errMsg,
 		ErrorCode:      c.errCode,
+		ErrorShared:    c.errShared,
 		TokensIn:       c.tokensIn,
 		TokensOut:      c.tokensOut,
 		ServedModel:    c.servedModel,

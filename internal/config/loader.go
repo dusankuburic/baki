@@ -618,9 +618,18 @@ func validateAzureFoundryAllowedHosts(entries []string) error {
 }
 
 // multiTenantHostZones are Azure and hosting DNS zones in which any customer
-// can create a host name (an API Management instance, a web app, a Traffic
-// Manager profile, a VM's DNS label, a Front Door or CDN endpoint, a storage
-// account, …). A PAD_AZURE_FOUNDRY_ALLOWED_HOSTS glob may not cover one.
+// can create a host name that terminates TLS with code the customer controls
+// (an API Management instance, a web app, a Traffic Manager profile, a VM's
+// DNS label, a Front Door or CDN endpoint, a storage account, an Azure ML
+// managed online endpoint, a Databricks model-serving endpoint behind
+// azuredatabricks.net, an Entra application proxy on msappproxy.net, an
+// App Service Environment, an HDInsight gateway, a Spring Apps instance, …).
+// A PAD_AZURE_FOUNDRY_ALLOWED_HOSTS glob may not cover one. APPEND-ONLY after
+// azure-mobile.net: multiTenantZoneOf returns the first match and callers
+// depend on cloudapp.azure.com / blob.core.windows.net winning. ml.azure.com
+// is deliberately absent (parent matching already covers it) and
+// servicebus.windows.net is an exact PSL entry, refused by the public-suffix
+// rule.
 var multiTenantHostZones = []string{
 	"azure-api.net",
 	"azurewebsites.net",
@@ -635,6 +644,12 @@ var multiTenantHostZones = []string{
 	"azurecontainer.io",
 	"azurestaticapps.net",
 	"azure-mobile.net",
+	"appserviceenvironment.net",
+	"inference.ml.azure.com",
+	"azuredatabricks.net",
+	"msappproxy.net",
+	"azurehdinsight.net",
+	"azuremicroservices.io",
 }
 
 // multiTenantZoneOf returns the multi-tenant zone a glob over name would

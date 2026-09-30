@@ -1,6 +1,7 @@
 // AI chat session, message, and request/response shapes.
 
 import type {ProviderID} from './providers'
+import type {ReasoningEffort} from './settings'
 
 // ToolCallRecord is one tool invocation behind an assistant message — the
 // transparency trail (mirrors the backend's tool_result wire event).
@@ -49,6 +50,11 @@ export interface ChatMessage {
   tokensOut?: number
   provider?: ProviderID
   model?: string
+  // modelLabel is the model's friendly name when the message was sent (an
+  // Azure AI Foundry registry entry's display name for an "m/<id>" model),
+  // kept end to end so history and exports still name a model that was later
+  // renamed or removed.
+  modelLabel?: string
   // servedModel is the model that actually answered when `model` is an alias
   // the provider resolves (an Azure AI Foundry deployment, `model-router`, an
   // `agent:*`); absent when the backend did not report one. The rates are the
@@ -62,6 +68,10 @@ export interface ChatMessage {
   // the backend sent one; drives the bubble's "Open settings" action. Error
   // bubbles are never persisted, so this never reaches the server.
   errorCode?: string
+  // True when the failure came from the organisation's shared credential
+  // (F-42): the bubble then also offers the Organizations settings section,
+  // where an admin — not the member — can fix it. Never persisted.
+  errorShared?: boolean
   toolCalls?: ToolCallRecord[]
   fixProposal?: FixProposalSnapshot
   fixProposals?: FixProposalSnapshot[]
@@ -81,6 +91,8 @@ export interface ChatRequest {
   systemPrompt?: string
   temperature?: number
   maxTokens?: number
+  // F-19: the provider's reasoning depth; omitted keeps the provider default.
+  reasoningEffort?: ReasoningEffort
   excludeContext?: boolean
   useTools?: boolean
   // C-1: client-generated stream ID. When set, the client subscribes its SSE

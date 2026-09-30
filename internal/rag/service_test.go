@@ -10,6 +10,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 	"pad-core/models"
 )
 
@@ -473,5 +474,31 @@ func TestStripOverlapPrefix(t *testing.T) {
 	}
 	if got := stripOverlapPrefix(short+"tail", "d", shortSet); got != short+"tail" {
 		t.Errorf("below-floor overlap wrongly stripped: %q", got)
+	}
+}
+
+// F-14: a document that chunks to more passages than maxKnowledgeChunks is
+// refused with the exported sentinel (the HTTP layer maps it to 413
+// KNOWLEDGE_DOCUMENT_TOO_LARGE) before a single embedding call is made.
+func TestAddDocument_TooManyChunksIsSentinel(t *testing.T) {
+	// One ~850-rune paragraph per chunk (a 150-rune carry plus 850 plus the
+	// separator exceeds the 1000-rune chunk size, so paragraphs never pack).
+	paragraphs := make([]string, maxKnowledgeChunks+1)
+	big := strings.Repeat("a", 850)
+	for i := range paragraphs {
+		paragraphs[i] = big
+	}
+	emb := &countingEmbedder{}
+	svc := NewKnowledgeService(testutil.NewFakeBackend(), nil, nil, WithEmbedder(emb))
+
+	err := svc.AddDocument(context.Background(), "scope", "org-1", "big.md", strings.Join(paragraphs, "\n\n"))
+	if !errors.Is(err, ErrDocumentTooLarge) {
+		t.Fatalf("err = %v, want ErrDocumentTooLarge", err)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("exceed the limit of %d", maxKnowledgeChunks)) {
+		t.Errorf("message = %q, want the passage/limit figures", err)
+	}
+	if emb.calls != 0 {
+		t.Errorf("embedder called %d times; a refused document must not be embedded", emb.calls)
 	}
 }

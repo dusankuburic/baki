@@ -188,7 +188,7 @@ func TestPrepareTurn_BudgetRefusalSkipsRAG(t *testing.T) {
 	}
 	doc := &models.FlowDocument{ID: "f1", OrganizationID: "org-A"}
 	ctl := &streamCtl{ownerID: "user-1", orgID: "org-A"}
-	ts, err := svc.prepareTurn(context.Background(), "user-1", doc, models.ChatRequest{Provider: "fake", UserMessage: "question"}, ctl)
+	ts, err := svc.prepareTurn(context.Background(), "user-1", doc, models.ChatRequest{Provider: "fake", UserMessage: "question"}, nil, ctl)
 	if !errors.Is(err, ErrAIBudgetExceeded) {
 		t.Fatalf("prepareTurn error = %v, want ErrAIBudgetExceeded", err)
 	}
@@ -201,7 +201,7 @@ func TestPrepareTurn_BudgetRefusalSkipsRAG(t *testing.T) {
 	}
 }
 
-// --- D-38: the audited wrapper's reservation rate wins --------------------------
+// --- D-38: an alias provider reserves nothing, whatever it reports -------------
 
 // reservationPricerProvider is an alias provider that also implements
 // ai.ReservationPricer, as the audited wrapper does.
@@ -214,7 +214,7 @@ func (p *reservationPricerProvider) ReservationPricing(context.Context, string) 
 	return p.reservation
 }
 
-func TestInFlightPricing_PrefersAuditedReservationPricer(t *testing.T) {
+func TestInFlightPricing_AliasIgnoresListingAndReservationPricer(t *testing.T) {
 	listing := ai.Pricing{InputCostPerM: 0.05, OutputCostPerM: 0.4} // a router's memo of its last routed model
 	sentinel := ai.Pricing{InputCostPerM: 3, OutputCostPerM: 15}
 	p := &reservationPricerProvider{
@@ -222,8 +222,8 @@ func TestInFlightPricing_PrefersAuditedReservationPricer(t *testing.T) {
 			listing: []ai.ModelInfo{{ID: "model-router", Pricing: listing}}},
 		reservation: sentinel,
 	}
-	if got := inFlightPricing(context.Background(), p, "model-router"); got != sentinel {
-		t.Errorf("inFlightPricing = %+v, want the wrapper's ReservationPricing %+v over the listing price", got, sentinel)
+	if got := inFlightPricing(context.Background(), p, "model-router"); got != (ai.Pricing{}) {
+		t.Errorf("inFlightPricing = %+v, want no reservation for the unpriced alias provider", got)
 	}
 	// A non-alias provider never consults the interface.
 	other := &reservationPricerProvider{
@@ -254,7 +254,7 @@ func TestTruncateForContextWindow_KeepsCurrentTurn(t *testing.T) {
 
 	t.Run("older history goes before the current question", func(t *testing.T) {
 		req := &ai.Request{Messages: []ai.Message{msg("user", "old"), msg("assistant", "a0"), msg("user", "current")}}
-		pin, err := truncateForContextWindow(provider, req, contextReserve+110, 2) // fits the current turn only
+		pin, err := truncateForContextWindow(context.Background(), provider, req, contextReserve+110, 2) // fits the current turn only
 		if err != nil {
 			t.Fatalf("truncate: %v", err)
 		}
@@ -272,7 +272,7 @@ func TestTruncateForContextWindow_KeepsCurrentTurn(t *testing.T) {
 			{Role: "assistant", ToolCalls: []ai.ToolCall{{ID: "c1", Name: "search_flow", Input: []byte(strings.Repeat("x", 400))}}},
 			msg("tool", "result"),
 		}}
-		pin, err := truncateForContextWindow(provider, req, contextReserve+420, 2) // one history turn too many
+		pin, err := truncateForContextWindow(context.Background(), provider, req, contextReserve+420, 2) // one history turn too many
 		if err != nil {
 			t.Fatalf("truncate: %v", err)
 		}
@@ -288,7 +288,7 @@ func TestTruncateForContextWindow_KeepsCurrentTurn(t *testing.T) {
 		req := &ai.Request{Messages: []ai.Message{
 			msg("user", "current"), msg("assistant", "A1"), msg("user", "<tool_result>1"), msg("assistant", "A2"), msg("user", "<tool_result>2"),
 		}}
-		pin, err := truncateForContextWindow(provider, req, contextReserve+420, 0)
+		pin, err := truncateForContextWindow(context.Background(), provider, req, contextReserve+420, 0)
 		if err != nil {
 			t.Fatalf("truncate: %v", err)
 		}
@@ -302,14 +302,14 @@ func TestTruncateForContextWindow_KeepsCurrentTurn(t *testing.T) {
 
 	t.Run("the current turn is never dropped", func(t *testing.T) {
 		req := &ai.Request{Messages: []ai.Message{msg("user", "old"), msg("assistant", "a0"), msg("user", "current")}}
-		if _, err := truncateForContextWindow(provider, req, contextReserve+50, 2); !errors.Is(err, ai.ErrContextLimit) {
+		if _, err := truncateForContextWindow(context.Background(), provider, req, contextReserve+50, 2); !errors.Is(err, ai.ErrContextLimit) {
 			t.Errorf("err = %v, want ErrContextLimit when the current turn alone overflows", err)
 		}
 	})
 
 	t.Run("a pin that moved is reported", func(t *testing.T) {
 		req := &ai.Request{Messages: []ai.Message{msg("user", "old"), msg("assistant", "a0"), msg("user", "u1"), msg("assistant", "a1"), msg("user", "current"), msg("assistant", "post"), msg("tool", "r")}}
-		pin, err := truncateForContextWindow(provider, req, contextReserve+104*5+10, 4)
+		pin, err := truncateForContextWindow(context.Background(), provider, req, contextReserve+104*5+10, 4)
 		if err != nil {
 			t.Fatalf("truncate: %v", err)
 		}
@@ -326,7 +326,7 @@ func TestTruncateForContextWindow_KeepsCurrentTurn(t *testing.T) {
 		// reserve; against the request's own 8000-token completion cap only
 		// the current turn does.
 		req := &ai.Request{MaxTokens: 8000, Messages: []ai.Message{msg("user", "old"), msg("assistant", "a0"), msg("user", "current")}}
-		if _, err := truncateForContextWindow(provider, req, 8000+110, 2); err != nil {
+		if _, err := truncateForContextWindow(context.Background(), provider, req, 8000+110, 2); err != nil {
 			t.Fatalf("truncate: %v", err)
 		}
 		if len(req.Messages) != 1 {
@@ -359,7 +359,7 @@ func TestTruncateForContextWindow_SkipsTokenizerWhenBytesFit(t *testing.T) {
 	if got, want := promptTokenCeiling(req), 1000+200+8+2000+4+1+4+2+1+4; got != want {
 		t.Fatalf("promptTokenCeiling = %d, want %d", got, want)
 	}
-	if _, err := truncateForContextWindow(p, req, promptTokenCeiling(req)+contextReserve, 2); err != nil {
+	if _, err := truncateForContextWindow(context.Background(), p, req, promptTokenCeiling(req)+contextReserve, 2); err != nil {
 		t.Fatal(err)
 	}
 	if p.calls != 0 {
@@ -369,12 +369,43 @@ func TestTruncateForContextWindow_SkipsTokenizerWhenBytesFit(t *testing.T) {
 		t.Errorf("messages truncated: %d, want 3", len(req.Messages))
 	}
 	// One byte over the ceiling and the real estimate runs (and fits).
-	if _, err := truncateForContextWindow(p, req, promptTokenCeiling(req)+contextReserve-1, 2); err != nil {
+	if _, err := truncateForContextWindow(context.Background(), p, req, promptTokenCeiling(req)+contextReserve-1, 2); err != nil {
 		t.Fatal(err)
 	}
 	if p.calls == 0 {
 		t.Error("tokenizer must run once the byte ceiling does not prove the prompt fits")
 	}
+
+	// F-28: a replayed provider record (ProviderItems) is re-sent verbatim,
+	// so the byte ceiling and the estimate both bound a record-bearing
+	// message by its record. A tiny-content turn carrying a ~200 KB record
+	// no longer slips under a limit sized for the content alone: the
+	// tokenizer pass runs and the post-pin exchange carrying the record is
+	// dropped.
+	t.Run("a replay record is counted", func(t *testing.T) {
+		p := &countingEstimator{FakeProvider: &testutil.FakeProvider{}}
+		record := json.RawMessage(strings.Repeat("r", 200_000))
+		req := &ai.Request{Messages: []ai.Message{
+			{Role: "user", Content: "q"}, // the pin
+			{Role: "assistant", Content: "a", ProviderItems: record, ProviderItemsFrom: "claude"},
+			{Role: "tool", Content: "r"},
+		}}
+		legacy := len("q") + 4 + len("a") + 4 + len("r") + 4 // content-only ceiling
+		if _, err := truncateForContextWindow(context.Background(), p, req, legacy+contextReserve, 0); err != nil {
+			t.Fatal(err)
+		}
+		if p.calls == 0 {
+			t.Fatal("the tokenizer pass must run: the record pushes the real ceiling far past the content-only limit")
+		}
+		if len(req.Messages) != 1 || req.Messages[0].Content != "q" {
+			t.Errorf("kept %d messages, want only the pinned turn (the record-bearing exchange dropped)", len(req.Messages))
+		}
+		// The per-message ceiling is the record's bytes + framing.
+		solo := &ai.Request{Messages: []ai.Message{{Role: "assistant", ProviderItems: record}}}
+		if got, want := promptTokenCeiling(solo), len(record)+4; got != want {
+			t.Errorf("promptTokenCeiling of a record-only message = %d, want %d", got, want)
+		}
+	})
 }
 
 // --- D-4: the detached answer write is bounded ----------------------------------
@@ -401,7 +432,7 @@ func TestPersistAssistantTurn_ReturnsWhenStoreHangs(t *testing.T) {
 	ctl.buffer.WriteString("the answer")
 
 	started := time.Now()
-	svc.persistAssistantTurn(context.Background(), doc, req, ctl)
+	svc.persistAssistantTurn(context.Background(), doc, req, ctl, req.Model, "")
 	if took := time.Since(started); took > time.Second {
 		t.Fatalf("persistAssistantTurn took %v against a hung store, want the persistAnswerTimeout bound", took)
 	}
