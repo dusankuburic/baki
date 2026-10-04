@@ -22,6 +22,7 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
 	"pad-core/cache"
+	"pad-core/models"
 )
 
 func ProvideDocumentProvider(mode config.DeploymentMode, storageBackend storageif.StorageBackend) service.DocumentProvider {
@@ -32,10 +33,9 @@ func ProvideDocumentProvider(mode config.DeploymentMode, storageBackend storagei
 }
 
 // ProvideSettingsStore builds the desktop app-settings store, backed by a file
-// under the user's config directory. Cloud mode gets a memory-only instance
-// because nothing there should be reading it — see ProvideSettingsProvider —
-// and because a file-backed store would force the container to have a writable
-// home directory.
+// under the user's config directory. Cloud mode gets a memory-only instance:
+// nothing there should be reading it (see ProvideSettingsProvider) and a
+// file-backed store would force a writable home directory.
 func ProvideSettingsStore(mode config.DeploymentMode) (*storage.SettingsStore, error) {
 	if mode == config.ModeCloud {
 		return storage.NewInMemorySettingsStore(), nil
@@ -47,12 +47,9 @@ func ProvideSettingsStore(mode config.DeploymentMode) (*storage.SettingsStore, e
 //
 // Cloud mode reads and writes them through the storage backend (Postgres
 // app_settings). It previously used the same local store as the desktop, which
-// split deployment settings in two: POST /api/system/settings wrote to the
-// database while POST /api/analysis/rule/enabled wrote to the local file, and
-// every reader on the analysis path — rule profiles, the AI daily budget, the
-// knowledge-base embedding provider — read the local file. In a container that
-// file is recreated from defaults on every start, so an administrator's saved
-// configuration had no effect on analysis at all.
+// split deployment settings in two: writes went to the database while the
+// analysis path read the local file — recreated from defaults on every
+// container start — so a saved configuration had no effect on analysis at all.
 func ProvideSettingsProvider(
 	ctx context.Context,
 	mode config.DeploymentMode,
@@ -65,12 +62,11 @@ func ProvideSettingsProvider(
 	return store
 }
 
-// ProvideConfigDir resolves the per-user application directory. It is a
-// desktop concept: in cloud mode the container's filesystem is ephemeral and
-// (under the compose production overlay) read-only, so this returns an empty
-// path and the stores that take it degrade to no-ops. Returning a path here
-// also made boot depend on os.UserConfigDir() succeeding, i.e. on $HOME being
-// set inside a distroless image.
+// ProvideConfigDir resolves the per-user application directory — a desktop
+// concept: in cloud mode the container's filesystem is ephemeral and (under
+// the compose production overlay) read-only, so this returns an empty path
+// and the stores that take it degrade to no-ops. Returning a path here also
+// made boot depend on $HOME being set inside a distroless image.
 func ProvideConfigDir(mode config.DeploymentMode) (string, error) {
 	if mode == config.ModeCloud {
 		return "", nil
@@ -78,8 +74,26 @@ func ProvideConfigDir(mode config.DeploymentMode) (string, error) {
 	return storage.ConfigDir()
 }
 
+// astCacheBudget bounds the heap the parsed-document (AST) cache pins: the
+// desktop's "reopen the same file" shortcut, keyed by content hash. An
+// entry-count LRU would let a few large flows pin gigabytes alive at ~1 KiB
+// per block (service.FlowDocumentCost); the byte budget keeps a working set of
+// recent files. In cloud mode FlowService keeps no AST cache (NewFlowService).
+const astCacheBudget int64 = 96 << 20
+
+// ProvideASTCache builds the parsed-document cache, charged per document by
+// the memory-audit cost model (blocks × 1 KiB + the source it carries).
 func ProvideASTCache() (cache.Cache, error) {
-	return cache.NewLRUCache(100) // Cache up to 100 flows
+	return cache.NewSizedLRU(astCacheBudget, cache.WithCostFunc(astEntryCost)), nil
+}
+
+// astEntryCost is the AST cache's cost function: a document's estimated heap,
+// or a nominal 1 for anything else stored in it.
+func astEntryCost(value any) int64 {
+	if doc, ok := value.(*models.FlowDocument); ok {
+		return service.FlowDocumentCost(doc)
+	}
+	return 1
 }
 
 // ProvideHistoryStore persists per-flow analysis trend snapshots under the
@@ -98,8 +112,8 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 	copilotAuth := ai.NewCopilotAuth()
 	// The storage backend is nil in local/desktop mode (no usage store). Leave the
 	// recorder nil there — the audited provider guards a nil recorder and skips
-	// recording — rather than handing it a closure that would dereference the nil
-	// backend and panic in the goroutine record() spawns after every completion.
+	// recording — rather than a closure that would dereference the nil backend
+	// and panic in the goroutine record() spawns after every completion.
 	var recorder ai.UsageRecorder
 	if backend != nil {
 		recorder = func(ctx context.Context, metric *storageif.UsageMetric) error {
@@ -108,11 +122,10 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 	}
 	factory := ai.NewProviderFactory(memberKeyLookup(keys), copilotAuth, recorder, &cfg.Runtime)
 	// Embeddings come back at the knowledge base's vector width where the
-	// model supports it (text-embedding-3-*, up to its native width), so they
-	// are indexable. The width is the storage contract's, default included:
-	// passing the raw PAD_EMBEDDING_DIM (0 when unset) asked for nothing,
-	// and text-embedding-3-large then returned 3072-wide vectors against the
-	// 1536 index.
+	// model supports it, so they are indexable. The width is the storage
+	// contract's, default included: passing the raw PAD_EMBEDDING_DIM (0 when
+	// unset) asked for nothing, and text-embedding-3-large then returned
+	// 3072-wide vectors against the 1536 index.
 	factory.SetEmbeddingDimensions(cfg.Storage.EffectiveEmbeddingDim())
 	// Azure AI Foundry endpoints are user-supplied. In cloud mode every
 	// request to one goes through the dial-time private-address guard (the
@@ -127,7 +140,7 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 		ExtraAllowedHosts:  cfg.Runtime.AzureFoundryAllowedHosts,
 		AllowPrivateEgress: cfg.Runtime.AIAllowPrivateEgress,
 	})
-	// F-50: the local models provider (Foundry Local, Ollama, LM Studio) is
+	// The local models provider (Foundry Local, Ollama, LM Studio) is
 	// constructible only in the desktop/local single-user app, whose loopback
 	// allowance is exactly the deliberate opt-in it needs.
 	ai.ConfigureLocalModels(ai.LocalModelsOptions{Egress: policy})
@@ -139,9 +152,9 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 // "no key stored" is ("", nil) and only a real failure (a decrypt failure
 // after a secret rotation, a database error) is an error. Both keystores
 // report absence as storage.ErrSecretNotFound; passed through unmapped it
-// made a plainly unconfigured provider look like a broken one (chat showed
+// made a plainly unconfigured provider look broken (chat showed
 // "couldn't load the AI provider configuration" instead of
-// PROVIDER_NOT_CONFIGURED) and would keep ForOrg from ever reaching the
+// PROVIDER_NOT_CONFIGURED) and kept ForOrg from ever reaching the
 // organisation's shared credential.
 func memberKeyLookup(keys service.KeyStore) func(scope, provider string) (string, error) {
 	return func(scope, provider string) (string, error) {
@@ -176,23 +189,30 @@ func ProvideOrgKeyStore(keys service.KeyStore) service.OrgKeyStore {
 	return nil
 }
 
+// decorateAnalysisService wires the AnalysisService's post-construction
+// dependencies (see the fx.Decorate in ServiceModule).
+func decorateAnalysisService(cfg *config.Config, rules service.DeploymentCustomRules, resolver *service.RuleProfileResolver, svc *service.AnalysisService) *service.AnalysisService {
+	svc.SetCustomRules(rules)
+	svc.SetRuleProfileResolver(resolver)
+	// With auth on, an analysis that carries no user (the scanner) must not
+	// broadcast progress to every connected client.
+	svc.SetAuthEnabled(cfg.Auth.Enabled)
+	return svc
+}
+
 // ProvideKnowledgeService builds the org knowledge-base service.
 //
 // It takes the factory (not a pre-resolved provider) so the embedding
-// provider is resolved per request in the caller's scope. Resolving once here
-// with an empty scope fails in cloud mode (keys are per-user) and never picks
-// up keys added later.
-//
-// settings is the service.SettingsProvider, NOT the concrete
-// *storage.SettingsStore: in cloud mode the configured embedding provider and
-// model live in the database, and taking the concrete store here read them
-// from a local file that always held the defaults.
-//
+// provider is resolved per request in the caller's scope — resolving once
+// here with an empty scope fails in cloud mode (keys are per-user) and never
+// picks up keys added later. settings is the service.SettingsProvider, NOT
+// the concrete *storage.SettingsStore: in cloud mode the configured embedding
+// provider and model live in the database, and taking the concrete store read
+// them from a local file that always held the defaults.
 // PAD_EMBEDDING_PROVIDER (validated at boot) pins the embedding provider for
 // the deployment; it is the only way the knowledge base embeds with Azure AI
 // Foundry — through the model registry's "Use for knowledge base"
-// designation when azure (the registry) is wired, nil keeping the
-// single-document path.
+// designation when azure (the registry) is wired.
 func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config, azure *service.AzureModelService) *rag.KnowledgeService {
 	opts := []rag.Option{rag.WithEmbeddingProvider(cfg.Storage.EmbeddingProvider)}
 	if azure != nil {
@@ -202,15 +222,13 @@ func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.Provi
 }
 
 // ProvideAzureRegistry selects where the Azure AI Foundry model registry
-// lives (Part 9): Postgres when authentication is on and the backend is the
-// database one — only then are owner ids real users and organisations and
-// the foreign keys (and their cascades) hold — else the per-user config
-// directory's azure-models.json (the desktop, and a database backend with
-// auth off), whose one personal registry is owner "". Never settings.json.
-// orgKeys only decides whether organisations can hold registries (logged):
-// the org tables need the encrypted org keystore, which gates the org routes
-// too. Without a config directory (cloud mode — which always has the
-// database registry) the registry is kept in memory, with a warning.
+// lives: Postgres when authentication is on and the backend is the database
+// one — only then are owner ids real users and organisations and the foreign
+// keys (and their cascades) hold — else the per-user config directory's
+// azure-models.json (the desktop, and a database backend with auth off),
+// whose one personal registry is owner "". Never settings.json. orgKeys only
+// decides whether organisations can hold registries (logged). Without a
+// config directory the registry is kept in memory, with a warning.
 func ProvideAzureRegistry(cfg *config.Config, backend storageif.StorageBackend, orgKeys service.OrgKeyStore, configDir string) (storageif.AzureRegistryStore, error) {
 	if cfg.Auth.Enabled && backend != nil {
 		if p, ok := backend.(storagedb.AzureRegistryProvider); ok {
@@ -229,13 +247,13 @@ func ProvideAzureRegistry(cfg *config.Config, backend storageif.StorageBackend, 
 	return reg, nil
 }
 
-// ProvideAzureModelService builds the Azure AI Foundry model registry
-// service. Per-user and organisation registries exist with the database
-// store; the backend (nil on the desktop) supplies the caller's settings,
-// organisation membership, the knowledge corpus counts and user names. The
-// knowledge-base designation is offered where the knowledge base embeds with
-// Azure (cloud with PAD_EMBEDDING_PROVIDER=azure-foundry). The data-subject
-// export reads each personal resource's public configuration through it.
+// ProvideAzureModelService builds the Azure AI Foundry model registry service.
+// Per-user and organisation registries exist with the database store; the
+// backend (nil on the desktop) supplies the caller's settings, organisation
+// membership, the knowledge corpus counts and user names. The knowledge-base
+// designation is offered where the knowledge base embeds with Azure (cloud
+// with PAD_EMBEDDING_PROVIDER=azure-foundry); the data-subject export reads
+// each personal resource's public configuration through it.
 func ProvideAzureModelService(registry storageif.AzureRegistryStore, secrets service.KeyStore, orgKeys service.OrgKeyStore, factory *ai.ProviderFactory, settings service.SettingsProvider, backend storageif.StorageBackend, cfg *config.Config) *service.AzureModelService {
 	_, perUser := registry.(*storagedb.PostgresAzureRegistry)
 	deps := service.AzureModelServiceDeps{
@@ -273,11 +291,10 @@ var ServiceModule = fx.Options(
 		ProvideSettingsProvider,
 		// WebhookNotifier is a thin facade over the shared notify.Dispatcher,
 		// consolidating analysis-complete alerts onto the same delivery stack as
-		// governance (scanner) alerts. The dispatcher is provided by
-		// main.go's provideNotifier.
+		// governance (scanner) alerts; provided by main.go's provideNotifier.
 		service.NewWebhookNotifier,
-		// service.KeyStore itself comes from main.go's provideKeyStore (a
-		// plain fx provider, not a global) — no adapter needed here.
+		// service.KeyStore itself comes from main.go's provideKeyStore (a plain
+		// fx provider, not a global) — no adapter needed here.
 		ProvideOrgKeyStore,
 		ProvideAzureRegistry,
 		ProvideAzureModelService,
@@ -293,10 +310,8 @@ var ServiceModule = fx.Options(
 		service.NewFlowService,
 		service.NewAnalysisService,
 		// Adapter: fx only provides the full storageif.StorageBackend, but
-		// DashboardService's constructor takes the narrower DashboardStore it
-		// actually uses — Go allows the wider interface value through at this
-		// call site even though fx's reflection-based provider matching needs
-		// the concrete registration to bridge the two static types.
+		// DashboardService's constructor takes the narrower DashboardStore;
+		// fx's reflection-based provider matching needs this bridge.
 		func(backend storageif.StorageBackend, analysis *service.AnalysisService, flowSvc *service.FlowService, lib *service.LibraryService) *service.DashboardService {
 			svc := service.NewDashboardService(backend, analysis, flowSvc)
 			// The analytics page resolves its flow set through the library's
@@ -306,7 +321,7 @@ var ServiceModule = fx.Options(
 			// SetKnowledgeService below: the dashboard cache is user-keyed and
 			// must drop when the owner's flows change, but DashboardService
 			// already depends on FlowService, so the hook is registered here
-			// instead of being a constructor parameter (which would cycle).
+			// (a constructor parameter would cycle).
 			flowSvc.SetCloudFlowMutationHook(svc.InvalidateDashboardCache)
 			return svc
 		},
@@ -334,8 +349,8 @@ var ServiceModule = fx.Options(
 			svc := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, backend, mode)
 			svc.SetKnowledgeService(knowledge)
 			// Chat turns and context previews on azure-foundry resolve their
-			// model id on the Azure AI Foundry model registry (Part 9) and run
-			// on exactly that entry's resource.
+			// model id on the Azure AI Foundry model registry and run on
+			// exactly that entry's resource.
 			svc.SetAzureModels(azure)
 			wireKnowledgeBudget(knowledge, svc)
 			// nil when PAD_REDIS_URL is unset → single-replica resume (local maps).
@@ -358,31 +373,30 @@ var ServiceModule = fx.Options(
 			// Organisation-shared credentials (G7): nil outside cloud mode,
 			// where the org routes report ORG_KEYSTORE_UNAVAILABLE.
 			svc.SetOrgKeyStore(orgKeys)
-			// The Azure AI Foundry model registry (Part 9): the
+			// The Azure AI Foundry model registry: the
 			// single-document routes act on its resource "default", the
 			// lifecycle and "configured" checks on every resource.
 			svc.SetAzureModels(azure)
 			// POST /api/keys/save and /api/keys/delete go through SystemService
 			// (removing an Azure AI Foundry configuration too): drop that
-			// provider's cached live listing and fence off a listing in
-			// flight, as an Azure config save does — a replacement key may
-			// carry other entitlements than the one it replaces.
+			// provider's cached live listing and fence off one in flight — a
+			// replacement key may carry other entitlements than the one it
+			// replaces.
 			sys.OnApiKeyChanged(svc.InvalidateModels)
 			return svc
 		},
 	),
 	// R4: the deployment custom-rule file is its OWN graph node rather than
-	// something the AnalysisService loads for itself. Two consumers need the
-	// same compiled slice — the service (as its fallback layer) and the
-	// RuleProfileResolver (as its base layer) — and making the resolver read it
-	// off the service would be a cycle, since the service also needs the
-	// resolver.
+	// something the AnalysisService loads for itself: the service (fallback
+	// layer) and the RuleProfileResolver (base layer) both need the same
+	// compiled slice, and making the resolver read it off the service would
+	// cycle (the service also needs the resolver).
 	fx.Provide(ProvideDeploymentCustomRules),
 	fx.Provide(service.NewRuleProfileResolver),
-	// The factory learns the organisation credential store after
-	// construction (ProvideAI's signature is the tests' contract): ForOrg
-	// and ForEmbeddingOrg then fall back to — or, for embeddings, prefer —
-	// the org's shared credential. A decorator, not a second provider.
+	// The factory learns the organisation credential store after construction
+	// (ProvideAI's signature is the tests' contract): ForOrg and ForEmbeddingOrg
+	// then fall back to — or, for embeddings, prefer — the org's shared
+	// credential. A decorator, not a second provider.
 	fx.Decorate(func(factory *ai.ProviderFactory, orgKeys service.OrgKeyStore) *ai.ProviderFactory {
 		if orgKeys != nil {
 			factory.SetOrgKeyLookup(orgKeyLookup(orgKeys))
@@ -390,31 +404,25 @@ var ServiceModule = fx.Options(
 		return factory
 	}),
 	// A DECORATOR, not a second provider of *AnalysisService — fx hard-fails
-	// that graph with "already provided". It wires both dependencies into the
+	// that graph with "already provided"; it wires both dependencies into the
 	// service the constructor built.
-	fx.Decorate(func(rules service.DeploymentCustomRules, resolver *service.RuleProfileResolver, svc *service.AnalysisService) *service.AnalysisService {
-		svc.SetCustomRules(rules)
-		svc.SetRuleProfileResolver(resolver)
-		return svc
-	}),
+	fx.Decorate(decorateAnalysisService),
 	// FlowService needs the same resolver: its batch-fix loop re-analyzes the
 	// flow to find what to fix, and without the org profile that analysis ran
-	// on deployment defaults — so "fix all" could apply a fix for a rule the
-	// org had disabled, and never applied an org custom rule's autoFix. A
-	// second decorator, because one fx.Decorate returns exactly one type.
+	// on deployment defaults — "fix all" could apply a fix for a rule the org
+	// had disabled, and never applied an org custom rule's autoFix. A second
+	// decorator, because one fx.Decorate returns exactly one type.
 	fx.Decorate(func(resolver *service.RuleProfileResolver, svc *service.FlowService) *service.FlowService {
 		svc.SetRuleProfileResolver(resolver)
 		return svc
 	}),
 	// Account erasure (handleAuthDeleteAccount → backend.DeleteUser) cascades
-	// the user's provider keys in SQL; this post-construction wiring — the
-	// same setter pattern as OnApiKeyChanged above, which can't be used here
-	// because no service owns the deletion, only the auth handler does — drops
-	// the provider service's cached live listings for that scope so they
-	// cannot outlive the account. The provider service also releases the
-	// user's own Azure AI Foundry credential (read before the cascade) and
-	// disables every organisation credential the user lent as an admin (the
-	// org_provider_keys rows do not cascade with the account).
+	// the user's provider keys in SQL; this wiring drops the provider service's
+	// cached live listings for that scope so they cannot outlive the account.
+	// The provider service also releases the user's own Azure AI Foundry
+	// credential (read before the cascade) and disables every organisation
+	// credential the user lent as an admin (org_provider_keys rows do not
+	// cascade with the account).
 	fx.Decorate(func(h *api.AuthHandler, svc *service.ProviderService) *api.AuthHandler {
 		h.OnUserDeleted(svc.InvalidateScope)
 		h.SetProviderService(svc)
@@ -432,7 +440,6 @@ func wireKnowledgeBudget(knowledge *rag.KnowledgeService, chat *service.ChatServ
 }
 
 // ProvideDeploymentCustomRules compiles PAD_CUSTOM_RULES once at boot.
-//
 // Invalid entries are SKIPPED WITH A WARNING EACH, never silently: R0-5 was
 // motivated by exactly that failure mode — a typo'd regex quietly removed a
 // rule the operator believed was enforcing. A missing/unset path is a no-op.

@@ -62,11 +62,11 @@ function isCode(err: unknown, code: string): boolean {
 
 // AI Accounts → Azure AI Foundry, and an organisation's block in
 // Organizations: the model registry of one scope. It owns
-//   - the states: first run (a1), resources without models (a2), the
-//     migrated resource and its discovery prompt (a3), discovery
-//     suggestions (a4), credentials needed (a5), the organisation's view
-//     (a6), loading and failures (a7), a desktop list file it cannot write
-//     or had to recover (a8), invalid settings and unsupported models (a9);
+//   - the states: first run, resources without models, the migrated
+//     resource and its discovery prompt, discovery suggestions,
+//     credentials needed, the organisation's view, loading and failures, a
+//     desktop list file it cannot write or had to recover, invalid
+//     settings and unsupported models;
 //   - the Resource and Model modals;
 //   - one sr-only status region and one alert region, both mounted up front
 //     (no toasts: they would render outside the Settings dialog);

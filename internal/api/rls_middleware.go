@@ -4,50 +4,27 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"pad-analyzer/internal/api/render"
 	"strings"
+
+	"pad-analyzer/internal/api/render"
 
 	"pad-analyzer/internal/auth"
 	storagedb "pad-analyzer/internal/storage/database"
 )
 
-// rlsStreamingPrefixes are path prefixes for long-lived / streaming endpoints
-// that must NOT be wrapped in a per-request RLS transaction. Wrapping them would
-// hold a database transaction (and pin its pooled connection) open for the
-// entire stream / SSE lifetime, exhausting the pool under concurrency. These
-// handlers remain protected by the Go-layer authz checks; they simply forgo the
-// RLS defense-in-depth layer.
+// rlsStreamingPrefixes: streaming endpoints that must NOT be wrapped in the per-request RLS transaction — it would pin a pooled connection for the stream's lifetime.
+// Go-layer authz still protects them; they forgo the RLS defense-in-depth layer only.
 var rlsStreamingPrefixes = []string{
 	"/api/events", // server-sent events bus
 	"/api/chat/",  // LLM streaming + conversation operations
 }
 
-// rlsHeavyExactPaths lists CPU- or blob-heavy request paths exempt from the
-// per-request RLS transaction for the same reason as the streaming routes:
-// each can burn seconds of CPU (parse + 45-rule analysis + iterative fix
-// loop) or perform many blob round-trips while holding the transaction, so a
-// handful of concurrent calls pins every pooled connection and stalls ALL
-// other requests — including health-gated writes.
-//
-// Every route here was verified to enforce Go-layer authz independently
-// (FlowService.GetAuthorized / resolveFlow with viewer/editor perms, or
-// user-scoped-only operations), so forgoing RLS removes only the
-// defense-in-depth layer, not the access control. Queries still carry their
-// explicit owner/org WHERE clauses, and RLS policies short-circuit to "allow"
-// when app.current_user_id is unset (app_rls_active()), so exempted routes
-// behave exactly like the streaming routes above.
-//
-// EXACT paths (not prefixes): the /api/analysis tree also contains cheap
-// DB-write routes (triage, baselines, policies, comments) that should keep
-// the RLS transaction's atomicity guarantees.
+// rlsHeavyExactPaths: CPU- or blob-heavy paths exempt from the per-request RLS transaction — each can burn seconds of CPU or many blob round-trips while holding it, pinning every pooled connection.
+// Every route here was verified to enforce Go-layer authz independently (GetAuthorized / resolveFlow, or user-scoped-only operations) and keeps explicit owner/org WHERE clauses — forgoing RLS removes only the defense-in-depth layer. EXACT paths, not prefixes: the /api/analysis tree also contains cheap DB-write routes (triage, baselines, policies, comments) that keep the transaction's atomicity.
 var rlsHeavyExactPaths = map[string]bool{
-	// Analysis of stored flows — resolve via GetAuthorized("viewer"), then
-	// seconds of parse/analyze/export CPU on the resolved document.
+	// GetAuthorized("viewer"), then seconds of parse/analyze/export CPU.
 	"/api/analysis/analyze": true,
-	// Six concurrent pool reads per request (snapshots, history, triage,
-	// usage, audit, security); each carries its own flow-id / user-id
-	// predicate, and the service resolves the flow set through the library
-	// scope checks first.
+	// Six concurrent pool reads per request, each with its own flow-id/user-id predicate.
 	"/api/dashboard/analytics":   true,
 	"/api/analysis/lineage":      true,
 	"/api/analysis/graph":        true,
@@ -58,49 +35,34 @@ var rlsHeavyExactPaths = map[string]bool{
 	"/api/analysis/related":      true,
 	"/api/analysis/export/sarif": true,
 	"/api/analysis/export/junit": true,
-	// Suppression inventory: parses the flow and runs every rule to decide
-	// which inline pad-ignore directives are stale.
+	// Parses the flow and runs every rule to decide which pad-ignore directives are stale.
 	"/api/analysis/suppressions": true,
-	// Stateless CI payload analysis — nothing is persisted; PAT-authed and
-	// body/time bounded by the handler itself.
+	// Stateless CI payload analysis — nothing persisted; PAT-authed and bounded.
 	"/api/analysis/analyze-raw": true,
 	// Desktop-only folder batch (rejected in cloud mode where RLS exists).
 	"/api/analysis/batch": true,
-	// Flow patch/fix paths — resolveFlow("editor"), then iterative
-	// parse+analyze+patch loops over up to 10 MB sources.
+	// resolveFlow("editor"), then iterative parse+analyze+patch loops over up to 10 MB sources.
 	"/api/flow/apply-fix":          true,
 	"/api/flow/apply-fix-batch":    true,
 	"/api/flow/preview-fix":        true,
 	"/api/flow/save-source":        true,
 	"/api/flow/suppress-in-source": true,
-	// Up to maxLibrarySearchFlows per-flow blob loads behind a user-scoped
-	// ListFlows (explicit owner WHERE clause).
+	// Per-flow blob loads behind a user-scoped ListFlows (owner WHERE).
 	"/api/flow/search-library": true,
 	// 10 MB multipart parse + save; role-gated (member) and per-user throttled.
 	"/api/flow/upload": true,
-	// Home dashboard aggregates: ~16 read-only queries run CONCURRENTLY on an
-	// errgroup, every one carrying its explicit owner_id predicate. On the
-	// request-long RLS transaction they shared one *sql.Tx — a canceled
-	// sibling (page navigation cancels the request context) left the
-	// transaction's connection poisoned, so later cold builds died on their
-	// first query with "driver: bad connection" and served the empty stub
-	// (which then sat in the 30s cache). Pool connections retry cleanly per
-	// query; the explicit predicates remain the access control.
+	// resolveFlow("viewer"), then the search index is built over the whole document; nothing written.
+	"/api/flow/search": true,
+	// GetAuthorized("viewer"), then seconds of pure rendering (Markdown, the HTML template, the PDF rasteriser); the only DB work is the audit row via its own
+	// writer. /compare and /save are desktop-only and keep their transaction.
+	"/api/export/markdown": true,
+	"/api/export/html":     true,
+	"/api/export/pdf":      true,
+	// ~16 read-only queries run CONCURRENTLY, each with its explicit owner_id predicate; on the request-long transaction a canceled sibling poisoned the
+	// shared *sql.Tx's connection ("driver: bad connection"). Pool connections retry cleanly per query.
 	"/api/dashboard/home": true,
-	// Provider routes that dial OUTBOUND while the handler runs: the live
-	// model listings (each under liveModelsBudget + grace, ~8.5 s), the
-	// connection test (15 s of real billed chat completions plus a model
-	// listing) and the GitHub device-flow calls (start/poll/user for GitHub
-	// Models and Copilot — the poll repeats for as long as the user dithers
-	// on the authorization page). None of them touches the RLS-scoped
-	// backend: credentials and tokens go through the keystore's own
-	// context.Background() connection with per-user WHERE user_id = clauses
-	// (Go-layer authz, not RLS), so the request-long transaction pinned a
-	// pooled connection for the whole upstream dial — with MaxOpenConns 25,
-	// a handful of concurrent tests froze the backend, the same
-	// pool-exhaustion shape /api/dashboard/home had. The purely local
-	// siblings (revoke, the azure-foundry config read/save whose validation
-	// does no network I/O) keep their RLS transaction.
+	// Provider routes that dial OUTBOUND while the handler runs: live model listings (~8.5 s), the billed connection test, the GitHub/Copilot device-flow polls.
+	// None touches the RLS-scoped backend (credentials go through the keystore's own connection) — the transaction pinned a pooled connection for the whole dial. The local siblings (revoke, the config read/save) keep their RLS transaction.
 	"/api/providers/list":          true,
 	"/api/providers/test":          true,
 	"/api/providers/github/start":  true,
@@ -111,30 +73,26 @@ var rlsHeavyExactPaths = map[string]bool{
 	"/api/providers/copilot/user":  true,
 }
 
-// rlsBlobContentPath matches the dynamic library routes whose handlers stream
-// stored blobs (flow content, a stored version, or the two-blob diff). They
-// cannot appear in rlsHeavyExactPaths (exact match only, these carry path
-// IDs), and running them inside the request-long RLS transaction pinned a
-// pooled connection for the whole blob transfer — with MaxOpenConns 25, 25
-// concurrent content fetches froze the backend for up to the 45s blob cap
-// each, the same pool-exhaustion shape rls.go's withTx comment describes.
-// Every matched handler enforces Go-layer authz BEFORE the blob read
-// (GetLibraryFlowForUser / CheckFlowAccessForUser), so RLS here remains the
-// defense-in-depth layer it is everywhere else exempt.
-//
-// Read-shaped only: the /versions POST (save) and .../restore mutation keep
-// their RLS transaction — multi-step writes want its atomicity.
+// rlsBlobContentPath matches the dynamic library routes that stream stored blobs (flow content, a stored version, the two-blob diff) — exact-path exemption is impossible (they carry IDs), and inside the request-long transaction they pinned a pooled connection for the whole blob transfer.
+// Go-layer authz is enforced BEFORE the blob read; the /versions save and restore mutations keep their transaction (multi-step writes want atomicity). Segments are matched exactly on the dispatch path (routePath), so /{id}/versions/ (the save) must not read as a version.
 func rlsBlobContentPath(path string) bool {
-	if !strings.HasPrefix(path, "/api/library/") {
+	rest, ok := strings.CutPrefix(path, "/api/library/")
+	if !ok {
 		return false
 	}
-	if strings.HasSuffix(path, "/content") {
-		return true
+	segs := strings.Split(rest, "/")
+	if segs[0] == "" {
+		return false
 	}
-	// /{id}/versions/{vn} (content) and /{id}/versions/{vn}/diff. The bare
-	// "/versions" collection and ".../restore" don't contain the trailing
-	// slash and stay transactional.
-	return strings.Contains(path, "/versions/") && !strings.HasSuffix(path, "/restore")
+	switch len(segs) {
+	case 2:
+		return segs[1] == "content"
+	case 3:
+		return segs[1] == "versions" && segs[2] != ""
+	case 4:
+		return segs[1] == "versions" && segs[2] != "" && segs[3] == "diff"
+	}
+	return false
 }
 
 func rlsExemptPath(path string) bool {
@@ -146,76 +104,52 @@ func rlsExemptPath(path string) bool {
 	if rlsBlobContentPath(path) {
 		return true
 	}
-	// The org admin's connection test of the shared credential dials the
-	// upstream for up to 15 s like /api/providers/test below; its org
-	// lookups are Go-layer authz (requireAdmin) and the credential comes
-	// through the keystore's own connection.
+	// The org admin's shared-credential test dials upstream up to 15 s like /api/providers/test;
+	// its org lookups are Go-layer authz (requireAdmin) and the credential uses the keystore's connection.
 	if isOrgProviderTestPath(path) {
 		return true
 	}
-	// The Azure AI Foundry registry's test and discovery routes (the
-	// caller's own and an organisation's) dial Azure — a sign-in, a probe or
-	// one tiny model call, a project's listings — for up to 30 s. Their
-	// registry reads and writes carry explicit owner predicates, the role
-	// checks are Go-layer authz and the credentials come through the
-	// keystore's own connection; the registry's CRUD routes keep their
-	// transaction.
+	// The Azure AI Foundry registry's test and discovery routes (own and org) dial Azure for up
+	// to 30 s; registry reads/writes carry explicit owner predicates and CRUD keeps its transaction.
 	if _, outbound := azureOutboundRoute(path); outbound {
 		return true
 	}
-	// The knowledge-base re-index walks up to 10 000 chunks through the
-	// embedding provider (minutes) and must commit page by page — inside
-	// the request transaction a failure on page 3 rolled back the paid-for
-	// pages 1-2 and a large corpus pinned a pooled connection for the whole
-	// walk. Each page's UpdateKnowledgeChunkEmbeddings opens its own short
-	// RLS transaction as the caller instead (so the knowledge_chunks
-	// policies still apply to the writes); the reads carry explicit org_id
-	// predicates and the handler's requireAdmin is the access control.
-	if isKnowledgeReindexPath(path) {
+	// The knowledge re-index walks up to 10 000 chunks through the embedding provider (minutes) and must commit page by page — inside the request transaction a failure on page 3 rolled back the paid-for pages 1-2 (the upload has the same shape at smaller scale).
+	// Each write opens its own short RLS transaction as the caller, so the knowledge policies still apply.
+	if isKnowledgeEmbedPath(path) {
+		return true
+	}
+	// The org notification-channel test dials the webhook for up to 15 s; requireAdmin is its
+	// access control and ListOrgChannels carries an explicit org_id predicate.
+	if isOrgChannelTestPath(path) {
 		return true
 	}
 	return rlsHeavyExactPaths[path]
 }
 
-// isKnowledgeReindexPath matches POST /api/orgs/{id}/knowledge/reindex
-// (path already canonical — the /api/v1 alias is stripped before this
-// middleware runs).
-func isKnowledgeReindexPath(path string) bool {
+// isKnowledgeEmbedPath matches the two knowledge routes that walk the embedding provider: POST /api/orgs/{id}/knowledge/{reindex,upload} (path already canonical — the /api/v1 alias is stripped before this runs).
+func isKnowledgeEmbedPath(path string) bool {
 	rest, ok := strings.CutPrefix(path, "/api/orgs/")
 	if !ok {
 		return false
 	}
 	orgID, tail, ok := strings.Cut(rest, "/")
-	return ok && orgID != "" && tail == "knowledge/reindex"
+	return ok && orgID != "" && (tail == "knowledge/reindex" || tail == "knowledge/upload")
 }
 
-// rlsMiddleware sets the Postgres session variable app.current_user_id for
-// authenticated /api/ requests that are not exempt (below). The variable is
-// scoped to a transaction that wraps the entire request so that Row-Level
-// Security policies can filter rows by the caller's identity.
-//
-// The middleware is a no-op when:
-//   - JWT auth is disabled (local / desktop mode)
-//   - the backend is not Postgres (filesystem backend)
-//   - the route is public (no authenticated user)
-//   - the route streams (see rlsStreamingPrefixes) — wrapping it would pin a
-//     connection for the stream's lifetime
-//   - the route is CPU- or blob-heavy (see rlsHeavyExactPaths), including
-//     some writes (apply-fix, save-source, upload)
-//
-// Outside this middleware entirely: the /ws WebSocket endpoint (not under
-// /api/) and background work — the scanner, retention purge, audit writer and
-// notification delivery. None of these run with app.current_user_id set, so
-// for them RLS policies allow every row and tenant isolation rests on the
-// Go-layer authz and the queries' explicit owner/org clauses.
-//
-// If the RLS transaction cannot be started, the request proceeds without RLS
-// (the Go-layer authz is still enforced). A warning is logged so operators can
-// detect misconfiguration without taking the service down.
-//
-// On completion the transaction is committed only when the handler produced a
-// success (<400) response; an error response or a panic rolls it back so a
-// partially applied write is not persisted.
+// isOrgChannelTestPath matches POST /api/orgs/{id}/channels/{channelId}/test
+// segment by segment (no empty ids, nothing after "test").
+func isOrgChannelTestPath(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/api/orgs/")
+	if !ok {
+		return false
+	}
+	segs := strings.Split(rest, "/")
+	return len(segs) == 4 && segs[0] != "" && segs[1] == "channels" && segs[2] != "" && segs[3] == "test"
+}
+
+// rlsMiddleware sets app.current_user_id for authenticated /api/ requests that are not exempt, in a transaction wrapping the entire request: LAZY for reads (first scoped statement, storagedb.RLSScope), fail-closed for mutations (starts before the handler; a start failure is a 503).
+// No-op without JWT auth, Postgres, or on public/exempt routes; /ws and background work (scanner, retention, audit writer, notifications) are outside it entirely and rest on Go-layer authz plus explicit clauses — RLS policies allow every row when app.current_user_id is unset. Commits only on a <400 response; an error or panic rolls back.
 func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !rt.security.JWTEnabled {
@@ -223,7 +157,9 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		if !strings.HasPrefix(r.URL.Path, "/api/") || publicRoutes[r.URL.Path] || rlsExemptPath(r.URL.Path) {
+		// Exemptions are judged on the path chi dispatches on (routePath): a RawPath such as /api/library/..%2Fchat%2Fx decodes and cleans to the exempt /api/chat/x
+		// while chi runs a transactional library route.
+		if p := routePath(r); !strings.HasPrefix(p, "/api/") || publicRoutes[p] || rlsExemptPath(p) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -240,61 +176,59 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		tx, err := rlsBackend.BeginRLS(r.Context(), claims.UserID)
-		if err != nil {
-			// B1.9: MUTATING requests fail CLOSED — without the RLS
-			// transaction the Postgres policies short-circuit to allow-all,
-			// so "proceeding without RLS" on a write was a cross-tenant
-			// window whenever the pool/transient DB hiccuped. Reads stay
-			// fail-open for availability (they're also scoped by explicit
-			// ownership predicates at the query layer).
-			if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+		// The scope is LAZY for reads: BEGIN + set_config run on the first scoped statement, so a read that never touches the store pins nothing.
+		// MUTATING requests fail CLOSED — without the transaction the policies short-circuit to allow-all — so a mutation's scope starts HERE, before handler code, landing the 503 before its non-transactional side effects (keystore writes, provider calls, blob uploads, audit rows). Reads stay fail-open (explicit ownership predicates also scope them).
+		failOpen := r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
+		ctx, scope := storagedb.WithLazyRLS(r.Context(), rlsBackend, claims.UserID, failOpen)
+		if !failOpen {
+			if err := storagedb.EnsureRLS(ctx); err != nil {
 				slog.Error("rls: failed to begin transaction, refusing mutation", "method", r.Method, "path", r.URL.Path, "err", err)
 				render.Error(w, fmt.Errorf("temporarily unavailable — retry"), http.StatusServiceUnavailable)
 				return
 			}
-			slog.Warn("rls: failed to begin transaction, proceeding without RLS (read-only)", "err", err)
-			next.ServeHTTP(w, r)
-			return
 		}
-
-		ctx := storagedb.WithRLSTx(r.Context(), tx)
 		ctx, postCommit := storagedb.WithPostCommit(ctx)
 		r = r.WithContext(ctx)
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 
-		// On panic, roll back and re-panic so an upstream recoverer still sees
-		// the original failure instead of a silently committed partial write.
+		// On panic, roll back and re-panic so an upstream recoverer still sees the original
+		// failure instead of a silently committed partial write.
 		defer func() {
 			if p := recover(); p != nil {
-				_ = tx.Rollback()
+				_ = scope.Rollback()
 				panic(p)
 			}
 		}()
 
 		next.ServeHTTP(rec, r)
 
+		// Only a read can get here with a start failure (a mutation's was
+		// refused above); it ran on the pool.
+		if err := scope.Err(); err != nil {
+			slog.Warn("rls: failed to begin transaction, proceeded without RLS (read-only)", "method", r.Method, "path", r.URL.Path, "err", err)
+		}
+
 		if rec.status >= 400 {
-			if err := tx.Rollback(); err != nil {
+			if err := scope.Rollback(); err != nil {
 				slog.Warn("rls: rollback after error response failed", "err", err)
 			}
 			return
 		}
-		if err := tx.Commit(); err != nil {
+		// Commit is a no-op for a scope that never started: the request wrote
+		// nothing through the transaction, so it is "committed" as it stands.
+		if err := scope.Commit(); err != nil {
 			slog.Warn("rls: failed to commit transaction", "err", err)
 			return
 		}
-		// Run deferred work only after the write is durably committed (e.g. blob
-		// cleanup for a deleted flow), so a rolled-back request never deletes data
-		// that still has a surviving row.
+		// Run deferred work only after the write is durably committed (e.g. blob cleanup for a
+		// deleted flow): a rolled-back request must not delete data whose row survives.
 		postCommit.Run()
 	})
 }
 
-// statusRecorder captures the response status code so the RLS middleware can
-// decide whether to commit or roll back, while passing every write straight
-// through to the underlying ResponseWriter.
+// statusRecorder captures the response status code so the RLS middleware can decide commit vs
+// rollback, while passing every write straight through to the underlying ResponseWriter.
 type statusRecorder struct {
 	http.ResponseWriter
 	status      int
@@ -307,10 +241,8 @@ func (r *statusRecorder) WriteHeader(code int) {
 		r.wroteHeader = true
 		r.ResponseWriter.WriteHeader(code)
 	}
-	// A duplicate WriteHeader is silently dropped: net/http would only log a
-	// "superfluous response.WriteHeader call" and the second status never reaches
-	// the client anyway. Freezing on the first status also keeps the RLS
-	// commit/rollback decision based on the status the client actually received.
+	// A duplicate WriteHeader is silently dropped; freezing on the first status keeps the RLS
+	// commit/rollback decision based on what the client actually received.
 }
 
 func (r *statusRecorder) Write(b []byte) (int, error) {
@@ -327,4 +259,10 @@ func (r *statusRecorder) Flush() {
 	if f, ok := r.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer — without it, an RLS-wrapped
+// streaming handler could not lift the server's WriteTimeout and was cut off mid-stream.
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
 }

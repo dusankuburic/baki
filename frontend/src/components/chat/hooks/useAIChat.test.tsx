@@ -168,14 +168,12 @@ describe('useAIChat send/stream/commit', () => {
     })
     // The stream slot is cleared once committed.
     expect(useChatStore.getState().streams[threadId]).toBeUndefined()
-    expect(chatApi.saveConversation).toHaveBeenCalledWith(
-      'flow1',
-      threadId,
-      expect.arrayContaining([
-        expect.objectContaining({role: 'user', content: 'hello'}),
-        expect.objectContaining({role: 'assistant', content: 'Hello!'}),
-      ]),
-    )
+    // The turn went without history, so the server owns its stored copy —
+    // the question at stream start, the answer (trail, finish reason, usage
+    // included) at stream end — and the client makes no full-replace save
+    // of the thread on done.
+    expect(req.messages).toBeUndefined()
+    expect(chatApi.saveConversation).not.toHaveBeenCalled()
   })
 
   it('appends an error bubble when the stream reports an error mid-flight', async () => {
@@ -367,7 +365,7 @@ describe('useAIChat history restore (H1)', () => {
     ).toEqual(['q1', 'a1', 'new question'])
   })
 
-  // F-21: a conversation load that reports an in-flight stream re-attaches
+  // A conversation load that reports an in-flight stream re-attaches
   // to it through the app-wide engine (the real SSE + resume machinery).
   it('re-attaches an in-flight stream reported by the conversation load and commits the resumed done', async () => {
     seedPersistedThread()
@@ -1011,9 +1009,11 @@ describe('useAIChat per-thread model memory', () => {
     expect(useChatStore.getState().modelRefusals[threadId]).toMatchObject({model: 'm/docs000000', epoch: epoch0 + 1})
   })
 
-  // The client re-saves whole threads and the server stores them as sent: a
-  // label dropped anywhere on the way would be lost for good.
-  it('keeps modelLabel through save → reload → save', async () => {
+  // The server stores a turn sent without history itself, with the label
+  // the turn went to; the client re-saves whole threads after a resend (the
+  // turn it owns), and the server stores them as sent: a label dropped
+  // anywhere on the way would be lost for good.
+  it('keeps modelLabel through commit → reload → resend save', async () => {
     vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
     const first = await renderWithTurn(DOCS)
     const threadId = first.result.current.activeThreadId!
@@ -1025,9 +1025,11 @@ describe('useAIChat per-thread model memory', () => {
     act(() => {
       capturedCb!(doneEvent(sid))
     })
-    await waitFor(() => expect(chatApi.saveConversation).toHaveBeenCalledTimes(1))
-    const saved = vi.mocked(chatApi.saveConversation).mock.calls[0][2]
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+    // Server-owned: committed with its label, not saved from here.
+    const saved = useChatStore.getState().getMessages(threadId)
     expect(saved[1]).toMatchObject({role: 'assistant', modelLabel: 'Docs writer'})
+    expect(chatApi.saveConversation).not.toHaveBeenCalled()
     first.unmount()
 
     // A reload: the thread comes back from storage, its conversation from the
@@ -1052,13 +1054,30 @@ describe('useAIChat per-thread model memory', () => {
     act(() => {
       capturedCb!(doneEvent(sid2))
     })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(4))
+    expect(chatApi.saveConversation).not.toHaveBeenCalled()
+
+    // A resend carries the thread's history and is the client's to store:
+    // its save on done re-sends the loaded reply, label intact, beside the
+    // new one.
+    capturedCb = null
+    act(() => {
+      second.result.current.handleResend()
+    })
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
+    const sid3 = vi.mocked(chatApi.streamChatMessage).mock.calls[1][0].clientStreamId!
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(doneEvent(sid3))
+    })
     await waitFor(() => expect(chatApi.saveConversation).toHaveBeenCalledTimes(1))
     const resaved = vi.mocked(chatApi.saveConversation).mock.calls[0][2]
+    expect(resaved).toHaveLength(4)
     expect(resaved[1]).toMatchObject({id: saved[1].id, modelLabel: 'Docs writer'})
     expect(resaved[3]).toMatchObject({modelLabel: 'Docs writer'})
   })
 
-  // C6: a turn sent before the listing named its model stored "m/…" as the
+  // A turn sent before the listing named its model stored "m/…" as the
   // label, which then beat the listing's name in bubbles and exports.
   it('never stores an id as the label of the reply or the pin', async () => {
     vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
@@ -1081,7 +1100,7 @@ describe('useAIChat per-thread model memory', () => {
     expect(useChatStore.getState().getMessages(threadId)[1]).not.toHaveProperty('modelLabel')
   })
 
-  // C4: the notice waits for the model list to refresh; the toast doesn't.
+  // The notice waits for the model list to refresh; the toast doesn't.
   it('says at once that a send was refused for its model', async () => {
     vi.mocked(chatApi.streamChatMessage).mockRejectedValue(new ApiError('gone', 400, 'MODEL_NOT_AVAILABLE'))
     const {result} = await renderWithTurn(DOCS)
@@ -1095,7 +1114,7 @@ describe('useAIChat per-thread model memory', () => {
   })
 })
 
-// C11: a reload mid-turn re-attaches the stream labelled from the thread's
+// A reload mid-turn re-attaches the stream labelled from the thread's
 // record of the turn — the model it actually went to.
 describe('useAIChat in-flight turn record', () => {
   const inFlightOf = (threadId: string) => useChatStore.getState().threads.find(t => t.id === threadId)?.inFlight
@@ -1176,9 +1195,9 @@ describe('useAIChat in-flight turn record', () => {
   })
 })
 
-// C12: Regenerate takes the last exchange off before sending it again; a
-// refusal used to lose the old answer (and the next save deleted it on the
-// server too).
+// Regenerate takes the last exchange off before sending it again; a refusal
+// must put the old answer back (the next save would otherwise delete it on
+// the server too).
 describe('useAIChat resend refused', () => {
   it('puts the exchange back as it was, and leaves the composer alone', async () => {
     vi.mocked(chatApi.streamChatMessage).mockResolvedValueOnce('sid')
@@ -1216,8 +1235,8 @@ describe('useAIChat resend refused', () => {
   })
 })
 
-// C5: the composer's guidance (no Azure model to chat with) used to hold the
-// composer only; the other ways of sending went out with model ''.
+// The composer's guidance (no Azure model to chat with) must hold every way
+// of sending; none may go out with model ''.
 describe('useAIChat while nothing can be sent', () => {
   it('refuses every way of sending, and Regenerate keeps the exchange', async () => {
     vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')

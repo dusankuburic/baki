@@ -73,9 +73,8 @@ func summarize(chunks []Chunk) chunkSummary {
 	return s
 }
 
-// Foundry tool items as the v1 spec shapes them: MCP calls report
-// "error": null on success and an object on failure; Foundry tools'
-// *_call_output items carry object or array outputs.
+// Foundry tool items as the v1 spec shapes them: MCP calls report "error": null on success and an object on
+// failure; *_call_output items carry object or array outputs.
 const (
 	mcpOKItem      = `{"id":"mcp_1","type":"mcp_call","server_label":"dice","name":"roll","arguments":"{}","output":"4","error":null,"status":"completed"}`
 	mcpErrItem     = `{"id":"mcp_2","type":"mcp_call","server_label":"dice","name":"roll","arguments":"{}","output":null,"error":{"type":"mcp_protocol_error","code":32600,"message":"Session terminated"},"status":"failed"}`
@@ -88,9 +87,8 @@ const (
 
 var foundryOutputItems = []string{mcpOKItem, mcpErrItem, mcpListErrItem, searchOutItem, openapiOutItem, answerItem, flowCallItem}
 
-// TestParseResponsesSSE_ObjectValuedToolItems: object / array outputs and
-// object errors must neither drop the items' own events nor sink the terminal
-// event (whose response.output repeats every item).
+// TestParseResponsesSSE_ObjectValuedToolItems: object/array outputs and object errors must neither drop the
+// items' events nor sink the terminal event (whose output repeats every item).
 func TestParseResponsesSSE_ObjectValuedToolItems(t *testing.T) {
 	var events []string
 	for i, item := range foundryOutputItems {
@@ -143,8 +141,7 @@ func TestParseResponsesSSE_ObjectValuedToolItems(t *testing.T) {
 	}
 }
 
-// TestAzureFoundry_AgentChatToleratesObjectOutputs is the non-streaming
-// counterpart (the connection test path).
+// TestAzureFoundry_AgentChatToleratesObjectOutputs: the non-streaming counterpart (the connection test path).
 func TestAzureFoundry_AgentChatToleratesObjectOutputs(t *testing.T) {
 	output := "[" + strings.Join(foundryOutputItems, ",") + `,{"type":"future_item","content":"not an array"}]`
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, body map[string]any) {
@@ -169,9 +166,8 @@ const (
 	githubApprovalReq = `{"id":"mcpr_1","type":"mcp_approval_request","server_label":"github","name":"create_issue","arguments":"{\"title\":\"x\"}"}`
 )
 
-// TestParseResponsesSSE_MCPApprovalRequestExplains: a run that stops for MCP
-// tool approval (Foundry's default) must end with an explanation, not with a
-// successful empty answer.
+// TestParseResponsesSSE_MCPApprovalRequestExplains: a run stopped for MCP approval must end with an
+// explanation, not a successful empty answer.
 func TestParseResponsesSSE_MCPApprovalRequestExplains(t *testing.T) {
 	events := itemPair(0, githubToolsItem)
 	events = append(events, itemPair(1, githubApprovalReq)...)
@@ -217,8 +213,7 @@ func TestAzureFoundry_AgentChatMCPApprovalRequestExplains(t *testing.T) {
 	}
 }
 
-// TestParseResponsesSSE_UnlabelledServerStep: a server-side item without a
-// trail label still marks the stream as delivered (Chunk.ServerStep).
+// TestParseResponsesSSE_UnlabelledServerStep: a server-side item without a trail label still marks the stream as delivered (Chunk.ServerStep).
 func TestParseResponsesSSE_UnlabelledServerStep(t *testing.T) {
 	events := itemPair(0, `{"type":"future_tool_call","call_id":"c9","status":"completed"}`)
 	events = append(events, `{"type":"response.failed","response":{"status":"failed","error":{"code":"rate_limit_exceeded","message":"slow down"}}}`)
@@ -234,9 +229,7 @@ func TestParseResponsesSSE_UnlabelledServerStep(t *testing.T) {
 	}
 }
 
-// TestAzureFoundry_AgentStreamNotReplayedAfterServerStep: the retry wrapper
-// must not re-POST an agent run whose server-side step already executed,
-// whether or not the step has a trail label.
+// TestAzureFoundry_AgentStreamNotReplayedAfterServerStep: a server-side step already executed must block the retry wrapper's replay, labelled or not.
 func TestAzureFoundry_AgentStreamNotReplayedAfterServerStep(t *testing.T) {
 	for _, tc := range []struct{ name, item string }{
 		{"labelled step", `{"type":"openapi_call","call_id":"c1","name":"tickets","arguments":"{}","status":"completed"}`},
@@ -270,9 +263,7 @@ func TestAzureFoundry_AgentStreamNotReplayedAfterServerStep(t *testing.T) {
 	}
 }
 
-// TestParseResponsesSSE_LargeImageGenerationLine: a generated image travels
-// base64-encoded in output_item.done and again in response.completed; a line
-// over the former 4 MB cap must not fail the turn.
+// TestParseResponsesSSE_LargeImageGenerationLine: a line over the former 4 MB cap (the base64 image rides output_item.done and completed) must not fail the turn.
 func TestParseResponsesSSE_LargeImageGenerationLine(t *testing.T) {
 	item := `{"id":"ig_1","type":"image_generation_call","status":"completed","result":"` + strings.Repeat("A", 5<<20) + `"}`
 	body := sseEvents(
@@ -289,8 +280,7 @@ func TestParseResponsesSSE_LargeImageGenerationLine(t *testing.T) {
 	}
 }
 
-// TestParseResponsesSSE_FoundryToolLabels: Foundry's own tool items (call_id,
-// no id) reach the trail; their *_call_output items do not.
+// TestParseResponsesSSE_FoundryToolLabels: Foundry's own tool items (call_id, no id) reach the trail; their *_call_output items do not.
 func TestParseResponsesSSE_FoundryToolLabels(t *testing.T) {
 	search := `{"type":"azure_ai_search_call","call_id":"c1","status":"completed"}`
 	a2a := `{"type":"a2a_preview_call","call_id":"c2","name":"Helper","status":"completed"}`
@@ -326,10 +316,8 @@ func TestParseResponsesSSE_FoundryToolLabels(t *testing.T) {
 	}
 }
 
-// TestParseResponsesSSE_UndecodableItemEmitsKeepalive: an undecodable
-// output_item event is exactly the unknown-shape silent event the keepalive
-// exists for — it used to `continue` straight past the end-of-loop keepalive,
-// so a silent phase made only of such events fed the idle watchdog nothing.
+// TestParseResponsesSSE_UndecodableItemEmitsKeepalive: an undecodable output_item event used to `continue`
+// past the end-of-loop keepalive, so a silent phase of only such events fed the idle watchdog nothing.
 func TestParseResponsesSSE_UndecodableItemEmitsKeepalive(t *testing.T) {
 	body := sseEvents(
 		`{"type":"response.output_item.added","output_index":0,"item":42}`,
@@ -354,10 +342,8 @@ func TestParseResponsesSSE_UndecodableItemEmitsKeepalive(t *testing.T) {
 	}
 }
 
-// TestParseResponsesSSE_AsymmetricCallKeyingSingleCall: when the added event
-// carries only call_id but the done event carries id AND call_id, the two
-// events must still pair (both canonicalise to call_id); keying the done
-// event id-first used to create a second pending call and double-emit it.
+// TestParseResponsesSSE_AsymmetricCallKeyingSingleCall: added carrying only call_id and done carrying id AND
+// call_id must still pair; keying the done event id-first double-emitted the call.
 func TestParseResponsesSSE_AsymmetricCallKeyingSingleCall(t *testing.T) {
 	added := `{"type":"function_call","call_id":"call_x","name":"search_flow","arguments":""}`
 	done := `{"id":"fc_9","type":"function_call","call_id":"call_x","name":"search_flow","arguments":"{\"q\":\"z\"}","status":"completed"}`
@@ -375,9 +361,7 @@ func TestParseResponsesSSE_AsymmetricCallKeyingSingleCall(t *testing.T) {
 	}
 }
 
-// TestParseResponsesSSE_ContentFilterCarriesUsage: the tokens a filtered run
-// consumed ride on the error chunk (as with MCP approvals) so they are still
-// billed instead of escaping the budget.
+// TestParseResponsesSSE_ContentFilterCarriesUsage: a filtered run's tokens ride on the error chunk so they are billed.
 func TestParseResponsesSSE_ContentFilterCarriesUsage(t *testing.T) {
 	body := sseEvents(`{"type":"response.incomplete","response":{"status":"incomplete","model":"gpt-4.1","usage":{"input_tokens":31,"output_tokens":4},"incomplete_details":{"reason":"content_filter"}}}`)
 	var got []Chunk
@@ -390,8 +374,7 @@ func TestParseResponsesSSE_ContentFilterCarriesUsage(t *testing.T) {
 	}
 }
 
-// D-33: a response.failed event that carries usage and the model bills the
-// tokens the failed run spent by Azure's numbers, not a tokenizer estimate.
+// D-33: a response.failed that carries usage bills by Azure's numbers, not a tokenizer estimate.
 func TestParseResponsesSSE_FailedCarriesUsage(t *testing.T) {
 	body := sseEvents(`{"type":"response.failed","response":{"status":"failed","model":"gpt-4.1","usage":{"input_tokens":31,"output_tokens":4},"error":{"code":"server_error","message":"boom"}}}`)
 	got := parseChunks(t, body)
@@ -406,9 +389,8 @@ func TestParseResponsesSSE_FailedCarriesUsage(t *testing.T) {
 	}
 }
 
-// D-35: answer text delivered whole in a message's done event, and refusal
-// content (a refusal is the model's answer, not silence), reach the user
-// exactly once; text that streamed as deltas is not repeated.
+// D-35: whole-message text and refusal content (a refusal is the model's answer) reach the user exactly
+// once; text that streamed as deltas is not repeated.
 func TestParseResponsesSSE_WholeMessageAndRefusal(t *testing.T) {
 	completed := `{"type":"response.completed","response":{"status":"completed","model":"gpt-4.1"}}`
 	t.Run("message delivered whole", func(t *testing.T) {
@@ -459,8 +441,7 @@ func TestParseResponsesSSE_WholeMessageAndRefusal(t *testing.T) {
 	})
 }
 
-// D-35 (non-streaming): the connection test's agent turn reads refusal
-// content as the answer.
+// D-35 (non-streaming): the connection test's agent turn reads refusal content as the answer.
 func TestAzureFoundry_AgentChatReadsRefusal(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, body map[string]any) {
 		writeJSON(w, 200, map[string]any{
@@ -479,10 +460,8 @@ func TestAzureFoundry_AgentChatReadsRefusal(t *testing.T) {
 	}
 }
 
-// D-40: the served model is seeded from the first event that carries the
-// response object (response.created) and rides on every text delta and on
-// error chunks, so a run cut before response.completed still records the
-// model that answered.
+// D-40: the served model is seeded from the first response-bearing event and rides on every delta and error
+// chunk, so a run cut before completed still records the model that answered.
 func TestParseResponsesSSE_ServedModelRidesOnDeltasAndErrors(t *testing.T) {
 	created := `{"type":"response.created","response":{"id":"resp_1","status":"in_progress","model":"gpt-4.1"}}`
 	delta := `{"type":"response.output_text.delta","item_id":"msg_1","delta":"hi"}`
@@ -510,10 +489,8 @@ func TestParseResponsesSSE_ServedModelRidesOnDeltasAndErrors(t *testing.T) {
 	}
 }
 
-// PERF-3 (parser half): every decoded event that produces no chunk —
-// argument deltas, reasoning deltas, *.done notices — feeds the idle
-// watchdog with one keepalive, so a long silent phase is never cancelled as a
-// stalled stream.
+// (parser half) every decoded event that produces no chunk feeds the idle watchdog one keepalive — a long
+// silent phase is never cancelled as a stalled stream.
 func TestParseResponsesSSE_EveryEventFeedsTheWatchdog(t *testing.T) {
 	events := []string{itemEvent("response.output_item.added", 0, `{"id":"fc_1","type":"function_call","call_id":"call_1","name":"propose_fix","arguments":""}`)}
 	for i := 0; i < 60; i++ {
@@ -621,8 +598,7 @@ func TestHostedToolSummary_ScrubsAndCutsOnRuneBoundary(t *testing.T) {
 	if got := hostedToolSummary(responsesOutputItem{Output: json.RawMessage(`{ "summary": "ok" }`), Error: json.RawMessage(`null`)}); got != `{"summary":"ok"}` {
 		t.Errorf("object output summary = %q", got)
 	}
-	// F-20: finished hosted search steps without an outcome text show what
-	// they searched for.
+	// Finished hosted search steps without outcome text show what they searched for.
 	if got := hostedToolSummary(responsesOutputItem{Type: "web_search_call",
 		Action: responsesToolAction{Type: "search", Query: "PAD run flow action"}}); got != "PAD run flow action" {
 		t.Errorf("web search action.query summary = %q", got)
@@ -650,9 +626,8 @@ func TestHostedToolSummary_ScrubsAndCutsOnRuneBoundary(t *testing.T) {
 	}
 }
 
-// TestAzureFoundry_FetchAgentsSkipsKindsTheSharedRouteCannotRun: hosted,
-// external and voice agents are not offered (the shared Responses route
-// cannot run them) and do not count toward the listing cap.
+// TestAzureFoundry_FetchAgentsSkipsKindsTheSharedRouteCannotRun: hosted, external and voice agents are not
+// offered and do not count toward the listing cap.
 func TestAzureFoundry_FetchAgentsSkipsKindsTheSharedRouteCannotRun(t *testing.T) {
 	kind := func(k string) map[string]any {
 		return map[string]any{"latest": map[string]any{"definition": map[string]any{"kind": k}}}
@@ -697,12 +672,9 @@ func TestAzureFoundry_FetchAgentsSkipsKindsTheSharedRouteCannotRun(t *testing.T)
 	}
 }
 
-// TestAzureFoundry_ReasoningRouteFallbackOnModelNotSupported (F-18): when the
-// resource's /openai/v1/responses route does not serve the model (404 or a
-// 400 "Model not supported"), the rerouted turn falls back to chat
-// completions' built-in reasoning_effort "none" repair — announced by the
-// reasoning_off notice — and the refusal is memoised so later turns answer
-// on chat completions at once.
+// TestAzureFoundry_ReasoningRouteFallbackOnModelNotSupported: a responses route refusing the model (404 or
+// 400 "Model not supported") falls back to chat completions' built-in "none" repair — announced by the
+// reasoning_off notice — and the refusal is memoised so later turns answer there at once.
 func TestAzureFoundry_ReasoningRouteFallbackOnModelNotSupported(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, body map[string]any) {
 		if strings.HasSuffix(r.URL.Path, "/responses") {
@@ -742,10 +714,8 @@ func TestAzureFoundry_ReasoningRouteFallbackOnModelNotSupported(t *testing.T) {
 		t.Errorf("done = %+v, want the tool call from the repaired turn", done)
 	}
 	reqs := srv.requests()
-	// The rejection, the refused reroute, and the fallback's own rejection
-	// plus its repaired request — the fallback restarts the repair dance, so
-	// the first refused turn costs one extra round trip; the memos make every
-	// later turn a single request.
+	// The rejection, the refused reroute, and the fallback's own rejection plus its repaired request — the
+	// first refused turn costs one extra round trip; the memos make every later turn a single request.
 	if len(reqs) != 4 {
 		t.Fatalf("%d requests, want 4", len(reqs))
 	}
@@ -762,9 +732,8 @@ func TestAzureFoundry_ReasoningRouteFallbackOnModelNotSupported(t *testing.T) {
 	}
 }
 
-// TestAzureFoundry_ResponsesFunctionToolsAreFlat (F-18): the ephemeral-model
-// reroute sends baki's tools in the Responses API's FLAT function shape, not
-// chat-completions' nested {type, function} pair.
+// TestAzureFoundry_ResponsesFunctionToolsAreFlat: the ephemeral-model reroute sends tools in the Responses
+// API's FLAT function shape, not chat-completions' nested {type, function} pair.
 func TestAzureFoundry_ResponsesFunctionToolsAreFlat(t *testing.T) {
 	var seen map[string]any
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, body map[string]any) {
@@ -800,11 +769,8 @@ func TestAzureFoundry_ResponsesFunctionToolsAreFlat(t *testing.T) {
 	}
 }
 
-// A10: a tools turn whose Responses route is KNOWN to refuse the model goes
-// to chat completions with the built-in repair at once. It used to leave the
-// rejection unrepaired for the reroute hook, which declined (route refused)
-// and restarted the repair — three requests where two suffice. The route
-// memo can outlive the repair memo: any repaired 200 overwrites the latter.
+// A route KNOWN to refuse the model takes chat completions with the built-in repair at once (the old path
+// paid three requests where two suffice); the route memo can outlive the repair memo.
 func TestAzureFoundry_KnownRefusedRouteSkipsTheEscape(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, body map[string]any) {
 		if strings.HasSuffix(r.URL.Path, "/responses") {

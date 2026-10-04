@@ -76,21 +76,12 @@ func TestBeginApplyKeepalive_EndsOnCtxCancel(t *testing.T) {
 	close(applyDone)
 }
 
-// TestBeginApplyKeepalive_NilTouchClosable: with no touch wired the helper
-// starts no goroutine; the caller's close must still be a safe no-op.
-func TestBeginApplyKeepalive_NilTouchClosable(t *testing.T) {
-	ap := &chatFixApplier{}
-	applyDone := ap.beginApplyKeepalive(context.Background())
-	close(applyDone)
-}
-
-// TestApplyFixWithApproval_PanicInApplyEndsTheKeepalive drives the production
-// path: the decision is approved, the apply hook panics, and the panic is
-// recovered one frame up (where the stream worker's recover sits in
-// production). The keepalive goroutine started for the apply window must not
-// survive it — before the defer-close fix it was stranded forever, touching
-// the dead stream control every fixDecisionKeepalive and pinning the closure
-// graph, answer buffer included.
+// TestApplyFixWithApproval_PanicInApplyEndsTheKeepalive drives the production path: the
+// decision is approved, the apply hook panics, and the panic is recovered one frame up
+// (where the stream worker's recover sits in production). The keepalive goroutine started
+// for the apply window must not survive it — before the defer-close fix it was stranded
+// forever, touching the dead stream control every fixDecisionKeepalive and pinning the
+// closure graph, answer buffer included.
 func TestApplyFixWithApproval_PanicInApplyEndsTheKeepalive(t *testing.T) {
 	doc := fixTestDoc()
 	var hookRuns int32

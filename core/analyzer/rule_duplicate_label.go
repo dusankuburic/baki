@@ -27,8 +27,7 @@ func (r *DuplicateLabelRule) Check(block *models.Block, ctx *RuleContext) []mode
 
 	// Count LABEL blocks sharing this name (case-insensitive, matching the
 	// goto-antipattern resolver and buildLabelIndex exactly) from the
-	// precomputed LabelNameCount index — previously this rescanned
-	// ctx.AllBlocks per LABEL block (O(labels × blocks)).
+	// precomputed LabelNameCount index (was O(labels × blocks)).
 	lower := strings.ToLower(labelName)
 	count := ctx.LabelNameCount[lower]
 	if count <= 1 {

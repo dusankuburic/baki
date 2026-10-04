@@ -7,12 +7,9 @@ import (
 	"time"
 )
 
-// maxConnsPerHostFromEnv reads PAD_AI_MAX_CONNS_PER_HOST. Idle pooling was
-// already capped, but ACTIVE outbound connections were unbounded: N users × 3
-// concurrent streams each hold one provider connection for up to the 10-minute
-// stream cap, and a small deploy could exhaust its fd budget. The default
-// (256) covers healthy multi-tenant load; 0 disables the cap for operators
-// who prefer the old behaviour.
+// maxConnsPerHostFromEnv reads PAD_AI_MAX_CONNS_PER_HOST: idle pooling was already capped, but ACTIVE
+// connections were unbounded — N users × 3 concurrent streams each hold a connection for up to the 10-minute
+// stream cap, and a small deploy could exhaust its fd budget. Default 256; 0 disables the cap.
 func maxConnsPerHostFromEnv() int {
 	if v := os.Getenv("PAD_AI_MAX_CONNS_PER_HOST"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
@@ -22,24 +19,11 @@ func maxConnsPerHostFromEnv() int {
 	return 256
 }
 
-// sharedHTTPClient is the single http.Client used by every provider.
-//
-// Previously each provider instance constructed its own http.Client, and the
-// ProviderFactory builds a fresh provider per request — so TCP/TLS connections
-// were never reused across requests (each client had its own idle-connection
-// pool that was discarded with the provider). Sharing one client lets the
-// underlying transport pool and reuse keep-alive connections, cutting latency
-// and file-descriptor churn under load.
-//
-// MaxIdleConnsPerHost is raised from the default of 2 because a busy instance
-// talks to a small number of provider hosts with high concurrency.
-//
-// Timeout is deliberately 0 (no client-level deadline). Go's http.Client.Timeout
-// includes reading the response body, so a 120s value here would silently kill
-// any streaming response (SSE) that took longer than 120s — even though the chat
-// layer advertises a 10-minute stream cap. Per-request cancellation is enforced
-// via the context passed to each provider's Stream/Chat call (chat.go sets a
-// 10-min context timeout + a 90s idle-timeout watchdog).
+// sharedHTTPClient is the single http.Client used by every provider: the factory builds a provider per
+// request, and per-instance clients meant TCP/TLS connections were never reused across requests. MaxIdleConnsPerHost
+// is raised from 2 because a busy instance talks to few hosts with high concurrency. Timeout is deliberately 0:
+// http.Client.Timeout includes reading the body, so any value here would silently kill long SSE responses —
+// per-request cancellation is enforced via the context (chat.go's 10-min cap + 90s idle watchdog).
 var sharedHTTPClient = &http.Client{
 	Timeout: 0,
 	Transport: &http.Transport{
@@ -48,9 +32,8 @@ var sharedHTTPClient = &http.Client{
 		MaxIdleConnsPerHost: 20,
 		MaxConnsPerHost:     maxConnsPerHostFromEnv(),
 		IdleConnTimeout:     90 * time.Second,
-		// B1.8: a header-only floor — a future call site that forgets a
-		// per-request context gets bounded headers (30s) without killing
-		// long SSE bodies the way Client.Timeout would.
+		// B1.8: a header-only floor — a call site that forgets a per-request context gets bounded headers
+		// without killing long SSE bodies the way Client.Timeout would.
 		ResponseHeaderTimeout: 30 * time.Second,
 		ForceAttemptHTTP2:     true,
 	},

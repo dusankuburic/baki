@@ -24,13 +24,13 @@ const ciWebhookPath = "/api/integrations/ci"
 // a STORED flow and record the run on its dashboard through POST
 // /api/integrations/ci, signed exactly the way the server's verifySignature
 // checks it (HMAC-SHA256 over "<unix-seconds>." + body, hex, "sha256=" prefix,
-// timestamp echoed in X-Baki-Timestamp; the server rejects a timestamp more
-// than five minutes off its clock).
+// timestamp echoed in X-Baki-Timestamp; rejected if more than five minutes off
+// the server clock).
 //
 // The endpoint does not ingest a runner's report — the server re-analyses the
-// flow it holds, so dashboards never trust numbers a pipeline hands them —
-// which is why the body is just {flowId, failOn, format}. A local report.json
-// (`bakicli -format json` output) may be given as the source of the flow ID.
+// flow it holds, so dashboards never trust numbers a pipeline hands them — so
+// the body is just {flowId, failOn, format}. A local report.json may supply
+// the flow ID.
 func runReport(args []string) {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
 	endpoint := fs.String("endpoint", "", "PAD Analyzer server base URL (https://baki.example.com) or the full "+ciWebhookPath+" URL")

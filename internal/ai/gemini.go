@@ -12,16 +12,12 @@ import (
 	"sync/atomic"
 )
 
-// geminiCallSeq mints globally-unique synthesized tool-call IDs. Gemini's
-// protocol returns no tool-call IDs, so both the streaming and non-streaming
-// paths synthesize "call_N". The counter must be process-wide (not
-// per-request): a tool-loop conversation replays history through
-// toGeminiContents, whose callNames map is keyed by ID — a per-request counter
-// makes iteration 2's call_0 overwrite iteration 1's entry, silently
-// mis-attributing an earlier tool result to the newer function name.
+// geminiCallSeq mints synthesized tool-call IDs ("call_N"): Gemini's protocol
+// returns none. It must be process-wide — a tool loop replays history through
+// toGeminiContents, whose callNames map is keyed by ID, and a per-request
+// counter makes iteration 2's call_0 overwrite iteration 1's entry.
 var geminiCallSeq atomic.Uint64
 
-// nextGeminiCallID returns a fresh, process-unique Gemini tool-call ID.
 func nextGeminiCallID() string {
 	return fmt.Sprintf("call_%d", geminiCallSeq.Add(1))
 }
@@ -29,9 +25,8 @@ func nextGeminiCallID() string {
 type GeminiProvider struct {
 	apiKey string
 	client *http.Client
-	// embeddingModel overrides the Gemini embedding model; empty falls back to
-	// gemini-embedding-001. Satisfies embedModelSetter so ForEmbedding can apply
-	// a deployer-chosen model.
+	// embeddingModel overrides the embed model; "" falls back to
+	// gemini-embedding-001. Satisfies embedModelSetter for ForEmbedding.
 	embeddingModel string
 }
 
@@ -54,8 +49,6 @@ func (g *GeminiProvider) EmbeddingModel() string {
 	return geminiEmbedModelDefault
 }
 
-// geminiEmbedModelDefault is the shipped Gemini embedding model used when no
-// override is configured.
 const geminiEmbedModelDefault = "gemini-embedding-001"
 
 func (g *GeminiProvider) SupportsTools() bool { return true }
@@ -70,10 +63,9 @@ func (g *GeminiProvider) PricePerMillionTokens() Pricing {
 	return Pricing{InputCostPerM: 1.25, OutputCostPerM: 10.0}
 }
 
-// geminiEmbedBatchSize caps how many texts ride in one batchEmbedContents
-// request. Gemini rejects oversized batches (documented ~100/call), and callers
-// embed up to maxKnowledgeChunks (500) documents at once, so Embed splits the
-// input into sub-batches and concatenates the results in order.
+// geminiEmbedBatchSize caps one batchEmbedContents request: Gemini rejects
+// oversized batches (~100 documented) and callers embed up to
+// maxKnowledgeChunks texts, so Embed splits and concatenates in order.
 const geminiEmbedBatchSize = 100
 
 func (g *GeminiProvider) Embed(ctx context.Context, texts []string) ([][]float32, error) {
@@ -92,12 +84,11 @@ func (g *GeminiProvider) Embed(ctx context.Context, texts []string) ([][]float32
 	return res, nil
 }
 
-// embedBatch embeds a single sub-batch (≤ geminiEmbedBatchSize texts).
 func (g *GeminiProvider) embedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	// Gemini's embeddings API differs from OpenAI's shape: a single
+	// Gemini's embeddings API differs from OpenAI's shape: one
 	// batchEmbedContents POST carries an array of requests, each wrapping the
-	// text in a content.parts[].text object. taskType RETRIEVAL_DOCUMENT is the
-	// recommended setting for documents that will be stored and searched.
+	// text in content.parts[].text; RETRIEVAL_DOCUMENT is the recommended
+	// taskType for stored/searched documents.
 	embedModel := geminiEmbedModelDefault
 	if g.embeddingModel != "" {
 		embedModel = g.embeddingModel
@@ -211,9 +202,9 @@ type geminiGenConfig struct {
 	MaxOutputTokens int      `json:"maxOutputTokens,omitempty"`
 }
 
-// geminiTemperature is the generationConfig temperature for req: sent when
-// the caller chose it (TemperatureSet, 0 included) or it is non-zero; a zero
-// the caller did not choose keeps the legacy "provider default" (omitted).
+// geminiTemperature is the generationConfig temperature for req: sent when the
+// caller chose it (TemperatureSet, 0 included) or it is non-zero; an unchosen
+// zero keeps the legacy provider default (omitted).
 func geminiTemperature(req Request) *float64 {
 	if !req.TemperatureSet && req.Temperature == 0 {
 		return nil
@@ -380,9 +371,9 @@ func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, erro
 			case resp.StatusCode >= 500:
 				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
-			// Mirror the OpenAI-compat/Claude error paths: an oversized prompt
-			// must surface as ErrContextLimit so the chat service maps it to
-			// the friendly "conversation too long" UX instead of a raw 400.
+			// Mirror the OpenAI-compat/Claude paths: an oversized prompt must
+			// surface as ErrContextLimit so the chat service maps it to the
+			// friendly "conversation too long" UX instead of a raw 400.
 			if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
 				return nil, err
 			}

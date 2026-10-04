@@ -17,11 +17,8 @@ type ChatHandler struct {
 	common  *SecurityConfig
 }
 
-// maxChatMessageBodyBytes bounds request bodies that carry user-authored chat
-// content. A single chat turn (plus any inline attachments) has no legitimate
-// need for more than this — large flow content is pulled server-side from the
-// flow doc, not embedded in the request body. This is tighter than the global
-// 10 MiB cap in router.go.
+// maxChatMessageBodyBytes bounds bodies carrying user-authored chat content: a turn with inline
+// attachments needs no more (large flow content is pulled server-side); tighter than the global 10 MiB cap.
 const maxChatMessageBodyBytes = 1 << 20 // 1 MiB
 
 func NewChatHandler(chatSvc *service.ChatService, flowSvc *service.FlowService, common *SecurityConfig) *ChatHandler {
@@ -53,11 +50,8 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 
 	id, err := h.chatSvc.StreamChatMessage(r.Context(), h.common.KeyScope(r), doc, nil, req)
 	if err != nil {
-		// Capacity rejections are the caller's fault (too many concurrent
-		// streams), not a server failure: render as 429 with a distinct
-		// machine code so the frontend can branch on it instead of regexing
-		// the message. 4xx also keeps the message visible (5xx bodies are
-		// masked to "internal server error").
+		// Capacity rejections are the caller's fault, not a server failure: 429 with a machine code
+		// the frontend branches on (4xx keeps the message visible; 5xx bodies are masked).
 		if errors.Is(err, service.ErrTooManyChatStreams) {
 			render.ErrorWithCode(w, err, http.StatusTooManyRequests, "CHAT_CAPACITY_REACHED")
 			return
@@ -68,19 +62,15 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// The paid LLM streaming operation is the one chat action without an audit
-	// trail — every other sensitive action (analyze, share, triage, role
-	// change) is audited. Record it on accept so cost-amplification / abuse has
-	// a non-repudiation record (no-op in local mode where backend is nil).
+	// The paid LLM turn is audited on accept so cost-amplification has a
+	// non-repudiation record (no-op in local mode).
 	logAudit(r.Context(), h.common.Backend, r, h.common.TrustedProxies, AuditActionChatStream, "flow", req.FlowID, map[string]string{"streamId": id})
 	render.JSON(w, id)
 }
 
-// renderModelNotAvailable answers a chat request whose Azure AI Foundry model
-// the caller cannot use (service.ErrModelNotAvailable — removed, another
-// owner's, no longer shared with them) with 400 MODEL_NOT_AVAILABLE, which
-// the client answers by putting the text back in the composer, refreshing
-// its model list and offering another model. false for any other error.
+// renderModelNotAvailable answers a chat request whose Azure AI Foundry model the caller cannot use
+// (removed, another owner's, no longer shared) with 400 MODEL_NOT_AVAILABLE — the client restores
+// the composer text and offers another model. false for any other error.
 func renderModelNotAvailable(w http.ResponseWriter, err error) bool {
 	if !errors.Is(err, service.ErrModelNotAvailable) {
 		return false
@@ -108,10 +98,8 @@ func (h *ChatHandler) handleBeginStream(w http.ResponseWriter, r *http.Request) 
 	if !h.ownsStream(w, r, req.ID) {
 		return
 	}
-	// A stream that finished before the client began (fail-fast pre-stream
-	// errors) emitted its terminal event before the SSE subscription existed;
-	// return that state in the begin response so the client isn't left waiting
-	// for events that will never arrive.
+	// A stream that finished before the client began emitted its terminal event before the SSE
+	// subscription existed; return that state so the client isn't left waiting for it.
 	if res := h.chatSvc.BeginStream(r.Context(), req.ID); res != nil {
 		render.JSON(w, beginFinishedBody(res))
 		return
@@ -119,11 +107,8 @@ func (h *ChatHandler) handleBeginStream(w http.ResponseWriter, r *http.Request) 
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// beginFinishedBody is the begin answer for a stream that already finished:
-// its final state, including — when reported — the served model, the
-// rates the turn was billed at and the shared-credential failure flag
-// (the frontend's BeginStreamResult), which the client missed with the done
-// or error event.
+// beginFinishedBody is the begin answer for a stream that already finished: the final state the
+// client missed with the done or error event (the frontend's BeginStreamResult shape).
 func beginFinishedBody(res *service.ResumeResult) map[string]any {
 	body := map[string]any{
 		"status":    "finished",
@@ -172,11 +157,9 @@ func (h *ChatHandler) handleCancelStream(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// handleFixDecision delivers the user's approve/decline for an apply_fix
-// proposal shown in their chat stream (the AI requested a fix; the user
-// clicked Approve/Dismiss in the proposal card). Only the stream's owner may
-// decide; the actual flow mutation separately re-checks EDITOR permission at
-// apply time (the stream itself only required viewer).
+// handleFixDecision delivers the user's approve/decline for an apply_fix proposal in their chat
+// stream. Only the stream's owner may decide; the flow mutation separately re-checks EDITOR
+// permission at apply time (the stream itself only required viewer).
 // @Summary      Respond to a fix approval prompt
 // @Description  Delivers the user's approve/decline for an apply_fix proposal pending in one of the caller's chat streams. First decision wins; unknown or already-decided proposals return 404.
 // @Tags         chat
@@ -243,10 +226,9 @@ func (h *ChatHandler) handleResumeStream(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, res)
 }
 
-// ownsStream verifies that the caller owns the given stream ID. In local mode
-// (no JWT) there is only one user so the check is always allowed. In JWT mode
-// the stream's creator scope must match the caller's identity; an unknown stream
-// ID is treated as not-owned to avoid leaking information about other users.
+// ownsStream verifies that the caller owns the given stream ID. In local mode (no JWT) there is only
+// one user; in JWT mode the stream's creator scope must match, and an unknown stream ID is treated
+// as not-owned to avoid leaking information about other users.
 func (h *ChatHandler) ownsStream(w http.ResponseWriter, r *http.Request, streamID string) bool {
 	if !h.common.JWTEnabled {
 		return true
@@ -254,33 +236,26 @@ func (h *ChatHandler) ownsStream(w http.ResponseWriter, r *http.Request, streamI
 	owner := h.chatSvc.OwnerOf(r.Context(), streamID)
 	caller := h.common.CallerID(r)
 	if owner == "" || owner != caller {
-		// Return the standard JSON error envelope (every other authz failure in
-		// the API does) so frontend handlers parsing {code,message,requestId}
-		// don't choke on a plain-text body.
+		// The standard JSON error envelope, so frontend handlers parsing
+		// {code,message,requestId} don't choke on a plain-text body.
 		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
 		return false
 	}
 	return true
 }
 
-// conversationResponse is the GET-conversation body (F-21): an object, no
-// longer the bare message array this route answered before — {messages} plus,
-// when the caller has a stream on this conversation whose answer the stored
-// history does not carry yet, activeStreamId, so a client that reloaded
-// mid-turn re-attaches through /api/chat/resume instead of waiting for
-// another reload. Messages is always an array ([] for an empty or missing
-// conversation), never null.
+// conversationResponse is the GET-conversation body: {messages} (always an array, never null) plus
+// activeStreamId when the caller has a stream whose answer is not stored yet, so a client that
+// reloaded mid-turn re-attaches via /api/chat/resume.
 type conversationResponse struct {
 	Messages []models.ChatMessage `json:"messages"`
-	// ActiveStreamID is the caller's stream on this (flow, conversation key)
-	// whose question is stored and whose answer is not yet: live, or finished
-	// with its answer still being stored (service.ActiveStreamFor). Omitted
-	// otherwise — a finished stream whose answer is stored is not reported.
+	// ActiveStreamID is the caller's stream whose answer is not yet stored (live, or finished and
+	// still being stored); omitted once the answer is stored.
 	ActiveStreamID string `json:"activeStreamId,omitempty"`
 }
 
 // @Summary      Get conversation history
-// @Description  Retrieves the chat history for a specific flow and conversation key (the wire field is historically named `provider`). The body is an object — {messages: [...]} (always an array) plus activeStreamId when the caller has a stream on this conversation whose question is stored but whose answer is not yet (live, or finished and still being stored) — so a client that reloads mid-turn can re-attach via /api/chat/resume instead of losing the answer until another reload. Before F-21 this route answered a bare message array.
+// @Description  Retrieves the chat history for a specific flow and conversation key (the wire field is historically named `provider`). The body is an object — {messages: [...]} (always an array) plus activeStreamId when the caller has a stream on this conversation whose question is stored but whose answer is not yet (live, or finished and still being stored) — so a client that reloads mid-turn can re-attach via /api/chat/resume instead of losing the answer until another reload. The frontend still accepts the bare array older servers answered with.
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
@@ -298,12 +273,12 @@ func (h *ChatHandler) handleGetConversation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.common, req.FlowID, "viewer")
+	flowID, ok := resolveFlowID(w, r, h.flowSvc, h.common, req.FlowID, "viewer")
 	if !ok {
 		return
 	}
 
-	conv, sid, err := h.chatSvc.ConversationWithActiveStream(r.Context(), h.common.KeyScope(r), doc, req.Provider)
+	conv, sid, err := h.chatSvc.ConversationWithActiveStream(r.Context(), h.common.KeyScope(r), flowID, req.Provider)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -340,18 +315,17 @@ func (h *ChatHandler) handleSaveConversation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.common, req.FlowID, "editor")
+	flowID, ok := resolveFlowID(w, r, h.flowSvc, h.common, req.FlowID, "editor")
 	if !ok {
 		return
 	}
 
-	// modelLabel is client text rendered next to every stored answer (and
-	// in exports): it gets the rules of a registry display name, clamped
-	// instead of refused so one odd label cannot fail the whole save.
+	// modelLabel is client text rendered next to stored answers and in exports: clamped like a
+	// registry display name, not refused, so one odd label cannot fail the whole save.
 	for i := range req.Messages {
 		req.Messages[i].ModelLabel = service.ClampModelLabel(req.Messages[i].ModelLabel)
 	}
-	if err := h.chatSvc.SaveConversation(r.Context(), doc, req.Provider, req.Messages); err != nil {
+	if err := h.chatSvc.SaveConversation(r.Context(), flowID, req.Provider, req.Messages); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -377,12 +351,12 @@ func (h *ChatHandler) handleClearConversation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.common, req.FlowID, "editor")
+	flowID, ok := resolveFlowID(w, r, h.flowSvc, h.common, req.FlowID, "editor")
 	if !ok {
 		return
 	}
 
-	if err := h.chatSvc.ClearConversation(r.Context(), doc, req.Provider); err != nil {
+	if err := h.chatSvc.ClearConversation(r.Context(), flowID, req.Provider); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

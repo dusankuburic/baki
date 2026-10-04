@@ -18,6 +18,11 @@ RUN npm run build
 # `--target frontend-builder` still has the maps for anyone who wants to
 # upload them to an error tracker.
 RUN cp -a dist dist-nomaps && find dist-nomaps -name '*.map' -delete
+# Precompress the shipped bundle once (brotli max quality + gzip -9, .br/.gz
+# next to each file); the server serves those siblings instead of compressing
+# every asset on every request (26 ms of CPU for the main chunk with brotli).
+# Run on the map-stripped copy, after the strip, so no map gets a sibling.
+RUN node scripts/precompress.mjs dist-nomaps
 
 # Stage 2: Build the backend
 FROM golang:1.25-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS backend-builder
@@ -25,13 +30,18 @@ WORKDIR /app
 COPY go.mod go.sum ./
 COPY core/go.mod core/go.sum ./core/
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
+# Before COPY . . so a source change does not re-download and re-link swag;
+# the module cache mount means its dependencies are fetched once per builder.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go install github.com/swaggo/swag/cmd/swag@v1.16.6
 COPY . .
-RUN go install github.com/swaggo/swag/cmd/swag@v1.16.6
 # Same invocation as the OpenAPI Freshness CI job, so the spec baked into the
 # image is the one CI validated. (Verified identical output to the previous
 # --parseDependency --parseInternal form, but identical-by-accident is not a
 # property worth relying on.)
-RUN swag init -g main.go -o docs --parseDependencyLevel 1
+RUN --mount=type=cache,target=/go/pkg/mod \
+    swag init -g main.go -o docs --parseDependencyLevel 1
 ARG GIT_COMMIT=dev
 ARG VERSION=0.1.0
 # Commit date, not build time: keeps the image reproducible from a given commit
@@ -43,7 +53,13 @@ ARG BUILD_DATE=
 # answered gitCommit="" and buildDate="". main.Version is stamped too because
 # telemetry.Init reports it as the OTel service version; main.GitCommit is
 # stamped for symmetry, though nothing reads it today.
-RUN CGO_ENABLED=0 go build -trimpath \
+# Both caches are BuildKit mounts, not layers: the build cache turns a
+# one-file change into an incremental compile instead of a full rebuild of
+# every package, and the module mount stops the build re-fetching what
+# `go mod download` already put in the (equally non-layer) module cache.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath \
     -ldflags="-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT} -X pad-analyzer/internal/service.Version=${VERSION} -X pad-analyzer/internal/service.GitCommit=${GIT_COMMIT} -X pad-analyzer/internal/service.BuildDate=${BUILD_DATE}" \
     -o baki-backend main.go
 

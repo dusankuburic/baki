@@ -1,11 +1,9 @@
 package analyzer
 
 // registeredRules accumulates every Rule via each rule file's init() (see
-// registerRule) — so a new rule_*.go file is picked up by AllRules() the
-// moment it adds its own `func init() { registerRule(&XRule{}) }`, with no
-// separate "also add it to registry.go" step to forget. This replaced a
-// hand-maintained literal slice that had already drifted out of sync with the
-// rule files at least once.
+// registerRule) — a new rule_*.go file is picked up by AllRules() automatically
+// (this replaced a hand-maintained literal slice that had already drifted out
+// of sync at least once).
 var registeredRules []Rule
 
 // registerRule adds r to the rule catalog. Called from each rule file's
@@ -23,11 +21,10 @@ func AllRules() []Rule {
 }
 
 // AutoFixableRules returns the subset of rules that can emit findings carrying
-// an AutoFix (see mayEmitAutoFix). The apply-fix loop only ever selects
-// findings with a non-empty AutoFix, so running the loop's analysis with just
-// this subset is behavior-equivalent while dispatching ~60% fewer rules per
-// iteration. Order is preserved from the input so fixable findings are picked
-// in the same sequence as with the full set.
+// an AutoFix (see mayEmitAutoFix). The apply-fix loop only selects findings
+// with a non-empty AutoFix, so running it with just this subset is
+// behavior-equivalent with ~60% fewer rules per iteration; order is preserved
+// so fixable findings are picked in the same sequence.
 func AutoFixableRules(rules []Rule) []Rule {
 	out := make([]Rule, 0, len(rules)/2)
 	for _, r := range rules {

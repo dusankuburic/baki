@@ -164,32 +164,3 @@ func TestChangeTypeConstants(t *testing.T) {
 		t.Errorf("ChangeModified = %q", ChangeModified)
 	}
 }
-
-// ---- Struct zero values / initialization -----------------------------------
-
-func TestFlowDocument_ZeroValue(t *testing.T) {
-	var doc FlowDocument
-	if doc.ID != "" || doc.Name != "" {
-		t.Error("zero FlowDocument should have empty ID and Name")
-	}
-}
-
-func TestFinding_SeverityField(t *testing.T) {
-	f := Finding{
-		Severity: SeverityError,
-		Title:    "test finding",
-	}
-	if f.Severity != SeverityError {
-		t.Errorf("Severity = %q, want %q", f.Severity, SeverityError)
-	}
-}
-
-func TestBlock_TypeField(t *testing.T) {
-	b := Block{
-		ID:   "b1",
-		Type: BlockTypeAction,
-	}
-	if b.Type != BlockTypeAction {
-		t.Errorf("Type = %q, want %q", b.Type, BlockTypeAction)
-	}
-}

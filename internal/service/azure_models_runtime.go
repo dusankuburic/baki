@@ -19,19 +19,12 @@ import (
 	"pad-core/models"
 )
 
-// The registry at run time: what a chat turn runs on for a model id
-// (ResolveChat), the Azure part of the provider listing (PickerListing), the
-// knowledge base's embedder (KnowledgeEmbedder), the one test entry point
-// (Test) and discovery (Discover). None of the read paths waits on the
-// network: windows and served models come from the process caches, and a
-// stale project listing refreshes in the background (refreshListings).
+// The registry at run time: chat resolution, the picker, the KB embedder, tests and discovery — no read path waits on the network.
 
-// azureDefaultWindow is the window baki assumes for a model nothing sizes
-// (the Azure provider's ContextLimit).
+// azureDefaultWindow is the window baki assumes for a model nothing sizes (the Azure provider's ContextLimit).
 const azureDefaultWindow = 128000
 
-// Background refresh of project listings: at most azureRefreshParallel
-// resources at once, each bounded by azureRefreshTimeout.
+// Background refresh of project listings: at most azureRefreshParallel resources at once, each bounded by azureRefreshTimeout.
 const (
 	azureRefreshParallel = 4
 	azureRefreshTimeout  = 45 * time.Second
@@ -39,60 +32,27 @@ const (
 
 // ---- Chat resolution ----
 
-// AzureChatResolution is what a chat turn runs on for one Azure AI Foundry
-// model id (ResolveChat). It travels with the turn — never through the
-// request, which is passed by value — to every reader of the model.
+// AzureChatResolution is what a chat turn runs on for one model id; it travels with the turn — never through the by-value request.
 type AzureChatResolution struct {
-	// ResolvedModel is the provider-level id the turn sends and sizes by:
-	// "<deployment>", "claude:<deployment>" or "agent:<name>".
+	// ResolvedModel is the provider-level id the turn sends and sizes by: "<deployment>", "claude:<deployment>" or "agent:<name>".
 	ResolvedModel string
-	// RequestedModel is the id the answer is persisted with: the request's
-	// ("m/<entryId>", or a raw pre-registry id), or for "" the server
-	// default's "m/<entryId>".
+	// RequestedModel is the id the answer is persisted with: the request's, or for "" the default's "m/<entryId>".
 	RequestedModel string
-	// ModelLabel is the entry's display name at send time (a raw id resolved
-	// through the legacy document: the id itself).
+	// ModelLabel is the entry's display name at send time (a raw id: the id itself).
 	ModelLabel string
 	// Kind is the entry's kind: chat, claude or agent.
 	Kind string
-	// ConnectionRef names the credential the provider is built from: the
-	// caller's own resource (OrgID "") or the organisation's.
+	// ConnectionRef names the credential the provider is built from: the caller's own resource or the organisation's.
 	ConnectionRef ai.AzureConnectionRef
-	// Entries is the resource's full entry set — ProviderFactory.
-	// ForAzureConnection's models (the picker passes the same set, so both
-	// share one listing cache).
+	// Entries is the resource's full entry set (the picker shares it, so both listing caches coincide).
 	Entries []ai.AzureRegisteredModel
-	// EntryID is the registry entry ("" for a raw id resolved through the
-	// legacy document); Shared marks an organisation's entry.
+	// EntryID is the registry entry ("" for a raw id via the legacy document); Shared marks an org's entry.
 	EntryID string
 	Shared  bool
 }
 
-// ResolveChat resolves the model id of a chat turn on provider azure-foundry
-// (see AzureChatResolution). Personal entries first, then credOrg's — the
-// flow's organisation, passed only when the caller is one of its admins or
-// members (the chat service's credentialOrg): no other organisation is ever
-// queried, so the answer is no existence or timing oracle.
-//
-//   - "m/<entryId>": the caller's own entry, else credOrg's;
-//   - a raw pre-registry id ("gpt-4.1", "claude:x", "agent:y"; one release):
-//     an alias of the caller's own "default" resource; else, when the caller
-//     has that resource, the id itself on it (the legacy document took any
-//     deployment name); else — only for a caller without it, the member-first
-//     rule — an alias of credOrg's "default" resource. A raw id no org entry
-//     aliases is refused on the org credential: it keeps the org's curation;
-//   - "": the server default (see serverDefault).
-//
-// Unknown, malformed, foreign, embedding-kind and lost-access ids are all
-// ErrModelNotAvailable. A registry or keystore failure is a different error
-// (never a fallback to another model or credential) — and so is a legacy
-// import still pending (errAzureImportPending): while the caller's legacy
-// document is not in the registry, "" and a raw id — which the legacy
-// document answers — are refused, never answered from the organisation's
-// credential (the member-first rule counts that document as the caller's
-// own); an organisation's pending import refuses what only its registry
-// could answer. An "m/" id is an explicit pick of an existing entry and
-// resolves either way.
+// ResolveChat resolves a chat turn's model id (see AzureChatResolution): personal entries first, then credOrg's — no other org is queried, so no existence oracle.
+// Unusable ids are all ErrModelNotAvailable; registry/keystore failures and a pending legacy import are different errors, never a fallback.
 func (s *AzureModelService) ResolveChat(ctx context.Context, scope, credOrg, modelID string) (res AzureChatResolution, err error) {
 	defer logger.Guard("AzureModels.ResolveChat", &err)
 	modelID = strings.TrimSpace(modelID)
@@ -133,8 +93,7 @@ func (s *AzureModelService) ResolveChat(ctx context.Context, scope, credOrg, mod
 			return resolveEntry(personal, m, ai.RegistryModelID(m.ID))
 		}
 		if orgState != nil && orgState.importPending {
-			// No personal default, and the organisation's is its legacy
-			// document's chat deployment — not in the registry yet.
+			// No personal default, and the organisation's is its legacy document's chat deployment.
 			return AzureChatResolution{}, errAzureImportPending
 		}
 		if m, ok := findModel(orgState, id); ok {
@@ -161,8 +120,7 @@ func (s *AzureModelService) ResolveChat(ctx context.Context, scope, credOrg, mod
 		return AzureChatResolution{}, ErrModelNotAvailable
 	}
 
-	// A raw (pre-registry) id: the caller's legacy document answers it first,
-	// so it cannot be answered while that document is not imported.
+	// A raw (pre-registry) id: the caller's legacy document answers it first, so not while unimported.
 	if personal.importPending {
 		return AzureChatResolution{}, errAzureImportPending
 	}
@@ -199,8 +157,7 @@ func findModel(st *azureOwnerState, id string) (storageif.AzureModelRecord, bool
 	return storageif.AzureModelRecord{}, false
 }
 
-// aliasMatch finds the entry of st's "default" resource whose pre-registry
-// id is id: exactly, else case-insensitively (Azure deployment names are).
+// aliasMatch finds the entry of st's "default" resource whose pre-registry id is id: exactly, else case-insensitively.
 func aliasMatch(st *azureOwnerState, id string) (storageif.AzureModelRecord, bool) {
 	if st == nil {
 		return storageif.AzureModelRecord{}, false
@@ -224,8 +181,7 @@ func aliasMatch(st *azureOwnerState, id string) (storageif.AzureModelRecord, boo
 	return storageif.AzureModelRecord{}, false
 }
 
-// resolveEntry is the resolution of entry m of st (an embedding model is
-// never a chat target).
+// resolveEntry is the resolution of entry m of st (an embedding model is never a chat target).
 func resolveEntry(st *azureOwnerState, m storageif.AzureModelRecord, requested string) (AzureChatResolution, error) {
 	target, ok := ai.AzureModelTarget(m.Kind, m.Deployment)
 	if !ok {
@@ -247,9 +203,8 @@ func resolveEntry(st *azureOwnerState, m storageif.AzureModelRecord, requested s
 	return res, nil
 }
 
-// resolveLegacyID resolves a raw id no entry aliases on the caller's own
-// "default" resource, as the legacy document did: any deployment name, a
-// "claude:" or "agent:" id. A malformed one is not available.
+// resolveLegacyID resolves a raw id no entry aliases on the caller's own "default" resource, as the legacy document did.
+// A malformed one is not available.
 func resolveLegacyID(st *azureOwnerState, id string) (AzureChatResolution, error) {
 	kind := storageif.AzureKindChat
 	name := id
@@ -281,10 +236,7 @@ func resolveLegacyID(st *azureOwnerState, id string) (AzureChatResolution, error
 
 // ---- The server default ----
 
-// legacyDefaultTarget is the model the legacy document offered as its
-// default: its chat deployment (else the first additional one, else the
-// first Claude deployment). The document keeps those fields unchanged
-// (rollback), so this is the entry the import made of it.
+// legacyDefaultTarget is the model the legacy document offered as its default.
 func legacyDefaultTarget(cfg ai.AzureFoundryConfig) string {
 	switch {
 	case cfg.ChatDeployment != "":
@@ -297,20 +249,8 @@ func legacyDefaultTarget(cfg ai.AzureFoundryConfig) string {
 	return ""
 }
 
-// serverDefault is the entry a new chat starts on when the user saved no
-// default of their own — member-first, like the credential rule:
-//  1. the personal entry imported from the legacy document's chat
-//     deployment;
-//  2. the first personal chat entry (chat and Claude before agents);
-//  3. the organisation's "Default for members";
-//  4. the first organisation chat entry.
-//
-// Only usable entries count (their resource ready, an agent runnable); ""
-// when there is none. org may be nil. The states must carry credentials.
-// While either owner's legacy import is pending the organisation is not
-// consulted: the caller's pending legacy document is a default of their
-// own (member-first), and the organisation's pending one is its default
-// for members — neither is in the registry yet.
+// serverDefault is the entry a new chat starts on (member-first): the legacy-imported personal default,
+// the first personal chat entry, the org's "Default for members", the first org chat entry.
 func (s *AzureModelService) serverDefault(_ context.Context, personal, org *azureOwnerState) string {
 	usable := func(st *azureOwnerState, m storageif.AzureModelRecord) bool {
 		if m.Kind == storageif.AzureKindEmbedding {
@@ -370,42 +310,21 @@ func (s *AzureModelService) serverDefault(_ context.Context, personal, org *azur
 
 // ---- The picker ----
 
-// AzurePickerListing is the Azure AI Foundry part of the provider listing
-// (models.ProviderInfo), built from the registry: every chat, Claude and
-// agent entry is listed whatever a live listing says — live data only
-// decorates. Network-free.
+// AzurePickerListing is the Azure part of the provider listing, built from the registry — network-free.
 type AzurePickerListing struct {
-	// Models are the caller's own entries and orgID's shared ones in display
-	// order (purpose, then personal before shared, then name). Entries whose
-	// resource cannot run them stay listed with their status.
+	// Models are the caller's own and orgID's shared entries in display order, with their statuses.
 	Models []models.ModelDetail
 	// DefaultModel is the server default's "m/<id>" ("" when there is none).
 	DefaultModel string
-	// Configured: the caller has a resource of their own. Shared: they have
-	// none, and orgID has one.
+	// Configured: the caller has a resource of their own. Shared: they have none, and orgID has one.
 	Configured bool
 	Shared     bool
-	// SuggestDiscovery offers the "your project has models you haven't
-	// added" prompt: the caller's migrated resource ("default") can list its
-	// project (Entra ID or the Azure CLI with a project endpoint), its prompt
-	// was not dismissed, and the registry takes writes.
+	// SuggestDiscovery offers the "your project has models you haven't added" prompt (project listable, prompt not dismissed, registry writable).
 	SuggestDiscovery bool
 }
 
-// PickerListing builds the Azure part of the provider listing for the
-// caller with key scope scope; orgID is the open flow's organisation, whose
-// shared entries are listed — the caller's role in it (admin or member) is
-// the handler's check. Stale project listings refresh in the background (at
-// most four resources at once).
-//
-// A legacy import still pending never fails the listing, nor moves the
-// caller onto the organisation: while the caller's own legacy document is
-// not in the registry it keeps them configured and counts as their
-// "default" resource for the member-first rule — no organisation alias is
-// listed (a client would re-pin the caller's old raw-id threads to the
-// organisation's entries) and the server default is never the
-// organisation's; while the organisation's is pending it counts as a
-// resource (shared) but gives no default.
+// PickerListing builds the Azure part of the provider listing; role check is the handler's, stale listings refresh in the background.
+// A pending legacy import never fails the listing, nor moves the caller onto the organisation.
 func (s *AzureModelService) PickerListing(ctx context.Context, scope, orgID string) (out AzurePickerListing, err error) {
 	defer logger.Guard("AzureModels.PickerListing", &err)
 	owner := s.userOwner(scope)
@@ -476,9 +395,7 @@ func (s *AzureModelService) PickerListing(ctx context.Context, scope, orgID stri
 			if st.org != nil {
 				d.OrgID, d.OrgName = st.org.id, st.org.name
 			}
-			// Aliases (the pre-registry ids) only on the "default" resource's
-			// entries — and an organisation's only for a member without a
-			// "default" resource of their own (member-first).
+			// Aliases (pre-registry ids) only on the "default" resource's entries; an org's only for a member without their own.
 			if m.ConnectionID == ai.AzureDefaultConnectionID && (!st.owner.IsOrg() || !hasPersonalDefault) {
 				d.Aliases = []string{modelTarget(m)}
 			}
@@ -493,14 +410,8 @@ func (s *AzureModelService) PickerListing(ctx context.Context, scope, orgID stri
 	return out, nil
 }
 
-// windowsFor sizes st's chat, Claude and agent entries without the network:
-// from the provider each ready resource runs on (its listing is the
-// entries plus the cached project listing, decorated by the served-model
-// memo and clamped by learned windows). reported leaves the users'
-// overrides out — the window the server knows by itself, 0 when nothing
-// sizes the model (baki then assumes azureDefaultWindow); otherwise the
-// effective window, override included. Entries of a resource that cannot
-// run are sized by their override, else the catalogue.
+// windowsFor sizes st's chat/Claude/agent entries without the network, from the provider each ready resource runs on.
+// reported leaves the users' overrides out (0 = nothing sizes it).
 func (s *AzureModelService) windowsFor(ctx context.Context, st *azureOwnerState, reported bool) map[string]int {
 	out := map[string]int{}
 	catalogue := azureCatalogueWindows(ctx)
@@ -561,8 +472,7 @@ func hasChatEntry(entries []ai.AzureRegisteredModel) bool {
 	return false
 }
 
-// azureCatalogueWindows is the Azure reference catalogue's windows by
-// lower-cased model id (a deployment named after its model is sized by it).
+// azureCatalogueWindows is the Azure reference catalogue's windows by lower-cased model id.
 func azureCatalogueWindows(ctx context.Context) map[string]int {
 	out := map[string]int{}
 	p := ai.GetMetadataProvider(ai.AzureFoundryProviderID)
@@ -583,23 +493,10 @@ func azureCatalogueWindows(ctx context.Context) map[string]int {
 
 // ---- Background listing refresh ----
 
-// azureRefreshQueueMax bounds the refreshes waiting for a worker; past it a
-// read's refresh is dropped (the next read asks again).
+// azureRefreshQueueMax bounds the refreshes waiting for a worker; past it a read's refresh is dropped.
 const azureRefreshQueueMax = 64
 
-// azureListingRefresher refreshes stale project listings off the read
-// paths: one refresh per resource at a time (running or queued — a
-// singleflight), at most azureRefreshParallel running at once. A refresh
-// that finds every worker busy waits in a bounded queue the workers drain,
-// so a resource beyond the first four is refreshed too, never starved by
-// the order the reads list resources in.
-//
-// A job names its resource, not its credential: it reads the credential
-// when it runs and is skipped when the credential is gone or is no longer
-// the one the read saw (a job queued before a delete, a rotation or a
-// lender's disable must not sign in with the old document — that would put
-// back the Entra ID token source ForgetAzureFoundryCredential just dropped,
-// and list the project with a principal that was removed or demoted).
+// azureListingRefresher refreshes stale listings off the read paths, one job per resource (credential read at run time).
 type azureListingRefresher struct {
 	refresh  func(ctx context.Context, raw string, models []ai.AzureRegisteredModel) error
 	mu       sync.Mutex
@@ -609,9 +506,7 @@ type azureListingRefresher struct {
 	wg       sync.WaitGroup
 }
 
-// azureRefreshJob is one resource's refresh: owner's resource connID (its
-// personal credential under scope), the fingerprint of the credential the
-// triggering read saw, and the resource's entries.
+// azureRefreshJob is one resource's refresh: owner/scope/connID, the credential fingerprint the read saw, and the entries.
 type azureRefreshJob struct {
 	key         string
 	owner       storageif.AzureOwner
@@ -627,8 +522,7 @@ func newAzureListingRefresher(refresh func(ctx context.Context, raw string, mode
 	return &azureListingRefresher{refresh: refresh, inflight: map[string]bool{}}
 }
 
-// trigger schedules job unless its resource's refresh is running or
-// queued. Never blocks.
+// trigger schedules job unless its resource's refresh is running or queued. Never blocks.
 func (r *azureListingRefresher) trigger(job azureRefreshJob) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -663,15 +557,14 @@ func (r *azureListingRefresher) work(job azureRefreshJob) {
 			return
 		}
 		job = r.queue[0]
+		// Clear the popped slot before reslicing: it would hold the job's entries and closure until reallocation.
+		r.queue[0] = azureRefreshJob{}
 		r.queue = r.queue[1:]
 		r.mu.Unlock()
 	}
 }
 
-// run refreshes one listing, bounded by azureRefreshTimeout, on the
-// resource's credential as it is stored NOW: skipped when it is gone or is
-// not the one the triggering read saw (see azureListingRefresher). A panic
-// is logged, never fatal (nothing above a detached goroutine recovers it).
+// run refreshes one listing (bounded by azureRefreshTimeout) on the credential as stored NOW; a panic is logged.
 func (r *azureListingRefresher) run(job azureRefreshJob) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -689,8 +582,7 @@ func (r *azureListingRefresher) run(job azureRefreshJob) {
 	}
 }
 
-// current reads the job's credential and reports whether it is still the
-// one the job was queued for (same fingerprint).
+// current reads the job's credential and reports whether it is still the one queued for (same fingerprint).
 func (j azureRefreshJob) current() (string, bool) {
 	if j.read == nil {
 		return "", false
@@ -710,10 +602,8 @@ func (j azureRefreshJob) current() (string, bool) {
 	return raw, true
 }
 
-// refreshListings triggers a background refresh of st's resources that
-// list a project: ready, with Entra ID (or the Azure CLI) and a project
-// endpoint, and at least one chat entry. A listing still live costs nothing
-// (ai.RefreshAzureFoundryListing returns at once).
+// refreshListings triggers a background refresh of st's resources that list a project: ready,
+// Entra ID (or CLI) + project endpoint, at least one chat entry; a live listing costs nothing.
 func (s *AzureModelService) refreshListings(st *azureOwnerState) {
 	if s.refresher == nil {
 		return
@@ -733,10 +623,7 @@ func (s *AzureModelService) refreshListings(st *azureOwnerState) {
 
 // ---- The knowledge base's embedder ----
 
-// azureEmbedderError is a knowledge-base embedder refusal with its own copy,
-// matching sentinel (ai.ErrOrgEmbeddingDeploymentMissing: the org admin's
-// to fix, no personal fallback; ai.ErrEmbeddingDeploymentMissing: the
-// caller's) and optional cause.
+// azureEmbedderError is a KB embedder refusal with its own copy, sentinel and optional cause.
 type azureEmbedderError struct {
 	msg      string
 	sentinel error
@@ -752,24 +639,7 @@ func (e *azureEmbedderError) Unwrap() []error {
 	return []error{e.sentinel, e.cause}
 }
 
-// KnowledgeEmbedder resolves the knowledge base's embedder from the
-// registry (rag.WithAzureEmbedder): for an organisation's corpus the
-// organisation's "Use for knowledge base" model whenever the organisation
-// holds resources — none designated is an ai.ErrOrgEmbeddingDeploymentMissing
-// refusal (EMBEDDING_ORG_NOT_CONFIGURED), never a member's personal model:
-// one corpus, one model; otherwise the caller's own designated model (an
-// ai.ErrEmbeddingDeploymentMissing refusal when there is none, which lets
-// the knowledge base look further, as before). The provider is built by
-// ProviderFactory.ForAzureConnectionEmbedding on exactly that resource's
-// credential.
-//
-// An organisation whose legacy import is pending counts as holding
-// resources (its legacy document is one), and a caller whose own import is
-// pending has no usable "none designated" (the legacy embedding deployment
-// may be the designation): without a designated entry either is a
-// transient refusal, never a fallback to another model. So is a registry or
-// key-store failure — logged, and answered with rag.ErrEmbeddingSetupUnavailable
-// (503 with masked copy), never with the store's own text.
+// KnowledgeEmbedder resolves the KB's embedder: an org corpus uses the org's designated model (none = refusal, never a personal fallback).
 func (s *AzureModelService) KnowledgeEmbedder(ctx context.Context, scope, orgID string) (p ai.Provider, err error) {
 	defer logger.Guard("AzureModels.KnowledgeEmbedder", &err)
 	if s.factory == nil {
@@ -813,13 +683,7 @@ func (s *AzureModelService) KnowledgeEmbedder(ctx context.Context, scope, orgID 
 	return knowledgeEmbedderResult(owner, m, p, err)
 }
 
-// knowledgeEmbedderResult classifies the factory's answer for owner's
-// knowledge-base model m. The configuration gaps keep their sentinels and
-// copy — no credential (an organisation's: the org admin's to fix, never a
-// personal fallback; a caller's own: the knowledge base looks further, as
-// before), settings that no longer validate (ai.ErrProviderConfigInvalid),
-// credentials the server can no longer decrypt (enter them again). Anything
-// else is a key-store failure: knowledgeEmbedderUnavailable.
+// knowledgeEmbedderResult classifies the factory's answer: config gaps keep their sentinels; the rest is unavailable.
 func knowledgeEmbedderResult(owner storageif.AzureOwner, m storageif.AzureModelRecord, p ai.Provider, err error) (ai.Provider, error) {
 	switch {
 	case err == nil:
@@ -840,13 +704,7 @@ func knowledgeEmbedderResult(owner storageif.AzureOwner, m storageif.AzureModelR
 	return nil, knowledgeEmbedderUnavailable(owner, err)
 }
 
-// knowledgeEmbedderUnavailable logs why the knowledge base's embedder could
-// not be decided for owner — a registry or key-store failure, a legacy
-// import pending — and returns rag.ErrEmbeddingSetupUnavailable: a transient
-// refusal the knowledge base never answers with another model, whose copy
-// (unlike the cause's: a driver's error names database hosts and roles) the
-// client may see. The cause is logged only, never wrapped: nothing in it
-// may turn the refusal into a fallback.
+// knowledgeEmbedderUnavailable logs the cause and returns the transient refusal; the cause is never wrapped.
 func knowledgeEmbedderUnavailable(owner storageif.AzureOwner, cause error) error {
 	logger.Warn("azure registry: the knowledge base's embedder could not be resolved", "owner", owner.String(), "error", cause)
 	return &azureEmbedderError{sentinel: rag.ErrEmbeddingSetupUnavailable, msg: rag.ErrEmbeddingSetupUnavailable.Error()}
@@ -864,26 +722,21 @@ func knowledgeEntry(st *azureOwnerState) (storageif.AzureModelRecord, bool) {
 
 // ---- Tests ----
 
-// AzureTestModelRef names the model of a test: a saved one by its entry id
-// ([a-z0-9]{10}, not "m/…"), or a draft {kind, deployment} on the test's
-// resource.
+// AzureTestModelRef names the model of a test: a saved one by entry id, or a draft {kind, deployment}.
 type AzureTestModelRef struct {
 	ID         string `json:"id,omitempty"`
 	Kind       string `json:"kind,omitempty"`
 	Deployment string `json:"deployment,omitempty"`
 }
 
-// AzureTestInput is POST /test: {connectionId} tests a saved resource,
-// {config} a draft one — with connectionId too, the stored secret carries
-// over by the host rules — and model adds a model test on that resource.
+// AzureTestInput is POST /test: {connectionId} tests a saved resource, {config} a draft one; model adds a model test.
 type AzureTestInput struct {
 	ConnectionID string                      `json:"connectionId,omitempty"`
 	Config       *AzureConnectionConfigInput `json:"config,omitempty"`
 	Model        *AzureTestModelRef          `json:"model,omitempty"`
 }
 
-// AzureTestResult is POST /test's answer for every test outcome (a 4xx is
-// only for an invalid request). Code classifies a failure.
+// AzureTestResult is POST /test's answer for every test outcome; Code classifies a failure.
 type AzureTestResult struct {
 	OK        bool   `json:"ok"`
 	LatencyMs int    `json:"latencyMs"`
@@ -891,16 +744,7 @@ type AzureTestResult struct {
 	Code      string `json:"code,omitempty"`
 }
 
-// Test is the one test entry point: a saved or draft resource, with or
-// without a saved or draft model on it. A resource test signs in and probes
-// the endpoint (and the project) — no model call, no cost; a chat, Claude or
-// embedding model test sends one tiny billed request; an agent test only
-// looks the agent up — it is never run. A draft goes through the carry-
-// secret rules, then validation, before any network call (an organisation's
-// draft never signs in with the Azure CLI); probes run isolated, with a
-// throwaway token source, and record no usage. A saved target records its
-// last test. Errors are only for invalid requests (a draft that does not
-// validate, CONNECTION_NOT_FOUND, MODEL_NOT_FOUND).
+// Test is the one test entry point (saved or draft resource/model); drafts validate before any network call.
 func (s *AzureModelService) Test(ctx context.Context, as AzureScope, in AzureTestInput) (out AzureTestResult, err error) {
 	defer logger.Guard("AzureModels.Test", &err)
 	owner, err := s.ownerFor(as)
@@ -992,8 +836,7 @@ func (s *AzureModelService) Test(ctx context.Context, as AzureScope, in AzureTes
 	return out, nil
 }
 
-// savedModelID is the entry id a test result is recorded on ("" = the
-// resource's; nothing is recorded for a draft model).
+// savedModelID is the entry id a test result is recorded on ("" = the resource's).
 func savedModelID(saved *storageif.AzureModelRecord, draft *ai.AzureRegisteredModel) string {
 	if saved != nil && draft == nil {
 		return saved.ID
@@ -1001,8 +844,7 @@ func savedModelID(saved *storageif.AzureModelRecord, draft *ai.AzureRegisteredMo
 	return ""
 }
 
-// testModelRecord reads the saved model a test names (MODEL_NOT_FOUND when
-// it is not the scope's, or not on connID when one was named).
+// testModelRecord reads the saved model a test names (MODEL_NOT_FOUND when not the scope's).
 func (s *AzureModelService) testModelRecord(ctx context.Context, owner storageif.AzureOwner, id, connID string) (storageif.AzureModelRecord, error) {
 	notFound := azureRegErr(http.StatusNotFound, AzureCodeModelNotFound, "the model was not found", storageif.ErrAzureModelNotFound, nil)
 	if !storageif.ValidAzureModelID(id) {
@@ -1072,8 +914,7 @@ func azureFailureCode(err error) string {
 // AzureDiscoveryItemView is one deployment or agent discovery found.
 type AzureDiscoveryItemView struct {
 	Name string `json:"name"`
-	// Kind is what it would be added as: chat, claude or embedding for a
-	// deployment, agent for an agent.
+	// Kind is what it would be added as: chat, claude or embedding for a deployment, agent for an agent.
 	Kind string `json:"kind"`
 	// Model is the model behind it ("" when unknown).
 	Model         string `json:"model"`
@@ -1081,16 +922,13 @@ type AzureDiscoveryItemView struct {
 	// AlreadyAdded: the resource registers it already, as ModelID.
 	AlreadyAdded bool   `json:"alreadyAdded"`
 	ModelID      string `json:"modelId,omitempty"`
-	// Deployment (agents) is the project deployment the agent runs on;
-	// Workflow marks a workflow agent (a preview).
+	// Deployment (agents) is the project deployment the agent runs on; Workflow marks a workflow agent.
 	Deployment string `json:"deployment,omitempty"`
 	Workflow   bool   `json:"workflow,omitempty"`
 }
 
-// AzureDiscoveryView is POST /connections/{id}/discover. An Azure refusal
-// (a missing role, a wrong project, a sign-in Entra ID refused) is a 200
-// with Error and Code; a resource that cannot list its project is 400
-// DISCOVERY_UNAVAILABLE.
+// AzureDiscoveryView is POST /connections/{id}/discover: an Azure refusal is a 200 with Error and Code;
+// a resource that cannot list its project is 400 DISCOVERY_UNAVAILABLE.
 type AzureDiscoveryView struct {
 	Deployments []AzureDiscoveryItemView `json:"deployments"`
 	Agents      []AzureDiscoveryItemView `json:"agents"`
@@ -1099,11 +937,7 @@ type AzureDiscoveryView struct {
 	Code        string                   `json:"code,omitempty"`
 }
 
-// Discover lists what a saved resource's Foundry project offers — its
-// deployments (each with the kind it would be added as) and its agents —
-// marking what the resource already registers. It needs Entra ID (or the
-// Azure CLI) and a project endpoint; nothing it learns reaches the caches
-// the chat path reads.
+// Discover lists what a saved resource's Foundry project offers, marking what it already registers.
 func (s *AzureModelService) Discover(ctx context.Context, as AzureScope, connID string) (out AzureDiscoveryView, err error) {
 	defer logger.Guard("AzureModels.Discover", &err)
 	owner, err := s.ownerFor(as)

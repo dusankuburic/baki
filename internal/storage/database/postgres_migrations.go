@@ -11,10 +11,7 @@ import (
 	"time"
 )
 
-// migrationChecksum returns the hex-encoded SHA-256 of a migration's SQL. It is
-// recorded when the step is applied and re-verified on every subsequent boot so
-// that editing an already-shipped migration (which would silently diverge the
-// schema across deployments) is caught instead of ignored.
+// migrationChecksum returns the hex SHA-256 of a migration's SQL, recorded at apply time and re-verified on boot.
 func migrationChecksum(sqlText string) string {
 	sum := sha256.Sum256([]byte(sqlText))
 	return hex.EncodeToString(sum[:])
@@ -22,40 +19,23 @@ func migrationChecksum(sqlText string) string {
 
 // ---- Schema migration ----
 
-// migrationLockKey is an arbitrary fixed 64-bit integer used as the key for
-// pg_advisory_lock during schema migration. Any value works as long as it is
-// unique to this application — pick something derived from the project name
-// so it does not collide with locks taken by other software sharing the DB.
+// migrationLockKey is the pg_advisory_lock key serializing schema migrations; any fixed app-unique value works.
 const migrationLockKey int64 = 0x70616461_6E616C7A // "padanalz" in hex bytes
 
-// migration is a single forward-only schema step. The baseline is the entire
-// original idempotent schema; subsequent steps are appended in order. Each step
-// is applied at most once (recorded in schema_migrations) under the advisory
-// lock, so two pods starting concurrently can't both apply the same step.
-//
-// There is intentionally no automatic down/rollback path — DDL changes are
-// forward-compatible by discipline (CREATE/ALTER ... IF NOT EXISTS, additive
-// columns with defaults). A bad change requires manual SQL to reverse, so keep
-// new steps additive and small.
+// migration is a single forward-only schema step, applied at most once under the advisory lock.
+// No automatic rollback: DDL is kept forward-compatible by discipline (IF NOT EXISTS, additive columns).
 type migration struct {
 	version int
 	name    string
 	sql     string
-	// downSQL is the optional reverse of sql. Empty ("") means the step is
-	// intentionally irreversible (the baseline, or a step whose inverse is not
-	// safely expressible) — MigrateDown refuses to cross such a step. The
-	// down-migration is NEVER checksummed (only forward sql is) and NEVER runs
-	// on boot; it is operator-invoked via bakicli.
+	// downSQL is the optional reverse of sql; empty means intentionally irreversible
+	// (MigrateDown refuses to cross it). Never checksummed, never run on boot.
 	downSQL string
 }
 
-// migrations is the ordered, append-only set of schema versions. Version 1 is
-// the baseline: the entire original idempotent schema, recorded so existing
-// deployments stop re-running it every boot and so future steps build on a
-// known version. Append new versions only at the end; never edit or reorder an
-// already-shipped step.
+// migrations is the ordered, append-only set of schema versions (v1 is the baseline); append only at the end.
 var migrations = []migration{
-	{version: 1, name: "baseline", sql: schemaBaseline, downSQL: ""}, // intentionally irreversible
+	{version: 1, name: "baseline", sql: schemaBaseline, downSQL: ""},
 	{version: 2, name: "comments_and_shares", sql: commentsAndSharesSQL, downSQL: commentsAndSharesDownSQL},
 	{version: 3, name: "refresh_token_device_info", sql: refreshSessionDdlSQL, downSQL: refreshSessionDdlDownSQL},
 	{version: 4, name: "flow_analysis_v2", sql: flowAnalysisV2SQL, downSQL: flowAnalysisV2DownSQL},
@@ -80,32 +60,56 @@ var migrations = []migration{
 	{version: 23, name: "org_provider_keys", sql: orgProviderKeysSQL, downSQL: orgProviderKeysDownSQL},
 	{version: 24, name: "org_provider_keys_secret_set_by", sql: orgProviderKeysSecretSetBySQL, downSQL: orgProviderKeysSecretSetByDownSQL},
 	{version: 25, name: "azure_registry", sql: azureRegistrySQL, downSQL: azureRegistryDownSQL},
+	{version: 26, name: "perf_indexes_v26", sql: perfIndexesV26SQL, downSQL: perfIndexesV26DownSQL},
+	{version: 27, name: "perf_round2_v27", sql: perfRound2V27SQL, downSQL: perfRound2V27DownSQL},
+	{version: 28, name: "perf_round3_v28", sql: perfRound3V28SQL, downSQL: perfRound3V28DownSQL},
+	{version: 29, name: "perf_round4_v29", sql: perfRound4V29SQL, downSQL: perfRound4V29DownSQL},
+	{version: 30, name: "perf_indexes_v30", sql: perfIndexesV30SQL, downSQL: perfIndexesV30DownSQL},
+	{version: 31, name: "users_created_id_idx", sql: usersCreatedIdIdxV31SQL, downSQL: usersCreatedIdIdxV31DownSQL},
 }
 
-// flowBlockCountIndexSQL adds an expression index matching the FlowSortBlocksDesc
-// ORDER BY (`COALESCE((metadata->>'BlockCount')::int, 0) DESC, updated_at DESC`),
-// which previously forced a full-table scan + in-memory sort on that sort mode.
-// The cast is safe: metadata.BlockCount is always a JSON number (or the key is
-// absent → NULL → 0), so the immutable expression never throws at index build.
+// perfIndexesV30SQL (v30) adds the `id` tiebreaker to the gov_alerts and block-count indexes so their ORDER BYs are fully index-ordered.
+const perfIndexesV30SQL = `
+DROP INDEX IF EXISTS flows_blockcount_updated_idx;
+CREATE INDEX IF NOT EXISTS flows_blockcount_updated_idx
+    ON flows ((COALESCE((metadata->>'BlockCount')::int, 0)) DESC, updated_at DESC, id);
+
+DROP INDEX IF EXISTS gov_alerts_created_idx;
+CREATE INDEX IF NOT EXISTS gov_alerts_created_id_idx ON gov_alerts (created_at DESC, id);
+`
+
+// perfIndexesV30DownSQL reverses v30: restores both pre-v30 definitions. Idempotent.
+const perfIndexesV30DownSQL = `
+DROP INDEX IF EXISTS gov_alerts_created_id_idx;
+CREATE INDEX IF NOT EXISTS gov_alerts_created_idx ON gov_alerts (created_at DESC);
+
+DROP INDEX IF EXISTS flows_blockcount_updated_idx;
+CREATE INDEX IF NOT EXISTS flows_blockcount_updated_idx
+    ON flows ((COALESCE((metadata->>'BlockCount')::int, 0)) DESC, updated_at DESC);
+`
+
+// usersCreatedIdIdxV31SQL (v31) backs the admin user listing's ORDER BY (created_at DESC, id ASC) — previously a full scan + sort.
+const usersCreatedIdIdxV31SQL = `
+CREATE INDEX IF NOT EXISTS users_created_id_idx ON users (created_at DESC, id);
+`
+
+// usersCreatedIdIdxV31DownSQL reverses v31. Idempotent.
+const usersCreatedIdIdxV31DownSQL = `
+DROP INDEX IF EXISTS users_created_id_idx;
+`
+
+// flowBlockCountIndexSQL adds an expression index matching FlowSortBlocksDesc ORDER BY (was a full scan + sort; safe cast — BlockCount is a JSON number or absent).
 const flowBlockCountIndexSQL = `
 CREATE INDEX IF NOT EXISTS flows_blockcount_updated_idx
     ON flows ((COALESCE((metadata->>'BlockCount')::int, 0)) DESC, updated_at DESC);
 `
 
-// flowVersionsBlobKeySQL records the content blob's storage key per version row.
-// Previously the key was derived from (flow_id, version), which forced the blob
-// upload to happen while holding the parent flow's FOR UPDATE lock (the version
-// number isn't known until then). Storing an explicit key lets SaveFlowVersion
-// key the blob on the row id and upload BEFORE taking the lock. Additive with an
-// empty-string default; legacy rows keep "" and fall back to the derived key.
+// flowVersionsBlobKeySQL stores the content blob's key per version row so SaveFlowVersion can upload BEFORE the flow's FOR UPDATE lock; legacy rows keep "".
 const flowVersionsBlobKeySQL = `
 ALTER TABLE flow_versions ADD COLUMN IF NOT EXISTS blob_key TEXT NOT NULL DEFAULT '';
 `
 
-// flowVersionsBlobKeyDownSQL reverses v10. Data-lossy: the stored blob key is
-// discarded; legacy rows that relied on the derived key keep working (the read
-// path falls back), but rows written post-v10 with a non-legacy key would need
-// re-derivation. Idempotent.
+// flowVersionsBlobKeyDownSQL reverses v10. Data-lossy (stored blob key discarded; reads fall back to the derived key).
 const flowVersionsBlobKeyDownSQL = `
 ALTER TABLE flow_versions DROP COLUMN IF EXISTS blob_key;
 `
@@ -115,21 +119,18 @@ const flowBlockCountIndexDownSQL = `
 DROP INDEX IF EXISTS flows_blockcount_updated_idx;
 `
 
-// policiesDownSQL reverses v8. Dropping the table also drops its index + RLS
-// policies. Data-lossy: saved governance policies are destroyed.
+// policiesDownSQL reverses v8 (drops table, index + RLS policies). Data-lossy: policies destroyed.
 const policiesDownSQL = `
 DROP TABLE IF EXISTS policies;
 `
 
-// usageMetricsOrgIndexDownSQL reverses v7: drop the composite, restore the
-// single-column org_id index that the forward step removed.
+// usageMetricsOrgIndexDownSQL reverses v7: drop the composite, restore the single-column org_id index.
 const usageMetricsOrgIndexDownSQL = `
 DROP INDEX IF EXISTS usage_metrics_org_created_idx;
 CREATE INDEX IF NOT EXISTS usage_metrics_org_id_idx ON usage_metrics (org_id);
 `
 
-// perfIndexesDownSQL reverses v6: drop the three added composite indexes and
-// restore the six redundant single-column indexes the forward step removed.
+// perfIndexesDownSQL reverses v6: drop the three composites, restore the six redundant single-column indexes.
 const perfIndexesDownSQL = `
 DROP INDEX IF EXISTS audit_events_user_created_idx;
 DROP INDEX IF EXISTS refresh_tokens_expires_at_idx;
@@ -142,14 +143,12 @@ CREATE INDEX IF NOT EXISTS flow_versions_flow_id_idx ON flow_versions (flow_id);
 CREATE INDEX IF NOT EXISTS idx_share_tokens_hash ON share_tokens (token_hash);
 `
 
-// findingStatusCreatedAtDownSQL reverses v5. Data-lossy: the MTTR created_at
-// column (and its data) is dropped.
+// findingStatusCreatedAtDownSQL reverses v5. Data-lossy: the MTTR created_at column (and data) is dropped.
 const findingStatusCreatedAtDownSQL = `
 ALTER TABLE finding_status DROP COLUMN IF EXISTS created_at;
 `
 
-// flowAnalysisV2DownSQL reverses v4: drop the six dashboard-rollup columns
-// added to flow_analysis and flow_analysis_history. Data-lossy.
+// flowAnalysisV2DownSQL reverses v4: drop the six dashboard-rollup columns. Data-lossy.
 const flowAnalysisV2DownSQL = `
 ALTER TABLE flow_analysis DROP COLUMN IF EXISTS by_confidence;
 ALTER TABLE flow_analysis DROP COLUMN IF EXISTS auto_fixable_count;
@@ -159,36 +158,21 @@ ALTER TABLE flow_analysis_history DROP COLUMN IF EXISTS auto_fixable_count;
 ALTER TABLE flow_analysis_history DROP COLUMN IF EXISTS total_findings;
 `
 
-// refreshSessionDdlDownSQL reverses v3: drop the device-info columns added to
-// refresh_tokens. Data-lossy (UA/IP session labels destroyed).
+// refreshSessionDdlDownSQL reverses v3: drop the device-info columns. Data-lossy (UA/IP labels destroyed).
 const refreshSessionDdlDownSQL = `
 ALTER TABLE refresh_tokens DROP COLUMN IF EXISTS user_agent;
 ALTER TABLE refresh_tokens DROP COLUMN IF EXISTS ip;
 `
 
-// commentsAndSharesDownSQL reverses v2: drop the share_tokens and
-// finding_comments tables (their RLS policies drop with the tables). Order
-// matters only relative to FKs to flows, which both share — IF EXISTS makes
-// either order safe. Data-lossy: comments + share links destroyed.
+// commentsAndSharesDownSQL reverses v2: drop share_tokens and finding_comments. Data-lossy.
 const commentsAndSharesDownSQL = `
 DROP TABLE IF EXISTS share_tokens;
 DROP TABLE IF EXISTS finding_comments;
 `
 
-// pgvectorKnowledgeSQL enables server-side similarity search over knowledge-base
-// embeddings. The column is intentionally DIMENSIONLESS (`vector`, pgvector
-// 0.7+) so the schema doesn't need to be rebuilt when the embedding provider
-// changes dimension; instead the application enforces the configured dimension
-// at insert time (only same-dimension chunks populate embedding_vec, the rest
-// stay NULL and are excluded from the index search, mirroring the "re-index
-// after changing the embedding provider" contract).
-//
-// Everything is guarded on the extension being installable: a deployment whose
-// Postgres role can't CREATE EXTENSION vector (or where the extension isn't
-// packaged) must still boot. The column/index/backfill then no-op, and
-// SearchKnowledge falls back to the in-Go cosine ranker. The backfill converts
-// the existing JSONB embedding array (`[0.1,0.2,…]`) into the vector text form
-// pgvector accepts; rows that fail (e.g. a corrupt JSONB array) are left NULL.
+// pgvectorKnowledgeSQL enables server-side similarity search. The column is intentionally DIMENSIONLESS:
+// the app enforces the configured dimension at insert (wrong-dimension chunks stay NULL — the "re-index
+// after changing the embedding provider" contract). No-ops without the extension (Go-side cosine ranker).
 const pgvectorKnowledgeSQL = `
 -- Best-effort extension install. Swallowed if the role lacks privilege or the
 -- extension isn't packaged — the DO block below only proceeds when it lands.
@@ -220,11 +204,7 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 `
 
-// pgvectorKnowledgeDownSQL is the reverse of v11: drop the embedding_vec column
-// (its HNSW index drops automatically with the column) but do NOT DROP the
-// vector EXTENSION — it is database-wide and may serve other uses. The JSONB
-// embedding column remains, so SearchKnowledge falls back to the Go-side cosine
-// ranker. Idempotent. Guarded so a down without the extension/column is a no-op.
+// pgvectorKnowledgeDownSQL reverses v11: drop embedding_vec (HNSW goes with it) but NOT the vector EXTENSION.
 const pgvectorKnowledgeDownSQL = `
 DO $$ BEGIN
 	IF EXISTS (SELECT 1 FROM information_schema.columns
@@ -236,38 +216,12 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 `
 
-// findingStatusCreatedAtSQL adds a created_at column to finding_status so the
-// dashboard can compute mean-time-to-resolve (MTTR) and stale-finding counts.
-// Additive with a default — existing rows backfill to NOW() (migration time),
-// which the MTTR query excludes via `updated_at >= created_at`, so only findings
-// triaged through a full lifecycle post-migration contribute to the average.
+// findingStatusCreatedAtSQL adds created_at to finding_status for MTTR / stale counts; existing rows backfill to NOW() and are excluded via `updated_at >= created_at`.
 const findingStatusCreatedAtSQL = `
 ALTER TABLE finding_status ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 `
 
-// perfIndexesSQL adds composite indexes that eliminate full-table scans on hot
-// paths, and drops redundant indexes whose maintenance is pure write/storage
-// overhead on the hottest tables. All statements are idempotent (IF EXISTS).
-//
-// Added:
-//   - audit_events(user_id, created_at DESC) — ListAuditEvents and the dashboard
-//     activity feed filter by user_id and ORDER BY created_at DESC. Without this
-//     composite, Postgres range-scans the single-column user_id index then does
-//     an in-memory sort.
-//   - refresh_tokens(expires_at) — the login/refresh hot path runs
-//     DELETE FROM refresh_tokens WHERE expires_at < NOW() on every issuance.
-//     Without an index this is a full table scan.
-//   - token_blacklist(expires_at) — a per-process cleanup goroutine runs
-//     DELETE FROM token_blacklist WHERE expires_at < NOW() every 5 minutes.
-//     Without an index this is a full table scan.
-//
-// Dropped (each is covered by a composite or UNIQUE constraint's leftmost prefix):
-//   - audit_events_user_id_idx  — covered by the new composite above
-//   - flows_owner_id_idx        — covered by flows_owner_updated_idx(owner_id, updated_at DESC)
-//   - flows_org_id_idx          — covered by flows_org_updated_idx(org_id, updated_at DESC)
-//   - usage_metrics_user_id_idx — covered by usage_metrics_user_created_idx(user_id, created_at)
-//   - flow_versions_flow_id_idx — covered by UNIQUE(flow_id, version)
-//   - idx_share_tokens_hash     — covered by UNIQUE(token_hash)
+// perfIndexesSQL adds composite indexes eliminating full-table scans on hot paths and drops redundant single-column indexes covered by a composite/UNIQUE leftmost prefix.
 const perfIndexesSQL = `
 -- Add composite indexes for hot-path queries.
 CREATE INDEX IF NOT EXISTS audit_events_user_created_idx ON audit_events (user_id, created_at DESC);
@@ -283,21 +237,13 @@ DROP INDEX IF EXISTS flow_versions_flow_id_idx;
 DROP INDEX IF EXISTS idx_share_tokens_hash;
 `
 
-// usageMetricsOrgIndexSQL adds a composite (org_id, created_at) index on
-// usage_metrics. The AI budget-check hot path (GetDailyUsage) filters by
-// org_id AND created_at on every AI call, but previously only had a
-// single-column org_id index, forcing a range scan + in-memory date filter.
-// The single-column index is dropped (covered by the composite's leftmost prefix).
+// usageMetricsOrgIndexSQL adds a composite (org_id, created_at) index for the AI budget-check hot path; the single-column org_id index is dropped (leftmost prefix).
 const usageMetricsOrgIndexSQL = `
 CREATE INDEX IF NOT EXISTS usage_metrics_org_created_idx ON usage_metrics (org_id, created_at);
 DROP INDEX IF EXISTS usage_metrics_org_id_idx;
 `
 
-// flowAnalysisV2SQL adds the dashboard-rollup columns to flow_analysis (and
-// its append-only history mirror) so the welcome dashboard can compute
-// org-wide "confidence distribution" and "fix availability" KPIs without
-// re-analyzing every flow. Additive columns with defaults — safe on existing
-// rows, which backfill to {} / 0 and are refreshed on each flow's next analyze.
+// flowAnalysisV2SQL adds dashboard-rollup columns to flow_analysis (+ history mirror) for the org-wide confidence/fix-availability KPIs; additive.
 const flowAnalysisV2SQL = `
 ALTER TABLE flow_analysis ADD COLUMN IF NOT EXISTS by_confidence JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE flow_analysis ADD COLUMN IF NOT EXISTS auto_fixable_count INTEGER NOT NULL DEFAULT 0;
@@ -308,10 +254,7 @@ ALTER TABLE flow_analysis_history ADD COLUMN IF NOT EXISTS auto_fixable_count IN
 ALTER TABLE flow_analysis_history ADD COLUMN IF NOT EXISTS total_findings INTEGER NOT NULL DEFAULT 0;
 `
 
-// refreshSessionDdlSQL records the User-Agent and client IP a refresh
-// token was issued to, so the "active sessions" UI can show a friendly device
-// label ("Firefox on Windows") and a rough location hint instead of just a
-// timestamp. Additive columns with defaults — safe on existing rows.
+// refreshSessionDdlSQL records the User-Agent and client IP a refresh token was issued to (active-sessions UI).
 const refreshSessionDdlSQL = `
 ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS user_agent TEXT NOT NULL DEFAULT '';
 ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS ip TEXT NOT NULL DEFAULT '';
@@ -368,16 +311,8 @@ CREATE INDEX IF NOT EXISTS idx_share_tokens_flow ON share_tokens(flow_id);
 CREATE INDEX IF NOT EXISTS idx_share_tokens_hash ON share_tokens(token_hash);
 `
 
-// migrate applies every pending migration, serializing concurrent startups
-// across replicas using a PostgreSQL session-level advisory lock. Without the
-// lock, two pods starting simultaneously can both execute a migration block and
-// one will fail with a duplicate-object or constraint-violation error.
-//
-// Each step runs in its own transaction together with its version record, so a
-// failure rolls both back and the step is retried on the next boot. The lock is
-// held for the whole run; pg_advisory_lock is released when the session ends,
-// so we dedicate a single connection to the migration and release the lock
-// explicitly before returning it to the pool.
+// migrate applies every pending migration under a session-level advisory lock (dedicated connection)
+// so concurrent replicas serialize. Each step + its version record run in one transaction: a failure rolls both back.
 func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 	conn, err := b.db.Conn(ctx)
 	if err != nil {
@@ -394,10 +329,7 @@ func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
 		return fmt.Errorf("acquire migration advisory lock: %w", err)
 	}
-	defer func() {
-		// Best-effort release; if it fails the lock will free when the conn closes.
-		_, _ = conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
-	}()
+	defer releaseMigrationLock(conn)
 
 	if err := ensureMigrationsTable(ctx, conn); err != nil {
 		return fmt.Errorf("ensure schema_migrations table: %w", err)
@@ -408,23 +340,15 @@ func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 		return fmt.Errorf("read schema version: %w", err)
 	}
 
-	// Refuse a schema this binary does not know. Without this an OLD binary
-	// against a NEWER database booted clean and logged "schema up to date"
-	// with ITS OWN max version — so a rollback (the one recovery move an
-	// operator actually makes) ran queries against tables and columns it had
-	// never seen, silently. Rolling the binary back requires rolling the
-	// schema back first (`bakicli migrate down`), or the app must be redeployed
-	// at a version that knows the schema.
+	// Refuse a schema this binary does not know: an old binary against a newer database would run
+	// queries against tables it has never seen. Roll back first (`bakicli migrate down`) or deploy newer.
 	latest := migrations[len(migrations)-1].version
 	if current > latest {
 		return fmt.Errorf("schema is at v%d, newer than the v%d this binary knows: refusing to run against an unknown schema (roll the schema back to v%d with `bakicli migrate down %d`, or deploy a binary that knows v%d)",
 			current, latest, latest, latest, current)
 	}
 
-	// Integrity gate: verify that every already-applied migration's SQL still
-	// matches the checksum recorded when it was applied. A mismatch means a
-	// shipped migration was edited in place — fail boot rather than run new
-	// steps on top of a divergent schema.
+	// Integrity gate: fail boot when an applied migration's SQL no longer matches its checksum.
 	if err := verifyChecksums(ctx, conn, current); err != nil {
 		return err
 	}
@@ -450,15 +374,9 @@ func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 	return nil
 }
 
-// liftSessionTimeouts clears statement_timeout and lock_timeout on the
-// migration's dedicated session and returns a func that restores them. The
-// pool applies both to every connection (see New), which is right for
-// request traffic and wrong for migrations: a CREATE INDEX on a real table
-// can legitimately outrun a 30s statement budget, and a replica waiting on
-// the migration advisory lock would be killed by lock_timeout and fail its
-// boot. RESET on the way out matters because sql.Conn.Close returns the
-// connection to the pool, where the next request would otherwise inherit an
-// unbounded session.
+// liftSessionTimeouts clears the pool's statement/lock timeouts on the migration's dedicated session
+// and returns a restorer: a long CREATE INDEX can outrun the statement budget, and a replica waiting on
+// the advisory lock must not be killed by lock_timeout.
 func liftSessionTimeouts(ctx context.Context, conn *sql.Conn) (restore func(), err error) {
 	if _, err := conn.ExecContext(ctx, "SET statement_timeout = 0"); err != nil {
 		return nil, fmt.Errorf("lift statement_timeout for migration: %w", err)
@@ -467,8 +385,8 @@ func liftSessionTimeouts(ctx context.Context, conn *sql.Conn) (restore func(), e
 		return nil, fmt.Errorf("lift lock_timeout for migration: %w", err)
 	}
 	return func() {
-		// Use a fresh context: the caller's may already be cancelled, and a
-		// pooled connection with the timeouts still lifted is the bug.
+		// Fresh context: the caller's may already be cancelled, and a pooled conn with the
+		// timeouts still lifted is the bug.
 		rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if _, err := conn.ExecContext(rctx, "RESET statement_timeout"); err != nil {
@@ -483,10 +401,18 @@ func liftSessionTimeouts(ctx context.Context, conn *sql.Conn) (restore func(), e
 	}, nil
 }
 
-// ensureMigrationsTable creates the version-tracking table if it does not yet
-// exist. Existing deployments that predate versioning get it created on first
-// boot; their already-applied baseline is then recorded as v1 by applyMigration
-// (the baseline SQL is fully idempotent, so re-running it is a no-op).
+// releaseMigrationLock releases the session-level lock on a fresh context before conn returns to the
+// pool (a pooled conn keeps its session, so a held lock would block every other replica); on failure the conn is discarded — ending the session frees the lock.
+func releaseMigrationLock(conn *sql.Conn) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey); err != nil {
+		slog.Warn("migration: advisory unlock failed; closing connection", "err", err)
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
+}
+
+// ensureMigrationsTable creates the version-tracking table; deployments predating versioning get it on first boot with baseline recorded as v1.
 func ensureMigrationsTable(ctx context.Context, conn *sql.Conn) error {
 	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version    INTEGER    PRIMARY KEY,
@@ -495,19 +421,13 @@ func ensureMigrationsTable(ctx context.Context, conn *sql.Conn) error {
 	)`); err != nil {
 		return err
 	}
-	// checksum records the SHA-256 of the step's SQL. Added additively so
-	// deployments that predate checksumming get the column on first boot; their
-	// existing rows default to '' ("unknown") and are backfilled by
-	// verifyChecksums rather than treated as drift.
+	// checksum records the step SQL's SHA-256, added additively; pre-checksum rows default to ''
+	// and are backfilled by verifyChecksums rather than treated as drift.
 	_, err := conn.ExecContext(ctx, `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NOT NULL DEFAULT ''`)
 	return err
 }
 
-// verifyChecksums compares each already-applied migration's recorded checksum
-// against the current SQL's checksum. Rows recorded before checksumming existed
-// (empty checksum) are adopted by backfilling the current value — we cannot know
-// the original SQL, so we trust the running binary once. A non-empty mismatch is
-// a fatal drift error.
+// verifyChecksums compares each applied migration's recorded checksum against the current SQL; empty (pre-checksum) values are adopted, a mismatch is fatal drift.
 func verifyChecksums(ctx context.Context, conn *sql.Conn, current int) error {
 	stored, err := loadAppliedChecksums(ctx, conn)
 	if err != nil {
@@ -541,8 +461,7 @@ func verifyChecksums(ctx context.Context, conn *sql.Conn, current int) error {
 	return nil
 }
 
-// loadAppliedChecksums returns version → recorded checksum for every row in
-// schema_migrations.
+// loadAppliedChecksums returns version → recorded checksum for every schema_migrations row.
 func loadAppliedChecksums(ctx context.Context, conn *sql.Conn) (map[int]string, error) {
 	rows, err := conn.QueryContext(ctx, `SELECT version, checksum FROM schema_migrations`)
 	if err != nil {
@@ -567,8 +486,7 @@ func currentVersion(ctx context.Context, conn *sql.Conn) (int, error) {
 	return v, err
 }
 
-// applyMigration runs one step's SQL and records its version in a single
-// transaction, so a half-applied step can never be marked complete.
+// applyMigration runs one step's SQL and records its version in a single transaction, so a half-applied step can never be marked complete.
 func applyMigration(ctx context.Context, conn *sql.Conn, m migration) (err error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -589,11 +507,7 @@ func applyMigration(ctx context.Context, conn *sql.Conn, m migration) (err error
 	return tx.Commit()
 }
 
-// applyMigrationDown runs one step's downSQL and removes its version record in
-// a single transaction, mirroring applyMigration so a half-rolled-back step can
-// never be left in a partial state. The downSQL is NOT checksummed (only the
-// forward sql is immutable); deleting the version row makes verifyChecksums
-// naturally skip it on the next boot.
+// applyMigrationDown runs one step's downSQL and removes its version record in one transaction; the downSQL is not checksummed.
 func applyMigrationDown(ctx context.Context, conn *sql.Conn, m migration) (err error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -617,13 +531,11 @@ func applyMigrationDown(ctx context.Context, conn *sql.Conn, m migration) (err e
 type MigrationStep struct {
 	Version int
 	Name    string
-	// Reversible is false when downSQL is empty (the step is intentionally
-	// irreversible and MigrateDown refuses to cross it).
+	// Reversible is false when downSQL is empty (intentionally irreversible).
 	Reversible bool
 }
 
-// MigrationSteps exposes the ordered step list + reversibility for bakicli's
-// `migrate down` planning/help. It is the complete set the binary can apply.
+// MigrationSteps exposes the ordered step list + reversibility for bakicli's `migrate down` planning.
 func MigrationSteps() []MigrationStep {
 	out := make([]MigrationStep, 0, len(migrations))
 	for _, m := range migrations {
@@ -632,20 +544,11 @@ func MigrationSteps() []MigrationStep {
 	return out
 }
 
-// ErrMigrationNotReversible is returned by MigrateDown when the rollback path
-// crosses a step with no downSQL (e.g. the baseline). The operator must restore
-// from backup instead.
+// ErrMigrationNotReversible is returned by MigrateDown when the rollback path crosses a step with no downSQL (e.g. the baseline); restore from backup instead.
 var ErrMigrationNotReversible = fmt.Errorf("migration not reversible: a step in the rollback path has no down-migration (baseline or unsafe); restore from backup instead")
 
-// MigrateDown rolls the schema back to targetVersion by running each applied
-// step's downSQL in strict descending order, each in its own transaction under
-// the migration advisory lock. It is the operator-invoked reverse of migrate()
-// and is NEVER run on boot. A step with empty downSQL makes the whole rollback
-// fail with ErrMigrationNotReversible — the caller (bakicli) is expected to
-// pre-check the path and refuse interactively before any destructive work.
-//
-// Returns the list of step versions that were rolled back (descending), which
-// the caller surfaces to the operator.
+// MigrateDown rolls the schema back to targetVersion via each step's downSQL in strict descending
+// order, each in its own transaction under the advisory lock. Operator-invoked (bakicli), never on boot.
 func (b *PostgresStorageBackend) MigrateDown(ctx context.Context, targetVersion int) ([]int, error) {
 	conn, err := b.db.Conn(ctx)
 	if err != nil {
@@ -662,9 +565,7 @@ func (b *PostgresStorageBackend) MigrateDown(ctx context.Context, targetVersion 
 	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
 		return nil, fmt.Errorf("acquire migration advisory lock: %w", err)
 	}
-	defer func() {
-		_, _ = conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
-	}()
+	defer releaseMigrationLock(conn)
 
 	current, err := currentVersion(ctx, conn)
 	if err != nil {
@@ -674,9 +575,8 @@ func (b *PostgresStorageBackend) MigrateDown(ctx context.Context, targetVersion 
 		return nil, nil // nothing to do (already at or below target)
 	}
 
-	// Pre-check the entire rollback path BEFORE any destructive work: every
-	// step from current down to targetVersion+1 must have a downSQL. This keeps
-	// a "not reversible" failure atomic — no half-rolled-back schema.
+	// Pre-check the whole rollback path before any destructive work, so a "not reversible"
+	// failure leaves no half-rolled-back schema.
 	for v := current; v > targetVersion; v-- {
 		step, ok := migrationByVersion(v)
 		if !ok {
@@ -718,8 +618,7 @@ func mustMigrationByVersion(v int) migration {
 	return m
 }
 
-// CurrentSchemaVersion reports the highest applied migration version, or 0 when
-// no backend/migrations table exists (local mode). Exposed for health/observability.
+// CurrentSchemaVersion reports the highest applied migration version, or 0 with no backend/table.
 func (b *PostgresStorageBackend) CurrentSchemaVersion(ctx context.Context) (int, error) {
 	if b == nil || b.db == nil {
 		return 0, nil
@@ -1349,14 +1248,7 @@ CREATE POLICY rls_policies_visible ON policies FOR ALL USING (
 );
 `
 
-// governanceAlertsSQL (v12) adds the in-app governance alerts inbox. The
-// continuous-governance scanner writes a row whenever it detects baseline drift
-// or a health regression on a flow; the notifications bell reads them. Alerts
-// are team-shared and inherit the parent flow's visibility (same RLS shape as
-// finding_status), so a user sees alerts only for flows they own / collaborate
-// on / share an org with. read_at/dismissed_at are team-global (ack semantics:
-// one team member acknowledging clears the badge for the whole team). An index on
-// created_at DESC backs the newest-first list query.
+// governanceAlertsSQL (v12) adds the in-app governance alerts inbox: team-shared, inherit flow visibility (same RLS shape as finding_status); read/dismiss stamps are team-global.
 const governanceAlertsSQL = `
 CREATE TABLE IF NOT EXISTS gov_alerts (
     id            TEXT        PRIMARY KEY,
@@ -1402,38 +1294,24 @@ CREATE POLICY rls_gov_alerts_visible ON gov_alerts FOR ALL USING (
 );
 `
 
-// governanceAlertsDownSQL reverses v12. Data-lossy: the alerts inbox is
-// destroyed (the scanner re-populates it on the next sweep after re-upgrade).
+// governanceAlertsDownSQL reverses v12. Data-lossy: the inbox is destroyed (the scanner repopulates it after re-upgrade).
 const governanceAlertsDownSQL = `
 DROP TABLE IF EXISTS gov_alerts;
 `
 
-// flowsNameTrgmSQL (v13) adds a trigram GIN index backing the library's
-// name-substring search (`name ILIKE '%q%'`). A leading-wildcard ILIKE cannot
-// use a btree index, so the query filtered every in-scope row's name after the
-// owner/org index scan — fine for small personal libraries, a full scan of
-// every org flow's name for large orgs. pg_trgm's GIN index makes the
-// substring match index-backed. CREATE EXTENSION is idempotent (IF NOT
-// EXISTS); on managed Postgres (Azure Database) pg_trgm is preinstalled and
-// creatable by the table owner.
+// flowsNameTrgmSQL (v13) adds a trigram GIN index backing the library's name-substring search (`name ILIKE '%q%'`), which a btree cannot serve.
 const flowsNameTrgmSQL = `
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 DROP INDEX IF EXISTS flows_name_trgm_idx;
 CREATE INDEX flows_name_trgm_idx ON flows USING gin (name gin_trgm_ops);
 `
 
-// flowsNameTrgmDownSQL reverses v13. The extension itself is left installed
-// (other objects may depend on it; dropping an extension other users rely on
-// from a down-migration would be surprising).
+// flowsNameTrgmDownSQL reverses v13; the pg_trgm extension stays installed.
 const flowsNameTrgmDownSQL = `
 DROP INDEX IF EXISTS flows_name_trgm_idx;
 `
 
-// apiTokenScopesSQL (R2-1): PAT capability restriction. scopes is a
-// comma-joined TEXT column (the set is ≤4 short, comma-free names — an array
-// type would drag a pq dependency for no benefit). ” = unscoped = full
-// access (every pre-existing token), so the default keeps behavior identical
-// until a scoped token is minted.
+// apiTokenScopesSQL: PAT capability restriction via a comma-joined TEXT column; empty = unscoped = full access.
 //
 //nolint:gosec // G101 false positive: schema DDL, not a credential
 const apiTokenScopesSQL = `
@@ -1445,10 +1323,7 @@ const apiTokenScopesDownSQL = `
 ALTER TABLE api_tokens DROP COLUMN IF EXISTS scopes;
 `
 
-// flowTagsSQL (R2-4): organizational tagging for the flow library — business
-// unit, criticality, environment. CSV TEXT column: tags are a small set of
-// normalized (comma-free, ≤32 char) names; filtering uses delimiter-anchored
-// LIKE so 'prod' never matches 'production'.
+// flowTagsSQL: organizational tagging for the flow library, as a CSV TEXT column of normalized comma-free names; delimiter-anchored LIKE filtering so 'prod' never matches 'production'.
 const flowTagsSQL = `
 ALTER TABLE flows ADD COLUMN IF NOT EXISTS tags TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS flows_tags_idx ON flows (tags);
@@ -1459,10 +1334,7 @@ DROP INDEX IF EXISTS flows_tags_idx;
 ALTER TABLE flows DROP COLUMN IF EXISTS tags;
 `
 
-// govAlertTargetsSQL (R2-5): targeted alerts. target_user_id ” (default) =
-// team-wide (every existing alert); a user ID = visible ONLY to that user —
-// the delivery target for assignment/comment notifications, which are
-// personal, not governance-wide.
+// govAlertTargetsSQL: target_user_id empty (default) = team-wide; a user ID = visible only to that user.
 const govAlertTargetsSQL = `
 ALTER TABLE gov_alerts ADD COLUMN IF NOT EXISTS target_user_id TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS gov_alerts_target_user_idx ON gov_alerts (target_user_id) WHERE target_user_id <> '';
@@ -1473,11 +1345,7 @@ DROP INDEX IF EXISTS gov_alerts_target_user_idx;
 ALTER TABLE gov_alerts DROP COLUMN IF EXISTS target_user_id;
 `
 
-// orgChannelsSQL (R2-3): per-org notification channels. Governance events for
-// an org's flows fan out to the org's own channels IN ADDITION to the
-// deployment-global ones — routing by ownership instead of one global blast.
-// RLS mirrors the knowledge tables (org-member read; writes also via member
-// policy — the HTTP layer additionally requires admin).
+// orgChannelsSQL: per-org notification channels; governance events fan out to the org's channels too. RLS mirrors the knowledge tables.
 const orgChannelsSQL = `
 CREATE TABLE IF NOT EXISTS org_channels (
     id         TEXT        PRIMARY KEY,
@@ -1507,25 +1375,7 @@ const orgChannelsDownSQL = `
 DROP TABLE IF EXISTS org_channels;
 `
 
-// orgCustomRulesSQL (R4): per-org user-authored analyzer rules. Custom rules
-// previously came from ONE deployment-global JSON file (PAD_CUSTOM_RULES, read
-// once at boot), so a tenant could not express its own policy and could not
-// author one without a process restart.
-//
-// config holds an analyzer.CustomRuleConfig verbatim (declarative matchers +
-// optional autoFix). Storing it as JSONB rather than shredding it into columns
-// keeps the storage layer out of the rule schema: the analyzer owns that shape,
-// and every write is validated through analyzer.NewCustomRule before it lands,
-// so an unparseable rule can never reach the table.
-//
-// rule_id is the AUTHOR'S id (what appears on findings) and is unique PER ORG,
-// not globally — two orgs may legitimately both define "house-style". The
-// analysis cache accounts for that (see analyzer.ruleSetDigest); a global
-// unique constraint here would be wrong.
-//
-// RLS is ENABLE + FORCE in this same migration. B8 (v19) had to retrofit FORCE
-// onto ten tables that shipped with ENABLE only — under ENABLE alone the table
-// OWNER is exempt, and the app owns its tables, so the policy did nothing.
+// orgCustomRulesSQL: per-org user-authored analyzer rules (was one deployment-global JSON file); rule_id is the AUTHOR'S id, unique PER ORG. RLS is ENABLE + FORCE in this same migration (ENABLE alone exempts the table OWNER — the app role).
 const orgCustomRulesSQL = `
 CREATE TABLE IF NOT EXISTS org_custom_rules (
     id         TEXT        PRIMARY KEY,
@@ -1556,14 +1406,7 @@ const orgCustomRulesDownSQL = `
 DROP TABLE IF EXISTS org_custom_rules;
 `
 
-// usageServedModelSQL (D-42): usage_metrics.model is the id the CALLER asked
-// for — for Azure AI Foundry that is a user-chosen deployment name ("my-gpt4o",
-// "model-router", "claude:sonnet") or a Foundry agent, which says nothing
-// about what was billed. served_model records the model the provider reported
-// answering the call, and is empty when unknown or identical to model, so the
-// analytics model breakdown can group by what actually served the request.
-// Additive with an empty-string default; legacy rows keep the empty value and
-// group by model exactly as before.
+// usageServedModelSQL (D-42): served_model records the model the provider reported answering the call (usage_metrics.model is what the CALLER asked for), empty when unknown or identical. Additive.
 const usageServedModelSQL = `
 ALTER TABLE usage_metrics ADD COLUMN IF NOT EXISTS served_model TEXT NOT NULL DEFAULT '';
 `
@@ -1572,17 +1415,9 @@ const usageServedModelDownSQL = `
 ALTER TABLE usage_metrics DROP COLUMN IF EXISTS served_model;
 `
 
-// orgProviderKeysSQL (G7) stores an organisation's SHARED provider credential
-// (today: the Azure AI Foundry document), encrypted like provider_keys, so an
-// org admin can configure one resource for every member. updated_by is the
-// admin's user id (resolved to a display name at read time, never joined
-// here); updated_at is shown to members as "shared by … on …".
-//
-// No RLS, deliberately, for the same reason as provider_keys: the table is
-// keyed by org_id, every query in keystore.go carries `WHERE org_id = $1`,
-// and the AES-GCM associated data binds each ciphertext to its (org,
-// provider) row, so a stolen row cannot be replayed under another org. The
-// FK cascade removes the credential with the organisation.
+// orgProviderKeysSQL stores an organisation's SHARED provider credential, encrypted like provider_keys.
+// No RLS deliberately (same reason as provider_keys): every keystore query carries `WHERE org_id = $1`
+// and AES-GCM AAD binds each ciphertext to its (org, provider) row. FK cascade removes it with the org.
 const orgProviderKeysSQL = `
 CREATE TABLE IF NOT EXISTS org_provider_keys (
 	org_id     TEXT        NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
@@ -1598,19 +1433,7 @@ const orgProviderKeysDownSQL = `
 DROP TABLE IF EXISTS org_provider_keys;
 `
 
-// orgProviderKeysSecretSetBySQL records the org credential's LENDER: the
-// admin who supplied the stored secret (secret_set_by), next to the admin who
-// last saved the document (updated_by). A save that carries the stored secret
-// over — another admin editing a deployment name — used to overwrite
-// updated_by, so when the admin whose secret it was left the admin role the
-// disable-on-departure delete (matched on updated_by) missed it and the
-// secret stayed live, and members were shown the wrong lender. secret_set_by
-// changes only when a new secret is supplied; the departure delete matches
-// the lender — secret_set_by, with updated_by only as the fallback for a
-// row no save has stamped since the backfill — so a departing admin's edit
-// that carried the secret does not delete the lender's credential.
-// Existing rows are backfilled from updated_by (the best record there
-// is). Additive with an empty-string default.
+// orgProviderKeysSecretSetBySQL records the org credential's LENDER (the admin who supplied the secret), distinct from updated_by, so the disable-on-departure delete matches the lender; existing rows backfill from updated_by.
 //
 //nolint:gosec // G101: DDL for the lender column (the name says "secret"), not a credential.
 const orgProviderKeysSecretSetBySQL = `
@@ -1618,23 +1441,14 @@ ALTER TABLE org_provider_keys ADD COLUMN IF NOT EXISTS secret_set_by TEXT NOT NU
 UPDATE org_provider_keys SET secret_set_by = updated_by WHERE secret_set_by = '';
 `
 
-// orgProviderKeysSecretSetByDownSQL reverses v24. Data-lossy only in the
-// lender record: the credentials themselves stay, and the disable path falls
-// back to updated_by alone.
+// orgProviderKeysSecretSetByDownSQL reverses v24. Data-lossy only in the lender record; the disable path falls back to updated_by.
 //
 //nolint:gosec // G101: DDL for the lender column (the name says "secret"), not a credential.
 const orgProviderKeysSecretSetByDownSQL = `
 ALTER TABLE org_provider_keys DROP COLUMN IF EXISTS secret_set_by;
 `
 
-// flowsContentTrgmSQL (R3-5a) backs library content-search pushdown: an
-// ILIKE over content::text finds flows whose BLOCK NAMES/properties mention
-// the needle WITHOUT loading + parsing every flow in-process (the previous
-// SearchLibrary capped at 50 flows — on a 500-flow org, 450 flows were
-// silently invisible to search). pg_trgm (required since v13) makes the scan
-// index-backed. NOTE: deployments with Azure Blob content offloading store a
-// "{}" placeholder in this column — the storage method detects that mode and
-// reports unsupported, so the service falls back to the legacy scan there.
+// flowsContentTrgmSQL (R3-5a) backs library content-search pushdown: an index-backed ILIKE over content::text instead of loading every flow in-process; blob-offloaded deployments ("{}" placeholder) report unsupported.
 const flowsContentTrgmSQL = `
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS flows_content_trgm_idx ON flows USING gin ((content::text) gin_trgm_ops);
@@ -1644,28 +1458,7 @@ const flowsContentTrgmDownSQL = `
 DROP INDEX IF EXISTS flows_content_trgm_idx;
 `
 
-// rlsForceSQL closes a silent hole in the Row-Level Security layer.
-//
-// `ENABLE ROW LEVEL SECURITY` does NOT apply policies to the table's OWNER —
-// only `FORCE ROW LEVEL SECURITY` does. This deployment runs its own
-// migrations at boot, so the application role owns every table it reads. Ten
-// of the twelve RLS-protected tables had ENABLE without FORCE, which means
-// their policies were inert in exactly the configuration the app ships in.
-// (finding_comments and policies already carried FORCE, which is what makes
-// this an oversight rather than a design choice.)
-//
-// Verified against postgres:16 — with ENABLE alone, the owner reads all rows
-// through a `USING (false)` deny-all policy; with FORCE, the same query
-// returns none.
-//
-// Adding FORCE does NOT break the maintenance paths that legitimately span
-// tenants (GDPR erasure, retention sweeps, the blob cleaner, the scanner).
-// Every policy is written as `NOT app_rls_active() OR <predicate>`, so the
-// bypass is earned by leaving app.current_user_id unset — it never relied on
-// owner-exemption. All 12 policies were checked for that guard before this
-// migration was written.
-//
-// Idempotent: FORCE is a no-op when already set.
+// rlsForceSQL closes a silent RLS hole: ENABLE does NOT apply policies to the table's OWNER — only FORCE does — and the app role owns every table (it runs its own migrations); ten tables shipped with ENABLE only, so their policies were inert. Tenant-spanning maintenance paths are unaffected (every policy short-circuits on `NOT app_rls_active()`).
 const rlsForceSQL = `
 ALTER TABLE flows                 FORCE ROW LEVEL SECURITY;
 ALTER TABLE conversations         FORCE ROW LEVEL SECURITY;
@@ -1679,9 +1472,7 @@ ALTER TABLE gov_alerts            FORCE ROW LEVEL SECURITY;
 ALTER TABLE org_channels          FORCE ROW LEVEL SECURITY;
 `
 
-// rlsForceDownSQL reverses v19, returning the ten tables to owner-exempt RLS.
-// Not data-lossy, but it does re-open the hole — it exists for migration
-// round-trip symmetry, not as an operational recommendation.
+// rlsForceDownSQL reverses v19, re-opening the owner-exemption hole; round-trip symmetry only, not an operational recommendation.
 const rlsForceDownSQL = `
 ALTER TABLE flows                 NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE conversations         NO FORCE ROW LEVEL SECURITY;
@@ -1695,41 +1486,8 @@ ALTER TABLE gov_alerts            NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE org_channels          NO FORCE ROW LEVEL SECURITY;
 `
 
-// pgvectorRepairSQL fixes v11, whose pgvector setup could never succeed.
-//
-// v11 put the column add, the backfill and the HNSW index creation inside ONE
-// PL/pgSQL block with a single `EXCEPTION WHEN OTHERS` handler. The index step
-// always failed — `CREATE INDEX ... USING hnsw` requires a fixed dimension and
-// v11 deliberately adds a DIMENSIONLESS `vector` column, so pgvector rejects it
-// with "column does not have dimensions". Catching that exception rolls back
-// the ENTIRE block, including the ALTER TABLE that had already succeeded. Net
-// result on every deployment with pgvector installed: no embedding_vec column,
-// no index, detectPgvector() false, and the server-side similarity pushdown
-// silently inert — while v11 recorded itself as applied, so it never retried.
-// The one integration test that would have caught it skips whenever pgvector is
-// absent, which included CI (postgres:16-alpine ships no vector extension).
-//
-// v11 is NOT edited: its SQL is checksummed, and changing an applied
-// migration's text fails boot via verifyChecksums.
-//
-// The repair is structural — each step gets its OWN block, so a failure in one
-// can no longer undo another:
-//
-//  1. extension  — best-effort; may now succeed where it didn't at v11 time
-//     (e.g. a DBA installed it afterwards, which v11 would never notice).
-//  2. column     — the step that actually matters: SearchKnowledge's
-//     `ORDER BY embedding_vec <=> $2 LIMIT n` pushdown needs only this. Without
-//     it the query falls back to loading every candidate chunk into Go, which
-//     is the cost v11 existed to remove.
-//  3. backfill   — a malformed embedding row can no longer cost us the column.
-//  4. index      — attempted ONLY when the column carries a dimension
-//     (atttypmod > 0). On the dimensionless column this is genuinely
-//     impossible, so it is skipped with a notice instead of failing forever.
-//     Server-side ordering still works without it; the index is an
-//     optimization on top, and a deployment that pins the column to its
-//     PAD_EMBEDDING_DIM gets it automatically on the next boot.
-//
-// Idempotent throughout: safe to re-run, and a no-op where v11 somehow landed.
+// pgvectorRepairSQL fixes v11, whose single PL/pgSQL block always failed (HNSW needs a fixed dimension; v11's column is dimensionless) and rolled the whole block back — no column, no index, yet v11 recorded itself applied.
+// v11 is not edited (its SQL is checksummed); the repair gives each step its OWN block and attempts the index only at a fixed dimension.
 const pgvectorRepairSQL = `
 DO $$ BEGIN
 	CREATE EXTENSION IF NOT EXISTS vector;
@@ -1784,16 +1542,7 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 `
 
-// pgvectorRepairDownSQL reverses v20, mirroring v11's own reverse: drop the
-// embedding_vec column (its HNSW index goes with it) but never DROP the vector
-// EXTENSION, which is database-wide and may serve other uses.
-//
-// Rolling back to v19 should leave the schema as v11..v19 actually left it —
-// and v11's setup always failed, so "no column" is the correct target state.
-// Data loss is nominal: embedding_vec is derived from the JSONB embedding
-// column, which stays, so SearchKnowledge falls back to the Go-side ranker and
-// re-applying v20 rebuilds the column from source. Idempotent; a down without
-// the column is a no-op.
+// pgvectorRepairDownSQL reverses v20: drop embedding_vec (HNSW goes with it) but never the vector EXTENSION; embedding_vec is derived from the JSONB column, which stays.
 const pgvectorRepairDownSQL = `
 DO $$ BEGIN
 	IF EXISTS (SELECT 1 FROM information_schema.columns
@@ -1805,37 +1554,10 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 `
 
-// azureRegistrySQL (v25, Part 9) is the Azure AI Foundry model registry:
-// several resources per owner, each with its own credential, and the models
-// registered on them with a display name, purpose, description, optional
-// window overrides, designations and last-test stamps. Owners are users
-// (personal registries) and organisations (admin-curated ones), in twin
-// table sets keyed (owner, id).
-//
-//   - Credentials stay in provider_keys / org_provider_keys (key
-//     "azure-foundry" = resource "default", "azure-foundry/<id>" the
-//     others). Nothing here is secret.
-//   - No user ids in org rows. Who changed what is in the audit log and the
-//     lender is org_provider_keys.secret_set_by, so account erasure never
-//     has to rewrite an org row: it deletes org_members, and the policies
-//     then hide the org's rows from the erased account. Never add a *_by
-//     column with a foreign key to users here.
-//   - Status is not stored (the service computes it at read time), and
-//     there is no sort_order (a fixed display sort).
-//   - The *_registry_state tables hold the legacy-import marker. It
-//     outlives the "default" resource, so deleting that resource never
-//     re-imports it from the old single document.
-//   - CHECKs mirror interfaces.ValidateAzure*Record (lengths in characters,
-//     never bytes). The unique indexes are the source of truth for
-//     duplicates — Go's strings.ToLower and Postgres lower() can disagree —
-//     and the store maps SQLSTATE 23505 to typed errors by index name, so
-//     the names below are part of the contract. Claude deployments share
-//     the chat namespace in the deployment index.
-//   - RLS ENABLE + FORCE on all six (FORCE, or the owning app role is
-//     exempt — the B8/v19 lesson). User tables: the caller's own rows. Org
-//     tables: the org_custom_rules membership predicate; admin-only writes
-//     are enforced in Go. The store also puts an explicit owner predicate
-//     in every query, because /api/chat/* runs without the RLS transaction.
+// azureRegistrySQL (v25) is the Azure AI Foundry model registry: resources per owner (twin user/org table sets keyed (owner, id)) and their models.
+// Key contracts: no secrets here (credentials stay in provider_keys); never add a user-id FK to org rows (erasure deletes org_members and the policies would hide the rows);
+// *_registry_state holds the legacy-import marker; CHECKs mirror interfaces.ValidateAzure*Record; unique-index names map SQLSTATE 23505 to typed errors; RLS ENABLE+FORCE on
+// all six plus an explicit owner predicate in every store query (/api/chat/* runs without the RLS transaction).
 const azureRegistrySQL = `
 CREATE TABLE IF NOT EXISTS user_azure_connections (
 	user_id                TEXT        NOT NULL,
@@ -2062,17 +1784,7 @@ CREATE POLICY rls_org_azure_registry_state_visible ON org_azure_registry_state F
 );
 `
 
-// azureRegistryDownSQL reverses v25. Data-lossy by design: all registry
-// metadata, the knowledge-base and org-default designations, and every
-// NON-default resource's credential. The v24 binary knows only the exact
-// "azure-foundry" key — its lender-disable path cannot see the
-// "azure-foundry/<id>" rows, so they would sit as orphans, and a later
-// roll-forward would revive credentials whose lender was demoted meanwhile.
-// So they go too — and only they: starts_with(provider, 'azure-foundry/')
-// never matches the exact "azure-foundry" key (the default resource, which
-// the old binary still runs on) or a different provider such as
-// "azure-foundryX". The counts go to the server log (RAISE LOG is logged at
-// the default log_min_messages).
+// azureRegistryDownSQL reverses v25. Data-lossy by design: all registry metadata and every NON-default resource's credential (leaving them would orphan credentials whose lender was demoted); starts_with(provider, 'azure-foundry/') matches only those, never the exact "azure-foundry" key.
 const azureRegistryDownSQL = `
 DROP TABLE IF EXISTS user_azure_models;
 DROP TABLE IF EXISTS org_azure_models;
@@ -2092,4 +1804,345 @@ BEGIN
 	GET DIAGNOSTICS shared = ROW_COUNT;
 	RAISE LOG 'migration v25 down: deleted % personal and % organisation azure-foundry/<id> credentials', personal, shared;
 END $$;
+`
+
+// perfIndexesV26SQL (v26): flow_collaborators (user_id, flow_id) — the table is keyed (flow_id, user_id), so every lookup BY USER scanned; gov_alerts(flow_id) + unread partial index for the badge; usage_metrics INCLUDE (estimated_cost) covering indexes for an index-only GetDailyUsage; flows_tags_idx dropped — the delimiter-anchored LIKE tags predicate can never use a btree on the CSV.
+const perfIndexesV26SQL = `
+CREATE INDEX IF NOT EXISTS flow_collaborators_user_flow_idx ON flow_collaborators (user_id, flow_id);
+
+CREATE INDEX IF NOT EXISTS gov_alerts_flow_idx ON gov_alerts (flow_id);
+CREATE INDEX IF NOT EXISTS gov_alerts_unread_idx ON gov_alerts (flow_id, target_user_id)
+    WHERE read_at IS NULL AND dismissed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS usage_metrics_user_created_cost_idx ON usage_metrics (user_id, created_at) INCLUDE (estimated_cost);
+CREATE INDEX IF NOT EXISTS usage_metrics_org_created_cost_idx ON usage_metrics (org_id, created_at) INCLUDE (estimated_cost);
+DROP INDEX IF EXISTS usage_metrics_user_created_idx;
+DROP INDEX IF EXISTS usage_metrics_org_created_idx;
+
+DROP INDEX IF EXISTS flows_tags_idx;
+`
+
+// perfIndexesV26DownSQL reverses v26: drops the added indexes, recreates the three it dropped. Idempotent.
+const perfIndexesV26DownSQL = `
+DROP INDEX IF EXISTS flow_collaborators_user_flow_idx;
+DROP INDEX IF EXISTS gov_alerts_flow_idx;
+DROP INDEX IF EXISTS gov_alerts_unread_idx;
+
+CREATE INDEX IF NOT EXISTS usage_metrics_user_created_idx ON usage_metrics (user_id, created_at);
+CREATE INDEX IF NOT EXISTS usage_metrics_org_created_idx ON usage_metrics (org_id, created_at);
+DROP INDEX IF EXISTS usage_metrics_user_created_cost_idx;
+DROP INDEX IF EXISTS usage_metrics_org_created_cost_idx;
+
+CREATE INDEX IF NOT EXISTS flows_tags_idx ON flows (tags);
+`
+
+// perfRound2V27SQL (v27): flow_search, a trigram-indexed side table WITHOUT RLS holding each flow's name/content text — ILIKE/jsonb output are not LEAKPROOF, so the FORCE-RLS flows table's trigram indexes were unusable by the app role; search is `id IN (SELECT … ILIKE …)`, the trigram index serving the subquery while the outer read stays under RLS (trade-off: the ILIKE scans every tenant's text — tenant-correct but a weak cross-tenant existence oracle; maintained in saveFlowTx).
+// Also bell/audit/BRIN/knowledge indexes, and the seven flow-child policies rewritten to delegate to rls_flows_visible (row-for-row equivalent, TestPolicyDelegation_V27_MatchesOldVisibility).
+const perfRound2V27SQL = `
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE TABLE IF NOT EXISTS flow_search (
+    flow_id TEXT PRIMARY KEY REFERENCES flows(id) ON DELETE CASCADE,
+    name    TEXT NOT NULL DEFAULT '',
+    body    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS flow_search_name_trgm_idx ON flow_search USING gin (name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS flow_search_body_trgm_idx ON flow_search USING gin (body gin_trgm_ops);
+INSERT INTO flow_search (flow_id, name, body)
+    SELECT id, name, content::text FROM flows
+    ON CONFLICT (flow_id) DO NOTHING;
+DROP INDEX IF EXISTS flows_content_trgm_idx;
+DROP INDEX IF EXISTS flows_name_trgm_idx;
+
+CREATE INDEX IF NOT EXISTS gov_alerts_flow_created_idx ON gov_alerts (flow_id, created_at DESC) WHERE dismissed_at IS NULL;
+CREATE INDEX IF NOT EXISTS audit_events_resource_created_idx ON audit_events (resource_type, resource_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS usage_metrics_created_brin ON usage_metrics USING brin (created_at);
+CREATE INDEX IF NOT EXISTS knowledge_documents_org_filename_idx ON knowledge_documents (org_id, filename);
+
+-- Flow-child policies delegate to rls_flows_visible: a flow row is only
+-- reachable from inside a policy when the caller may see it, so the child
+-- predicate is just "my flow exists". Same names, same FOR clauses.
+DROP POLICY IF EXISTS finding_comments_modify ON finding_comments;
+CREATE POLICY finding_comments_modify ON finding_comments
+    USING (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = finding_comments.flow_id))
+    WITH CHECK (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = finding_comments.flow_id));
+
+DROP POLICY IF EXISTS rls_conversations_visible ON conversations;
+CREATE POLICY rls_conversations_visible ON conversations FOR ALL
+    USING (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = conversations.flow_id))
+    WITH CHECK (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = conversations.flow_id));
+
+DROP POLICY IF EXISTS rls_flow_versions_visible ON flow_versions;
+CREATE POLICY rls_flow_versions_visible ON flow_versions FOR ALL
+    USING (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = flow_versions.flow_id))
+    WITH CHECK (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = flow_versions.flow_id));
+
+DROP POLICY IF EXISTS rls_flow_analysis_history_visible ON flow_analysis_history;
+CREATE POLICY rls_flow_analysis_history_visible ON flow_analysis_history FOR ALL
+    USING (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = flow_analysis_history.flow_id))
+    WITH CHECK (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = flow_analysis_history.flow_id));
+
+DROP POLICY IF EXISTS rls_finding_status_visible ON finding_status;
+CREATE POLICY rls_finding_status_visible ON finding_status FOR ALL
+    USING (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = finding_status.flow_id))
+    WITH CHECK (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = finding_status.flow_id));
+
+DROP POLICY IF EXISTS rls_flow_baselines_visible ON flow_baselines;
+CREATE POLICY rls_flow_baselines_visible ON flow_baselines FOR ALL
+    USING (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = flow_baselines.flow_id))
+    WITH CHECK (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = flow_baselines.flow_id));
+
+DROP POLICY IF EXISTS rls_gov_alerts_visible ON gov_alerts;
+CREATE POLICY rls_gov_alerts_visible ON gov_alerts FOR ALL
+    USING (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = gov_alerts.flow_id))
+    WITH CHECK (NOT app_rls_active() OR EXISTS (SELECT 1 FROM flows f WHERE f.id = gov_alerts.flow_id));
+`
+
+// perfRound2V27DownSQL reverses v27: restores the seven flow-child policy bodies, drops the added indexes and the flow_search side table, recreates the v13/v18 trigram indexes; flows data untouched.
+const perfRound2V27DownSQL = `
+DROP POLICY IF EXISTS finding_comments_modify ON finding_comments;
+CREATE POLICY finding_comments_modify ON finding_comments
+    USING (
+        NOT app_rls_active()
+        OR EXISTS (
+            SELECT 1 FROM flows f
+            WHERE f.id = finding_comments.flow_id
+              AND (f.owner_id = app_current_user_id()
+                   OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+                   OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+        )
+    ) WITH CHECK (
+        NOT app_rls_active()
+        OR EXISTS (
+            SELECT 1 FROM flows f
+            WHERE f.id = finding_comments.flow_id
+              AND (f.owner_id = app_current_user_id()
+                   OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+                   OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+        )
+    );
+
+DROP POLICY IF EXISTS rls_conversations_visible ON conversations;
+CREATE POLICY rls_conversations_visible ON conversations FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = conversations.flow_id
+          AND ( f.owner_id = app_current_user_id()
+             OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+             OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()) )
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = conversations.flow_id
+          AND ( f.owner_id = app_current_user_id()
+             OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+             OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()) )
+    )
+);
+
+DROP POLICY IF EXISTS rls_flow_versions_visible ON flow_versions;
+CREATE POLICY rls_flow_versions_visible ON flow_versions FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = flow_versions.flow_id
+          AND ( f.owner_id = app_current_user_id()
+             OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+             OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()) )
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = flow_versions.flow_id
+          AND ( f.owner_id = app_current_user_id()
+             OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+             OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()) )
+    )
+);
+
+DROP POLICY IF EXISTS rls_flow_analysis_history_visible ON flow_analysis_history;
+CREATE POLICY rls_flow_analysis_history_visible ON flow_analysis_history FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = flow_analysis_history.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = flow_analysis_history.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+);
+
+DROP POLICY IF EXISTS rls_finding_status_visible ON finding_status;
+CREATE POLICY rls_finding_status_visible ON finding_status FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = finding_status.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = finding_status.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+);
+
+DROP POLICY IF EXISTS rls_flow_baselines_visible ON flow_baselines;
+CREATE POLICY rls_flow_baselines_visible ON flow_baselines FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = flow_baselines.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = flow_baselines.flow_id
+          AND (f.owner_id = app_current_user_id()
+                OR EXISTS (SELECT 1 from flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+                OR EXISTS (SELECT 1 from org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+     )
+);
+
+DROP POLICY IF EXISTS rls_gov_alerts_visible ON gov_alerts;
+CREATE POLICY rls_gov_alerts_visible ON gov_alerts FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = gov_alerts.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = gov_alerts.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+);
+
+DROP INDEX IF EXISTS knowledge_documents_org_filename_idx;
+DROP INDEX IF EXISTS usage_metrics_created_brin;
+DROP INDEX IF EXISTS audit_events_resource_created_idx;
+DROP INDEX IF EXISTS gov_alerts_flow_created_idx;
+
+DROP TABLE IF EXISTS flow_search;
+
+CREATE INDEX IF NOT EXISTS flows_name_trgm_idx ON flows USING gin (name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS flows_content_trgm_idx ON flows USING gin ((content::text) gin_trgm_ops);
+`
+
+// perfRound3V28SQL (v28): an audit_events (action, created_at DESC, id ASC) index serving ListAuditEvents' own order (subsumes the single-column one, dropped), and knowledge_chunks.org_id — denormalised from the parent document (backfilled here, kept filled by a BEFORE INSERT trigger) so rls_knowledge_chunks_visible tests the chunk row alone; admitted rows unchanged (TestPolicy_V28_KnowledgeChunks_VisibilityParity).
+const perfRound3V28SQL = `
+CREATE INDEX IF NOT EXISTS audit_events_action_created_idx ON audit_events (action, created_at DESC, id ASC);
+DROP INDEX IF EXISTS audit_events_action_idx;
+
+ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT '';
+UPDATE knowledge_chunks c SET org_id = d.org_id FROM knowledge_documents d WHERE d.id = c.doc_id AND c.org_id = '';
+CREATE INDEX IF NOT EXISTS knowledge_chunks_org_doc_idx ON knowledge_chunks (org_id, doc_id, id);
+
+-- A chunk inserted without an org inherits its document's. Runs as the
+-- inserting role: under row-level security the document read sees only
+-- documents the caller may see, so a chunk for a foreign document keeps the
+-- blank org and the policy's WITH CHECK refuses it, as the baseline did.
+CREATE OR REPLACE FUNCTION knowledge_chunks_fill_org() RETURNS trigger
+    LANGUAGE plpgsql AS $fn$
+BEGIN
+    IF NEW.org_id = '' THEN
+        SELECT d.org_id INTO NEW.org_id FROM knowledge_documents d WHERE d.id = NEW.doc_id;
+        NEW.org_id := coalesce(NEW.org_id, '');
+    END IF;
+    RETURN NEW;
+END $fn$;
+DROP TRIGGER IF EXISTS knowledge_chunks_fill_org ON knowledge_chunks;
+CREATE TRIGGER knowledge_chunks_fill_org BEFORE INSERT ON knowledge_chunks
+    FOR EACH ROW EXECUTE FUNCTION knowledge_chunks_fill_org();
+
+DROP POLICY IF EXISTS rls_knowledge_chunks_visible ON knowledge_chunks;
+CREATE POLICY rls_knowledge_chunks_visible ON knowledge_chunks FOR ALL
+    USING (NOT app_rls_active() OR org_id IN (SELECT om.org_id FROM org_members om WHERE om.user_id = app_current_user_id()))
+    WITH CHECK (NOT app_rls_active() OR org_id IN (SELECT om.org_id FROM org_members om WHERE om.user_id = app_current_user_id()));
+`
+
+// perfRound3V28DownSQL reverses v28: restores the baseline policy (before dropping the column it references), removes trigger, index and column, restores the action index.
+const perfRound3V28DownSQL = `
+DROP POLICY IF EXISTS rls_knowledge_chunks_visible ON knowledge_chunks;
+CREATE POLICY rls_knowledge_chunks_visible ON knowledge_chunks FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM knowledge_documents kd
+        WHERE kd.id = knowledge_chunks.doc_id
+          AND EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = kd.org_id AND om.user_id = app_current_user_id())
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM knowledge_documents kd
+        WHERE kd.id = knowledge_chunks.doc_id
+          AND EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = kd.org_id AND om.user_id = app_current_user_id())
+    )
+);
+
+DROP TRIGGER IF EXISTS knowledge_chunks_fill_org ON knowledge_chunks;
+DROP FUNCTION IF EXISTS knowledge_chunks_fill_org();
+DROP INDEX IF EXISTS knowledge_chunks_org_doc_idx;
+ALTER TABLE knowledge_chunks DROP COLUMN IF EXISTS org_id;
+
+DROP INDEX IF EXISTS audit_events_action_created_idx;
+CREATE INDEX IF NOT EXISTS audit_events_action_idx ON audit_events (action);
+`
+
+// perfRound4V29SQL (v29): a flows (lower(name), updated_at DESC, id) index matching the library's name sort (walkable under FORCE RLS), and lz4 TOAST compression for the four wide columns a save touches (a third smaller, ~60 ms vs ~100 ms on a 1.7 MB write; only affects values written from now on; pglz kept via NOTICE without lz4).
+const perfRound4V29SQL = `
+CREATE INDEX IF NOT EXISTS flows_lower_name_updated_idx ON flows (lower(name), updated_at DESC, id);
+
+DO $v29$ BEGIN
+    ALTER TABLE flows ALTER COLUMN content SET COMPRESSION lz4;
+    ALTER TABLE flow_search ALTER COLUMN body SET COMPRESSION lz4;
+    ALTER TABLE flow_versions ALTER COLUMN content SET COMPRESSION lz4;
+    ALTER TABLE conversations ALTER COLUMN messages SET COMPRESSION lz4;
+EXCEPTION WHEN feature_not_supported THEN
+    RAISE NOTICE 'lz4 toast compression unavailable; keeping pglz';
+END $v29$;
+`
+
+// perfRound4V29DownSQL reverses v29: drops the index, puts the four columns back on pglz for future values (stored lz4 stays readable).
+const perfRound4V29DownSQL = `
+DROP INDEX IF EXISTS flows_lower_name_updated_idx;
+
+DO $v29$ BEGIN
+    ALTER TABLE flows ALTER COLUMN content SET COMPRESSION pglz;
+    ALTER TABLE flow_search ALTER COLUMN body SET COMPRESSION pglz;
+    ALTER TABLE flow_versions ALTER COLUMN content SET COMPRESSION pglz;
+    ALTER TABLE conversations ALTER COLUMN messages SET COMPRESSION pglz;
+EXCEPTION WHEN feature_not_supported THEN
+    RAISE NOTICE 'toast compression method change unavailable';
+END $v29$;
 `

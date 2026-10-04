@@ -57,7 +57,7 @@ func configureAzureWithFake(t *testing.T, status int, body string) (*rewriteTran
 	return rt, &paths
 }
 
-// F-26: an API key against a Claude Mythos deployment is refused by Foundry
+// An API key against a Claude Mythos deployment is refused by Foundry
 // (Mythos is Entra ID only). The connection test reports the Entra-only
 // explanation, not "invalid API key", and stops at that first candidate.
 func TestTestProviderConnection_ClaudeMythosKeyNamesEntraOnly(t *testing.T) {
@@ -88,7 +88,7 @@ func TestTestProviderConnection_ClaudeMythosKeyNamesEntraOnly(t *testing.T) {
 	}
 }
 
-// F-51: an entra_cli document on a machine whose Azure CLI is missing (or not
+// An entra_cli document on a machine whose Azure CLI is missing (or not
 // signed in) reports the fix — install it and run `az login` — instead of a
 // generic token failure. The machine's PATH is emptied so the test never
 // finds (or uses) a real az; no request reaches the resource.

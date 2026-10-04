@@ -9,18 +9,17 @@ import (
 	"pad-analyzer/internal/metrics"
 )
 
-// fixDeclinedMarker is the stable prefix of the model-facing result for a
-// user-declined fix (chatFixApplier). Declared here so the loops' decline
-// memory and the applier's message cannot drift apart.
+// fixDeclinedMarker is the stable prefix of the model-facing result for a user-declined
+// fix (chatFixApplier); declared here so the loops' decline memory and the applier's
+// message cannot drift apart.
 const fixDeclinedMarker = "the user DECLINED"
 
-// loopToolMemory gives one tool-loop run repetition detection: a model can
-// re-emit the IDENTICAL call (name + raw args) every iteration — re-billing a
-// growing prompt with zero progress until the iteration cap. The second
-// identical call returns the cached result with a "change tactic" note; fix
-// tools additionally remember user DECLINES and refuse to re-request the same
-// approval (the prompt-level "do not call apply_fix again" note was the only
-// enforcement before).
+// loopToolMemory gives one tool-loop run repetition detection: a model can re-emit the
+// IDENTICAL call (name + raw args) every iteration — re-billing a growing prompt with
+// zero progress until the iteration cap; the second identical call returns the cached
+// result with a "change tactic" note. Fix tools additionally remember user DECLINES and
+// refuse to re-request the same approval (the prompt-level "do not call apply_fix again"
+// note was the only enforcement before).
 type loopToolMemory struct {
 	mu       sync.Mutex
 	results  map[string]string // signature -> first result
@@ -33,11 +32,10 @@ func newLoopToolMemory() *loopToolMemory {
 
 func isFixTool(name string) bool { return name == "apply_fix" || name == "apply_fixes" }
 
-// exec runs one tool call through the repetition guard. Signature is the tool
-// name + raw input JSON: identical args means the model gained nothing since
-// the last identical call (docs are content-addressed per turn; only applies
-// mutate the doc, and those re-resolve to "no finding" naturally once the
-// re-parse changes IDs).
+// exec runs one tool call through the repetition guard. Signature is the tool name +
+// raw input JSON: identical args means the model gained nothing since the last identical
+// call (docs are content-addressed per turn; only applies mutate the doc, and those
+// re-resolve to "no finding" naturally once the re-parse changes IDs).
 func (m *loopToolMemory) exec(name string, input json.RawMessage, tctx *ai.ToolContext) string {
 	sig := name + "\x00" + string(input)
 
@@ -68,10 +66,10 @@ func (m *loopToolMemory) exec(name string, input json.RawMessage, tctx *ai.ToolC
 	return result
 }
 
-// knownToolNames is the closed label set for pad_chat_tool_results_total{tool}.
-// The label used to be the model-emitted tool name verbatim, so a hallucinated
-// name minted a permanent time series per request — the cardinality bomb this
-// codebase has already had to fix twice (route labels, invite tokens).
+// knownToolNames is the closed label set for pad_chat_tool_results_total{tool}: the
+// label used to be the model-emitted tool name verbatim, so a hallucinated name minted a
+// permanent per-request time series — the cardinality bomb this codebase has already had
+// to fix twice (route labels, invite tokens).
 var knownToolNames = func() map[string]bool {
 	m := map[string]bool{}
 	for _, d := range ai.ToolDefinitions() {

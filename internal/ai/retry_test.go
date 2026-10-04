@@ -360,12 +360,11 @@ func TestBackoff_HonorsRetryAfterFloor(t *testing.T) {
 	}
 }
 
-// TestCappedBackoff_NoOverflowAndBounded is the regression test for the backoff
-// overflow: retryMaxAttempts is operator-configurable with no upper bound, and a
-// naive `baseDelay << attempt` overflows int64 into a NEGATIVE duration at a high
-// attempt count, which would panic rand.Int63n in backoff and crash the request
-// goroutine. cappedBackoff must instead stay positive and never exceed the
-// ceiling for any attempt count.
+// TestCappedBackoff_NoOverflowAndBounded: retryMaxAttempts is
+// operator-configurable with no upper bound, and a naive
+// `baseDelay << attempt` overflows int64 into a NEGATIVE duration at a high
+// attempt count, which would panic rand.Int63n. cappedBackoff must stay
+// positive and never exceed the ceiling for any attempt count.
 func TestCappedBackoff_NoOverflowAndBounded(t *testing.T) {
 	// Low attempts grow exponentially from the base.
 	if got := cappedBackoff(0, retryBaseDelay); got != retryBaseDelay {
@@ -398,7 +397,7 @@ func TestBackoff_LargeAttemptDoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestRetry_Stream_SilentStepDoesNotBlockRetry (F-08): a SilentStep marker is
+// TestRetry_Stream_SilentStepDoesNotBlockRetry: a SilentStep marker is
 // an idle-watchdog bracket, not a hosted step the provider already ran — a
 // stream that emits one and then a retryable error is still replayed.
 func TestRetry_Stream_SilentStepDoesNotBlockRetry(t *testing.T) {

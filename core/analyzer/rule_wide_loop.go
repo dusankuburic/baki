@@ -42,6 +42,4 @@ func (r *WideLoopRule) Check(block *models.Block, ctx *RuleContext) []models.Fin
 	}}
 }
 
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
 func init() { registerRule(&WideLoopRule{}) }

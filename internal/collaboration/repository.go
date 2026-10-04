@@ -18,7 +18,6 @@ type OrgStore interface {
 	DeleteOrg(ctx context.Context, id string) error
 	MutateOrg(ctx context.Context, id string, fn func(*interfaces.Organisation) error) error
 
-	// Invite operations
 	SaveOrgInvite(ctx context.Context, invite *interfaces.OrgInvite) error
 	ListOrgInvites(ctx context.Context, orgID string) ([]*interfaces.OrgInvite, error)
 	GetOrgInvite(ctx context.Context, orgID, inviteID string) (*interfaces.OrgInvite, error)
@@ -114,8 +113,6 @@ func (s *memOrgStore) MutateOrg(_ context.Context, id string, fn func(*interface
 	}
 	return nil
 }
-
-// ---- Invite operations ----
 
 func (s *memOrgStore) SaveOrgInvite(_ context.Context, invite *interfaces.OrgInvite) error {
 	s.mu.Lock()

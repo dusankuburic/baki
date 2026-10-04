@@ -2,11 +2,10 @@ package models
 
 import "time"
 
-// DashboardHomeData is the payload for GET /api/dashboard/home — the welcome
-// "mission control" landing surface. It is assembled per-section so a failure in
-// one source (e.g. token usage) still returns the rest; sections that have no
-// data carry explicit availability flags so the UI can render honest empty
-// states instead of misleading zeros.
+// DashboardHomeData is the payload for GET /api/dashboard/home — assembled
+// per-section so one source's failure still returns the rest; sections
+// without data carry explicit availability flags so the UI renders honest
+// empty states, not zeros.
 type DashboardHomeData struct {
 	Greeting    DashboardGreeting    `json:"greeting"`
 	Overview    DashboardOverview    `json:"overview"`
@@ -22,18 +21,15 @@ type DashboardHomeData struct {
 	Activity    []ActivityStub        `json:"activity"`
 	Complexity  []FlowComplexityStub  `json:"complexity"`
 	Security    DashboardSecurityStub `json:"security"`
-	// Analytics sections (v3). These answer developer-facing questions the v2
-	// cards didn't: "is the fleet getting healthier" (severity trend), "how much
-	// can I trust these results" (confidence), "where does health cluster"
-	// (histogram), and "how much is auto-fixable" (fixability). SeverityTrend is
-	// cloud-only (needs history); the rest are populated in both modes.
+	// Analytics sections (v3): confidence, health histogram and fixability
+	// answer developer-facing questions the v2 cards didn't; SeverityTrend is
+	// cloud-only (needs history).
 	SeverityTrend  []DailySeverityPoint `json:"severityTrend"`
 	ConfidenceDist map[string]int       `json:"confidenceDist"`
 	HealthBuckets  []HealthBucketStub   `json:"healthBuckets"`
 	Fixability     FixabilityStub       `json:"fixability"`
 	// Workflow is the team-triage funnel + resolution health (MTTR, stale).
-	// Cloud-only: local mode has no persistent triage, so Available stays false
-	// and the UI renders a placeholder rather than an empty funnel.
+	// Cloud-only: local mode keeps Available false and renders a placeholder.
 	Workflow WorkflowStub `json:"workflow"`
 }
 
@@ -73,8 +69,6 @@ type FindingCategory struct {
 	Count    int    `json:"count"`
 }
 
-// ---- Advanced dashboard types (v2) ----
-
 type DailyHealthPoint struct {
 	Date      string `json:"date"`
 	AvgHealth int    `json:"avgHealth"`
@@ -92,8 +86,7 @@ type RuleFrequencyStub struct {
 	Rule  string `json:"rule"`
 	Count int    `json:"count"`
 	// TopSeverity is the worst severity this rule fires at across the owner's
-	// flows ("error"/"warning"/"info"), so the bar chart can tint each bar by
-	// severity instead of a flat brand color.
+	// flows, so the bar chart can tint each bar by severity.
 	TopSeverity string `json:"topSeverity,omitempty"`
 }
 
@@ -112,27 +105,23 @@ type FlowComplexityStub struct {
 }
 
 type DashboardSecurityStub struct {
-	// Available is false when the posture could not be read (the advanced
-	// dashboard query failed, or there is no persistent source at all in local
-	// mode). All-zero counts are then "unknown", not "no issues", and the UI
-	// must not render them as a clean bill of health.
+	// Available is false when the posture could not be read (query failed, or
+	// no persistent source in local mode): all-zero counts are then "unknown",
+	// not "no issues".
 	Available bool `json:"available"`
 	// Admin is set per request: LockedAccounts is an instance-wide count and
 	// is zeroed for everyone else.
 	Admin              bool `json:"admin"`
 	FailedLogins24h    int  `json:"failedLogins24h"`
 	CredentialFindings int  `json:"credentialFindings"`
-	// LockedAccounts is how many user accounts are currently locked by the
-	// brute-force defense, surfaced so admins can spot a sweep without grepping
-	// the audit log.
+	// LockedAccounts is how many accounts the brute-force defense currently
+	// holds locked, so admins can spot a sweep without grepping the audit log.
 	LockedAccounts int `json:"lockedAccounts"`
 }
 
-// ---- Analytics dashboard types (v3) ----
-
 // DailySeverityPoint is one day of the org-wide severity trend (error/warning/
-// info summed across every flow analyzed that day). Drives the stacked-area
-// "is my fleet getting healthier over time?" chart. Cloud-only.
+// info summed across every flow analyzed that day); drives the stacked-area
+// fleet-health chart. Cloud-only.
 type DailySeverityPoint struct {
 	Date     string `json:"date"`
 	Errors   int    `json:"errors"`
@@ -140,9 +129,9 @@ type DailySeverityPoint struct {
 	Info     int    `json:"info"`
 }
 
-// HealthBucketStub is one 20-point slice of the health-score histogram, so the
-// UI can render the distribution the single AvgHealth number hides (e.g. a 70
-// average built from a bimodal 40/100 split).
+// HealthBucketStub is one 20-point slice of the health-score histogram,
+// rendering the distribution the single average hides (a 70 built from a
+// bimodal 40/100 split).
 type HealthBucketStub struct {
 	Label string `json:"label"` // "0-20", "20-40", ...
 	Lo    int    `json:"lo"`
@@ -151,9 +140,8 @@ type HealthBucketStub struct {
 }
 
 // FixabilityStub summarizes how much of the current finding load is cheaply
-// fixable: Available counts findings carrying a one-click deterministic fix;
-// Total is all findings. AutoFixableRules/TotalRules come from the catalog so
-// the UI can show "11 of 29 rules are auto-fixable".
+// fixable: Available counts findings carrying a one-click deterministic fix,
+// Total all findings; AutoFixableRules/TotalRules come from the catalog.
 type FixabilityStub struct {
 	Available        int `json:"available"`
 	Total            int `json:"total"`
@@ -161,9 +149,9 @@ type FixabilityStub struct {
 	TotalRules       int `json:"totalRules"`
 }
 
-// WorkflowStub carries the team-triage funnel and resolution health for the
-// dashboard's workflow card. Available is false in local mode (no persistent
-// triage) so the UI shows a placeholder instead of an all-zero funnel.
+// WorkflowStub carries the team-triage funnel and resolution health.
+// Available is false in local mode (no persistent triage) so the UI shows a
+// placeholder instead of an all-zero funnel.
 type WorkflowStub struct {
 	Available     bool           `json:"available"`
 	Funnel        map[string]int `json:"funnel"`        // status → count (open/acknowledged/in_progress/resolved/suppressed)

@@ -119,6 +119,13 @@ services:
       # reachability. Leave unset to keep flow content in Postgres.
       - PAD_AZURE_STORAGE_ACCOUNT=${PAD_AZURE_STORAGE_ACCOUNT:-}
       - PAD_AZURE_STORAGE_CONTAINER=${PAD_AZURE_STORAGE_CONTAINER:-}
+      # Soft heap limit for the Go GC, ~80% of the 1G memory limit under
+      # deploy.resources below; change the two together. Without it the GC
+      # paces by GOGC alone and ignores the container limit, so a burst of
+      # large uploads can grow the heap past it and get the container
+      # OOM-killed. The other 20% is for non-heap memory (goroutine stacks,
+      # the runtime, the binary).
+      - GOMEMLIMIT=800MiB
     # Immutable root filesystem (H1): the backend writes nothing outside
     # /tmp (blob-offload staging); /tmp becomes a tmpfs. Combined with the
     # base file's cap_drop/no-new-privileges, a container compromise gets a
@@ -129,8 +136,14 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 1G
+          # Not '0.5': Go 1.25 floors GOMAXPROCS at 2 even when the cgroup
+          # quota is below that, so with half a core every CPU-bound request
+          # (analysis, PDF export, brotli) ran two runtime threads against a
+          # quota that allowed one and was CFS-throttled for the rest of each
+          # 100 ms period — visible as periodic ~50-100 ms stalls under load.
+          # Two cores match the floor; the memory limit is unchanged.
+          cpus: '2'
+          memory: 1G # GOMEMLIMIT above is ~80% of this
   db:
     environment:
       # No default, unlike the base file's local-dev value: an unset variable
@@ -155,11 +168,48 @@ services:
     # postgres would make that init fail and leave search on its slow in-Go
     # fallback.
     image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
+    # Postgres's compiled-in defaults assume a machine from 2005: 128MB of
+    # shared_buffers, a 4GB effective_cache_size (MORE than this container's
+    # limit, so the planner over-trusts the cache), 4MB work_mem (every
+    # non-trivial sort and hash spills to disk), spinning-disk random_page_cost
+    # (the planner shuns the indexes), and JIT on (it costs more than it saves
+    # on this schema's short OLTP statements). Sized for the 2G / 1 CPU limits
+    # under deploy.resources below — scale them TOGETHER:
+    #   shared_buffers       ~25% of the memory limit
+    #   effective_cache_size ~75% of the memory limit
+    #   work_mem             per sort/hash per query, so (max_connections x
+    #                        work_mem x a few) must fit in what is left
+    #   maintenance_work_mem ~5% (VACUUM, CREATE INDEX)
+    # pg_stat_statements + log_min_duration_statement are the two
+    # observability hooks a perf investigation needs; preloading the library
+    # only allocates its shared-memory slot, the extension itself has to be
+    # CREATEd in the database — scripts/db-init/02-pg-stat-statements.sql
+    # does that on first init of an empty volume; an existing deployment runs
+    # the same statement once by hand (see README.md).
+    command: >
+      postgres
+      -c shared_buffers=512MB
+      -c effective_cache_size=1536MB
+      -c work_mem=16MB
+      -c maintenance_work_mem=128MB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c max_wal_size=2GB
+      -c checkpoint_completion_target=0.9
+      -c wal_compression=on
+      -c jit=off
+      -c shared_preload_libraries=pg_stat_statements
+      -c pg_stat_statements.track=all
+      -c log_min_duration_statement=500
+    # Docker's default /dev/shm is 64MB; parallel workers and hash joins use
+    # it for dynamic shared memory and fail with "could not resize shared
+    # memory segment" once work_mem is raised. Not counted against `memory`.
+    shm_size: 256m
     deploy:
       resources:
         limits:
           cpus: '1'
-          memory: 2G
+          memory: 2G # the -c settings in `command` above are sized to this
 
 # The subnet is pinned so caddy can hold a fixed address (see
 # PAD_TRUSTED_PROXIES above). Override BAKI_SUBNET and BAKI_PROXY_IP together if

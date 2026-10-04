@@ -9,8 +9,6 @@ import (
 	"pad-analyzer/internal/testutil"
 )
 
-// --- Handler-level OCC tests (filesystem backend) ---
-
 func TestLibraryUpdate_ResponseIncludesVersion(t *testing.T) {
 	rt, seed := newLibraryTestRouter(t)
 	seed("vflow", "alice")
@@ -105,8 +103,6 @@ func TestLibraryUpdate_NotifierCalledAfterSave(t *testing.T) {
 		t.Error("expected NotifyFlowChanged to be called after save")
 	}
 }
-
-// --- Storage-level OCC tests (FakeBackend) ---
 
 func TestFakeBackend_OCC_NewFlowVersionZero(t *testing.T) {
 	b := testutil.NewFakeBackend()
@@ -204,8 +200,6 @@ func TestFakeBackend_OCC_CorrectVersionSucceeds(t *testing.T) {
 		t.Errorf("after correct update: want version 2, got %d", doc.Version)
 	}
 }
-
-// --- Helpers ---
 
 type captureNotifier struct {
 	called bool

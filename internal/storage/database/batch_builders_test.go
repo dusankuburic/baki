@@ -99,13 +99,3 @@ func TestExecFindingStatusBatch_ChunkingAndAtomicity(t *testing.T) {
 		t.Fatal("expected chunk failure to propagate for rollback")
 	}
 }
-
-// TestSyncOrgMembers_Shape (SQL-shape only; persistence is Postgres-gated)
-// verifies the member upsert is one multi-row statement with the shared org_id
-// and the prune DELETE still present.
-func TestSyncOrgMembers_Shape(t *testing.T) {
-	// syncOrgMembers takes a *sql.Tx; exercising the statement build without
-	// a live DB isn't possible, so persistence stays covered by the
-	// Postgres-gated contract suite.
-	t.Skip("syncOrgMembers requires a live *sql.Tx; covered by the Postgres contract suite")
-}

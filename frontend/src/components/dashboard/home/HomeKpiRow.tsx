@@ -1,6 +1,6 @@
 import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
-import {StatTile} from '@/components/charts'
+import {StatTile} from '@/components/charts/StatTile'
 import {healthTier} from '@/lib/scoring'
 import {formatCompactIntl, formatCurrency} from '@/lib/format'
 import type {

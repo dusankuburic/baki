@@ -5,6 +5,7 @@ import (
 	"pad-core/models"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const SystemPromptDefault = `You are an expert in Power Automate Desktop (PAD) flow analysis. You help users:
@@ -54,12 +55,8 @@ func BuildContext(req ContextRequest) (systemPrompt string, contextMessage strin
 
 	hasSources := len(req.RawSourceFiles) > 0
 
-	// Findings come FIRST: the final truncation cuts the tail, so whatever is
-	// written last is sacrificed first. With source files selected the
-	// multi-KB file dumps used to crowd out (or entirely skip, via the old
-	// 3/4-budget gate) the Analysis Summary — losing the most decision-relevant
-	// data while keeping raw file text. Now the analysis rides early and the
-	// file dumps are what truncation trims.
+	// Findings come FIRST: the final truncation cuts the tail, and the multi-KB file dumps used to crowd
+	// out the Analysis Summary — the analysis rides early, the file dumps are what truncation trims.
 	if len(req.Findings) > 0 {
 		b.WriteString("\n## Analysis Summary\n\n")
 		writeFindingsSummary(&b, req.Findings)
@@ -74,7 +71,10 @@ func BuildContext(req ContextRequest) (systemPrompt string, contextMessage strin
 
 		fmt.Fprintf(&b, "### Source Files (%d)\n\n", len(filenames))
 		for _, name := range filenames {
-			content := req.RawSourceFiles[name]
+			// Bounded again here (the chat service bounds each file before scrubbing, same cap): the final
+			// truncation keeps only the first TokenBudget tokens, so bytes past the cap can never reach the
+			// model — appending them only cost a multi-megabyte builder.
+			content := BoundSourceText(req.RawSourceFiles[name], req.TokenBudget)
 			fmt.Fprintf(&b, "#### %s\n\n```%s\n```\n\n", name, content)
 		}
 	}
@@ -157,10 +157,40 @@ func BuildContext(req ContextRequest) (systemPrompt string, contextMessage strin
 	return
 }
 
-// findingKey is the stable identity the chat UI uses to locate a finding (see
-// the frontend analysisStore.findingKey): the content-derived Fingerprint when
-// present, else "ruleID:blockID". Kept in sync so "finding:" deep-links from the
-// model resolve to the right row.
+// SourceTruncatedMarker ends a source file BoundSourceText cut short, so the
+// model (and a reader of the context preview) can tell the file goes on.
+const SourceTruncatedMarker = "…(truncated)"
+
+// sourceBytesPerToken sizes BoundSourceText's cap: tokenBudget × 16 bytes, four times the ~4 bytes a cl100k
+// token covers on PAD source, so the budget is exhausted inside the kept part on any real file while the
+// scrub and tokeniser see at most that many bytes per file (64 KB at the default 4000-token budget).
+const sourceBytesPerToken = 16
+
+// BoundSourceText returns content when it is within tokenBudget × 16 bytes, else its head up to that cap —
+// cut after the last line break inside the final 4 KB when there is one, else at a rune boundary — plus
+// SourceTruncatedMarker. Applied per selected source file BEFORE the AST scrub (ScrubSourceText ran
+// ~0.1–0.8 s on a multi-megabyte file) and again by BuildContext. A non-positive budget leaves content as is.
+func BoundSourceText(content string, tokenBudget int) string {
+	limit := tokenBudget * sourceBytesPerToken
+	if tokenBudget <= 0 || len(content) <= limit {
+		return content
+	}
+	cut := limit
+	// A whole last line: a literal split mid-way would leave the AST scrub
+	// an unterminated value it cannot mask, and reads badly.
+	const lineWindow = 4096
+	if nl := strings.LastIndexByte(content[:cut], '\n'); nl >= 0 && cut-nl <= lineWindow {
+		cut = nl + 1
+	} else {
+		for cut > 0 && !utf8.RuneStart(content[cut]) {
+			cut--
+		}
+	}
+	return content[:cut] + SourceTruncatedMarker
+}
+
+// findingKey is the stable identity the chat UI locates a finding by (analysisStore.findingKey): the
+// Fingerprint when present, else "ruleID:blockID" — kept in sync so "finding:" deep-links resolve.
 func findingKey(f *models.Finding) string {
 	if f.Fingerprint != "" {
 		return f.Fingerprint
@@ -237,8 +267,7 @@ func findParentChain(doc *models.FlowDocument, target *models.Block) []*models.B
 		return chain
 	}
 
-	// Build bottom-up (target → root) then reverse in place — O(depth) total,
-	// vs the previous prepend-on-each-iteration which was O(depth²).
+	// Build bottom-up (target → root) then reverse in place — O(depth), vs prepend-on-each-iteration O(depth²).
 	currentID := target.ParentID
 	for currentID != "" {
 		parent, ok := doc.BlocksByID[currentID]

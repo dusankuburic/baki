@@ -20,17 +20,16 @@ type Options struct {
 	Level string
 	// AddSource adds file:line to every log line. Useful in debug builds.
 	AddSource bool
-	// StdoutOnly disables the file sink and writes JSON to stdout only.
-	// This is the right choice for containerized deployments: the
-	// orchestrator collects stdout/stderr, and the pod's filesystem is
-	// ephemeral so a file-based log doesn't survive a restart.
+	// StdoutOnly disables the file sink and writes JSON to stdout only — the
+	// right choice for containers, where the orchestrator collects stdout and
+	// the pod's ephemeral filesystem loses a file-based log on restart.
 	StdoutOnly bool
 }
 
-// Init initialises logging with the legacy defaults: structured JSON to
-// both a file under <appDataDir>/logs/ and stderr, at info level (debug
-// if the flag is true). Used by desktop/Tauri builds. Cloud deployments
-// should call InitWith with StdoutOnly=true.
+// Init initialises logging with the legacy defaults: structured JSON to a file
+// under <appDataDir>/logs/ and to stderr, at info level (debug if the flag is
+// true); used by desktop/Tauri builds. Cloud deployments should call InitWith
+// with StdoutOnly=true.
 func Init(appDataDir string, debug bool) error {
 	level := "info"
 	if debug {

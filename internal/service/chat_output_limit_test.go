@@ -45,7 +45,7 @@ func runScriptedStream(t *testing.T, p *scriptedChunkProvider, useTools bool) (t
 }
 
 // runScriptedStreamCtl is runScriptedStream plus the service and stream id,
-// for callers that also check the resumable state (F-15).
+// for callers that also check the resumable state.
 func runScriptedStreamCtl(t *testing.T, p *scriptedChunkProvider, useTools bool) (svc *ChatService, streamID string, types []string, payloads []map[string]interface{}, usage <-chan *interfaces.UsageMetric) {
 	t.Helper()
 	// One registry entry, re-pointed per run (subtests run sequentially).
@@ -118,7 +118,7 @@ func TestStream_EmptyAnswerAtTokenCapIsOutputLimitError(t *testing.T) {
 			if payloads[errAt]["code"] != ChatErrOutputLimit || payloads[errAt]["message"] != outputLimitMsg {
 				t.Errorf("error event = %v", payloads[errAt])
 			}
-			// F-15: the failure is billed, so the error event carries the
+			// The failure is billed, so the error event carries the
 			// same usage keys a done event would (minus chunks), and a client
 			// that missed the live event gets them from the resume snapshot
 			// instead of 0/0.

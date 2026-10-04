@@ -18,16 +18,13 @@ import (
 	"pad-core/logger"
 )
 
-// Registry models: create, update, delete, the designations (the
-// knowledge-base embedding model, an organisation's "Default for members")
-// and the validation of what users and admins write into them.
+// Registry models: create, update, delete, the designations and the validation
+// of what users and admins write into them.
 
 // ---- Text ----
 
-// cleanAzureText normalises user- and admin-written text: NFC, surrounding
-// whitespace trimmed, inner whitespace runs (newlines and tabs included)
-// collapsed to one space — every name, purpose and description is shown on
-// one line.
+// cleanAzureText normalises user- and admin-written text: NFC, whitespace runs
+// (newlines and tabs included) collapsed to one space — everything shows on one line.
 func cleanAzureText(s string) string {
 	if !utf8.ValidString(s) {
 		return s // refused by validAzureText
@@ -35,16 +32,8 @@ func cleanAzureText(s string) string {
 	return strings.Join(strings.Fields(norm.NFC.String(s)), " ")
 }
 
-// validAzureText reports whether raw, cleaned to clean (cleanAzureText), is
-// an acceptable value: valid UTF-8; only characters registry text allows
-// (ai.AzureTextRuneAllowed — no control or format characters: NUL, which
-// Postgres refuses outright, bidi controls, zero-width characters; no other
-// default-ignorable code point, variation selector, private-use, surrogate
-// or unassigned code point — what lets a shared name impersonate another or
-// show blank); at least one visible character once it is not empty
-// (ai.AzureTextRuneVisible: a name of Hangul fillers or braille blanks shows
-// as nothing — a description may be empty, never blank); and minLen–maxLen
-// characters (runes, as Postgres char_length counts, never bytes).
+// validAzureText reports whether raw (cleaned to clean) is acceptable: valid UTF-8, only
+// ai.AzureTextRuneAllowed runes, one visible char when non-empty, and minLen–maxLen runes (never bytes).
 func validAzureText(raw, clean string, minLen, maxLen int) bool {
 	if !utf8.ValidString(raw) {
 		return false
@@ -73,10 +62,8 @@ func truncateRunes(s string, n int) string {
 
 // ---- Purposes ----
 
-// azurePurposeLabels are the presets' English labels: custom text naming a
-// preset by its key or its label (case-insensitively) is stored as the
-// preset, so "Documentation" typed as a custom purpose groups with the
-// preset's models.
+// azurePurposeLabels are the presets' English labels — custom text naming a
+// preset by key or label (case-insensitively) is stored as that preset.
 var azurePurposeLabels = map[string]string{
 	storageif.AzurePurposeGeneral:       "General",
 	storageif.AzurePurposeDocumentation: "Documentation",
@@ -101,11 +88,8 @@ func matchAzurePurposePreset(text string) string {
 	return ""
 }
 
-// normalizeAzurePurpose returns the stored (purpose, purposeCustom) pair for
-// a client's: a preset key (any case) clears the custom text; "custom" takes
-// the text — NFC-normalised, trimmed, inner whitespace collapsed, 1–32
-// characters, and stored as the preset it names when it names one; an empty
-// pair is General; a custom text alone means "custom".
+// normalizeAzurePurpose returns the stored (purpose, purposeCustom) pair: a preset key
+// clears custom text; "custom" takes 1–32 NFC-trimmed chars (named presets stored as such); empty is General.
 func normalizeAzurePurpose(purpose, custom string) (string, string, error) {
 	p := strings.ToLower(strings.TrimSpace(purpose))
 	if p == "" {
@@ -148,13 +132,8 @@ type azureModelFields struct {
 	MaxOutputTokens int
 }
 
-// validateModelFields checks and normalises f: a known kind (INVALID_KIND),
-// a deployment or agent name (INVALID_DEPLOYMENT), overrides inside their
-// bounds and none on an embedding model (INVALID_CONTEXT_WINDOW,
-// INVALID_MAX_OUTPUT), a display name (defaulting to the deployment name,
-// INVALID_DISPLAY_NAME), a purpose (already normalised by the caller) and a
-// description (INVALID_DESCRIPTION). The stricter ai validators run first;
-// the store's CHECK mirror stays the backstop.
+// validateModelFields checks and normalises f (kind, deployment, bounded overrides, display
+// name, description — INVALID_* codes); the stricter ai validators run first, the store CHECK backs them up.
 func validateModelFields(f *azureModelFields) error {
 	f.Kind = strings.TrimSpace(f.Kind)
 	f.Deployment = strings.TrimSpace(f.Deployment)
@@ -187,9 +166,8 @@ func validateModelFields(f *azureModelFields) error {
 
 // ---- Inputs ----
 
-// OptionalInt is a number field of a partial update that tells its three
-// states apart: absent (Set false — keep the stored value), null (Null —
-// clear the override) and a value.
+// OptionalInt is a number field of a partial update telling its three states
+// apart: absent (Set false, keep stored), null (Null, clear) and a value.
 type OptionalInt struct {
 	Set   bool
 	Null  bool
@@ -247,9 +225,8 @@ type AzureModelInput struct {
 	// never on an embedding model).
 	ContextWindow   int `json:"contextWindow,omitempty"`
 	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
-	// IsDefault (org scope only) makes it the organisation's "Default for
-	// members"; IsKnowledgeEmbedding (an embedding model, where the knowledge
-	// base embeds with Azure) the knowledge base's model.
+	// IsDefault (org scope only) = the organisation's "Default for members";
+	// IsKnowledgeEmbedding (embedding model, KB embeds with Azure) = the KB's model.
 	IsDefault            bool `json:"isDefault,omitempty"`
 	IsKnowledgeEmbedding bool `json:"isKnowledgeEmbedding,omitempty"`
 	// Force confirms the re-index a new knowledge-base model needs on a
@@ -270,9 +247,8 @@ type AzureModelPatch struct {
 	PurposeCustom *string `json:"purposeCustom,omitempty"`
 	// Description: "" clears it.
 	Description *string `json:"description,omitempty"`
-	// ContextWindow and MaxOutputTokens: null clears the override. On the
-	// wire an integer or null (the swaggertype tags say so to the API docs:
-	// OptionalInt is how the decoder tells absent, null and a value apart).
+	// ContextWindow and MaxOutputTokens: null clears the override; the
+	// swaggertype tags document the integer-or-null wire form (OptionalInt).
 	ContextWindow   OptionalInt `json:"contextWindow" swaggertype:"primitive,integer" extensions:"x-nullable"`
 	MaxOutputTokens OptionalInt `json:"maxOutputTokens" swaggertype:"primitive,integer" extensions:"x-nullable"`
 	// IsDefault / IsKnowledgeEmbedding: true moves the designation to this
@@ -289,10 +265,8 @@ type AzureModelPatch struct {
 
 // ---- Designations and the corpus ----
 
-// designationRules checks a model's designations against its kind, the
-// scope and the deployment: the knowledge-base model is an embedding model,
-// offered only where the knowledge base embeds with Azure; the default for
-// members is an organisation's chat, Claude or agent model.
+// designationRules checks designations against kind, scope and deployment: the KB model
+// is an embedding model where the KB embeds with Azure; the member default, a chat/Claude/agent model.
 func (s *AzureModelService) designationRules(owner storageif.AzureOwner, kind string, kb, def bool) error {
 	switch {
 	case kb && !s.knowledgeEmbeddingEnabled:
@@ -317,12 +291,8 @@ func reindexRequired() error {
 		"the knowledge base is indexed with the current knowledge-base model: this change needs a re-index of the knowledge base — confirm to continue", nil, nil)
 }
 
-// checkReindex refuses (REINDEX_REQUIRED) a change to owner's
-// knowledge-base model while the corpus it embeds is not empty: the
-// organisation's own corpus, or — for a user's model, which embeds the
-// corpus of every organisation they administer that has no resources of its
-// own — any of those. Nothing to refuse where the knowledge base does not
-// embed with Azure.
+// checkReindex refuses (REINDEX_REQUIRED) a change to the KB model while the corpus it
+// embeds is non-empty (the org's own, or any resource-less org a user administers).
 func (s *AzureModelService) checkReindex(ctx context.Context, owner storageif.AzureOwner, scope string) error {
 	nonEmpty, err := s.corpusNonEmpty(ctx, owner, scope)
 	if err != nil {
@@ -414,13 +384,8 @@ func designationHolder(models []storageif.AzureModelRecord, kb bool) string {
 
 // ---- Models ----
 
-// ListModels is GET /models: the scope's models (user scope: the caller's
-// own, then the shared models of every organisation where they are an admin
-// or member, read-only) in display order, with each one's status and the
-// window the server knows for it; in user scope also the server default
-// (personal entries, then — when the caller belongs to exactly one such
-// organisation — its default for members and its models). Network-free:
-// stale project listings refresh in the background.
+// ListModels is GET /models: the scope's models in display order with status and known
+// window; user scope adds shared org models (read-only) and the server default. Network-free.
 func (s *AzureModelService) ListModels(ctx context.Context, as AzureScope) (out AzureModelsListing, err error) {
 	defer logger.Guard("AzureModels.ListModels", &err)
 	owner, err := s.ownerFor(as)
@@ -505,10 +470,8 @@ func (s *AzureModelService) viewModel(ctx context.Context, owner storageif.Azure
 	return AzureModelView{}, storageif.ErrAzureModelNotFound
 }
 
-// CreateModel is POST /models: validate, check the resource (an agent needs
-// Entra ID and a project endpoint on it: KIND_REQUIRES_PROJECT), the limit,
-// the duplicate and the designations, then create it under the owner lock —
-// moving a designation it takes from the model that held it.
+// CreateModel is POST /models: validate, check resource (agent needs Entra ID + project
+// endpoint), limit, duplicate and designations; create under the owner lock, moving designations.
 func (s *AzureModelService) CreateModel(ctx context.Context, as AzureScope, in AzureModelInput) (out AzureModelView, err error) {
 	defer logger.Guard("AzureModels.CreateModel", &err)
 	owner, err := s.ownerFor(as)
@@ -596,10 +559,8 @@ func connectionNotFound(err error) error {
 	return err
 }
 
-// checkKindSupported refuses an agent on a resource whose stored document
-// cannot run one (KIND_REQUIRES_PROJECT: an API key, or no project
-// endpoint). A resource whose credential is missing or unreadable is not
-// judged — its status says so.
+// checkKindSupported refuses an agent on a resource whose document cannot run one
+// (KIND_REQUIRES_PROJECT: API key, or no project endpoint); an unreadable credential is not judged.
 func (s *AzureModelService) checkKindSupported(owner storageif.AzureOwner, scope, connID, kind string) error {
 	if kind != storageif.AzureKindAgent {
 		return nil
@@ -615,9 +576,8 @@ func (s *AzureModelService) checkKindSupported(owner storageif.AzureOwner, scope
 	return nil
 }
 
-// duplicateModel refuses a deployment the resource already registers in
-// the same namespace (Claude and chat deployments share one),
-// case-insensitively, naming the existing model.
+// duplicateModel refuses a deployment the resource already registers in the
+// same namespace (Claude and chat share one), case-insensitively, naming it.
 func duplicateModel(models []storageif.AzureModelRecord, skipID string, f azureModelFields) error {
 	ns := storageif.AzureModelNamespace(f.Kind)
 	for _, m := range models {
@@ -658,12 +618,8 @@ func (s *AzureModelService) mapModelWriteErr(ctx context.Context, owner storagei
 	return err
 }
 
-// UpdateModel is PUT /models/{id}: merge the patch onto the stored model,
-// validate the result like a create, then — under the owner lock — clear a
-// designation the new kind cannot hold, update the fields and move the
-// designations. Changing the knowledge-base model's deployment or resource,
-// or making another model the knowledge-base model, on a non-empty corpus is
-// 409 REINDEX_REQUIRED unless Force.
+// UpdateModel is PUT /models/{id}: merge the patch, validate like a create, then under the
+// owner lock clear/update/move designations; KB-model changes on a non-empty corpus 409 REINDEX_REQUIRED unless Force.
 func (s *AzureModelService) UpdateModel(ctx context.Context, as AzureScope, id string, in AzureModelPatch) (out AzureModelView, err error) {
 	defer logger.Guard("AzureModels.UpdateModel", &err)
 	owner, err := s.ownerFor(as)
@@ -734,15 +690,8 @@ func (s *AzureModelService) UpdateModel(ctx context.Context, as AzureScope, id s
 		ContextWindow: f.ContextWindow, MaxOutputTokens: f.MaxOutputTokens, ExpectedUpdatedAt: expected,
 	}
 	err = s.registry.WithOwnerLock(ctx, owner, func(lctx context.Context) error {
-		// Every plan above was made on cur, read before the lock. A
-		// designation moved meanwhile (another admin's PUT, which does not
-		// move updatedAt) would turn the clears below — which take the
-		// designation from whichever model holds it — into a clear of the
-		// NEW holder, leaving no knowledge-base model or default for
-		// members; and a designation moved onto this model would skip the
-		// re-index check. Re-read under the lock: this model's designations
-		// must still be the ones planned on (the lock holds every other
-		// designation writer off), else the edit is a conflict to reload.
+		// The plan was made on cur, read before the lock — a designation moved
+		// meanwhile would clear the NEW holder or skip the re-index check; re-read under the lock.
 		fresh, err := s.registry.GetModel(lctx, owner, id)
 		if err != nil {
 			return err
@@ -832,9 +781,8 @@ func mergeModelPatch(cur storageif.AzureModelRecord, in AzureModelPatch) (azureM
 	return f, nil
 }
 
-// DeleteModel is DELETE /models/{id}. Deleting the knowledge-base model of a
-// non-empty corpus is 409 REINDEX_REQUIRED unless force. Nothing changes in
-// Azure.
+// DeleteModel is DELETE /models/{id}: deleting the knowledge-base model of a
+// non-empty corpus is 409 REINDEX_REQUIRED unless force; nothing changes in Azure.
 func (s *AzureModelService) DeleteModel(ctx context.Context, as AzureScope, id string, force bool) (err error) {
 	defer logger.Guard("AzureModels.DeleteModel", &err)
 	owner, err := s.ownerFor(as)

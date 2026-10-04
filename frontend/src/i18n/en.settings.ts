@@ -23,7 +23,7 @@ export const enSettings = {
     azureAuthMode: 'Authentication',
     azureAuthApiKey: 'API key',
     azureAuthEntra: 'Microsoft Entra ID',
-    // F-51: signs in as the Azure CLI's signed-in user (az login) — no app
+    // Signs in as the Azure CLI's signed-in user (az login) — no app
     // registration and no secret. Desktop only; not offered for the
     // org-shared credential (the server refuses it).
     azureAuthEntraCli: 'Azure CLI',
@@ -889,7 +889,7 @@ export const enSettings = {
     precise: 'Precise',
     creative: 'Creative',
     maxTokens: 'Max Tokens',
-    // F-38: the 16384-token reasoning floor the server applies to reasoning
+    // The 16384-token reasoning floor the server applies to reasoning
     // models ({{floor}} is pre-formatted with a thousands separator).
     maxTokensHint:
       'Reasoning models (o-series, GPT-5, gpt-oss, DeepSeek-R1, Grok 4, Phi-4 reasoning, Claude Opus/Sonnet 5.x / Fable / Mythos) count their hidden thinking against this budget, so they are always sent at least {{floor}} tokens per turn — capped at the model’s own output limit — whatever is set here.',

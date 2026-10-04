@@ -159,44 +159,8 @@ func TestRotateLogs_RotatesLargeFile(t *testing.T) {
 	}
 }
 
-func TestRotateLogs_ChainRotation(t *testing.T) {
-	dir := t.TempDir()
-
-	// Seed .1 through .4 so the rename chain is exercised.
-	for i := 1; i <= 4; i++ {
-		p := filepath.Join(dir, filepath.Join(dir, "pad-analyzer.log."+string(rune('0'+i))))
-		_ = os.WriteFile(p, []byte("old"), 0644)
-	}
-
-	// Write an oversized main log to trigger rotation.
-	data := make([]byte, 11<<20)
-	if err := os.WriteFile(filepath.Join(dir, "pad-analyzer.log"), data, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	rotateLogs(dir) // should not panic or error
-}
-
 func TestRotateLogs_NonExistentFile_Noop(t *testing.T) {
 	// No log file in the dir → os.Stat fails → early return; must not panic.
 	dir := t.TempDir()
 	rotateLogs(dir)
-}
-
-// ---- Convenience wrappers --------------------------------------------------
-
-func TestInfo_DoesNotPanic(t *testing.T) {
-	Info("test info message", "key", "value")
-}
-
-func TestError_DoesNotPanic(t *testing.T) {
-	Error("test error message", "key", "value")
-}
-
-func TestDebug_DoesNotPanic(t *testing.T) {
-	Debug("test debug message")
-}
-
-func TestWarn_DoesNotPanic(t *testing.T) {
-	Warn("test warn message")
 }

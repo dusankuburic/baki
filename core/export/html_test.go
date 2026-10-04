@@ -49,7 +49,6 @@ func TestReportToHTML_SeverityGrouping(t *testing.T) {
 	doc := makeDoc("Flow", "")
 	out := ReportToHTML(report, doc)
 
-	// All three severity sections must appear in order: Errors, Warnings, Info
 	errIdx := strings.Index(out, ">Errors <span")
 	warnIdx := strings.Index(out, ">Warnings <span")
 	infoIdx := strings.Index(out, ">Info <span")
@@ -184,7 +183,6 @@ func TestReportToHTML_HealthScore(t *testing.T) {
 		}
 	}
 
-	// No metrics → no health badge at all.
 	out := ReportToHTML(makeReport(), makeDoc("Flow", ""))
 	if strings.Contains(out, "Health Score") {
 		t.Error("unexpected health badge when Metrics is nil")

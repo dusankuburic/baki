@@ -16,9 +16,8 @@ var (
 
 func getTokenizer() *tiktoken.Tiktoken {
 	tokenizerOnce.Do(func() {
-		// Use the offline BPE loader so the vocabulary is embedded in the binary.
-		// Without this, tiktoken-go downloads cl100k_base from a remote URL on
-		// first use, which blocks (and fails) in egress-restricted containers.
+		// The offline BPE loader embeds the vocabulary in the binary; without it tiktoken-go downloads
+		// cl100k_base remotely on first use, which blocks (and fails) in egress-restricted containers.
 		tiktoken.SetBpeLoader(tiktokenloader.NewOfflineLoader())
 		tkm, err := tiktoken.GetEncoding("cl100k_base")
 		if err != nil {
@@ -31,21 +30,24 @@ func getTokenizer() *tiktoken.Tiktoken {
 	return tokenizer
 }
 
+// encodeText is the tokenizer's Encode — the one BPE pass every estimate and
+// truncation goes through, so tests can count the bytes it sees.
+var encodeText = func(tkm *tiktoken.Tiktoken, text string) []int {
+	return tkm.Encode(text, nil, nil)
+}
+
 func estimateTokensGeneric(text string) int {
 	tkm := getTokenizer()
 	if tkm != nil {
-		tokens := tkm.Encode(text, nil, nil)
+		tokens := encodeText(tkm, text)
 		return len(tokens)
 	}
 
 	return heuristicTokenEstimate(text, 3.5)
 }
 
-// heuristicTokenEstimate is the tokenizer-unavailable fallback: Latin-ish
-// text runs ~divisor runes per token, but CJK ideographs cost ~1 token PER
-// rune — a uniform /3.5 or /4 undercounted Chinese/Japanese/Korean ~3-4×,
-// letting oversized prompts pass window guards and surface as provider 400s.
-// CJK runes are counted at 1 token each; the rest at divisor.
+// heuristicTokenEstimate is the tokenizer-unavailable fallback: Latin-ish text runs ~divisor runes per token,
+// but CJK ideographs cost ~1 token PER rune — a uniform divisor undercounted CJK ~3-4×.
 func heuristicTokenEstimate(text string, divisor float64) int {
 	cjk, other := 0, 0
 	for _, r := range text {
@@ -70,7 +72,7 @@ func EstimateTokensClaude(text string) int {
 func EstimateTokensOpenAI(text string) int {
 	tkm := getTokenizer()
 	if tkm != nil {
-		tokens := tkm.Encode(text, nil, nil)
+		tokens := encodeText(tkm, text)
 		return len(tokens)
 	}
 
@@ -85,18 +87,31 @@ func EstimateTokens(text string) int {
 	return estimateTokensGeneric(text)
 }
 
+// truncatePrefixBytesPerToken sizes the prefix TruncateToTokenLimit encodes
+// first: maxTokens × 16 bytes, four times the ~4 bytes a cl100k token covers
+// on prose, so a multi-megabyte text is never tokenised whole.
+const truncatePrefixBytesPerToken = 16
+
+// TruncateToTokenLimit returns text when it is at most maxTokens tokens, else its first maxTokens-3 tokens
+// plus "...". A text longer than maxTokens × truncatePrefixBytesPerToken bytes is cut at a pre-token boundary
+// (tokenStablePrefix) and only that prefix encoded — its tokens are exactly the whole text's first tokens, so
+// the result matches the full encode whenever the prefix overflows.
 func TruncateToTokenLimit(text string, maxTokens int) string {
 	tkm := getTokenizer()
 	if tkm != nil {
-		tokens := tkm.Encode(text, nil, nil)
+		if p := tokenStablePrefix(text, maxTokens*truncatePrefixBytesPerToken); p > 0 {
+			// text[p:] is not empty, so the whole text has at least one
+			// token more than the prefix: maxTokens tokens in the prefix
+			// prove the overflow.
+			if tokens := encodeText(tkm, text[:p]); len(tokens) >= maxTokens {
+				return truncateTokens(tkm, tokens, maxTokens)
+			}
+		}
+		tokens := encodeText(tkm, text)
 		if len(tokens) <= maxTokens {
 			return text
 		}
-		if maxTokens <= 3 {
-			return "..."
-		}
-		truncatedTokens := tokens[:maxTokens-3]
-		return tkm.Decode(truncatedTokens) + "..."
+		return truncateTokens(tkm, tokens, maxTokens)
 	}
 
 	// Fallback heuristic
@@ -114,4 +129,40 @@ func TruncateToTokenLimit(text string, maxTokens int) string {
 	}
 
 	return text
+}
+
+// truncateTokens is the over-budget half of TruncateToTokenLimit: the first
+// maxTokens-3 of tokens decoded, plus the "..." marker.
+func truncateTokens(tkm *tiktoken.Tiktoken, tokens []int, maxTokens int) string {
+	if maxTokens <= 3 {
+		return "..."
+	}
+	return tkm.Decode(tokens[:maxTokens-3]) + "..."
+}
+
+// tokenStablePrefix returns a cut p ≤ maxBytes such that encoding text[:p] yields exactly the first tokens of
+// encoding text, or 0 when the text is not longer than maxBytes or no such cut exists. cl100k's pre-tokeniser
+// byte-pair-encodes each matched piece on its own, so a prefix ending on a piece boundary tokenises to a
+// prefix of the whole; a '\n' followed by spaces/tabs and a printable ASCII byte is such a boundary (the piece
+// holding the '\n' is the newline-terminated tail of one of the two line-break alternatives). Searched
+// backwards from maxBytes.
+func tokenStablePrefix(text string, maxBytes int) int {
+	if maxBytes <= 0 || len(text) <= maxBytes {
+		return 0
+	}
+	// maxIndent bounds the spaces/tabs skipped after a candidate '\n'; a longer run is not worth a scan.
+	const maxIndent = 256
+	for p := maxBytes; p > 0; p-- {
+		if text[p-1] != '\n' {
+			continue
+		}
+		q := p
+		for q < len(text) && q-p < maxIndent && (text[q] == ' ' || text[q] == '\t') {
+			q++
+		}
+		if q < len(text) && text[q] > ' ' && text[q] < 0x7f {
+			return p
+		}
+	}
+	return 0
 }

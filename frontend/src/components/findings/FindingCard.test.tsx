@@ -77,7 +77,6 @@ beforeEach(() => {
   useFlowStore.setState({document: mockDoc, readOnly: false})
   useAnalysisStore.setState({
     reports: new Map(),
-    findingsByBlock: new Map(),
     suppressedFindings: [],
     suppressedKeys: new Set(),
     triageMap: new Map(),

@@ -7,47 +7,16 @@ import (
 	"pad-core/models"
 )
 
-// Inline suppression lets flow authors silence findings directly in the flow
-// source using a PAD comment placed immediately before the action it applies to
-// (the same model as ESLint's `// eslint-disable-next-line`). Because it lives in
-// the flow text, it is honored everywhere the analyzer runs — the web app, the
-// CLI, batch analysis and the governance scanner — so a CI gate can respect a
-// reviewed false-positive without a database round-trip.
-//
-// Syntax (case-insensitive), written as a normal PAD comment line:
-//
-//	# pad-ignore                      -> suppress every rule on the next block
-//	# pad-ignore[hardcoded-credential] -> suppress one rule on the next block
-//	# pad-ignore[deep-nesting, unused-variable] -> suppress several rules
-//	COMMENT  pad-ignore-next-line[sql-injection-risk]  (alias form also works)
-//
-// Consecutive comment directives stack and all apply to the next non-comment
-// sibling block. A directive among the LEADING comments of a subflow (or of the
-// file) additionally covers that subflow's (or the document's) findings that
-// have no block to anchor on — see inlineSuppressions.
-// Two patterns, because the two forms carry very different risk.
-//
-// rePadIgnoreRules (targeted) may appear anywhere in the comment: naming
-// explicit rule IDs is self-evidently deliberate, and writing the justification
-// first — "reviewed, false positive pad-ignore[sql-injection-risk]" — is a
-// documented and tested usage.
-//
-// rePadIgnoreAll (blanket) must be the ENTIRE comment. This is the fail-open
-// that mattered: the old single pattern was unanchored with an OPTIONAL bracket
-// group, so any mention of the word anywhere matched with an empty capture and
-// fell through to "suppress every rule". A comment reading
-//
-//	COMMENT TODO: never use pad-ignore in production flows
-//
-// disabled all 45 rules on the next action, Security rules included — and
-// bakicli is the product's CI gate, so it failed open exactly where it must
-// not. Requiring the blanket form to stand alone removes the ambiguity without
-// touching the targeted form.
-//
-// A malformed list now matches NEITHER pattern rather than degrading to
-// suppress-all: `pad-ignore[unhandled-error` (missing `]`) suppresses nothing.
-// That is the safe direction and it is self-correcting — the finding the author
-// meant to silence still appears, so the typo is visible.
+// Inline suppression: a PAD comment immediately before an action silences that
+// next block (the ESLint eslint-disable-next-line model), everywhere the
+// analyzer runs — web app, CLI, batch, governance scanner. Case-insensitive:
+// `# pad-ignore` (all rules) or `# pad-ignore[rule1, rule2]`
+// (`pad-ignore-next-line[...]` alias; consecutive directives stack); among a
+// subflow's leading comments it also covers that subflow's block-less findings.
+// The blanket form must be the ENTIRE comment (the old pattern matched the word
+// anywhere and "never use pad-ignore in production flows" failed the CI gate
+// open); a malformed list matches NEITHER pattern, so a typo'd directive
+// suppresses nothing and the finding stays visible.
 var (
 	rePadIgnoreRules = regexp.MustCompile(`(?i)\bpad-ignore(?:-next-line)?\[([^\]]*)\]`)
 	rePadIgnoreAll   = regexp.MustCompile(`^(?i)pad-ignore(?:-next-line)?$`)
@@ -57,13 +26,11 @@ var (
 // block". It cannot collide with a real rule ID (those are kebab-case words).
 const suppressAll = "*"
 
-// parsePadIgnore reports whether text contains a pad-ignore directive and, if so,
-// whether it suppresses all rules (all=true) or a specific set (rules). A
-// directive with an empty or whitespace-only bracket list suppresses all rules.
+// parsePadIgnore reports whether text contains a pad-ignore directive and, if
+// so, whether it suppresses all rules (all=true) or a specific set (rules); an
+// empty or whitespace-only bracket list means all.
 func parsePadIgnore(text string) (all bool, rules []string, ok bool) {
-	// Block comments keep their /# framing in Name; strip it so `/# pad-ignore #/`
-	// is honoured the same as the single-line forms, whose marker the tokenizer
-	// has already removed.
+	// Block comments keep their /# framing in Name; strip it so `/# pad-ignore #/` works too.
 	t := strings.TrimSpace(text)
 	t = strings.TrimPrefix(t, "/#")
 	t = strings.TrimSuffix(t, "#/")
@@ -71,7 +38,7 @@ func parsePadIgnore(text string) (all bool, rules []string, ok bool) {
 
 	m := rePadIgnoreRules.FindStringSubmatch(t)
 	if m == nil {
-		// No well-formed rule list: only a comment that IS the bare directive
+		// No well-formed list: only a comment that IS the bare directive
 		// suppresses anything, and it suppresses everything.
 		if rePadIgnoreAll.MatchString(t) {
 			return true, nil, true
@@ -84,10 +51,8 @@ func parsePadIgnore(text string) (all bool, rules []string, ok bool) {
 		return true, nil, true
 	}
 	for _, part := range strings.Split(inside, ",") {
-		// Lower-cased because rule IDs are kebab-case and this directive is
-		// documented as case-insensitive. The (?i) flag only ever covered the
-		// keyword, so `pad-ignore[UNHANDLED-ERROR]` captured the uppercase text
-		// verbatim, matched no rule ID, and silently suppressed nothing.
+		// Lower-cased: (?i) only covered the keyword, so `pad-ignore[UNHANDLED-ERROR]`
+		// matched no rule ID and silently suppressed nothing.
 		if p := strings.ToLower(strings.TrimSpace(part)); p != "" {
 			rules = append(rules, p)
 		}
@@ -98,28 +63,13 @@ func parsePadIgnore(text string) (all bool, rules []string, ok bool) {
 	return false, rules, true
 }
 
-// inlineSuppressions is the parsed `pad-ignore` state of one flow, in three
-// scopes:
-//
-//   - blocks: the next-block scope — a directive applies to the first concrete
-//     sibling after it (the model documented above). Keyed by target block ID.
-//   - subflows: the subflow-header scope — directives among the LEADING comment
-//     lines of a subflow (before its first real block) also apply to that
-//     subflow's block-less findings. Keyed by subflow ID.
-//   - file: the file scope — the header of the first subflow that has any blocks
-//     (the top of Main.txt, or of the implicit "Main" region) also applies to
-//     block-less findings anywhere in the document.
-//
-// The last two exist because some findings have no block to anchor on. The
-// engine's parse-error fallback emits findings with an empty BlockID when no
-// block of the first subflow is parseable, and the per-block parse-error rule
-// anchors on Blocks[0] of the first subflow — which, when the author writes a
-// directive there, IS the directive comment, a block the next-block scope can
-// never name. Either way `# pad-ignore[parse-error]` at the top of the file
-// silenced nothing. Header directives therefore also cover findings anchored
-// on the header comments themselves.
-//
-// The rule sets use the same sentinel as before: suppressAll means every rule.
+// inlineSuppressions is the parsed `pad-ignore` state in three scopes: blocks
+// (next-block, keyed by target block ID), subflows (a subflow's leading
+// comments, keyed by subflow ID) and file (first subflow header). The last two
+// cover block-less findings: parse-error findings carry an empty BlockID, and
+// the per-block parse-error rule anchors on Blocks[0] of the first subflow,
+// which when the author writes a directive there IS the directive comment —
+// a block next-block scope can never name.
 type inlineSuppressions struct {
 	blocks   map[string]map[string]bool
 	subflows map[string]map[string]bool
@@ -148,7 +98,6 @@ func ruleSetHas(set map[string]bool, rule string) bool {
 	return set != nil && (set[suppressAll] || set[rule])
 }
 
-// mergeDirective folds one parsed directive into set.
 func mergeDirective(set map[string]bool, all bool, rules []string) {
 	if all {
 		set[suppressAll] = true
@@ -170,8 +119,7 @@ func mergeRuleSet(dst map[string]map[string]bool, key string, src map[string]boo
 }
 
 // leadingCommentIDs returns the IDs of the comment blocks that open a sibling
-// group before its first non-comment block — the subflow header when called on
-// a subflow's top-level blocks.
+// group before its first non-comment block (a subflow header at top level).
 func leadingCommentIDs(blocks []models.Block) []string {
 	var ids []string
 	for i := range blocks {
@@ -183,20 +131,18 @@ func leadingCommentIDs(blocks []models.Block) []string {
 	return ids
 }
 
-// collectInlineSuppressions walks the flow and returns every `pad-ignore`
-// directive resolved into its scopes (see inlineSuppressions). Each sibling
-// group (and nested child group) is its own next-block scope, so a directive
-// only reaches the next concrete block in the same group; only a subflow's
-// top-level leading comments form a header.
+// collectInlineSuppressions resolves every `pad-ignore` directive into its
+// scopes: each sibling (and nested) group is its own next-block scope, so a
+// directive only reaches the next concrete block in the same group; only a
+// subflow's top-level leading comments form a header.
 func collectInlineSuppressions(flow *models.FlowDocument) *inlineSuppressions {
 	supp := &inlineSuppressions{
 		blocks:   map[string]map[string]bool{},
 		subflows: map[string]map[string]bool{},
 	}
 
-	// walk processes one sibling group. header is non-nil only for a subflow's
-	// top-level group and receives the directives found among its leading
-	// comments.
+	// walk processes one sibling group; header is non-nil only for a subflow's
+	// top-level group and receives its leading directives.
 	var walk func(blocks []models.Block, header map[string]bool)
 	walk = func(blocks []models.Block, header map[string]bool) {
 		pending := map[string]bool{}
@@ -251,8 +197,8 @@ func collectInlineSuppressions(flow *models.FlowDocument) *inlineSuppressions {
 }
 
 // applyInlineSuppressions removes findings silenced by a `pad-ignore` directive
-// in any scope, returning the kept findings and the number suppressed (counted
-// per finding, so stats.Suppressed stays a finding count).
+// in any scope, returning the kept findings and the count suppressed (per
+// finding, so stats.Suppressed stays a finding count).
 func applyInlineSuppressions(findings []models.Finding, supp *inlineSuppressions) ([]models.Finding, int) {
 	if supp.empty() {
 		return findings, 0

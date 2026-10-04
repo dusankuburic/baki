@@ -31,10 +31,9 @@ func (b *PostgresStorageBackend) SetFindingStatus(ctx context.Context, st *inter
 }
 
 // The justification COALESCE above (and in buildFindingStatusUpsert) keeps a
-// previously recorded risk-acceptance reason when a later status change omits
-// one: the status menu sends only {status, assignee}, and a plain overwrite
-// erased the reason entered at suppression time. Clearing a finding's triage
-// (DeleteFindingStatus) remains the way to drop a justification.
+// recorded risk-acceptance reason when a later status change omits one — the
+// status menu sends only {status, assignee}, and a plain overwrite erased the
+// suppression-time reason. DeleteFindingStatus drops a justification.
 
 // batchExec is the executor subset both tx paths satisfy, so the multi-row
 // loop is shared between the RLS-middleware tx and the self-opened tx.
@@ -42,9 +41,8 @@ type batchExec interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// findingStatusBatchRows caps rows per multi-row upsert: 1 shared flow_id
-// param + 6 per row must stay under the Postgres 65535 bind-parameter limit
-// (10000 rows → 60001 params).
+// findingStatusBatchRows caps rows per multi-row upsert: 1 shared flow_id param
+// + 6 per row must stay under the Postgres 65535 bind-parameter limit.
 const findingStatusBatchRows = 9000
 
 // buildFindingStatusUpsert renders one multi-row INSERT..ON CONFLICT chunk.
@@ -89,26 +87,19 @@ func execFindingStatusBatch(ctx context.Context, exec batchExec, flowID string, 
 }
 
 // BatchSetFindingStatus upserts multiple finding-status rows for one flow in a
-// single transaction. Atomicity contract: either every row commits or none — a
-// mid-batch failure rolls back the whole batch, so the audit log's "updated: N"
-// and the actual persisted row count never diverge (the previous per-item loop
-// silently committed items 1..K-1 on a failure at item K).
-//
-// Rows are written as chunked multi-row upserts (buildFindingStatusUpsert) —
-// one Exec round trip per ≤9000 rows, not one per item.
-//
-// The tx is RLS-scoped to userID so existing per-flow RLS policies still apply.
-// If the RLS middleware already opened a tx on ctx we use it directly
-// (committing nested-opened transactions is the middleware's job); otherwise we
+// single transaction: either every row commits or none, so the audit log's
+// "updated: N" never diverges from the persisted count (the old per-item loop
+// silently committed items 1..K-1 on a failure at K). The tx is RLS-scoped to
+// userID; an existing RLS-middleware tx on ctx is used directly, otherwise we
 // open and commit our own.
 func (b *PostgresStorageBackend) BatchSetFindingStatus(ctx context.Context, flowID, userID string, items []*interfaces.FindingStatus) error {
 	if len(items) == 0 {
 		return nil
 	}
 
-	// If the RLS middleware already opened a tx, run inside it (no inner
-	// commit — the middleware commits or rolls back the whole request).
-	if existingTx, ok := ctx.Value(rlsTxKey).(*sql.Tx); ok && existingTx != nil {
+	if existingTx, ok, err := rlsTxFromContext(ctx); err != nil {
+		return err
+	} else if ok {
 		return execFindingStatusBatch(ctx, existingTx, flowID, items)
 	}
 
@@ -151,6 +142,24 @@ func (b *PostgresStorageBackend) ListFindingStatuses(ctx context.Context, flowID
 		out = append(out, &s)
 	}
 	return out, rows.Err()
+}
+
+// GetFindingStatus reads one finding's triage state by its primary key, or
+// (nil, nil) when none is persisted — the single-finding write needs only the
+// prior assignee, not the flow's whole status list.
+func (b *PostgresStorageBackend) GetFindingStatus(ctx context.Context, flowID, findingKey string) (*interfaces.FindingStatus, error) {
+	var s interfaces.FindingStatus
+	err := b.query(ctx).QueryRowContext(ctx, `
+		SELECT flow_id, finding_key, rule_id, status, justification, assignee_id, updated_by, updated_at
+		FROM finding_status WHERE flow_id = $1 AND finding_key = $2`, flowID, findingKey).
+		Scan(&s.FlowID, &s.FindingKey, &s.RuleID, &s.Status, &s.Justification, &s.AssigneeID, &s.UpdatedBy, &s.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
 }
 
 func (b *PostgresStorageBackend) DeleteFindingStatus(ctx context.Context, flowID, findingKey string) error {

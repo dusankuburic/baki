@@ -10,11 +10,11 @@ import (
 )
 
 // PanicHook is invoked by the recover helpers after a panic is logged. The
-// server registers a hook that forwards to its error-aggregation sink
+// server registers a hook forwarding to its error-aggregation sink
 // (internal/errreport); core cannot import that package, so the indirection
-// keeps the dependency one-way (server → core). Implementations must not panic.
-// Arguments: operation is the call-site label; recovered is the panic value;
-// stack is the goroutine stack trace.
+// keeps the dependency one-way (server → core). Implementations must not
+// panic. Arguments: operation (call-site label), recovered (panic value),
+// stack (goroutine stack trace).
 type PanicHook func(operation string, recovered any, stack []byte)
 
 var (
@@ -50,10 +50,9 @@ func notifyHook(operation string, r any, stack []byte) {
 }
 
 // logPanic logs a recovered panic value with a stack trace and notifies the
-// panic hook. Shared by every recover helper below; each helper must still
-// call recover() itself, because recover() only works when invoked directly
-// by a deferred function — that constraint is why the helpers can't simply
-// delegate to one another.
+// panic hook. Each helper must still call recover() itself: recover() only
+// works invoked directly by a deferred function, which is why the helpers
+// cannot simply delegate to one another.
 func logPanic(operation string, r any) {
 	stack := captureStack()
 	slog.Error("panic recovered",

@@ -62,10 +62,10 @@ const VERBATIM_ERROR_CODES = new Set([
   // the figures.
   'BUDGET_EXCEEDED',
   // The document chunks to more passages than one upload may index
-  // (F-14): the server message carries the figures.
+  // (the server message carries the figures).
   'KNOWLEDGE_DOCUMENT_TOO_LARGE',
   // The org's shared Azure credential names no embedding deployment
-  // (F-33): the server message tells the org admin what to add.
+  // (the server message tells the org admin what to add).
   'EMBEDDING_ORG_NOT_CONFIGURED',
   // The budget could not be checked (503); the server message says why.
   'BUDGET_UNAVAILABLE',
@@ -99,7 +99,7 @@ export default function KnowledgeBasePanel() {
   // Stops a running re-index: aborts the in-flight page, and with it the
   // loop. Pages already answered stay committed server-side.
   const reindexAbortRef = useRef<AbortController | null>(null)
-  // Where a stopped or failed run can continue from (F-13): the resume
+  // Where a stopped or failed run can continue from: the resume
   // cursor of the last committed page — or the one the server's error
   // details carried — plus the force the run settled on. Null while no
   // run is resumable.

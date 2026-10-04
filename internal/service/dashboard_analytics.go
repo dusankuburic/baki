@@ -17,16 +17,13 @@ import (
 	"pad-core/models"
 )
 
-// The filterable analytics page (GET /api/dashboard/analytics).
-//
-// Findings are stored as per-flow rollups (a count per rule id), never per
-// finding. Every breakdown here — by severity, category, rule, fixability —
-// is therefore that rollup mapped through the org-aware rule catalog, which
-// is also what makes severity / category / rule filters possible over history
-// without a schema change. The cost is that a rule whose severity was
-// overridden after a run is re-labelled by the current catalog; the payload
-// says so (Applied.Derived) and the tiles use the stored totals whenever no
-// finding filter is active.
+// The filterable analytics page (GET /api/dashboard/analytics). Findings are stored
+// as per-flow rollups (a count per rule id), never per finding: every breakdown here
+// — by severity, category, rule, fixability — is that rollup mapped through the
+// org-aware rule catalog, which is what makes the filters possible over history
+// without a schema change. The cost: a rule whose severity was overridden after a run
+// is re-labelled by the current catalog — the payload says so (Applied.Derived), and
+// the tiles use the stored totals whenever no finding filter is active.
 
 const (
 	maxAnalyticsFlows      = 5000
@@ -74,9 +71,9 @@ func (q AnalyticsQuery) Key() string {
 // PrevFrom is the start of the previous period of equal length.
 func (q AnalyticsQuery) PrevFrom() time.Time { return q.From.AddDate(0, 0, -q.Days) }
 
-// AnalyticsCaller carries what the payload needs to know about the caller
-// beyond the user id: the email (failed-login lookup) and whether they may
-// see instance-wide security counts.
+// AnalyticsCaller carries what the payload needs to know about the caller beyond the
+// user id: the email (failed-login lookup) and whether they may see instance-wide
+// security counts.
 type AnalyticsCaller struct {
 	Email   string
 	IsAdmin bool
@@ -88,11 +85,10 @@ type scopeResolver interface {
 	ScopeFlowIDs(ctx context.Context, userID, orgID string, scope LibraryScope, limit int) (ids []string, orgIDs []string, err error)
 }
 
-// anaCacheMaxEntries caps the analytics cache. The cache key embeds the
-// caller-chosen window (From/To to the nanosecond) and flow list, so a client
-// cycling query parameters can mint unlimited distinct keys, each holding a
-// several-hundred-KB payload for the TTL — without a cap that is an
-// unbounded, attacker-priced memory pool.
+// anaCacheMaxEntries caps the analytics cache: the key embeds the caller-chosen
+// window (From/To to the nanosecond) and flow list, so a client cycling query
+// parameters can mint unlimited distinct keys, each holding a several-hundred-KB
+// payload for the TTL — without a cap that is an unbounded, attacker-priced memory pool.
 const anaCacheMaxEntries = 128
 
 type anaCacheEntry struct {
@@ -140,12 +136,11 @@ func (s *DashboardService) anaCachePut(key string, data *models.DashboardAnalyti
 			delete(s.anaCache, k)
 		}
 	}
-	// The TTL sweep cannot shrink a cache filled with fresh distinct keys, so
-	// also cap the entry count: when over the cap, evict the entry closest to
-	// expiry (the oldest fetchedAt — entries expire fetchedAt+TTL). Same
-	// expired-first/nearest-expiry order as pruneModelCacheLocked. Equal
-	// timestamps (coarse clock) fall back to insertion order so the victim
-	// is deterministic and always the oldest insert.
+	// The TTL sweep cannot shrink a cache filled with fresh distinct keys, so also cap
+	// the entry count: when over the cap, evict the entry closest to expiry (the
+	// oldest fetchedAt — entries expire fetchedAt+TTL; equal timestamps fall back to
+	// insertion order so the victim is deterministic). Same expired-first/nearest-expiry
+	// order as pruneModelCacheLocked.
 	for len(s.anaCache) > anaCacheMaxEntries {
 		oldestKey, oldestAt, oldestSeq, first := "", time.Time{}, uint64(0), true
 		for k, e := range s.anaCache {
@@ -157,9 +152,9 @@ func (s *DashboardService) anaCachePut(key string, data *models.DashboardAnalyti
 	}
 }
 
-// BuildAnalytics assembles the analytics payload for userID under q. Scope
-// errors (an org the caller is not a member of) propagate — and are never
-// cached; a failed section read is logged, named in Partial and left empty.
+// BuildAnalytics assembles the analytics payload for userID under q. Scope errors
+// (an org the caller is not a member of) propagate and are never cached; a failed
+// section read is logged, named in Partial and left empty.
 func (s *DashboardService) BuildAnalytics(ctx context.Context, userID string, caller AnalyticsCaller, q AnalyticsQuery) (*models.DashboardAnalyticsData, error) {
 	if s.backend == nil {
 		return nil, fmt.Errorf("analytics: cloud backend required")
@@ -506,9 +501,9 @@ func (ff *findingFilter) keep(id string, meta ruleMeta, inCatalog bool) bool {
 
 type tally struct{ total, errors, warnings, info, autoFix int }
 
-// tally counts one flow's findings under the filter. Without a finding filter
-// the stored totals are returned untouched (exactly what the home dashboard
-// shows); with one, the by_rule rollup is mapped through the catalog.
+// tally counts one flow's findings under the filter: without a finding filter the
+// stored totals are returned untouched (exactly what the home dashboard shows); with
+// one, the by_rule rollup is mapped through the catalog.
 func (ff *findingFilter) tally(byRule map[string]int, raw tally, cat map[string]ruleMeta) tally {
 	if !ff.derived {
 		return raw
@@ -568,10 +563,10 @@ func aggregateStates(states map[string]*flowState, ff *findingFilter, cat map[st
 	return p
 }
 
-// sweepTrend walks every local day from start to end, applying each day's
-// latest analysis per flow to a carried-forward state, and aggregates the
-// fleet after each day. It returns the previous-period and current-period
-// points, the state at the end of the previous period and at the end.
+// sweepTrend walks every local day from start to end, applying each day's latest
+// analysis per flow to a carried-forward state and aggregating the fleet after each
+// day; it returns both periods' points and the state at the end of the previous
+// period and at the end.
 func sweepTrend(hist *storageif.AnalysisHistoryRows, start, from, end time.Time, ff *findingFilter, cat map[string]ruleMeta) (prev, cur []models.AnalyticsTrendPoint, prevEnd, final map[string]*flowState) {
 	state := map[string]*flowState{}
 	for _, r := range hist.Baseline {

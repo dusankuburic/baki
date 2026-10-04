@@ -185,7 +185,6 @@ func TestFilterFindingsForBlock(t *testing.T) {
 }
 
 func TestFindParentChain_NilSafe(t *testing.T) {
-	// None of these should panic.
 	chain := findParentChain(nil, nil)
 	if len(chain) != 0 {
 		t.Errorf("nil doc: expected empty chain, got %d", len(chain))
@@ -261,7 +260,6 @@ func TestBuildContext_SelectedSubflow_AppearsInContext(t *testing.T) {
 }
 
 func TestFindSiblings_NilSafe(t *testing.T) {
-	// Neither nil doc nor nil block should panic.
 	if got := findSiblings(nil, nil); got != nil {
 		t.Errorf("nil doc: expected nil, got %v", got)
 	}

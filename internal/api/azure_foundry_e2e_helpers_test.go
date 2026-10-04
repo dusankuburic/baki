@@ -1,19 +1,7 @@
 package api
 
-// Test-only harness for TestAzureFoundryE2E: the real baki HTTP API (JWT /
-// cloud mode, the production Router, EventManager SSE hub, ChatService,
-// ProviderService and ai.ProviderFactory) served on an httptest server, with
-// every outbound Azure AI Foundry (and Microsoft Entra ID) request redirected
-// to an in-process fake that records the exact wire request.
-//
-// Redirect seam: ai.AzureFoundryOptions.Transport (tests only) makes the
-// Azure AI Foundry runtime client — and the Entra ID credential, which uses
-// the same client — send every request through the harness transport; every
-// other provider keeps the real shared client. The endpoint must still be
-// https on port 443 of an allow-listed DNS name, so the test hosts live under
-// the allow-listed .unit-test.invalid domain. The transport rewrites https://<x>.unit-test.invalid and
-// https://login.microsoftonline.com to the fake's plain-HTTP listener,
-// preserving the original Host header, and refuses every other destination.
+// Test-only harness for TestAzureFoundryE2E: the real baki HTTP API (JWT / cloud mode, the production Router, EventManager SSE hub, ChatService, ProviderService and ai.ProviderFactory) served on an httptest server, with every outbound Azure AI Foundry (and Microsoft Entra ID) request redirected to an in-process fake that records the exact wire request.
+// Redirect seam: ai.AzureFoundryOptions.Transport (tests only) makes the Foundry runtime client — and the Entra ID credential, which uses the same client — send every request through the harness transport; every other provider keeps the real shared client. The endpoint must still be https on port 443 of an allow-listed DNS name, so the test hosts live under the allow-listed .unit-test.invalid domain; the transport rewrites https://<x>.unit-test.invalid and https://login.microsoftonline.com to the fake's plain-HTTP listener, preserving the original Host header, and refuses every other destination.
 
 import (
 	"bufio"
@@ -130,9 +118,7 @@ type azE2EFake struct {
 	handlers map[string]azE2EHandler // by lower-case host
 	reqs     []azE2ERequest
 	perHost  map[string]int
-	// signIns counts the access tokens the fake Entra ID issued: the first is
-	// azE2EEntraToken, later ones carry a "-<n>" suffix, so a refreshed token
-	// is observable on the wire.
+	// signIns counts the access tokens the fake Entra ID issued: the first is azE2EEntraToken, later ones carry a "-<n>" suffix, so a refreshed token is observable on the wire.
 	signIns int
 }
 
@@ -197,10 +183,7 @@ func (f *azE2EFake) serve(w http.ResponseWriter, r *http.Request) {
 	h(w, r, rec, n)
 }
 
-// serveEntraID answers the client-credentials sign-in azidentity (MSAL)
-// performs against login.microsoftonline.com: the tenant's OpenID
-// configuration, then the token endpoint. Instance discovery is answered too
-// in case MSAL asks.
+// serveEntraID answers the client-credentials sign-in azidentity (MSAL) performs against login.microsoftonline.com: the tenant's OpenID configuration, then the token endpoint; instance discovery is answered too in case MSAL asks.
 func (f *azE2EFake) serveEntraID(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -296,10 +279,7 @@ func azE2EWriteJSON(w http.ResponseWriter, status int, body string, headers ...s
 
 // --- the baki side ---
 
-// azE2EOrgStore is the collaboration OrgStore on top of the filesystem
-// backend's organisations, so the OrgService (org routes, flow authz) and the
-// ChatService's role lookup (backend.ListOrgsForUser) see the same rosters —
-// as they do on Postgres. Invites stay in memory (not exercised).
+// azE2EOrgStore is the collaboration OrgStore on top of the filesystem backend's organisations, so the OrgService (org routes, flow authz) and the ChatService's role lookup (backend.ListOrgsForUser) see the same rosters — as they do on Postgres. Invites stay in memory (not exercised).
 type azE2EOrgStore struct {
 	collaboration.OrgStore
 	fs *filesystem.LocalStorageBackend
@@ -336,12 +316,7 @@ type azE2EEnv struct {
 	orgSvc  *collaboration.OrgService
 }
 
-// newAzureE2EEnv wires the router the way DI does in cloud mode (JWT auth,
-// cloud document provider, backend conversations, org credential store, the
-// EventManager as the services' notifier, the Azure AI Foundry model
-// registry on the provider, system and chat services) on in-memory secrets,
-// an in-memory registry and a temp-dir filesystem backend, and serves it
-// over real HTTP.
+// newAzureE2EEnv wires the router the way DI does in cloud mode (JWT auth, cloud document provider, backend conversations, org credential store, the EventManager as the services' notifier, the Azure AI Foundry model registry on the provider, system and chat services) on in-memory secrets, an in-memory registry and a temp-dir filesystem backend, and serves it over real HTTP.
 func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	t.Helper()
 	fake := newAzureE2EFake(t)
@@ -351,12 +326,7 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	if err != nil {
 		t.Fatalf("filesystem backend: %v", err)
 	}
-	// Cloud chat reads the caller's preferences through
-	// backend.LoadUserSettings. Postgres answers a user without a row with
-	// models.DefaultSettings() ("Save conversation history" on); the
-	// filesystem backend answers with a bare document whose zero values turn
-	// history off, so the server would store no turn. Seed the Postgres
-	// default so the harness behaves like the production backend.
+	// Cloud chat reads the caller's preferences through backend.LoadUserSettings. Postgres answers a user without a row with models.DefaultSettings() ("Save conversation history" on); the filesystem backend's bare document would turn history off, so seed the Postgres default to behave like production.
 	defaults, err := json.Marshal(models.DefaultSettings())
 	if err != nil {
 		t.Fatalf("marshal default settings: %v", err)
@@ -398,11 +368,7 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	providerSvc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
 	providerSvc.SetOrgKeyStore(orgKeys)
 	sysSvc := service.NewSystemService(settings, secrets, events, fs, config.ModeCloud)
-	// The Azure AI Foundry model registry (Part 9) as di.ProvideAzureModelService
-	// builds it in cloud mode — one registry per user and per organisation
-	// (the Postgres store's owners, kept in memory here), the backend for the
-	// caller's settings, organisation membership, corpus counts and user
-	// names — and wired into the same three services.
+	// The Azure AI Foundry model registry (Part 9) as di.ProvideAzureModelService builds it in cloud mode — one registry per user and per organisation (the Postgres store's owners, kept in memory here), the backend for the caller's settings, organisation membership, corpus counts and user names — wired into the same three services.
 	azure := service.NewAzureModelService(service.AzureModelServiceDeps{
 		Registry:      storage.NewMemoryAzureRegistry(),
 		Secrets:       secrets,
@@ -699,9 +665,7 @@ type azE2EChatReq struct {
 	ConversationID string
 }
 
-// chat subscribes, starts the stream through POST /api/chat/stream with a
-// client stream id (the C-1 path: no /chat/begin round trip) and waits for
-// its terminal event.
+// chat subscribes, starts the stream through POST /api/chat/stream with a client stream id (the C-1 path: no /chat/begin round trip) and waits for its terminal event.
 func (e *azE2EEnv) chat(t *testing.T, u azE2EUser, req azE2EChatReq) azE2EChatOutcome {
 	t.Helper()
 	sse := e.subscribe(t, u.bearer)
@@ -733,9 +697,7 @@ func (e *azE2EEnv) chatOn(t *testing.T, sse *azE2ESSE, u azE2EUser, req azE2ECha
 	}
 	out := sse.await(t, streamID, 30*time.Second)
 	if out.Done != nil && strings.TrimSpace(out.Text) != "" {
-		// The server stores the answer from the stream's cleanup, AFTER the
-		// done event; wait until it is readable so no write is still in
-		// flight when the next step (or the test's temp-dir cleanup) runs.
+		// The server stores the answer from the stream's cleanup, AFTER the done event; wait until it is readable so no write is still in flight when the next step (or the test's temp-dir cleanup) runs.
 		e.awaitStoredAnswer(t, u, req.FlowID, req.ConversationID, out.Text)
 	}
 	return out
@@ -764,9 +726,7 @@ func (e *azE2EEnv) awaitStoredAnswer(t *testing.T, u azE2EUser, flowID, convID, 
 	}
 }
 
-// conversation reloads a stored thread (POST /api/chat/get), polling until it
-// holds at least want messages: the server stores the answer after the done
-// event, from the stream's cleanup.
+// conversation reloads a stored thread (POST /api/chat/get), polling until it holds at least want messages: the server stores the answer after the done event, from the stream's cleanup.
 func (e *azE2EEnv) conversation(t *testing.T, u azE2EUser, flowID, convID string, want int) []map[string]any {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -826,9 +786,7 @@ func azE2EModel(p map[string]any, id string) map[string]any {
 	return nil
 }
 
-// azE2EModelByAlias returns the provider entry's model that answers for a
-// pre-registry id — one of its aliases, which only the entries of the
-// migrated resource "default" carry — or nil.
+// azE2EModelByAlias returns the provider entry's model that answers for a pre-registry id — one of its aliases, which only the entries of the migrated resource "default" carry — or nil.
 func azE2EModelByAlias(p map[string]any, alias string) map[string]any {
 	models, _ := p["models"].([]any)
 	for _, m := range models {
@@ -858,9 +816,7 @@ func (e *azE2EEnv) modelIDFor(t *testing.T, u azE2EUser, alias string) string {
 	return id
 }
 
-// addModel registers a model on one of the caller's resources through the
-// registry API (POST /api/providers/azure-foundry/models) and returns its
-// view (id, modelId "m/<id>", kind, deployment, displayName, …).
+// addModel registers a model on one of the caller's resources through the registry API (POST /api/providers/azure-foundry/models) and returns its view (id, modelId "m/<id>", kind, deployment, displayName, …).
 func (e *azE2EEnv) addModel(t *testing.T, u azE2EUser, body map[string]any) map[string]any {
 	t.Helper()
 	var out struct {
@@ -873,9 +829,7 @@ func (e *azE2EEnv) addModel(t *testing.T, u azE2EUser, body map[string]any) map[
 	return out.Model
 }
 
-// chatRefused sends a chat turn the server must refuse before any stream
-// starts, with 400 and the MODEL_NOT_AVAILABLE code (the client then puts
-// the text back in the composer); it returns the error envelope.
+// chatRefused sends a chat turn the server must refuse before any stream starts, with 400 and the MODEL_NOT_AVAILABLE code (the client then puts the text back in the composer); it returns the error envelope.
 func (e *azE2EEnv) chatRefused(t *testing.T, u azE2EUser, req azE2EChatReq) map[string]any {
 	t.Helper()
 	if req.FlowID == "" {

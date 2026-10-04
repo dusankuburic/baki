@@ -7,10 +7,9 @@ import (
 )
 
 // CommandInjectionRiskRule flags shell/DOS-command actions that interpolate
-// variables into the command line (System.RunDOSCommand with %var% args), a
-// classic command-injection vector: a malicious value can append `& del /f` or
-// chain another command. PAD's system-command actions should pass arguments as
-// discrete parameters, not concatenate them into one command string.
+// variables into the command line (System.RunDOSCommand with %var% args) — a
+// malicious value can append `& del /f` or chain another command. PAD's
+// system-command actions should pass arguments as discrete parameters.
 type CommandInjectionRiskRule struct{}
 
 func (r *CommandInjectionRiskRule) ID() string   { return "command-injection-risk" }
@@ -23,10 +22,9 @@ func (r *CommandInjectionRiskRule) Category() string                 { return "S
 
 // commandActionPrefixes — PAD actions that hand a string to an interpreter:
 // DOS/shell commands and the Scripting.* family (RunPowershellScript,
-// RunVBScript, RunPythonScript, RunJavascript). The scripting actions were
-// matched by NO security rule — arbitrary code execution from an interpolated
-// variable went unreported while a DOS command with the same variable was an
-// Error.
+// RunVBScript, RunPythonScript, RunJavascript) — previously matched by no
+// security rule, so arbitrary code execution from an interpolated variable
+// went unreported.
 var commandActionPrefixes = []string{
 	"system.rundoscommand",
 	"system.run",
@@ -46,11 +44,10 @@ func (r *CommandInjectionRiskRule) Check(block *models.Block, ctx *RuleContext) 
 	if !isCmd {
 		return nil
 	}
-	// A variable reference in the raw command line means caller data flows
-	// into the shell. PAD variable refs are %Name%; %% is a literal percent
-	// escape (not a variable), so match the same %VarName% pattern the
-	// SanitizeCommandVarsPatch fixer targets — otherwise '100%% complete' is a
-	// false-positive finding the fixer can't resolve.
+	// A variable reference in the raw command line means caller data flows into
+	// the shell. PAD refs are %Name%; %% is a literal percent escape, so match
+	// the same %VarName% pattern the SanitizeCommandVarsPatch fixer targets —
+	// otherwise '100%% complete' is a false positive the fixer can't resolve.
 	for _, val := range block.Properties {
 		if sqlVarRef.MatchString(val) {
 			return []models.Finding{{

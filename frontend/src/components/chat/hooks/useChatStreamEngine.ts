@@ -32,6 +32,41 @@ function providerErrorLine(info: ProviderErrorInfo, message: string): string {
   return i18n.t('chat:errors.providerBubble', {title: i18n.t(`chat:${info.titleKey}`), message})
 }
 
+// pendingCard primes an approval card from its wire payload; the flat fields
+// mirror items[0] for single-fix prompts. Used by the live event and the
+// resume journal replay alike.
+function pendingCard(p: FixProposalPayload): FixProposalCard {
+  const first = p.items[0]
+  return {
+    proposalId: p.proposalId,
+    status: 'pending',
+    items: p.items.map(it => ({...it, status: 'pending' as const})),
+    ruleId: first?.ruleId ?? '',
+    fixType: first?.fixType ?? '',
+    blockLabel: first?.blockLabel ?? '',
+    line: first?.line ?? 0,
+    summary: first?.summary ?? '',
+  }
+}
+
+// Only statuses the card and item types know are mapped through; an unknown
+// one still clears the card's buttons via 'error'.
+const CARD_STATUSES: readonly string[] = ['applying', 'applied', 'applied-unresolved', 'declined', 'timeout', 'error']
+const ITEM_STATUSES: readonly string[] = ['applied', 'applied-unresolved', 'error', 'already-resolved']
+const asCardStatus = (s: string): FixProposalCard['status'] =>
+  CARD_STATUSES.includes(s) ? (s as FixProposalCard['status']) : 'error'
+const asItemStatus = (s: string): FixProposalItem['status'] =>
+  ITEM_STATUSES.includes(s) ? (s as FixProposalItem['status']) : 'error'
+
+// applyDoneMeta pins a done's served model and billed rates onto a message —
+// the done commit and the billed-error bubble share the fields.
+function applyDoneMeta(msg: ChatMessage, meta: DoneMeta | undefined): void {
+  if (!meta) return
+  if (meta.servedModel) msg.servedModel = meta.servedModel
+  if (meta.inputCostPerM !== undefined) msg.inputCostPerM = meta.inputCostPerM
+  if (meta.outputCostPerM !== undefined) msg.outputCostPerM = meta.outputCostPerM
+}
+
 // StreamMeta is what produced a stream: the provider and model it was sent
 // with, and the model's friendly name then (an Azure AI Foundry entry's
 // display name — its "m/<id>" means nothing to a reader). Captured at send
@@ -60,7 +95,8 @@ function resumedTurn(thread: ChatThread, streamId: string): {meta: StreamMeta; m
 
 // What an accumulator is primed with: a stream's meta — none for a
 // re-attached stream with no record of its turn — and whether the server
-// owns the answer's stored copy (see resumeAfterReload).
+// owns the answer's stored copy: a turn sent without history (see send) or
+// re-attached without a record of it (see resumeAfterReload).
 type AccMeta = Partial<StreamMeta> & {serverOwned?: boolean}
 
 // StreamAcc is one in-flight stream's local accumulation state: the growing
@@ -190,13 +226,13 @@ export function useChatStreamEngine() {
       const acc = streamAccRef.current.get(streamId)
       if (!acc) return
       acc.text += text
-      // U1: answer text resuming after a tool phase clears the stale
+      // Answer text resuming after a tool phase clears the stale
       // "Using tool…" pulse — without this the last tool's label stayed lit
       // under the entire final answer.
       const slot = useChatStore.getState().streams[acc.threadId]
       const patch: Partial<import('@/stores/chatStore').StreamSlot> = {tokens: Math.ceil(acc.text.length / 4)}
       if (slot?.toolStatus != null) patch.toolStatus = null
-      // F-40: answer text on screen means no thinking indicator either — a
+      // Answer text on screen means no thinking indicator either — a
       // re-armed one (onToolResult) can never stick past the next chunk.
       if (slot?.isThinking) patch.isThinking = false
       if (!acc.first) {
@@ -345,8 +381,8 @@ export function useChatStreamEngine() {
   }, [])
 
   // bumpThreadTokens adds a finished turn's usage to the thread's badge
-  // totals. Shared by the done commit and the error path (F-15), so a
-  // BILLED failure — PROVIDER_OUTPUT_LIMIT after a 16k reasoning budget —
+  // totals. Shared by the done commit and the error path, so a BILLED
+  // failure — PROVIDER_OUTPUT_LIMIT after a 16k reasoning budget —
   // reaches the meter too. Reads the thread fresh: two streams on one
   // thread committing close together must not drop each other's tokens.
   const bumpThreadTokens = useCallback(
@@ -399,9 +435,7 @@ export function useChatStreamEngine() {
         tokensOut: opts.tokensOut,
         finishReason: opts.finishReason,
       }
-      if (opts.meta?.servedModel) msg.servedModel = opts.meta.servedModel
-      if (opts.meta?.inputCostPerM !== undefined) msg.inputCostPerM = opts.meta.inputCostPerM
-      if (opts.meta?.outputCostPerM !== undefined) msg.outputCostPerM = opts.meta.outputCostPerM
+      applyDoneMeta(msg, opts.meta)
       if (slot && slot.toolCalls.length > 0) {
         msg.toolCalls = slot.toolCalls.map(tc => ({...tc}))
       }
@@ -421,7 +455,7 @@ export function useChatStreamEngine() {
         }))
       }
       appendMessage(threadId, msg)
-      // Thread-tab badges (F10): this conversation was agentic — flag it once
+      // Thread-tab badges: this conversation was agentic — flag it once
       // tools ran or a fix landed; updateThread is idempotent per flag.
       if ((msg.toolCalls?.length ?? 0) > 0 || (msg.fixProposals?.length ?? 0) > 0) {
         updateThread(threadId, {
@@ -462,6 +496,10 @@ export function useChatStreamEngine() {
         !servedModelSeenRef.current.has(servedKey)
       ) {
         servedModelSeenRef.current.add(servedKey)
+        // The set lives for the whole session and threads are unbounded;
+        // past the cap it clears — the worst case is one extra listing
+        // refetch, exactly what the set exists to avoid per triple.
+        if (servedModelSeenRef.current.size > 500) servedModelSeenRef.current.clear()
         bumpProviderEpoch()
       }
     },
@@ -504,21 +542,19 @@ export function useChatStreamEngine() {
         ...(providerError && code ? {errorCode: code} : {}),
         ...(usage?.shared ? {errorShared: true} : {}),
       }
-      // A billed failure reports its usage (F-15): same fields as a done, on
+      // A billed failure reports its usage: same fields as a done, on
       // the bubble and in the thread totals. The error bubble itself is never
       // persisted — the thread totals are, which is what the meter reads.
       if (usage?.tokensIn != null) msg.tokensIn = usage.tokensIn
       if (usage?.tokensOut != null) msg.tokensOut = usage.tokensOut
-      if (usage?.meta?.servedModel) msg.servedModel = usage.meta.servedModel
-      if (usage?.meta?.inputCostPerM !== undefined) msg.inputCostPerM = usage.meta.inputCostPerM
-      if (usage?.meta?.outputCostPerM !== undefined) msg.outputCostPerM = usage.meta.outputCostPerM
-      // U3: a loop that fails at iteration 5 still ran 4 tools — keep the
+      applyDoneMeta(msg, usage?.meta)
+      // A loop that fails at iteration 5 still ran 4 tools — keep the
       // trail on the error bubble so the user sees what happened before the
       // failure (error messages are excluded from persistence by design).
       if (slot && slot.toolCalls.length > 0) {
         msg.toolCalls = slot.toolCalls.map(tc => ({...tc}))
       }
-      // Append unconditionally (F1.9): gating the error bubble on a doc
+      // Append unconditionally: gating the error bubble on a doc
       // being CURRENTLY loaded swallowed stream failures after the user
       // switched flows — their question appeared unanswered, silently.
       appendMessage(acc.threadId, msg)
@@ -580,22 +616,12 @@ export function useChatStreamEngine() {
   }, [])
 
   // onFixProposal shows an approval card (single or batch) on the stream's
-  // thread; the flat fields mirror items[0] for single-fix prompts.
+  // thread.
   const onFixProposal = useCallback(
     (proposal: FixProposalPayload, streamId: string) => {
       const acc = streamAccRef.current.get(streamId)
       if (!acc) return
-      const first = proposal.items[0]
-      setFixProposal(acc.threadId, {
-        proposalId: proposal.proposalId,
-        status: 'pending',
-        items: proposal.items.map(it => ({...it, status: 'pending' as const})),
-        ruleId: first?.ruleId ?? '',
-        fixType: first?.fixType ?? '',
-        blockLabel: first?.blockLabel ?? '',
-        line: first?.line ?? 0,
-        summary: first?.summary ?? '',
-      })
+      setFixProposal(acc.threadId, pendingCard(proposal))
     },
     [setFixProposal],
   )
@@ -614,20 +640,13 @@ export function useChatStreamEngine() {
     ) => {
       const acc = streamAccRef.current.get(streamId)
       if (!acc) return
-      // Only map statuses the card type knows; unknown statuses still clear
-      // the buttons via 'error'.
-      const known = ['applying', 'applied', 'applied-unresolved', 'declined', 'timeout', 'error'] as const
-      const cardStatus = (known as readonly string[]).includes(status) ? (status as FixProposalCard['status']) : 'error'
+      const cardStatus = asCardStatus(status)
       // Per-item outcome patches (batch decisions carry items[]). A
       // single-fix decision carries none — its one item mirrors the card, so
       // the card status propagates to the item.
-      const itemKnown = ['applied', 'applied-unresolved', 'error', 'already-resolved'] as const
       const itemFromWire = (rid: string, status: string, message?: string) => ({
         ruleId: rid,
-        patch: {
-          status: ((itemKnown as readonly string[]).includes(status) ? status : 'error') as FixProposalItem['status'],
-          message,
-        },
+        patch: {status: asItemStatus(status), message},
       })
       let itemPatches = (items ?? []).map(it => itemFromWire(it.ruleId, it.status, it.message))
       if (itemPatches.length === 0) {
@@ -661,7 +680,7 @@ export function useChatStreamEngine() {
   // lock immediately; the backend's fix_decision event is authoritative.
   const respondFixProposal = useCallback(
     (threadId: string, approved: boolean, proposalId?: string, excludedItemIndices?: number[]) => {
-      // View-only flows never dispatch an APPLY decision (F1.5): approval
+      // View-only flows never dispatch an APPLY decision: approval
       // writes source; declining is always allowed.
       if (approved && useFlowStore.getState().readOnly) return
       const slot = useChatStore.getState().streams[threadId]
@@ -695,34 +714,18 @@ export function useChatStreamEngine() {
         if (ev.kind === 'tool-result') {
           calls.push({name: ev.name, label: ev.label, ok: ev.ok, durationMs: ev.durationMs, summary: ev.summary})
         } else if (ev.kind === 'fix-proposal') {
-          const first = ev.items[0]
-          const card: FixProposalCard = {
-            proposalId: ev.proposalId,
-            status: 'pending',
-            items: ev.items.map(it => ({...it, status: 'pending' as const})),
-            ruleId: first?.ruleId ?? '',
-            fixType: first?.fixType ?? '',
-            blockLabel: first?.blockLabel ?? '',
-            line: first?.line ?? 0,
-            summary: first?.summary ?? '',
-          }
+          const card = pendingCard(ev)
           byId.set(card.proposalId, card)
           cards.push(card)
         } else if (ev.kind === 'fix-decision') {
           const card = byId.get(ev.proposalId)
           if (!card) continue
-          const known = ['applying', 'applied', 'applied-unresolved', 'declined', 'timeout', 'error'] as const
-          card.status = (known as readonly string[]).includes(ev.status)
-            ? (ev.status as FixProposalCard['status'])
-            : 'error'
+          card.status = asCardStatus(ev.status)
           card.message = ev.message
           for (const it of ev.items ?? []) {
             const target = card.items.find(x => x.ruleId === it.ruleId)
             if (target) {
-              const itemKnown = ['applied', 'applied-unresolved', 'error', 'already-resolved'] as const
-              target.status = (
-                (itemKnown as readonly string[]).includes(it.status) ? it.status : 'error'
-              ) as FixProposalItem['status']
+              target.status = asItemStatus(it.status)
               target.message = it.message
             }
           }
@@ -780,15 +783,14 @@ export function useChatStreamEngine() {
     (streamId: string, threadId: string, messageId: string) => {
       const acc = streamAccRef.current.get(streamId)
       if (acc) {
-        if (acc.raf !== null) cancelAnimationFrame(acc.raf)
-        streamAccRef.current.delete(streamId)
+        dropAcc(streamId)
         if (acc.text) {
           commitAssistantMessage({...acc, threadId}, messageId, acc.text, {finishReason: 'interrupted'})
         }
       }
       cancelStream(streamId)
     },
-    [commitAssistantMessage, cancelStream],
+    [commitAssistantMessage, cancelStream, dropAcc],
   )
 
   // send runs one turn on a thread: append the user message, open the
@@ -874,9 +876,7 @@ export function useChatStreamEngine() {
           role: 'assistant',
           content,
           timestamp: new Date().toISOString(),
-          provider: meta.provider,
-          model: meta.model,
-          ...(meta.modelLabel ? {modelLabel: meta.modelLabel} : {}),
+          ...messageModel(meta),
           finishReason: 'error',
           ...(errorCode ? {errorCode} : {}),
         })
@@ -901,8 +901,22 @@ export function useChatStreamEngine() {
 
       const myGen = bumpGen(threadId)
       const sid = uuid()
+      // The common teardown of a send that will not go (or stay) live: drop
+      // the accumulator, cancel any backend stream the create POST recorded,
+      // and free the slot only if it is still this send's.
+      const abortSend = () => {
+        dropAcc(sid)
+        cancelStream(sid)
+        endStreamIfOwn(threadId, sid)
+      }
       startStream(threadId, sid, msgId)
-      beginAcc(sid, threadId, meta)
+      // A turn sent without history is server-owned: the server stores the
+      // question as the stream starts and the finished answer — tool trail,
+      // fix outcomes, finish reason, usage and served model included — as
+      // it ends, so the save on done (a full-replace POST of the whole
+      // thread) is skipped. A turn that carried its history (resend, history
+      // off) owns persistence itself, as before.
+      beginAcc(sid, threadId, {...meta, serverOwned: req.messages === undefined})
       // Recorded with the thread (persisted) until the turn ends, so a reload
       // mid-turn re-attaches it labelled with the model it went to.
       updateThread(threadId, {inFlight: {streamId: sid, messageId: msgId, ...meta}})
@@ -914,9 +928,7 @@ export function useChatStreamEngine() {
           // engine was unmounted mid-registration — then do NOT create the stream.
           const registered = await registerStream(sid, /*begin*/ false)
           if (!registered || !isCurrentGen(threadId, myGen)) {
-            dropAcc(sid)
-            cancelStream(sid)
-            endStreamIfOwn(threadId, sid)
+            abortSend()
             return
           }
           // Create the stream with the client-generated ID. The backend stores it
@@ -925,19 +937,14 @@ export function useChatStreamEngine() {
           req.clientStreamId = sid
           const returnedId = await chatApi.streamChatMessage(req)
           if (!isCurrentGen(threadId, myGen)) {
-            // Cancelled while the create POST was in flight; tear down the stream
-            // the backend just recorded. The slot is ended only if it is still
-            // this send's — Stop already freed it, and a queued follow-up may
-            // own it by now.
-            dropAcc(sid)
-            cancelStream(sid)
-            endStreamIfOwn(threadId, sid)
+            // Cancelled while the create POST was in flight; tear down the
+            // stream the backend just recorded (abortSend frees the slot only
+            // if it is still this send's — a queued follow-up may own it).
+            abortSend()
             return
           }
           if (!returnedId) {
-            dropAcc(sid)
-            cancelStream(sid)
-            endStreamIfOwn(threadId, sid)
+            abortSend()
             appendErrorBubble(i18n.t('chat:errors.noStream'))
             return
           }
@@ -949,11 +956,9 @@ export function useChatStreamEngine() {
           // Classify by the envelope's machine-readable code first, falling back
           // to the message for older backends.
           const kind = classifyChatFailure(errMsg, e instanceof ApiError ? e.code : null)
-          // Tear down the SSE subscription we opened and cancel any backend stream
-          // that the create POST may have recorded before throwing.
-          dropAcc(sid)
-          cancelStream(sid)
-          endStreamIfOwn(threadId, sid)
+          // Tear down the SSE subscription we opened and cancel any backend
+          // stream that the create POST may have recorded before throwing.
+          abortSend()
           if (kind === 'capacity') {
             // The backend is at its per-caller cap — another tab or device, or
             // a Stop it had not processed when a queued follow-up drained.
@@ -1025,7 +1030,7 @@ export function useChatStreamEngine() {
   )
 
   // resumeAfterReload re-attaches a stream the server reports as still
-  // in-flight for a conversation the client just (re)loaded (F-21): a page
+  // in-flight for a conversation the client just (re)loaded: a page
   // reload, Tauri window reopen or crash mid-turn no longer loses the reply
   // — the server keeps the stream resumable and persists the finished turn.
   // Mirrors send(): slot + accumulator first, then the SSE subscription,

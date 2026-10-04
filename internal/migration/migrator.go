@@ -6,24 +6,15 @@
 //
 // # Failure model
 //
-// Migration is **best-effort and idempotent**, not transactional:
-//
-//   - Per-flow failures (validation errors, dst write errors) are collected
-//     into Result.Errors. They never abort the run; the migrator continues
-//     with the next flow so a single bad row doesn't strand thousands of
-//     good ones.
-//   - Result.FlowsMigrated / FlowsSkipped / FlowsFailed give the operator
-//     a precise tally. If Errors is non-empty the operator should inspect
-//     them, address the root cause, and re-run.
-//   - Re-runs are safe: migrateOneFlow skips any flow already present in
-//     the destination (matched by ID). A partially-completed migration is
-//     completed by simply running Migrate again.
-//   - A non-nil error from Migrate signals a *fatal* infrastructure
-//     failure (destination unreachable, list query failed) — not per-flow
-//     issues. The Result is still returned and may contain partial progress.
-//
-// There is intentionally no rollback. Reverting a partial cloud migration
-// would require knowing which flows the operator already touched
+// Migration is best-effort and idempotent, not transactional. Per-flow
+// failures (validation, dst write errors) are collected into Result.Errors and
+// never abort the run, so a single bad row doesn't strand thousands of good
+// ones; FlowsMigrated/FlowsSkipped/FlowsFailed give the operator a tally, and
+// re-runs are safe (migrateOneFlow skips flows already present by ID). A
+// non-nil error from Migrate signals a fatal infrastructure failure
+// (destination unreachable, list query failed); the Result may still hold
+// partial progress. There is intentionally no rollback: reverting a partial
+// migration would require knowing which flows the operator already touched
 // out-of-band and would conflict with the idempotent-rerun model.
 package migration
 
@@ -58,8 +49,8 @@ type Result struct {
 	// and were therefore assigned to the operator who ran the migration.
 	FlowsAdopted int
 	// NotMigrated lists the kinds of data the source directory can hold that
-	// this migrator does not copy. The status used to report counts for flows
-	// only, so a "completed" run read as a full upgrade.
+	// this migrator does not copy (the status used to report flow counts
+	// only, so a "completed" run read as a full upgrade).
 	NotMigrated []string
 	Errors      []MigrationError
 	Duration    time.Duration
@@ -79,17 +70,17 @@ type Migrator struct {
 	batchSize int
 	// perFlowTimeout bounds a single flow's load+save so one pathological flow
 	// (huge content, slow dst write) can't stall the whole run or the app's
-	// shutdown. Mirrors the scanner's perFlowScanTimeout.
+	// shutdown; mirrors the scanner's perFlowScanTimeout.
 	perFlowTimeout time.Duration
 	// convDir is the local-mode conversations directory (configDir/conversations).
 	// When non-empty, conversations are migrated alongside flows; empty disables.
 	convDir   string
 	validator *Validator
-	// defaultOwner adopts flows whose owner does not exist in the destination.
-	// Users are not migrated, so a legacy flow's owner_id names an account the
-	// new deployment does not have: the flow landed owned by nobody, invisible
-	// in every library and portfolio view, while the run still reported it as
-	// migrated. Empty keeps the source owner as-is.
+	// defaultOwner adopts flows whose owner does not exist in the destination
+	// (users are not migrated, so that is the common case): without adoption
+	// the flow is owned by nobody and invisible in every library and
+	// portfolio view while the run still reports it migrated. Empty keeps the
+	// source owner as-is.
 	defaultOwner string
 	// ownerKnown caches destination user lookups for the run.
 	ownerKnown map[string]bool
@@ -144,7 +135,7 @@ func (m *Migrator) WithDefaultOwner(userID string) *Migrator {
 }
 
 // Migrate runs the full migration: flows first, then settings, then
-// conversations (best-effort).  It returns a Result even on partial failure.
+// conversations (best-effort). It returns a Result even on partial failure.
 // notMigrated is what a legacy filesystem data directory can hold beyond the
 // flows, settings and conversations Migrate copies.
 var notMigrated = []string{
@@ -197,14 +188,19 @@ func (m *Migrator) migrateFlows(ctx context.Context, res *Result) error {
 	for {
 		batch, err := m.src.ListFlows(ctx, interfaces.FlowFilter{
 			AllFlows: true, // operational enumeration: copy every flow, unscoped
-			// Order by the immutable primary key, not the default
-			// updated_at DESC. This walk pages with LIMIT/OFFSET, and any
-			// ordering on a mutable column lets rows shift between pages —
-			// silently skipping flows while the run still reports success and
-			// no errors. That is data loss presented as a clean migration.
+			// Order by the immutable primary key, not the default updated_at
+			// DESC: this walk pages with LIMIT/OFFSET, and any ordering on a
+			// mutable column lets rows shift between pages — silently skipping
+			// flows while the run still reports success and no errors (data
+			// loss presented as a clean migration).
 			SortBy: interfaces.FlowSortIDAsc,
 			Limit:  m.batchSize,
 			Offset: offset,
+			// The listing only drives the walk (ids to copy); migrateOneFlow
+			// reloads each flow it actually copies. Without this every page
+			// hydrated every flow's content — including the ones a rerun then
+			// skipped as already migrated.
+			MetadataOnly: true,
 		})
 		if err != nil {
 			return fmt.Errorf("list flows (offset %d): %w", offset, err)
@@ -246,7 +242,15 @@ func (m *Migrator) migrateOneFlow(ctx context.Context, flow *interfaces.FlowDocu
 	flowCtx, cancel := context.WithTimeout(ctx, m.perFlowTimeout)
 	defer cancel()
 
-	// Reload from source to get the full content (ListFlows may omit body)
+	// Check if already present in destination to support idempotent reruns.
+	// The header is enough (a LoadFlow fetched the row AND downloaded the
+	// content blob), and it comes BEFORE the source load: a rerun used to
+	// hydrate every already-migrated flow from the source only to skip it.
+	if _, err := m.dst.LoadFlowHeader(flowCtx, flow.ID); err == nil {
+		return errSkipped
+	}
+
+	// Reload from source to get the full content (the listing is metadata-only)
 	full, err := m.src.LoadFlow(flowCtx, flow.ID)
 	if err != nil {
 		return fmt.Errorf("load from source: %w", err)
@@ -254,11 +258,6 @@ func (m *Migrator) migrateOneFlow(ctx context.Context, flow *interfaces.FlowDocu
 
 	if errs := m.validator.ValidateFlow(full); len(errs) > 0 {
 		return fmt.Errorf("validation: %s", errs[0])
-	}
-
-	// Check if already present in destination to support idempotent reruns
-	if _, err := m.dst.LoadFlow(flowCtx, full.ID); err == nil {
-		return errSkipped
 	}
 
 	if m.adoptOwner(flowCtx, full) {
@@ -301,9 +300,9 @@ func (m *Migrator) migrateSettings(ctx context.Context) error {
 	}
 	// H2: skip-if-present mirrors migrateOneFlow's idempotency. Without this
 	// check, a re-run after an admin tunes cloud-mode settings silently rolls
-	// them back to the (stale) local-mode values. We treat dst as "present"
-	// when it has any user-visible content — analysis rule overrides or
-	// recent files — so an empty fresh dst still gets seeded.
+	// them back to the stale local-mode values. dst counts as "present" when
+	// it has any user-visible content — analysis rule overrides or recent
+	// files — so an empty fresh dst still gets seeded.
 	if existing, err := m.dst.LoadSettings(ctx); err == nil && existing != nil {
 		if len(existing.Analysis.Rules) > 0 || len(existing.RecentFiles) > 0 {
 			logger.Info("migration: dst already has settings — skipping (clear dst to force overwrite)")
@@ -316,9 +315,9 @@ func (m *Migrator) migrateSettings(ctx context.Context) error {
 // migrateConversations walks the local-mode conversations directory and copies
 // each conversation file to the destination backend. Conversations are stored
 // per-provider per-flow as JSON files (see ChatService.convFilePath); the
-// migrator reads them directly from disk because they are not accessible via
-// the StorageBackend interface (there is no ListConversations). Best-effort:
-// per-file failures are recorded and never abort the run.
+// migrator reads them directly from disk because the StorageBackend interface
+// has no ListConversations. Best-effort: per-file failures are recorded and
+// never abort the run.
 func (m *Migrator) migrateConversations(ctx context.Context, res *Result) error {
 	if m.convDir == "" {
 		return nil
@@ -362,8 +361,8 @@ func (m *Migrator) migrateConversations(ctx context.Context, res *Result) error 
 	})
 	if walkErr != nil {
 		// Distinguish "walk was cancelled mid-sweep" (operator asked us to
-		// stop) from a genuine filesystem error. Previously the cancellation
-		// was silently swallowed (returned nil), hiding partial runs.
+		// stop) from a genuine filesystem error — the cancellation used to be
+		// silently swallowed, hiding partial runs.
 		if errors.Is(walkErr, ctx.Err()) {
 			logger.Warn("migration: conversations walk cancelled mid-sweep", "migrated", res.ConversationsMigrated, "failed", res.ConversationsFailed)
 			return ctx.Err()
@@ -375,9 +374,9 @@ func (m *Migrator) migrateConversations(ctx context.Context, res *Result) error 
 
 // migrateOneConversation reads, converts, and saves a single conversation file.
 // H3: skip-if-present — if dst already has messages for (flowID, scope) the
-// conversation is left untouched. Without this guard, re-running migration
-// clobbers any conversations the user has continued in cloud mode since the
-// first migration. Mirrors migrateOneFlow's idempotency contract.
+// conversation is left untouched, so re-running migration cannot clobber
+// conversations the user has continued in cloud mode since the first run.
+// Mirrors migrateOneFlow's idempotency contract.
 func (m *Migrator) migrateOneConversation(ctx context.Context, path string) error {
 	data, err := os.ReadFile(path) // #nosec G304 -- path from WalkDir over convDir, not user input
 	if err != nil {

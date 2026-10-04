@@ -1,11 +1,9 @@
 // Package redisx owns the optional Redis backplane client. The client is nil
 // when PAD_REDIS_URL is unset, in which case every consumer falls back to its
-// in-process implementation (single-replica). Setting the URL switches the
-// rate limiter, the WebSocket collaboration backplane (presence and block
-// selection fan-out across replicas, internal/websocket) and chat-stream resume
-// to a shared store so those subsystems are consistent across replicas. The
-// periodic scanner coordinates through a Postgres advisory lock instead, so it
-// needs no Redis.
+// in-process implementation (single-replica); setting the URL switches the
+// rate limiter, the WebSocket collaboration backplane and chat-stream resume
+// to a shared store consistent across replicas. The scanner coordinates
+// through a Postgres advisory lock instead, so it needs no Redis.
 package redisx
 
 import (
@@ -27,18 +25,9 @@ func Provide(lc fx.Lifecycle, cfg *config.Config) (*redis.Client, error) {
 	if cfg.Redis.URL == "" {
 		return nil, nil
 	}
-	opts, err := redis.ParseURL(cfg.Redis.URL)
+	opts, err := optionsFor(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("redis: parse PAD_REDIS_URL: %w", err)
-	}
-	// Apply pool overrides when configured (defaults: go-redis uses 10×GOMAXPROCS
-	// for PoolSize and 0 for MinIdleConns). Operators tune via PAD_REDIS_POOL_SIZE
-	// and PAD_REDIS_MIN_IDLE_CONNS.
-	if cfg.Redis.PoolSize > 0 {
-		opts.PoolSize = cfg.Redis.PoolSize
-	}
-	if cfg.Redis.MinIdleConns > 0 {
-		opts.MinIdleConns = cfg.Redis.MinIdleConns
+		return nil, err
 	}
 	client := redis.NewClient(opts)
 
@@ -59,6 +48,29 @@ func Provide(lc fx.Lifecycle, cfg *config.Config) (*redis.Client, error) {
 		},
 	})
 	return client, nil
+}
+
+// optionsFor builds the shared client's options: PAD_REDIS_URL plus the
+// optional pool overrides (defaults: 10×GOMAXPROCS PoolSize, 0 MinIdleConns;
+// tuned via PAD_REDIS_POOL_SIZE / PAD_REDIS_MIN_IDLE_CONNS).
+// ContextTimeoutEnabled is forced on so go-redis applies the caller's context
+// deadline inside its own command path — without it the rate limiter wraps
+// every command in a goroutine to apply the deadline
+// (internal/api/middleware/ratelimit.go, redisStore.run): one goroutine and
+// buffered channel per request, twice for writes.
+func optionsFor(cfg *config.Config) (*redis.Options, error) {
+	opts, err := redis.ParseURL(cfg.Redis.URL)
+	if err != nil {
+		return nil, fmt.Errorf("redis: parse PAD_REDIS_URL: %w", err)
+	}
+	if cfg.Redis.PoolSize > 0 {
+		opts.PoolSize = cfg.Redis.PoolSize
+	}
+	if cfg.Redis.MinIdleConns > 0 {
+		opts.MinIdleConns = cfg.Redis.MinIdleConns
+	}
+	opts.ContextTimeoutEnabled = true
+	return opts, nil
 }
 
 // Module wires the optional Redis client into the fx dependency graph.

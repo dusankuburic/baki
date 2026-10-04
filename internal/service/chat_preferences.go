@@ -12,24 +12,28 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// userSettingsLoader is the part of the storage backend that holds each user's
-// own preferences (cloud). The chat store interface does not include it, so it
-// is detected rather than required.
+// userSettingsLoader is the part of the storage backend that holds each user's own
+// preferences (cloud); the chat store interface does not include it, so it is detected
+// rather than required.
 type userSettingsLoader interface {
 	LoadUserSettings(ctx context.Context, userID string) (*storageif.AppSettings, error)
 }
 
-// callerPreferences returns the settings that carry the CALLING user's chat
-// preferences: custom instructions and whether conversation history is saved.
-//
-// Cloud saves preferences per user (Settings → UpdateUserSettings →
-// user_settings), but chat only ever read s.settings — the server's own
-// settings file — so in cloud mode a user's custom instructions and history
-// toggle never reached their chat. Desktop has one user and one store, which
-// is s.settings, and that is also the fallback when the user's row cannot be
-// read. Deployment-wide limits (daily budgets) deliberately keep reading
-// s.settings: a user must not be able to raise their own spend cap.
+// callerPreferences returns the settings that carry the CALLING user's chat preferences
+// (custom instructions, history toggle): the user's own row in cloud, s.settings on
+// desktop and when the row cannot be read. Deployment-wide limits (daily budgets)
+// deliberately keep reading s.settings: a user must not be able to raise their own spend
+// cap. Within a chat turn (withTurnMemo) the row is read once and shared by every reader.
 func (s *ChatService) callerPreferences(ctx context.Context) *models.AppSettings {
+	if memo := turnMemoFrom(ctx); memo != nil {
+		memo.prefsOnce.Do(func() { memo.prefs = s.loadCallerPreferences(ctx) })
+		return memo.prefs
+	}
+	return s.loadCallerPreferences(ctx)
+}
+
+// loadCallerPreferences is callerPreferences without the turn's memo.
+func (s *ChatService) loadCallerPreferences(ctx context.Context) *models.AppSettings {
 	if s.mode == config.ModeCloud && s.backend != nil {
 		if loader, ok := s.backend.(userSettingsLoader); ok {
 			if claims := auth.ClaimsFromContext(ctx); claims != nil && claims.UserID != "" {
@@ -50,17 +54,16 @@ func (s *ChatService) callerPreferences(ctx context.Context) *models.AppSettings
 	return nil
 }
 
-// conversationHistoryEnabled reports whether the caller's "Save conversation
-// history" preference allows persisting chat turns. Absent settings keep the
-// historical default (saved).
+// conversationHistoryEnabled reports whether the caller's "Save conversation history"
+// preference allows persisting chat turns; absent settings keep the historical default
+// (saved).
 func (s *ChatService) conversationHistoryEnabled(ctx context.Context) bool {
 	prefs := s.callerPreferences(ctx)
 	return prefs == nil || prefs.AI.SaveConversationHistory
 }
 
-// storageSettingsToModel bridges the storage settings type to the model type.
-// The two are kept field-for-field identical (same JSON tags), so the JSON
-// round trip is lossless.
+// storageSettingsToModel bridges the storage settings type to the model type; the two
+// are kept field-for-field identical (same JSON tags), so the JSON round trip is lossless.
 func storageSettingsToModel(in *storageif.AppSettings) (*models.AppSettings, bool) {
 	data, err := json.Marshal(in)
 	if err != nil {

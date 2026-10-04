@@ -87,9 +87,12 @@ func highEntropyBody(size int) []byte {
 	return body
 }
 
+// brotliEncode is the reference encode at a level, with the middleware's own
+// window (brotliWindowBits): the window changes the output bytes too, and the
+// comparison below is about the LEVEL.
 func brotliEncode(body []byte, level int) []byte {
 	var buf bytes.Buffer
-	w := brotli.NewWriterLevel(&buf, level)
+	w := brotli.NewWriterOptions(&buf, brotli.WriterOptions{Quality: level, LGWin: brotliWindowBits})
 	_, _ = w.Write(body)
 	_ = w.Close()
 	return buf.Bytes()

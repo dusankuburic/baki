@@ -250,7 +250,7 @@ func TestEmbeddingProviderIDs_MatchRegistry(t *testing.T) {
 	}
 }
 
-// TestAzureFoundry_EmbedDimensionsRefused422ModelInference pins F-06: the
+// TestAzureFoundry_EmbedDimensionsRefused422ModelInference: the
 // Model Inference layer answers a fixed-width non-OpenAI embedder's
 // `dimensions` with 422 parameter_not_supported (detail.loc naming the
 // parameter), which the one-shot repair must treat exactly like the 400.
@@ -311,12 +311,11 @@ func TestAzureFoundry_EmbedDimensionsRefused422ModelInference(t *testing.T) {
 	}
 }
 
-// TestForEmbeddingOrg_OrgWithoutEmbeddingDeployment (F-33): when the ORG's
-// shared document is the resolved credential and names no embedding
-// deployment, ForEmbeddingOrg raises the org sentinel (wrapping the plain
-// one so existing errors.Is checks hold) whose copy is aimed at the org
-// admin; the member's OWN chat-only document — and an org without a shared
-// credential — keep the plain sentinel for the fallback scan.
+// TestForEmbeddingOrg_OrgWithoutEmbeddingDeployment: when the ORG's shared
+// document is the resolved credential and names no embedding deployment,
+// ForEmbeddingOrg raises the org sentinel (wrapping the plain one) whose
+// copy is aimed at the org admin; the member's OWN chat-only document — and
+// an org without a shared credential — keep the plain sentinel.
 func TestForEmbeddingOrg_OrgWithoutEmbeddingDeployment(t *testing.T) {
 	ResetAzureFoundryCaches()
 	chatOnly := `{"endpoint":"https://my-res.openai.azure.com","auth":{"mode":"api_key","key":"k"},"chatDeployment":"gpt-4o"}`

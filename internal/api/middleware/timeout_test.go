@@ -127,6 +127,98 @@ func TestRequestTimeout_BulkKnowledgePathsGetLongDeadline(t *testing.T) {
 	}
 }
 
+// TestRequestTimeout_ClassifiesTheDispatchedPath: the deadline class follows
+// the path the router actually dispatches on (path.Clean, then the /api/v1
+// alias strip), not the raw request path. On the raw string GET
+// /api/v1/events — the SSE bus — got the 30 s default and the EventSource
+// reconnected every 30 s, and a non-canonical spelling of a stream or bulk
+// route got the short deadline although the router served it by the same
+// long-running handler.
+func TestRequestTimeout_ClassifiesTheDispatchedPath(t *testing.T) {
+	const def = 30 * time.Second
+	const none time.Duration = 0 // no deadline at all
+	cases := []struct {
+		path string
+		want time.Duration
+	}{
+		// The /api/v1 alias and non-canonical spellings.
+		{"/api/v1/events", none},
+		{"/api/events/", none},
+		{"/api//events", none},
+		{"/api/v1/chat/stream/", StreamRequestTimeout},
+		{"/api/chat/stream/", StreamRequestTimeout},
+		{"/api/v1/orgs/x/knowledge/upload", BulkRequestTimeout},
+		{"/api/v1/orgs/x/knowledge/./upload", BulkRequestTimeout},
+		{"/api/orgs/x/knowledge/reindex/", BulkRequestTimeout},
+		// Canonical paths are classified exactly as before.
+		{"/ws", none},
+		{"/api/events", none},
+		{"/api/chat/stream", StreamRequestTimeout},
+		{"/api/v1/chat/stream", StreamRequestTimeout},
+		{"/api/orgs/x/knowledge/upload", BulkRequestTimeout},
+		{"/api/orgs/x/knowledge/reindex", BulkRequestTimeout},
+		{"/api/something", def},
+		{"/api/v1/something", def},
+		{"/api/v1", def},
+		// "/api/v1" is an alias only as a whole segment.
+		{"/api/v1foo/events", def},
+		// Percent-escaped paths: chi routes on RawPath whenever it is set,
+		// and nothing cleans that — the first two reach versions/{vn} with
+		// the whole tail as vn, the pprof one /debug/pprof/*. Classified on
+		// the cleaned decoded path they all read /api/events or /ws and ran
+		// with no deadline at all; cleaning the escaped form instead would
+		// still collapse the literal dot segments of the last two.
+		{"/api/library/abc/versions/1%2F..%2F..%2F..%2F..%2F..%2Fapi%2Fevents", def},
+		{"/api/library/abc/versions/1%2F..%2F..%2F..%2F..%2F..%2Fws", def},
+		{"/api/library/%41/../../events", def},
+		{"/debug/pprof/%41/../../../ws", def},
+		// … and the raw form still carries a route's class.
+		{"/api/orgs/o%2Dx/knowledge/upload", BulkRequestTimeout},
+	}
+	for _, c := range cases {
+		t.Run(c.path, func(t *testing.T) {
+			var got time.Time
+			var has bool
+			h := RequestTimeout(def)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got, has = r.Context().Deadline()
+				w.WriteHeader(http.StatusOK)
+			}))
+			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, c.path, nil))
+			if c.want == none {
+				if has {
+					t.Fatalf("deadline %v from now; a long-lived session must have none", time.Until(got).Round(time.Second))
+				}
+				return
+			}
+			if !has {
+				t.Fatalf("no deadline; want ≈ %v", c.want)
+			}
+			if remaining := time.Until(got); remaining > c.want || remaining < c.want-10*time.Second {
+				t.Errorf("deadline %v from now; want ≈ %v", remaining.Round(time.Second), c.want)
+			}
+		})
+	}
+}
+
+// TestDispatchPath_MatchesTheRouter: dispatchPath names the path chi routes
+// on. The router strips the /api/v1 alias from RawPath as well (it cleans
+// only Path), and dispatchPath returned RawPath verbatim — no deadline class
+// differs today, the classifiers match suffixes, but a prefix-based one would
+// have disagreed with chi on every escaped /api/v1 request.
+func TestDispatchPath_MatchesTheRouter(t *testing.T) {
+	for target, want := range map[string]string{
+		"/api/v1/orgs/o%2Dx/knowledge/upload": "/api/orgs/o%2Dx/knowledge/upload",
+		"/api/orgs/o%2Dx/knowledge/upload":    "/api/orgs/o%2Dx/knowledge/upload",
+		"/api/v1/probe/a%2F..%2Fb":            "/api/probe/a%2F..%2Fb", // RawPath: never cleaned
+		"/api/v1foo/a%2Fb":                    "/api/v1foo/a%2Fb",      // not the alias
+		"/api/v1/./probe//x":                  "/api/probe/x",          // no RawPath: canonicalPath
+	} {
+		if got := dispatchPath(httptest.NewRequest(http.MethodGet, target, nil)); got != want {
+			t.Errorf("dispatchPath(%s) = %q, want %q", target, got, want)
+		}
+	}
+}
+
 func TestIsStreamingPath(t *testing.T) {
 	tests := []struct {
 		path     string

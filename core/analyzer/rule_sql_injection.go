@@ -53,11 +53,10 @@ func (r *SqlInjectionRiskRule) Check(block *models.Block, ctx *RuleContext) []mo
 		if len(matches) == 0 {
 			continue
 		}
-		// Taint grading: escalate to Error when ANY interpolated variable
-		// traces back to an untrusted source (an HTTP/Web request body, or a
-		// writer that built it by concatenation \u2014 i.e. attacker-influenced
-		// data flows into the SQL string). Otherwise stay at the rule's default
-		// Warning: the var may be internally sanitized.
+		// Taint grading: escalate to Error when ANY interpolated variable traces
+		// back to an untrusted source (an HTTP/Web request body, or a writer that
+		// built it by concatenation); otherwise stay at the default Warning —
+		// the var may be internally sanitized.
 		tainted := false
 		var taintedVar string
 		for _, m := range matches {
@@ -89,54 +88,85 @@ func (r *SqlInjectionRiskRule) Check(block *models.Block, ctx *RuleContext) []mo
 	return nil
 }
 
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
-// varTaintedByUntrusted reports whether the variable vn is written by a block
-// whose value derives from an external/untrusted source (an HTTP/Web request
-// body) or by a SET that references a variable already traced to an untrusted
-// source (one-hop propagation, conservative intraprocedural). Conservative:
-// only confirms a taint trail, never clears one (a var with no known writer is
-// treated as untainted, not safe).
+// varTaintedByUntrusted reports whether vn derives from an untrusted source
+// (HTTP/Web/FTP) or a SET chain referencing one — conservative: it only
+// confirms a taint trail, never clears one. O(1) lookup into ctx.TaintedVars
+// (computed once per analysis by buildTaintedVars); nil answers false, exactly
+// as the old walk did.
 func varTaintedByUntrusted(ctx *RuleContext, vn string) bool {
-	return varTaintedVisited(ctx, vn, map[string]bool{})
-}
-
-// varTaintedVisited is the recursive core of varTaintedByUntrusted. `visited`
-// breaks cycles in SET chains (SET A TO %B%, SET B TO %A%) so taint tracing
-// terminates. A SET that merely references another variable is only tainted if
-// that referenced variable is itself tainted — referencing an internal counter
-// (e.g. SET X TO %Counter% + 1) does NOT make X untrusted.
-func varTaintedVisited(ctx *RuleContext, vn string, visited map[string]bool) bool {
-	if ctx == nil || ctx.WritersByVar == nil || ctx.Flow == nil {
+	if ctx == nil || ctx.TaintedVars == nil {
 		return false
 	}
-	if visited[vn] {
-		return false // cycle guard
+	return ctx.TaintedVars[vn]
+}
+
+// isTaintSourceType reports whether a writer block of this raw type produces
+// a value sourced from an external request body (HTTP/Web/FTP).
+func isTaintSourceType(rawType string) bool {
+	rt := strings.ToLower(rawType)
+	return strings.HasPrefix(rt, "httpclient.") ||
+		strings.HasPrefix(rt, "webautomation.") ||
+		strings.HasPrefix(rt, "ftp.")
+}
+
+// buildTaintedVars computes the variables whose value traces to an untrusted
+// source, as a fixed point over ctx.WritersByVar: tainted if any writer is a
+// taint-source block (httpclient./webautomation./ftp.), or any writer has a
+// _value referencing (%ref%) a tainted variable — a SET carries taint forward
+// one hop, to any depth. Semantics match the former recursive walk: cycle-safe,
+// conservative, and referencing an internal counter (SET X TO %Counter% + 1)
+// does NOT taint X. Cost: one sqlVarRef pass per writer block (cached per
+// block ID) plus a linear propagation.
+func buildTaintedVars(ctx *RuleContext) map[string]bool {
+	tainted := make(map[string]bool)
+	if ctx == nil || ctx.WritersByVar == nil {
+		return tainted
 	}
-	visited[vn] = true
-	for _, wid := range ctx.WritersByVar[vn] {
-		w, ok := ctx.AllBlocks[wid]
-		if !ok {
-			continue
+	// dependents[R] lists the variables written by a block whose _value
+	// references %R%: when R turns out tainted, each of them is too.
+	dependents := make(map[string][]string)
+	refsByBlock := make(map[string][]string)
+	var queue []string
+	mark := func(vn string) {
+		if !tainted[vn] {
+			tainted[vn] = true
+			queue = append(queue, vn)
 		}
-		rt := strings.ToLower(w.RawType)
-		if strings.HasPrefix(rt, "httpclient.") ||
-			strings.HasPrefix(rt, "webautomation.") ||
-			strings.HasPrefix(rt, "ftp.") {
-			return true // value sourced from an external request body
-		}
-		// A SET that references another variable carries that variable's taint
-		// forward one hop — trace each referenced variable rather than treating
-		// any %ref% as tainted (which would flag internal counters as untrusted).
-		if val, ok := w.Properties["_value"]; ok {
-			for _, m := range sqlVarRef.FindAllStringSubmatch(val, -1) {
-				if varTaintedVisited(ctx, m[1], visited) {
-					return true
+	}
+	for vn, writers := range ctx.WritersByVar {
+		for _, wid := range writers {
+			w, ok := ctx.AllBlocks[wid]
+			if !ok {
+				continue
+			}
+			if isTaintSourceType(w.RawType) {
+				mark(vn) // value sourced from an external request body
+				continue
+			}
+			refs, seen := refsByBlock[wid]
+			if !seen {
+				if val, ok := w.Properties["_value"]; ok {
+					for _, m := range sqlVarRef.FindAllStringSubmatch(val, -1) {
+						refs = append(refs, m[1])
+					}
 				}
+				refsByBlock[wid] = refs
+			}
+			for _, r := range refs {
+				dependents[r] = append(dependents[r], vn)
 			}
 		}
 	}
-	return false
+	// Propagate: every variable reachable from a source through reference
+	// edges is tainted. Each variable is enqueued at most once.
+	for len(queue) > 0 {
+		vn := queue[0]
+		queue = queue[1:]
+		for _, d := range dependents[vn] {
+			mark(d)
+		}
+	}
+	return tainted
 }
 
 func init() { registerRule(&SqlInjectionRiskRule{}) }

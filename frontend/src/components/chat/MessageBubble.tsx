@@ -554,7 +554,7 @@ function MessageBubble({
         )}
 
       {isError && message.errorShared && (
-        // F-42: the failure came from the organisation's shared credential —
+        // The failure came from the organisation's shared credential —
         // the member cannot fix it under their own Accounts. For AUTH and
         // PERMISSION the server copy still offers adding personal
         // credentials, so the Accounts action above stays; for
@@ -576,7 +576,7 @@ function MessageBubble({
           // A still-pending card on an interrupted message is DEAD: stopping
           // the stream cancels the apply_fix tool call server-side, so the
           // decision can never resolve — say so instead of showing an
-          // ambiguous pending strip (U4.1).
+          // ambiguous pending strip.
           <FixOutcomeStrip
             key={snap.proposalId}
             snapshot={isInterrupted && snap.status === 'pending' ? {...snap, status: 'cancelled'} : snap}
@@ -596,7 +596,7 @@ function MessageBubble({
 
       {!isStreaming && (
         <div
-          // U1.6: actions reveal on hover AND on keyboard focus-within —
+          // Actions reveal on hover AND on keyboard focus-within —
           // hover-only opacity left keyboard users with invisible-but-
           // focusable buttons (the FindingsList pattern). Pure CSS off the
           // container's `group`: the old useState re-rendered a markdown-heavy

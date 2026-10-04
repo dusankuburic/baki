@@ -20,8 +20,7 @@ import (
 )
 
 // FlowNotifier broadcasts a flow-changed notification to connected WebSocket
-// clients after a library flow is saved. In local mode (no WebSocket hub)
-// the value is nil and the notification is skipped.
+// clients after a library flow is saved; nil in local mode (no hub).
 type FlowNotifier interface {
 	NotifyFlowChanged(flowID string, version int)
 }
@@ -37,9 +36,6 @@ func NewLibraryHandler(libSvc *service.LibraryService, backend storageif.Storage
 	return &LibraryHandler{libSvc: libSvc, security: security, backend: backend}
 }
 
-// handlePortfolio returns the org-wide governance portfolio: every flow the
-// caller can access (optionally filtered by ?orgId=), ordered by ?sort= and
-// trimmed to ?limit= entries. Rollup totals always cover every ranked flow.
 // @Summary      Flow portfolio view
 // @Description  handlePortfolio returns the org-wide governance portfolio: every flow the caller can access (optionally filtered by ?orgId=), ordered by ?sort= and trimmed to ?limit= entries. Rollup totals always cover every ranked flow.
 // @Tags         library
@@ -76,8 +72,8 @@ func (h *LibraryHandler) handlePortfolio(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, p)
 }
 
-// SetFlowNotifier wires the WebSocket hub so that library saves broadcast
-// a flow.changed event to all connected viewers.
+// SetFlowNotifier wires the WebSocket hub: library saves broadcast a
+// flow.changed event to connected viewers.
 func (h *LibraryHandler) SetFlowNotifier(n FlowNotifier) {
 	h.notifier = n
 }
@@ -97,10 +93,8 @@ type libraryFlow struct {
 	SubflowCount     int       `json:"subflowCount"`
 	UpdatedAt        time.Time `json:"updatedAt"`
 	Version          int       `json:"version"`
-	// Tags ride on both the list and the single GET: the detail panel shows
-	// them and the library's tag filter offers the tags it has seen. They were
-	// stored and filterable (?tags=) but never serialized here, so every
-	// reload showed "No tags".
+	// Tags ride on both the list and the GET: they were stored and filterable (?tags=) but
+	// never serialized, so every reload showed "No tags".
 	Tags []string `json:"tags,omitempty"`
 	// Health fields are populated only by the single-flow GET, not the list.
 	HealthScore  *int `json:"healthScore,omitempty"`
@@ -182,7 +176,7 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Tag ANY-of filter (R2-4): ?tags=critical,prod — empty element ignored.
+	// Tag ANY-of filter: ?tags=critical,prod — empty element ignored.
 	var tagFilter []string
 	if raw := q.Get("tags"); raw != "" {
 		for _, t := range strings.Split(raw, ",") {
@@ -192,11 +186,14 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	docs, err := h.libSvc.ListLibraryFlowsWithTagFilter(r.Context(), userID, orgID, scope, query, sort, limit, offset, tagFilter)
+	// One page call resolves the caller's org memberships once and reuses
+	// them for the list, total and per-flow permission flags.
+	page, err := h.libSvc.ListLibraryFlowsPage(r.Context(), userID, orgID, scope, query, sort, limit, offset, tagFilter)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
+	docs := page.Docs
 
 	// Resolve all owner display names in ONE backend round trip (avoids N+1).
 	ownerIDs := make([]string, 0, len(docs))
@@ -207,9 +204,9 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 	}
 	ownerNames := h.libSvc.ResolveOwnerNames(r.Context(), ownerIDs)
 
-	// Batch-resolve all per-flow permission flags in O(orgs + 1) queries
-	// instead of O(flows).
-	perms := h.libSvc.BatchFlowPermissions(r.Context(), docs, userID)
+	// Batch-resolve per-flow permission flags with the roles the page
+	// already loaded: zero role queries when the memberships are complete.
+	perms := h.libSvc.BatchFlowPermissionsWithRoles(r.Context(), docs, userID, page.Memberships)
 
 	items := make([]libraryFlow, len(docs))
 	for i, d := range docs {
@@ -217,14 +214,9 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 		items[i] = h.toLibraryFlowWithPerms(d, userID, ownerNames[d.OwnerID], p)
 	}
 
-	total, err := h.libSvc.CountLibraryFlowsWithTagFilter(r.Context(), userID, orgID, scope, query, tagFilter)
-	if err != nil {
-		render.Error(w, err, 0)
-		return
-	}
 	render.JSON(w, render.PagedResponse[libraryFlow]{
 		Items:  items,
-		Total:  total,
+		Total:  page.Total,
 		Offset: offset,
 		Limit:  limit,
 	})
@@ -291,16 +283,21 @@ func (h *LibraryHandler) handleLibraryCreate(w http.ResponseWriter, r *http.Requ
 func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
+	// The read check and the capability flags (toLibraryFlow) are two decisions about one flow:
+	// one role lookup and one collaborator read serve both (service.WithFlowAuthzMemo).
+	ctx := service.WithFlowAuthzMemo(r.Context())
 
-	doc, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
+	// Metadata only: the detail panel never renders the content, so this reads
+	// the header instead of the whole document.
+	doc, err := h.libSvc.GetLibraryFlowMetaForUser(ctx, id, userID)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	out := h.toLibraryFlow(r.Context(), doc, userID, h.libSvc.ResolveOwnerName(r.Context(), doc.OwnerID))
+	out := h.toLibraryFlow(ctx, doc, userID, h.libSvc.ResolveOwnerName(ctx, doc.OwnerID))
 	// Best-effort: a missing or failed health lookup just omits the fields —
 	// the detail view degrades to "not analyzed yet" rather than failing.
-	if health, herr := h.libSvc.FlowHealth(r.Context(), doc.ID); herr == nil && health != nil {
+	if health, herr := h.libSvc.FlowHealth(ctx, doc.ID); herr == nil && health != nil {
 		hs, e, wn := health.HealthScore, health.Errors, health.Warnings
 		out.HealthScore = &hs
 		out.ErrorCount = &e
@@ -322,20 +319,66 @@ func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request
 func (h *LibraryHandler) handleLibraryGetContent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
+	ctx := service.WithFlowAuthzMemo(r.Context())
 
-	doc, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
+	// Header first: the ETag is the flow's version, so a client holding current content gets a 304
+	// without the content read or its compression (brotli was two thirds of CPU under a 40-user read
+	// mix). Authorization still happens before the cached body is confirmed; one (flow, version)'s
+	// content is the same for every reader.
+	meta, err := h.libSvc.GetLibraryFlowMetaForUser(ctx, id, userID)
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-cache")
+	if etag := flowContentETag(meta); etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.Header().Set("ETag", etag)
+		w.Header().Set("X-Flow-Version", strconv.Itoa(meta.Version))
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	doc, err := h.libSvc.GetLibraryFlowForUser(ctx, id, userID)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	// Tag the body actually sent (a save between the two reads bumps the
+	// version; the newer body must not travel under the older tag).
+	w.Header().Set("ETag", flowContentETag(doc))
 	w.Header().Set("X-Flow-Version", strconv.Itoa(doc.Version))
 	payload := doc.Content
 	if len(payload) == 0 {
 		payload = []byte("null")
 	}
 	_, _ = w.Write(payload)
+}
+
+// flowContentETag is the strong validator of a flow's content: the version bumps on every save,
+// and the content of one (flow, version) never changes (the document cache relies on this too).
+func flowContentETag(doc *storageif.FlowDocument) string {
+	return `"` + doc.ID + "-v" + strconv.Itoa(doc.Version) + `"`
+}
+
+// etagMatches reports whether an If-None-Match header names etag: a list of quoted tags (weak
+// prefixes ignored — the content is byte-identical for a given version) or "*".
+func etagMatches(ifNoneMatch, etag string) bool {
+	if ifNoneMatch == "" {
+		return false
+	}
+	for _, part := range strings.Split(ifNoneMatch, ",") {
+		part = strings.TrimSpace(part)
+		if part == "*" {
+			return true
+		}
+		part = strings.TrimPrefix(part, "W/")
+		if part == etag {
+			return true
+		}
+	}
+	return false
 }
 
 // @Summary      Delete library flow
@@ -376,10 +419,14 @@ func (h *LibraryHandler) handleLibraryDelete(w http.ResponseWriter, r *http.Requ
 func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
+	// Three decisions about one flow (read gate, write gate, capability flags) would issue the
+	// role lookup and collaborator read three times each; the memo makes them one of each.
+	ctx := service.WithFlowAuthzMemo(r.Context())
 
-	// Read-gate before the write-gate inside UpdateLibraryFlow: callers without
-	// read access get a 403 without learning the flow's name/description.
-	existing, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
+	// Read-gate before the write-gate: callers without read access get a 403 without learning the
+	// flow's name. A full load, not the header — a header would blank the content of a name-only
+	// update since SaveFlow rewrites every column.
+	existing, err := h.libSvc.GetLibraryFlowForUser(ctx, id, userID)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -404,31 +451,26 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 	if len(req.Content) > 0 {
 		existing.Content = req.Content
 	}
-	// OCC: in cloud mode, if the flow already has a version (existing.Version > 0
-	// from the DB load), the client MUST send the version they loaded. version=0
-	// on an existing flow means the client is bypassing OCC and could silently
-	// overwrite another user's changes.
+	// OCC: in cloud mode the client MUST send the version they loaded; version=0 on an existing
+	// flow bypasses OCC and could silently overwrite another user's changes.
 	if h.security.JWTEnabled && existing.Version > 0 && req.Version == 0 {
 		render.Error(w, fmt.Errorf("version is required for updates — reload the flow and try again"), http.StatusConflict)
 		return
 	}
 	existing.Version = req.Version
 
-	if err := h.libSvc.UpdateLibraryFlow(r.Context(), existing, userID); err != nil {
+	if err := h.libSvc.UpdateLibraryFlow(ctx, existing, userID); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
 	if h.notifier != nil {
 		h.notifier.NotifyFlowChanged(existing.ID, existing.Version)
 	}
-	render.JSON(w, h.toLibraryFlow(r.Context(), existing, userID, h.libSvc.ResolveOwnerName(r.Context(), existing.OwnerID)))
+	render.JSON(w, h.toLibraryFlow(ctx, existing, userID, h.libSvc.ResolveOwnerName(ctx, existing.OwnerID)))
 }
 
-// flowVersionView is the wire shape of a stored version. The storage struct is
-// not tagged on purpose — its nested FlowMetadata keys are read by SQL
-// (metadata->>'BlockCount') — so the camelCase the history panel reads is built
-// here. Before this, the panel received Version/Comment/CreatedAt and rendered
-// "v undefined", "No comment" and an invalid date for every snapshot.
+// flowVersionView is the wire shape of a stored version; the storage struct is deliberately
+// untagged (its nested FlowMetadata keys are read by SQL), so the camelCase is built here.
 type flowVersionView struct {
 	ID        string              `json:"id"`
 	FlowID    string              `json:"flowId"`
@@ -465,7 +507,6 @@ func toFlowVersionViews(vs []*storageif.FlowVersion) []flowVersionView {
 	return out
 }
 
-// handleListFlowVersions returns the version history for a library flow.
 // @Summary      List flow versions
 // @Description  handleListFlowVersions returns the version history for a library flow.
 // @Tags         library
@@ -499,7 +540,6 @@ func (h *LibraryHandler) handleListFlowVersions(w http.ResponseWriter, r *http.R
 	render.JSON(w, toFlowVersionViews(versions))
 }
 
-// handleSaveFlowVersion snapshots the current flow content as a new version.
 // @Summary      Snapshot a flow version
 // @Description  handleSaveFlowVersion snapshots the current flow content as a new version.
 // @Tags         library
@@ -541,8 +581,8 @@ func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// The backend assigns v.Version atomically (Postgres: FOR UPDATE + MAX+1),
-	// so it is not pre-computed here — a read-then-write would just race.
+	// The backend assigns v.Version atomically (Postgres: FOR UPDATE + MAX+1);
+	// a read-then-write here would just race.
 	v := &storageif.FlowVersion{
 		ID:        uuid.NewString(),
 		FlowID:    id,
@@ -560,7 +600,6 @@ func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Re
 	render.JSONStatus(w, http.StatusCreated, toFlowVersionView(v))
 }
 
-// handleGetFlowVersion loads a specific historical version.
 // @Summary      Get a flow version
 // @Description  handleGetFlowVersion loads a specific historical version.
 // @Tags         library
@@ -598,10 +637,8 @@ func (h *LibraryHandler) handleGetFlowVersion(w http.ResponseWriter, r *http.Req
 	render.JSON(w, v)
 }
 
-// handleRestoreFlowVersion reverts the current flow's content to a historical
-// version's content. The historical content is written as a new current
-// version (SaveFlow bumps the version atomically), so the restore is itself
-// recoverable via the version history. Requires editor access.
+// handleRestoreFlowVersion reverts the flow to a historical version's content,
+// written as a NEW current version — so the restore is itself recoverable.
 // @Summary      Restore a flow version
 // @Description  handleRestoreFlowVersion reverts the current flow's content to a historical version's content. The historical content is written as a new current version (SaveFlow bumps the version atomically), so the restore is itself recoverable via the version history. Requires editor access.
 // @Tags         library
@@ -647,9 +684,8 @@ func (h *LibraryHandler) handleRestoreFlowVersion(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Overwrite the current content with the historical content. SaveFlow's OCC
-	// guards against a concurrent edit; UpdateLibraryFlow re-checks editor
-	// access and invalidates the cached search index.
+	// SaveFlow's OCC guards against a concurrent edit; UpdateLibraryFlow
+	// re-checks editor access and invalidates the cached search index.
 	doc.Content = historical.Content
 	if err := h.libSvc.UpdateLibraryFlow(r.Context(), doc, userID); err != nil {
 		render.Error(w, err, 0)
@@ -660,8 +696,7 @@ func (h *LibraryHandler) handleRestoreFlowVersion(w http.ResponseWriter, r *http
 }
 
 // handleDiffFlowVersion returns the structural diff between a historical
-// version and the current flow content. Read-only (viewer access). Uses
-// parser.DiffFlows on the two unmarshaled FlowDocuments.
+// version and the current flow (parser.DiffFlows, viewer access).
 // @Summary      Diff version vs. current
 // @Description  handleDiffFlowVersion returns the structural diff between a historical version and the current flow content. Read-only (viewer access). Uses parser.DiffFlows on the two unmarshaled FlowDocuments.
 // @Tags         library
@@ -708,8 +743,7 @@ func (h *LibraryHandler) handleDiffFlowVersion(w http.ResponseWriter, r *http.Re
 		render.Error(w, fmt.Errorf("parse current flow: %w", err), http.StatusInternalServerError)
 		return
 	}
-	// DiffFlows(old, new): old = historical, new = current, so + = added since
-	// the snapshot, - = removed since the snapshot.
+	// DiffFlows(old, new): + = added since the snapshot, - = removed since it.
 	render.JSON(w, parser.DiffFlows(oldDoc, newDoc))
 }
 

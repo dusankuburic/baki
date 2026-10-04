@@ -43,12 +43,10 @@ func IsAPIToken(token string) bool {
 //
 // A PAT minted WITHOUT scopes is "unscoped" — full access as the issuing user
 // (backward compatible with every existing token). A PAT minted WITH scopes is
-// capability-restricted: RouteAllowed maps (method, path) → the one scope the
-// request needs, and any route that would need a capability the token lacks is
-// rejected with 403 at the auth middleware, before any handler runs.
-//
-// The point: a CI token should never be able to delete flows, read chat
-// history, or change admin settings — today every PAT is the full user.
+// capability-restricted: any route needing a capability the token lacks is
+// rejected with 403 at the auth middleware, before any handler runs. A CI
+// token should never be able to delete flows, read chat history, or change
+// admin settings.
 
 // Token scopes. The set is intentionally small; each is a broad capability,
 // not a per-route permission.

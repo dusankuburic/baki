@@ -48,11 +48,20 @@ param minReplicas int = 1
 @description('Maximum replica count. Keep 1 until internal/api/events.go has a cross-replica backplane.')
 param maxReplicas int = 1
 
-@description('CPU cores per replica (ACA minimum is 0.25).')
-param cpu string = '0.5'
+// cpu/memory must be one of ACA's allowed pairs (Consumption: 0.25/0.5Gi,
+// 0.5/1.0Gi, 0.75/1.5Gi, 1.0/2.0Gi, 1.25/2.5Gi, ... 4.0/8.0Gi — memory is
+// always 2 x cpu in Gi). Not 0.5/1.0Gi: Go 1.25 floors GOMAXPROCS at 2 even
+// when the CPU quota is below that, so with half a core every CPU-bound
+// request (analysis, PDF export, brotli) ran two runtime threads against a
+// quota that allowed one and was CFS-throttled for the rest of each 100 ms
+// period. 1.0 is the smallest allowed value that does not leave the runtime
+// permanently over its quota. GOMEMLIMIT below is derived from `memory`, so
+// changing the pair keeps the GC limit consistent automatically.
+@description('CPU cores per replica (ACA minimum is 0.25; must pair with memory, see the comment above).')
+param cpu string = '1.0'
 
-@description('Memory per replica.')
-param memory string = '1.0Gi'
+@description('Memory per replica (must pair with cpu, see the comment above).')
+param memory string = '2.0Gi'
 
 // ── Secrets ────────────────────────────────────────────────────────────────
 
@@ -463,6 +472,16 @@ var secrets = concat(
 
 var ingressFqdn = '${appName}.${env.properties.defaultDomain}'
 
+// GOMEMLIMIT: ~80% of the replica's memory (the memory param, '<n>[.<d>]Gi'
+// as ACA takes it), the rest left for non-heap memory (goroutine stacks, the
+// runtime, the binary). Without it the GC paces by GOGC alone and ignores the
+// container limit, so a burst of large uploads can grow the heap past it and
+// get the replica OOM-killed. Keep it tied to `memory`, not a literal.
+// last() rather than [1]: '1Gi' has no fractional part.
+var memoryParts = split(replace(memory, 'Gi', ''), '.')
+var memoryMiB = int(memoryParts[0]) * 1024 + (length(memoryParts) > 1 ? int(take(last(memoryParts), 1)) * 1024 / 10 : 0)
+var goMemLimit = '${memoryMiB * 8 / 10}MiB'
+
 var coreEnv = [
   { name: 'PAD_MODE', value: 'cloud' }
   { name: 'PAD_HOST', value: '0.0.0.0' }
@@ -477,6 +496,7 @@ var coreEnv = [
   { name: 'PAD_APP_BASE_URL', value: !empty(appBaseUrl) ? appBaseUrl : 'https://${ingressFqdn}' }
   { name: 'PAD_FEATURE_DISABLE_SIGNUP', value: string(disableSignUp) }
   { name: 'PAD_AUDIT_SPILL_DIR', value: auditSpillDir }
+  { name: 'GOMEMLIMIT', value: goMemLimit }
   // Tells DefaultAzureCredential which user-assigned identity to use, for both
   // blob and (if ever enabled) Postgres Entra auth.
   { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }

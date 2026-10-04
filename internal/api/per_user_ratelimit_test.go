@@ -71,6 +71,28 @@ func TestPerUserKey_UnauthedWriteFallsBackToIP(t *testing.T) {
 	}
 }
 
+// The anonymous-write fallback is keyed like the per-IP limiters
+// (middleware.RateLimitAddr): an IPv6 client by its /64 — one host holds a
+// whole /64, and per-address keys let it rotate addresses for a fresh bucket
+// on every write — while IPv4 clients stay per-address.
+func TestPerUserKey_UnauthedWriteGroupsIPv6By64(t *testing.T) {
+	rt := newPerUserTestRouter()
+	keyFrom := func(remote string) string {
+		r := req(http.MethodPost, "/api/auth/login")
+		r.RemoteAddr = remote
+		return rt.perUserKey(r)
+	}
+	if a, b := keyFrom("[2001:db8:1:2::1]:4000"), keyFrom("[2001:db8:1:2:ffff:ffff:ffff:9]:4001"); a != b {
+		t.Errorf("two addresses of one /64 got different buckets: %q vs %q", a, b)
+	}
+	if a, b := keyFrom("[2001:db8:1:2::1]:4000"), keyFrom("[2001:db8:1:3::1]:4000"); a == b {
+		t.Errorf("different /64s share bucket %q", a)
+	}
+	if a, b := keyFrom("203.0.113.7:4000"), keyFrom("203.0.113.8:4000"); a == b {
+		t.Errorf("different IPv4 clients share bucket %q", a)
+	}
+}
+
 // nil claims with empty userID must not key on "" (which would share one bucket
 // across all such requests) — it must take the per-IP branch.
 func TestPerUserKey_NilClaimsTakesIPBranch(t *testing.T) {

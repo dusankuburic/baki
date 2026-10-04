@@ -10,11 +10,9 @@ import (
 	"pad-core/models"
 )
 
-// ReportToJUnit serializes an analysis report as JUnit XML — the de-facto CI
-// format consumed by Jenkins, GitLab CI, GitHub Actions, etc. Each finding
-// becomes a <testcase>; error and warning findings carry a <failure> child
-// while info findings appear as passing testcases (noted via <system-out>).
-// doc may be nil; when provided, its name populates the testsuite name.
+// ReportToJUnit serializes an analysis report as JUnit XML: each finding a
+// <testcase>; error/warning findings carry a <failure>, info findings are
+// passing testcases noted via <system-out>. doc may be nil.
 func ReportToJUnit(report *models.AnalysisReport, doc *models.FlowDocument) ([]byte, error) {
 	return ReportToJUnitWithOptions(report, doc, Options{})
 }
@@ -58,10 +56,9 @@ func ReportToJUnitWithOptions(report *models.AnalysisReport, doc *models.FlowDoc
 				Content: body,
 			}
 		} else {
-			// Info findings are passing testcases. The doc comment above
-			// promised their body in <system-out>; the struct had no such
-			// field, so 12 of 31 testcases on a sample flow rendered with no
-			// body at all — a name, and nothing to act on.
+			// Info findings are passing testcases; the doc comment promised their
+			// body in <system-out>, but the struct had no such field, so 12 of 31
+			// testcases on a sample flow rendered with no body at all.
 			tc.SystemOut = &junitText{Content: body}
 		}
 		cases = append(cases, tc)
@@ -84,7 +81,7 @@ func ReportToJUnitWithOptions(report *models.AnalysisReport, doc *models.FlowDoc
 	}
 
 	// Encode straight into a bytes.Buffer: the previous strings.Builder →
-	// []byte(buf.String()) conversion copied the entire rendered document a
+	// []byte(buf.String()) conversion copied the whole rendered document a
 	// second time (an extra multi-MB allocation at peak for 10k-finding reports).
 	var buf bytes.Buffer
 	buf.WriteString(xml.Header)
@@ -95,12 +92,9 @@ func ReportToJUnitWithOptions(report *models.AnalysisReport, doc *models.FlowDoc
 	return buf.Bytes(), nil
 }
 
-// junitCaseName returns "[rule] title @id", unique per finding. It used to be
-// "[rule] title" alone, so N findings of one rule collapsed into ONE test in
-// Jenkins/GitLab (they key on classname+name) that flapped between pass and
-// fail as findings came and went. The fingerprint is the stable, content-
-// derived identity baselines use, so the same finding keeps the same test name
-// across runs; the block ID is the fallback for findings built without one.
+// junitCaseName returns "[rule] title @id", unique per finding — "[rule]
+// title" alone collapsed N findings of one rule into ONE flapping test in
+// Jenkins/GitLab; the fingerprint is the stable identity, BlockID the fallback.
 func junitCaseName(f models.Finding) string {
 	id := f.Fingerprint
 	if id == "" {
@@ -114,8 +108,6 @@ func junitCaseName(f models.Finding) string {
 	}
 	return fmt.Sprintf("[%s] %s @%s", f.RuleID, f.Title, id)
 }
-
-// JUnit XML types (using xml names to match the standard format).
 
 type junitRoot struct {
 	XMLName xml.Name         `xml:"testsuites"`

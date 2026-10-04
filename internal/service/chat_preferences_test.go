@@ -44,14 +44,14 @@ func TestSaveConversation_CloudHonoursEachUsersHistoryToggle(t *testing.T) {
 	svc := &ChatService{backend: backend, mode: config.ModeCloud, configDir: t.TempDir()}
 	msgs := []models.ChatMessage{{ID: "1", Role: "user", Content: "hello"}}
 
-	if err := svc.SaveConversation(asUser("alice"), &models.FlowDocument{ID: "flow-a"}, "thread-1", msgs); err != nil {
+	if err := svc.SaveConversation(asUser("alice"), (&models.FlowDocument{ID: "flow-a"}).ID, "thread-1", msgs); err != nil {
 		t.Fatalf("SaveConversation alice: %v", err)
 	}
 	if got, _ := backend.LoadConversation(context.Background(), "flow-a", "thread-1"); len(got) != 0 {
 		t.Errorf("history off: the turn must not be stored, got %d message(s)", len(got))
 	}
 
-	if err := svc.SaveConversation(asUser("bob"), &models.FlowDocument{ID: "flow-b"}, "thread-1", msgs); err != nil {
+	if err := svc.SaveConversation(asUser("bob"), (&models.FlowDocument{ID: "flow-b"}).ID, "thread-1", msgs); err != nil {
 		t.Fatalf("SaveConversation bob: %v", err)
 	}
 	if got, _ := backend.LoadConversation(context.Background(), "flow-b", "thread-1"); len(got) != 1 {
@@ -66,10 +66,10 @@ func TestSaveConversation_DesktopHonoursHistoryToggle(t *testing.T) {
 	svc := &ChatService{settings: off, mode: config.ModeLocal, configDir: t.TempDir()}
 	doc := &models.FlowDocument{ID: "flow-1"}
 
-	if err := svc.SaveConversation(context.Background(), doc, "thread-1", []models.ChatMessage{{ID: "1", Role: "user", Content: "hi"}}); err != nil {
+	if err := svc.SaveConversation(context.Background(), doc.ID, "thread-1", []models.ChatMessage{{ID: "1", Role: "user", Content: "hi"}}); err != nil {
 		t.Fatalf("SaveConversation: %v", err)
 	}
-	got, err := svc.GetConversation(context.Background(), doc, "thread-1")
+	got, err := svc.GetConversation(context.Background(), doc.ID, "thread-1")
 	if err != nil {
 		t.Fatalf("GetConversation: %v", err)
 	}

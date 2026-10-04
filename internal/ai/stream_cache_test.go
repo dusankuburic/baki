@@ -8,9 +8,9 @@ import (
 // TestClaudeSSE_CacheTokensCounted pins R1: Claude's input_tokens EXCLUDES
 // cache reads/writes, which are billed separately — not folding them in made
 // prompt-cached conversations (the norm on long tool loops) silently bypass
-// the daily budget on the cached slice. Since audit #9 F-05 the breakdown
-// also rides the usage chunks (CacheRead/WriteTokens, included in TokensIn)
-// so the audited wrapper prices the slice at the cached rates.
+// the daily budget on the cached slice. The breakdown also rides the usage
+// chunks (CacheRead/WriteTokens, included in TokensIn) so the audited
+// wrapper prices the slice at the cached rates.
 func TestClaudeSSE_CacheTokensCounted(t *testing.T) {
 	sse := strings.Join([]string{
 		`event: message_start`,
@@ -51,9 +51,9 @@ func TestClaudeSSE_CacheTokensCounted(t *testing.T) {
 	}
 }
 
-// A7: the streaming parser caps cached_tokens at prompt_tokens, as chat()
-// does — the breakdown is a slice of the total, and an upstream reporting
-// more cached tokens than prompt tokens must not price tokens never sent.
+// The streaming parser caps cached_tokens at prompt_tokens, as chat() does
+// — the breakdown is a slice of the total, and an upstream reporting more
+// cached tokens than prompt tokens must not price tokens never sent.
 func TestParseOpenAISSE_CachedTokensCappedAtPromptTokens(t *testing.T) {
 	sse := strings.Join([]string{
 		`data: {"model":"gpt-4o","choices":[{"delta":{"content":"hi"},"finish_reason":null}]}`,

@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// --- Email channel ---
-
 // EmailNotifier renders an event as a transactional email and sends it to a
 // configured recipient (typically an ops alias or team mailing list). It depends
 // only on the EmailSender interface, so the notify package stays decoupled from
@@ -102,8 +100,6 @@ func htmlEscape(s string) string {
 	s = strings.ReplaceAll(s, `"`, "&#34;")
 	return s
 }
-
-// --- Jira channel ---
 
 // JiraNotifier creates a Jira issue (REST API v3) for each event. Auth is HTTP
 // Basic with an API token (the standard Jira Cloud automation credential). The

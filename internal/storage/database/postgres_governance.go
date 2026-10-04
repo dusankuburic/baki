@@ -10,45 +10,20 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// Postgres governance-alerts implementation. See migration v12
-// (governanceAlertsSQL) for the table + RLS policy. RLS inherits the parent
-// flow's visibility, so a user calling through the API (RLS-scoped via the
-// middleware tx or queryRLS) sees alerts only for flows they can see; the
-// scanner writes with a system context (no app.current_user_id → RLS bypassed
-// via the `NOT app_rls_active()` arm).
+// Postgres governance-alerts implementation (table + RLS policy: migration v12).
+// RLS inherits the parent flow's visibility; the scanner writes with a system
+// context (the NOT app_rls_active() arm).
 
-// govAlertListDefaultLimit is the cap when a caller omits a limit, matching the
-// dashboard/list conventions (enough to populate the bell panel without an
-// unbounded query).
+// govAlertListDefaultLimit caps a caller-omitted limit (bell panel sized,
+// no unbounded query).
 const govAlertListDefaultLimit = 50
 
-// govAlertVisible returns a SQL predicate restricting gov_alerts rows to those
-// whose parent flow userID can see — owner, explicit collaborator, or member of
-// the flow's org — plus the single bind arg it needs. It returns an empty clause
-// for an empty userID: that is local/desktop mode, which has no claims and is
-// single-tenant by construction.
-//
-// It is a deliberate, line-for-line mirror of the rls_gov_alerts_visible policy
-// in migration v12 (see postgres_migrations.go). THE TWO MUST STAY IN SYNC.
-//
-// Why duplicate the policy in Go at all: the alert endpoints do no authz of
-// their own — the handlers pass CallerID straight to these methods — so this
-// clause IS the application-layer tenant boundary. Postgres RLS enforces the
-// same rule, but only when the app connects as a role without BYPASSRLS; a
-// superuser DSN (the docker-compose default until recently) turns RLS off
-// entirely and leaves nothing behind it.
-//
-// The scoping used to be `target_user_id = ” OR target_user_id = $n` alone.
-// `target_user_id = ”` means "team-wide", which is true of every team-wide
-// alert in the deployment regardless of org — so with RLS off, one call to
-// MarkAllGovernanceAlertsRead cleared every org's badge and one call to
-// ClearGovernanceAlerts DELETED every org's dismissed alerts, with no
-// identifier needed. That clause is still applied below: it correctly narrows
-// personal (assignment/comment) alerts to their target. It was just never a
-// tenant boundary.
-//
-// gov_alerts.flow_id is NOT NULL and REFERENCES flows(id) ON DELETE CASCADE, so
-// this EXISTS can never strand a row whose flow has gone away.
+// govAlertVisible restricts gov_alerts rows to those whose parent flow userID can see (owner,
+// collaborator, or org member) plus its bind arg; empty clause for an empty userID (local mode).
+// It mirrors rls_gov_alerts_visible in migration v12 line for line — THE TWO MUST STAY IN SYNC — and IS the
+// application-layer tenant boundary: the handlers do no authz of their own, and RLS is inert under a
+// BYPASSRLS role. The old target_user_id-only scoping was never a boundary — with RLS off one
+// MarkAllGovernanceAlertsRead cleared every org's badge; that clause survives below only as a narrowing.
 func govAlertVisible(userID string, n int) (string, []any) {
 	if userID == "" {
 		return "", nil
@@ -62,10 +37,8 @@ func govAlertVisible(userID string, n int) (string, []any) {
 		n, n, n), []any{userID}
 }
 
-// govAlertWhere assembles the full row-visibility WHERE fragment for one
-// caller: the flow-visibility scope (the tenant boundary) AND the
-// target_user_id narrowing (personal vs team-wide). Shared by every read and
-// mutation below so they cannot drift apart.
+// govAlertWhere assembles the full row-visibility WHERE fragment for one caller: the flow-visibility scope
+// (the tenant boundary) AND the target_user_id narrowing (personal vs team-wide), shared by every read and mutation.
 func govAlertWhere(userID string, n int) (string, []any) {
 	target := fmt.Sprintf("(target_user_id = '' OR target_user_id = $%d)", n)
 	if userID == "" {
@@ -76,9 +49,65 @@ func govAlertWhere(userID string, n int) (string, []any) {
 	return "(" + target + " AND " + visible + ")", args
 }
 
-// RecordGovernanceAlert persists a new alert. On a duplicate ID the row is left
-// as-is (ON CONFLICT DO NOTHING) so a scanner retry is safe. The caller stamps
-// ID + CreatedAt; the server stamps read_at/dismissed_at as NULL.
+// govVisibleFlows yields the ids of every flow userID can see (the same three
+// access paths govAlertVisible tests, index-backed). Reads use it as
+// `gov_alerts.flow_id IN (…)` so Postgres starts from the caller's flows — the
+// badge is polled every minute per tab — and the semi-join returns an alert once.
+func govVisibleFlows(n int) string {
+	return fmt.Sprintf(`SELECT id FROM flows WHERE owner_id = $%d
+			    UNION ALL
+			    SELECT f.id FROM flows f WHERE f.org_id IN (SELECT om.org_id FROM org_members om WHERE om.user_id = $%d)
+			    UNION ALL
+			    SELECT fc.flow_id FROM flow_collaborators fc WHERE fc.user_id = $%d`, n, n, n)
+}
+
+// govAlertReadWhere is govAlertWhere for the two read queries: the same target_user_id narrowing, with the
+// flow scope expressed through govVisibleFlows. Mutations keep govAlertWhere: keyed by alert id or rare.
+func govAlertReadWhere(userID string, n int) (string, []any) {
+	if userID == "" {
+		// Local mode: no claims, single tenant. Only team-wide alerts exist.
+		return "target_user_id = ''", nil
+	}
+	return fmt.Sprintf("((target_user_id = '' OR target_user_id = $%d) AND flow_id IN (%s))", n, govVisibleFlows(n)), []any{userID}
+}
+
+// listGovAlertsSQL is the ListGovernanceAlerts statement (exposed for the
+// plan tests). limit is already defaulted.
+func listGovAlertsSQL(filter storageif.GovernanceAlertFilter, limit int) (string, []any) {
+	q := `
+		SELECT id, flow_id, org_id, type, title, message, severity,
+		       new_errors, new_warnings, health_score, prev_health,
+		       created_at, read_at, dismissed_at, target_user_id
+		FROM gov_alerts`
+	// WHERE assembly: the dismissed toggle AND row visibility (govAlertReadWhere
+	// — the team-wide/targeted narrowing AND the flow scope).
+	where := []string{}
+	args := []any{}
+	if !filter.IncludeDismissed {
+		where = append(where, "dismissed_at IS NULL")
+	}
+	visClause, visArgs := govAlertReadWhere(filter.UserID, len(args)+1)
+	where = append(where, visClause)
+	args = append(args, visArgs...)
+	q += " WHERE " + strings.Join(where, " AND ")
+	// `id` as final tiebreaker: LIMIT/OFFSET paging with created_at ties (one
+	// scanner tick stamps several alerts alike) otherwise drops and repeats rows.
+	q += fmt.Sprintf(` ORDER BY created_at DESC, id ASC LIMIT $%d OFFSET $%d`, len(args)+1, len(args)+2)
+	args = append(args, limit, filter.Offset)
+	return q, args
+}
+
+// unreadGovAlertCountSQL is the UnreadGovernanceAlertCountFor statement
+// (exposed for the plan tests).
+func unreadGovAlertCountSQL(userID string) (string, []any) {
+	vis, args := govAlertReadWhere(userID, 1)
+	return `SELECT COUNT(*) FROM gov_alerts
+		 WHERE read_at IS NULL AND dismissed_at IS NULL AND ` + vis, args
+}
+
+// RecordGovernanceAlert persists a new alert; a duplicate ID is left as-is
+// (ON CONFLICT DO NOTHING) so a scanner retry is safe. Server stamps
+// read_at/dismissed_at NULL.
 func (b *PostgresStorageBackend) RecordGovernanceAlert(ctx context.Context, a *storageif.GovernanceAlert) error {
 	if a == nil || a.ID == "" {
 		return errGovAlertMissingID
@@ -103,32 +132,7 @@ func (b *PostgresStorageBackend) ListGovernanceAlerts(ctx context.Context, filte
 	if limit <= 0 {
 		limit = govAlertListDefaultLimit
 	}
-	q := `
-		SELECT id, flow_id, org_id, type, title, message, severity,
-		       new_errors, new_warnings, health_score, prev_health,
-		       created_at, read_at, dismissed_at, target_user_id
-		FROM gov_alerts`
-	// WHERE assembly: row visibility (govAlertWhere — flow scope AND the
-	// team-wide/targeted narrowing) AND the dismissed toggle.
-	where := []string{}
-	args := []any{}
-	if !filter.IncludeDismissed {
-		where = append(where, "dismissed_at IS NULL")
-	}
-	visClause, visArgs := govAlertWhere(filter.UserID, len(args)+1)
-	where = append(where, visClause)
-	args = append(args, visArgs...)
-	if len(where) > 0 {
-		q += " WHERE " + strings.Join(where, " AND ")
-	}
-	// `id` as a final tiebreaker: the bell panel pages this list with
-	// LIMIT/OFFSET, and created_at ties readily — one scanner tick records
-	// several alerts for a flow, all stamped from the same time.Now(), and
-	// TIMESTAMPTZ only keeps microseconds. Without a unique tiebreaker, SQL may
-	// order a tied group differently on each page, so paging drops some alerts
-	// and repeats others.
-	q += fmt.Sprintf(` ORDER BY created_at DESC, id ASC LIMIT $%d OFFSET $%d`, len(args)+1, len(args)+2)
-	args = append(args, limit, filter.Offset)
+	q, args := listGovAlertsSQL(filter, limit)
 	rows, err := b.query(ctx).QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -155,22 +159,17 @@ func (b *PostgresStorageBackend) UnreadGovernanceAlertCount(ctx context.Context)
 // UnreadGovernanceAlertCountFor is the badge query scoped to one caller:
 // team-wide alerts plus that user's targeted ones.
 func (b *PostgresStorageBackend) UnreadGovernanceAlertCountFor(ctx context.Context, userID string) (int, error) {
-	vis, args := govAlertWhere(userID, 1)
+	q, args := unreadGovAlertCountSQL(userID)
 	var n int
-	err := b.query(ctx).QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM gov_alerts
-		 WHERE read_at IS NULL AND dismissed_at IS NULL AND `+vis, args...).Scan(&n)
+	err := b.query(ctx).QueryRowContext(ctx, q, args...).Scan(&n)
 	return n, err
 }
 
 // MarkGovernanceAlertRead stamps read_at on one alert. Idempotent (a second call
 // is a no-op — read_at is only set when NULL).
 func (b *PostgresStorageBackend) MarkGovernanceAlertRead(ctx context.Context, userID, alertID string) error {
-	// Explicit visibility predicate IN ADDITION to RLS. This clause is the
-	// application-layer tenant boundary — the handler does no authz of its own,
-	// and RLS is inert whenever the app connects as a superuser/BYPASSRLS role.
-	// See govAlertVisible for why the old target_user_id-only form was not a
-	// boundary at all.
+	// Explicit visibility predicate IN ADDITION to RLS — the application-layer
+	// tenant boundary (RLS is inert under a BYPASSRLS role; see govAlertVisible).
 	vis, args := govAlertWhere(userID, 2)
 	_, err := b.query(ctx).ExecContext(ctx,
 		`UPDATE gov_alerts SET read_at = NOW()

@@ -414,7 +414,7 @@ export const enDashboard = {
       yes: 'yes',
       no: 'no',
     },
-    // How the usage tables name the internal routing ids (F-31): the model
+    // How the usage tables name the internal routing ids: the model
     // picker's labels for an Azure AI Foundry agent and a Claude deployment.
     models: {
       agent: 'Agent · {{name}}',

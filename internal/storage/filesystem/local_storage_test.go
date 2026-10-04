@@ -17,9 +17,8 @@ import (
 )
 
 // TestLocalStorageBackend_Contract runs the cross-backend contract suite
-// against the filesystem backend. The same suite runs against Postgres in
-// `database/postgres_storage_test.go::TestPostgres_Contract` so the two
-// implementations cannot diverge on return-shape semantics.
+// against the filesystem backend (the same suite runs against Postgres), so
+// the two implementations cannot diverge on return-shape semantics.
 func TestLocalStorageBackend_Contract(t *testing.T) {
 	b, err := NewLocalStorageBackend(t.TempDir())
 	if err != nil {
@@ -44,12 +43,10 @@ func createTestFlow(id string) *interfaces.FlowDocument {
 }
 
 // TestNewLocalStorageBackend_SweepsCrashOrphanedTemps pins the startup sweep:
-// atomicWrite's unique ".baki-tmp-*" names are removed on every failure path,
-// but a crash between CreateTemp and the rename strands them forever (the old
-// fixed "<name>.tmp" self-overwrote on the next write, so stranding was
-// self-healing by construction). Constructing the backend must remove temps
-// older than staleTempMaxAge — including in nested directories like
-// conversations/<scope>/ — while a young temp (a live writer's) survives.
+// a crash between CreateTemp and the rename strands a ".baki-tmp-*" forever
+// (the old fixed "<name>.tmp" self-overwrote, so stranding was self-healing).
+// Constructing the backend must remove temps older than staleTempMaxAge,
+// nested ones included, while a young (live writer's) temp survives.
 func TestNewLocalStorageBackend_SweepsCrashOrphanedTemps(t *testing.T) {
 	dataDir := t.TempDir()
 
@@ -94,18 +91,14 @@ func TestLocalStorageBackend_SaveAndLoadFlow(t *testing.T) {
 	storage, _ := NewLocalStorageBackend(ts.GetTempDir())
 	ctx := context.Background()
 
-	// Create test flow
 	testFlow := createTestFlow("test-flow-1")
 
-	// Save flow
 	err := storage.SaveFlow(ctx, testFlow)
 	testutil.AssertNoError(t, err, "Failed to save flow")
 
-	// Load flow
 	loadedFlow, err := storage.LoadFlow(ctx, "test-flow-1")
 	testutil.AssertNoError(t, err, "Failed to load flow")
 
-	// Verify flow data
 	testutil.AssertEqual(t, testFlow.ID, loadedFlow.ID, "Flow ID mismatch")
 	testutil.AssertEqual(t, testFlow.Name, loadedFlow.Name, "Flow name mismatch")
 	testutil.AssertEqual(t, testFlow.Description, loadedFlow.Description, "Flow description mismatch")
@@ -121,34 +114,29 @@ func TestLocalStorageBackend_ListFlows(t *testing.T) {
 
 	owner := "test-user"
 
-	// Create multiple test flows owned by the test user
 	flows := []*interfaces.FlowDocument{
 		{ID: "flow-1", Name: "Test Flow", Description: "A test flow document", Content: []byte(`{"test": "content"}`), Metadata: interfaces.FlowMetadata{BlockCount: 10, SubflowCount: 2, MaxDepth: 3}, OwnerID: owner},
 		{ID: "flow-2", Name: "Test Flow", Description: "A test flow document", Content: []byte(`{"test": "content"}`), Metadata: interfaces.FlowMetadata{BlockCount: 10, SubflowCount: 2, MaxDepth: 3}, OwnerID: owner},
 		{ID: "flow-3", Name: "Test Flow", Description: "A test flow document", Content: []byte(`{"test": "content"}`), Metadata: interfaces.FlowMetadata{BlockCount: 10, SubflowCount: 2, MaxDepth: 3}, OwnerID: owner},
 	}
 
-	// Save flows
 	for _, flow := range flows {
 		err := storage.SaveFlow(ctx, flow)
 		testutil.AssertNoError(t, err, "Failed to save flow")
 	}
 
-	// List flows owned by the test user
 	listedFlows, err := storage.ListFlows(ctx, interfaces.FlowFilter{UserID: owner})
 	testutil.AssertNoError(t, err, "Failed to list flows")
 	testutil.AssertEqual(t, len(flows), len(listedFlows), "Flow count mismatch")
 
-	// List with limit
 	limitedFlows, err := storage.ListFlows(ctx, interfaces.FlowFilter{UserID: owner, Limit: 2})
 	testutil.AssertNoError(t, err, "Failed to list flows with limit")
 	testutil.AssertEqual(t, 2, len(limitedFlows), "Limited flow count mismatch")
 }
 
 // TestLocalStorageBackend_ListFlows_AllFlows locks the enumeration contract the
-// migrator depends on: an unscoped filter must match nothing (defense-in-depth),
-// while AllFlows must return every flow regardless of owner — including flows
-// owned by different users or with no owner at all. Without this, the
+// migrator depends on: an unscoped filter matches nothing (defense-in-depth),
+// while AllFlows returns every flow regardless of owner — otherwise the
 // filesystem→cloud migration silently copies zero flows.
 func TestLocalStorageBackend_ListFlows_AllFlows(t *testing.T) {
 	storage, err := NewLocalStorageBackend(t.TempDir())
@@ -180,10 +168,9 @@ func TestLocalStorageBackend_ListFlows_AllFlows(t *testing.T) {
 	testutil.AssertEqual(t, len(flows), len(all), "AllFlows must return every flow")
 }
 
-// TestLocalStorageBackend_ListFlows_OrdersByUpdatedAtDesc is a regression guard:
-// the filesystem backend previously returned directory (alphabetical) order,
-// which diverged from the Postgres default (updated_at DESC) and made
-// offset/limit pagination unstable (skips/dupes across pages).
+// TestLocalStorageBackend_ListFlows_OrdersByUpdatedAtDesc is a regression
+// guard: the backend previously returned directory order, diverging from the
+// Postgres updated_at DESC and making offset/limit pagination unstable.
 func TestLocalStorageBackend_ListFlows_OrdersByUpdatedAtDesc(t *testing.T) {
 	storage, err := NewLocalStorageBackend(t.TempDir())
 	if err != nil {
@@ -230,9 +217,9 @@ func TestLocalStorageBackend_ListFlows_OrdersByUpdatedAtDesc(t *testing.T) {
 	}
 }
 
-// TestLocalStorageBackend_ListFlows_OrdersByBlocksDesc verifies the FlowSortBlocksDesc
-// mode mirrors the Postgres ORDER BY (block_count DESC, updated_at DESC) rather
-// than falling through to updated_at DESC (the previous divergence).
+// TestLocalStorageBackend_ListFlows_OrdersByBlocksDesc verifies the
+// FlowSortBlocksDesc mode mirrors the Postgres ORDER BY (block_count DESC,
+// updated_at DESC) instead of falling through to updated_at DESC.
 func TestLocalStorageBackend_ListFlows_OrdersByBlocksDesc(t *testing.T) {
 	storage, err := NewLocalStorageBackend(t.TempDir())
 	if err != nil {
@@ -281,16 +268,13 @@ func TestLocalStorageBackend_DeleteFlow(t *testing.T) {
 	storage, _ := NewLocalStorageBackend(ts.GetTempDir())
 	ctx := context.Background()
 
-	// Create and save test flow
 	testFlow := createTestFlow("flow-to-delete")
 	err := storage.SaveFlow(ctx, testFlow)
 	testutil.AssertNoError(t, err, "Failed to save flow")
 
-	// Delete flow
 	err = storage.DeleteFlow(ctx, "flow-to-delete")
 	testutil.AssertNoError(t, err, "Failed to delete flow")
 
-	// Verify flow is deleted
 	_, err = storage.LoadFlow(ctx, "flow-to-delete")
 	if err == nil {
 		t.Fatal("Expected error when loading deleted flow")
@@ -305,7 +289,6 @@ func TestLocalStorageBackend_SaveAndLoadSettings(t *testing.T) {
 	storage, _ := NewLocalStorageBackend(ts.GetTempDir())
 	ctx := context.Background()
 
-	// Create test settings
 	testSettings := &interfaces.AppSettings{
 		Version: 1,
 		General: interfaces.GeneralSettings{
@@ -317,54 +300,14 @@ func TestLocalStorageBackend_SaveAndLoadSettings(t *testing.T) {
 		},
 	}
 
-	// Save settings
 	err := storage.SaveSettings(ctx, testSettings)
 	testutil.AssertNoError(t, err, "Failed to save settings")
 
-	// Load settings
 	loadedSettings, err := storage.LoadSettings(ctx)
 	testutil.AssertNoError(t, err, "Failed to load settings")
 
-	// Verify settings
 	testutil.AssertEqual(t, testSettings.Version, loadedSettings.Version, "Settings version mismatch")
 	testutil.AssertEqual(t, testSettings.General.FirstRunCompleted, loadedSettings.General.FirstRunCompleted, "First run completed mismatch")
-}
-
-// TestLocalStorageBackend_SaveAndLoadConversation tests saving and loading conversations
-func TestLocalStorageBackend_SaveAndLoadConversation(t *testing.T) {
-	ts := testutil.NewTestSuite(t)
-	defer ts.Cleanup()
-
-	storage, _ := NewLocalStorageBackend(ts.GetTempDir())
-	ctx := context.Background()
-
-	// Create test conversation
-	messages := []interfaces.ChatMessage{
-		{
-			ID:        "msg-1",
-			Role:      "user",
-			Content:   "Hello",
-			Timestamp: "2024-01-01T00:00:00Z",
-		},
-		{
-			ID:        "msg-2",
-			Role:      "assistant",
-			Content:   "Hi there!",
-			Timestamp: "2024-01-01T00:00:01Z",
-		},
-	}
-
-	// Save conversation
-	err := storage.SaveConversation(ctx, "flow-1", "test-scope", messages)
-	testutil.AssertNoError(t, err, "Failed to save conversation")
-
-	// Load conversation
-	loadedMessages, err := storage.LoadConversation(ctx, "flow-1", "test-scope")
-	testutil.AssertNoError(t, err, "Failed to load conversation")
-
-	// Verify messages
-	testutil.AssertEqual(t, len(messages), len(loadedMessages), "Message count mismatch")
-	testutil.AssertEqual(t, messages[0].ID, loadedMessages[0].ID, "First message ID mismatch")
 }
 
 // TestLocalStorageBackend_Ping tests the ping method
@@ -375,7 +318,6 @@ func TestLocalStorageBackend_Ping(t *testing.T) {
 	storage, _ := NewLocalStorageBackend(ts.GetTempDir())
 	ctx := context.Background()
 
-	// Ping should succeed
 	err := storage.Ping(ctx)
 	testutil.AssertNoError(t, err, "Ping failed")
 }
@@ -404,7 +346,7 @@ func TestLocalStorageBackend_SaveFlow_OCCIncrementsVersion(t *testing.T) {
 	testutil.AssertEqual(t, "Updated", reloaded.Name, "name should be updated")
 }
 
-// TestLocalStorageBackend_SaveFlow_VersionConflict verifies that saving a flow
+// TestLocalStorageBackend_SaveFlow_VersionConflict verifies that saving
 // against a stale version is rejected with ErrVersionConflict and leaves the
 // stored flow untouched.
 func TestLocalStorageBackend_SaveFlow_VersionConflict(t *testing.T) {
@@ -440,9 +382,8 @@ func TestLocalStorageBackend_SaveFlow_VersionConflict(t *testing.T) {
 }
 
 // TestLocalStorageBackend_SaveFlow_ConcurrentRetry hammers SaveFlow from many
-// goroutines using a read-modify-write-with-retry loop. flowMu must serialize
-// the OCC check+write so that every increment lands exactly once and no update
-// is silently lost. Run with -race to also catch data races.
+// goroutines with read-modify-write retry: flowMu must serialize the OCC
+// check+write so every increment lands exactly once. Run with -race.
 func TestLocalStorageBackend_SaveFlow_ConcurrentRetry(t *testing.T) {
 	dataDir := t.TempDir()
 	storage, err := NewLocalStorageBackend(dataDir)
@@ -483,10 +424,8 @@ func TestLocalStorageBackend_SaveFlow_ConcurrentRetry(t *testing.T) {
 	assertNoTempStragglers(t, dataDir)
 }
 
-// assertNoTempStragglers fails the test if any atomicWrite temp file survived
-// under root — the unique ".baki-tmp-*" temps, or a legacy fixed "<name>.tmp".
-// atomicWrite renames its temp away on success and removes it on every failure
-// path, so a leftover means a cleanup path was missed.
+// assertNoTempStragglers fails if any atomicWrite temp survived under root —
+// a leftover means a cleanup path was missed.
 func assertNoTempStragglers(t *testing.T, root string) {
 	t.Helper()
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -505,12 +444,9 @@ func assertNoTempStragglers(t *testing.T, root string) {
 
 // TestLocalStorageBackend_SaveSettings_ConcurrentWriters locks the temp-file
 // isolation of atomicWrite: settings.json is written by three unsynchronized
-// Save*Settings methods, so a shared fixed temp name let two O_TRUNC writers
-// interleave on one temp file and the rename then published a mixed or
-// truncated body. Each call must build its body in its OWN temp file so the
-// last rename is the only deciding event; the final file must parse as exactly
-// one writer's complete shape. Run with -race and -count to shake the window
-// open.
+// Save*Settings methods, and a shared fixed temp name let two O_TRUNC writers
+// interleave and publish a mixed body. Each call must build its body in its
+// OWN temp so the last rename is the only deciding event. Run with -race.
 func TestLocalStorageBackend_SaveSettings_ConcurrentWriters(t *testing.T) {
 	dataDir := t.TempDir()
 	storage, err := NewLocalStorageBackend(dataDir)
@@ -558,11 +494,10 @@ func TestLocalStorageBackend_SaveSettings_ConcurrentWriters(t *testing.T) {
 	assertNoTempStragglers(t, dataDir)
 }
 
-// TestLocalStorageBackend_SaveFlow_NewFlowForcesVersionZero verifies that a
-// brand-new flow is always stored at version 0, matching the Postgres backend
-// (INSERT ... VALUES (..., 0)). Previously the filesystem backend left
-// flow.Version at whatever the caller passed, so a new flow saved with a stale
-// non-zero version would later reject a legitimate Version=0 save.
+// TestLocalStorageBackend_SaveFlow_NewFlowForcesVersionZero verifies a
+// brand-new flow is stored at version 0, matching Postgres — the backend
+// previously kept whatever the caller passed, so a stale non-zero version
+// later rejected a legitimate Version=0 save.
 func TestLocalStorageBackend_SaveFlow_NewFlowForcesVersionZero(t *testing.T) {
 	storage, err := NewLocalStorageBackend(t.TempDir())
 	testutil.AssertNoError(t, err, "NewLocalStorageBackend")

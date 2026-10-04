@@ -27,11 +27,10 @@ func parseProperties(raw string) map[string]string {
 	return props
 }
 
-// The scanners below are byte-wise on purpose: every delimiter (quotes,
-// colon, whitespace) and every key char is ASCII, and UTF-8 continuation
-// bytes (≥0x80) fail isKeyChar just like the multibyte runes they form — so
-// byte positions behave identically to rune positions for what is found,
-// without the 4-bytes-per-char allocation the []rune conversion cost.
+// The scanners below are byte-wise on purpose: every delimiter and key char
+// is ASCII, and UTF-8 continuation bytes (≥0x80) fail isKeyChar just like the
+// multibyte runes they form — byte positions behave identically to rune
+// positions for what is found, without the []rune allocation.
 
 func extractKeyValuePairs(text string, props map[string]string) map[string]string {
 	pos := 0
@@ -58,18 +57,12 @@ func extractKeyValuePairs(text string, props map[string]string) map[string]strin
 // findNextKey scans forward for the next `Key: ` boundary and returns the key
 // plus the offset just past the colon.
 //
-// On a failed match it resumes at the END of the key-character run it just
-// scanned, never inside it. That is not only an optimisation, it is the only
-// correct resumption point: a key is a MAXIMAL run of key characters followed by
-// ':' and then a space, tab or end-of-line. Every sub-run starting inside
-// [keyStart, runEnd) ends at the same runEnd and is therefore followed by the
-// same byte — so if the full run is not a key, no sub-run of it can be either.
-//
-// It used to resume at keyStart+1, re-scanning the whole run on every byte, so
-// an N-byte run cost N²/2 comparisons. A 2 MB line (the limit on
-// /api/analysis/analyze-raw) took tens of minutes of pinned CPU, and since the
-// parser takes no context the request timeout could not interrupt it.
-// See TestParseProperties_UnterminatedKeyRunIsLinear.
+// On a failed match it resumes at the END of the key-character run — not just
+// an optimisation but the only correct resumption point: a key is a MAXIMAL
+// run followed by ':' and a space/tab/EOL, so if the full run is not a key no
+// sub-run can be either. Resuming at keyStart+1 instead re-scanned the run on
+// every byte (N²/2 comparisons; a 2 MB line took tens of minutes of CPU —
+// TestParseProperties_UnterminatedKeyRunIsLinear).
 func findNextKey(text string, start int) (string, int) {
 	pos := start
 	for pos < len(text) {
@@ -146,10 +139,9 @@ func findValueEnd(text string, start int) (int, int) {
 					return pos, pos
 				}
 			}
-			// Not a key boundary. Skip the ENTIRE run just scanned rather than
-			// advancing one byte and re-scanning it: every sub-run ends at the
-			// same `peek`, so none of them can be a boundary either. Advancing by
-			// one made this O(n²) — see findNextKey's comment for the impact.
+			// Not a key boundary. Skip the ENTIRE run just scanned — every
+			// sub-run ends at the same `peek`, so none can be a boundary
+			// either. Advancing by one made this O(n²) (see findNextKey).
 			pos = peek
 			continue
 		}
@@ -201,18 +193,12 @@ func extractVariables(raw string) []string {
 		// Mask string literals to avoid extracting identifiers from them.
 		masked := maskStrings(expression)
 
-		// Extract all root variables from the expression.
-		// We use a simple identifier regex and manually check surroundings
-		// because Go's regexp doesn't support lookarounds.
-		//
-		// Every index below is read from — and applied back onto — masked, never
-		// expression: maskStrings collapses each literal to a single space, so
-		// masked's length differs from expression's and offsets computed against
-		// one must never slice the other. reIdentifier only matches ASCII word
-		// characters, which maskStrings never alters outside a literal, so
-		// masked[start:end] holds the identical identifier text expression[start:end]
-		// would have — with no risk of an offset computed against one string
-		// falling outside the other.
+		// Every index below is read from — and applied back onto — masked,
+		// never expression: maskStrings collapses each literal to a single
+		// space, so the two strings' lengths diverge and an offset computed
+		// against one must never slice the other. reIdentifier matches only
+		// ASCII word chars, never altered outside literals, so masked[start:end]
+		// holds the identical identifier text.
 		ids := reIdentifier.FindAllStringSubmatchIndex(masked, -1)
 		for _, idMatch := range ids {
 			start, end := idMatch[0], idMatch[1]
@@ -251,9 +237,8 @@ func extractVariables(raw string) []string {
 	return vars
 }
 
-// normalizeVariableOutput ensures that variable-manipulation blocks which write to
-// a named output variable have that name in Properties["_output"], enabling
-// analysis rules to track written variables uniformly.
+// normalizeVariableOutput ensures variable-manipulation blocks writing a
+// named output carry Properties["_output"], so rules track written variables uniformly.
 func normalizeVariableOutput(blk *models.Block) {
 	switch blk.RawType {
 	case "Variables.SetVariable",

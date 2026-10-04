@@ -83,12 +83,11 @@ func TestThinkSplitter_BuffersAtMostOneDelta(t *testing.T) {
 	}
 }
 
-// TestThinkSplitter_WhitespaceRunIsBounded: while only whitespace arrives the
-// splitter must hold it (it could still precede "<think>"), but no longer
-// without bound — a whitespace-only stream used to accumulate every byte in
-// pending (strings.HasPrefix(thinkOpenTag, "") is always true). Past the cap
-// the run is released as answer text — exactly what the non-streaming split
-// does with content that never opens a tag — and the splitter passes through.
+// TestThinkSplitter_WhitespaceRunIsBounded: while only whitespace arrives
+// the splitter must hold it (it could still precede "<think>"), but no
+// longer without bound — a whitespace-only stream used to accumulate every
+// byte in pending. Past the cap the run is released as answer text, as the
+// non-streaming split does, and the splitter passes through.
 func TestThinkSplitter_WhitespaceRunIsBounded(t *testing.T) {
 	ws := strings.Repeat(" ", 256)
 	var s thinkSplitter
@@ -255,8 +254,8 @@ func reasoningContentEvent(s string) string {
 // TestParseOpenAISSE_ReasoningContentKeepalives: DeepSeek-V3.2/V4 and others
 // stream their thinking in delta.reasoning_content for minutes before the
 // first content delta. Each such event must reach the caller as one
-// reasoning-only chunk (Chunk.Reasoning — it resets the chat idle watchdog
-// like a keepalive) — never as text.
+// reasoning-only chunk (it resets the idle watchdog like a keepalive),
+// never as text.
 func TestParseOpenAISSE_ReasoningContentKeepalives(t *testing.T) {
 	const n = 5
 	events := make([]string, 0, n+2)
@@ -415,12 +414,11 @@ func TestAzureFoundry_ChatSplitsThinkBlock(t *testing.T) {
 
 const gpt56ToolsRejection = "Function tools with reasoning_effort are not supported for gpt-5.6-sol in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'."
 
-// gpt56Server behaves like a gpt-5.6 deployment on chat completions: tools are
-// refused unless reasoning_effort is "none"; with rejectTemperature it also
-// refuses a non-default temperature (checked first or second per order).
-// gpt56ResponsesStream is the resource's /openai/v1/responses answer for the
-// same deployment: reasoning with its encrypted content and one function
-// call, as the reroute (F-18) expects.
+// gpt56Server behaves like a gpt-5.6 deployment on chat completions: tools
+// are refused unless reasoning_effort is "none"; with rejectTemperature it
+// also refuses a non-default temperature. gpt56ResponsesStream is the
+// resource's /openai/v1/responses answer for the same deployment: reasoning
+// with its encrypted content and one function call, as the reroute expects.
 const gpt56ResponsesStream = `data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_56","type":"reasoning","encrypted_content":"ENC56"}}
 
 data: {"type":"response.output_item.done","output_index":0,"item":{"id":"rs_56","type":"reasoning","encrypted_content":"ENC56"}}
@@ -435,7 +433,7 @@ data: {"type":"response.completed","response":{"status":"completed","model":"gpt
 
 // gpt56ResponsesServer answers the Responses route and the chat-completions
 // route as a gpt-5.6 deployment: chat completions refuse tools unless
-// reasoning_effort is "none"; the Responses route answers normally (F-18).
+// reasoning_effort is "none"; the Responses route answers normally.
 func gpt56Server(t *testing.T, rejectTemperature, temperatureFirst bool) *azureTestServer {
 	return newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, body map[string]any) {
 		if strings.HasSuffix(r.URL.Path, "/responses") {
@@ -477,7 +475,7 @@ func toolsRequest(temperature float64) Request {
 		Tools: []ToolDefinition{{Name: "search_flow", InputSchema: []byte(`{"type":"object"}`)}}}
 }
 
-// F-18: the observed chat-completions tools-with-reasoning rejection is
+// The observed chat-completions tools-with-reasoning rejection is
 // rerouted through the resource's Responses route — the turn keeps its
 // tools AND its reasoning (no reasoning_effort "none" repair at all).
 func TestAzureFoundry_ReasoningToolsRejectionReroutesToResponses(t *testing.T) {
@@ -567,7 +565,7 @@ func TestAzureFoundry_TemperatureAndReasoningRepairsKeepTools(t *testing.T) {
 func TestAzureFoundry_ReasoningNoneRefusedDegradesToToolsUnsupported(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, body map[string]any) {
 		if strings.HasSuffix(r.URL.Path, "/responses") {
-			// The route does not serve the model (F-18 refusal): the turn
+			// The route does not serve the model: the turn
 			// falls back to chat completions' repair path.
 			writeJSON(w, 404, map[string]any{"error": map[string]any{"code": "NotFound", "message": "The API version you requested is not yet supported"}})
 			return

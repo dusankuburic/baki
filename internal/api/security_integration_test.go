@@ -16,8 +16,6 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// --- SSE per-user filtering (EmitTo) ---
-
 func TestEventManager_EmitTo_OnlyDeliversToTargetUser(t *testing.T) {
 	em := NewEventManager(make(chan struct{}))
 
@@ -110,15 +108,10 @@ func TestHandleEvents_DisconnectsAtTokenExpiry(t *testing.T) {
 	}
 }
 
-// --- Audit pool shutdown safety ---
-
-// TestAuditEnqueue_RecoversSendOnClosedChannel proves the recover guard catches
-// the TOCTOU window: ShutdownAuditPool sets auditClosed and closes the channel
-// as two separate statements, so a sender that already passed the
-// auditClosed.Load() check (returned false) reaches the send AFTER the channel
-// was closed. We reproduce that exact ordering deterministically by closing the
-// channel WITHOUT setting the flag, forcing auditEnqueue onto the send path
-// into a closed channel. The recover must convert the panic into ("closed").
+// TestAuditEnqueue_RecoversSendOnClosedChannel proves the recover guard catches the TOCTOU window:
+// ShutdownAuditPool sets auditClosed and closes the channel as two separate statements, so a sender
+// past the flag check reaches the send AFTER the close. Reproduced deterministically by closing the
+// channel WITHOUT setting the flag — the recover must convert the panic into ("closed").
 func TestAuditEnqueue_RecoversSendOnClosedChannel(t *testing.T) {
 	ch := make(chan *interfaces.AuditEvent, 1)
 	auditCh = ch
@@ -162,8 +155,6 @@ func TestAuditEnqueue_DivertsWhenFull(t *testing.T) {
 	auditClosed.Store(false)
 }
 
-// --- Invite email binding ---
-
 func TestAcceptInvite_RejectsNonexistentToken(t *testing.T) {
 	rt, _ := newLibraryTestRouter(t)
 
@@ -174,8 +165,6 @@ func TestAcceptInvite_RejectsNonexistentToken(t *testing.T) {
 		t.Errorf("expected non-200 for nonexistent invite, got %d", rr.Code)
 	}
 }
-
-// --- Refresh token replay detection ---
 
 // mockTokenStore implements RefreshTokenStore for testing replay detection.
 type mockTokenStore struct {
@@ -310,8 +299,6 @@ func TestRefreshToken_ConcurrentRevoke_OnlyOneSucceeds(t *testing.T) {
 		t.Errorf("expected exactly 1 replay detection, got %d", replayCount)
 	}
 }
-
-// --- Auth role validation ---
 
 func TestAdminUserRole_RejectsInvalidRole(t *testing.T) {
 	rt, _ := newLibraryTestRouter(t)

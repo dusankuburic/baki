@@ -58,9 +58,8 @@ func (s *cbStreamStub) Stream(_ context.Context, _ Request, onChunk func(Chunk))
 func (s *cbStreamStub) ID() string { return "stream-stub" }
 
 // TestCircuitBreaker_StreamErrorChunkTripsCircuit: a stream that ends with a
-// retryable error chunk (and a nil return) must count as a failure — before
-// the fix it was recorded as a success, so a provider that always streamed an
-// error event could never open the circuit.
+// retryable error chunk (and a nil return) must count as a failure — it used
+// to be recorded as a success, so an always-erroring stream never tripped.
 func TestCircuitBreaker_StreamErrorChunkTripsCircuit(t *testing.T) {
 	resetBreakerRegistry()
 	stub := &cbStreamStub{chunks: []Chunk{
@@ -158,11 +157,10 @@ func TestCircuitBreaker_PermanentErrorsDoNotTrip(t *testing.T) {
 	}
 }
 
-// TestCircuitBreaker_RateLimitedDoesNotTrip verifies that 429 (ErrRateLimited)
-// — though retryable — does NOT count toward the circuit-open threshold. A 429
-// is per-API-key, not "provider down for everyone"; in multi-tenant deployments
-// one tenant's rate-limit must not trip the shared breaker and block healthy
-// tenants. The retry layer still backs off on 429; only the breaker ignores it.
+// TestCircuitBreaker_RateLimitedDoesNotTrip verifies that 429 — though
+// retryable — does NOT count toward the circuit-open threshold: a 429 is
+// per-API-key, not "provider down for everyone". The retry layer still
+// backs off; only the breaker ignores it.
 func TestCircuitBreaker_RateLimitedDoesNotTrip(t *testing.T) {
 	errs := make([]error, cbFailureThreshold*3)
 	for i := range errs {
@@ -245,9 +243,8 @@ func TestCircuitBreaker_RetripsOnFailedProbe(t *testing.T) {
 }
 
 // TestCircuitBreaker_NonRetryableProbeDoesNotWedge verifies that a half-open
-// probe failing with a NON-retryable error (e.g. a context timeout or cancelled
-// stream) reopens the circuit instead of leaving it stuck half-open forever —
-// which would reject every subsequent call to the provider until restart.
+// probe failing with a NON-retryable error reopens the circuit instead of
+// leaving it stuck half-open forever.
 func TestCircuitBreaker_NonRetryableProbeDoesNotWedge(t *testing.T) {
 	// Trip the circuit with retryable failures, then queue a non-retryable
 	// error for the half-open probe (the stub returns successes afterwards).
@@ -290,9 +287,8 @@ func TestCircuitBreaker_NonRetryableProbeDoesNotWedge(t *testing.T) {
 
 // TestCircuitBreaker_PersistsAcrossInstances verifies that breaker state is
 // shared per provider ID, so failures accumulated through one
-// CircuitBreakerProvider open the circuit for a *separate* instance wrapping the
-// same provider. This mirrors ProviderFactory.For rebuilding the decorator chain
-// on every request: without shared state the breaker could never open.
+// CircuitBreakerProvider open the circuit for a separate instance wrapping
+// the same provider — as ProviderFactory.For's per-request chain rebuilds.
 func TestCircuitBreaker_PersistsAcrossInstances(t *testing.T) {
 	resetBreakerRegistry()
 
@@ -319,9 +315,8 @@ func TestCircuitBreaker_ErrCircuitOpenIsNotRetryable(t *testing.T) {
 	}
 }
 
-// cbPanicStub is a Provider whose Chat panics — simulating a downstream provider
-// crashing mid-call (nil deref, etc.). Used to prove a panic during a half-open
-// probe still resolves the circuit rather than wedging it half-open.
+// cbPanicStub is a Provider whose Chat panics — proving a panic during a
+// half-open probe still resolves the circuit rather than wedging it.
 type cbPanicStub struct{ Provider }
 
 func (cbPanicStub) Chat(context.Context, Request) (*Response, error) {
@@ -329,11 +324,10 @@ func (cbPanicStub) Chat(context.Context, Request) (*Response, error) {
 }
 func (cbPanicStub) ID() string { return "panic-stub" }
 
-// TestCircuitBreaker_ProbePanicDoesNotWedge is the regression test for the
-// panic-skips-record wedge: if the wrapped provider panics during a HALF-OPEN
-// probe, record() (called after the provider returns) is skipped, so without the
-// recover-and-record guard the circuit stays half-open forever and check()
-// rejects every future caller. The fix records a failure on panic and re-panics.
+// TestCircuitBreaker_ProbePanicDoesNotWedge: if the wrapped provider panics
+// during a HALF-OPEN probe, record() is skipped, so without the
+// recover-and-record guard the circuit stays half-open forever. The fix
+// records a failure on panic and re-panics.
 func TestCircuitBreaker_ProbePanicDoesNotWedge(t *testing.T) {
 	resetBreakerRegistry()
 	cb := NewCircuitBreakerProvider(cbPanicStub{})
@@ -367,9 +361,8 @@ func TestCircuitBreaker_ProbePanicDoesNotWedge(t *testing.T) {
 		t.Fatalf("expected circuit reopened after probe panic, got %s", state)
 	}
 
-	// And it must recover normally: after the cooldown, a healthy probe closes it.
-	// Reuse the SAME shared state (the shared state) with a healthy provider, exactly as the
-	// next admitted probe would.
+	// And it must recover: after the cooldown, a healthy probe on the SAME
+	// shared state closes it.
 	cb.stateFor("").mu.Lock()
 	cb.stateFor("").lastFailure = time.Now().Add(-cbOpenDuration - time.Second)
 	cb.stateFor("").mu.Unlock()
@@ -393,8 +386,7 @@ func (okStub) ID() string                                       { return "panic-
 // TestCircuitBreaker_ModelScopedIsolation pins the per-(provider|model) keying:
 // a deprecated model ID 500-ing five times must open ONLY that model's
 // circuit — its healthy siblings (and the provider-wide Embed path) keep
-// working. The pre-fix provider-wide key blocked every model and every user
-// for the cooldown.
+// working.
 func TestCircuitBreaker_ModelScopedIsolation(t *testing.T) {
 	resetBreakerRegistry()
 	cb := NewCircuitBreakerProvider(cbFailStub{})
@@ -544,8 +536,8 @@ func TestBreakerRegistry_PrunesHealthyEntries(t *testing.T) {
 }
 
 // A closed circuit whose last failure is older than breakerStaleFailure is
-// reclaimable: failures only reset on a same-key success, so without the age
-// rule any key that ever failed lived in the registry forever.
+// reclaimable: without the age rule any key that ever failed lived in the
+// registry forever (failures only reset on a same-key success).
 func TestBreakerRegistry_PrunesStaleFailuresByAge(t *testing.T) {
 	resetBreakerRegistry()
 	t.Cleanup(resetBreakerRegistry)

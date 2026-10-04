@@ -7,17 +7,9 @@ import (
 	"pad-core/models"
 )
 
-// SerializeDocument renders a FlowDocument back to canonical PAD text: one
-// #Region per subflow, keyword-style control flow, dotted-style actions with
-// sorted Key: Value parameters. It is the parser's inverse for the paths this
-// project produces and consumes — ingested cloud flows (no stored source) can
-// be fixed/exported, and structured editors can emit PAD text.
-//
-// Canonical, not byte-faithful: original comment spacing, blank lines, and
-// parameter order are normalized (properties are a map). The correctness
-// contract — pinned by the SerializeRoundTrip tests — is that the output
-// RE-PARSES into an equivalent document: no new parse errors, the same block
-// tree (type/rawType/properties/nesting), and the same analysis findings.
+// SerializeDocument renders a FlowDocument back to canonical PAD text: one #Region per subflow, keyword
+// control flow, dotted actions with sorted Key: Value parameters. Canonical, not byte-faithful — the
+// pinned contract is that output RE-PARSES equivalently: no new parse errors, same tree, same findings.
 func SerializeDocument(doc *models.FlowDocument) string {
 	if doc == nil {
 		return ""
@@ -32,49 +24,56 @@ func SerializeDocument(doc *models.FlowDocument) string {
 	return sb.String()
 }
 
-// SerializeFiles renders a (folder) document grouped by subflow SourceFile:
-// map[filename]content, mirroring the multi-file layout ParseFiles consumed.
-// Subflows without a SourceFile land under "Main.txt". A nil/empty doc yields
-// a single empty Main.txt entry so callers can rely on the key existing.
+// SerializeFiles renders a (folder) document grouped by subflow SourceFile;
+// subflows without one land under "Main.txt", and a nil/empty doc still
+// yields a Main.txt key.
 func SerializeFiles(doc *models.FlowDocument) map[string]string {
 	files := map[string]string{}
 	if doc == nil {
 		return files
 	}
+	// Per-file Builders: concatenating onto the accumulated string re-copied
+	// everything stored so far on every append.
+	builders := map[string]*strings.Builder{}
 	for i := range doc.Subflows {
 		sf := &doc.Subflows[i]
 		name := sf.SourceFile
 		if name == "" {
 			name = "Main.txt"
 		}
-		if prev, ok := files[name]; ok {
-			files[name] = prev + "\n" + SerializeSubflow(sf)
+		b := builders[name]
+		if b == nil {
+			nb := &strings.Builder{}
+			nb.WriteString(SerializeSubflow(sf))
+			builders[name] = nb
 			continue
 		}
-		files[name] = SerializeSubflow(sf)
+		b.WriteByte('\n')
+		b.WriteString(SerializeSubflow(sf))
 	}
-	if len(files) == 0 {
+	if len(builders) == 0 {
 		files["Main.txt"] = ""
+		return files
+	}
+	for name, b := range builders {
+		files[name] = b.String()
 	}
 	return files
 }
 
-// SerializeSubflow renders one subflow as a #Region block. The region style
-// is the most portable of the two observed subflow formats (both parse; the
-// dotted style is newer and less uniformly supported downstream).
+// SerializeSubflow renders one subflow as a #Region block (the more portable of the two observed formats; both parse).
 func SerializeSubflow(sf *models.Subflow) string {
 	if sf == nil {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("#Region \"" + sanitizeRegionName(sf.Name) + "\"\n")
-	serializeChildList(&sb, 1, sf.Blocks)
-	sb.WriteString("#EndRegion\n")
+	writeLine(&sb, "", "#Region \""+sanitizeRegionName(sf.Name)+"\"")
+	serializeChildList(&sb, padIndentUnit, sf.Blocks)
+	writeLine(&sb, "", "#EndRegion")
 	return sb.String()
 }
 
-// sanitizeRegionName keeps the region header a single physical line — a
-// multi-line subflow name would otherwise corrupt the region framing.
+// sanitizeRegionName keeps the region header one physical line — a multi-line name would corrupt the framing.
 func sanitizeRegionName(name string) string {
 	name = strings.ReplaceAll(name, "\r", " ")
 	name = strings.ReplaceAll(name, "\n", " ")
@@ -84,13 +83,21 @@ func sanitizeRegionName(name string) string {
 
 const padIndentUnit = "    "
 
+// writeLine appends one emitted line as separate writes — the one-expression
+// form allocated a fresh string per line.
+func writeLine(sb *strings.Builder, ind, line string) {
+	sb.WriteString(ind)
+	sb.WriteString(line)
+	sb.WriteByte('\n')
+}
+
 // serializeChildList emits a container's children. ELSE / CASE / DEFAULT are
 // branch markers of their ENCLOSING construct: PAD prints them at the
-// container's own depth (not one deeper), and they carry no END — the
-// container's single END closes everything. Every other child recurses at
-// depth+1.
-func serializeChildList(sb *strings.Builder, depth int, children []models.Block) {
-	ind := strings.Repeat(padIndentUnit, depth)
+// container's own depth with no END — the container's single END closes
+// everything; every other child recurses at depth+1.
+func serializeChildList(sb *strings.Builder, ind string, children []models.Block) {
+	// Child indent derived once per list (every descendant shares it), not per block.
+	childInd := ind + padIndentUnit
 	for i := range children {
 		b := &children[i]
 		switch b.Type {
@@ -98,41 +105,39 @@ func serializeChildList(sb *strings.Builder, depth int, children []models.Block)
 			// Structural artifact of the parse; containers re-emit their own.
 			continue
 		case models.BlockTypeElse:
-			// An ELSE IF rung carries its condition in Name and shares the
-			// chain's single END, so it is emitted here (no END of its own)
-			// rather than through the BlockTypeCondition path.
+			// An ELSE IF rung carries its condition in Name and shares the chain's single END.
 			if strings.EqualFold(b.RawType, "ELSE IF") && b.Name != "" {
 				line := b.Name
 				if endsWithThenSuffix(b) {
 					line += " THEN"
 				}
-				sb.WriteString(ind + line + "\n")
+				writeLine(sb, ind, line)
 			} else {
-				sb.WriteString(ind + "ELSE\n")
+				writeLine(sb, ind, "ELSE")
 			}
-			serializeChildList(sb, depth+1, b.Children)
+			serializeChildList(sb, childInd, b.Children)
 		case models.BlockTypeDefault:
-			sb.WriteString(ind + "DEFAULT\n")
-			serializeChildList(sb, depth+1, b.Children)
+			writeLine(sb, ind, "DEFAULT")
+			serializeChildList(sb, childInd, b.Children)
 		case models.BlockTypeCase:
-			// Name carries the original line ("CASE 'Active'"); empty name is
-			// a malformed parse — emit the bare keyword so framing survives.
+			// Name carries the original line ("CASE 'Active'"); empty means
+			// malformed — emit the bare keyword so framing survives.
 			line := b.Name
 			if line == "" {
 				line = "CASE"
 			}
-			sb.WriteString(ind + line + "\n")
-			serializeChildList(sb, depth+1, b.Children)
+			writeLine(sb, ind, line)
+			serializeChildList(sb, childInd, b.Children)
 		default:
-			serializeBlock(sb, depth+1, b)
+			serializeBlock(sb, childInd, b)
 		}
 	}
 }
 
-// serializeBlock emits one block at the given depth. Stored Indent/LineNumber
+// serializeBlock emits one block at the given depth; stored Indent/LineNumber
 // are ignored — canonical emission recomputes layout from tree depth.
-func serializeBlock(sb *strings.Builder, depth int, b *models.Block) {
-	ind := strings.Repeat(padIndentUnit, depth)
+func serializeBlock(sb *strings.Builder, ind string, b *models.Block) {
+	childInd := ind + padIndentUnit
 
 	if b.Type == models.BlockTypeEnd {
 		return
@@ -141,74 +146,61 @@ func serializeBlock(sb *strings.Builder, depth int, b *models.Block) {
 	switch {
 	case b.Type == models.BlockTypeComment:
 		// Doc-comment blocks (/# ... #/ spanning lines) merge into ONE token
-		// whose Name is the verbatim text — emit it raw at the block's
-		// indent; the tokenizer's inBlockComment pass re-merges identically.
+		// whose Name is the verbatim text — emit it raw; the tokenizer's
+		// inBlockComment pass re-merges identically.
 		if strings.HasPrefix(b.Name, "/#") && strings.HasSuffix(b.Name, "#/") {
-			sb.WriteString(ind + b.Name + "\n")
+			writeLine(sb, ind, b.Name)
 		} else if strings.Contains(b.Name, "\n") {
-			// A multi-line name without doc-comment framing cannot be one
-			// COMMENT line; split per line (degrades to N comments — this
-			// shape doesn't occur in real parses, which use /#...#/).
+			// A multi-line name without doc framing cannot be one COMMENT
+			// line; split per line (never occurs in real parses).
 			for _, ln := range strings.Split(b.Name, "\n") {
-				sb.WriteString(ind + "COMMENT  " + ln + "\n")
+				writeLine(sb, ind, "COMMENT  "+ln)
 			}
 		} else {
 			// COMMENT's two-space separator is the observed PAD convention;
-			// the tokenizer accepts any run of whitespace.
-			sb.WriteString(ind + "COMMENT  " + b.Name + "\n")
+			// the tokenizer accepts any whitespace run.
+			writeLine(sb, ind, "COMMENT  "+b.Name)
 		}
-		// Leaf lines can still carry children (the parser nests indented
-		// followers under any block): emit them one deeper WITHOUT an END —
-		// indent alone reconstructs the nesting on re-parse.
-		serializeChildList(sb, depth+1, b.Children)
+		// Leaf lines can still carry children: emit them one deeper WITHOUT an
+		// END — indent alone reconstructs the nesting on re-parse.
+		serializeChildList(sb, childInd, b.Children)
 		return
 
 	case b.Type == models.BlockTypeErrorHandler:
-		// Two parse shapes share this type:
-		//
-		//  (a) plain `ON BLOCK ERROR ... END` — Name is a friendly label
-		//      ("On Block Error"); emit the canonical keyword.
-		//  (b) promoted BLOCK: `BLOCK <name>` + `ON BLOCK ERROR` promoted the
-		//      block into the handler, leaving an OnBlockError ACTION child
-		//      at the marker's position. Name preserves the BLOCK's name.
-		//      Emit the original BLOCK framing so re-parse promotes again
-		//      into the identical tree.
+		// Two parse shapes share this type: (a) plain `ON BLOCK ERROR ... END`;
+		// (b) a promoted BLOCK — `BLOCK <name>` + `ON BLOCK ERROR` promotes the
+		// block into the handler, leaving an OnBlockError ACTION child at the
+		// marker; re-emit the BLOCK framing so re-parse promotes identically.
 		if artifact := indexOfOnBlockErrorChild(b); artifact >= 0 {
-			// Promotion holds TWO containers in one node -- the BLOCK and its
-			// handler section -- and PAD closes them with two ENDs: the first
-			// ends the handler, the second ends the block. The children are laid
-			// out in that order, so the first BlockTypeEnd after the marker is
-			// the boundary between the handler section and the protected body.
-			//
-			// This previously emitted a single END, matching a parser that
-			// closed both on the first one. That round-tripped only because both
-			// halves agreed to discard the body: everything after the handler
-			// was re-emitted INSIDE the handler and re-parsed back to root.
-			sb.WriteString(ind + "BLOCK " + sanitizeRegionName(b.Name) + "\n")
-			serializeChildList(sb, depth+1, b.Children[:artifact])
-			sb.WriteString(ind + "ON BLOCK ERROR\n")
+			// Promotion holds TWO containers (the BLOCK and its handler
+			// section) closed by two ENDs; the first BlockTypeEnd after the
+			// marker is the handler/body boundary — a single END round-tripped
+			// only because the old serializer and parser both discarded the body.
+			writeLine(sb, ind, "BLOCK "+sanitizeRegionName(b.Name))
+			serializeChildList(sb, childInd, b.Children[:artifact])
+			writeLine(sb, ind, "ON BLOCK ERROR")
 
 			handlerEnd := artifact + 1
 			for handlerEnd < len(b.Children) && b.Children[handlerEnd].Type != models.BlockTypeEnd {
 				handlerEnd++
 			}
-			serializeChildList(sb, depth+1, b.Children[artifact+1:handlerEnd])
-			sb.WriteString(ind + "END\n")
+			serializeChildList(sb, childInd, b.Children[artifact+1:handlerEnd])
+			writeLine(sb, ind, "END")
 
 			if handlerEnd < len(b.Children) {
-				serializeChildList(sb, depth+1, b.Children[handlerEnd+1:])
+				serializeChildList(sb, childInd, b.Children[handlerEnd+1:])
 			}
-			sb.WriteString(ind + "END\n")
+			writeLine(sb, ind, "END")
 			return
 		}
-		sb.WriteString(ind + "ON BLOCK ERROR\n")
-		serializeChildList(sb, depth+1, b.Children)
-		sb.WriteString(ind + "END\n")
+		writeLine(sb, ind, "ON BLOCK ERROR")
+		serializeChildList(sb, childInd, b.Children)
+		writeLine(sb, ind, "END")
 		return
 
 	case b.Type == models.BlockTypeSubflow && isKeywordCall(b.RawType):
-		// Subflow CALLs: Name is "Call <target>" / "Call <target> (disabled)"
-		// — recover the target and re-emit the CALL / DISABLE CALL form.
+		// Subflow CALLs: Name is "Call <target>" / "Call <target> (disabled)" —
+		// recover the target and re-emit the CALL / DISABLE CALL form.
 		target := strings.TrimPrefix(b.Name, "Call ")
 		target = strings.TrimSuffix(target, " (disabled)")
 		target = strings.TrimSpace(target)
@@ -217,22 +209,21 @@ func serializeBlock(sb *strings.Builder, depth int, b *models.Block) {
 		} else {
 			emitLeafLine(sb, ind, "CALL "+target, b)
 		}
-		serializeChildList(sb, depth+1, b.Children)
+		serializeChildList(sb, childInd, b.Children)
 		return
 
 	case b.Type == models.BlockTypeVariable && b.RawType == "SET":
-		// SET preserves its RAW value (original quoting kept in _value by the
-		// parser) — emit verbatim, never re-quoted. A missing _var/_value is
-		// a malformed parse; the empty emission degrades to a parse warning
-		// rather than corrupting the region framing.
+		// SET preserves its RAW value (original quoting kept in _value): emit
+		// verbatim, never re-quoted; a missing _var/_value degrades to a parse
+		// warning rather than corrupting the region framing.
 		emitLeafLine(sb, ind, "SET "+b.Properties["_var"]+" TO "+b.Properties["_value"], b)
-		serializeChildList(sb, depth+1, b.Children)
+		serializeChildList(sb, childInd, b.Children)
 		return
 
 	case b.RawType == "ERROR_CAPTURE":
-		// `ERROR => LastError Reset: True`: the output variable lives in
-		// Name ("Error => LastError"), NOT in _output. Reconstruct the line
-		// from Name + the non-internal properties.
+		// `ERROR => LastError Reset: True`: the output variable lives in Name
+		// ("Error => LastError"), NOT _output — reconstruct from Name + the
+		// non-internal properties.
 		out := b.Properties["_output"]
 		if out == "" {
 			if i := strings.Index(b.Name, "=>"); i >= 0 {
@@ -245,14 +236,13 @@ func serializeBlock(sb *strings.Builder, depth int, b *models.Block) {
 		}
 		line += serializePropsSuffix(b)
 		emitLeafLine(sb, ind, line, b)
-		serializeChildList(sb, depth+1, b.Children)
+		serializeChildList(sb, childInd, b.Children)
 		return
 
 	case isFlowKeywordAction(b.RawType):
 		// Source keyword forms differ from the normalized RawType:
-		// EXIT_LOOP/NEXT_LOOP are two words ("EXIT LOOP" / "NEXT LOOP");
-		// GOTO/LABEL carry a bare target in Name; EXIT keeps its full
-		// content in Name (e.g. "EXIT Subflow").
+		// EXIT_LOOP/NEXT_LOOP are two words, GOTO/LABEL carry a bare target in
+		// Name, EXIT keeps its full content in Name (e.g. "EXIT Subflow").
 		switch b.RawType {
 		case "EXIT_LOOP":
 			emitLeafLine(sb, ind, "EXIT LOOP", b)
@@ -269,25 +259,22 @@ func serializeBlock(sb *strings.Builder, depth int, b *models.Block) {
 		default:
 			emitLeafLine(sb, ind, b.RawType, b)
 		}
-		serializeChildList(sb, depth+1, b.Children)
+		serializeChildList(sb, childInd, b.Children)
 		return
 
 	case b.RawType == "REGION":
 		// Star-region framing (`**REGION NAME` / `**ENDREGION`) parses as a
-		// BLOCK with RawType REGION; re-emit the star form (a bare REGION
-		// line re-parses as malformed).
-		sb.WriteString(ind + "**REGION " + b.Name + "\n")
-		serializeChildList(sb, depth+1, b.Children)
-		sb.WriteString(ind + "**ENDREGION\n")
+		// BLOCK with RawType REGION; a bare REGION line re-parses as malformed.
+		writeLine(sb, ind, "**REGION "+b.Name)
+		serializeChildList(sb, childInd, b.Children)
+		writeLine(sb, ind, "**ENDREGION")
 		return
 
 	case isKeywordControl(b.Type, b.RawType):
 		// IF/LOOP/SWITCH/WAIT/BLOCK keyword forms: Name carries the ORIGINAL
-		// line content ("IF %x% = OK", "WAIT 5") — emit verbatim, EXCEPT the
-		// optional trailing THEN: the tokenizer strips it from Name, but the
-		// property-value scan ran to end-of-line and ABSORBED it into the
-		// last value. Re-append when any prop value still ends with " THEN"
-		// so the re-parse regenerates identical properties.
+		// line content, emitted verbatim EXCEPT the optional trailing THEN —
+		// the tokenizer strips it from Name but the value scan ABSORBED it into
+		// the last value; re-append so re-parse regenerates identical properties.
 		line := b.Name
 		if line == "" {
 			line = b.RawType
@@ -296,35 +283,30 @@ func serializeBlock(sb *strings.Builder, depth int, b *models.Block) {
 			line += " THEN"
 		}
 		emitLeafLine(sb, ind, line, b)
-		serializeChildList(sb, depth+1, b.Children)
+		serializeChildList(sb, childInd, b.Children)
 		if b.Type != models.BlockTypeWait {
-			// WAIT is the one keyword block the parser does NOT END-pop
-			// (handleEnd's list is Loop/Condition/ErrorHandler/Block/Switch):
-			// it closes implicitly by indent. An END after WAIT's children
-			// would fall through to the enclosing IF/LOOP and steal ITS
-			// closure — re-parenting a following ELSE to the wrong level.
-			sb.WriteString(ind + "END\n")
+			// WAIT is the one keyword block the parser does NOT END-pop: it
+			// closes implicitly by indent. An END after WAIT's children would
+			// steal the enclosing construct's closure, re-parenting a following
+			// ELSE to the wrong level.
+			writeLine(sb, ind, "END")
 		}
 		return
 
 	default:
 		// Everything else (leaf ACTIONs, dotted VARIABLE ops, dotted If/Loop
-		// containers) uses the generic dotted form:
-		//     <RawType> Key: Value ... => Output
-		// Dotted containers (classifier prefix rules) close with END; leaf
-		// blocks that merely carry indented followers (the parser nests by
-		// indent under ANY block) emit children with NO END — indent alone
-		// reconstructs them.
+		// containers) uses `<RawType> Key: Value ... => Output`. Dotted
+		// containers close with END; leaf blocks that merely carry indented
+		// followers emit children with NO END — indent alone reconstructs the nesting.
 		emitLeafLine(sb, ind, serializeGenericAction(b), b)
-		serializeChildList(sb, depth+1, b.Children)
+		serializeChildList(sb, childInd, b.Children)
 		if isContainerType(b.Type) {
-			sb.WriteString(ind + "END\n")
+			writeLine(sb, ind, "END")
 		}
 	}
 }
 
-// indexOfOnBlockErrorChild returns the position of the OnBlockError ACTION
-// artifact child (the promoted-BLOCK parse marker), or -1.
+// indexOfOnBlockErrorChild returns the OnBlockError ACTION artifact child position (promoted-BLOCK marker), or -1.
 func indexOfOnBlockErrorChild(b *models.Block) int {
 	for i := range b.Children {
 		c := &b.Children[i]
@@ -335,8 +317,7 @@ func indexOfOnBlockErrorChild(b *models.Block) int {
 	return -1
 }
 
-// serializePropsSuffix renders ` Key: Value` for the non-internal properties
-// (no leading RawType, no _output suffix) — used by the ERROR_CAPTURE line.
+// serializePropsSuffix renders ` Key: Value` for non-internal properties (ERROR_CAPTURE line).
 func serializePropsSuffix(b *models.Block) string {
 	keys := make([]string, 0, len(b.Properties))
 	for k := range b.Properties {
@@ -348,7 +329,10 @@ func serializePropsSuffix(b *models.Block) string {
 	sort.Strings(keys)
 	var sb strings.Builder
 	for _, k := range keys {
-		sb.WriteString(" " + k + ": " + QuoteValue(b.Properties[k]))
+		sb.WriteByte(' ')
+		sb.WriteString(k)
+		sb.WriteString(": ")
+		sb.WriteString(QuoteValue(b.Properties[k]))
 	}
 	return sb.String()
 }
@@ -366,12 +350,11 @@ func endsWithThenSuffix(b *models.Block) bool {
 }
 
 // emitLeafLine writes one leaf block line followed, when the block carries
-// them, by its INLINE RETRY directive (`ON ERROR REPEAT n TIMES WAIT w ...`).
-// The parser folds that directive into the parent's _retry* properties —
-// dropping it on re-emit silently changed analysis results (hasTimeoutConfigured
-// matches the "wait" in _retryWait, so missing-timeout findings moved).
+// them, by its INLINE RETRY directive — the parser folds it into _retry*
+// properties, and dropping it on re-emit silently changed analysis results
+// (missing-timeout matches the "wait" in _retryWait).
 func emitLeafLine(sb *strings.Builder, ind, line string, b *models.Block) {
-	sb.WriteString(ind + line + "\n")
+	writeLine(sb, ind, line)
 	if b.Properties["_retryCount"] == "" {
 		return
 	}
@@ -385,15 +368,14 @@ func emitLeafLine(sb *strings.Builder, ind, line string, b *models.Block) {
 	if v := b.Properties["_retryMaxInterval"]; v != "" {
 		d += " MaxInterval: " + v
 	}
-	sb.WriteString(ind + d + "\n")
+	writeLine(sb, ind, d)
 }
 
 func isKeywordCall(raw string) bool {
 	return raw == "CALL" || raw == "DISABLED_CALL"
 }
 
-// isFlowKeywordAction covers the zero-argument flow primitives classified as
-// leaf ACTIONs by the classifier's exact map.
+// isFlowKeywordAction covers the zero-argument flow primitives classified as leaf ACTIONs by the classifier's exact map.
 func isFlowKeywordAction(raw string) bool {
 	switch raw {
 	case "GOTO", "LABEL", "EXIT", "EXIT_LOOP", "NEXT_LOOP", "ERROR_CAPTURE":
@@ -402,8 +384,7 @@ func isFlowKeywordAction(raw string) bool {
 	return false
 }
 
-// isKeywordControl reports whether the block was parsed from a keyword-style
-// control line (whose Name preserves the full original line text).
+// isKeywordControl reports whether the block parsed from a keyword-style control line (Name preserves the full original text).
 func isKeywordControl(t models.BlockType, raw string) bool {
 	switch t {
 	case models.BlockTypeCondition, models.BlockTypeLoop, models.BlockTypeSwitch,
@@ -415,8 +396,7 @@ func isKeywordControl(t models.BlockType, raw string) bool {
 	return false
 }
 
-// isContainerType reports whether a block nests children in the generic
-// (dotted) emission path. CASE/DEFAULT/ELSE are handled in serializeChildList.
+// isContainerType reports whether a block nests children in the generic (dotted) path; CASE/DEFAULT/ELSE live in serializeChildList.
 func isContainerType(t models.BlockType) bool {
 	switch t {
 	case models.BlockTypeCondition, models.BlockTypeLoop, models.BlockTypeSwitch,
@@ -427,9 +407,8 @@ func isContainerType(t models.BlockType) bool {
 }
 
 // serializeGenericAction renders `<RawType> Key: Value ... => Out` with
-// sorted property keys (map iteration is random; sorted output is
-// deterministic, which round-trip tests rely on). Internal `_`-prefixed
-// keys are dropped except `_output`, which becomes the => suffix.
+// sorted keys (map iteration is random; round-trip tests rely on determinism).
+// Internal `_`-prefixed keys are dropped except `_output`, the => suffix.
 func serializeGenericAction(b *models.Block) string {
 	var sb strings.Builder
 	sb.WriteString(b.RawType)
@@ -442,31 +421,32 @@ func serializeGenericAction(b *models.Block) string {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		sb.WriteString(" " + k + ": " + QuoteValue(b.Properties[k]))
+		sb.WriteByte(' ')
+		sb.WriteString(k)
+		sb.WriteString(": ")
+		sb.WriteString(QuoteValue(b.Properties[k]))
 	}
 	if out := b.Properties["_output"]; out != "" {
-		sb.WriteString(" => " + out)
+		sb.WriteString(" => ")
+		sb.WriteString(out)
 	}
 	return sb.String()
 }
 
-// QuoteValue re-quotes a parsed (unwrapped) property value for emission.
-// Bare iff it contains no whitespace and no quotes of any kind — a bare
-// value terminates at whitespace, and a quote character would start a quoted
-// section mid-value. Everything else is wrapped in a $”'...”' literal; the
-// parser strips that wrapper back off, so the quoting decision doesn't need
-// to match the original file's.
+// QuoteValue re-quotes a parsed (unwrapped) property value for emission:
+// bare iff it contains no whitespace and no quotes of any kind; everything
+// else wraps in a dollar-prefixed triple-quote literal — the parser strips
+// that wrapper back off, so the decision need not match the original file's.
 func QuoteValue(v string) string {
 	if v == "" {
-		// Six single quotes: a triple-quoted empty literal — the shortest
-		// form stripQuotes unwraps (its len>5 guard).
+		// Six single quotes: a triple-quoted empty literal — the shortest form stripQuotes unwraps.
 		return "''''''"
 	}
 	if strings.Contains(v, "'''") {
-		// The PARSED value already embeds quote markers (values like
-		// `$'''text''' Result` scan through a quoted section plus trailing
-		// words). No wrapper can safely contain ''' — emitting the value
-		// VERBATIM reproduces the original token scan exactly.
+		// The PARSED value already embeds quote markers (some values scan
+		// through a quoted section plus trailing words); no wrapper can safely
+		// contain a triple-quote — emitting VERBATIM reproduces the original
+		// token scan exactly.
 		return v
 	}
 	if !strings.ContainsAny(v, " \t\r\n'\"") {

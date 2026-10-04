@@ -14,9 +14,8 @@ import (
 // float64 rounding in the per-million arithmetic.
 func costApprox(got, want float64) bool { return math.Abs(got-want) < 1e-9 }
 
-// TestUsageMetric_CacheTokensPricedAtCachedRates (audit #9 F-05): the cached
-// slice of TokensIn is priced at the cached rates instead of the full input
-// rate, which overstated a cached Claude session against the daily budget
+// TestUsageMetric_CacheTokensPricedAtCachedRates: the cached slice of
+// TokensIn is priced at the cached rates instead of the full input rate
 // (Opus 5.5 reads 0.05x, Fable/Mythos 5.1 0.025x, other Claude 0.1x, writes
 // 1.25x). TokensIn itself stays the total.
 func TestUsageMetric_CacheTokensPricedAtCachedRates(t *testing.T) {
@@ -29,9 +28,8 @@ func TestUsageMetric_CacheTokensPricedAtCachedRates(t *testing.T) {
 	}
 	ap := &auditedProvider{providerID: "claude", inner: claude}
 
-	// Opus 5, 1000 uncached + 9000 cached read + 100 out: the verifier's
-	// fixture — (1000×5 + 9000×0.5 + 100×25)/1e6 = 0.0120, not 0.0525 (which
-	// pricing the whole input at full rate produced).
+	// Opus 5, 1000 uncached + 9000 cached read + 100 out:
+	// (1000×5 + 9000×0.5 + 100×25)/1e6 = 0.0120.
 	m := ap.usageMetric(context.Background(), "claude-opus-5", "claude-opus-5-20260101", "", usage{In: 10_000, CacheRead: 9000, Out: 100})
 	if !costApprox(m.EstimatedCost, 0.0120) {
 		t.Errorf("Opus 5 cached turn = %v, want 0.0120", m.EstimatedCost)
@@ -60,9 +58,9 @@ func TestUsageMetric_CacheTokensPricedAtCachedRates(t *testing.T) {
 	}
 
 	// Non-Claude, non-Azure providers keep the full input rate on cached
-	// tokens (no verified cached meter): the safe overstatement the audit
-	// shipped as the fallback. Azure Foundry is unpriced (no cached-token
-	// discount table), so its cost is zero whatever the cached breakdown.
+	// tokens (no verified cached meter) — the safe overstatement. Azure
+	// Foundry is unpriced (no cached-token discount table), so its cost is
+	// zero whatever the cached breakdown.
 	az := &auditStub{models: []ModelInfo{{ID: "gpt-4o", Pricing: Pricing{InputCostPerM: 2.5, OutputCostPerM: 10.0}}}}
 	apAz := &auditedProvider{providerID: "openai", inner: az}
 	m = apAz.usageMetric(context.Background(), "gpt-4o", "gpt-4o", "", usage{In: 1000, CacheRead: 900})
@@ -78,7 +76,6 @@ func TestUsageMetric_CacheTokensPricedAtCachedRates(t *testing.T) {
 	}
 }
 
-// TestCacheReadMultiplier families (audit #9 F-05).
 func TestCacheReadMultiplier_Families(t *testing.T) {
 	for _, tc := range []struct {
 		provider, model, served string
@@ -101,7 +98,7 @@ func TestCacheReadMultiplier_Families(t *testing.T) {
 	}
 }
 
-// TestParseOpenAISSE_CachedTokensBreakdown (audit #9 F-05): the
+// TestParseOpenAISSE_CachedTokensBreakdown: the
 // chat-completions parser carries usage.prompt_tokens_details.cached_tokens
 // (Azure's prompt-cache hits; included in prompt_tokens) onto the Done chunk
 // as the CacheReadTokens breakdown.
@@ -133,7 +130,7 @@ func TestParseOpenAISSE_CachedTokensBreakdown(t *testing.T) {
 	}
 }
 
-// TestClaudeChat_CacheTokensCarried (audit #9 F-05): the non-streaming Chat
+// TestClaudeChat_CacheTokensCarried: the non-streaming Chat
 // path fills the cache breakdown on the Response, included in TokensIn.
 func TestClaudeChat_CacheTokensCarried(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -154,8 +151,8 @@ func TestClaudeChat_CacheTokensCarried(t *testing.T) {
 	}
 }
 
-// TestAudited_StreamCacheTokensPricedAtCachedRates (audit #9 F-05): end to
-// end, a Claude stream whose usage chunks carry the cache breakdown records
+// TestAudited_StreamCacheTokensPricedAtCachedRates: end to end, a Claude
+// stream whose usage chunks carry the cache breakdown records
 // the cached rate, not the full input rate, on the usage row.
 func TestAudited_StreamCacheTokensPricedAtCachedRates(t *testing.T) {
 	sink := newUsageSink()
@@ -180,7 +177,7 @@ func TestAudited_StreamCacheTokensPricedAtCachedRates(t *testing.T) {
 	}
 }
 
-// TestRetry_HeldUsageKeepsCacheCounts (audit #9 F-05): the withheld
+// TestRetry_HeldUsageKeepsCacheCounts: the withheld
 // pre-content error chunk's cache breakdown rides the error (heldUsageError)
 // so a failed run's usage is still priced at the cached rates.
 func TestRetry_HeldUsageKeepsCacheCounts(t *testing.T) {

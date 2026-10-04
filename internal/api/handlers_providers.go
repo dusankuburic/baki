@@ -45,12 +45,9 @@ func (h *ProviderHandler) handleListProviders(w http.ResponseWriter, r *http.Req
 	render.JSON(w, providers)
 }
 
-// listingOrg returns the ?orgId= the caller may list shared credentials for:
-// the parameter when the caller's role in that organisation may run on its
-// shared credential (admin or member, service.OrgRoleUsesSharedCredential —
-// the rule the chat turn applies), else "" (listed without an org: a
-// non-member learns nothing, not even that the org exists, and a viewer or
-// guest is not offered a provider their turns could not use).
+// listingOrg returns the ?orgId= the caller may list shared credentials for: the parameter when the
+// caller's role may run on the org's shared credential (admin or member — the rule the chat turn
+// applies), else "" — a non-member learns nothing.
 func (h *ProviderHandler) listingOrg(r *http.Request) string {
 	orgID := r.URL.Query().Get("orgId")
 	if orgID == "" || h.security.OrgSvc == nil {
@@ -272,14 +269,13 @@ func (h *ProviderHandler) handleSaveAzureFoundryConfig(w http.ResponseWriter, r 
 	req.Normalize()
 	if err := h.providerSvc.SaveAzureFoundryConfig(h.security.KeyScope(r), req); err != nil {
 		if _, changed := service.AzureCredentialChanged(err); changed {
-			// The save failed after the new document went in, and the
-			// previous one could not be put back: the change stands.
+			// The save failed after the new document went in and the previous one could not be put back: the change stands.
 			meta := azureConfigAuditMeta(req, !req.HasSecret())
 			meta["outcome"] = "failed_after_credential_change"
 			logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", ai.AzureFoundryProviderID, meta)
 		}
-		// A settings code (400), and — the save now writes the registry's
-		// resource "default" and its models — the registry's own refusals.
+		// A settings code (400), and — the save writes the registry's
+		// resource "default" and its models too — the registry's own refusals.
 		renderAzureRegistryError(w, err)
 		return
 	}
@@ -307,9 +303,8 @@ func (h *ProviderHandler) handleGetLocalConfig(w http.ResponseWriter, r *http.Re
 	render.JSON(w, cfg)
 }
 
-// renderLocalConfigError answers a refused local models read or save
-// (*ai.LocalConfigError) as a 400 carrying its client code, anything else
-// as a 500.
+// renderLocalConfigError answers a refused local models read or save (*ai.LocalConfigError) as a
+// 400 carrying its client code, anything else as a 500.
 func renderLocalConfigError(w http.ResponseWriter, err error) {
 	var cfgErr *ai.LocalConfigError
 	if errors.As(err, &cfgErr) {
@@ -319,10 +314,8 @@ func renderLocalConfigError(w http.ResponseWriter, err error) {
 	render.Error(w, err, http.StatusInternalServerError)
 }
 
-// localConfigSaveRequest is the local models save body. ContextWindow is the
-// context length, in tokens, the local server runs its models with (Ollama
-// num_ctx, LM Studio's context length): omitted or 0 = the default (8192),
-// else 1024..2000000.
+// localConfigSaveRequest is the local models save body. ContextWindow is the context length, in
+// tokens, the local server runs its models with (Ollama num_ctx): omitted or 0 = 8192, else 1024..2000000.
 type localConfigSaveRequest struct {
 	BaseURL       string `json:"baseUrl" example:"http://127.0.0.1:11434/v1"`
 	ContextWindow int    `json:"contextWindow,omitempty" example:"32768"`
@@ -374,12 +367,9 @@ func (h *ProviderHandler) handleSaveLocalConfig(w http.ResponseWriter, r *http.R
 // document cap, far below anything that costs memory.
 const azureConfigBodyLimit = 64 << 10
 
-// decodeAzureConfigBody decodes an Azure AI Foundry configuration save body
-// strictly: an unknown field is refused (the stored document is parsed with
-// DisallowUnknownFields, so a misspelled field must fail here rather than
-// vanish), and so is anything after the JSON value — a body such as
-// `{…}{"endpoint":…}` used to save the first object and silently ignore the
-// rest, so what was audited or reviewed was not what was sent.
+// decodeAzureConfigBody decodes strictly: unknown fields are refused (the stored document is parsed
+// with DisallowUnknownFields — a misspelled field must fail here, not vanish), and so is anything
+// after the JSON value (`{…}{…}` used to save the first object and silently drop the rest).
 func decodeAzureConfigBody(w http.ResponseWriter, r *http.Request, v any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, azureConfigBodyLimit))
 	dec.DisallowUnknownFields()
@@ -392,12 +382,8 @@ func decodeAzureConfigBody(w http.ResponseWriter, r *http.Request, v any) error 
 	return nil
 }
 
-// azureConfigAuditMeta is the audit meta of an Azure AI Foundry
-// configuration save: where the credential now goes and whose it is — the
-// endpoint and project endpoint hosts, the auth mode, the Microsoft Entra ID
-// tenant and client IDs — and secretCarried, whether the stored secret was
-// kept (the request omitted it) rather than a new one supplied. Never a
-// secret.
+// azureConfigAuditMeta is the audit meta of a configuration save: where the credential goes and
+// whose it is (hosts, auth mode, Entra IDs) and secretCarried. Never a secret.
 func azureConfigAuditMeta(cfg ai.AzureFoundryConfig, secretCarried bool) map[string]string {
 	meta := map[string]string{
 		"op":            "save",

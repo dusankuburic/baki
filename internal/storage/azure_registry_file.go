@@ -20,41 +20,30 @@ import (
 	"pad-core/logger"
 )
 
-// AzureRegistryFileName is the file store's file inside the config dir. It
-// is never settings.json: the registry has its own file, format version and
-// revision counter, so neither can clobber the other.
+// AzureRegistryFileName is the file store's file inside the config dir — never settings.json: the registry
+// has its own file, format version and revision counter, so neither can clobber the other.
 const AzureRegistryFileName = "azure-models.json"
 
-// azureRegistryFileVersion is the file format this binary writes. A file
-// with a higher version was written by a newer app: it is read (leniently)
-// but never rewritten — the store reports read_only.
+// azureRegistryFileVersion is the file format this binary writes. A higher version was written by a newer
+// app: read leniently, never rewritten — the store reports read_only.
 const azureRegistryFileVersion = 1
 
-// FileAzureRegistry is the AzureRegistryStore of the desktop app and of a
-// database backend with auth off: one personal owner (AzureUserOwner("")),
-// persisted in <configDir>/azure-models.json.
+// FileAzureRegistry is the AzureRegistryStore of the desktop app and of a database backend with auth off:
+// one personal owner (AzureUserOwner("")), persisted in <configDir>/azure-models.json.
 //
-//   - Every read-modify-write holds one process mutex and re-reads the file
-//     inside it, so writers in this process never lose each other's work.
-//   - Writes go to a unique temp file (mode 0600) renamed over the target,
-//     with the filesystem backend's bounded retry over a Windows reader's
-//     transient sharing conflict.
-//   - The file carries a revision counter, compared again right before the
-//     rename: a second process sharing the directory (a standalone backend
-//     next to the desktop app — Tauri's single-instance plugin does not
-//     stop it) that wrote meanwhile turns this write into
-//     ErrAzureRegistryConflict instead of silently discarding its write.
-//     The compare and the rename are not one atomic step, so two processes
-//     committing in the same instant can still race; the counter closes the
-//     window a read-modify-write leaves open, which is where the time goes.
-//   - A corrupt file is renamed aside (the copy is kept, its path reported
-//     by State) and the registry starts empty: registryState recovered.
-//   - A file from a newer format version is read-only: registryState
-//     read_only, writes fail with ErrAzureRegistryReadOnly.
+//   - Every read-modify-write holds one process mutex and re-reads the file inside it, so writers in this
+//     process never lose each other's work.
+//   - Writes go to a unique temp file (mode 0600) renamed over the target, with the filesystem backend's
+//     bounded retry over a Windows reader's transient sharing conflict.
+//   - The file carries a revision counter, compared again right before the rename: a second process sharing
+//     the directory that wrote meanwhile turns this write into ErrAzureRegistryConflict instead of silently
+//     discarding its write (the compare and rename are not atomic, but the counter closes the window a
+//     read-modify-write leaves open).
+//   - A corrupt file is renamed aside (kept, path reported by State) and the registry starts empty
+//     (registryState recovered); a file from a newer format version is read-only (ErrAzureRegistryReadOnly).
 //
-// There is no transaction spanning this file and the OS keyring, so a
-// resource is created Pending with this process's BootID (see
-// AzureConnectionRecord.Pending); PendingWrites reports true.
+// No transaction spans this file and the OS keyring, so a resource is created Pending with this process's
+// BootID; PendingWrites reports true.
 type FileAzureRegistry struct {
 	path   string
 	bootID string
@@ -73,10 +62,8 @@ type FileAzureRegistry struct {
 
 var _ interfaces.AzureRegistryStore = (*FileAzureRegistry)(nil)
 
-// NewFileAzureRegistry opens the registry file in configDir (created on
-// the first write). It loads the file once, so a corrupt file is
-// quarantined — and a newer one detected — at startup rather than on the
-// first request; an I/O error doing so is returned.
+// NewFileAzureRegistry opens the registry file in configDir (created on the first write). It loads the
+// file once, so a corrupt file is quarantined — and a newer one detected — at startup; an I/O error is returned.
 func NewFileAzureRegistry(configDir string) (*FileAzureRegistry, error) {
 	if configDir == "" {
 		return nil, errors.New("azure registry: empty config directory")
@@ -232,9 +219,8 @@ func (s *FileAzureRegistry) checkOwner(owner interfaces.AzureOwner) error {
 // it (another process rewrote it) — load again.
 var errAzureFileChanged = errors.New("azure registry file changed while loading")
 
-// loadLocked reads and parses the file (fileMu held). A missing file is an
-// empty registry at revision 0; a corrupt one is quarantined and also reads
-// as empty; a newer-version one is parsed leniently and flagged read-only.
+// loadLocked reads and parses the file (fileMu held). A missing file is an empty registry at revision 0;
+// a corrupt one is quarantined and also reads as empty; a newer-version one is parsed leniently and read-only.
 func (s *FileAzureRegistry) loadLocked() (d *azureRegistryData, revision int64, err error) {
 	for range 3 {
 		d, revision, err = s.loadOnceLocked()
@@ -262,9 +248,8 @@ func (s *FileAzureRegistry) loadOnceLocked() (*azureRegistryData, int64, error) 
 		return s.quarantineLocked(data, err)
 	}
 	if head.Version > azureRegistryFileVersion {
-		// A newer app wrote it. Show what this version understands, but
-		// never rewrite it (and never quarantine it: that would hide the
-		// newer app's data from the newer app).
+		// A newer app wrote it. Show what this version understands, but never rewrite it (and never
+		// quarantine it: that would hide the newer app's data from the newer app).
 		s.setReadOnly(true)
 		var doc azureRegistryFile
 		if json.Unmarshal(data, &doc) != nil {
@@ -293,10 +278,9 @@ func (s *FileAzureRegistry) setReadOnly(v bool) {
 	s.stateMu.Unlock()
 }
 
-// quarantineLocked renames the corrupt file aside — keeping the copy for
-// the user or support — and reports an empty registry at revision 0, so
-// the next write starts a fresh file. The file is re-read first: if another
-// process replaced it meanwhile, that newer content is loaded instead.
+// quarantineLocked renames the corrupt file aside — keeping the copy for the user or support — and reports
+// an empty registry at revision 0, so the next write starts a fresh file. Re-read first: if another process
+// replaced the file meanwhile, that newer content is loaded instead.
 func (s *FileAzureRegistry) quarantineLocked(data []byte, cause error) (*azureRegistryData, int64, error) {
 	current, err := atomicfile.ReadFileTolerant(s.path)
 	if err == nil && !bytes.Equal(current, data) || errors.Is(err, fs.ErrNotExist) {
@@ -317,9 +301,8 @@ func (s *FileAzureRegistry) quarantineLocked(data []byte, cause error) (*azureRe
 	return &azureRegistryData{}, 0, nil
 }
 
-// peekRevision reads the revision currently on disk: 0 when the file is
-// absent; ok is false when it cannot be read as a file this version may
-// overwrite (unparseable, or from a newer version).
+// peekRevision reads the revision currently on disk: 0 when the file is absent; ok is false when it cannot
+// be read as a file this version may overwrite (unparseable, or from a newer version).
 func (s *FileAzureRegistry) peekRevision() (revision int64, ok bool) {
 	data, err := atomicfile.ReadFileTolerant(s.path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -423,9 +406,8 @@ func (s *FileAzureRegistry) update(owner interfaces.AzureOwner, fn func(d *azure
 	return s.commitLocked(d, revision)
 }
 
-// State re-reads the file, then reports read_only (a newer version's file),
-// recovered (a corrupt file was quarantined during this process's life) or
-// ok.
+// State re-reads the file, then reports read_only (a newer version's file), recovered (a corrupt file was
+// quarantined during this process's life) or ok.
 func (s *FileAzureRegistry) State(context.Context) interfaces.AzureRegistryStatus {
 	s.fileMu.Lock()
 	if _, _, err := s.loadLocked(); err != nil {
@@ -452,9 +434,8 @@ func (s *FileAzureRegistry) BootID() string { return s.bootID }
 
 type fileAzureLockKey struct{ store *FileAzureRegistry }
 
-// WithOwnerLock holds the store's owner mutex while fn runs (reentrant
-// through fn's ctx). It serialises check-then-act sequences within this
-// process; another process is caught by the revision check instead.
+// WithOwnerLock holds the store's owner mutex while fn runs (reentrant through fn's ctx). It serialises
+// check-then-act sequences within this process; another process is caught by the revision check instead.
 func (s *FileAzureRegistry) WithOwnerLock(ctx context.Context, owner interfaces.AzureOwner, fn func(ctx context.Context) error) error {
 	if err := s.checkOwner(owner); err != nil {
 		return err

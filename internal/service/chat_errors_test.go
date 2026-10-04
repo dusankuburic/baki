@@ -482,7 +482,7 @@ func TestPersistedTurns_UseTheClientMessageIDs(t *testing.T) {
 	// Idempotent: a second pass (retry) must not append again.
 	svc.persistAssistantTurn(ctx, doc, req, ctl, req.Model, "")
 
-	got, err := svc.GetConversation(ctx, doc, req.ConversationKey())
+	got, err := svc.GetConversation(ctx, doc.ID, req.ConversationKey())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,7 @@ func TestPersistAssistantTurn_RespectsTheClientsCopyOfTheTurn(t *testing.T) {
 		AssistantMessageID: "33333333-3333-4333-8333-333333333333",
 	}
 	ctx := context.Background()
-	if err := svc.SaveConversation(ctx, doc, req.ConversationKey(), []models.ChatMessage{
+	if err := svc.SaveConversation(ctx, doc.ID, req.ConversationKey(), []models.ChatMessage{
 		{ID: "22222222-2222-4222-8222-222222222222", Role: "user", Content: "hi", Timestamp: time.Now()},
 		{ID: req.AssistantMessageID, Role: "assistant", Content: "the ans", Timestamp: time.Now()},
 	}); err != nil {
@@ -515,7 +515,7 @@ func TestPersistAssistantTurn_RespectsTheClientsCopyOfTheTurn(t *testing.T) {
 	ctl.buffer.WriteString("the answer, in full")
 	svc.persistAssistantTurn(ctx, doc, req, ctl, req.Model, "")
 
-	got, _ := svc.GetConversation(ctx, doc, req.ConversationKey())
+	got, _ := svc.GetConversation(ctx, doc.ID, req.ConversationKey())
 	if len(got) != 2 {
 		t.Errorf("stored %d messages, want the client's 2", len(got))
 	}
@@ -532,7 +532,7 @@ func TestPersistAssistantTurn_DedupesByIDAnywhereInTheHistory(t *testing.T) {
 		AssistantMessageID: "33333333-3333-4333-8333-333333333333",
 	}
 	ctx := context.Background()
-	if err := svc.SaveConversation(ctx, doc, req.ConversationKey(), []models.ChatMessage{
+	if err := svc.SaveConversation(ctx, doc.ID, req.ConversationKey(), []models.ChatMessage{
 		{ID: "22222222-2222-4222-8222-222222222222", Role: "user", Content: "hi", Timestamp: time.Now()},
 		{ID: req.AssistantMessageID, Role: "assistant", Content: "the answer", Timestamp: time.Now()},
 		{ID: "44444444-4444-4444-8444-444444444444", Role: "user", Content: "and then?", Timestamp: time.Now()},
@@ -543,7 +543,7 @@ func TestPersistAssistantTurn_DedupesByIDAnywhereInTheHistory(t *testing.T) {
 	ctl.buffer.WriteString("the answer")
 	svc.persistAssistantTurn(ctx, doc, req, ctl, req.Model, "")
 
-	got, _ := svc.GetConversation(ctx, doc, req.ConversationKey())
+	got, _ := svc.GetConversation(ctx, doc.ID, req.ConversationKey())
 	if len(got) != 3 {
 		t.Errorf("stored %d messages, want the 3 already there: %+v", len(got), got)
 	}
@@ -563,7 +563,7 @@ func TestPersistInitialUserTurn_MintsAFreshIDWhenTheClientsIsTaken(t *testing.T)
 	}
 	svc.persistInitialUserTurn(context.Background(), doc, req)
 
-	got, _ := svc.GetConversation(context.Background(), doc, req.ConversationKey())
+	got, _ := svc.GetConversation(context.Background(), doc.ID, req.ConversationKey())
 	if len(got) != 2 || got[0].ID != taken || got[1].ID == taken || len(got[1].ID) != 36 {
 		t.Errorf("stored ids %+v, want the taken id once and a fresh one for the new turn", got)
 	}

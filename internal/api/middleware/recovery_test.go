@@ -94,6 +94,33 @@ func TestRecovery_LogsPanicDetails(t *testing.T) {
 	}
 }
 
+// TestRecovery_RedactsTheInviteTokenOfARawPath: a panic before the router
+// (in the rate limiter, say) reports the path as the client spelled it, so
+// the invite redaction must match its canonical form, not just the literal
+// /api/invites/ prefix.
+func TestRecovery_RedactsTheInviteTokenOfARawPath(t *testing.T) {
+	for _, target := range []string{
+		"/api/invites/s3cret-token/accept",
+		"/api/v1/invites/s3cret-token/accept",
+		"/api//invites/s3cret-token/accept",
+		"/api/./invites/s3cret-token/accept",
+	} {
+		buf := captureSlog(t)
+		handler := Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			panic("boom")
+		}))
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, target, nil))
+
+		out := buf.String()
+		if contains(out, "s3cret-token") {
+			t.Errorf("POST %s: the invite token reached the panic report:\n%s", target, out)
+		}
+		if !contains(out, "/api/invites/[redacted]/accept") {
+			t.Errorf("POST %s: expected the redacted canonical path in the panic report:\n%s", target, out)
+		}
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
 }

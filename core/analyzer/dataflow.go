@@ -1,6 +1,10 @@
 package analyzer
 
 import (
+	"context"
+	"math"
+	"sort"
+
 	"pad-core/models"
 )
 
@@ -35,28 +39,9 @@ func (r *DeadDataRule) Check(block *models.Block, ctx *RuleContext) []models.Fin
 		return nil
 	}
 
-	readers := findReaders(outVar, ctx)
-	if len(readers) == 0 {
-		return nil
-	}
-
-	allReadersDead := true
-	for _, readerID := range readers {
-		readerIdx, ok := ctx.BlockIndex[readerID]
-		if !ok {
-			continue
-		}
-		readerSiblingKey := ctx.SiblingKey[readerID]
-
-		readerTermIdx, hasTerm := ctx.TerminatorIndex[readerSiblingKey]
-		if hasTerm && readerIdx > readerTermIdx {
-			continue
-		}
-		allReadersDead = false
-		break
-	}
-
-	if !allReadersDead {
+	// Classified once per variable in buildContext (see buildAllReadersDead);
+	// absent means no readers, or at least one live one.
+	if !ctx.AllReadersDead[outVar] {
 		return nil
 	}
 
@@ -72,9 +57,8 @@ func (r *DeadDataRule) Check(block *models.Block, ctx *RuleContext) []models.Fin
 	}}
 }
 
-// findReaders returns the IDs of blocks that read varName (it appears in their
-// Variables), excluding blocks that also write the same variable (a self
-// assignment is not counted as a read). O(readers) via ctx.ReadersByVar.
+// findReaders returns the IDs of blocks that read varName, excluding blocks
+// that also write it (a self assignment is not a read); O(readers) via ctx.ReadersByVar.
 func findReaders(varName string, ctx *RuleContext) []string {
 	candidates := ctx.ReadersByVar[varName]
 	if len(candidates) == 0 {
@@ -96,14 +80,115 @@ func findReaders(varName string, ctx *RuleContext) []string {
 	return readers
 }
 
+// buildAllReadersDead holds varName iff it has at least one reader (excluding
+// self-writes, as findReaders does) and none is live — live means a BlockIndex
+// at or before its group's terminator, or no terminator; no BlockIndex counts
+// as dead, exactly as the rule's per-writer walk did. O(total reads).
+func buildAllReadersDead(ctx *RuleContext) map[string]bool {
+	dead := make(map[string]bool)
+	for varName, candidates := range ctx.ReadersByVar {
+		n := 0
+		allDead := true
+		for _, id := range candidates {
+			b := ctx.AllBlocks[id]
+			if b == nil {
+				continue
+			}
+			if b.Properties != nil {
+				if b.Properties["_output"] == varName || b.Properties["_var"] == varName {
+					continue
+				}
+			}
+			n++
+			readerIdx, ok := ctx.BlockIndex[id]
+			if !ok {
+				continue
+			}
+			readerTermIdx, hasTerm := ctx.TerminatorIndex[ctx.SiblingKey[id]]
+			if hasTerm && readerIdx > readerTermIdx {
+				continue
+			}
+			allDead = false
+			break
+		}
+		if n > 0 && allDead {
+			dead[varName] = true
+		}
+	}
+	return dead
+}
+
+// DataFlowLimits bounds the data-flow response; PAD variables are flow-global,
+// so materialized edges are O(readers × writers) per variable (a 10.6 MB flow
+// hit 26M edges, 4.6 GB). A limit <= 0 means unlimited.
+type DataFlowLimits struct {
+	// MaxEdgesPerVariable caps the upstream and downstream blocks listed for
+	// one variable, so one hot variable cannot take the whole edge budget.
+	MaxEdgesPerVariable int `json:"maxEdgesPerVariable"`
+	// MaxEdges caps the upstream entries, and separately the downstream
+	// entries, across all blocks.
+	MaxEdges int `json:"maxEdges"`
+	// MaxTaintPaths and MaxDeadData cap those lists.
+	MaxTaintPaths int `json:"maxTaintPaths"`
+	MaxDeadData   int `json:"maxDeadData"`
+}
+
+// DefaultDataFlowLimits leaves typical flows exact and holds a pathological one
+// to a few MB of JSON (one variable with 5,000 writers and 5,000 readers:
+// 5.6 MB, was 25M edges each way).
+var DefaultDataFlowLimits = DataFlowLimits{
+	MaxEdgesPerVariable: 200,
+	MaxEdges:            100_000,
+	MaxTaintPaths:       10_000,
+	MaxDeadData:         10_000,
+}
+
+// DataFlowResult is models.DataFlowAnalysis (fields inlined, so the response
+// keeps the old shape) plus what the limits cut; Truncated=false means the
+// lists are exactly the unlimited analysis.
+type DataFlowResult struct {
+	*models.DataFlowAnalysis
+	Truncated           bool           `json:"truncated"`
+	EdgesTruncated      bool           `json:"edgesTruncated,omitempty"`
+	TaintPathsTruncated bool           `json:"taintPathsTruncated,omitempty"`
+	DeadDataTruncated   bool           `json:"deadDataTruncated,omitempty"`
+	Limits              DataFlowLimits `json:"limits"`
+}
+
+// AnalyzeDataFlow is AnalyzeDataFlowCtx without cancellation, under
+// DefaultDataFlowLimits.
 func AnalyzeDataFlow(doc *models.FlowDocument) *models.DataFlowAnalysis {
+	res, _ := AnalyzeDataFlowCtx(context.Background(), doc, DefaultDataFlowLimits)
+	return res.DataFlowAnalysis
+}
+
+const dataFlowCheckEvery = 256
+
+// AnalyzeDataFlowCtx computes each block's reads/writes plus upstream/downstream
+// blocks, taint hints and dead data paths, within limits; O(blocks log blocks +
+// reads + output), returns ctx.Err() once ctx is done. Blocks are visited in
+// sorted-ID order, so which blocks lose edges is deterministic.
+func AnalyzeDataFlowCtx(ctx context.Context, doc *models.FlowDocument, limits DataFlowLimits) (*DataFlowResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	result := &models.DataFlowAnalysis{
 		Blocks: make(map[string]*models.BlockDataFlow),
 	}
+	res := &DataFlowResult{DataFlowAnalysis: result, Limits: limits}
 
-	ctx := buildContext(doc, nil)
+	// Structural indexes only: data flow reads none of the rule-only work
+	// buildContext adds.
+	rctx := buildIndexContext(doc, nil)
 
-	for id, block := range ctx.AllBlocks {
+	ids := make([]string, 0, len(rctx.AllBlocks))
+	for id := range rctx.AllBlocks {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		block := rctx.AllBlocks[id]
 		df := &models.BlockDataFlow{
 			BlockID:   id,
 			SubflowID: block.SubflowID,
@@ -122,24 +207,119 @@ func AnalyzeDataFlow(doc *models.FlowDocument) *models.DataFlowAnalysis {
 		result.Blocks[id] = df
 	}
 
-	for id, df := range result.Blocks {
+	perVar := limitOrMax(limits.MaxEdgesPerVariable)
+
+	// Upstream: writers of each read variable in WritersByVar order, minus
+	// the block itself.
+	budget := limitOrMax(limits.MaxEdges)
+	for i, id := range ids {
+		if i%dataFlowCheckEvery == 0 && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		df := result.Blocks[id]
 		for _, readVar := range df.Reads {
-			upstream := findWriters(readVar, ctx, id)
-			df.UpstreamBlocks = append(df.UpstreamBlocks, upstream...)
+			ws := rctx.WritersByVar[readVar]
+			taken, j := 0, 0
+			for ; j < len(ws) && taken < perVar && budget > 0; j++ {
+				if ws[j] == id {
+					continue
+				}
+				df.UpstreamBlocks = append(df.UpstreamBlocks, ws[j])
+				taken++
+				budget--
+			}
+			// Only the block's own entries may be left unlisted.
+			for ; j < len(ws); j++ {
+				if ws[j] != id {
+					res.EdgesTruncated = true
+					break
+				}
+			}
 		}
 	}
 
-	for id, df := range result.Blocks {
+	// Downstream: readers of each written variable after the writer's line, in
+	// ReadersByVar order; a per-variable index sorted by line finds them by
+	// binary search.
+	budget = limitOrMax(limits.MaxEdges)
+	byLine := make(map[string][]readerAt)
+	var scratch []readerAt
+	for i, id := range ids {
+		if i%dataFlowCheckEvery == 0 && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		df := result.Blocks[id]
+		if len(df.Writes) == 0 {
+			continue
+		}
+		writerLine := rctx.AllBlocks[id].LineNumber
 		for _, writeVar := range df.Writes {
-			downstream := findReadersAfter(writeVar, ctx, id)
-			df.DownstreamBlocks = append(df.DownstreamBlocks, downstream...)
+			idx, ok := byLine[writeVar]
+			if !ok {
+				idx = readersByLine(rctx, writeVar)
+				byLine[writeVar] = idx
+			}
+			// The writer's own entries carry its line, so "after" also drops
+			// them, as the old id != writer check did.
+			k := sort.Search(len(idx), func(n int) bool { return idx[n].line > writerLine })
+			after := idx[k:]
+			take := min(len(after), perVar, budget)
+			if take < len(after) {
+				res.EdgesTruncated = true
+			}
+			if take == 0 {
+				continue
+			}
+			scratch = append(scratch[:0], after[:take]...)
+			sort.Slice(scratch, func(a, b int) bool { return scratch[a].pos < scratch[b].pos })
+			for _, r := range scratch {
+				df.DownstreamBlocks = append(df.DownstreamBlocks, r.id)
+			}
+			budget -= take
 		}
 	}
 
-	result.TaintPaths = computeTaintPaths(doc, ctx)
-	result.DeadData = computeDeadDataPaths(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	result.TaintPaths, res.TaintPathsTruncated = computeTaintPaths(doc, rctx, ids, limitOrMax(limits.MaxTaintPaths))
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	result.DeadData, res.DeadDataTruncated = computeDeadDataPaths(rctx, ids, limitOrMax(limits.MaxDeadData))
+	res.Truncated = res.EdgesTruncated || res.TaintPathsTruncated || res.DeadDataTruncated
 
-	return result
+	return res, nil
+}
+
+// limitOrMax maps a DataFlowLimits value to a count (<= 0 is unlimited).
+func limitOrMax(n int) int {
+	if n <= 0 {
+		return math.MaxInt
+	}
+	return n
+}
+
+// readerAt is one ReadersByVar entry: reader ID, line, and position in
+// ReadersByVar (the order the response lists readers in).
+type readerAt struct {
+	id   string
+	line int
+	pos  int
+}
+
+// readersByLine returns varName's ReadersByVar entries sorted by line, ties in
+// ReadersByVar order; unknown blocks are dropped, as findReadersAfter drops them.
+func readersByLine(ctx *RuleContext, varName string) []readerAt {
+	ids := ctx.ReadersByVar[varName]
+	idx := make([]readerAt, 0, len(ids))
+	for pos, id := range ids {
+		if b := ctx.AllBlocks[id]; b != nil {
+			idx = append(idx, readerAt{id: id, line: b.LineNumber, pos: pos})
+		}
+	}
+	sort.SliceStable(idx, func(a, b int) bool { return idx[a].line < idx[b].line })
+	return idx
 }
 
 // findWriters returns the IDs of blocks that write varName (via _output or
@@ -182,17 +362,15 @@ func findReadersAfter(varName string, ctx *RuleContext, writerID string) []strin
 	return readers
 }
 
-// computeTaintPaths is a NAME-BASED heuristic, not a data-flow analysis, and
-// the UI labels it as such. A "source" is a variable produced by a dialog/
-// prompt block or named with an Input_/UserInput_ prefix; a "path" is that
-// variable read DIRECTLY by a sink block — zero hops. One intermediate
-// `SET Copy TO %Input_X%` breaks the trail. It is useful as a hint and was
-// presented as taint analysis; in a security tool that overclaim is worse
-// than the gap, so the name stays in the code and the API for compatibility
-// while every user-facing label says what it is.
-func computeTaintPaths(doc *models.FlowDocument, ctx *RuleContext) []models.TaintPath {
+// computeTaintPaths is a NAME-BASED heuristic, not a data-flow analysis (the
+// UI labels it as such): a "source" is a dialog/prompt-produced variable or an
+// Input_/UserInput_-prefixed name; a "path" is that variable read DIRECTLY by a
+// sink — zero hops (one intermediate SET breaks the trail). The name stays for
+// compatibility. ids is the visiting order; at most limit paths are returned.
+func computeTaintPaths(doc *models.FlowDocument, ctx *RuleContext, ids []string, limit int) (paths []models.TaintPath, truncated bool) {
 	var sources []string
-	for _, b := range ctx.AllBlocks {
+	for _, id := range ids {
+		b := ctx.AllBlocks[id]
 		if b.Properties != nil {
 			if rt, ok := b.Properties["_inputType"]; ok && (rt == "dialog" || rt == "prompt") {
 				if out, ok := b.Properties["_output"]; ok && out != "" {
@@ -212,45 +390,57 @@ func computeTaintPaths(doc *models.FlowDocument, ctx *RuleContext) []models.Tain
 			}
 		}
 	}
+	if len(sources) == 0 {
+		return nil, false
+	}
 
-	var paths []models.TaintPath
-
-	// Pre-index sink blocks once (O(blocks)) instead of scanning all blocks
-	// per source (O(sources × blocks)). This converts the inner loop from
-	// O(sources × blocks) to O(sources × sinks).
+	// Sinks indexed by the variables they read (each sink once per variable)
+	// so a source finds its direct sinks without scanning; per variable they
+	// stay in visiting order.
 	type sinkEntry struct {
 		block *models.Block
 		styp  string
 	}
-	var sinks []sinkEntry
-	for _, b := range ctx.AllBlocks {
-		if st := findSink(b.RawType); st != "" {
-			sinks = append(sinks, sinkEntry{block: b, styp: st})
+	sinksByVar := make(map[string][]sinkEntry)
+	for _, id := range ids {
+		b := ctx.AllBlocks[id]
+		st := findSink(b.RawType)
+		if st == "" {
+			continue
+		}
+		for _, v := range b.Variables {
+			list := sinksByVar[v]
+			if len(list) > 0 && list[len(list)-1].block == b {
+				continue // b reads v more than once: still one path
+			}
+			sinksByVar[v] = append(list, sinkEntry{block: b, styp: st})
 		}
 	}
 
 	for _, source := range sources {
-		for _, s := range sinks {
-			for _, v := range s.block.Variables {
-				if v == source {
-					paths = append(paths, models.TaintPath{
-						SourceVar: source,
-						SinkBlock: s.block.ID,
-						SinkType:  s.styp,
-						Path:      []string{source, s.block.ID},
-					})
-					break
-				}
+		for _, s := range sinksByVar[source] {
+			if len(paths) >= limit {
+				return paths, true
 			}
+			paths = append(paths, models.TaintPath{
+				SourceVar: source,
+				SinkBlock: s.block.ID,
+				SinkType:  s.styp,
+				Path:      []string{source, s.block.ID},
+			})
 		}
 	}
-	return paths
+	return paths, false
 }
 
-func computeDeadDataPaths(ctx *RuleContext) []models.DeadDataPath {
-	var dead []models.DeadDataPath
-
-	for _, b := range ctx.AllBlocks {
+// computeDeadDataPaths pairs each live writer of a used variable (before its
+// scope's terminator) with every dead reader (after its own terminator); dead
+// readers depend only on the variable, so they are found once per variable.
+// ids is the visiting order; at most limit paths.
+func computeDeadDataPaths(ctx *RuleContext, ids []string, limit int) (dead []models.DeadDataPath, truncated bool) {
+	deadReaders := make(map[string][]string)
+	for _, id := range ids {
+		b := ctx.AllBlocks[id]
 		outVar := outputVar(b)
 		if outVar == "" {
 			continue
@@ -270,27 +460,33 @@ func computeDeadDataPaths(ctx *RuleContext) []models.DeadDataPath {
 			continue
 		}
 
-		readers := findReaders(outVar, ctx)
+		readers, ok := deadReaders[outVar]
+		if !ok {
+			for _, readerID := range findReaders(outVar, ctx) {
+				readerIdx, ok := ctx.BlockIndex[readerID]
+				if !ok {
+					continue
+				}
+				readerTermIdx, hasTerm := ctx.TerminatorIndex[ctx.SiblingKey[readerID]]
+				if hasTerm && readerIdx > readerTermIdx {
+					readers = append(readers, readerID)
+				}
+			}
+			deadReaders[outVar] = readers
+		}
 		for _, readerID := range readers {
-			readerIdx, ok := ctx.BlockIndex[readerID]
-			if !ok {
-				continue
+			if len(dead) >= limit {
+				return dead, true
 			}
-			readerSiblingKey := ctx.SiblingKey[readerID]
-			readerTermIdx, hasTerm := ctx.TerminatorIndex[readerSiblingKey]
-			if hasTerm && readerIdx > readerTermIdx {
-				dead = append(dead, models.DeadDataPath{
-					Variable:  outVar,
-					SetBlock:  b.ID,
-					ReadBlock: readerID,
-					Reason:    "reader is in dead code (after terminator)",
-				})
-			}
+			dead = append(dead, models.DeadDataPath{
+				Variable:  outVar,
+				SetBlock:  b.ID,
+				ReadBlock: readerID,
+				Reason:    "reader is in dead code (after terminator)",
+			})
 		}
 	}
-	return dead
+	return dead, false
 }
 
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
 func init() { registerRule(&DeadDataRule{}) }

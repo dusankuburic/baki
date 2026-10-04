@@ -2,11 +2,10 @@ package models
 
 import "time"
 
-// DashboardAnalyticsData is the payload for GET /api/dashboard/analytics — the
-// filterable analytics page. Every section is computed for the same scope and
-// window (Applied / Range) so the numbers agree with each other. A section
-// whose source failed is named in Partial and left empty rather than failing
-// the request, the same contract as the home payload.
+// DashboardAnalyticsData is the payload for GET /api/dashboard/analytics.
+// Every section is computed for the same scope and window (Applied / Range)
+// so the numbers agree with each other; a section whose source failed is
+// named in Partial and left empty rather than failing the request.
 type DashboardAnalyticsData struct {
 	Applied     AnalyticsApplied  `json:"applied"`
 	Range       AnalyticsRange    `json:"range"`
@@ -175,9 +174,8 @@ type AIDailyPoint struct {
 
 // ModelUsage is one row of the by-model breakdown. Model is what the caller
 // asked for (for Azure AI Foundry a deployment name or agent); ServedModel is
-// the model that actually answered when it differs, so the UI can label the
-// row "deployment · served". Rows are grouped by the served model, so one
-// deployment routed to two models over the window yields two rows.
+// the model that actually answered when it differs. Rows are grouped by the
+// served model, so one deployment routed to two models yields two rows.
 type ModelUsage struct {
 	Provider    string  `json:"provider"`
 	Model       string  `json:"model"`

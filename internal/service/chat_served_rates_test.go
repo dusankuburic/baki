@@ -14,7 +14,7 @@ import (
 	"pad-core/models"
 )
 
-// TestConversation_KeepsServedModelAndRates pins R-3: a saved conversation
+// TestConversation_KeepsServedModelAndRates: a saved conversation
 // round-trips an assistant message's served model and billed rates on both
 // persistence paths (the local file and the cloud backend through the
 // models ↔ storage bridge), under the JSON names the frontend's
@@ -44,10 +44,10 @@ func TestConversation_KeepsServedModelAndRates(t *testing.T) {
 
 	t.Run("filesystem", func(t *testing.T) {
 		svc := &ChatService{configDir: t.TempDir()}
-		if err := svc.SaveConversation(context.Background(), doc, "flow", msgs); err != nil {
+		if err := svc.SaveConversation(context.Background(), doc.ID, "flow", msgs); err != nil {
 			t.Fatalf("SaveConversation: %v", err)
 		}
-		got, err := svc.GetConversation(context.Background(), doc, "flow")
+		got, err := svc.GetConversation(context.Background(), doc.ID, "flow")
 		if err != nil {
 			t.Fatalf("GetConversation: %v", err)
 		}
@@ -56,7 +56,7 @@ func TestConversation_KeepsServedModelAndRates(t *testing.T) {
 	t.Run("backend", func(t *testing.T) {
 		store := &testutil.FakeBackend{}
 		svc := &ChatService{configDir: t.TempDir(), mode: config.ModeCloud, backend: store}
-		if err := svc.SaveConversation(context.Background(), doc, "flow", msgs); err != nil {
+		if err := svc.SaveConversation(context.Background(), doc.ID, "flow", msgs); err != nil {
 			t.Fatalf("SaveConversation: %v", err)
 		}
 		// Through the storage type's JSON, as Postgres stores it (messages
@@ -71,7 +71,7 @@ func TestConversation_KeepsServedModelAndRates(t *testing.T) {
 				t.Errorf("stored JSON lacks %s: %s", want, raw)
 			}
 		}
-		got, err := svc.GetConversation(context.Background(), doc, "flow")
+		got, err := svc.GetConversation(context.Background(), doc.ID, "flow")
 		if err != nil {
 			t.Fatalf("GetConversation: %v", err)
 		}
@@ -97,8 +97,8 @@ func TestConversation_KeepsServedModelAndRates(t *testing.T) {
 	})
 }
 
-// TestResumeAndBegin_CarryBilledRates pins the Go side of R-3 for resume: a
-// finished stream's billed rates (from its done event) reach a client that
+// TestResumeAndBegin_CarryBilledRates pins the resume side: a finished
+// stream's billed rates (from its done event) reach a client that
 // missed that event through ResumeStream, BeginStream and the cross-replica
 // snapshot, next to the served model; and the answer the server persists
 // for a disconnected client carries them too.
@@ -162,7 +162,7 @@ func TestResumeAndBegin_CarryBilledRates(t *testing.T) {
 	}
 
 	// The server-side persist of the finished answer.
-	history, err := svc.GetConversation(context.Background(), doc, req.ConversationKey())
+	history, err := svc.GetConversation(context.Background(), doc.ID, req.ConversationKey())
 	if err != nil {
 		t.Fatalf("GetConversation: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestNoteDoneRates_IgnoresMissingAndForeignValues(t *testing.T) {
 	if c.inputCostPerM != 0 {
 		t.Error("a non-done event set the rate")
 	}
-	// F-15: an error event that carries the billed usage of a failed turn
+	// An error event that carries the billed usage of a failed turn
 	// records its rates too, so resume snapshots answer with them.
 	c.recordJournal("error", map[string]interface{}{"inputCostPerM": 1.25, "outputCostPerM": 5.0})
 	if c.inputCostPerM != 1.25 || c.outputCostPerM != 5 {
@@ -240,7 +240,7 @@ func (p *servingPricedProvider) Stream(_ context.Context, _ ai.Request, onChunk 
 	return nil
 }
 
-// TestToolLoop_DoneRatesBlendAcrossServedModels (F-30): a turn whose
+// TestToolLoop_DoneRatesBlendAcrossServedModels: a turn whose
 // iterations were answered by different served models (a router) reports
 // effective per-million rates blended from each iteration's price × tokens —
 // the done event, the resume snapshot and the persisted message — instead of

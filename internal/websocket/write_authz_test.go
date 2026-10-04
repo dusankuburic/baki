@@ -2,7 +2,9 @@ package websocket
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,11 +49,13 @@ func TestWS_ViewerCannotBroadcastBlockMutations(t *testing.T) {
 	ownerConn := dial(t, ownerSrv, "flow-1")
 	defer ownerConn.Close()
 	_ = readEnvelope(t, ownerConn) // own presence.join
+	_ = readSync(t, ownerConn)
 
 	viewerConn := dial(t, viewerSrv, "flow-1")
 	defer viewerConn.Close()
 	_ = readEnvelope(t, viewerConn) // own presence.join
-	_ = readEnvelope(t, ownerConn)  // viewer's presence.join
+	_ = readSync(t, viewerConn)
+	_ = readEnvelope(t, ownerConn) // viewer's presence.join
 	time.Sleep(50 * time.Millisecond)
 
 	for _, evt := range []EventType{EventBlockUpdate, EventBlockCreate, EventBlockDelete} {
@@ -90,10 +94,12 @@ func TestWS_EditorCanStillBroadcastBlockMutations(t *testing.T) {
 	ownerConn := dial(t, ownerSrv, "flow-1")
 	defer ownerConn.Close()
 	_ = readEnvelope(t, ownerConn)
+	_ = readSync(t, ownerConn)
 
 	editorConn := dial(t, editorSrv, "flow-1")
 	defer editorConn.Close()
 	_ = readEnvelope(t, editorConn)
+	_ = readSync(t, editorConn)
 	_ = readEnvelope(t, ownerConn) // editor's presence.join
 	time.Sleep(50 * time.Millisecond)
 
@@ -124,10 +130,12 @@ func TestWS_ViewerCanStillSendPresence(t *testing.T) {
 	ownerConn := dial(t, ownerSrv, "flow-1")
 	defer ownerConn.Close()
 	_ = readEnvelope(t, ownerConn)
+	_ = readSync(t, ownerConn)
 
 	viewerConn := dial(t, viewerSrv, "flow-1")
 	defer viewerConn.Close()
 	_ = readEnvelope(t, viewerConn)
+	_ = readSync(t, viewerConn)
 	_ = readEnvelope(t, ownerConn)
 	time.Sleep(50 * time.Millisecond)
 
@@ -144,3 +152,96 @@ func TestWS_ViewerCanStillSendPresence(t *testing.T) {
 }
 
 var _ = websocket.TextMessage
+
+// lookupCounter is a FlowAccessChecker whose answers the test sets, counting
+// the authz lookups made against it.
+type lookupCounter struct {
+	read, edit atomic.Bool
+	lookups    atomic.Int32
+}
+
+func (c *lookupCounter) CheckAccess(_ context.Context, _, _ string) error {
+	c.lookups.Add(1)
+	if !c.read.Load() {
+		return ErrAccessDenied
+	}
+	return nil
+}
+
+func (c *lookupCounter) CanEdit(_ context.Context, _, _ string) bool {
+	c.lookups.Add(1)
+	return c.edit.Load()
+}
+
+// serverSideConn returns the server end of a live WebSocket connection.
+func serverSideConn(t *testing.T) *websocket.Conn {
+	t.Helper()
+	conns := make(chan *websocket.Conn, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		conns <- conn
+	}))
+	t.Cleanup(srv.Close)
+	client := dial(t, srv, "flow-1")
+	t.Cleanup(func() { client.Close() })
+	select {
+	case conn := <-conns:
+		t.Cleanup(func() { conn.Close() })
+		return conn
+	case <-time.After(2 * time.Second):
+		t.Fatal("no server-side connection")
+		return nil
+	}
+}
+
+// TestRecheckAccess_OneLookupForAnEditor: the re-authz loop runs every 2
+// minutes on every connection, and each pass used to make two full authz
+// lookups — the read check, then the write rank. The editor rank includes read
+// access, so an editor needs only the second; a viewer still needs both, and
+// losing read access still disconnects.
+func TestRecheckAccess_OneLookupForAnEditor(t *testing.T) {
+	checker := &lookupCounter{}
+	c := NewClient(NewHub(), serverSideConn(t), "u1", "U1", "flow-1", true)
+
+	// Editor: one lookup, still connected and still an editor.
+	checker.read.Store(true)
+	checker.edit.Store(true)
+	if !c.recheckAccess(context.Background(), checker) {
+		t.Fatal("editor was disconnected")
+	}
+	if n := checker.lookups.Load(); n != 1 {
+		t.Fatalf("editor re-check made %d authz lookups, want 1", n)
+	}
+	if !c.canEdit.Load() || !c.authorized.Load() {
+		t.Fatal("editor lost write rank or authorization")
+	}
+
+	// Demoted to viewer: stays connected, loses the write rank.
+	checker.lookups.Store(0)
+	checker.edit.Store(false)
+	if !c.recheckAccess(context.Background(), checker) {
+		t.Fatal("viewer was disconnected")
+	}
+	if n := checker.lookups.Load(); n != 2 {
+		t.Fatalf("viewer re-check made %d authz lookups, want 2", n)
+	}
+	if c.canEdit.Load() || !c.authorized.Load() {
+		t.Fatal("demotion was not applied, or the viewer was deauthorized")
+	}
+
+	// Read access revoked: deauthorized and disconnected.
+	checker.read.Store(false)
+	if c.recheckAccess(context.Background(), checker) {
+		t.Fatal("revoked user stayed connected")
+	}
+	if c.authorized.Load() {
+		t.Fatal("revoked user still authorized")
+	}
+	c.conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := c.conn.ReadMessage(); err == nil {
+		t.Fatal("revoked user's connection is still open")
+	}
+}

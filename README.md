@@ -154,6 +154,23 @@ Two settings in that overlay are load-bearing rather than cosmetic:
 `/metrics` and `/debug/pprof` are 404'd at the edge; scrape them from inside the
 compose network (`http://app:8080/metrics`) with `PAD_METRICS_TOKEN`.
 
+**Postgres is tuned, not stock.** The overlay's `db` service passes `-c`
+settings sized to its 2G / 1 CPU limit (`shared_buffers=512MB`,
+`effective_cache_size=1536MB`, `work_mem=16MB`, SSD `random_page_cost=1.1`,
+`jit=off`, `pg_stat_statements` preloaded, statements over 500 ms logged) and a
+256m `/dev/shm`. Scale them with the memory limit — the comment on the service
+says how. `pg_stat_statements` is preloaded by the overlay but the extension is
+only *created* on first init of an empty volume
+(`scripts/db-init/02-pg-stat-statements.sql`); on an existing deployment run it
+once as the superuser against the `baki` database:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+```
+
+The `app` service gets 2 CPUs, not 0.5: Go 1.25 floors `GOMAXPROCS` at 2, so a
+half-core quota is CFS-throttled on every CPU-bound request.
+
 **Terminating TLS somewhere else** (a cloud load balancer, an existing nginx)?
 Then do not use this overlay's proxy. Run the app behind your own front end and
 set `PAD_TRUSTED_PROXIES` to that front end's address yourself — the default in
@@ -354,10 +371,18 @@ What the template sets up, and what still needs a human:
 > in-process SSE hub with no cross-replica backplane, so with a second replica a
 > chat stream started on one replica never reaches an SSE client connected to
 > the other, and the subscriber watchdog cancels it for lack of a local
-> subscriber. Cancel-stream, AI budget accounting, the WebSocket ticket replay
-> guard and the retention purge are per-process too. The WebSocket hub
-> (`internal/websocket/backplane.go`) already has the Redis backplane the SSE hub
-> needs; scale out after that pattern is applied there.
+> subscriber. Cancel-stream, AI budget accounting and the WebSocket ticket
+> replay guard are per-process too (the scanner and the retention purge are
+> not: both take a Postgres advisory lock, so only one replica sweeps at a
+> time). The WebSocket hub (`internal/websocket/backplane.go`) already has the
+> Redis backplane the SSE hub needs; scale out after that pattern is applied
+> there.
+
+> **Replica size.** `cpu`/`memory` default to `1.0`/`2.0Gi`, the smallest ACA
+> pair that is not permanently over its CPU quota: Go 1.25 floors `GOMAXPROCS`
+> at 2, so the old `0.5`/`1.0Gi` was CFS-throttled on every CPU-bound request.
+> The pair must be one ACA allows (memory is 2 x cpu in Gi); `GOMEMLIMIT` is
+> derived from `memory` in the template, so it follows automatically.
 
 #### GitHub secrets for the deploy workflow
 

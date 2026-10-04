@@ -16,7 +16,7 @@ import {EmptyState, useToast} from '@/components/shared'
 import {useFlattenedBlocks, type FlatBlock} from '@/hooks/useFlattenedBlocks'
 import {useIsDesktop} from '@/hooks/useMediaQuery'
 import {flowApi} from '@/api'
-import {refreshAfterBlockEdit} from '@/lib/blockEdit'
+import {runBlockEdit} from '@/lib/blockEdit'
 import {useBlockOperations} from '@/lib/blockOperations'
 import {useKeyboard} from '@/hooks/useKeyboard'
 import type {Severity, BlockType, Block} from '@/types'
@@ -27,10 +27,10 @@ import type {Severity, BlockType, Block} from '@/types'
 // does.
 type RemoteSelection = Map<string, PresenceUser[]>
 
-// The Virtuoso scroller element, published for the drag-over edge auto-scroll
-// (U3a.4). Module-scoped because exactly one BlockView owns the canvas at a
+// The Virtuoso scroller element, published for the drag-over edge auto-scroll.
+// Module-scoped because exactly one BlockView owns the canvas at a
 // time and rows are memoized — a prop would defeat the memo.
-// One scroller PER SUBFLOW (F1.8): split editor groups render two canvases,
+// One scroller PER SUBFLOW: split editor groups render two canvases,
 // and a single module slot meant the last-mounted instance won every
 // drag-autoscroll — scrolling the wrong pane. Keyed by subflowId (rows know
 // theirs via block.subflowId).
@@ -38,7 +38,7 @@ const scrollerEls = new Map<string, HTMLElement>()
 // Exported for tests (drag-edge autoscroll needs a fake scroller element).
 export const blockCanvasScrollers = scrollerEls
 
-// DnD v2 (U3a.2): rows identify themselves with a custom MIME type so
+// DnD v2: rows identify themselves with a custom MIME type so
 // FOREIGN text/plain drags (selected text from this app or another) never
 // light up the drop targets or mint garbage moveBlockTo calls.
 const BLOCK_DND_MIME = 'application/x-baki-block'
@@ -74,7 +74,7 @@ function BlockItemWrapperComponent({
   const toast = useToast()
   // View-only shares keep rows inert — no drag cursor, no drop handling.
   const readOnly = useFlowStore(s => s.readOnly)
-  // HTML5 DnD never fires on touch (U5b): mobile users get the keyboard/menu
+  // HTML5 DnD never fires on touch: mobile users get the keyboard/menu
   // move paths instead of a dead drag affordance.
   const isDesktop = useIsDesktop()
   const draggable = block.type !== 'END' && block.type !== 'ELSE' && block.type !== 'CASE' && block.type !== 'DEFAULT'
@@ -93,7 +93,7 @@ function BlockItemWrapperComponent({
         e.dataTransfer.dropEffect = 'move'
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
         setDropPos(e.clientY < rect.top + rect.height / 2 ? 'before' : 'after')
-        // Edge auto-scroll (U3a.4): dragging past the viewport edge used to be
+        // Edge auto-scroll: dragging past the viewport edge used to be
         // a dead end — the target rows weren't rendered yet. dragover paces us.
         const sc = scrollerEls.get(block.subflowId)
         if (sc) {
@@ -106,7 +106,7 @@ function BlockItemWrapperComponent({
     [block.subflowId],
   )
   const handleDragLeave = useCallback((e: React.DragEvent) => {
-    // Child transitions fire dragleave on the row wrapper (F1.8): clearing
+    // Child transitions fire dragleave on the row wrapper: clearing
     // there made the indicator + gap animation flicker while crossing cards.
     const to = e.relatedTarget as Node | null
     if (to && (e.currentTarget as HTMLElement).contains(to)) return
@@ -125,15 +125,12 @@ function BlockItemWrapperComponent({
       const position = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
       const doc = useFlowStore.getState().document
       if (!doc) return
-      flowApi
-        .moveBlockTo(doc.id, draggedId, block.id, position)
-        .then(res => {
-          if (res?.document) refreshAfterBlockEdit(res.document)
-        })
-        .catch(err => {
-          // Guards (not-a-sibling, stale-file) carry their own guidance.
-          toast.error('Move failed', {description: String(err)})
-        })
+      // The lane applies the document (refreshAfterBlockEdit) and serialises
+      // this drop with any keyboard move still in flight.
+      runBlockEdit(doc.id, () => flowApi.moveBlockTo(doc.id, draggedId, block.id, position)).catch(err => {
+        // Guards (not-a-sibling, stale-file) carry their own guidance.
+        toast.error('Move failed', {description: String(err)})
+      })
     },
     [block.id, toast],
   )
@@ -183,7 +180,7 @@ function BlockItemWrapperComponent({
     )
   }, [block, selected, findingCounts, findingSeverities, collapsed, isLast, occupants, onShiftClick])
 
-  // Indentation guide rails (U3a.1): depth was invisible padding-only —
+  // Indentation guide rails: depth was invisible padding-only —
   // nested flows read as a flat list. One 1px vertical rail per ancestor
   // level, centered in each 20px gutter column, token-colored so themes
   // carry them. Rails span the full row height (content + connector).
@@ -221,7 +218,7 @@ function BlockItemWrapperComponent({
           aria-hidden="true"
         />
       )}
-      {/* Gap-open drop affordance (U3a.3): the row's CONTENT slides away
+      {/* Gap-open drop affordance: the row's CONTENT slides away
           from the drop edge instead of only a 2px line flashing — the space
           the block will occupy opens up. */}
       <div
@@ -266,7 +263,7 @@ function areEqual(
   if (prev.findingCounts !== next.findingCounts) return false
   if (prev.findingSeverities !== next.findingSeverities) return false
   if (prev.remoteSelection !== next.remoteSelection) return false
-  // onShiftClick closes over the flattened order (F1.3): without this check
+  // onShiftClick closes over the flattened order: without this check
   // rows keep a stale range-select callback after add/delete/move.
   if (prev.onShiftClick !== next.onShiftClick) return false
   if (prev.item.block?.id !== next.item.block?.id) return false
@@ -299,7 +296,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     return flattened.filter(f => f.block.name.toLowerCase().includes(q))
   }, [flattened, searchActive, searchQuery])
 
-  // Shift-click range selection (U3b): anchor = current single selection,
+  // Shift-click range selection: anchor = current single selection,
   // range computed in VISIBLE (flattened) order — what the user sees.
   const handleShiftClick = useCallback(
     (blockId: string) => {
@@ -309,7 +306,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
         st.toggleBlockSelection(blockId)
         return
       }
-      // Range in VISIBLE order (F1.3): while filtering, that's the searched
+      // Range in VISIBLE order: while filtering, that's the searched
       // list — selecting hidden blocks through an invisible gap surprised.
       const ids = (searchActive ? displayedFlattened : flattened).map(f => f.block.id)
       const a = ids.indexOf(anchor)
@@ -324,7 +321,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     [flattened, displayedFlattened, searchActive],
   )
 
-  // Group move (U3b): a contiguous same-scope selection moves as a unit by
+  // Group move: a contiguous same-scope selection moves as a unit by
   // relocating the BOUNDARY sibling around it — one moveBlockTo call, no new
   // backend semantics. Returns the move args or a refusal reason.
   const groupMoveArgs = useCallback(
@@ -335,7 +332,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
       if (!doc || selected.length < 2) return null
       const editable = (b: Block) => !['END', 'ELSE', 'CASE', 'DEFAULT'].includes(b.type)
       // Returning finder (TS can't narrow closure-assigned locals). Scoped
-      // per-subflow (F1.8): flatMapping all subflows merged distinct scopes
+      // per-subflow: flatMapping all subflows merged distinct scopes
       // into one sibling list, letting cross-subflow selections pass the
       // contiguity check and rely on the server's refusal.
       const findScope = (blocks: Block[]): Block[] | null => {
@@ -383,12 +380,9 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
         })
         return
       }
-      flowApi
-        .moveBlockTo(doc.id, args.pivot, args.ref, args.position)
-        .then(res => {
-          if (res?.document) refreshAfterBlockEdit(res.document)
-        })
-        .catch(err => toast.error('Group move failed', {description: String(err)}))
+      runBlockEdit(doc.id, () => flowApi.moveBlockTo(doc.id, args.pivot, args.ref, args.position)).catch(err =>
+        toast.error('Group move failed', {description: String(err)}),
+      )
     },
     [groupMoveArgs, toast],
   )
@@ -492,7 +486,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
   useKeyboard({
     scope: 'main',
     handlers: {
-      // Edit shortcuts (U3b) — the context-menu operations on the selected
+      // Edit shortcuts — the context-menu operations on the selected
       // block. Read-only flows ignore them (same gating as the menu).
       'edit.move.up': () => {
         if (readOnly || !selectedBlockId) return
@@ -589,7 +583,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
   })
 
   useEffect(() => {
-    // mod+F routes here via useAppShortcuts' contextual dispatch (F1.8) —
+    // mod+F routes here via useAppShortcuts' contextual dispatch —
     // the raw window listener fired BESIDE the global shortcut, lacked the
     // input guard, and never suppressed the browser's find bar.
     const onSearchOpen = () => setSearchActive(true) // BlockSearchBar autofocuses
@@ -623,7 +617,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
 
   return (
     <div className="block-view w-full h-full flex flex-col">
-      {/* Multi-select bulk bar (U3b) — the same operations as the context
+      {/* Multi-select bulk bar — the same operations as the context
           menu, applied to the selection set. */}
       {selectedCount > 1 && !readOnly && (
         <div

@@ -9,6 +9,7 @@ import (
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/lifecycle"
 	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -24,16 +25,36 @@ type AnalysisHandler struct {
 	dashboard   *service.DashboardService
 	security    *SecurityConfig
 	backend     storageif.StorageBackend
-	// email sends finding-assignment notifications to the assignee. Nil-safe
-	// (the log-only mailer is always non-nil even without SMTP).
+	// email sends finding-assignment notifications; nil-safe (the log-only
+	// mailer is always non-nil even without SMTP).
 	email *mailer.Service
-	// webhook is best-effort / async / env-configured via PAD_WEBHOOK_URL;
-	// no-op when unset. Injected for testability (was a package-global var).
+	// webhook is best-effort / async via PAD_WEBHOOK_URL; no-op when unset.
+	// Injected for testability (was a package-global var).
 	webhook *service.WebhookNotifier
 	// ciSecret is the HMAC key for the inbound CI webhook (PAD_CI_WEBHOOK_SECRET).
 	// Empty disables the endpoint (503). Auth is via X-Baki-Signature, not JWT.
 	ciSecret CIWebhookSecret
+	// emails runs the detached finding-comment/assignment emails, bounded and
+	// drained on shutdown (a bare `go` per request would pile up unbounded).
+	emails *lifecycle.Bounded
+	// alerts runs the detached in-app alert fan-outs: DB-only, kept apart from
+	// the SMTP pool so a stalled relay cannot make the badge drop.
+	alerts *lifecycle.Bounded
+	// records runs the detached dashboard writes of a fresh analysis: best-effort on the
+	// pool (RLS-exempt, no request transaction) so they can finish after the response.
+	records *lifecycle.Bounded
 }
+
+// maxConcurrentFindingEmails caps the detached finding emails in flight.
+const maxConcurrentFindingEmails = 32
+
+// maxConcurrentFindingAlerts caps the detached alert fan-outs: cheap DB writes
+// that must not queue behind SMTP, so they have their own larger pool.
+const maxConcurrentFindingAlerts = 64
+
+// maxConcurrentAnalysisRecords caps the detached dashboard writes; past the cap the write is dropped
+// (pad_background_dropped_total) and the next fresh analyze retries it.
+const maxConcurrentAnalysisRecords = 32
 
 func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, dashboard *service.DashboardService, backend storageif.StorageBackend, security *SecurityConfig, webhook *service.WebhookNotifier, email *mailer.Service, ciSecret CIWebhookSecret) *AnalysisHandler {
 	return &AnalysisHandler{
@@ -45,6 +66,46 @@ func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.F
 		webhook:     webhook,
 		email:       email,
 		ciSecret:    ciSecret,
+		emails:      lifecycle.NewBounded("finding_email", maxConcurrentFindingEmails),
+		alerts:      lifecycle.NewBounded("finding_alert", maxConcurrentFindingAlerts),
+		records:     lifecycle.NewBounded("analysis_record", maxConcurrentAnalysisRecords),
+	}
+}
+
+// DrainBackground stops starting new best-effort work (finding emails, alert
+// fan-outs, dashboard records, webhooks) and waits for the ones in flight.
+func (h *AnalysisHandler) DrainBackground(ctx context.Context) error {
+	// Alerts first: an alert job enqueues its email once the actor's name is
+	// resolved, so draining emails before alerts would drop those sends.
+	err := h.alerts.Drain(ctx)
+	if eerr := h.emails.Drain(ctx); err == nil {
+		err = eerr
+	}
+	if rerr := h.records.Drain(ctx); err == nil {
+		err = rerr
+	}
+	if h.webhook != nil {
+		if werr := h.webhook.Drain(ctx); err == nil {
+			err = werr
+		}
+	}
+	return err
+}
+
+// recordAnalysis persists the dashboard summary off the request path: bounded, detached, RLS-exempt.
+// A dropped task gives the report's record claim back so the next analyze retries the write.
+func (h *AnalysisHandler) recordAnalysis(ctx context.Context, doc *models.FlowDocument, report *models.AnalysisReport) {
+	if h.dashboard == nil {
+		return
+	}
+	detached := context.WithoutCancel(ctx)
+	started := h.records.Go(func() {
+		ctx, cancel := context.WithTimeout(detached, bestEffortTimeout)
+		defer cancel()
+		h.dashboard.RecordAnalysis(ctx, doc, report)
+	})
+	if !started {
+		h.analysisSvc.ReleaseRecord(doc, report)
 	}
 }
 
@@ -71,28 +132,23 @@ func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	res, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
+	res, fresh, err := h.analysisSvc.AnalyzeFlowFresh(r.Context(), doc)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// Persist the latest analysis summary so the welcome dashboard stays
-	// populated across sessions/replicas (best-effort; no-op in local mode).
-	if h.dashboard != nil {
-		h.dashboard.RecordAnalysis(r.Context(), doc, res)
+	// Side effects belong to a REPORT, not every fetch of it: a cache hit already recorded and
+	// notified. fresh is the dashboard-record claim, not "new run".
+	if fresh {
+		// Persist the dashboard summary (best-effort, detached).
+		h.recordAnalysis(r.Context(), doc, res)
+		// Webhook notification (best-effort, async via PAD_WEBHOOK_URL).
+		h.webhook.NotifyAnalysis(doc.Name, res)
 	}
-	// Webhook notification (best-effort, async, env-configured via
-	// PAD_WEBHOOK_URL). No-op if unset.
-	h.webhook.NotifyAnalysis(doc.Name, res)
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowAnalyze, "flow", req.FlowID, nil)
 	render.JSON(w, res)
 }
 
-// handleAnalyzeRaw analyzes raw PAD flow text WITHOUT requiring a pre-stored
-// flow, so CI pipelines and wrappers can POST flow text and get findings JSON
-// (or SARIF) back in one call — no library upload, no Go CLI install. Works in
-// both modes (auth via PAT in cloud; open in local). Body: {files, name,
-// format?} where format is "json" (default) or "sarif". Nothing is persisted.
 // @Summary      Analyze raw PAD source
 // @Description  handleAnalyzeRaw analyzes raw PAD flow text WITHOUT requiring a pre-stored flow, so CI pipelines and wrappers can POST flow text and get findings JSON (or SARIF) back in one call — no library upload, no Go CLI install. Works in both modes (auth via PAT in cloud; open in local). Body: {files, name, format?} where format is "json" (default) or "sarif". Nothing is persisted.
 // @Tags         analysis
@@ -117,7 +173,6 @@ func (h *AnalysisHandler) handleAnalyzeRaw(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Validate format — unknown values are rejected (consistent with the CLI).
 	switch req.Format {
 	case "", "json", "sarif", "junit", "csv":
 	default:
@@ -125,12 +180,8 @@ func (h *AnalysisHandler) handleAnalyzeRaw(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Bound the CPU surface of this unauthenticated-ish endpoint: a 10 MB body
-	// of pathological PAD source (deeply nested blocks) can burn seconds in
-	// parse+analyze. A per-request deadline bounds the HTTP layer (the analysis
-	// engine itself runs to completion today; full enforcement needs ctx checks
-	// inside RunAnalysis). Rejecting oversized payloads up front is the primary
-	// guard against a single request degrading the shared backend.
+	// Bound the CPU surface of this barely-authenticated endpoint: a 10 MB body of pathological PAD
+	// source can burn seconds in parse+analyze; the per-request deadline bounds the HTTP layer only.
 	const (
 		maxRawFiles   = 50
 		maxRawTotalKB = 2048
@@ -286,9 +337,8 @@ func (h *AnalysisHandler) handleGetRules(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, h.analysisSvc.GetRulesFor(r.Context(), orgID))
 }
 
-// catalogOrg reads the optional ?orgId= query parameter for the rule catalog
-// endpoints and checks the caller is a member of that org — the org's custom
-// rules are tenant data. Returns ok=false after writing the 403.
+// catalogOrg reads the optional ?orgId= for the rule catalog endpoints and
+// checks the caller is a member — org custom rules are tenant data.
 func (h *AnalysisHandler) catalogOrg(w http.ResponseWriter, r *http.Request) (string, bool) {
 	orgID := r.URL.Query().Get("orgId")
 	if orgID == "" {
@@ -300,10 +350,8 @@ func (h *AnalysisHandler) catalogOrg(w http.ResponseWriter, r *http.Request) (st
 	return orgID, true
 }
 
-// handleValidateCustomRules validates a custom-rules payload (array or single
-// object) WITHOUT loading it: per-entry validity + error, and warnings for
-// entries that would be skipped — the backend for the settings editor's
-// authoring feedback (the same checks `bakicli rules test` applies).
+// handleValidateCustomRules validates a custom-rules payload without loading
+// it — the same checks `bakicli rules test` applies.
 // @Summary      Validate custom rules
 // @Description  Validates custom-rule JSON without installing it: per-entry validity, errors, and skip warnings.
 // @Tags         analysis
@@ -317,8 +365,7 @@ func (h *AnalysisHandler) handleValidateCustomRules(w http.ResponseWriter, r *ht
 	if !decodeBody(w, r, &raw) {
 		return
 	}
-	// Accept three shapes: a raw array, a single object, or the {"rules": …}
-	// envelope the API client conventionally uses.
+	// Accept a raw array, a single object, or the {"rules": …} envelope.
 	var payload struct {
 		Rules json.RawMessage `json:"rules"`
 	}
@@ -367,16 +414,12 @@ func (h *AnalysisHandler) handleValidateCustomRules(w http.ResponseWriter, r *ht
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/analysis/rule/enabled [post]
 func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Request) {
-	// System admin, not member. This endpoint writes the DEPLOYMENT-WIDE
-	// settings singleton: before R4 any member of any org could disable a rule
-	// here and silently change analysis for every tenant in the deployment,
-	// with nothing surfacing that it had happened. Per-org configuration lives
-	// at /api/orgs/{id}/rules and is gated on org admin.
+	// System admin, not member: this writes the DEPLOYMENT-WIDE settings singleton — any org member
+	// could otherwise change analysis for every tenant. Per-org configuration lives at /api/orgs/{id}/rules.
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
 	}
-	// The frontend sends "ruleId"; "id" is kept for compatibility. Decoding
-	// only "id" made every toggle silently write to rule "" (never matching).
+	// The frontend sends "ruleId"; "id" kept for compat — decoding only "id" wrote to rule "" silently.
 	var req struct {
 		ID      string `json:"id"`
 		RuleID  string `json:"ruleId"`
@@ -399,16 +442,8 @@ func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Re
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// handleTestCustomRule runs a CANDIDATE rule against one of the caller's flows
-// and reports what it would match.
-//
-// The validate endpoint answers "does this compile"; this answers "does it do
-// anything". An author who cannot tell the two apart can save a regex that
-// never matches and believe a policy is being enforced — the same class of
-// silent no-op R1-5's suppression inventory exists to surface.
-//
-// Member-level and flow-authorized: it analyzes a flow the caller can already
-// read, with a rule they supplied, and stores nothing.
+// handleTestCustomRule runs a CANDIDATE rule against one of the caller's flows and reports what it
+// would match — validate answers "does this compile", this "does it do anything". Member-level, stores nothing.
 // @Summary      Test a candidate custom rule against a flow
 // @Description  Runs one unsaved rule against a flow and returns the findings it would produce.
 // @Tags         analysis
@@ -444,8 +479,7 @@ func (h *AnalysisHandler) handleTestCustomRule(w http.ResponseWriter, r *http.Re
 	}
 	findings, err := h.analysisSvc.TestRule(r.Context(), doc, req.Rule)
 	if err != nil {
-		// A rule that does not compile is the AUTHOR's error, not a server
-		// fault — same 400 the save endpoint gives for the same input.
+		// A rule that does not compile is the AUTHOR's error, not a server fault — same 400 as the save endpoint.
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
@@ -467,8 +501,7 @@ func (h *AnalysisHandler) handleTestCustomRule(w http.ResponseWriter, r *http.Re
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/analysis/rule/config [post]
 func (h *AnalysisHandler) handleUpdateRuleConfig(w http.ResponseWriter, r *http.Request) {
-	// System admin — same reasoning as handleSetRuleEnabled: this writes the
-	// deployment-wide settings singleton, not the caller's own org.
+	// System admin — same reasoning as handleSetRuleEnabled: deployment-wide settings singleton.
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
 	}
@@ -520,9 +553,15 @@ func (h *AnalysisHandler) handleGetDataFlow(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	df, err := h.analysisSvc.GetDataFlow(doc)
+	if doc == nil {
+		render.Error(w, fmt.Errorf("no flow loaded"), http.StatusInternalServerError)
+		return
+	}
+	// Bounded and cancellable: the edges are O(readers x writers) per flow-global variable — on a
+	// 10 MB flow that was 26M edges, ~1 GB of JSON and 18 s of CPU that kept running after the client left.
+	df, err := analyzer.AnalyzeDataFlowCtx(r.Context(), doc, analyzer.DefaultDataFlowLimits)
 	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
+		render.Error(w, err, http.StatusServiceUnavailable)
 		return
 	}
 	render.JSON(w, df)
@@ -537,9 +576,8 @@ func (h *AnalysisHandler) handleGetDataFlow(w http.ResponseWriter, r *http.Reque
 // @Failure      500 {object} map[string]string "Error"
 // @Router       /api/analysis/batch [post]
 func (h *AnalysisHandler) handleBatchAnalyze(w http.ResponseWriter, r *http.Request) {
-	// Desktop-only: this reads .txt files from a server-side folder path. In cloud
-	// mode it would be an authenticated arbitrary-directory read (LFI), so gate it
-	// like the other filesystem endpoints in handlers_flow.go.
+	// Desktop-only: reads .txt files from a server-side folder path; in
+	// cloud mode it would be an authenticated arbitrary-directory read (LFI).
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("batch folder analysis is not available in cloud mode"), http.StatusForbidden)
 		return
@@ -561,12 +599,9 @@ func (h *AnalysisHandler) handleBatchAnalyze(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// No aggregate-vs-per-file invalidation needed here: the analytics cache
-	// evicts overlapping path identities on Put (a per-file entry replaces any
-	// folder aggregate covering it, and vice versa) — see PutWithPath.
+	// No aggregate-vs-per-file invalidation needed: the analytics cache evicts overlapping path identities on Put.
 
-	// A folder where every file failed still yields a useful batch result
-	// (all error rows) rather than an HTTP error.
+	// A folder where every file failed still yields all-error rows.
 	var batch *models.BatchAnalysis
 	if len(docs) > 0 {
 		batch, err = h.analysisSvc.AnalyzeBatch(docs)
@@ -658,8 +693,6 @@ func (h *AnalysisHandler) handleGetHistory(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, snapshots)
 }
 
-// handleExportSARIF emits a SARIF 2.1.0 report for the flow, suitable for
-// GitHub Code Scanning or any SARIF-consuming tool.
 // @Summary      Export SARIF report
 // @Description  SARIF 2.1.0 report for GitHub Code Scanning.
 // @Tags         analysis
@@ -701,8 +734,6 @@ func (h *AnalysisHandler) handleExportSARIF(w http.ResponseWriter, r *http.Reque
 	fmt.Fprintf(w, "%s\n", out)
 }
 
-// handleExportJUnit emits a JUnit XML report for the flow, suitable for CI
-// pipelines (Jenkins, GitLab CI). Mirrors handleExportSARIF.
 // @Summary      Export analysis results as JUnit XML
 // @Tags         export
 // @Produce      json
@@ -760,9 +791,8 @@ func (h *AnalysisHandler) handleGetDependencies(w http.ResponseWriter, r *http.R
 // @Success      200 {object} map[string]interface{} "Dashboard"
 // @Router       /api/analysis/dashboard [get]
 func (h *AnalysisHandler) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
-	// Desktop-only: ComputeDashboard aggregates the process-global analyzer cache,
-	// which in cloud mode holds every tenant's analyzed flows — i.e. a cross-tenant
-	// aggregate leak. Cloud clients use the owner-scoped /api/dashboard/home instead.
+	// Desktop-only: ComputeDashboard aggregates the process-global analyzer
+	// cache — a cross-tenant leak in cloud; cloud uses /api/dashboard/home.
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("session analytics are not available in cloud mode; use the home dashboard"), http.StatusForbidden)
 		return

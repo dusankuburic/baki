@@ -22,8 +22,8 @@ var errNotInGitRepo = fmt.Errorf("not inside a git repository")
 //
 // The rev reaches exec.Command as an argument, so there is no shell to inject
 // into — but git itself parses leading-dash arguments as flags, and several
-// (--upload-pack, --exec) run a command of the attacker's choosing. A rev comes
-// from CI configuration, which is not always more trusted than the repo, so it
+// (--upload-pack, --exec) run a command of the attacker's choosing. A rev
+// comes from CI configuration, not always more trusted than the repo, so it
 // is validated rather than assumed benign.
 func validateRev(rev string) error {
 	if rev == "" {
@@ -80,23 +80,21 @@ func gitRepoRoot(path string) (string, error) {
 
 // gitFileAtRev returns the contents of repo-relative relPath as of rev.
 //
-// ok is false when the file did not exist at that revision — which is not an
-// error: a newly added flow simply has no prior findings, so every finding in it
-// is new.
+// ok is false when the file did not exist at that revision — not an error:
+// a newly added flow has no prior findings, so every finding in it is new.
 func gitFileAtRev(root, rev, relPath string) (content string, ok bool, err error) {
 	if err := validateRev(rev); err != nil {
 		return "", false, err
 	}
 	// No `--` here: `git show` takes an OBJECT spec, not a pathspec, and adding
 	// the separator makes git ignore the spec and print the HEAD commit instead
-	// — which silently returned a commit message for every file, reported
-	// missing paths as present, and swallowed bad revisions. validateRev
-	// guarantees rev has no leading dash, so the combined "rev:path" argument
-	// can never be parsed as an option.
+	// — silently returning a commit message for every file and swallowing bad
+	// revisions. validateRev guarantees no leading dash, so "rev:path" can
+	// never be parsed as an option.
 	out, gerr := runGit(root, "show", rev+":"+filepath.ToSlash(relPath))
 	if gerr != nil {
-		// git exits non-zero both for "no such path at rev" and for a bad rev.
-		// Distinguish them so a typo'd branch is reported instead of silently
+		// git exits non-zero both for "no such path at rev" and a bad rev;
+		// distinguish them so a typo'd branch is reported instead of silently
 		// making every finding look new.
 		if _, revErr := runGit(root, "rev-parse", "--verify", rev+"^{commit}"); revErr != nil {
 			return "", false, fmt.Errorf("unknown revision %q", rev)
@@ -106,10 +104,9 @@ func gitFileAtRev(root, rev, relPath string) (content string, ok bool, err error
 	return string(out), true, nil
 }
 
-// flowFilesAtRev rebuilds the analysed file set as it existed at rev.
-//
-// It walks the CURRENT target to decide which files matter, then reads each
-// one's historical content. Files absent at rev are skipped: a newly added flow
+// flowFilesAtRev rebuilds the analysed file set as it existed at rev: it walks
+// the CURRENT target to decide which files matter, then reads each one's
+// historical content. Files absent at rev are skipped — a newly added flow
 // has no prior findings, so everything in it is legitimately new.
 func flowFilesAtRev(target, rev string) (map[string]string, error) {
 	root, err := gitRepoRoot(target)

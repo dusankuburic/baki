@@ -3,8 +3,11 @@ package database
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"sync"
+
+	"pad-analyzer/internal/storage/interfaces"
 )
 
 type contextKey string
@@ -13,15 +16,197 @@ const rlsTxKey contextKey = "rls_tx"
 
 const postCommitKey contextKey = "post_commit_hooks"
 
-// hasRLSTx reports whether ctx carries an RLS transaction.
-func hasRLSTx(ctx context.Context) bool {
-	tx, ok := ctx.Value(rlsTxKey).(*sql.Tx)
-	return ok && tx != nil
+// ErrRLSUnavailable is what every statement sent through a fail-closed RLS scope returns once the scoped
+// transaction could not be started: the request must not fall through to the pool, where the policies
+// short-circuit to allow-all (logged by the RLS middleware; render.Error maps it to 503).
+var ErrRLSUnavailable = interfaces.ErrRLSUnavailable
+
+// errRLSScopeEnded is the start error of a scope used after the middleware
+// committed or rolled it back — a goroutine that outlived its request.
+var errRLSScopeEnded = fmt.Errorf("%w: request scope already ended", ErrRLSUnavailable)
+
+// RLSScope is the per-request holder of the RLS transaction. It starts the transaction LAZILY: BEGIN +
+// set_config run only when a storage method first asks for the executor, so a handler that never touches
+// the database neither pins a pooled connection nor pays a round-trip. Once started, every query of the
+// request shares the one *sql.Tx; only the first use is serialised here.
+type RLSScope struct {
+	beginner RLSBeginner
+	userID   string
+	// base is the context the transaction is bound to: the request context at install time, NOT the
+	// shorter-lived context of whichever call starts it — a sub-call's timeout must not roll back the
+	// request-long transaction.
+	base context.Context
+	// failOpen: a start failure lets the request run on the pool (reads).
+	// Otherwise every scoped statement fails with ErrRLSUnavailable.
+	failOpen bool
+
+	mu      sync.Mutex
+	started bool // a start was attempted (or the tx was supplied)
+	ended   bool // Commit/Rollback ran
+	tx      *sql.Tx
+	err     error // the start failure, sticky
 }
 
-// PostCommitRegistry collects work that must run only after the request's RLS
-// transaction commits successfully (e.g. deleting blobs that back a row being
-// removed). The RLS middleware creates one per request and runs it post-commit.
+// WithLazyRLS installs a lazy RLS scope for userID on ctx (tx opened through b.BeginRLS on first use);
+// the caller must End the scope with Commit or Rollback when the request is done.
+func WithLazyRLS(ctx context.Context, b RLSBeginner, userID string, failOpen bool) (context.Context, *RLSScope) {
+	s := &RLSScope{beginner: b, userID: userID, base: ctx, failOpen: failOpen}
+	return context.WithValue(ctx, rlsTxKey, s), s
+}
+
+// WithRLSTx returns a new context carrying an already-started RLS transaction (the caller owns commit
+// and rollback). A nil tx clears any scope on ctx.
+func WithRLSTx(ctx context.Context, tx *sql.Tx) context.Context {
+	if tx == nil {
+		return context.WithValue(ctx, rlsTxKey, (*RLSScope)(nil))
+	}
+	return context.WithValue(ctx, rlsTxKey, &RLSScope{started: true, tx: tx})
+}
+
+func rlsScopeFromContext(ctx context.Context) *RLSScope {
+	s, _ := ctx.Value(rlsTxKey).(*RLSScope)
+	return s
+}
+
+// rlsTxFromContext returns the request's RLS transaction, starting it on first use. ok is false when ctx
+// carries no (or fail-open failed) scope: the caller uses the pool. err is set when the scope could not be
+// started and must not be bypassed.
+func rlsTxFromContext(ctx context.Context) (tx *sql.Tx, ok bool, err error) {
+	s := rlsScopeFromContext(ctx)
+	if s == nil {
+		return nil, false, nil
+	}
+	return s.get()
+}
+
+// get starts the transaction if nothing has tried yet and reports it.
+func (s *RLSScope) get() (*sql.Tx, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.started {
+		s.started = true
+		s.start()
+	}
+	// A statement after Commit/Rollback — a goroutine that outlived its request — gets neither the
+	// committed transaction nor the pool, fail-open scopes included.
+	if s.ended {
+		return nil, false, errRLSScopeEnded
+	}
+	if s.err != nil {
+		if s.failOpen {
+			return nil, false, nil
+		}
+		return nil, false, s.err
+	}
+	return s.tx, true, nil
+}
+
+// start opens the transaction; s.mu is held.
+func (s *RLSScope) start() {
+	switch {
+	case s.ended:
+		s.err = errRLSScopeEnded
+	case s.beginner == nil:
+		s.err = fmt.Errorf("%w: no backend", ErrRLSUnavailable)
+	default:
+		// The transaction outlives the request context's cancellation: a handler cut short by the
+		// deadline may still persist completed work under context.WithoutCancel, and database/sql
+		// would otherwise roll the tx back the moment the deadline passed. The middleware still ends
+		// the scope when the handler returns; every statement runs under its caller's context.
+		tx, err := s.beginner.BeginRLS(context.WithoutCancel(s.base), s.userID)
+		if err != nil {
+			s.err = fmt.Errorf("%w: %w", ErrRLSUnavailable, err)
+			return
+		}
+		s.tx = tx
+	}
+}
+
+// Started reports whether a transaction is open (started and not failed).
+func (s *RLSScope) Started() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tx != nil
+}
+
+// Err returns the start failure, if any — for the middleware's log line.
+func (s *RLSScope) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+// Commit ends the scope, committing the transaction when one was started. A scope that never started
+// returns nil so the caller treats the request as committed (post-commit hooks run).
+func (s *RLSScope) Commit() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ended = true
+	if s.tx == nil {
+		return nil
+	}
+	tx := s.tx
+	s.tx = nil
+	return tx.Commit()
+}
+
+// Rollback ends the scope, rolling back the transaction when one was started.
+func (s *RLSScope) Rollback() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ended = true
+	if s.tx == nil {
+		return nil
+	}
+	tx := s.tx
+	s.tx = nil
+	return tx.Rollback()
+}
+
+// EnsureRLS starts the lazy scope on ctx now, for a handler that wants the fail-closed decision before
+// doing its work. Returns the start failure of a fail-closed scope; nil when ctx has no scope, the scope
+// started, or it failed fail-open (the request runs on the pool).
+func EnsureRLS(ctx context.Context) error {
+	_, _, err := rlsTxFromContext(ctx)
+	return err
+}
+
+// hasRLSTx reports whether ctx carries an RLS scope — WITHOUT starting it. Its callers decide whether to
+// open (and commit) a transaction of their own: inside a scope they must not. A fail-open failed scope no
+// longer counts; an ended scope still does (no own pool transaction for a request that is over).
+func hasRLSTx(ctx context.Context) bool {
+	s := rlsScopeFromContext(ctx)
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ended || s.err == nil || !s.failOpen
+}
+
+// rlsFailedDB answers every statement with ErrRLSUnavailable. It is a real *sql.DB over a refusing
+// connector because DBTX's QueryRowContext returns a *sql.Row, which only database/sql can build.
+var (
+	rlsFailedOnce sync.Once
+	rlsFailedDB   *sql.DB
+)
+
+func rlsFailed() *sql.DB {
+	rlsFailedOnce.Do(func() { rlsFailedDB = sql.OpenDB(rlsFailConnector{}) })
+	return rlsFailedDB
+}
+
+type rlsFailConnector struct{}
+
+func (rlsFailConnector) Connect(context.Context) (driver.Conn, error) { return nil, ErrRLSUnavailable }
+func (rlsFailConnector) Driver() driver.Driver                        { return rlsFailDriver{} }
+
+type rlsFailDriver struct{}
+
+func (rlsFailDriver) Open(string) (driver.Conn, error) { return nil, ErrRLSUnavailable }
+
+// PostCommitRegistry collects work that must run only after the request's RLS transaction commits
+// successfully (e.g. deleting blobs that back a row being removed).
 type PostCommitRegistry struct {
 	mu    sync.Mutex
 	hooks []func()
@@ -46,19 +231,16 @@ func (r *PostCommitRegistry) Run() {
 	}
 }
 
-// hasPostCommit reports whether ctx carries a post-commit registry, i.e.
-// whether RegisterPostCommit would defer fn rather than run it inline. Callers
-// registering work that is only safe AFTER a commit (e.g. deleting a blob the
-// current row version still references) must skip registration when this is
-// false and they are inside an uncommitted transaction.
+// hasPostCommit reports whether ctx carries a post-commit registry, i.e. whether RegisterPostCommit would
+// defer fn rather than run it inline. Work only safe AFTER a commit must skip registration when this is
+// false and the caller is inside an uncommitted transaction.
 func hasPostCommit(ctx context.Context) bool {
 	reg, ok := ctx.Value(postCommitKey).(*PostCommitRegistry)
 	return ok && reg != nil
 }
 
-// RegisterPostCommit schedules fn to run after the request's RLS transaction
-// commits. When there is no registry on the context (no RLS tx — the caller is
-// in autocommit, so the surrounding write is already durable) fn runs inline.
+// RegisterPostCommit schedules fn to run after the request's RLS transaction commits. With no registry on
+// the context (autocommit — the surrounding write is already durable) fn runs inline.
 func RegisterPostCommit(ctx context.Context, fn func()) {
 	if reg, ok := ctx.Value(postCommitKey).(*PostCommitRegistry); ok && reg != nil {
 		reg.mu.Lock()
@@ -69,27 +251,23 @@ func RegisterPostCommit(ctx context.Context, fn func()) {
 	fn()
 }
 
-// withTx runs fn inside a transaction, JOINING the request's RLS transaction
-// when ctx already carries one and opening (and committing) its own otherwise.
+// withTx runs fn inside a transaction, JOINING the request's RLS transaction when ctx carries a scope
+// (starting it on this first use) and opening (and committing) its own otherwise. Every write method that
+// opens a transaction must go through this.
 //
-// Every write method that opens a transaction must go through this. Calling
-// b.db.BeginTx unconditionally takes a SECOND pooled connection while
-// rlsMiddleware still holds the first for the whole request, which is a
-// self-deadlock: the pool defaults to 25, so 13 concurrent requests each hold
-// one connection and block forever waiting for another that only a peer can
-// release. It wedges every route, not just the one at fault, and the server
-// sets no write timeout, so nothing recovers it but clients giving up.
-//
-// Two further consequences make this a correctness bug and not only a capacity
-// one. The inner transaction commits independently, so its write survives the
-// middleware's rollback and breaks the atomicity the middleware documents. And
-// the second connection carries no app.current_user_id, so app_rls_active() is
-// false and the RLS policies short-circuit to allow-all -- the second layer is
-// simply absent for exactly the writes that most need it.
+// Calling b.db.BeginTx unconditionally takes a SECOND pooled connection while the RLS middleware still
+// holds the first for the whole request — a self-deadlock (with the default pool of 25, 13 concurrent
+// requests wedge every route). It is a correctness bug too: the inner transaction commits independently
+// (its write survives the middleware's rollback), and the second connection carries no app.current_user_id,
+// so the RLS policies short-circuit to allow-all for exactly the writes that most need them.
 func (b *PostgresStorageBackend) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
-	if tx, ok := ctx.Value(rlsTxKey).(*sql.Tx); ok && tx != nil {
+	rtx, ok, err := rlsTxFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if ok {
 		// The middleware owns commit and rollback; joining is all we do.
-		return fn(tx)
+		return fn(rtx)
 	}
 	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -111,51 +289,41 @@ func (b *PostgresStorageBackend) withTx(ctx context.Context, fn func(*sql.Tx) er
 	return nil
 }
 
-// DBTX is the common interface between *sql.DB and *sql.Tx. All tenant-scoped
-// queries should call b.query(ctx) to get the right executor — if an RLS
-// transaction has been set on the context (by the RLS middleware), the
-// transaction is returned; otherwise the pool is used directly (no RLS).
+// DBTX is the common interface between *sql.DB and *sql.Tx. All tenant-scoped queries should call
+// b.query(ctx) to get the right executor.
 type DBTX interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// query returns the RLS-scoped executor for ctx: a *sql.Tx if the RLS
-// middleware set one, otherwise the connection pool. All tenant-scoped storage
-// methods should use this instead of b.db directly so that RLS policies can
-// enforce row-level visibility.
+// query returns the RLS-scoped executor for ctx: the scope's *sql.Tx if the RLS middleware installed one
+// (started here on first use), otherwise the pool. A fail-closed scope that could not start yields an
+// executor whose every statement fails with ErrRLSUnavailable.
 func (b *PostgresStorageBackend) query(ctx context.Context) DBTX {
-	if tx, ok := ctx.Value(rlsTxKey).(*sql.Tx); ok && tx != nil {
+	tx, ok, err := rlsTxFromContext(ctx)
+	if err != nil {
+		return rlsFailed()
+	}
+	if ok {
 		return tx
 	}
 	return b.db
 }
 
-// BeginRLS starts a transaction and sets the app.current_user_id session
-// variable so that Postgres RLS policies can filter rows by the calling user.
-// The caller must commit or roll back the returned transaction when done.
-//
-// The transaction is read-write: a request wrapped by the RLS middleware may
-// perform writes, and those must run inside the same transaction so the GUC
-// (set with SET LOCAL semantics) is in scope.
+// BeginRLS starts a transaction and sets the app.current_user_id session variable so Postgres RLS policies
+// can filter rows by the calling user; read-write, because a wrapped request's writes must see the GUC.
+// The caller commits or rolls it back.
 func (b *PostgresStorageBackend) BeginRLS(ctx context.Context, userID string) (*sql.Tx, error) {
 	tx, err := b.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return nil, fmt.Errorf("rls: begin tx: %w", err)
 	}
-	// SET LOCAL cannot be parameterized (it is a utility statement, not a
-	// planned query), so set_config(..., is_local => true) is used instead — it
-	// accepts a bind parameter and is scoped to this transaction.
+	// SET LOCAL cannot be parameterized (utility statement, not a planned query), so set_config(...,
+	// is_local => true) is used instead — it accepts a bind parameter and is scoped to this transaction.
 	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_user_id', $1, true)`, userID); err != nil {
 		tx.Rollback()
 		return nil, fmt.Errorf("rls: set user id: %w", err)
 	}
 	return tx, nil
-}
-
-// WithRLSTx returns a new context that carries the RLS transaction. Storage
-// methods called with this context will use the transaction instead of the pool.
-func WithRLSTx(ctx context.Context, tx *sql.Tx) context.Context {
-	return context.WithValue(ctx, rlsTxKey, tx)
 }

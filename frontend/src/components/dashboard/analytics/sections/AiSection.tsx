@@ -20,7 +20,7 @@ interface ProviderRow extends HBarRow {
 }
 
 // The picker's labels, not the internal routing ids: `agent:<x>` renders
-// as "Agent · <x>" and `claude:<x>` as "<x> · Claude" (F-31; no other
+// as "Agent · <x>" and `claude:<x>` as "<x> · Claude" (no other
 // provider mints colon-prefixed model ids). "· served" is appended only
 // when the model that answered differs from what was asked for (an Azure
 // AI Foundry deployment alias, model router or agent) — compared against

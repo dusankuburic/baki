@@ -22,34 +22,24 @@ import (
 
 const keystoreTimeout = 5 * time.Second
 
-// EncryptedKeyStore persists provider API keys in PostgreSQL, encrypted at rest
-// with AES-256-GCM. It implements storage.SecretStore so it can be injected as
-// the active secret backend in cloud mode, where the OS keychain is absent.
+// EncryptedKeyStore persists provider API keys in PostgreSQL, encrypted at rest with AES-256-GCM; it
+// implements storage.SecretStore as the cloud-mode secret backend (no OS keychain there). The encryption
+// key should be a dedicated deployment secret (PAD_ENCRYPTION_KEY) separate from the JWT signing key (the
+// auth secret is accepted for backward compatibility); rotating it renders stored ciphertext undecryptable
+// (Get reports not-found; the provider must be re-authenticated).
 //
-// The encryption key should be a dedicated deployment secret (PAD_ENCRYPTION_KEY),
-// separate from the JWT signing key (PAD_AUTH_SECRET), so rotating one doesn't
-// affect the other. For backward compatibility the auth secret is accepted
-// when no dedicated key is configured. Rotating the encryption key renders
-// previously stored ciphertext undecryptable (Get reports the key as not
-// found, and the provider must be re-authenticated).
-//
-// RLS note: provider_keys has NO row-level-security policies, deliberately. Like
-// the other auth-infra tables (refresh_tokens, token_blacklist, api_tokens), it
-// is keyed by user_id and every query here carries an explicit `WHERE user_id =
-// $1`, so access is bounded by the query itself rather than the session var. The
-// AES-GCM associated data (keyAAD) additionally binds each ciphertext to its
-// (scope, provider) row, so a row-swap confused-deputy can't reuse a stolen
-// ciphertext under a different identity. If RLS is ever added to provider_keys,
-// these methods must switch to BeginRLS (and the background retention purge in
-// postgres_retention.go would need a non-request principal).
+// RLS note: provider_keys deliberately has NO row-level-security policies — like the other auth-infra
+// tables it is keyed by user_id and every query here carries an explicit `WHERE user_id = $1`; the AES-GCM
+// associated data (keyAAD) additionally binds each ciphertext to its (scope, provider) row, so a row-swap
+// confused-deputy can't reuse a stolen ciphertext under a different identity. If RLS is ever added here,
+// these methods must switch to BeginRLS (and the retention purge would need a non-request principal).
 type EncryptedKeyStore struct {
 	db   *sql.DB
 	aead cipher.AEAD
 }
 
-// The keystore also holds organisations' shared credentials (G7), lists
-// and releases key families (several Azure AI Foundry resources, Part 9),
-// and puts back an org credential a failed cross-store write replaced.
+// The keystore also holds orgs' shared credentials, lists/releases key families, and restores an org
+// credential a failed cross-store write replaced.
 var (
 	_ interfaces.OrgSecretStore       = (*EncryptedKeyStore)(nil)
 	_ interfaces.SecretFamilyLister   = (*EncryptedKeyStore)(nil)
@@ -84,10 +74,8 @@ func newKeystoreAEAD(secret []byte) (cipher.AEAD, error) {
 	return aead, nil
 }
 
-// keyAAD returns the AES-GCM associated data that binds a ciphertext to its
-// (scope, provider) row. Authentication fails if a stored ciphertext is moved to
-// a different identity, preventing a row-swap confused-deputy by anyone able to
-// write the provider_keys table.
+// keyAAD returns the AES-GCM associated data binding a ciphertext to its (scope, provider) row:
+// authentication fails if a stored ciphertext is moved to a different identity (row-swap confused-deputy).
 func keyAAD(scope, provider string) []byte {
 	return []byte(scope + "\x00" + provider)
 }
@@ -141,13 +129,9 @@ func (s *EncryptedKeyStore) Save(scope, provider, key string) error {
 	return nil
 }
 
-// Get returns the decrypted key, storage.ErrSecretNotFound if no row exists,
-// or storage.ErrSecretDecryptFailed if a row exists but cannot be decrypted
-// with the current deployment key (almost always: PAD_AUTH_SECRET was
-// rotated). Distinguishing the two lets the API surface a clear "your AI
-// key needs to be re-entered after secret rotation" rather than masking the
-// rotation as "no key configured" and prompting the user to enter it again
-// indefinitely.
+// Get returns the decrypted key, storage.ErrSecretNotFound if no row exists, or storage.ErrSecretDecryptFailed
+// if a row exists but cannot be decrypted with the current deployment key (almost always: rotated) — the
+// distinction lets the API surface "re-enter the key after secret rotation" instead of "no key configured".
 func (s *EncryptedKeyStore) Get(scope, provider string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
 	defer cancel()
@@ -161,9 +145,8 @@ func (s *EncryptedKeyStore) Get(scope, provider string) (string, error) {
 	}
 	plaintext, err := s.decrypt(ct, keyAAD(scope, provider))
 	if err != nil {
-		// Log so the operator can see that a rotation invalidated stored
-		// keys; don't log scope (user id) at info level — keep it at warn
-		// with provider only.
+		// Log so the operator can see that a rotation invalidated stored keys;
+		// keep it at warn with provider only (no user id).
 		logger.Warn("keystore: ciphertext decrypt failed (deployment key may have rotated)",
 			"provider", provider, "error", err)
 		return "", storage.ErrSecretDecryptFailed
@@ -197,36 +180,25 @@ func (s *EncryptedKeyStore) Delete(scope, provider string) error {
 
 // --- Organisation-shared credentials (org_provider_keys, migration v23) ---
 //
-// Trust model. An org admin is NOT a trusted principal (anyone can create an
-// organisation and be its admin), so a shared credential is only ever what
-// that admin chose to lend the org's members: it is written by admins,
-// readable in its public (secret-free) form by members, and never returned
-// to any client — the secret is write-only. A member's OWN credential always
-// wins over the org's for chat (ProviderFactory.ForOrg), so an admin cannot
-// route a member's turns through the admin's resource once the member has
-// configured their own; usage run on the org credential is attributed to
-// the org (and capped by the org's daily budget) like every org-scoped turn.
-// The row goes with the organisation (ON DELETE CASCADE).
+// Trust model. An org admin is NOT a trusted principal (anyone can create an organisation and be its
+// admin), so a shared credential is only ever what that admin chose to lend the org's members: written
+// by admins, readable in its secret-free form by members, never returned to any client. A member's OWN
+// credential always wins over the org's for chat (ProviderFactory.ForOrg), and usage on the org credential
+// is attributed to the org and capped by its budget. The row goes with the organisation (ON DELETE CASCADE).
 //
-// Lender tracking (migration v24): updated_by is the admin who last saved
-// the document, secret_set_by the admin who supplied its stored secret —
-// the credential's lender. A save that carries the stored secret over
-// changes updated_by only; the disable-on-departure path matches the
-// lender (secret_set_by), so the lender's departure still disables a
-// credential another admin has since edited — and that admin's departure
-// does not delete a credential they merely borrowed and the lender still
-// manages.
+// Lender tracking (v24): updated_by is the admin who last saved the document, secret_set_by the admin who
+// supplied its stored secret — the lender. A save that carries the stored secret over changes updated_by
+// only; the disable-on-departure path matches the lender, so the lender's departure still disables a
+// credential another admin has since edited.
 
-// orgKeyAAD is keyAAD's counterpart for the org_provider_keys table. The
-// "org" prefix keeps an org ciphertext from ever authenticating under a user
-// scope (or vice versa), even for an org id that equals some user id.
+// orgKeyAAD is keyAAD's counterpart for org_provider_keys: the "org" prefix keeps an org ciphertext from
+// ever authenticating under a user scope (or vice versa), even for an org id that equals some user id.
 func orgKeyAAD(orgID, provider string) []byte {
 	return []byte("org\x00" + orgID + "\x00" + provider)
 }
 
-// SaveOrg upserts the encrypted shared key for an (org, provider) pair with
-// a newly supplied secret, recording updatedBy as both the admin who wrote
-// it and the secret's lender.
+// SaveOrg upserts the encrypted shared key for an (org, provider) pair with a newly supplied secret,
+// recording updatedBy as both the writer and the secret's lender.
 func (s *EncryptedKeyStore) SaveOrg(orgID, provider, key, updatedBy string) error {
 	ct, err := s.encrypt(key, orgKeyAAD(orgID, provider))
 	if err != nil {
@@ -247,16 +219,10 @@ func (s *EncryptedKeyStore) SaveOrg(orgID, provider, key, updatedBy string) erro
 	return nil
 }
 
-// SaveOrgIfUnchanged is SaveOrg with compare-and-swap on updated_at: it
-// writes only when the stored row's updated_at still equals expected — or,
-// with a zero expected, only when the org has no row yet — and returns the
-// new updated_at. ok is false (nothing written) when another save or a
-// delete got there first. An admin's edit made from a stale read therefore
-// cannot silently overwrite another admin's newer configuration.
-//
-// secretCarried keeps the row's secret_set_by (the document still holds the
-// secret its lender supplied); otherwise updatedBy supplied the secret and
-// becomes the lender. A new row always records updatedBy as the lender.
+// SaveOrgIfUnchanged is SaveOrg with compare-and-swap on updated_at: writes only when the stored row's
+// updated_at still equals expected (zero expected = only when the org has no row yet) and returns the new
+// updated_at. ok is false when another save or delete got there first, so a stale read cannot silently
+// overwrite a newer configuration. secretCarried keeps the row's secret_set_by; otherwise updatedBy is the lender.
 func (s *EncryptedKeyStore) SaveOrgIfUnchanged(orgID, provider, key, updatedBy string, secretCarried bool, expected time.Time) (updatedAt time.Time, ok bool, err error) {
 	ct, err := s.encrypt(key, orgKeyAAD(orgID, provider))
 	if err != nil {
@@ -292,13 +258,10 @@ func (s *EncryptedKeyStore) SaveOrgIfUnchanged(orgID, provider, key, updatedBy s
 	return updatedAt, true, nil
 }
 
-// DeleteOrgIfSavedBy removes the org's shared key only while userID is still
-// the admin who supplied its secret — the lender, secret_set_by (updated_by
-// only for a row no save has stamped since the v24 backfill) — atomically,
-// so a newer save by another admin with their own secret is never deleted
-// in its place, and an edit that carried the stored secret does not make
-// its editor a lender. deleted is false when there was no such row; an
-// empty userID matches nothing.
+// DeleteOrgIfSavedBy removes the org's shared key only while userID is still the admin who supplied its
+// secret — the lender, secret_set_by (updated_by only for a row no save has stamped since the v24 backfill) —
+// atomically, so a newer save by another admin with their own secret is never deleted; deleted is false when
+// there was no such row.
 func (s *EncryptedKeyStore) DeleteOrgIfSavedBy(orgID, provider, userID string) (deleted bool, err error) {
 	if userID == "" {
 		return false, nil
@@ -319,9 +282,7 @@ func (s *EncryptedKeyStore) DeleteOrgIfSavedBy(orgID, provider, userID string) (
 }
 
 // OrgsWithKeySavedBy lists the organisations whose shared key for provider
-// userID lent (secret_set_by; updated_by only for rows no save has
-// stamped since the v24 backfill) — account erasure disables them. An
-// empty userID matches nothing.
+// userID lent (DeleteOrgIfSavedBy's rule) — account erasure disables them.
 func (s *EncryptedKeyStore) OrgsWithKeySavedBy(provider, userID string) ([]string, error) {
 	if userID == "" {
 		return nil, nil
@@ -350,9 +311,8 @@ func (s *EncryptedKeyStore) OrgsWithKeySavedBy(provider, userID string) ([]strin
 	return orgIDs, nil
 }
 
-// GetOrg returns the decrypted shared key, storage.ErrSecretNotFound when
-// the org has none, or storage.ErrSecretDecryptFailed when the row cannot be
-// decrypted with the current deployment key (see Get).
+// GetOrg returns the decrypted shared key, storage.ErrSecretNotFound when the org has none, or
+// storage.ErrSecretDecryptFailed when the row cannot be decrypted with the current deployment key (see Get).
 func (s *EncryptedKeyStore) GetOrg(orgID, provider string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
 	defer cancel()
@@ -397,9 +357,8 @@ func (s *EncryptedKeyStore) DeleteOrg(orgID, provider string) error {
 	return nil
 }
 
-// OrgKeyMeta reports who last wrote the org's shared key, who supplied its
-// secret and when, without touching the ciphertext; ok is false when the org
-// has no row.
+// OrgKeyMeta reports who last wrote the org's shared key, who supplied its secret and when, without
+// touching the ciphertext; ok is false when the org has no row.
 func (s *EncryptedKeyStore) OrgKeyMeta(orgID, provider string) (info interfaces.OrgKeyInfo, ok bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
 	defer cancel()
@@ -415,15 +374,12 @@ func (s *EncryptedKeyStore) OrgKeyMeta(orgID, provider string) (info interfaces.
 	return info, true, nil
 }
 
-// --- Key families (Part 9) ---
+// --- Key families ---
 //
-// A family is a provider's set of credentials: "azure-foundry" (the default
-// resource) plus "azure-foundry/<id>" (every other resource). Membership is
-// `provider = $f OR starts_with(provider, $f || '/')` — starts_with, not
-// LIKE: "_" is a LIKE wildcard, so LIKE 'azure-foundry/%' would read a
-// family name containing one as a pattern, and a forgotten '/' would let
-// "azure-foundryX" in. Every query stays bounded by its owner column, like
-// the rest of this file (the tables carry no RLS).
+// A family is a provider's set of credentials: "azure-foundry" (the default resource) plus
+// "azure-foundry/<id>" (every other resource). Membership is `provider = $f OR starts_with(provider, $f || '/')`
+// — starts_with, not LIKE: "_" is a LIKE wildcard, and a forgotten '/' would let "azure-foundryX" in.
+// Every query stays bounded by its owner column (the tables carry no RLS).
 
 // validFamily refuses a family name no provider has: the empty name, or one
 // that is itself a family member ("a/b").
@@ -434,10 +390,8 @@ func validFamily(family string) error {
 	return nil
 }
 
-// ListFamily returns scope's keys in family, ordered by provider (byte
-// order, whatever the database collation), with each row's last save time —
-// the orphan sweep only removes keys older than its grace period, so an
-// in-flight create's secret is never swept.
+// ListFamily returns scope's keys in family, ordered by provider (byte order, whatever the database
+// collation), with each row's last save time — the orphan sweep only removes keys older than its grace period.
 func (s *EncryptedKeyStore) ListFamily(scope, family string) ([]interfaces.SecretFamilyEntry, error) {
 	if err := validFamily(family); err != nil {
 		return nil, err
@@ -497,9 +451,7 @@ func (s *EncryptedKeyStore) ListOrgKeyFamily(orgID, family string) ([]interfaces
 }
 
 // OrgKeyFamilySavedBy lists every (org, key) in family that userID lent —
-// the same lender rule as OrgsWithKeySavedBy: secret_set_by, or updated_by
-// for a row no save has stamped since the v24 backfill. An empty userID
-// matches nothing.
+// DeleteOrgIfSavedBy's rule. An empty userID matches nothing.
 func (s *EncryptedKeyStore) OrgKeyFamilySavedBy(family, userID string) ([]interfaces.OrgKeyRef, error) {
 	if err := validFamily(family); err != nil {
 		return nil, err
@@ -532,14 +484,10 @@ func (s *EncryptedKeyStore) OrgKeyFamilySavedBy(family, userID string) ([]interf
 	return out, nil
 }
 
-// DeleteOrgKeyFamilyIfSavedBy deletes the org's keys in family that userID
-// lent (OrgKeyFamilySavedBy's rule) in ONE statement and returns each
-// deleted key with its decrypted document. Reading the documents first and
-// deleting afterwards would race a newer save by another admin: the caller
-// could forget the old credential from its caches while the new one was the
-// row actually deleted — or delete a row it never read. RETURNING hands back
-// exactly the rows that went. A row that cannot be decrypted (the
-// deployment key rotated) is still deleted and returned Unreadable.
+// DeleteOrgKeyFamilyIfSavedBy deletes the org's keys in family that userID lent (OrgKeyFamilySavedBy's rule)
+// in ONE statement and returns each deleted key with its decrypted document — reading first and deleting after
+// would race a newer save; RETURNING hands back exactly the rows that went. An undecryptable row (rotated
+// deployment key) is still deleted and returned Unreadable.
 func (s *EncryptedKeyStore) DeleteOrgKeyFamilyIfSavedBy(orgID, family, userID string) ([]interfaces.DeletedOrgKey, error) {
 	if err := validFamily(family); err != nil {
 		return nil, err
@@ -585,20 +533,16 @@ func (s *EncryptedKeyStore) DeleteOrgKeyFamilyIfSavedBy(orgID, family, userID st
 	return out, nil
 }
 
-// --- Conditional deletes and the org restore (Part 9) ---
+// --- Conditional deletes and the org restore ---
 //
-// The Azure AI Foundry registry keeps each resource's credential here and
-// its row in another store, with no transaction spanning the two. Its
-// deletes decide on an earlier read (the orphan sweep lists the family, a
-// removed resource's credential goes after the registry commit), so they
-// delete only a row still carrying the stamp that read saw: a credential
-// saved again in between survives. And a credential change whose registry
-// write then fails puts the previous org row back (SnapshotOrg,
-// RestoreOrgIfUnchanged) — conditionally too, never undoing a newer save.
+// The Azure registry keeps each resource's credential here and its row in another store, with no transaction
+// spanning the two. Its deletes decide on an earlier read, so they delete only a row still carrying the stamp
+// that read saw: a credential saved again in between survives. A credential change whose registry write then
+// fails puts the previous org row back (SnapshotOrg, RestoreOrgIfUnchanged) — conditionally too, never
+// undoing a newer save.
 
-// DeleteIfUnchanged deletes scope's key only while its updated_at is still
-// updatedAt (the time ListFamily reported); deleted is false when no row
-// matched — the key is gone, or it was saved again since.
+// DeleteIfUnchanged deletes scope's key only while its updated_at is still updatedAt (the time ListFamily
+// reported); deleted is false when no row matched — the key is gone, or it was saved again since.
 func (s *EncryptedKeyStore) DeleteIfUnchanged(scope, provider string, updatedAt time.Time) (deleted bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
 	defer cancel()
@@ -630,10 +574,8 @@ func (s *EncryptedKeyStore) DeleteOrgKeyIfUnchanged(orgID, provider string, upda
 	return n > 0, nil
 }
 
-// SnapshotOrg reads an org key row exactly as stored — its ciphertext
-// (bound to this row by orgKeyAAD, so it can only ever be written back
-// here), writer, lender and stamp — in one statement. A row the current key
-// cannot decrypt is snapshotted as it is.
+// SnapshotOrg reads an org key row exactly as stored — its ciphertext (bound to this row by orgKeyAAD,
+// so it can only ever be written back here), writer, lender and stamp — in one statement.
 func (s *EncryptedKeyStore) SnapshotOrg(orgID, provider string) (snap interfaces.OrgKeySnapshot, ok bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
 	defer cancel()
@@ -649,11 +591,9 @@ func (s *EncryptedKeyStore) SnapshotOrg(orgID, provider string) (snap interfaces
 	return snap, true, nil
 }
 
-// RestoreOrgIfUnchanged writes snap back — ciphertext, updated_by,
-// secret_set_by and updated_at, so the previous compare-and-swap token is
-// current again — or, with snap nil, deletes the row, in both cases only
-// while the row's updated_at is still current (the stamp of the save being
-// undone). restored is false when a newer save got there first.
+// RestoreOrgIfUnchanged writes snap back — ciphertext, updated_by, secret_set_by and updated_at, so the
+// previous compare-and-swap token is current again — or, with snap nil, deletes the row; both only while the
+// row's updated_at is still current. restored is false when a newer save got there first.
 func (s *EncryptedKeyStore) RestoreOrgIfUnchanged(orgID, provider string, current time.Time, snap *interfaces.OrgKeySnapshot) (restored bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
 	defer cancel()

@@ -111,13 +111,12 @@ func TestComputeContextCore_SourceFilesWired(t *testing.T) {
 	}
 }
 
-// TestComputeContextCore_ExcludeContextGating covers BUG-2 and BUG-4:
-//   - BUG-2: ExcludeContext is part of the cache key, so a free-form turn and a
-//     context-bearing turn (same selection) get distinct cache entries — the
-//     context-bearing turn must NOT receive the source-less contextText.
-//   - BUG-4: ExcludeContext gates the SelectedBlock context injection (not just
-//     source files), so a free-form turn on a block-scoped thread omits the
-//     block detail from contextText.
+// TestComputeContextCore_ExcludeContextGating covers BUG-2 and BUG-4: BUG-2 —
+// ExcludeContext is part of the cache key, so a free-form turn and a context-bearing turn
+// (same selection) get distinct cache entries and the context-bearing turn must NOT
+// receive the source-less contextText. BUG-4 — ExcludeContext gates the SelectedBlock
+// context injection (not just source files), so a free-form turn on a block-scoped thread
+// omits the block detail from contextText.
 func TestComputeContextCore_ExcludeContextGating(t *testing.T) {
 	dir := t.TempDir()
 	doc := &models.FlowDocument{

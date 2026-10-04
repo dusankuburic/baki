@@ -11,7 +11,11 @@ import (
 // fuzzyMaxDistance is the maximum Levenshtein distance for a fuzzy token match.
 const fuzzyMaxDistance = 2
 
-func (idx *SearchIndex) Search(query models.SearchQuery) *models.SearchResults {
+// Search runs query against doc, the document the index was built from (the
+// caller holds it — FlowService checks identity before reusing a cached
+// index). Blocks are resolved on the document (blockLookup), so the index can
+// hold no pointers into it.
+func (idx *SearchIndex) Search(doc *models.FlowDocument, query models.SearchQuery) *models.SearchResults {
 	start := time.Now()
 	text := strings.ToLower(strings.TrimSpace(query.Text))
 	if text == "" {
@@ -34,10 +38,8 @@ func (idx *SearchIndex) Search(query models.SearchQuery) *models.SearchResults {
 		} else if query.Fuzzy && len(qt) >= 4 {
 			for token, blockIDs := range idx.tokens {
 				// Levenshtein distance is at least the length difference, so a
-				// token whose length differs from the query token by more than
-				// the fuzzy threshold can never match — skip the O(len²) DP for
-				// it. This is exact (same results), it just avoids wasted work
-				// across the full token index on every fuzzy query.
+				// token differing in length by more than the threshold can never
+				// match — skip the O(len²) DP for it (exact, just less work).
 				if d := len(qt) - len(token); d > fuzzyMaxDistance || d < -fuzzyMaxDistance {
 					continue
 				}
@@ -57,8 +59,9 @@ func (idx *SearchIndex) Search(query models.SearchQuery) *models.SearchResults {
 	}
 
 	var results []models.SearchResult
+	lookup := blockLookup{doc: doc}
 	for blockID, hits := range candidates {
-		block := idx.blocks[blockID]
+		block, subflowID := lookup.find(blockID)
 		if block == nil {
 			continue
 		}
@@ -80,7 +83,7 @@ func (idx *SearchIndex) Search(query models.SearchQuery) *models.SearchResults {
 
 		results = append(results, models.SearchResult{
 			BlockID:      blockID,
-			SubflowID:    idx.blockSubflow[blockID],
+			SubflowID:    subflowID,
 			MatchedField: matchedField,
 			MatchedText:  matchedText,
 			Score:        score,
@@ -101,6 +104,55 @@ func (idx *SearchIndex) Search(query models.SearchQuery) *models.SearchResults {
 		Results:    results,
 		TotalCount: len(results),
 		DurationMs: int(time.Since(start).Milliseconds()),
+	}
+}
+
+// blockLookup resolves block ids on the document a query runs against: via
+// its BlocksByID/BlockSubflow maps when it has them (the parser builds them
+// at parse time), else via one walk for this query. Both resolve a duplicated
+// id to the last block carrying it in walk order; BlocksByID without a
+// BlockSubflow map falls back to the block's own SubflowID.
+type blockLookup struct {
+	doc    *models.FlowDocument
+	walked map[string]walkedBlock
+}
+
+type walkedBlock struct {
+	block     *models.Block
+	subflowID string
+}
+
+func (l *blockLookup) find(id string) (*models.Block, string) {
+	if l.doc == nil {
+		return nil, ""
+	}
+	if l.doc.BlocksByID != nil {
+		block := l.doc.BlocksByID[id]
+		if block == nil {
+			return nil, ""
+		}
+		if sf := l.doc.BlockSubflow[id]; sf != nil {
+			return block, sf.ID
+		}
+		return block, block.SubflowID
+	}
+	if l.walked == nil {
+		l.walked = make(map[string]walkedBlock)
+		for i := range l.doc.Subflows {
+			sf := &l.doc.Subflows[i]
+			for j := range sf.Blocks {
+				l.walk(&sf.Blocks[j], sf.ID)
+			}
+		}
+	}
+	w := l.walked[id]
+	return w.block, w.subflowID
+}
+
+func (l *blockLookup) walk(block *models.Block, subflowID string) {
+	l.walked[block.ID] = walkedBlock{block: block, subflowID: subflowID}
+	for i := range block.Children {
+		l.walk(&block.Children[i], subflowID)
 	}
 }
 

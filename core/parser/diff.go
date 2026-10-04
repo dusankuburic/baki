@@ -22,13 +22,10 @@ func DiffFlows(oldDoc, newDoc *models.FlowDocument) *models.FlowDiff {
 		newSubflows[newDoc.Subflows[i].Name] = &newDoc.Subflows[i]
 	}
 
-	// Process new and common subflows
 	for _, newSf := range newDoc.Subflows {
 		if oldSf, ok := oldSubflows[newSf.Name]; ok {
-			// Common subflow - diff blocks
 			diff.Subflows = append(diff.Subflows, diffSubflow(oldSf, &newSf))
 		} else {
-			// Added subflow
 			diff.Subflows = append(diff.Subflows, models.SubflowDiff{
 				Name:   newSf.Name,
 				Change: models.ChangeAdded,
@@ -37,7 +34,6 @@ func DiffFlows(oldDoc, newDoc *models.FlowDocument) *models.FlowDiff {
 		}
 	}
 
-	// Process removed subflows
 	for _, oldSf := range oldDoc.Subflows {
 		if _, ok := newSubflows[oldSf.Name]; !ok {
 			diff.Subflows = append(diff.Subflows, models.SubflowDiff{
@@ -62,10 +58,6 @@ func wrapBlocksAsDiff(blocks []models.Block, change models.ChangeType) []models.
 		}
 		res = append(res, bd)
 
-		// Recursively wrap children?
-		// Actually, for a completely added/removed subflow,
-		// we might just want a flat list or the root blocks.
-		// Let's stick to root blocks for now, but usually diffs are flat.
 		// #nosec G602 -- i is always a valid index (from `range blocks`).
 		if len(blocks[i].Children) > 0 {
 			res = append(res, wrapBlocksAsDiff(blocks[i].Children, change)...) // #nosec G602
@@ -75,9 +67,8 @@ func wrapBlocksAsDiff(blocks []models.Block, change models.ChangeType) []models.
 }
 
 // Diff size caps. The LCS matrix is O(m×n) memory and backtrack recurses O(m+n)
-// deep, so a pathologically large subflow (thousands of blocks) could exhaust
-// memory or overflow the stack. Above these bounds we fall back to a coarse,
-// linear diff instead of the exact LCS.
+// deep, so a pathologically large subflow could exhaust memory or overflow the
+// stack; above these bounds we fall back to a coarse, linear diff.
 const (
 	maxDiffBlocksPerSide = 5000
 	maxDiffCells         = 4_000_000
@@ -175,11 +166,9 @@ func backtrack(matrix [][]int, a, b []models.Block, i, j int) []models.BlockDiff
 	return []models.BlockDiff{}
 }
 
-// coarseBlockDiff is the linear fallback used when an exact LCS would exceed the
-// size caps (see diffTooLarge). It cannot detect moves/insertions the way LCS
-// does, but it is O(m+n) time and memory with no recursion. A fast path handles
-// the common "large subflow, nothing changed" case exactly; otherwise every old
-// block is reported removed and every new block added.
+// coarseBlockDiff is the linear fallback when an exact LCS would exceed the
+// size caps: O(m+n) time and memory, no recursion, but it cannot detect
+// moves/insertions. A fast path handles "large subflow, nothing changed" exactly.
 func coarseBlockDiff(oldBlocks, newBlocks []models.Block) []models.BlockDiff {
 	if len(oldBlocks) == len(newBlocks) {
 		identical := true
@@ -208,14 +197,11 @@ func coarseBlockDiff(oldBlocks, newBlocks []models.Block) []models.BlockDiff {
 }
 
 func blocksEqual(a, b *models.Block) bool {
-	// For a structural diff, equality should be based on type and content,
-	// not UUID (which is generated per parse). Property values are part of a
-	// block's content: a config-only edit (a changed Url:, Timeout:, connection
-	// string, …) leaves RawType/Name/Indent identical, so without comparing
-	// Properties the LCS treats it as unchanged and the edit is invisible in the
-	// diff. maps.Equal is exact and deterministic over map[string]string;
-	// synthetic keys like _output are derived deterministically from the source,
-	// so they compare stably across re-parses.
+	// Structural equality ignores the per-parse UUID but includes Properties:
+	// a config-only edit (changed Url:, Timeout:, …) leaves RawType/Name/Indent
+	// identical, so without Properties the LCS would hide the edit. maps.Equal
+	// is exact; synthetic keys like _output derive deterministically from the
+	// source, so they compare stably.
 	return a.RawType == b.RawType && a.Name == b.Name && a.Indent == b.Indent &&
 		maps.Equal(a.Properties, b.Properties)
 }

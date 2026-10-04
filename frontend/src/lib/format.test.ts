@@ -31,7 +31,7 @@ describe('formatDateTime / formatTimeOfDay', () => {
   })
 })
 
-describe('formatContextWindow (F-44)', () => {
+describe('formatContextWindow', () => {
   it('renders sub-1M windows as integer k, unchanged from the picker labels', () => {
     expect(formatContextWindow(200_000)).toBe('200k')
     expect(formatContextWindow(128_000)).toBe('128k')

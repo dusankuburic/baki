@@ -58,9 +58,32 @@ export interface SuppressedFinding {
   suppressedAt: string
 }
 
+// Per-block index of a report's findings, built on demand and cached per
+// report object (a WeakMap, so it is collected with the report). The store
+// used to keep an eager index for every retained report — a second copy of
+// every findings array, for flows only the inspector of the OPEN flow reads
+// — and rebuilt it on every setReport. Building one costs ~3 ms for 20k
+// findings, once per report.
+const EMPTY_BLOCK_INDEX: ReadonlyMap<string, Finding[]> = new Map()
+const blockIndexCache = new WeakMap<AnalysisReport, Map<string, Finding[]>>()
+
+export function findingsByBlockOf(report: AnalysisReport | undefined): ReadonlyMap<string, Finding[]> {
+  if (!report) return EMPTY_BLOCK_INDEX
+  let index = blockIndexCache.get(report)
+  if (!index) {
+    index = new Map<string, Finding[]>()
+    for (const f of report.findings ?? []) {
+      const arr = index.get(f.blockId)
+      if (arr) arr.push(f)
+      else index.set(f.blockId, [f])
+    }
+    blockIndexCache.set(report, index)
+  }
+  return index
+}
+
 interface AnalysisState {
   reports: Map<string, AnalysisReport>
-  findingsByBlock: Map<string, Map<string, Finding[]>>
   isAnalyzing: boolean
   analyzingGen: number
   progress: {current: number; total: number; ruleName: string}
@@ -112,8 +135,8 @@ interface AnalysisState {
   // stored on the triage entry so the status chip can show it.
   setFindingTriage: (finding: Finding, status: TriageStatus, justification?: string) => void
   // triageFindingsBatch applies one triage patch (status and/or assignee) to
-  // many findings: optimistic triageMap update + ONE persisted batch request
-  // (U4.4 bulk triage). prev entries are snapshotted for rollback.
+  // many findings (bulk triage): optimistic triageMap update + ONE persisted
+  // batch request. prev entries are snapshotted for rollback.
   triageFindingsBatch: (findings: Finding[], patch: {status?: TriageStatus; assigneeId?: string | null}) => void
   assignFinding: (finding: Finding, assigneeId: string | null) => void
   loadBaseline: (flowId: string) => Promise<void>
@@ -128,7 +151,12 @@ interface AnalysisState {
   reset: () => void
 }
 
+// Retained reports are capped by count AND by the findings they hold: 20
+// reports of a 20k-finding flow kept ~10 MB of JSON each alive per session.
+// The open flow's report (protectedFlowId) and the report just set are never
+// evicted, so the budget can be exceeded by exactly those two.
 const MAX_REPORTS = 20
+export const MAX_RETAINED_FINDINGS = 100_000
 
 const defaultSeverityFilter = (): Set<Severity> => new Set(['error', 'warning', 'info'])
 // All statuses on by default: 'suppressed' is listed for completeness, but
@@ -139,7 +167,6 @@ const defaultCategoryFilter = (): Set<FindingCategory> =>
 
 export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   reports: new Map(),
-  findingsByBlock: new Map(),
   isAnalyzing: false,
   analyzingGen: 0,
   progress: {current: 0, total: 0, ruleName: ''},
@@ -164,32 +191,24 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   setReport: (flowId, report) => {
     set(state => {
       const next = new Map(state.reports)
+      // Delete-then-set: a Map keeps a re-set key's ORIGINAL position, so a
+      // refreshed report would otherwise still count as the oldest.
+      next.delete(flowId)
       next.set(flowId, report)
-      // Build per-block findings index for O(1) lookup in BlockFindings.
-      const nextIndex = new Map(state.findingsByBlock)
-      const blockIndex = new Map<string, Finding[]>()
-      for (const f of report.findings) {
-        const arr = blockIndex.get(f.blockId)
-        if (arr) arr.push(f)
-        else blockIndex.set(f.blockId, [f])
-      }
-      nextIndex.set(flowId, blockIndex)
-      // Evict oldest entries beyond the cap, but never evict the currently-open
-      // flow's report — losing it causes the per-block findings UI to silently
-      // go empty while the dashboard aggregate still shows it.
+      // Evict oldest entries beyond the count cap or the findings budget, but
+      // never the currently-open flow's report — losing it causes the
+      // per-block findings UI to silently go empty while the dashboard
+      // aggregate still shows it — nor the one just set.
       const protectedId = state.protectedFlowId
-      while (next.size > MAX_REPORTS) {
-        let evicted = false
-        for (const key of next.keys()) {
-          if (key === protectedId) continue
-          next.delete(key)
-          nextIndex.delete(key)
-          evicted = true
-          break
-        }
-        if (!evicted) break
+      let retained = 0
+      for (const r of next.values()) retained += r.findings?.length ?? 0
+      for (const [key, r] of next) {
+        if (next.size <= MAX_REPORTS && retained <= MAX_RETAINED_FINDINGS) break
+        if (key === protectedId || key === flowId) continue
+        next.delete(key)
+        retained -= r.findings?.length ?? 0
       }
-      return {reports: next, findingsByBlock: nextIndex}
+      return {reports: next}
     })
     // Best-effort notification when the user has tabbed away from the app.
     // notifyIfBackground is a no-op while the document is visible, so this
@@ -444,7 +463,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       analysisApi
         .setFindingStatusBatch(
           findings.map((f, i) => {
-            // Index into prev directly (F1.4): indexOf(f) is O(n²) AND wrong
+            // Index into prev directly: indexOf(f) is O(n²) AND wrong
             // when the same object reference appears twice.
             const existing = prev[i]
             const status = patch.status ?? existing?.status ?? 'in_progress'
@@ -586,7 +605,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   reset: () =>
     set({
       reports: new Map(),
-      findingsByBlock: new Map(),
       isAnalyzing: false,
       analyzingGen: 0,
       progress: {current: 0, total: 0, ruleName: ''},
@@ -604,7 +622,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       baselineNewCount: null,
       selectedFindingIds: new Set(),
       // savedViews are DEVICE-LOCAL prefs (persisted to localStorage, loaded
-      // at module init) — logout must not blank them for the session (F1.9):
+      // at module init) — logout must not blank them for the session:
       // they'd stay gone until a reload despite surviving on disk.
       focusedFindingKey: null,
     }),

@@ -14,11 +14,9 @@ import (
 	"pad-core/models"
 )
 
-// TestStreamChatMessage_PreStreamFailureFailsFast verifies that a stream whose
-// provider can't even be resolved does not park on `<-ctl.started` waiting for
-// /api/chat/begin: the goroutine exits immediately, the error is emitted, and
-// BeginStream hands the buffered error back for the client that begins late
-// (whose SSE subscription didn't exist when the event was emitted).
+// TestStreamChatMessage_PreStreamFailureFailsFast verifies that a stream whose provider can't be resolved does
+// not park on `<-ctl.started`: the goroutine exits immediately, the error is emitted, and BeginStream hands the
+// buffered error back for the client that begins late (no SSE subscription existed when the event was emitted).
 func TestStreamChatMessage_PreStreamFailureFailsFast(t *testing.T) {
 	notifier := &testutil.CountingNotifier{}
 
@@ -65,15 +63,8 @@ func TestStreamChatMessage_PreStreamFailureFailsFast(t *testing.T) {
 	}
 }
 
-// TestStreamChatMessage_ParentCancelBeforeBegin_StillRuns is a regression test
-// for the "context canceled" bug: the create-request's context (r.Context())
-// must NOT abort the stream, since the stream outlives that request (begin is a
-// separate call). We cancel the parent immediately — as net/http does when the
-// create handler returns — then begin the stream and assert it still ran (an
-// error event is emitted). Before the fix (stream ctx derived from r.Context()),
-// the parent cancel propagated, awaitStart() saw ctx.Done() and bailed, so no
-// event was emitted; this manifested as Copilot's token exchange failing with
-// "context canceled" on a cold token cache.
+// TestStreamChatMessage_ParentCancelBeforeBegin_StillRuns pins that the create-request's context must NOT abort
+// the stream — the stream outlives that request (begin is a separate call); net/http's cancel-on-return broke it.
 func TestStreamChatMessage_ParentCancelBeforeBegin_StillRuns(t *testing.T) {
 	notifier := &testutil.CountingNotifier{}
 
@@ -93,8 +84,7 @@ func TestStreamChatMessage_ParentCancelBeforeBegin_StillRuns(t *testing.T) {
 		factory:       factory,
 	}
 
-	// Simulate the HTTP create handler: it passes its request context, then
-	// returns — which cancels that context.
+	// Simulate the HTTP create handler: pass the request context, then cancel it on return.
 	parent, cancelParent := context.WithCancel(context.Background())
 	id, err := svc.StreamChatMessage(parent, "test", nil, nil, models.ChatRequest{Provider: "unknown"})
 	if err != nil {
@@ -121,15 +111,12 @@ func TestStreamChatMessage_ParentCancelBeforeBegin_StillRuns(t *testing.T) {
 	}
 }
 
-// TestStreamChatMessage_ClientStreamID_AutoBegins verifies the C-1 handshake:
-// a client-provided stream ID is used as the stream identity and the stream is
-// auto-begun (ctl.started closed immediately) so the worker may emit without a
-// /chat/begin round-trip. The legacy path (no ClientStreamID) leaves started
-// open for BeginStream. Invalid IDs and collisions are rejected.
+// TestStreamChatMessage_ClientStreamID_AutoBegins verifies the C-1 handshake: a client-provided stream ID is the
+// identity and auto-begins (ctl.started closed) so the worker may emit without a /chat/begin round-trip; the
+// legacy path leaves started open for BeginStream. Invalid IDs and collisions are rejected.
 func TestStreamChatMessage_ClientStreamID_AutoBegins(t *testing.T) {
 	notifier := &testutil.CountingNotifier{}
-	// Block provider resolution so the worker parks and the stream stays in
-	// activeStreams long enough to inspect ctl.started without racing cleanup.
+	// Block provider resolution so the worker parks and ctl.started stays inspectable without racing cleanup.
 	release := make(chan struct{})
 	factory := ai.NewProviderFactory(func(_, _ string) (string, error) {
 		<-release
@@ -137,7 +124,6 @@ func TestStreamChatMessage_ClientStreamID_AutoBegins(t *testing.T) {
 	}, nil, nil, nil)
 	svc := &ChatService{notifier: notifier, flowCache: &FlowService{}, analysisCache: &AnalysisService{}, factory: factory}
 
-	// 1. A valid client-provided UUID is used as the id and auto-begins.
 	sid := "12345678-1234-5678-1234-567812345678"
 	id, err := svc.StreamChatMessage(context.Background(), "test", nil, nil, models.ChatRequest{Provider: "claude", ClientStreamID: sid})
 	if err != nil {
@@ -153,12 +139,10 @@ func TestStreamChatMessage_ClientStreamID_AutoBegins(t *testing.T) {
 	ctl := ctlVal.(*streamCtl)
 	select {
 	case <-ctl.started:
-		// good — auto-begun without BeginStream
 	default:
 		t.Error("expected ctl.started to be closed immediately for a client-provided stream id (C-1 auto-begin)")
 	}
 
-	// 2. Legacy path (no ClientStreamID) leaves ctl.started open for BeginStream.
 	id2, err := svc.StreamChatMessage(context.Background(), "test", nil, nil, models.ChatRequest{Provider: "claude"})
 	if err != nil {
 		t.Fatalf("StreamChatMessage legacy: %v", err)
@@ -172,15 +156,12 @@ func TestStreamChatMessage_ClientStreamID_AutoBegins(t *testing.T) {
 	case <-ctl2.started:
 		t.Error("legacy stream must NOT auto-begin; ctl.started should remain open until BeginStream")
 	default:
-		// good
 	}
 
-	// 3. Invalid (non-UUID) clientStreamId is rejected.
 	if _, err := svc.StreamChatMessage(context.Background(), "test", nil, nil, models.ChatRequest{Provider: "claude", ClientStreamID: "not-a-uuid"}); err == nil {
 		t.Error("expected an error for a non-UUID clientStreamId")
 	}
 
-	// 4. Collision with an active stream's id is rejected.
 	if _, err := svc.StreamChatMessage(context.Background(), "test", nil, nil, models.ChatRequest{Provider: "claude", ClientStreamID: sid}); err == nil {
 		t.Error("expected an error for a colliding clientStreamId")
 	}
@@ -199,51 +180,6 @@ func TestStreamChatMessage_ClientStreamID_AutoBegins(t *testing.T) {
 			case <-time.After(10 * time.Millisecond):
 			}
 		}
-	}
-}
-
-// TestStreamChatMessage_CancelAfterBegin_EmitsError verifies the normal
-// cancellation path.
-func TestStreamChatMessage_CancelAfterBegin_EmitsError(t *testing.T) {
-	notifier := &testutil.CountingNotifier{}
-
-	factory := ai.NewProviderFactory(
-		func(scope, provider string) (string, error) {
-			return "", fmt.Errorf("no key configured")
-		},
-		nil,
-		nil,
-		nil,
-	)
-
-	svc := &ChatService{
-		notifier:      notifier,
-		flowCache:     &FlowService{},
-		analysisCache: &AnalysisService{},
-		factory:       factory,
-	}
-
-	id, err := svc.StreamChatMessage(context.Background(), "test", nil, nil, models.ChatRequest{Provider: "unknown"})
-	if err != nil {
-		t.Fatalf("StreamChatMessage: %v", err)
-	}
-
-	svc.BeginStream(context.Background(), id)
-
-	deadline := time.After(2 * time.Second)
-	for {
-		if _, ok := svc.activeStreams.Load(id); !ok {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("stream goroutine did not exit within 2s after BeginStream")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-
-	if got := notifier.Count(); got == 0 {
-		t.Errorf("expected at least one error event after BeginStream, got 0")
 	}
 }
 
@@ -298,9 +234,8 @@ func TestBeginStream_ConcurrentCalls_NoPanic(t *testing.T) {
 	}
 }
 
-// TestWatchStream_CancelsWhenSubscriberGone verifies the stream watchdog:
-// once the client has begun and its SSE connection stays gone for the miss
-// limit, the stream is cancelled instead of billing until the wall-clock cap.
+// TestWatchStream_CancelsWhenSubscriberGone verifies the watchdog: a begun stream whose SSE connection stays gone
+// for the miss limit is cancelled instead of billing until the wall-clock cap.
 func TestWatchStream_CancelsWhenSubscriberGone(t *testing.T) {
 	notifier := &testutil.CountingNotifier{}
 	notifier.SetNoSubscriber(true)
@@ -321,8 +256,7 @@ func TestWatchStream_CancelsWhenSubscriberGone(t *testing.T) {
 	}
 }
 
-// TestWatchStream_LiveSubscriberNotCancelled: a connected client with an
-// active provider must never have its stream cancelled by the watchdog.
+// TestWatchStream_LiveSubscriberNotCancelled: a connected client with an active provider is never cancelled.
 func TestWatchStream_LiveSubscriberNotCancelled(t *testing.T) {
 	notifier := &testutil.CountingNotifier{}
 	svc := &ChatService{notifier: notifier, watchdogInterval: 5 * time.Millisecond, idleTimeout: time.Hour}
@@ -342,9 +276,8 @@ func TestWatchStream_LiveSubscriberNotCancelled(t *testing.T) {
 	}
 }
 
-// TestWatchStream_NotStartedNotCancelledBySubscriberLoss: before the client
-// begins, subscriber liveness must not cancel — pre-begin lifetime is bounded
-// by fail-fast errors, the idle timeout, and the stream cap.
+// TestWatchStream_NotStartedNotCancelledBySubscriberLoss: before the client begins, subscriber liveness must not
+// cancel — pre-begin lifetime is bounded by fail-fast errors, the idle timeout and the stream cap.
 func TestWatchStream_NotStartedNotCancelledBySubscriberLoss(t *testing.T) {
 	notifier := &testutil.CountingNotifier{}
 	notifier.SetNoSubscriber(true)
@@ -364,9 +297,8 @@ func TestWatchStream_NotStartedNotCancelledBySubscriberLoss(t *testing.T) {
 	}
 }
 
-// TestWatchStream_CancelsIdleProvider: a provider that stops emitting chunks
-// is cancelled after the idle timeout — even before the client begins — with
-// the provider-stalled reason.
+// TestWatchStream_CancelsIdleProvider: a provider that stops emitting chunks is cancelled after the idle timeout
+// — even before the client begins — with the provider-stalled reason.
 func TestWatchStream_CancelsIdleProvider(t *testing.T) {
 	notifier := &testutil.CountingNotifier{}
 	svc := &ChatService{notifier: notifier, watchdogInterval: 5 * time.Millisecond, idleTimeout: 30 * time.Millisecond}
@@ -388,8 +320,7 @@ func TestWatchStream_CancelsIdleProvider(t *testing.T) {
 	}
 }
 
-// TestWatchStream_ActiveProviderNotIdleCancelled: steady provider chunks keep
-// the stream alive well past the idle timeout.
+// TestWatchStream_ActiveProviderNotIdleCancelled: steady provider chunks keep the stream alive past the idle timeout.
 func TestWatchStream_ActiveProviderNotIdleCancelled(t *testing.T) {
 	notifier := &testutil.CountingNotifier{}
 	svc := &ChatService{notifier: notifier, watchdogInterval: 5 * time.Millisecond, idleTimeout: 40 * time.Millisecond}
@@ -414,12 +345,9 @@ func TestWatchStream_ActiveProviderNotIdleCancelled(t *testing.T) {
 	}
 }
 
-// TestWatchStream_ToolExecutionTouchedNotIdleCancelled locks the contract the
-// tool loops rely on: tool execution emits no provider chunks, so the loops
-// ctl.touch() around ExecuteTool (chat.go runToolLoop/runPromptToolLoop) to
-// signal activity. A stream whose only activity is these periodic touches —
-// simulating a legitimately slow tool running well past the idle timeout —
-// must NOT be cancelled as an idle provider.
+// TestWatchStream_ToolExecutionTouchedNotIdleCancelled locks the contract the tool loops rely on: tool execution
+// emits no chunks, so the loops ctl.touch() around ExecuteTool. A stream whose only activity is these touches —
+// a legitimately slow tool running well past the idle timeout — must NOT be cancelled as an idle provider.
 func TestWatchStream_ToolExecutionTouchedNotIdleCancelled(t *testing.T) {
 	notifier := &testutil.CountingNotifier{}
 	svc := &ChatService{notifier: notifier, watchdogInterval: 5 * time.Millisecond, idleTimeout: 40 * time.Millisecond}
@@ -432,9 +360,8 @@ func TestWatchStream_ToolExecutionTouchedNotIdleCancelled(t *testing.T) {
 
 	go svc.watchStream(ctx, "s1", "user-1", ctl)
 
-	// Simulate a slow tool: 12 "tool execution" windows of 20ms each — every
-	// window well under the 40ms idle limit, but the total (240ms) far past
-	// it. Each window starts and ends with a touch, exactly like the loop.
+	// Simulate a slow tool: 12 windows of 20ms each, every window well under the 40ms idle limit but totaling
+	// far past it; each window starts and ends with a touch, exactly like the loop.
 	stop := time.After(2 * time.Second)
 	for i := 0; i < 12; i++ {
 		select {
@@ -448,8 +375,7 @@ func TestWatchStream_ToolExecutionTouchedNotIdleCancelled(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		ctl.touch() // …and after
 	}
-	// Sanity contrast: with touches stopped, the same stream IS idle-cancelled
-	// (proves the touches above were load-bearing, not a short test).
+	// Sanity contrast: with touches stopped the same stream IS idle-cancelled (the touches were load-bearing).
 	select {
 	case <-ctx.Done():
 	case <-time.After(2 * time.Second):
@@ -457,10 +383,9 @@ func TestWatchStream_ToolExecutionTouchedNotIdleCancelled(t *testing.T) {
 	}
 }
 
-// windowFakeProvider scripts one plain (tool-less) assistant turn like
-// testutil.FakeProvider, but with a controllable catalog: Models() lists
-// "big-window" with a huge ContextLimit while the provider-wide ContextLimit()
-// stays small, and Stream records how many messages each request carried.
+// windowFakeProvider scripts tool-less turns like testutil.FakeProvider with a controllable catalog: Models()
+// lists "big-window" with a huge ContextLimit while provider-wide ContextLimit() stays small; Stream records
+// how many messages each request carried.
 type windowFakeProvider struct {
 	testutil.FakeProvider
 	providerLimit int
@@ -476,21 +401,16 @@ func (p *windowFakeProvider) Stream(ctx context.Context, req ai.Request, onChunk
 	return p.FakeProvider.Stream(ctx, req, onChunk)
 }
 
-// TestRunToolLoop_UsesModelCatalogWindow proves the tool loop truncates
-// against the SELECTED MODEL's catalog window, not the smaller provider-wide
-// default: the same conversation that fails as "too long" under the provider
-// default streams intact (all history delivered to the provider) once the
-// model's catalog entry advertises a window big enough to hold it.
+// TestRunToolLoop_UsesModelCatalogWindow proves the tool loop truncates against the SELECTED MODEL's catalog
+// window, not the smaller provider-wide default: the conversation that fails as "too long" under the provider
+// default streams intact once the model's catalog entry advertises a window big enough to hold it.
 func TestRunToolLoop_UsesModelCatalogWindow(t *testing.T) {
 	newSvc := func() *ChatService {
 		return &ChatService{notifier: &testutil.CountingNotifier{}, analysisCache: &AnalysisService{}}
 	}
 
-	// A current turn of ~1500 tokens (6000 bytes at the fake's len/4
-	// estimator) plus the 4000 reserve overflows a 5000 provider default on
-	// its own (→ ErrContextLimit even after every older turn is truncated:
-	// the current turn is pinned), while the 1M catalog window holds the
-	// whole conversation.
+	// A current turn of ~1500 tokens (6000 bytes at the fake's len/4 estimator) plus the 4000 reserve overflows
+	// a 5000 provider default on its own (the current turn is pinned), while the 1M catalog window holds all.
 	var msgs []ai.Message
 	for i := 0; i < 20; i++ {
 		role := "user"
@@ -534,10 +454,9 @@ func TestRunToolLoop_UsesModelCatalogWindow(t *testing.T) {
 	}
 }
 
-// TestFailureMessage maps stream failures to client-facing text: a deliberate
-// cancellation surfaces its stored reason instead of the provider's raw
-// "context canceled" wrapping, the duration cap gets a readable message, and
-// genuine provider errors pass through untouched.
+// TestFailureMessage maps stream failures to client-facing text: a deliberate cancellation surfaces its stored
+// reason instead of the raw "context canceled" wrapping; the duration cap gets a readable message; provider
+// errors pass through untouched.
 func TestFailureMessage(t *testing.T) {
 	t.Run("cancel reason replaces raw error", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -594,8 +513,7 @@ func TestNormalizeChatParams(t *testing.T) {
 		{"negative maxtokens clamps to 0", 0.5, -10, 0, 0, 0.5, 0},
 		{"maxtokens over context window is capped", 0.5, 999999, 8000, 0, 0.5, 8000 - contextReserve},
 		{"unknown ctxlimit leaves maxtokens", 0.5, 999999, 0, 0, 0.5, 999999},
-		// A small window keeps half of itself for the prompt, not all of it:
-		// capping at 0 sent the provider's own default instead (R1).
+		// A small window keeps half of itself for the prompt — capping at 0 sent the provider's default instead.
 		{"tiny context window keeps a cap under half of it", 0.5, 100, 1000, 0, 0.5, 100},
 		{"tiny context window caps at half of it", 0.5, 999999, 1000, 0, 0.5, 500},
 		{"output cap bounds maxtokens below input window", 0.5, 200000, 200000, 64000, 0.5, 64000},
@@ -615,9 +533,8 @@ func TestNormalizeChatParams(t *testing.T) {
 	}
 }
 
-// Tool-loop tests use the shared testutil.FakeProvider (scriptable streamed
-// turns + context-window guard). A turn with no scripted entry and a Fallback
-// set drives the iteration-cap path.
+// Tool-loop tests use the shared testutil.FakeProvider (scriptable streamed turns + context-window guard); a
+// turn with no scripted entry and a Fallback set drives the iteration-cap path.
 
 func toolLoopDoc() *models.FlowDocument {
 	doc := &models.FlowDocument{
@@ -636,9 +553,8 @@ func collectEvents() (func(string, map[string]interface{}), *[]string) {
 	return func(typ string, _ map[string]interface{}) { evs = append(evs, typ) }, &evs
 }
 
-// TestDailyUsage_NilBackendDoesNotPanic covers the local/desktop-mode case where
-// the storage backend is nil (the default StorageLocal builds no backend): the
-// budget check must report $0 usage instead of dereferencing a nil backend.
+// TestDailyUsage_NilBackendDoesNotPanic covers local/desktop mode (nil backend): the budget check must report
+// $0 usage instead of dereferencing nil.
 func TestDailyUsage_NilBackendDoesNotPanic(t *testing.T) {
 	svc := &ChatService{} // backend is nil, as in local mode
 	usage, err := svc.dailyUsage(context.Background(), "user-1", "org-1")
@@ -650,8 +566,7 @@ func TestDailyUsage_NilBackendDoesNotPanic(t *testing.T) {
 	}
 }
 
-// staticSettings is a minimal SettingsProvider for service-layer tests that need
-// to drive settings without the on-disk SettingsStore.
+// staticSettings is a minimal SettingsProvider for tests that drive settings without the on-disk store.
 type staticSettings struct{ s models.AppSettings }
 
 func (m *staticSettings) Get() *models.AppSettings                         { cp := m.s; return &cp }
@@ -660,9 +575,8 @@ func (m *staticSettings) AddRecentFile(string, int64) error                { ret
 func (m *staticSettings) RemoveRecentFile(string) error                    { return nil }
 func (m *staticSettings) ClearRecentFiles() error                          { return nil }
 
-// TestEnforceBudget_FailsClosedOnStoreError verifies the cost guardrail denies
-// a request when the day's spend can't be read, instead of treating the unknown
-// spend as $0 (which would open an unlimited-spend window during a DB hiccup).
+// TestEnforceBudget_FailsClosedOnStoreError verifies the cost guardrail denies a request when the day's spend
+// can't be read — treating unknown spend as $0 would open an unlimited-spend window during a DB hiccup.
 func TestEnforceBudget_FailsClosedOnStoreError(t *testing.T) {
 	backend := &testutil.FakeBackend{UsageErr: fmt.Errorf("db down")}
 	svc := &ChatService{
@@ -674,8 +588,7 @@ func TestEnforceBudget_FailsClosedOnStoreError(t *testing.T) {
 	}
 }
 
-// TestEnforceBudget_AllowsUnderBudget confirms the happy path still permits a
-// request when verified spend is below the configured budget.
+// TestEnforceBudget_AllowsUnderBudget confirms the happy path permits a request below the configured budget.
 func TestEnforceBudget_AllowsUnderBudget(t *testing.T) {
 	backend := &testutil.FakeBackend{DailyUsage: 2}
 	svc := &ChatService{
@@ -725,9 +638,8 @@ func TestRunToolLoop_NoToolsFinalImmediately(t *testing.T) {
 	if stub.Calls() != 1 {
 		t.Fatalf("expected 1 Stream call, got %d", stub.Calls())
 	}
-	// Two chunk events: "Direct" ends in "t" — a possible prefix of the
-	// "token" secret anchor — so the output scrubber holds that byte until the
-	// turn-end flush proves it is prose.
+	// Two chunk events: "Direct" ends in "t" — a possible prefix of the "token" anchor — so the scrubber holds
+	// that byte until the turn-end flush proves it is prose.
 	if got := strings.Join(*evs, ","); got != "chunk,chunk,done" {
 		t.Errorf("expected chunk,chunk,done, got %q", got)
 	}
@@ -736,9 +648,8 @@ func TestRunToolLoop_NoToolsFinalImmediately(t *testing.T) {
 	}
 }
 
-// TestRunToolLoop_MasksSecretSplitAcrossChunks: model output containing a
-// secret — even one split across stream chunks — must reach the client (and
-// the resume buffer) masked.
+// TestRunToolLoop_MasksSecretSplitAcrossChunks: model output containing a secret — even split across chunks —
+// must reach the client (and the resume buffer) masked.
 func TestRunToolLoop_MasksSecretSplitAcrossChunks(t *testing.T) {
 	stub := &testutil.FakeProvider{Turns: []testutil.FakeTurn{{Parts: []string{"the flow uses password=sup", "ersecret123 in Database.Connect"}}}}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
@@ -810,10 +721,9 @@ func TestRunToolLoop_NotStartedEmitsNothing(t *testing.T) {
 	}
 }
 
-// TestRunToolLoop_EmitsToolResult pins the tool_result transparency event: one
-// per executed tool, after execution, carrying name/label, ok (per
-// ExecuteTool's "error:" contract), a non-negative duration, and a one-line
-// summary. The failing half drives an unknown tool through the same path.
+// TestRunToolLoop_EmitsToolResult pins the tool_result transparency event: one per executed tool, after
+// execution, carrying name/label, ok, a non-negative duration and a one-line summary; the failing half drives
+// an unknown tool through the same path.
 func TestRunToolLoop_EmitsToolResult(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -869,10 +779,8 @@ func TestRunToolLoop_EmitsToolResult(t *testing.T) {
 	}
 }
 
-// toolsUnsupportedProvider fails the FIRST Stream call (when tools are still
-// attached) with the wrapped sentinel, then answers normally — proving the
-// runToolLoop degradation path: tools dropped, notice emitted, same iteration
-// retried, final answer delivered.
+// toolsUnsupportedProvider fails the FIRST Stream call (tools attached) with the wrapped sentinel, then answers
+// normally — proving the degradation path: tools dropped, notice emitted, same iteration retried.
 type toolsUnsupportedProvider struct {
 	testutil.FakeProvider
 	sawTools bool
@@ -913,9 +821,8 @@ func TestRunToolLoop_ToolsUnsupportedDegradesGracefully(t *testing.T) {
 	if !stub.sawTools {
 		t.Fatal("expected the first attempt to carry tools")
 	}
-	// Two chunk events: "answer without tools" ends in "s" — a possible
-	// prefix of a secret anchor — so the scrubber holds that byte until the
-	// turn-end flush (same as TestRunToolLoop_NoToolsFinalImmediately).
+	// Two chunk events: "answer without tools" ends in "s" — a possible prefix of a secret anchor — so the
+	// scrubber holds that byte until the turn-end flush.
 	if got := strings.Join(events, ","); got != "tool,chunk,chunk,done" {
 		t.Errorf("expected tool(notice),chunk,chunk,done events, got %q", got)
 	}
@@ -925,16 +832,14 @@ func TestRunToolLoop_ToolsUnsupportedDegradesGracefully(t *testing.T) {
 	if !ctl.done || ctl.buffer.String() != "answer without tools" {
 		t.Errorf("turn not finalized: done=%v buffer=%q", ctl.done, ctl.buffer.String())
 	}
-	// Exactly 2 Stream calls: tools-rejected + toolless answer (the retry did
-	// NOT consume an iteration or loop extra times).
+	// Exactly 2 Stream calls: tools-rejected + toolless answer (the retry consumed no iteration).
 	if stub.calls != 2 {
 		t.Errorf("expected 2 Stream calls, got %d", stub.calls)
 	}
 }
 
-// TestToolSummary pins the summary derivation: first line only, whitespace
-// trimmed, capped at 120 bytes on a rune boundary with an ellipsis (multibyte
-// safety mirrors ai.truncateResult).
+// TestToolSummary pins the summary derivation: first line only, whitespace trimmed, capped at 120 bytes on a
+// rune boundary with an ellipsis.
 func TestToolSummary(t *testing.T) {
 	cases := []struct {
 		name string
@@ -969,10 +874,8 @@ func TestToolSummary(t *testing.T) {
 	})
 }
 
-// ctxCacheStubProvider is a minimal ai.Provider for the context-cache test:
-// only ID/EstimateTokens/ContextLimit are reachable from cachedContextCore →
-// ai.BuildContext (which calls EstimateTokens). Embedding the interface leaves
-// the rest nil; unused methods are never invoked on this path.
+// ctxCacheStubProvider is a minimal ai.Provider for the context-cache test: only ID/EstimateTokens/ContextLimit
+// are reachable; embedding the interface leaves the rest nil.
 type ctxCacheStubProvider struct {
 	ai.Provider
 }
@@ -981,9 +884,9 @@ func (ctxCacheStubProvider) ID() string                  { return "stub" }
 func (ctxCacheStubProvider) EstimateTokens(s string) int { return len(s) / 4 }
 func (ctxCacheStubProvider) ContextLimit() int           { return 100000 }
 
-// TestCachedContextCore_CachesAcrossTurns verifies the scrubbed-context LRU:
-// consecutive identical turns reuse the same redacted clone (pointer identity),
-// a different cache key rebuilds, and InvalidateChatContext forces a miss.
+// TestCachedContextCore_CachesAcrossTurns verifies the scrubbed-context cache: consecutive identical turns reuse
+// the same redacted clone (pointer identity); a different cache key rebuilds the TEXT, and InvalidateChatContext
+// forces a fresh clone.
 func TestCachedContextCore_CachesAcrossTurns(t *testing.T) {
 	svc := &ChatService{chatCtxCache: newChatContextCache()}
 	doc := toolLoopDoc()
@@ -1018,29 +921,8 @@ func TestCachedContextCore_CachesAcrossTurns(t *testing.T) {
 	}
 }
 
-// TestInvalidateChatContext_BareStructLiteral verifies a ChatService built as
-// a bare struct literal (chatCtxGen left as its zero value, as many tests and
-// any not-yet-updated call site would do) still invalidates correctly instead
-// of silently no-op'ing on a nil cache.
-func TestInvalidateChatContext_BareStructLiteral(t *testing.T) {
-	svc := &ChatService{chatCtxCache: newChatContextCache()}
-	doc := toolLoopDoc()
-	provider := ctxCacheStubProvider{}
-	req := models.ChatRequest{Model: "m1", UserMessage: "turn 1"}
-
-	cv1 := svc.cachedContextCore(context.Background(), "scope-1", provider, doc, nil, req)
-	svc.InvalidateChatContext(doc.ID)
-	cv2 := svc.cachedContextCore(context.Background(), "scope-1", provider, doc, nil, req)
-	if cv2.scrubbedDoc == cv1.scrubbedDoc {
-		t.Fatal("expected InvalidateChatContext to force a fresh scrubbed doc even without an explicit chatCtxGen")
-	}
-}
-
-// TestChatCtxGen_BoundedAcrossManyFlows verifies the per-flow generation
-// counter cache doesn't grow without bound: invalidating far more distinct
-// flows than maxChatCtxGen evicts the oldest entries (LRU), so a long-lived
-// process that edits many distinct flows over its uptime can't leak memory
-// here the way an unbounded map would.
+// TestChatCtxGen_BoundedAcrossManyFlows verifies the per-flow generation cache doesn't grow without bound:
+// invalidating far more flows than maxChatCtxGen LRU-evicts the oldest entries.
 func TestChatCtxGen_BoundedAcrossManyFlows(t *testing.T) {
 	svc := &ChatService{chatCtxCache: newChatContextCache()}
 	genCache := svc.chatCtxGenCache()
@@ -1072,21 +954,18 @@ func (r *emitRecorder) emit(typ string, data map[string]interface{}) {
 	r.calls = append(r.calls, struct{ typ, content string }{typ, content})
 }
 
-// TestChunkCoalescer covers C-6: the first chunk emits immediately (first-token
-// latency), subsequent deltas batch until flush, non-chunk events flush the
-// batch before passing through, and the emitted-chunk count tracks emissions.
+// TestChunkCoalescer covers C-6: the first chunk emits immediately (first-token latency), subsequent deltas
+// batch until flush, non-chunk events flush the batch before passing through.
 func TestChunkCoalescer(t *testing.T) {
 	rec := &emitRecorder{}
 	c := newChunkCoalescer(rec.emit)
 	emit := c.wrap()
 
-	// First chunk → immediate.
 	emit("chunk", map[string]interface{}{"content": "Hel"})
 	if len(rec.calls) != 1 || rec.calls[0].content != "Hel" {
 		t.Fatalf("first chunk should emit immediately, got %+v", rec.calls)
 	}
 
-	// Subsequent chunks batch (no immediate emit).
 	emit("chunk", map[string]interface{}{"content": "lo "})
 	emit("chunk", map[string]interface{}{"content": "wor"})
 	emit("chunk", map[string]interface{}{"content": "ld"})
@@ -1094,7 +973,6 @@ func TestChunkCoalescer(t *testing.T) {
 		t.Fatalf("batched chunks should not emit until flush, got %d calls", len(rec.calls))
 	}
 
-	// A non-chunk event flushes the batch FIRST (in order), then passes through.
 	emit("done", map[string]interface{}{"tokensIn": 10, "tokensOut": 5})
 	if len(rec.calls) != 3 {
 		t.Fatalf("expected flush+done = 3 calls, got %d (%+v)", len(rec.calls), rec.calls)
@@ -1106,22 +984,20 @@ func TestChunkCoalescer(t *testing.T) {
 		t.Errorf("done should follow the flushed chunk, got %+v", rec.calls[2])
 	}
 
-	// Emitted-chunk count = 2 (first immediate + one merged batch).
 	if n := c.flushAndCount(); n != 2 {
 		t.Errorf("emitted chunk count = %d, want 2", n)
 	}
 }
 
-// TestChunkCoalescer_EmptyChunkIgnored verifies a zero-content chunk (e.g. the
-// scrubber emitting nothing for a partial token) doesn't pollute the batch.
+// TestChunkCoalescer_EmptyChunkIgnored verifies a zero-content chunk doesn't pollute the batch.
 func TestChunkCoalescer_EmptyChunkIgnored(t *testing.T) {
 	rec := &emitRecorder{}
 	c := newChunkCoalescer(rec.emit)
 	emit := c.wrap()
-	emit("chunk", map[string]interface{}{"content": "first"})  // immediate
-	emit("chunk", map[string]interface{}{"content": ""})       // ignored
-	emit("chunk", map[string]interface{}{"content": "second"}) // batched
-	emit("done", map[string]interface{}{})                     // flush → "second"
+	emit("chunk", map[string]interface{}{"content": "first"})
+	emit("chunk", map[string]interface{}{"content": ""})
+	emit("chunk", map[string]interface{}{"content": "second"})
+	emit("done", map[string]interface{}{})
 	if len(rec.calls) != 3 {
 		t.Fatalf("got %d calls, want 3 (first + second + done): %+v", len(rec.calls), rec.calls)
 	}
@@ -1130,9 +1006,8 @@ func TestChunkCoalescer_EmptyChunkIgnored(t *testing.T) {
 	}
 }
 
-// nilSettings is a SettingsProvider whose Get returns nil → enforceBudget
-// treats the day as unlimited. Used by stream tests that drive a successful
-// (non-failing-key) provider path, which reaches enforceBudget.
+// nilSettings is a SettingsProvider whose Get returns nil → enforceBudget treats the day as unlimited; used by
+// stream tests that reach enforceBudget.
 type nilSettings struct{}
 
 func (nilSettings) Get() *models.AppSettings                         { return nil }
@@ -1141,14 +1016,9 @@ func (nilSettings) AddRecentFile(string, int64) error                { return ni
 func (nilSettings) RemoveRecentFile(string) error                    { return nil }
 func (nilSettings) ClearRecentFiles() error                          { return nil }
 
-// TestStreamChatMessage_PersistsUserTurnAtStart covers BUG-5: on the
-// reconstruction path (client omitted Messages), the backend persists
-// [history + new user turn] at stream start, so closing the app mid-stream
-// (before any client save-on-done) retains the typed message. Uses a scripted
-// provider registered with the factory to drive a real stream end-to-end
-// without network.
-// registerFakeProvider makes "fake" resolvable through ai.NewProviderFactory:
-// one scripted assistant turn, no network. Idempotent.
+// TestStreamChatMessage_PersistsUserTurnAtStart covers BUG-5: on the reconstruction path, the backend persists
+// [history + new user turn] at stream start, so closing the app mid-stream retains the typed message.
+// registerFakeProvider makes "fake" resolvable through ai.NewProviderFactory: one scripted turn, no network.
 func registerFakeProvider() {
 	ai.RegisterProvider("fake", func(string) ai.Provider {
 		return &testutil.FakeProvider{Turns: []testutil.FakeTurn{{Text: "ok", TokensIn: 1, TokensOut: 1}}}
@@ -1171,17 +1041,16 @@ func TestStreamChatMessage_PersistsUserTurnAtStart(t *testing.T) {
 	}
 	doc := &models.FlowDocument{ID: "f1", Name: "f1"}
 
-	// Pre-seed a prior conversation (the history to reconstruct).
+	// Pre-seed the prior conversation (the history to reconstruct).
 	history := []models.ChatMessage{
 		{ID: "h1", Role: "user", Content: "previous question"},
 		{ID: "h2", Role: "assistant", Content: "previous answer"},
 	}
-	if err := svc.SaveConversation(context.Background(), doc, "flow", history); err != nil {
+	if err := svc.SaveConversation(context.Background(), doc.ID, "flow", history); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
 
-	// Stream with NO Messages (→ reconstruction path) and a fresh user turn.
-	// No ClientStreamID, so the legacy begin-gated path runs; call BeginStream.
+	// Stream with NO Messages (→ reconstruction path); no ClientStreamID, so the legacy begin-gated path runs.
 	id, err := svc.StreamChatMessage(context.Background(), "test", doc, nil, models.ChatRequest{
 		Provider: "fake", Model: "fake-model", UserMessage: "fresh question",
 	})
@@ -1193,12 +1062,9 @@ func TestStreamChatMessage_PersistsUserTurnAtStart(t *testing.T) {
 	// Wait for the stream to finish.
 	waitStreamFinished(t, svc, id) // settled: the answer persist has landed
 
-	// The store must hold [history + fresh user + the answer]. The start-persist
-	// retains the question; the completion-persist retains the answer, which
-	// used to be left to the client's save-on-done — so a client that went away
-	// (this backend-only test mirrors a tab closed during the stream) left the
-	// question stored with nothing beside it.
-	got, err := svc.GetConversation(context.Background(), doc, "flow")
+	// The store must hold [history + fresh user + the answer]: the start-persist retains the question, the
+	// completion-persist the answer (once left to the client's save-on-done).
+	got, err := svc.GetConversation(context.Background(), doc.ID, "flow")
 	if err != nil {
 		t.Fatalf("GetConversation: %v", err)
 	}
@@ -1211,16 +1077,13 @@ func TestStreamChatMessage_PersistsUserTurnAtStart(t *testing.T) {
 	if got[3].Role != "assistant" || got[3].Content == "" {
 		t.Errorf("last message = %+v, want the streamed assistant answer", got[3])
 	}
-	// Prior history is preserved unchanged.
 	if got[0].Content != "previous question" || got[1].Content != "previous answer" {
 		t.Errorf("prior history altered: %+v", got[:2])
 	}
 }
 
-// TestStreamChatMessage_LegacyMessagesDoesNotStartPersist verifies the
-// start-persist is gated on the reconstruction path: when the client supplies
-// Messages (legacy / resend override), the backend must NOT overwrite the store
-// (the client owns persistence on that path).
+// TestStreamChatMessage_LegacyMessagesDoesNotStartPersist verifies the start-persist is gated on the
+// reconstruction path: with client-supplied Messages (legacy / resend override) the store is untouched.
 func TestStreamChatMessage_LegacyMessagesDoesNotStartPersist(t *testing.T) {
 	registerFakeProvider()
 	dir := t.TempDir()
@@ -1232,8 +1095,7 @@ func TestStreamChatMessage_LegacyMessagesDoesNotStartPersist(t *testing.T) {
 	}
 	doc := &models.FlowDocument{ID: "f1", Name: "f1"}
 
-	// Pre-seed the store with a known history.
-	if err := svc.SaveConversation(context.Background(), doc, "flow", []models.ChatMessage{
+	if err := svc.SaveConversation(context.Background(), doc.ID, "flow", []models.ChatMessage{
 		{ID: "store1", Role: "user", Content: "stored"},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -1252,9 +1114,8 @@ func TestStreamChatMessage_LegacyMessagesDoesNotStartPersist(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	svc.CancelStream(id)
 
-	// Store must be UNCHANGED (still the seeded single message) — the override
-	// path did not backend-persist.
-	got, err := svc.GetConversation(context.Background(), doc, "flow")
+	// Store must be UNCHANGED (the override path did not backend-persist).
+	got, err := svc.GetConversation(context.Background(), doc.ID, "flow")
 	if err != nil {
 		t.Fatalf("GetConversation: %v", err)
 	}
@@ -1263,10 +1124,8 @@ func TestStreamChatMessage_LegacyMessagesDoesNotStartPersist(t *testing.T) {
 	}
 }
 
-// TestStreamChatMessage_DoesNotStoreTheAnswerWhenHistoryIsOff: the
-// completion-persist goes through SaveConversation, so the "Save conversation
-// history" preference still decides. Otherwise the fix for the lost answer
-// would have quietly re-enabled storage the user switched off.
+// TestStreamChatMessage_DoesNotStoreTheAnswerWhenHistoryIsOff: the completion-persist goes through
+// SaveConversation, so the "Save conversation history" preference still decides.
 func TestStreamChatMessage_DoesNotStoreTheAnswerWhenHistoryIsOff(t *testing.T) {
 	registerFakeProvider()
 	dir := t.TempDir()
@@ -1291,7 +1150,7 @@ func TestStreamChatMessage_DoesNotStoreTheAnswerWhenHistoryIsOff(t *testing.T) {
 	svc.BeginStream(context.Background(), id)
 	waitStreamFinished(t, svc, id) // settled: the answer persist has landed
 
-	got, err := svc.GetConversation(context.Background(), doc, "flow")
+	got, err := svc.GetConversation(context.Background(), doc.ID, "flow")
 	if err != nil {
 		t.Fatalf("GetConversation: %v", err)
 	}

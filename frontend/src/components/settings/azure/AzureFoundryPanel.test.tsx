@@ -212,7 +212,7 @@ afterEach(() => {
 })
 
 describe('AzureFoundryPanel: states', () => {
-  it('a1: invites a first resource, says what it needs, and shows no toolbar', async () => {
+  it('invites a first resource, says what it needs, and shows no toolbar', async () => {
     seed()
     renderPanel()
     expect(
@@ -224,7 +224,7 @@ describe('AzureFoundryPanel: states', () => {
     expect(screen.queryByRole('button', {name: 'Add model'})).toBeNull()
   })
 
-  it('a7: shows a busy skeleton, then an alert with Retry — never the empty state — when the load fails', async () => {
+  it('shows a busy skeleton, then an alert with Retry — never the empty state — when the load fails', async () => {
     const connections = deferred<AzureConnectionsListing>()
     api.listAzureConnections.mockReturnValueOnce(connections.promise)
     api.listAzureModels.mockResolvedValue({models: []})
@@ -244,7 +244,7 @@ describe('AzureFoundryPanel: states', () => {
     expect(panelAlert(container)).toBeEmptyDOMElement()
   })
 
-  it('a7: keeps a loaded view when a refresh fails, and says so', async () => {
+  it('keeps a loaded view when a refresh fails, and says so', async () => {
     seed([conn('default')], [gpt])
     const {container} = renderPanel()
     expect(await screen.findByText('GPT-4.1')).toBeInTheDocument()
@@ -256,7 +256,7 @@ describe('AzureFoundryPanel: states', () => {
     expect(screen.getByText('GPT-4.1')).toBeInTheDocument()
   })
 
-  it('a7: gives a caller without access the note, not a dead Retry', async () => {
+  it('gives a caller without access the note, not a dead Retry', async () => {
     api.listAzureConnections.mockRejectedValue(new ApiError('forbidden', 403, null))
     api.listAzureModels.mockResolvedValue({models: []})
     renderPanel({scope: ORG, headingLevel: 5, canEdit: false})
@@ -273,7 +273,7 @@ describe('AzureFoundryPanel: states', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('a2: an API-key resource without models explains how to add them by name', async () => {
+  it('an API-key resource without models explains how to add them by name', async () => {
     seed([conn('default')])
     renderPanel()
     expect(await screen.findByRole('heading', {level: 4, name: 'my-res'})).toBeInTheDocument()
@@ -284,7 +284,7 @@ describe('AzureFoundryPanel: states', () => {
     expect(api.discoverAzureConnection).not.toHaveBeenCalled()
   })
 
-  it('a2/a4: a project resource without models shows what discovery found right away', async () => {
+  it('a project resource without models shows what discovery found right away', async () => {
     seed([entraConn('contoso')])
     api.discoverAzureConnection.mockResolvedValue({
       deployments: [{name: 'o4-mini', kind: 'chat', model: 'o4-mini', contextWindow: 200000, alreadyAdded: false}],
@@ -301,7 +301,7 @@ describe('AzureFoundryPanel: states', () => {
     expect(screen.getByRole('button', {name: 'Hide suggestions from contoso'})).toHaveAttribute('aria-expanded', 'true')
   })
 
-  it('a3: a migrated project offers to review what it no longer lists, until it is dismissed', async () => {
+  it('a migrated project offers to review what it no longer lists, until it is dismissed', async () => {
     seed([entraConn('default', {name: 'my-res', suggestDiscovery: true, modelCount: 1})], [gpt])
     api.discoverAzureConnection.mockResolvedValue({
       deployments: [
@@ -329,7 +329,7 @@ describe('AzureFoundryPanel: states', () => {
     expect(screen.queryByText("Your project has 2 models you haven't added")).toBeNull()
   })
 
-  it('a5: a resource needing credentials says so next to its models and offers Enter credentials', async () => {
+  it('a resource needing credentials says so next to its models and offers Enter credentials', async () => {
     seed(
       [conn('default', {status: 'needs_credentials', statusReason: 'Its lender left the organisation.'})],
       [{...gpt, status: 'needs_credentials'}],
@@ -358,7 +358,7 @@ describe('AzureFoundryPanel: states', () => {
   // made-up sign-in badge or host; Enter credentials saves what was typed;
   // and focus lands on the resource's heading, not on the page, once the
   // button that opened the modal has gone with the callout.
-  it('a5: re-enters the credentials of a resource whose settings came back blank, then focuses it', async () => {
+  it('re-enters the credentials of a resource whose settings came back blank, then focuses it', async () => {
     const blank = conn('default', {
       status: 'unreadable',
       config: {endpoint: '', authMode: '', hasSecret: false},
@@ -397,7 +397,7 @@ describe('AzureFoundryPanel: states', () => {
     expect(screen.getByText(/my-res\.openai\.azure\.com · 1 model/)).toBeInTheDocument()
   })
 
-  it('a9: focuses the resource once Edit resource fixed its settings', async () => {
+  it('focuses the resource once Edit resource fixed its settings', async () => {
     seed([conn('default', {status: 'invalid_config', statusReason: 'The endpoint host is no longer allowed.'})], [gpt])
     api.updateAzureConnection.mockResolvedValue(conn('default', {name: 'my-res', modelCount: 1}))
     renderPanel()
@@ -416,7 +416,7 @@ describe('AzureFoundryPanel: states', () => {
     await waitFor(() => expect(screen.getByRole('heading', {level: 4, name: 'my-res'})).toHaveFocus())
   })
 
-  it('a5: members get the ask-an-admin variant without any action', async () => {
+  it('members get the ask-an-admin variant without any action', async () => {
     seed([conn('default', {shared: true, status: 'needs_credentials', sharedBy: 'Ada'})], [{...gpt, shared: true}])
     renderPanel({scope: ORG, headingLevel: 5, canEdit: false})
     expect(
@@ -427,8 +427,8 @@ describe('AzureFoundryPanel: states', () => {
     expect(screen.queryByRole('button', {name: /^Enter credentials/})).toBeNull()
   })
 
-  // F-12: an unreadable stored credential offers both ways out to an admin.
-  it('a5/F-12: an unreadable credential offers Enter credentials and Remove resource', async () => {
+  // An unreadable stored credential offers both ways out to an admin.
+  it('an unreadable credential offers Enter credentials and Remove resource', async () => {
     seed([conn('default', {shared: true, status: 'unreadable'})])
     api.deleteAzureConnection.mockResolvedValue({status: 'ok', deletedModels: 0, clearedKnowledgeEmbedding: false})
     renderPanel({scope: ORG, headingLevel: 5, canEdit: true})
@@ -444,7 +444,7 @@ describe('AzureFoundryPanel: states', () => {
     await waitFor(() => expect(screen.getByRole('button', {name: 'Add resource'})).toHaveFocus())
   })
 
-  it('a5/F-12: never offers a member either way out', async () => {
+  it('never offers a member either way out', async () => {
     seed([conn('default', {shared: true, status: 'unreadable'})])
     renderPanel({scope: ORG, headingLevel: 5, canEdit: false})
     expect(await screen.findByText("The stored credentials can't be read")).toBeInTheDocument()
@@ -452,7 +452,7 @@ describe('AzureFoundryPanel: states', () => {
     expect(screen.queryByRole('button', {name: /^Remove resource/})).toBeNull()
   })
 
-  it('a6: shows an organisation read-only to a member, with who shared it and when', async () => {
+  it('shows an organisation read-only to a member, with who shared it and when', async () => {
     seed(
       [conn('default', {shared: true, sharedBy: 'Ada Admin', name: 'contoso'})],
       [{...gpt, shared: true, isDefault: true}],
@@ -466,7 +466,7 @@ describe('AzureFoundryPanel: states', () => {
     expect(screen.queryByRole('button', {name: /Edit|More actions|Add/})).toBeNull()
   })
 
-  it('a6: lets an admin manage the organisation, with the member default as its own action', async () => {
+  it('lets an admin manage the organisation, with the member default as its own action', async () => {
     seed(
       [conn('default', {shared: true})],
       [
@@ -490,7 +490,7 @@ describe('AzureFoundryPanel: states', () => {
     expect(badges[0].closest('li')).toHaveTextContent('GPT-4.1')
   })
 
-  it('a8: a list file from a newer baki is read-only, and a recovered one says where the copy is', async () => {
+  it('a list file from a newer baki is read-only, and a recovered one says where the copy is', async () => {
     seed([conn('default')], [gpt], {registryState: 'read_only'})
     const {unmount} = renderPanel()
     expect(await screen.findByText(/Update baki to change these models/)).toBeInTheDocument()
@@ -505,7 +505,7 @@ describe('AzureFoundryPanel: states', () => {
     ).toBeInTheDocument()
   })
 
-  it('a9: invalid settings get a callout with Edit resource, and an unsupported agent says why', async () => {
+  it('invalid settings get a callout with Edit resource, and an unsupported agent says why', async () => {
     seed(
       [conn('default', {status: 'invalid_config', statusReason: 'The endpoint host is no longer allowed.'})],
       [
@@ -915,7 +915,7 @@ describe('AzureFoundryPanel: resources', () => {
     expect(status()).toHaveTextContent('o4-mini added')
   })
 
-  // F-51: the Azure CLI sign-in is offered for a personal resource on a
+  // The Azure CLI sign-in is offered for a personal resource on a
   // local backend, never for an organisation's.
   it('offers the Azure CLI only for a personal resource on a local backend', async () => {
     useSystemStore.setState({info: info(true), isLoaded: true})

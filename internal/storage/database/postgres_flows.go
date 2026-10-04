@@ -20,31 +20,20 @@ import (
 	"pad-core/logger"
 )
 
-// maxBlobContentBytes bounds the size of a single flow-content blob. The whole
-// payload is held in memory on upload (UploadBuffer) and download
-// (bytes.Buffer), so a hard cap prevents an oversized flow from spiking memory.
-// Flow JSON is normally well under 1 MiB; 50 MiB is a generous ceiling.
+// maxBlobContentBytes bounds a single flow-content blob: the payload is held in memory on upload and download.
 const maxBlobContentBytes = 50 << 20
 
-// flowContentKey is the version-keyed blob key for a flow's current content.
-// Keying by the DB version — the single source of truth for "which blob is
-// current" — means a racing or rolled-back write leaves an orphan under an
-// unreferenced version instead of clobbering the live content. The OCC version
-// space (flows.version) is distinct from the snapshot space (flow_versions.version
-// used by SaveFlowVersion), so this "content.vN" key never collides with a
-// snapshot under "versions/N".
+// flowContentKey is the version-keyed blob key for a flow's current content: a racing or rolled-back
+// write leaves an unreferenced orphan instead of clobbering live content; the OCC space never collides with "versions/N".
 func flowContentKey(flowID string, version int) string {
 	return fmt.Sprintf("flows/%s/content.v%d.json", flowID, version)
 }
 
-// legacyFlowContentKey is the original version-agnostic key. LoadFlow falls
-// back to it so flows written before the versioned scheme remain readable.
+// legacyFlowContentKey is the original version-agnostic key; LoadFlow falls back to it for flows written before versioned keys.
 func legacyFlowContentKey(flowID string) string {
 	return fmt.Sprintf("flows/%s/content.json", flowID)
 }
 
-// blobErrStatus classifies an azblob error into a metric status label,
-// distinguishing Azure throttling (429) from other failures.
 func blobErrStatus(err error) string {
 	var respErr *azcore.ResponseError
 	if errors.As(err, &respErr) && respErr.StatusCode == 429 {
@@ -53,13 +42,7 @@ func blobErrStatus(err error) string {
 	return "error"
 }
 
-// validFlowID rejects flow IDs that could escape their blob key namespace.
-// Blob keys and DeleteFlow's prefix delete are built by interpolating the ID
-// into "flows/{id}/..." — an ID containing '/' (e.g. "victim/versions/3")
-// would nest one flow's blobs inside another's prefix, letting its owner
-// delete or shadow the other flow's content. All legitimate IDs are
-// server-generated UUIDs; the filesystem backend enforces the same invariant
-// via its path-traversal guard.
+// validFlowID rejects IDs containing '/': such an ID would nest one flow's blobs inside another's prefix and let its owner delete or shadow that flow's content.
 func validFlowID(id string) error {
 	if id == "" {
 		return errors.New("flow id must not be empty")
@@ -70,18 +53,13 @@ func validFlowID(id string) error {
 	return nil
 }
 
-// metadataRecordsContent reports whether a flow's metadata implies non-empty
-// content, i.e. a missing content blob is data loss rather than a legitimately
-// empty flow.
+// metadataRecordsContent reports whether a missing content blob would be data loss rather than a legitimately empty flow.
 func metadataRecordsContent(m interfaces.FlowMetadata) bool {
 	return m.BlockCount > 0 || m.SubflowCount > 0 || m.FileSize > 0 || m.RawLineCount > 0
 }
 
-// SaveFlow upserts a flow document. Existing rows update only when
-// flow.Version matches the current DB version (optimistic concurrency
-// control) — a stale version returns ErrVersionConflict, with no "skip"
-// value; both backends enforce this (see the contract suite). New rows
-// insert at version 0 regardless of flow.Version.
+// SaveFlow upserts a flow document: existing rows update only when flow.Version matches (OCC —
+// stale returns ErrVersionConflict); new rows insert at version 0 regardless of flow.Version.
 func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.FlowDocument) error {
 	if err := validFlowID(flow.ID); err != nil {
 		return err
@@ -91,13 +69,8 @@ func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.
 		content = []byte("{}")
 	}
 
-	// The version bump (DB) and the content upload (blob) must commit together,
-	// or a failed upload could leave the row pointing at a version whose blob
-	// never landed (then LoadFlow hard-errors). Inside an RLS request the
-	// surrounding transaction already provides this (it commits only after the
-	// handler succeeds). Without one — e.g. BeginRLS failed and the request runs
-	// in autocommit — wrap the work in a local transaction so the version bump is
-	// rolled back if the upload fails.
+	// The version bump and the content upload must commit together or the row could point at a
+	// version whose blob never landed; outside an RLS tx wrap in a local tx so a failed upload rolls the bump back.
 	if b.blobClient != nil && !hasRLSTx(ctx) {
 		tx, err := b.db.BeginTx(ctx, nil)
 		if err != nil {
@@ -109,10 +82,8 @@ func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.
 				_ = tx.Rollback()
 			}
 		}()
-		// A fresh post-commit registry so the stale-blob cleanup registered by
-		// saveFlowTx runs only after THIS transaction commits — without it,
-		// RegisterPostCommit would fall back to running inline, deleting the
-		// previous version's blob before the new version is durable.
+		// Fresh post-commit registry so the stale-blob cleanup runs only after THIS tx commits —
+		// inline it would delete the previous version's blob before the new version is durable.
 		txCtx, postCommit := WithPostCommit(WithRLSTx(ctx, tx))
 		if err := b.saveFlowTx(txCtx, flow, content); err != nil {
 			return err
@@ -127,24 +98,36 @@ func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.
 	return b.saveFlowTx(ctx, flow, content)
 }
 
-// saveFlowTx performs the conditional upsert and (when blob storage is
-// configured) the content upload, using whatever executor b.query(ctx) resolves
-// to. content is the caller's normalized content ("{}" when empty).
+// saveFlowSQL upserts the flows row AND its flow_search side row in ONE statement (a failed OCC
+// check yields no `up` row → ErrVersionConflict); TOASTed columns rewrite only when changed (IS
+// DISTINCT FROM); the result row comes from `up` since the search INSERT may legitimately write nothing.
+const saveFlowSQL = `
+		WITH up AS (
+			INSERT INTO flows (id, name, description, content, source, metadata, owner_id, org_id, created_at, updated_at, version)
+			VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10, 0)
+			ON CONFLICT (id) DO UPDATE SET
+				name        = EXCLUDED.name,
+				description = EXCLUDED.description,
+				content     = CASE WHEN flows.content IS DISTINCT FROM EXCLUDED.content THEN EXCLUDED.content ELSE flows.content END,
+				source      = CASE WHEN flows.source  IS DISTINCT FROM EXCLUDED.source  THEN EXCLUDED.source  ELSE flows.source  END,
+				metadata    = EXCLUDED.metadata,
+				updated_at  = EXCLUDED.updated_at,
+				version     = flows.version + 1
+			WHERE flows.version = $11
+			RETURNING id, name, content, version
+		), fs AS (
+			INSERT INTO flow_search (flow_id, name, body)
+			SELECT up.id, up.name, COALESCE(NULLIF(up.content->>'source', ''), up.content::text) FROM up
+			ON CONFLICT (flow_id) DO UPDATE SET name = EXCLUDED.name, body = EXCLUDED.body
+			WHERE flow_search.name IS DISTINCT FROM EXCLUDED.name OR flow_search.body IS DISTINCT FROM EXCLUDED.body
+		)
+		SELECT version FROM up`
+
+// saveFlowTx performs the conditional upsert and optional blob upload via b.query(ctx); content is the normalized content.
 func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interfaces.FlowDocument, content []byte) error {
-	// When blob storage is configured the content lives in the blob and the DB
-	// row only holds a "{}" placeholder. Two safeguards prevent dual-write
-	// corruption:
-	//   1. The blob is written *after* the optimistic-concurrency check below
-	//      succeeds, so a rejected concurrent writer never touches the blob.
-	//   2. The blob is keyed by the *new* DB version (flowContentKey), and
-	//      LoadFlow resolves content by the version stored on the row. The DB
-	//      version is therefore the single source of truth for "which blob is
-	//      current": if the upload succeeds but the surrounding transaction's
-	//      COMMIT later fails, the row stays at the previous version and still
-	//      points at the previous (correct) blob — the new blob is just an
-	//      unreferenced orphan, not corruption. (The next successful save reuses
-	//      and overwrites that key; superseded blobs are deleted post-commit
-	//      below, and DeleteFlow removes the whole prefix.)
+	// In blob mode the DB row holds only a "{}" placeholder: the blob is written only after the OCC
+	// check succeeds (a rejected writer never touches it) and keyed by the *new* DB version, so a
+	// failed later COMMIT leaves the row on the previous (correct) blob, the new one an orphan.
 	dbContent := content
 	if b.blobClient != nil {
 		dbContent = []byte("{}")
@@ -157,19 +140,7 @@ func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interface
 	now := time.Now().UTC()
 	expectedVer := flow.Version
 	var newVersion int
-	err = b.query(ctx).QueryRowContext(ctx, `
-		INSERT INTO flows (id, name, description, content, source, metadata, owner_id, org_id, created_at, updated_at, version)
-		VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10, 0)
-		ON CONFLICT (id) DO UPDATE SET
-			name        = EXCLUDED.name,
-			description = EXCLUDED.description,
-			content     = EXCLUDED.content,
-			source      = EXCLUDED.source,
-			metadata    = EXCLUDED.metadata,
-			updated_at  = EXCLUDED.updated_at,
-			version     = flows.version + 1
-		WHERE flows.version = $11
-		RETURNING version`,
+	err = b.query(ctx).QueryRowContext(ctx, saveFlowSQL,
 		flow.ID, flow.Name, flow.Description, string(dbContent), flow.Source, string(meta),
 		flow.OwnerID, flow.OrganizationID, now, now, expectedVer,
 	).Scan(&newVersion)
@@ -180,29 +151,20 @@ func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interface
 		return fmt.Errorf("upsert flow: %w", err)
 	}
 
-	// OCC check passed — only now is it safe to persist the real content to the
-	// blob, under the new version's key so a rejected concurrent write can never
-	// clobber the stored content.
+	// OCC check passed — only now persist the real content, under the new version's key so a
+	// rejected concurrent write can never clobber stored content.
 	if b.blobClient != nil {
 		if err := b.uploadBlob(ctx, flowContentKey(flow.ID, newVersion), content); err != nil {
 			return err
 		}
-		// The previous version's content blob is now stale — without cleanup one
-		// orphan accumulates per save for the flow's whole lifetime (and an
-		// age-based storage lifecycle rule can't reclaim them: it cannot tell a
-		// stale v(N-1) from the LIVE blob of a flow that simply hasn't been edited
-		// lately). Delete it post-commit, after a grace delay that covers readers
-		// who scanned the row at the old version just before this commit landed.
-		// Registered only when a post-commit registry exists (RLS middleware or
-		// the SaveFlow wrapper above): running it inline inside an uncommitted
-		// transaction could delete the blob the row still points at if the commit
-		// later fails. Without a registry the orphan is simply kept (safe).
+		// The previous version's blob is now stale (an age-based lifecycle rule can't tell it from the
+		// LIVE blob of a rarely-edited flow): delete it post-commit, after a grace delay for readers
+		// that scanned the old version — inline inside an uncommitted tx it could delete the blob the row still points at.
 		if newVersion > 0 && hasPostCommit(ctx) {
 			flowID := flow.ID
 			prevKey := flowContentKey(flowID, newVersion-1)
 			RegisterPostCommit(ctx, func() {
-				// notBefore is computed here (post-commit) so the grace window is
-				// measured from when the new version actually became durable.
+				// notBefore computed post-commit so the grace window starts when the new version became durable.
 				b.scheduleBlobCleanup(time.Now().Add(staleBlobCleanupDelay), "stale-content:"+flowID, func(ctx context.Context) {
 					b.deleteSingleBlob(ctx, flowID, prevKey)
 				})
@@ -215,8 +177,7 @@ func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interface
 	return nil
 }
 
-// loadFlowRow reads the flow's DB row (no blob download). Content is the raw DB
-// value — a "{}" placeholder when blob storage is configured.
+// loadFlowRow reads the flow's DB row without the blob; content is the raw DB value ("{}" placeholder in blob mode).
 func (b *PostgresStorageBackend) loadFlowRow(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
 	row := b.query(ctx).QueryRowContext(ctx,
 		`SELECT id, name, description, content, source, metadata, owner_id, org_id, created_at, updated_at, version, tags
@@ -245,39 +206,49 @@ func (b *PostgresStorageBackend) loadFlowRow(ctx context.Context, id string) (*i
 	return &flow, nil
 }
 
-// LoadFlowHeader retrieves a flow's metadata (owner, org, version, …) WITHOUT
-// fetching its content blob. Callers that only need to authorize, check
-// existence, or read the version (authz, OCC pre-checks) must use this so they
-// don't pay a blob round-trip and don't fail when blob storage is briefly
-// unavailable. Content is always nil.
+// flowHeaderQuery selects the flow row WITHOUT content/source: both are flow-sized TOASTed columns,
+// and every permission/ResolveDoc-cache/OCC-version read goes through LoadFlowHeader — never select them here.
+const flowHeaderQuery = `SELECT id, name, description, metadata, owner_id, org_id, created_at, updated_at, version, tags
+	 FROM flows WHERE id = $1`
+
+// LoadFlowHeader retrieves a flow's metadata WITHOUT content or source, so authorize/existence/version
+// callers don't pay for the document and don't fail when blob storage is briefly unavailable.
 func (b *PostgresStorageBackend) LoadFlowHeader(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
-	flow, err := b.loadFlowRow(ctx, id)
-	if err != nil {
-		return nil, err
+	var flow interfaces.FlowDocument
+	var metaRaw []byte
+	var tagsCSV string
+	if err := b.query(ctx).QueryRowContext(ctx, flowHeaderQuery, id).Scan(
+		&flow.ID, &flow.Name, &flow.Description, &metaRaw,
+		&flow.OwnerID, &flow.OrganizationID,
+		&flow.CreatedAt, &flow.UpdatedAt, &flow.Version,
+		&tagsCSV,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, interfaces.ErrNotFound
+		}
+		return nil, fmt.Errorf("scan flow header: %w", err)
 	}
-	flow.Content = nil
-	return flow, nil
+	if err := json.Unmarshal(metaRaw, &flow.Metadata); err != nil {
+		return nil, fmt.Errorf("unmarshal metadata: %w", err)
+	}
+	flow.Tags = interfaces.SplitFlowTags(tagsCSV)
+	return &flow, nil
 }
 
-// LoadFlow retrieves a flow document by ID, including its content (from blob
-// storage when configured).
+// LoadFlow retrieves a flow document by ID, including its content (from blob storage when configured).
 func (b *PostgresStorageBackend) LoadFlow(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
 	flow, err := b.loadFlowRow(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	// Download from Blob Storage if configured and DB content is placeholder.
 	if b.blobClient != nil && (len(flow.Content) == 0 || string(flow.Content) == "{}" || string(flow.Content) == "null") {
 		content, err := b.downloadBlob(ctx, flowContentKey(flow.ID, flow.Version))
 		if err != nil {
-			// Blob storage is unreachable/unreadable. Returning a hollow flow with
-			// empty content would silently corrupt the caller's view, so fail loudly.
+			// Unreachable blob storage: a hollow flow would silently corrupt the caller's view — fail loudly.
 			return nil, fmt.Errorf("load flow %s: content unavailable in blob storage: %w", flow.ID, err)
 		}
 		if content == nil {
-			// Fall back to the legacy version-agnostic key for flows written
-			// before the versioned scheme.
 			content, err = b.downloadBlob(ctx, legacyFlowContentKey(flow.ID))
 			if err != nil {
 				return nil, fmt.Errorf("load flow %s: content unavailable in blob storage: %w", flow.ID, err)
@@ -286,9 +257,8 @@ func (b *PostgresStorageBackend) LoadFlow(ctx context.Context, id string) (*inte
 		if content != nil {
 			flow.Content = content
 		} else if metadataRecordsContent(flow.Metadata) {
-			// Both keys 404 on a row whose metadata records content: the blob is
-			// missing though it should exist — data loss, not a legitimately
-			// empty flow. Fail rather than returning a hollow {}.
+			// Both keys 404 on metadata-recorded content: data loss, not a legitimately empty flow —
+			// fail rather than return a hollow {}.
 			metrics.RecordBlobContentMissing()
 			return nil, fmt.Errorf("load flow %s: content blob missing though metadata records content (%d block(s))", flow.ID, flow.Metadata.BlockCount)
 		}
@@ -297,78 +267,65 @@ func (b *PostgresStorageBackend) LoadFlow(ctx context.Context, id string) (*inte
 	return flow, nil
 }
 
-// flowFilterWhere builds the WHERE clause and args for a FlowFilter. Shared by
-// ListFlows and CountFlows so the two can never drift apart. Returns the
-// joined clause, the args, and the next free placeholder index.
+// flowFilterWhere builds the WHERE clause and args for a FlowFilter; shared by ListFlows and CountFlows so they never drift.
 func flowFilterWhere(filter interfaces.FlowFilter) (string, []any, int) {
 	where := []string{"1=1"}
 	args := []any{}
 	n := 1
 
-	// Ownership / org filtering: show flows owned by UserID, belonging to OrganizationID(s),
-	// or where the user is an explicit collaborator. Membership of UserID in
-	// OrganizationID / OrganizationIDs is enforced by the service layer
-	// (AuthzService) before the filter reaches storage.
+	// The visibility set is `id IN (arm UNION ALL arm …)` — one index-backed arm per access path
+	// rather than an OR with a correlated EXISTS, which forces a sequential scan of flows for every
+	// library page and count; IN returns a multi-path-visible flow once. Lists bind as `= ANY($n)`
+	// so the statement shape never varies (pgx statement cache keys on text).
 	switch {
 	case filter.AllFlows:
 		// Explicit operational enumeration (migration): no owner/org scoping.
 	case filter.SharedOnly:
-		// "Shared with me" — only flows where the caller is a collaborator
-		// (excluding flows they own outright). UserID is required.
+		// "Shared with me" — collaborator rows only, excluding owned flows.
 		if filter.UserID == "" {
 			return "1=0", nil, 1
 		}
 		where = append(where, fmt.Sprintf(
-			"owner_id <> $%d AND EXISTS (SELECT 1 FROM flow_collaborators WHERE flow_id = id AND user_id = $%d)",
+			"owner_id <> $%d AND id IN (SELECT flow_id FROM flow_collaborators WHERE user_id = $%d)",
 			n, n))
 		args = append(args, filter.UserID)
 		n++
 	case filter.UserID == "" && filter.OrganizationID == "" && len(filter.OrganizationIDs) == 0:
-		// Defense-in-depth: if neither UserID nor any org scoping is set the
-		// filter would match every row. Return an always-false clause instead
-		// so a caller who forgets to set filter fields cannot dump all data.
+		// Defense-in-depth: unscoped would match every row — always-false instead, so a caller
+		// who forgets to set filter fields cannot dump all data.
 		return "1=0", nil, 1
 	case filter.UserID != "":
-		clauses := []string{fmt.Sprintf("owner_id = $%d", n)}
+		arms := []string{fmt.Sprintf("SELECT id FROM flows WHERE owner_id = $%d", n)}
 		args = append(args, filter.UserID)
 		userArg := n
 		n++
 		if filter.OrganizationID != "" {
-			clauses = append(clauses, fmt.Sprintf("org_id = $%d", n))
+			arms = append(arms, fmt.Sprintf("SELECT id FROM flows WHERE org_id = $%d", n))
 			args = append(args, filter.OrganizationID)
 			n++
 		}
 		if len(filter.OrganizationIDs) > 0 {
-			// pq array binding — postgres ANY()
-			placeholders := make([]string, len(filter.OrganizationIDs))
-			for i, id := range filter.OrganizationIDs {
-				placeholders[i] = fmt.Sprintf("$%d", n)
-				args = append(args, id)
-				n++
-			}
-			clauses = append(clauses, fmt.Sprintf("org_id IN (%s)", strings.Join(placeholders, ",")))
+			arms = append(arms, fmt.Sprintf("SELECT id FROM flows WHERE org_id = ANY($%d)", n))
+			args = append(args, textArray(filter.OrganizationIDs))
+			n++
 		}
-		clauses = append(clauses, fmt.Sprintf(
-			"EXISTS (SELECT 1 FROM flow_collaborators WHERE flow_id = id AND user_id = $%d)",
-			userArg))
-		where = append(where, "("+strings.Join(clauses, " OR ")+")")
+		arms = append(arms, fmt.Sprintf("SELECT flow_id FROM flow_collaborators WHERE user_id = $%d", userArg))
+		where = append(where, "id IN ("+strings.Join(arms, " UNION ALL ")+")")
 	case filter.OrganizationID != "":
 		where = append(where, fmt.Sprintf("org_id = $%d", n))
 		args = append(args, filter.OrganizationID)
 		n++
 	case len(filter.OrganizationIDs) > 0:
-		placeholders := make([]string, len(filter.OrganizationIDs))
-		for i, id := range filter.OrganizationIDs {
-			placeholders[i] = fmt.Sprintf("$%d", n)
-			args = append(args, id)
-			n++
-		}
-		where = append(where, fmt.Sprintf("org_id IN (%s)", strings.Join(placeholders, ",")))
+		where = append(where, fmt.Sprintf("org_id = ANY($%d)", n))
+		args = append(args, textArray(filter.OrganizationIDs))
+		n++
 	}
 
 	if filter.Query != "" {
-		where = append(where, fmt.Sprintf("name ILIKE $%d", n))
-		args = append(args, "%"+filter.Query+"%")
+		// Name substring via flow_search (v27): its trigram index is usable, the one on flows never
+		// was (FORCE RLS + non-leakproof operator); flow_search has no RLS — tenant-correct but a weak cross-tenant timing oracle.
+		where = append(where, fmt.Sprintf("id IN (SELECT flow_id FROM flow_search WHERE name ILIKE $%d)", n))
+		args = append(args, "%"+likeLiteral(filter.Query)+"%")
 		n++
 	}
 	if filter.CreatedAfter != nil {
@@ -381,47 +338,84 @@ func flowFilterWhere(filter interfaces.FlowFilter) (string, []any, int) {
 		args = append(args, *filter.CreatedBefore)
 		n++
 	}
+	// Keyset cursor for id-ordered walks: the next page starts after the last id seen instead of OFFSET re-reading.
+	if filter.AfterID != "" {
+		where = append(where, fmt.Sprintf("id > $%d", n))
+		args = append(args, filter.AfterID)
+		n++
+	}
 
-	// Tags (R2-4): ANY-of semantics — the flow matches when it carries at
-	// least one of the filter's tags. Delimiter-anchored LIKE over the CSV
-	// column so 'prod' never matches 'production' (the trailing comma pad
-	// makes the last tag matchable).
+	// Tags: ANY-of semantics; delimiter-anchored LIKE over the CSV so 'prod' never matches 'production'.
 	if len(filter.Tags) > 0 {
 		normalized, err := interfaces.NormalizeFlowTags(filter.Tags)
 		if err != nil || len(normalized) == 0 {
 			return "1=0", nil, 1 // invalid tag in a filter matches nothing
 		}
-		orClauses := make([]string, len(normalized))
-		for i, tag := range normalized {
-			orClauses[i] = fmt.Sprintf("(',' || tags || ',') LIKE ('%%,' || $%d || ',%%')", n)
-			args = append(args, tag)
-			n++
-		}
-		where = append(where, "("+strings.Join(orClauses, " OR ")+")")
+		// One array bind so the statement shape does not vary with the number of tags.
+		where = append(where, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM unnest($%d::text[]) AS t(tag) WHERE (',' || tags || ',') LIKE ('%%,' || t.tag || ',%%'))", n))
+		args = append(args, textArray(normalized))
+		n++
 	}
 
 	return strings.Join(where, " AND "), args, n
 }
 
-// flowOrderBy returns the ORDER BY clause for a FlowSort. Whitelisted columns
-// only — never interpolate user input here.
-//
-// Every clause ends in `id` (the primary key) as a final tiebreaker. That is
-// not cosmetic: ListFlows is consumed with LIMIT/OFFSET by callers that walk
-// the WHOLE table one page at a time — the storage migrator
-// (migration.Migrator.migrateFlows) and the governance scanner
-// (scanner.ScanOnce) — and SQL gives no ordering guarantee between rows that
-// compare equal. Without a unique tiebreaker, two pages of the same walk can
-// order a tied group differently, so rows shift across the page boundary and
-// the walk silently skips some while returning others twice.
-//
-// Ties are ordinary, not exotic: updated_at is TIMESTAMPTZ (microsecond
-// resolution), so any bulk write — an import, a
-// migration — produces groups of rows sharing a timestamp. lower(name) and
-// BlockCount tie far more easily still.
-//
-// A skipped row in the migrator is silent data loss: the run reports the flows
-// it saw and no errors, so the operator believes everything moved.
+// textArray copies ids into a fresh slice for `= ANY($n)` binds, keeping the caller's slice from the driver.
+func textArray(ids []string) []string {
+	out := make([]string, len(ids))
+	copy(out, ids)
+	return out
+}
+
+// countFlowsSQL is the CountFlows statement for filter (exposed for the plan tests).
+func countFlowsSQL(filter interfaces.FlowFilter) (string, []any) {
+	whereClause, args, _ := flowFilterWhere(filter)
+	return "SELECT count(*) FROM flows WHERE " + whereClause, args
+}
+
+// listFlowsSQL is the ListFlows statement for filter with its args (exposed for the plan tests).
+func listFlowsSQL(filter interfaces.FlowFilter) (string, []any) {
+	return listFlowsSQLFor(filter, "")
+}
+
+// listFlowsWithTotalSQL is the ListFlowsWithTotal statement (plan tests): list + COUNT(*) OVER()
+// riding every row, so the total returns with the rows instead of a second visibility semi-join + RLS evaluation.
+func listFlowsWithTotalSQL(filter interfaces.FlowFilter) (string, []any) {
+	return listFlowsSQLFor(filter, ", COUNT(*) OVER() AS page_total")
+}
+
+func listFlowsSQLFor(filter interfaces.FlowFilter, extraSelect string) (string, []any) {
+	whereClause, args, n := flowFilterWhere(filter)
+
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	args = append(args, limit, filter.Offset)
+
+	// Select literals instead of content/source when MetadataOnly, keeping the row shape identical.
+	contentExpr := "content"
+	sourceExpr := "source"
+	if filter.MetadataOnly {
+		contentExpr = "'{}'::jsonb AS content"
+		sourceExpr = "'' AS source"
+	}
+
+	orderClause := flowOrderBy(filter.SortBy)
+	q := fmt.Sprintf(`
+		SELECT id, name, description, %s, %s, metadata, owner_id, org_id, created_at, updated_at, version, tags%s
+		FROM flows
+		WHERE %s
+		%s
+		LIMIT $%d OFFSET $%d`,
+		contentExpr, sourceExpr, extraSelect, whereClause, orderClause, n, n+1)
+	return q, args
+}
+
+// flowOrderBy whitelists ORDER BY columns, never interpolating user input. Every clause ends in
+// `id` as a unique tiebreaker — whole-table LIMIT/OFFSET walkers silently skip or duplicate tied
+// rows without it (ties are ordinary: updated_at is microsecond-resolution, bulk writes tie).
 func flowOrderBy(s interfaces.FlowSort) string {
 	switch s {
 	case interfaces.FlowSortUpdatedAsc:
@@ -433,33 +427,26 @@ func flowOrderBy(s interfaces.FlowSort) string {
 	case interfaces.FlowSortBlocksDesc:
 		return "ORDER BY COALESCE((metadata->>'BlockCount')::int, 0) DESC, updated_at DESC, id ASC"
 	case interfaces.FlowSortIDAsc:
-		// Immutable sort key — see FlowSortIDAsc's doc comment. Already unique,
-		// so it needs no tiebreaker.
+		// Immutable sort key (see FlowSortIDAsc); already unique, no tiebreaker needed.
 		return "ORDER BY id ASC"
 	default:
 		return "ORDER BY updated_at DESC, id ASC"
 	}
 }
 
-// CountFlows returns the total number of flows matching the filter, ignoring
-// Limit/Offset.
+// CountFlows returns the total matching the filter, ignoring Limit/Offset.
 func (b *PostgresStorageBackend) CountFlows(ctx context.Context, filter interfaces.FlowFilter) (int, error) {
-	whereClause, args, _ := flowFilterWhere(filter)
+	q, args := countFlowsSQL(filter)
 	var total int
-	err := b.query(ctx).QueryRowContext(ctx,
-		fmt.Sprintf("SELECT count(*) FROM flows WHERE %s", whereClause), args...,
-	).Scan(&total)
+	err := b.query(ctx).QueryRowContext(ctx, q, args...).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("count flows: %w", err)
 	}
 	return total, nil
 }
 
-// ListFlows returns flows matching the filter: a SQL query/scan phase
-// (queryFlowRows), followed by a concurrent blob-content backfill phase
-// (backfillBlobContent) for any row whose full content wasn't inlined in the
-// DB (only runs when the caller wants full content and blob storage is
-// configured — UI listings use MetadataOnly and never reach it).
+// ListFlows returns matching flows: a query/scan phase, then a concurrent blob-content backfill
+// for rows whose content wasn't inlined (only full-content callers with blob storage configured; UI listings use MetadataOnly).
 func (b *PostgresStorageBackend) ListFlows(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
 	result, err := b.queryFlowRows(ctx, filter)
 	if err != nil {
@@ -473,111 +460,100 @@ func (b *PostgresStorageBackend) ListFlows(ctx context.Context, filter interface
 	return result, nil
 }
 
-// queryFlowRows builds and runs the SELECT for ListFlows and scans the
-// results. Content is omitted from the query (a cheap literal instead) when
-// filter.MetadataOnly, so listing views never pay for the (potentially large)
-// content JSONB.
+// ListFlowsWithTotal is ListFlows plus the unpaginated total in ONE statement: the visibility
+// semi-join and flows RLS policy are the read path's most expensive predicates. Implements storageif.FlowPageLister.
+func (b *PostgresStorageBackend) ListFlowsWithTotal(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, int, error) {
+	docs, total, err := b.queryFlowRowsTotal(ctx, filter, true)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !filter.MetadataOnly && b.blobClient != nil {
+		if err := b.backfillBlobContent(ctx, docs); err != nil {
+			return nil, 0, err
+		}
+	}
+	return docs, total, nil
+}
+
+// queryFlowRows builds and runs the ListFlows SELECT and scans the results (literal content when MetadataOnly).
 func (b *PostgresStorageBackend) queryFlowRows(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
-	whereClause, args, n := flowFilterWhere(filter)
+	docs, _, err := b.queryFlowRowsTotal(ctx, filter, false)
+	return docs, err
+}
 
-	limit := filter.Limit
-	if limit <= 0 || limit > 500 {
-		limit = 100
+// queryFlowRowsTotal runs the list SELECT, optionally with COUNT(*) OVER() riding each row.
+func (b *PostgresStorageBackend) queryFlowRowsTotal(ctx context.Context, filter interfaces.FlowFilter, withTotal bool) ([]*interfaces.FlowDocument, int, error) {
+	var q string
+	var args []any
+	if withTotal {
+		q, args = listFlowsWithTotalSQL(filter)
+	} else {
+		q, args = listFlowsSQL(filter)
 	}
-	args = append(args, limit, filter.Offset)
-
-	// Avoid shipping the (potentially large) content JSONB + source text when
-	// the caller only needs listing metadata — selecting literals keeps the row
-	// shape identical to the full select.
-	contentExpr := "content"
-	sourceExpr := "source"
-	if filter.MetadataOnly {
-		contentExpr = "'{}'::jsonb AS content"
-		sourceExpr = "'' AS source"
-	}
-
-	orderClause := flowOrderBy(filter.SortBy)
-	q := fmt.Sprintf(`
-		SELECT id, name, description, %s, %s, metadata, owner_id, org_id, created_at, updated_at, version, tags
-		FROM flows
-		WHERE %s
-		%s
-		LIMIT $%d OFFSET $%d`,
-		contentExpr, sourceExpr, whereClause, orderClause, n, n+1)
-
 	rows, err := b.query(ctx).QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list flows: %w", err)
+		return nil, 0, fmt.Errorf("list flows: %w", err)
 	}
 	defer rows.Close()
 
 	var result []*interfaces.FlowDocument
+	var pageTotal int
 	for rows.Next() {
 		var flow interfaces.FlowDocument
 		var contentRaw, metaRaw []byte
 		var tagsCSV string
-		if err := rows.Scan(
+		dests := []any{
 			&flow.ID, &flow.Name, &flow.Description,
 			&contentRaw, &flow.Source, &metaRaw,
 			&flow.OwnerID, &flow.OrganizationID,
 			&flow.CreatedAt, &flow.UpdatedAt, &flow.Version,
 			&tagsCSV,
-		); err != nil {
-			return nil, fmt.Errorf("scan row: %w", err)
+		}
+		if withTotal {
+			dests = append(dests, &pageTotal)
+		}
+		if err := rows.Scan(dests...); err != nil {
+			return nil, 0, fmt.Errorf("scan row: %w", err)
 		}
 		flow.Content = contentRaw
 		if filter.MetadataOnly {
-			// Keep Content nil (not the "{}" placeholder we selected) so the
-			// result shape matches the filesystem backend and callers can rely
-			// on "MetadataOnly ⇒ empty Content" regardless of backend.
+			// Keep Content nil (not "{}") so "MetadataOnly ⇒ empty Content" holds across backends.
 			flow.Content = nil
 		}
 		if err := json.Unmarshal(metaRaw, &flow.Metadata); err != nil {
-			return nil, fmt.Errorf("unmarshal metadata: %w", err)
+			return nil, 0, fmt.Errorf("unmarshal metadata: %w", err)
 		}
 		flow.Tags = interfaces.SplitFlowTags(tagsCSV)
 		result = append(result, &flow)
 	}
 
-	return result, rows.Err()
+	return result, pageTotal, rows.Err()
 }
 
-// backfillBlobContent concurrently downloads full content, from blob storage,
-// for every flow in flows whose DB-stored content is empty or a placeholder.
-// Mutates each *FlowDocument's Content in place.
+// backfillBlobContent concurrently downloads full content from blob storage for every flow whose
+// DB-stored content is a placeholder, mutating each *FlowDocument's Content in place.
 func (b *PostgresStorageBackend) backfillBlobContent(ctx context.Context, flows []*interfaces.FlowDocument) error {
 	g, gctx := errgroup.WithContext(ctx)
-	// Bound concurrent Azure blob downloads: a page can hold up to 500 flows
-	// (see the limit clamp in queryFlowRows), and firing that many downloads at
-	// once risks Azure throttling (429s) and a memory spike holding every body
-	// in flight. g.Go then blocks until a slot frees, so fetches still
-	// parallelize. 16 matches the house cap in internal/ai (maxConcurrentRecords).
+	// Bound concurrent downloads: 500-flow pages risk Azure throttling (429s) and a memory spike;
+	// g.Go blocks until a slot frees, so fetches still parallelize.
 	g.SetLimit(16)
 	for _, flow := range flows {
 		if len(flow.Content) == 0 || string(flow.Content) == "{}" || string(flow.Content) == "null" {
 			f := flow // capture range variable
 			g.Go(func() (err error) {
-				// errgroup does not recover panics raised in its goroutines, so
-				// a panic in the azblob SDK would crash the process. Convert it
-				// to an error so the list fails loudly like any other blob failure.
+				// errgroup does not recover goroutine panics — convert one to an error so the list fails loudly.
 				defer func() {
 					if r := recover(); r != nil {
 						err = fmt.Errorf("blob fetch for flow %s panicked: %v", f.ID, r)
 					}
 				}()
-				// A transient blob failure fails the whole list. The only
-				// full-content consumers are the governance scanner and the user
-				// data export, and silently substituting placeholder content
-				// harms both: the scanner would record bogus "healthy/empty"
-				// analysis history (poisoning trends and alerts), and an export
-				// must be complete or fail. UI listings use MetadataOnly and
-				// never reach this path.
+				// A transient blob failure fails the whole list: the only full-content consumers
+				// (governance scanner, user data export) are both harmed by placeholder substitution.
 				content, err := b.downloadBlob(gctx, flowContentKey(f.ID, f.Version))
 				if err != nil {
 					return fmt.Errorf("list flows: download content for flow %s: %w", f.ID, err)
 				}
 				if content == nil {
-					// Fall back to the legacy version-agnostic key.
 					content, err = b.downloadBlob(gctx, legacyFlowContentKey(f.ID))
 					if err != nil {
 						return fmt.Errorf("list flows: download legacy content for flow %s: %w", f.ID, err)
@@ -587,13 +563,8 @@ func (b *PostgresStorageBackend) backfillBlobContent(ctx context.Context, flows 
 					f.Content = content
 					return nil
 				}
-				// Both keys 404. Clear the DB placeholder so callers can
-				// distinguish "content unavailable" (nil) from real content:
-				// the scanner then skips the flow instead of analyzing an
-				// empty document. When metadata says content should exist this
-				// is per-flow data loss — log it, but don't fail every caller
-				// forever on one lost blob (the export layer re-checks and
-				// fails loudly on its own).
+				// Both keys 404: clear the placeholder so callers distinguish "content unavailable" (nil)
+				// from real content; per-flow data loss is logged, not a permanent error for every caller.
 				f.Content = nil
 				if metadataRecordsContent(f.Metadata) {
 					metrics.RecordBlobContentMissing()
@@ -608,22 +579,13 @@ func (b *PostgresStorageBackend) backfillBlobContent(ctx context.Context, flows 
 
 // DeleteFlow removes a flow by ID.
 func (b *PostgresStorageBackend) DeleteFlow(ctx context.Context, id string) error {
-	// Guard against an ID containing '/' before it is interpolated into the
-	// blob-prefix below (validFlowID's docstring calls out this exact risk).
-	// SaveFlow already validates; this covers delete/load paths that bypass it.
+	// Guard '/' before it is interpolated into the blob prefix below (SaveFlow validates; this covers delete/load).
 	if err := validFlowID(id); err != nil {
 		return err
 	}
-	// conversations.flow_id deliberately has no FK to flows (chats about
-	// never-persisted flows must survive — see the migration note that drops
-	// conversations_flow_id_fkey), so nothing cascades and a deleted flow's
-	// chat rows would linger forever, unreachable under the conversations RLS
-	// policy once the parent flow is gone. Delete them here, BEFORE the flows
-	// row: that policy resolves visibility by joining flows, so removing the
-	// flow first would hide these rows from this very statement. Doc IDs are
-	// fresh UUIDs per parse (parser.ParseFiles), so a conversation about an
-	// unsaved/uploaded flow never shares an ID with a library row and is
-	// untouched by this delete.
+	// conversations.flow_id deliberately has no FK to flows (chats about never-persisted flows must
+	// survive), so delete them here BEFORE the flows row: the conversations RLS policy resolves
+	// visibility by joining flows, so removing the flow first would hide these rows from this statement.
 	if _, err := b.query(ctx).ExecContext(ctx, `DELETE FROM conversations WHERE flow_id = $1`, id); err != nil {
 		return fmt.Errorf("delete flow conversations: %w", err)
 	}
@@ -636,12 +598,8 @@ func (b *PostgresStorageBackend) DeleteFlow(ctx context.Context, id string) erro
 		return interfaces.ErrNotFound
 	}
 
-	// Delete all blobs related to this flow (content + versions). Defer the
-	// cleanup until the DB delete is durably committed: deleting blobs while the
-	// surrounding RLS transaction is still open would orphan a surviving row's
-	// content if the request later rolls back. RegisterPostCommit runs the hook
-	// after commit, or immediately when there is no RLS tx (autocommit — the
-	// delete is already durable).
+	// Delete the flow's blobs post-commit: deleting while the surrounding RLS tx is still open
+	// would orphan a surviving row's content if the request rolls back.
 	if b.blobClient != nil {
 		prefix := fmt.Sprintf("flows/%s/", id)
 		RegisterPostCommit(ctx, func() {
@@ -662,20 +620,21 @@ func (b *PostgresStorageBackend) SaveConversation(ctx context.Context, flowID, s
 	if err != nil {
 		return fmt.Errorf("marshal messages: %w", err)
 	}
+	// IS DISTINCT FROM skips the write for byte-identical history: messages is a wide TOASTed
+	// column, and an unchanged history also keeps its updated_at.
 	_, err = b.query(ctx).ExecContext(ctx, `
 		INSERT INTO conversations (flow_id, scope, messages, updated_at)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (flow_id, scope) DO UPDATE SET
 			messages   = EXCLUDED.messages,
-			updated_at = EXCLUDED.updated_at`,
+			updated_at = EXCLUDED.updated_at
+		WHERE conversations.messages IS DISTINCT FROM EXCLUDED.messages`,
 		flowID, scope, data, time.Now().UTC())
 	return err
 }
 
-// LoadConversation retrieves the conversation for a flow+scope. Returns a
-// non-nil empty slice when no conversation exists yet — this matches the
-// filesystem backend's semantics so callers can use a single nil-safe check
-// across both backends. A `nil` return therefore always indicates an error.
+// LoadConversation retrieves the conversation for a flow+scope; a non-nil empty slice when none
+// exists (filesystem parity — nil always indicates an error).
 func (b *PostgresStorageBackend) LoadConversation(ctx context.Context, flowID, scope string) ([]interfaces.ChatMessage, error) {
 	var data []byte
 	err := b.query(ctx).QueryRowContext(ctx,
@@ -699,9 +658,7 @@ func (b *PostgresStorageBackend) LoadConversation(ctx context.Context, flowID, s
 	return msgs, nil
 }
 
-// DeleteConversation removes the conversation for a flow+scope. Deleting a
-// missing conversation is a no-op (matches the filesystem backend's idempotent
-// clear), so callers can use it as a "clear history" operation.
+// DeleteConversation removes the conversation for a flow+scope; missing is a no-op (idempotent "clear history").
 func (b *PostgresStorageBackend) DeleteConversation(ctx context.Context, flowID, scope string) error {
 	_, err := b.query(ctx).ExecContext(ctx,
 		`DELETE FROM conversations WHERE flow_id = $1 AND scope = $2`, flowID, scope)
@@ -725,9 +682,7 @@ func (b *PostgresStorageBackend) ListCollaborators(ctx context.Context, flowID s
 	}
 	defer rows.Close()
 
-	// Contract: empty result is a non-nil empty slice (matches filesystem
-	// backend), so callers can use `len(collabs) == 0` without backend-
-	// specific nil checks. A nil return is reserved for errors.
+	// Contract: empty result is non-nil (filesystem parity); nil is reserved for errors.
 	collabs := []*interfaces.Collaborator{}
 	for rows.Next() {
 		var c interfaces.Collaborator
@@ -739,34 +694,32 @@ func (b *PostgresStorageBackend) ListCollaborators(ctx context.Context, flowID s
 	return collabs, rows.Err()
 }
 
-// ListCollaboratorsBatch returns collaborators for multiple flows in a single
-// query. The map keys are flow IDs; flows with no collaborators are absent
-// from the map (callers should treat missing keys as an empty list).
+// ListCollaboratorsBatch returns collaborators for multiple flows in one query; map keys are flow
+// IDs, flows with no collaborators are absent (treat missing keys as empty).
 func (b *PostgresStorageBackend) ListCollaboratorsBatch(ctx context.Context, flowIDs []string) (map[string][]*interfaces.Collaborator, error) {
 	result := make(map[string][]*interfaces.Collaborator, len(flowIDs))
 	if len(flowIDs) == 0 {
 		return result, nil
 	}
 	seen := make(map[string]bool, len(flowIDs))
-	placeholders := make([]string, 0, len(flowIDs))
-	args := make([]any, 0, len(flowIDs))
+	ids := make([]string, 0, len(flowIDs))
 	for _, id := range flowIDs {
 		if id == "" || seen[id] {
 			continue
 		}
 		seen[id] = true
-		args = append(args, id)
-		placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+		ids = append(ids, id)
 	}
-	if len(args) == 0 {
+	if len(ids) == 0 {
 		return result, nil
 	}
-	q := `SELECT c.flow_id, c.user_id, u.email, c.permission, c.granted_at
+	// One array bind: the statement text is the same for any page size.
+	const q = `SELECT c.flow_id, c.user_id, u.email, c.permission, c.granted_at
 		FROM flow_collaborators c
 		JOIN users u ON c.user_id = u.id
-		WHERE c.flow_id IN (` + strings.Join(placeholders, ",") + `)
+		WHERE c.flow_id = ANY($1)
 		ORDER BY c.granted_at ASC`
-	rows, err := b.query(ctx).QueryContext(ctx, q, args...)
+	rows, err := b.query(ctx).QueryContext(ctx, q, ids)
 	if err != nil {
 		return nil, fmt.Errorf("query collaborators batch: %w", err)
 	}
@@ -782,12 +735,9 @@ func (b *PostgresStorageBackend) ListCollaboratorsBatch(ctx context.Context, flo
 	return result, rows.Err()
 }
 
-// blobOpTimeout bounds a single logical blob operation (all SDK retries
-// included). The SDK's retry policy alone (TryTimeout 30s × up to 5 attempts
-// plus backoff) could hold a request — and, in saveFlowTx, the flow row lock
-// inside an open transaction — for minutes during a blob outage, piling up
-// lock waiters until the connection pool drains. This cap keeps a blob outage
-// a per-request failure instead of a pool-exhaustion incident.
+// blobOpTimeout bounds one logical blob op (SDK retries included): unbounded retries would hold
+// the flow row lock — and pile up lock waiters until the pool drains — during a blob outage; the
+// cap keeps the outage a per-request failure instead of a pool-exhaustion incident.
 const blobOpTimeout = 45 * time.Second
 
 func (b *PostgresStorageBackend) uploadBlob(ctx context.Context, key string, data []byte) error {
@@ -812,17 +762,12 @@ func (b *PostgresStorageBackend) uploadBlob(ctx context.Context, key string, dat
 	return nil
 }
 
-// staleBlobCleanupDelay is the grace period before a superseded content blob is
-// deleted. It covers readers that scanned the flow row at the previous version
-// just before the new version committed and have not yet fetched the blob.
-// Package-level so tests can shorten it.
+// staleBlobCleanupDelay is the grace period before a superseded content blob is deleted, covering
+// readers that scanned the previous version just before commit; package-level so tests can shorten it.
 var staleBlobCleanupDelay = time.Minute
 
-// scheduleBlobCleanup routes a deferred blob-cleanup task through the bounded
-// cleaner (created by New when blob storage is configured). If no cleaner is
-// present — a backend constructed directly, or one already stopped — it falls
-// back to a single detached goroutine so behaviour degrades to the previous
-// best-effort model rather than dropping the work.
+// scheduleBlobCleanup routes a deferred blob-cleanup task through the bounded cleaner, falling
+// back to a single detached goroutine so the work is never dropped.
 func (b *PostgresStorageBackend) scheduleBlobCleanup(notBefore time.Time, desc string, run func(ctx context.Context)) {
 	if b.cleaner != nil && b.cleaner.enqueue(notBefore, desc, run) {
 		return
@@ -842,10 +787,7 @@ func (b *PostgresStorageBackend) scheduleBlobCleanup(notBefore time.Time, desc s
 	}()
 }
 
-// deleteSingleBlob removes one blob, tolerating a 404 (the key may never have
-// existed — fresh-insert races, pre-versioned-scheme flows — or a concurrent
-// DeleteFlow already removed the whole prefix). ctx is supplied by the caller
-// (the cleaner worker bounds it).
+// deleteSingleBlob removes one blob, tolerating a 404 (never existed, or a concurrent prefix delete).
 func (b *PostgresStorageBackend) deleteSingleBlob(ctx context.Context, flowID, key string) {
 	start := time.Now()
 	_, err := b.blobClient.DeleteBlob(ctx, b.container, key, nil)
@@ -876,9 +818,7 @@ func (b *PostgresStorageBackend) downloadBlob(ctx context.Context, key string) (
 			metrics.RecordBlobOp("download", "not_found", time.Since(start))
 			return nil, nil
 		}
-		// Defensively close an error response body if the SDK returned one
-		// alongside the error (it generally closes them itself, but this is
-		// robust against SDK version changes that could leak the connection).
+		// Defensively close an error body if the SDK returned one (robust against SDK connection leaks).
 		if resp.Body != nil {
 			_ = resp.Body.Close()
 		}
@@ -886,11 +826,8 @@ func (b *PostgresStorageBackend) downloadBlob(ctx context.Context, key string) (
 		return nil, fmt.Errorf("download blob %s: %w", key, err)
 	}
 	defer resp.Body.Close()
-	// Cap the read at the same ceiling upload enforces: a blob larger than the
-	// limit (written before the cap, by another tool, or after the constant was
-	// lowered) must not be read unboundedly into memory — ListFlows downloads a
-	// whole page of these concurrently. LimitReader takes limit+1 so an
-	// exactly-limit blob still reads fully and only a truly oversized one trips.
+	// Cap the read at the upload ceiling — ListFlows downloads a whole page of these concurrently;
+	// LimitReader takes limit+1 so an exactly-limit blob reads fully and only a truly oversized one trips.
 	var buf bytes.Buffer
 	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, maxBlobContentBytes+1)); err != nil {
 		metrics.RecordBlobOp("download", "error", time.Since(start))
@@ -919,8 +856,7 @@ func (b *PostgresStorageBackend) deleteBlobs(ctx context.Context, prefix string)
 	var failed int
 	names := make([]string, 0, maxBlobBatchOps)
 
-	// flush deletes the accumulated blob names in a single Blob Batch request
-	// (one round trip for up to 256 blobs instead of one DELETE each).
+	// flush deletes the accumulated blob names in one Blob Batch (up to 256 per round trip).
 	flush := func() error {
 		if len(names) == 0 {
 			return nil
@@ -942,9 +878,8 @@ func (b *PostgresStorageBackend) deleteBlobs(ctx context.Context, prefix string)
 			metrics.RecordBlobOp("delete", blobErrStatus(err), time.Since(start))
 			return fmt.Errorf("submit blob delete batch: %w", err)
 		}
-		// The batch call succeeded as a whole; individual sub-requests can still
-		// fail (e.g. a blob deleted concurrently). Count those but don't abort —
-		// they're surfaced via the returned error so leaks stay observable.
+		// The batch call can succeed as a whole while sub-requests fail (e.g. concurrently deleted
+		// blobs) — count but don't abort, so leaks stay observable.
 		batchFailed := 0
 		for _, item := range resp.Responses {
 			if item != nil && item.Error != nil {
@@ -989,8 +924,7 @@ func (b *PostgresStorageBackend) deleteBlobs(ctx context.Context, prefix string)
 	if err := flush(); err != nil {
 		return err
 	}
-	// Surface partial failures so the caller (and its metric/log) can see that
-	// blobs leaked, rather than silently returning nil.
+	// Surface partial failures so leaked blobs stay observable.
 	if failed > 0 {
 		return fmt.Errorf("delete blobs under %q: %d blob(s) failed to delete", prefix, failed)
 	}
@@ -1044,11 +978,9 @@ func (b *PostgresStorageBackend) RemoveCollaborator(ctx context.Context, flowID,
 	return nil
 }
 
-// SaveFlowVersion persists a flow version snapshot. The version number is
-// computed atomically (SELECT ... FOR UPDATE on the parent flow row + MAX+1)
-// so concurrent saves for the same flow serialize and never collide. Only the
-// most recent maxFlowVersionSnapshots snapshots are kept per flow; older ones
-// are pruned (rows in the same transaction, blobs post-commit).
+// SaveFlowVersion persists a flow version snapshot: the version is computed atomically (FOR UPDATE
+// on the parent row + MAX+1) so concurrent saves serialize; only the newest maxFlowVersionSnapshots
+// are kept (rows pruned in-tx, blobs post-commit).
 func (b *PostgresStorageBackend) SaveFlowVersion(ctx context.Context, v *interfaces.FlowVersion) error {
 	if err := validFlowID(v.FlowID); err != nil {
 		return err
@@ -1064,8 +996,7 @@ func (b *PostgresStorageBackend) SaveFlowVersion(ctx context.Context, v *interfa
 				_ = tx.Rollback()
 			}
 		}()
-		// Fresh post-commit registry for the snapshot-prune blob cleanup — same
-		// rationale as SaveFlow: it must run only after THIS commit.
+		// Fresh post-commit registry for the prune cleanup — must run only after THIS commit (same rationale as SaveFlow).
 		txCtx, postCommit := WithPostCommit(WithRLSTx(ctx, tx))
 		if err := b.saveFlowVersionTx(txCtx, v); err != nil {
 			return err
@@ -1080,17 +1011,13 @@ func (b *PostgresStorageBackend) SaveFlowVersion(ctx context.Context, v *interfa
 	return b.saveFlowVersionTx(ctx, v)
 }
 
-// versionBlobKey is the content-blob storage key for a flow version, derived
-// from the row id (unique per version) so it is stable and knowable BEFORE the
-// version number is allocated — which lets SaveFlowVersion upload ahead of the
-// parent flow's FOR UPDATE lock.
+// versionBlobKey derives the snapshot blob key from the row id, so it is knowable BEFORE the
+// version number is allocated — letting SaveFlowVersion upload ahead of the parent's FOR UPDATE lock.
 func versionBlobKey(flowID, versionID string) string {
 	return fmt.Sprintf("flows/%s/versions/%s.json", flowID, versionID)
 }
 
-// versionBlobKeyLegacy is the pre-migration key derived from the version number.
-// Used as a read/cleanup fallback for rows written before the blob_key column
-// existed (blob_key == "").
+// versionBlobKeyLegacy is the pre-migration version-number-derived key; read/cleanup fallback for rows with blob_key == "".
 func versionBlobKeyLegacy(flowID string, version int) string {
 	return fmt.Sprintf("flows/%s/versions/%d/content.json", flowID, version)
 }
@@ -1107,12 +1034,8 @@ func (b *PostgresStorageBackend) saveFlowVersionTx(ctx context.Context, v *inter
 		content = json.RawMessage("{}")
 	}
 
-	// Upload the content blob BEFORE taking the parent flow's FOR UPDATE lock,
-	// so the lock is never held across the (network) upload. The blob key is
-	// derived from the row id (v.ID) rather than the version number, so it is
-	// unique without needing the version — which lets the upload happen ahead of
-	// the lock. Uploading before the INSERT also keeps the invariant that a row
-	// never points at a missing blob.
+	// Upload BEFORE taking the parent's FOR UPDATE lock so the lock is never held across the
+	// (network) upload; the row-id-derived key needs no version, and a row never points at a missing blob.
 	var blobKey string
 	if b.blobClient != nil {
 		blobKey = versionBlobKey(v.FlowID, v.ID)
@@ -1122,8 +1045,7 @@ func (b *PostgresStorageBackend) saveFlowVersionTx(ctx context.Context, v *inter
 		content = json.RawMessage("{}")
 	}
 
-	// Lock the parent flow row to serialize concurrent version saves. Without
-	// this, two callers can read the same max(version) and race on INSERT.
+	// Lock the parent row to serialize concurrent version saves (else two callers read the same MAX and race the INSERT).
 	var dummy int
 	if err := q.QueryRowContext(ctx, `SELECT 1 FROM flows WHERE id = $1 FOR UPDATE`, v.FlowID).Scan(&dummy); err != nil {
 		if blobKey != "" {
@@ -1153,17 +1075,9 @@ func (b *PostgresStorageBackend) saveFlowVersionTx(ctx context.Context, v *inter
 		v.ID, v.FlowID, v.Version, v.Comment, content, meta, v.CreatedBy, v.CreatedAt, blobKey,
 	)
 	if err != nil {
-		// The INSERT failed (constraint, transient DB error, …): the row this
-		// blob backs will never exist, so reclaim the just-uploaded blob now.
-		// Without this the blob is orphaned forever — pruneFlowVersions only
-		// schedules cleanup for rows it DELETEs, and this version's row was
-		// never inserted. Best-effort: a delete failure here is logged, not
-		// returned, since the original INSERT error is the actionable one. (A
-		// later commit failure is the same accepted trade-off SaveFlow makes.)
+		// INSERT failed: the row this blob backs will never exist — reclaim the just-uploaded blob
+		// now (pruneFlowVersions only schedules cleanup for rows it DELETEs); best-effort.
 		if blobKey != "" {
-			// Best-effort reclaim on a bounded context so a hung blob delete
-			// can't block the error return path. deleteSingleBlob logs its
-			// own failures; the original INSERT error is the actionable one.
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), blobOpTimeout)
 			b.deleteSingleBlob(cleanupCtx, v.FlowID, blobKey)
 			cancel()
@@ -1173,17 +1087,12 @@ func (b *PostgresStorageBackend) saveFlowVersionTx(ctx context.Context, v *inter
 	return b.pruneFlowVersions(ctx, q, v.FlowID)
 }
 
-// maxFlowVersionSnapshots caps the version history kept per flow. Snapshots
-// (rows + their content blobs) previously grew unbounded: nothing pruned them
-// until the flow itself was deleted. Package-level var so tests can lower it.
+// maxFlowVersionSnapshots caps the version history kept per flow; a var so tests can lower it.
 var maxFlowVersionSnapshots = 50
 
-// pruneFlowVersions deletes snapshots beyond the retention cap (oldest first)
-// and schedules their content blobs for post-commit deletion. Called under the
-// parent flow's FOR UPDATE lock, so concurrent snapshot saves cannot race the
-// prune. Blob cleanup is skipped when no post-commit registry is present —
-// deleting a blob before the row delete is durable could destroy a snapshot
-// that survives a rollback (the orphaned blob is the safe failure mode).
+// pruneFlowVersions deletes snapshots beyond the retention cap (oldest first) under the parent's
+// FOR UPDATE lock, so prunes cannot race concurrent saves. Blob cleanup runs post-commit only —
+// earlier could destroy a snapshot that survives a rollback.
 func (b *PostgresStorageBackend) pruneFlowVersions(ctx context.Context, q DBTX, flowID string) error {
 	rows, err := q.QueryContext(ctx, `
 		DELETE FROM flow_versions
@@ -1203,8 +1112,7 @@ func (b *PostgresStorageBackend) pruneFlowVersions(ctx context.Context, q DBTX, 
 		if err := rows.Scan(&ver, &blobKey); err != nil {
 			return fmt.Errorf("scan pruned version: %w", err)
 		}
-		// Prefer the stored key; fall back to the legacy version-derived key for
-		// rows written before the blob_key column existed.
+		// Fall back to the legacy version-derived key for rows predating the blob_key column.
 		if blobKey == "" {
 			blobKey = versionBlobKeyLegacy(flowID, ver)
 		}
@@ -1216,10 +1124,7 @@ func (b *PostgresStorageBackend) pruneFlowVersions(ctx context.Context, q DBTX, 
 	if b.blobClient != nil && len(prunedKeys) > 0 && hasPostCommit(ctx) {
 		keys := prunedKeys
 		RegisterPostCommit(ctx, func() {
-			// Although the pruned rows are gone after commit, an in-flight reader
-			// may have already SELECTed the row (under its own snapshot) and be
-			// about to download the blob. Use the same reader-grace delay as the
-			// stale-content path so such a reader doesn't hit a 404.
+			// Same reader-grace delay as the stale-content path: an in-flight reader may hold a pruned row's snapshot.
 			for _, key := range keys {
 				k := key
 				b.scheduleBlobCleanup(time.Now().Add(staleBlobCleanupDelay), "prune-version:"+flowID, func(ctx context.Context) {
@@ -1288,10 +1193,8 @@ func (b *PostgresStorageBackend) LoadFlowVersion(ctx context.Context, flowID str
 		}
 	}
 
-	// Download from Blob Storage if configured and DB content is placeholder.
+	// Download from blob storage when the DB content is a placeholder.
 	if b.blobClient != nil && (len(v.Content) == 0 || string(v.Content) == "{}" || string(v.Content) == "null") {
-		// Prefer the stored key; fall back to the legacy version-derived key for
-		// rows written before the blob_key column existed.
 		if blobKey == "" {
 			blobKey = versionBlobKeyLegacy(v.FlowID, v.Version)
 		}
@@ -1310,11 +1213,9 @@ func (b *PostgresStorageBackend) LoadFlowVersion(ctx context.Context, flowID str
 	return v, nil
 }
 
-// ── Flow tags (R2-4) ────────────────────────────────────────────────────────
+// ── Flow tags ────────────────────────────────────────────────────────
 
-// UpdateFlowTags replaces a flow's tags WITHOUT a content round-trip or a
-// version bump — tags are organizational metadata, not flow content, so
-// re-tagging must not trip OCC for a concurrent editor.
+// UpdateFlowTags replaces a flow's tags WITHOUT a content round-trip or version bump — re-tagging must not trip OCC.
 func (b *PostgresStorageBackend) UpdateFlowTags(ctx context.Context, flowID string, tags []string) error {
 	normalized, err := interfaces.NormalizeFlowTags(tags)
 	if err != nil {
@@ -1332,19 +1233,37 @@ func (b *PostgresStorageBackend) UpdateFlowTags(ctx context.Context, flowID stri
 	return nil
 }
 
-// likeLiteral escapes LIKE wildcards so needle matches as a LITERAL substring
-// (% and _ in user input must not act as wildcards — searching for "50_%"_
-// style input would otherwise over-match).
+// likeLiteral escapes LIKE wildcards so needle matches as a literal substring.
 func likeLiteral(needle string) string {
 	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return r.Replace(needle)
 }
 
-// SearchFlowContents pushes library content search into the database: an
-// ILIKE over content::text (trgm-indexed since migration v18) under the
-// caller's visibility filter, newest first, metadata-only. Blob-offloaded
-// deployments (DB holds "{}" placeholders) report ErrContentSearchUnsupported
-// so the service falls back to its legacy scan.
+// searchFlowContentsSQL is the SearchFlowContents statement (exposed for the plan tests); needle is
+// trimmed and non-empty, limit clamped.
+func searchFlowContentsSQL(filter interfaces.FlowFilter, needle string, limit int) (string, []any) {
+	where, args, n := flowFilterWhere(filter)
+	// The match runs on flow_search (v27): its trigram indexes are usable by the app role, the one on
+	// flows(content::text) never was (FORCE RLS + non-leakproof operators). body-only for parity with
+	// the old predicate — SearchLibrary re-ranks the capped candidate list in process, so name-only
+	// hits would displace content hits beyond the cap. flow_search has no RLS: tenant-correct, but a
+	// weak cross-tenant timing oracle (pre-filtering by the caller's visible ids cannot use the index).
+	pattern := "%" + likeLiteral(needle) + "%"
+	q := fmt.Sprintf(`
+		SELECT id, name, description, '{}'::jsonb AS content, '' AS source,
+		       metadata, owner_id, org_id, created_at, updated_at, version, tags
+		FROM flows
+		WHERE %s AND id IN (SELECT flow_id FROM flow_search WHERE body ILIKE $%d)
+		ORDER BY updated_at DESC
+		LIMIT $%d`,
+		where, n, n+1)
+	args = append(args, pattern, limit)
+	return q, args
+}
+
+// SearchFlowContents pushes library content search into the database: ILIKE over flow_search.body
+// (v27) under the caller's visibility filter, newest first, metadata-only; blob-offloaded deployments
+// return ErrContentSearchUnsupported for the legacy scan.
 func (b *PostgresStorageBackend) SearchFlowContents(ctx context.Context, filter interfaces.FlowFilter, needle string, limit int) ([]*interfaces.FlowDocument, error) {
 	if b.blobClient != nil {
 		return nil, interfaces.ErrContentSearchUnsupported
@@ -1356,20 +1275,7 @@ func (b *PostgresStorageBackend) SearchFlowContents(ctx context.Context, filter 
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	where, args, n := flowFilterWhere(filter)
-	// The tags clause is irrelevant here; strip it by re-deriving from the
-	// filter we were given (flowFilterWhere already handled it — leave as is;
-	// an any-of tag filter only narrows further, which is correct).
-	pattern := "%" + likeLiteral(needle) + "%"
-	q := fmt.Sprintf(`
-		SELECT id, name, description, '{}'::jsonb AS content, '' AS source,
-		       metadata, owner_id, org_id, created_at, updated_at, version, tags
-		FROM flows
-		WHERE %s AND content::text ILIKE $%d
-		ORDER BY updated_at DESC
-		LIMIT $%d`,
-		where, n, n+1)
-	args = append(args, pattern, limit)
+	q, args := searchFlowContentsSQL(filter, needle, limit)
 	rows, err := b.query(ctx).QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("content search: %w", err)

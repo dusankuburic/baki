@@ -326,7 +326,7 @@ func TestPostgres_RLS_SaveKnowledgeChunks_EnforcesOrgMembership(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveOrg: %v", err)
 	}
-	if err := b.SaveKnowledgeDocument(ctx, &interfaces.KnowledgeDocument{
+	if err := b.SaveKnowledgeDocument(ctx, "", &interfaces.KnowledgeDocument{
 		ID: docID, OrgID: orgID, Filename: "doc.txt", CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("SaveKnowledgeDocument: %v", err)

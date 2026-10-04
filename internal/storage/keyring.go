@@ -11,10 +11,9 @@ import (
 
 const keyringService = "pad-analyzer"
 
-// keyringStore is the default SecretStore, backed by the OS keychain.
-// It is the right choice for desktop (Tauri) mode. In headless/cloud
-// deployments the keychain is typically unavailable, so a database-backed
-// store is constructed and injected instead — see NewKeyringSecretStore.
+// keyringStore is the default SecretStore, backed by the OS keychain (right
+// for desktop mode). In headless/cloud deployments the keychain is typically
+// unavailable, so a database-backed store is injected instead.
 type keyringStore struct{}
 
 var warnUnavailableOnce sync.Once
@@ -32,10 +31,9 @@ func warnUnavailable(op string, err error) {
 	})
 }
 
-// keyringEntry returns the keychain entry name for a (scope, provider) pair.
-// An empty scope yields the historical "apikey:<provider>" name so existing
-// desktop entries continue to resolve unchanged; a non-empty scope namespaces
-// the entry per owner.
+// keyringEntry returns the keychain entry name for a (scope, provider) pair:
+// an empty scope keeps the historical "apikey:<provider>" name so existing
+// desktop entries resolve unchanged; non-empty namespaces per owner.
 func keyringEntry(scope, provider string) string {
 	if scope == "" {
 		return "apikey:" + provider
@@ -52,9 +50,8 @@ func (keyringStore) Save(scope, provider, key string) error {
 }
 
 // Get returns the stored key, or ErrSecretNotFound if it is absent OR the
-// keychain backend is unavailable. Treating an unavailable backend as
-// "not found" lets headless deployments behave as "no key configured" instead
-// of surfacing infrastructure errors to callers.
+// keychain backend is unavailable — an unavailable backend behaves as "no key
+// configured" instead of surfacing infrastructure errors.
 func (keyringStore) Get(scope, provider string) (string, error) {
 	v, err := keyring.Get(keyringService, keyringEntry(scope, provider))
 	if err != nil {

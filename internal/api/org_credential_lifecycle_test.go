@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -251,7 +252,7 @@ func TestAccountDelete_DisablesLentOrgCredentials(t *testing.T) {
 	noAudit(t, ch, func(ev *storageif.AuditEvent) bool { return ev.Meta["op"] == "disable" })
 }
 
-// F-48 per key: a demoted lender's every shared resource credential goes —
+// A demoted lender's every shared resource credential goes —
 // one audit row per key, naming the key and its resource — the reply flags
 // it, and another admin's resource stays.
 func TestOrgLenderLosesAdmin_DisablesEachLentKey(t *testing.T) {
@@ -367,7 +368,7 @@ func TestOrgAzureFoundryTest_AuditedChatBucketRLSExempt(t *testing.T) {
 	}
 
 	for _, p := range []string{"/api/orgs/o1/providers/azure-foundry/test", "/api/v1/orgs/o1/providers/azure-foundry/test", "/api/orgs/o1/../o1/providers/azure-foundry/test"} {
-		if g := rateLimitGroup(http.MethodPost, p); g != rlGroupChat {
+		if g := rateLimitGroup(http.MethodPost, &url.URL{Path: p}); g != rlGroupChat {
 			t.Errorf("rateLimitGroup(POST %s) = %q, want chat", p, g)
 		}
 	}
@@ -419,7 +420,7 @@ func (b budgetRefusal) CheckBudget(context.Context, string, string) error { retu
 // R-4: knowledge upload and re-index over the daily budget are 429
 // BUDGET_EXCEEDED; an unreadable spend is 503 BUDGET_UNAVAILABLE. The run
 // embeds with a priced provider: the embedder is resolved before the budget
-// is consulted (an Azure AI Foundry embedder is never gated — review #4 B6).
+// is consulted (an Azure AI Foundry embedder is never gated).
 func TestKnowledge_BudgetRendered(t *testing.T) {
 	f := newOrgProvidersFixture(t, true)
 	ks := rag.NewKnowledgeService(testutil.NewFakeBackend(), nil, nil, rag.WithEmbedder(&testutil.FakeProvider{}))
@@ -441,7 +442,7 @@ func TestKnowledge_BudgetRendered(t *testing.T) {
 }
 
 // decodeMutationFlag reads a membership mutation's reply and reports whether
-// it said the org's shared credential was disabled (F-48).
+// it said the org's shared credential was disabled.
 func decodeMutationFlag(t *testing.T, rr *httptest.ResponseRecorder) bool {
 	t.Helper()
 	var out struct {
@@ -457,7 +458,7 @@ func decodeMutationFlag(t *testing.T, rr *httptest.ResponseRecorder) bool {
 	return out.SharedCredentialDisabled
 }
 
-// F-12 over HTTP: after the stored credential became unreadable, the admin's
+// After the stored credential became unreadable, the admin's
 // "enter it again" save — no updatedAt, the GET could not supply one — is
 // accepted (the server CASes on the unreadable row's own stamp) and the next
 // GET shows the repaired document.
@@ -481,7 +482,7 @@ func TestOrgAzureFoundryConfigSave_ReplacesUnreadable(t *testing.T) {
 	}
 }
 
-// F-32 + F-48: a carrying edit does not make its editor a lender — demoting
+// A carrying edit does not make its editor a lender — demoting
 // the editor keeps the lender's credential (and the reply says nothing was
 // disabled), demoting the lender disables it (the reply flags it, the audit
 // row names them).

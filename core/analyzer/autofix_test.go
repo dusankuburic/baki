@@ -8,12 +8,10 @@ import (
 	"pad-core/parser"
 )
 
-// TestSuppressFindingPatch_RoundTripResolvesFinding is the load-bearing gate for
-// the raw-text apply-fix approach (Phase 1): a generated patch, applied to the
-// raw source, must re-parse cleanly AND the targeted finding must be gone after
-// re-analysis — proving the fix is faithful (no serializer) and effective.
+// Round-trip gate for the raw-text apply-fix approach: the patch applied to
+// the source must re-parse cleanly (faithful) AND the targeted finding must
+// be gone after re-analysis (effective).
 func TestSuppressFindingPatch_RoundTripResolvesFinding(t *testing.T) {
-	// A flow with an unhandled-error-prone action (HTTP.Invoke with no error handler).
 	const source = `Display.UiFlow
 
 WebAutomation.OpenBrowser Chrome: Chrome URL: '''https://example.com'''
@@ -27,7 +25,6 @@ Display.CloseBrowser
 		t.Fatalf("initial parse: %v", err)
 	}
 
-	// First analysis — expect the HTTP action to be flagged.
 	report := RunAnalysis(doc, AllRules(), models.DefaultSettings(), nil)
 	var httpFinding *models.Finding
 	for i := range report.Findings {
@@ -45,17 +42,14 @@ Display.CloseBrowser
 		t.Fatalf("finding block %s not in doc", httpFinding.BlockID)
 	}
 
-	// Generate + apply the suppress patch to the RAW source.
 	patch := SuppressFindingPatch(block, targetRule)
 	patched := ApplyPatch(source, patch)
 
-	// Re-parse the patched source — must succeed (faithful edit, no structure loss).
 	doc2, err := parser.ParseText(patched, "Main.txt", int64(len(patched)))
 	if err != nil {
 		t.Fatalf("re-parse after patch failed (not faithful): %v", err)
 	}
 
-	// Re-analyze — the targeted finding must now be suppressed (gone + counted).
 	report2 := RunAnalysis(doc2, AllRules(), models.DefaultSettings(), nil)
 	for _, f := range report2.Findings {
 		if f.RuleID == targetRule && f.BlockID == httpFinding.BlockID {
@@ -67,11 +61,10 @@ Display.CloseBrowser
 	}
 }
 
-// TestApplyPatch_InsertsBottomUp confirms multiple inserts land at the right
-// lines (later inserts don't shift earlier ones — the bottom-up ordering).
+// Multiple inserts land at the right lines: bottom-up ordering means later
+// inserts don't shift earlier ones.
 func TestApplyPatch_InsertsBottomUp(t *testing.T) {
 	source := "line1\nline2\nline3"
-	// Insert before line 1 and before line 3.
 	p := models.Patch{Ops: []models.PatchOp{
 		{Kind: "insert", BeforeLine: 3, Lines: []string{"before3"}},
 		{Kind: "insert", BeforeLine: 1, Lines: []string{"before1"}},
@@ -83,18 +76,16 @@ func TestApplyPatch_InsertsBottomUp(t *testing.T) {
 	}
 }
 
-// TestApplyPatch_NoOpsPassthrough confirms an empty patch leaves text untouched.
+// An empty patch leaves the text untouched.
 func TestApplyPatch_NoOpsPassthrough(t *testing.T) {
 	if got := ApplyPatch("abc", models.Patch{}); got != "abc" {
 		t.Errorf("empty patch should pass through, got %q", got)
 	}
 }
 
-// TestWrapInErrorHandlerPatch_RoundTripResolvesFinding is the gate for the
-// wrap-in-error-handler apply-fix: wrapping a fallible action in
-// ON BLOCK ERROR … END must (a) re-parse cleanly (faithful, correct indent)
-// and (b) give the action an error-handler ancestor so the unhandled-error
-// finding no longer fires.
+// Gate for the wrap-in-error-handler fix: the wrapped action re-parses
+// cleanly and gains an error-handler ancestor, so unhandled-error no longer
+// fires.
 func TestWrapInErrorHandlerPatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `#Region "Main"
 Excel.LaunchExcel Visible: True LoadAddIns: False => ExcelInstance
@@ -123,12 +114,10 @@ Display.CloseBrowser
 
 	patched := ApplyPatch(source, WrapInErrorHandlerPatch(block))
 
-	// Re-parse — must succeed (correct ON BLOCK ERROR / END + indent).
 	doc2, err := parser.ParseText(patched, "Main.txt", int64(len(patched)))
 	if err != nil {
 		t.Fatalf("re-parse after wrap failed (not faithful): %v\npatched:\n%s", err, patched)
 	}
-	// Re-analyze — the unhandled-error finding must be gone.
 	report2 := RunAnalysis(doc2, AllRules(), models.DefaultSettings(), nil)
 	for _, f := range report2.Findings {
 		if f.RuleID == "unhandled-error" {
@@ -137,8 +126,7 @@ Display.CloseBrowser
 	}
 }
 
-// TestApplyWrap_ReindentsAndWraps verifies the wrap op mechanics directly:
-// header + re-indented body + footer replace the range.
+// Wrap mechanics directly: header + re-indented body + footer replace the range.
 func TestApplyWrap_ReindentsAndWraps(t *testing.T) {
 	source := "a\nHTTP.Get Url: 'x'\nb"
 	p := models.Patch{Ops: []models.PatchOp{{
@@ -152,10 +140,8 @@ func TestApplyWrap_ReindentsAndWraps(t *testing.T) {
 	}
 }
 
-// TestInsertClosePatch_RoundTripResolvesFinding verifies the insert-close
-// apply-fix: inserting a matching close action (referencing the handle variable)
-// after the open must (a) re-parse cleanly and (b) resolve the resource-leak
-// finding — the rule detects the close via the variable reference.
+// Insert-close fix: the inserted close references the handle variable, so
+// resource-leak detects it and the finding resolves.
 func TestInsertClosePatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `#Region "Main"
 Excel.LaunchExcel Visible: True LoadAddIns: False => ExcelInstance
@@ -196,10 +182,8 @@ Display.ShowMessageBox Message: 'done'
 	}
 }
 
-// TestSetTimeoutPatch_RoundTripResolvesFinding verifies the set-timeout
-// apply-fix: appending ` Timeout: 30` to the action's source line must (a)
-// re-parse cleanly and (b) resolve the missing-timeout finding — the rule's
-// hasTimeoutConfigured detects the appended property via its "timeout" key.
+// Set-timeout fix: the appended ` Timeout: 30` key is detected by
+// hasTimeoutConfigured.
 func TestSetTimeoutPatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `#Region "Main"
 HTTPClient.InvokeService Method: 'GET' Url: 'https://example.com/api'
@@ -240,10 +224,8 @@ Display.ShowMessageBox Message: 'done'
 	}
 }
 
-// TestInsertDelayPatch_RoundTripResolvesFinding verifies the insert-delay
-// apply-fix: inserting a Wait action before the current block must (a) re-parse
-// cleanly and (b) resolve the missing-delay finding — the previous sibling is
-// now a Wait action (isWaitAction → true).
+// Insert-delay fix: the previous sibling is now a Wait action (isWaitAction
+// → true).
 func TestInsertDelayPatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `#Region "Main"
 WebAutomation.LaunchBrowser URL: 'https://example.com'
@@ -284,10 +266,7 @@ WebAutomation.ClickElement Element: 'button'
 	}
 }
 
-// TestInsertHandlerLogPatch_RoundTripResolvesFinding verifies the
-// insert-handler-log apply-fix: inserting a logging action before the error
-// handler's END line must (a) re-parse cleanly and (b) resolve the
-// empty-handler finding — the handler now has a real child.
+// Insert-handler-log fix: the handler now has a real child.
 func TestInsertHandlerLogPatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `#Region "Main"
 ON BLOCK ERROR
@@ -329,10 +308,7 @@ WebAutomation.LaunchBrowser URL: 'https://example.com'
 	}
 }
 
-// TestInsertVariableInitPatch_RoundTripResolvesFinding verifies the
-// init-variable apply-fix: inserting `SET <var> TO ""` before the first reader
-// must (a) re-parse cleanly and (b) resolve the uninitialized-variable finding
-// — the SET action registers the variable in WritersByVar.
+// Init-variable fix: the SET action registers the variable in WritersByVar.
 func TestInsertVariableInitPatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `#Region "Main"
 Display.ShowMessageBox Message: %MyVar%
@@ -376,10 +352,8 @@ Display.ShowMessageBox Message: %MyVar%
 	}
 }
 
-// TestInsertErrorLogPatch_RoundTripResolvesFinding verifies the insert-error-log
-// apply-fix for error-swallow: inserting a %LastError% logging action before
-// the handler's END must (a) re-parse cleanly and (b) resolve the finding —
-// handlerDoesSomething detects the "error" variable reference.
+// Insert-error-log fix for error-swallow: handlerDoesSomething detects the
+// %LastError% reference.
 func TestInsertErrorLogPatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `#Region "Main"
 ON BLOCK ERROR
@@ -422,11 +396,8 @@ WebAutomation.LaunchBrowser URL: 'https://example.com'
 	}
 }
 
-// TestReplaceWithVariablePatch_RoundTripResolvesFinding verifies the
-// replace-with-variable apply-fix for hardcoded-credential: replacing the
-// literal credential in a property value with %input_<key>% must (a) re-parse
-// cleanly and (b) resolve the finding — the credential pattern no longer
-// matches the variable reference.
+// Replace-with-variable fix for hardcoded-credential: the credential pattern
+// no longer matches the %input_<key>% reference.
 func TestReplaceWithVariablePatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `#Region "Main"
 Database.Connect ConnectionString: 'AKIA1234567890ABCDEF'
@@ -470,10 +441,8 @@ Database.Connect ConnectionString: 'AKIA1234567890ABCDEF'
 	}
 }
 
-// TestReplaceWithVariablePatch_MultiLineValue_RoundTrip verifies the fixer
-// resolves a hardcoded credential that starts a multi-line triple-quoted value.
-// The stripped property value spans source lines, so a naive single-line
-// replace is a silent no-op — the credential on the first line must be replaced.
+// Regression pin: the stripped property value of a multi-line triple-quoted
+// literal spans source lines, so a naive single-line replace is a silent no-op.
 func TestReplaceWithVariablePatch_MultiLineValue_RoundTrip(t *testing.T) {
 	const source = `#Region "Main"
 Database.Connect ConnectionString: '''AKIA1234567890ABCDEF
@@ -502,8 +471,6 @@ extra data'''
 	}
 
 	patched := ApplyPatch(source, ReplaceWithVariablePatch(block, propKey))
-	// The credential must be gone from the patched source (the old code left it
-	// in place — a silent no-op on multi-line values).
 	if strings.Contains(patched, "AKIA1234567890ABCDEF") {
 		t.Errorf("credential not removed from multi-line value:\n%s", patched)
 	}
@@ -519,10 +486,8 @@ extra data'''
 	}
 }
 
-// TestWrapInRetryPatch_RoundTripResolvesFinding verifies the wrap-in-retry
-// apply-fix for missing-retry: wrapping a transient action in a retry loop
-// (LOOP WHILE %RetryCount% < 3) must (a) re-parse cleanly and (b) resolve the
-// finding — isInsideRetryLoop detects "retry" in the loop condition.
+// Wrap-in-retry fix for missing-retry: isInsideRetryLoop detects "retry" in
+// the loop condition.
 func TestWrapInRetryPatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `#Region "Main"
 HTTPClient.InvokeService Method: 'GET' Url: 'https://api.example.com/data'
@@ -560,11 +525,8 @@ HTTPClient.InvokeService Method: 'GET' Url: 'https://api.example.com/data'
 			t.Errorf("missing-retry still present after wrap-in-retry; finding: %+v\npatched:\n%s", f, patched)
 		}
 	}
-	// The retry loop is bounded (LOOP WHILE %RetryCount% < 3 with
-	// SET RetryCount TO %RetryCount% + 1 in the body). It must NOT introduce an
-	// infinite-loop-risk finding — otherwise the fixer trades one finding for
-	// another (regression covered by hasExitCondition's counter-modification
-	// recognition).
+	// The retry loop is bounded, so it must NOT introduce an infinite-loop-risk
+	// finding — the fixer must not trade one finding for another.
 	for _, f := range report2.Findings {
 		if f.RuleID == "infinite-loop-risk" {
 			t.Errorf("wrap-in-retry introduced an infinite-loop-risk finding on the bounded retry loop; finding: %+v\npatched:\n%s", f, patched)
@@ -572,10 +534,8 @@ HTTPClient.InvokeService Method: 'GET' Url: 'https://api.example.com/data'
 	}
 }
 
-// TestInsertExitConditionPatch_RoundTripResolvesFinding verifies the
-// insert-exit-condition apply-fix for infinite-loop-risk: inserting an
-// EXIT_LOOP action inside the loop must (a) re-parse cleanly and (b) resolve
-// the finding — hasExitCondition detects the EXIT in the rawType.
+// Insert-exit-condition fix for infinite-loop-risk: hasExitCondition detects
+// the EXIT in the rawType.
 func TestInsertExitConditionPatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `#Region "Main"
 LOOP WHILE 1 == 1
@@ -617,7 +577,7 @@ END
 	}
 }
 
-// TestApplyPatch_Replace substitutes text within a single line.
+// Replace substitutes text within a single line.
 func TestApplyPatch_Replace(t *testing.T) {
 	source := "HTTPClient.InvokeService Method: 'GET' Key: 'AKIA1234567890ABCDEF'"
 	patch := models.Patch{Ops: []models.PatchOp{{
@@ -632,8 +592,8 @@ func TestApplyPatch_Replace(t *testing.T) {
 	}
 }
 
-// TestApplyPatch_ReplaceNotFoundIsNoOp verifies that a replace whose Old text
-// doesn't exist in the target line leaves the source unchanged.
+// A replace whose Old text doesn't exist in the target line leaves the source
+// unchanged.
 func TestApplyPatch_ReplaceNotFoundIsNoOp(t *testing.T) {
 	source := "line 1\nline 2\nline 3"
 	patch := models.Patch{Ops: []models.PatchOp{{
@@ -648,8 +608,8 @@ func TestApplyPatch_ReplaceNotFoundIsNoOp(t *testing.T) {
 	}
 }
 
-// TestApplyWrap_MultiLineHeaderFooter verifies that multi-line headers and
-// footers (containing \n) are correctly split into separate lines by applyWrap.
+// Multi-line headers and footers (containing \n) are split into separate lines
+// by applyWrap.
 func TestApplyWrap_MultiLineHeaderFooter(t *testing.T) {
 	source := "before\nACTION\nafter"
 	patch := models.Patch{Ops: []models.PatchOp{{
@@ -667,7 +627,7 @@ func TestApplyWrap_MultiLineHeaderFooter(t *testing.T) {
 	}
 }
 
-// TestApplyPatch_MixedOps applies a wrap then an insert to verify op ordering.
+// A wrap then an insert, pinning op ordering.
 func TestApplyPatch_MixedOps(t *testing.T) {
 	source := "line1\nTARGET\nline3"
 	patch := models.Patch{Ops: []models.PatchOp{
@@ -675,15 +635,14 @@ func TestApplyPatch_MixedOps(t *testing.T) {
 		{Kind: "insert", BeforeLine: 1, Lines: []string{"INSERTED"}},
 	}}
 	got := ApplyPatch(source, patch)
-	// Wrap first: line1\nHEADER\nTARGET\nFOOTER\nline3
-	// Insert before line 1: INSERTED\nline1\nHEADER\nTARGET\nFOOTER\nline3
+	// Wrap first, then insert before line 1.
 	expected := "INSERTED\nline1\nHEADER\nTARGET\nFOOTER\nline3"
 	if got != expected {
 		t.Errorf("mixed ops:\nexpected:\n%s\ngot:\n%s", expected, got)
 	}
 }
 
-// TestApplyPatch_AppendOutOfRange is a no-op when the target line doesn't exist.
+// An append whose target line doesn't exist is a no-op.
 func TestApplyPatch_AppendOutOfRange(t *testing.T) {
 	source := "only line"
 	patch := models.Patch{Ops: []models.PatchOp{{
@@ -697,20 +656,11 @@ func TestApplyPatch_AppendOutOfRange(t *testing.T) {
 	}
 }
 
-// TestApplyPatch_EmptyPatch is a passthrough.
-func TestApplyPatch_EmptyPatch(t *testing.T) {
-	source := "unchanged"
-	got := ApplyPatch(source, models.Patch{})
-	if got != source {
-		t.Errorf("empty patch should be passthrough, got %q", got)
-	}
-}
-
 // ── Edge-case tests for the bug-fix round ─────────────────────────
 
-// TestSuppressFindingPatch_NestedBlock verifies the indent fix: a suppression
-// directive for a block at Indent ≥ 1 must be at the block's indent level so
-// the parser associates it with the correct sibling group.
+// Indent fix: a suppression directive for a block at Indent ≥ 1 must sit at
+// the block's indent level so the parser associates it with the right sibling
+// group.
 func TestSuppressFindingPatch_NestedBlock(t *testing.T) {
 	const source = `#Region "Main"
 LOOP WHILE %X% < 10
@@ -723,7 +673,6 @@ END
 		t.Fatalf("parse: %v", err)
 	}
 	report := RunAnalysis(doc, AllRules(), models.DefaultSettings(), nil)
-	// Find a finding on the nested HTTP action (e.g. missing-timeout)
 	var nestedFinding *models.Finding
 	for i := range report.Findings {
 		f := &report.Findings[i]
@@ -733,11 +682,7 @@ END
 			break
 		}
 	}
-	// Fatal, not Skip: the fixture above is a nested HTTP action inside a LOOP,
-	// which the rule set is expected to flag (missing timeout / retry). If no
-	// nested finding appears, either the fixture or the rules changed — and a
-	// skip would quietly retire the whole nested-indentation assertion below
-	// rather than reporting that.
+	// Fatal, not Skip: a skip would quietly retire the assertion below.
 	if nestedFinding == nil {
 		t.Fatal("no finding on a nested block — the fixture or the rule set changed")
 	}
@@ -762,15 +707,12 @@ END
 	}
 }
 
-// TestSetTimeoutPatch_MultiLineValue verifies the blockEndLine fix: for a
-// multi-line triple-quoted action, appending ` Timeout: 30` must land on the
-// CLOSING line (after `”'`), not the opening line (inside the string literal).
-// Previously blockEndLine returned the start line for a leaf action, corrupting
-// the literal; threading EndLineNumber through Token→Block fixes the 7 fixers
-// that call blockEndLine.
+// blockEndLine fix: for a multi-line triple-quoted action, appending
+// ` Timeout: 30` must land on the CLOSING line (after the triple-quote), not
+// the opening line (inside the literal).
 func TestSetTimeoutPatch_MultiLineValue(t *testing.T) {
-	// The HTTP action's URL is a multi-line triple-quoted literal spanning
-	// lines 2–4. It has no Timeout → missing-timeout fires.
+	// The URL is a multi-line triple-quoted literal spanning lines 2–4, with
+	// no Timeout → missing-timeout fires.
 	const source = `#Region "Main"
 HTTPClient.InvokeService Method: 'GET' Url: $'''https://example.com/api
 second body line
@@ -798,8 +740,8 @@ Display.ShowMessageBox Message: 'done'
 		t.Fatalf("finding block %s not in doc", timeoutFinding.BlockID)
 	}
 
-	// The plumbing under test: a multi-line triple-quoted action must carry an
-	// EndLineNumber past its opening LineNumber.
+	// A multi-line triple-quoted action must carry an EndLineNumber past its
+	// opening LineNumber.
 	if block.EndLineNumber <= block.LineNumber {
 		t.Fatalf("multi-line action EndLineNumber=%d must exceed LineNumber=%d (EndLine not threaded)",
 			block.EndLineNumber, block.LineNumber)
@@ -807,9 +749,8 @@ Display.ShowMessageBox Message: 'done'
 
 	patched := ApplyPatch(source, SetTimeoutPatch(block))
 
-	// The Timeout must be appended to the closing ''' line, not the opening
-	// line. Assert it is NOT on the action's first line (which would put it
-	// inside the literal) and IS on the closing line.
+	// The Timeout must be on the closing ''' line, NOT the opening line
+	// (which would put it inside the literal).
 	patchLines := splitLines(patched)
 	if len(patchLines) < block.EndLineNumber {
 		t.Fatalf("patched source shorter than expected: %d lines", len(patchLines))
@@ -823,12 +764,11 @@ Display.ShowMessageBox Message: 'done'
 		t.Errorf("Timeout not on the closing line: %q", closingLine)
 	}
 
-	// Faithful: re-parse must succeed (Timeout is outside the literal now).
+	// Faithful: re-parse must succeed; effective: the finding is resolved.
 	doc2, err := parser.ParseText(patched, "Main.txt", int64(len(patched)))
 	if err != nil {
 		t.Fatalf("re-parse after set-timeout failed (not faithful): %v\npatched:\n%s", err, patched)
 	}
-	// Effective: the missing-timeout finding must be resolved.
 	report2 := RunAnalysis(doc2, AllRules(), models.DefaultSettings(), nil)
 	for _, f := range report2.Findings {
 		if f.RuleID == "missing-timeout" {
@@ -837,9 +777,9 @@ Display.ShowMessageBox Message: 'done'
 	}
 }
 
-// TestWrapInErrorHandlerPatch_MultiLineValue is a second consumer of the
-// blockEndLine fix: wrapping a multi-line action must size the wrapped range to
-// the closing ”' line so nothing is left outside the ON BLOCK ERROR … END.
+// Second consumer of the blockEndLine fix: wrapping a multi-line action must
+// size the wrapped range to the closing triple-quote line so nothing is left
+// outside the handler.
 func TestWrapInErrorHandlerPatch_MultiLineValue(t *testing.T) {
 	const source = `#Region "Main"
 HTTPClient.InvokeService Method: 'GET' Url: $'''https://example.com/api
@@ -852,7 +792,6 @@ Display.ShowMessageBox Message: 'done'
 	if err != nil {
 		t.Fatalf("initial parse: %v", err)
 	}
-	// Pick the HTTP action block.
 	var target *models.Block
 	for _, sf := range doc.Subflows {
 		for i := range sf.Blocks {
@@ -871,13 +810,11 @@ Display.ShowMessageBox Message: 'done'
 	}
 
 	patched := ApplyPatch(source, WrapInErrorHandlerPatch(target))
-	// Faithful round-trip: the wrapped source re-parses cleanly (the whole
-	// multi-line action is inside the handler, nothing orphaned).
+	// The whole multi-line action must be inside the handler, nothing orphaned.
 	if _, err := parser.ParseText(patched, "Main.txt", int64(len(patched))); err != nil {
 		t.Fatalf("re-parse after wrap-in-error-handler failed (not faithful): %v\npatched:\n%s", err, patched)
 	}
-	// The ON BLOCK ERROR line must precede the action, and END must come after
-	// the closing ''' line.
+	// ON BLOCK ERROR must precede the action; END must come after the closing line.
 	patchLines := splitLines(patched)
 	var hasHandlerOpen, hasHandlerEnd bool
 	for i, ln := range patchLines {
@@ -896,12 +833,11 @@ Display.ShowMessageBox Message: 'done'
 	}
 }
 
-// splitLines splits on \n without a trailing-empty-entry quirk.
 func splitLines(s string) []string {
 	return strings.Split(s, "\n")
 }
 
-// TestInsertClosePatch_NilProperties returns empty patch when Properties is nil.
+// Empty patch when Properties is nil.
 func TestInsertClosePatch_NilProperties(t *testing.T) {
 	block := &models.Block{
 		Type:    models.BlockTypeAction,
@@ -914,7 +850,7 @@ func TestInsertClosePatch_NilProperties(t *testing.T) {
 	}
 }
 
-// TestReplaceWithVariablePatch_NilProperties returns empty patch when Properties is nil.
+// Empty patch when Properties is nil.
 func TestReplaceWithVariablePatch_NilProperties(t *testing.T) {
 	block := &models.Block{
 		Type:    models.BlockTypeAction,
@@ -926,9 +862,8 @@ func TestReplaceWithVariablePatch_NilProperties(t *testing.T) {
 	}
 }
 
-// TestReplaceWithVariablePatch_ReplacesAllOccurrences verifies that the
-// replace op replaces ALL occurrences of the credential value on the line,
-// not just the first (in case the same secret appears in multiple properties).
+// The replace op replaces ALL occurrences of the value on the line, not just
+// the first.
 func TestReplaceWithVariablePatch_ReplacesAllOccurrences(t *testing.T) {
 	source := "DB.Connect Primary: 'AKIA1234' Secondary: 'AKIA1234'"
 	patch := models.Patch{Ops: []models.PatchOp{{
@@ -946,8 +881,7 @@ func TestReplaceWithVariablePatch_ReplacesAllOccurrences(t *testing.T) {
 	}
 }
 
-// TestApplyRemove_DeletesRange verifies the remove op mechanics directly: the
-// inclusive [StartLine..EndLine] range is deleted and surrounding lines join.
+// Remove op mechanics: the inclusive [StartLine..EndLine] range is deleted.
 func TestApplyRemove_DeletesRange(t *testing.T) {
 	source := "a\nb\nc\nd\ne"
 	p := models.Patch{Ops: []models.PatchOp{{
@@ -960,10 +894,8 @@ func TestApplyRemove_DeletesRange(t *testing.T) {
 	}
 }
 
-// TestRemoveBlockPatch_RoundTripResolvesFinding is the round-trip gate for the
-// remove-block fixer across the 5 rules that use it. For each: parse → analyze
-// → find the rule's finding → apply RemoveBlockPatch to the raw source →
-// re-parse (faithful) → re-analyze → assert the finding is gone (effective).
+// Round-trip gate for the remove-block fixer across the rules that use it
+// (parse → fix → re-parse → re-analyze: finding gone).
 func TestRemoveBlockPatch_RoundTripResolvesFinding(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -1044,10 +976,8 @@ func TestRemoveBlockPatch_RoundTripResolvesFinding(t *testing.T) {
 	}
 }
 
-// TestParameterizeSqlPatch_RoundTripResolvesFinding is the round-trip gate for
-// the parameterize-sql fixer: a SQL action interpolating %UserID% must, after
-// the patch, re-parse cleanly and no longer be flagged by sql-injection-risk
-// (the %var% reference is replaced with @UserID).
+// Round-trip gate for the parameterize-sql fixer: the %var% reference becomes
+// @UserID and sql-injection-risk no longer fires.
 func TestParameterizeSqlPatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = "#Region \"Main\"\nDatabase.ExecuteSql Sql: 'SELECT * FROM users WHERE id = %UserID%'\n#EndRegion\n"
 	doc, err := parser.ParseText(source, "Main.txt", int64(len(source)))
@@ -1094,8 +1024,7 @@ func TestParameterizeSqlPatch_RoundTripResolvesFinding(t *testing.T) {
 	}
 }
 
-// TestParameterizeSqlPatch_MultipleVars emits one replace op per distinct
-// variable and parameterizes all of them on the line.
+// One replace op per distinct variable; all of them parameterized on the line.
 func TestParameterizeSqlPatch_MultipleVars(t *testing.T) {
 	block := &models.Block{
 		LineNumber: 1,
@@ -1116,10 +1045,8 @@ func TestParameterizeSqlPatch_MultipleVars(t *testing.T) {
 	}
 }
 
-// TestSubflowNoErrorHandler_RoundTripResolvesFinding verifies the
-// wrap-error-handler fixer resolves a subflow-no-error-handler finding.
-// Wrapping the first actionable block in ON BLOCK ERROR...END gives the
-// subflow tree an error-handler block, so sfHasErrorHandler returns true.
+// Wrapping the first actionable block gives the subflow tree an error-handler
+// block, so sfHasErrorHandler returns true.
 func TestSubflowNoErrorHandler_RoundTripResolvesFinding(t *testing.T) {
 	const source = "#Region \"Main\"\n" +
 		"WebAutomation.Click Element: 'b1'\n" +
@@ -1194,14 +1121,14 @@ func TestApplyPatch_LegitimateBoundaryOpsAreNotCounted(t *testing.T) {
 	const source = "a\nb\nc"
 	before := PatchOutOfRangeOps()
 
-	// Insert at EOF (BeforeLine == len+1) is valid — appends at the end.
+	// Insert at EOF (BeforeLine == len+1) is valid.
 	got := ApplyPatch(source, models.Patch{Ops: []models.PatchOp{
 		{Kind: "insert", BeforeLine: 4, Lines: []string{"d"}},
 	}})
 	if got != "a\nb\nc\nd" {
 		t.Errorf("insert-at-EOF: got %q", got)
 	}
-	// Wrap whose EndLine spans past the last line clamps, not a fault.
+	// A wrap whose EndLine spans past the last line clamps, not a fault.
 	got = ApplyPatch(source, models.Patch{Ops: []models.PatchOp{
 		{Kind: "wrap", StartLine: 1, EndLine: 999, Header: "H", Footer: "F"},
 	}})

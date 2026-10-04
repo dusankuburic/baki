@@ -28,12 +28,14 @@ func (r *UninitializedVariableRule) Check(block *models.Block, ctx *RuleContext)
 	}
 
 	for _, vname := range used {
-		// Heuristic: If it's an Input variable, assume it's provided externally.
-		if strings.HasPrefix(strings.ToLower(vname), "input_") {
+		// Heuristic: an Input variable is provided externally. Allocation-free
+		// prefix test: this runs once per variable reference across the flow,
+		// and ToLower copied every referenced name just for the comparison.
+		if len(vname) >= 6 && strings.EqualFold(vname[:6], "input_") {
 			continue
 		}
 
-		// Heuristic: If it's a common system variable (e.g. CurrentDateTime, LoopIndex), skip.
+		// Heuristic: common system variable (CurrentDateTime, LoopIndex, …).
 		if isSystemVariable(vname) {
 			continue
 		}
@@ -42,7 +44,7 @@ func (r *UninitializedVariableRule) Check(block *models.Block, ctx *RuleContext)
 			continue
 		}
 
-		// Only report once per variable: check if this is the first block using it.
+		// Report only once per variable: only its first usage fires.
 		if !isFirstUsage(vname, block, ctx) {
 			continue
 		}
@@ -63,40 +65,53 @@ func (r *UninitializedVariableRule) Check(block *models.Block, ctx *RuleContext)
 }
 
 // systemVarSet is the set of PAD built-in system variables (lowercased).
-// Package-level: the per-call map literal allocated ~35 entries on every
-// referenced-variable check.
+// Package-level: the per-call map literal allocated ~35 entries every check.
 var systemVarSet = map[string]struct{}{
-	// Date/time
 	"currentdatetime": {}, "yesterday": {}, "tomorrow": {},
-	// Loop iteration
 	"loopindex": {}, "currentitem": {},
-	// UI interactions
 	"buttonpressed": {}, "selectedbutton": {},
-	// Windows user/machine identity
 	"username": {}, "currentuser": {}, "windowsusername": {}, "windowsuserdomainname": {},
 	"computername": {}, "machinename": {}, "hostname": {},
-	// File system paths
 	"userprofile": {}, "desktopdirectory": {}, "programfiles": {},
 	"programfilesx86": {}, "systemroot": {}, "windir": {}, "temp": {}, "tmp": {},
-	// PAD primitive constants
 	"newline": {}, "tab": {}, "true": {}, "false": {}, "blank": {},
-	// Browser automation
 	"pageurl": {}, "browserdata": {},
-	// Error handling built-ins
 	"lasterror": {}, "lasterrortext": {}, "errormessage": {}, "errortext": {},
 	"errordescription": {}, "erroroccurred": {},
 }
 
 func isSystemVariable(vname string) bool {
+	// Try the direct map hit first (the common case is already lowercase); the
+	// ToLower retry runs only on a miss AND only when the name contains an
+	// ASCII uppercase byte — the only bytes whose lowering can turn a miss
+	// into a hit against this all-lowercase ASCII key set. Zero allocations
+	// for already-lowercase names.
+	if _, found := systemVarSet[vname]; found {
+		return true
+	}
+	if !hasUppercaseASCII(vname) {
+		return false
+	}
 	_, found := systemVarSet[strings.ToLower(vname)]
 	return found
 }
 
+// hasUppercaseASCII reports whether s contains an ASCII uppercase letter — a
+// byte loop rather than `strings.ToLower(s) != s` so the guard never allocates
+// (bytes >= 0x80 never fall in 'A'..'Z').
+func hasUppercaseASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 'A' && s[i] <= 'Z' {
+			return true
+		}
+	}
+	return false
+}
+
 func isFirstUsage(vname string, block *models.Block, ctx *RuleContext) bool {
 	// The earliest-reading block (lowest LineNumber) is precomputed once in
-	// buildContext, so this is O(1). Previously this rescanned every reader of
-	// the variable on each block, making the rule O(readers²) per variable —
-	// the dominant cost of analysis on large flows.
+	// buildContext, so this is O(1); the old reader rescan made the rule
+	// O(readers²) per variable.
 	return ctx.FirstReaderByVar[vname] == block.ID
 }
 
@@ -106,6 +121,4 @@ func isAssignedAnywhere(vname string, ctx *RuleContext) bool {
 	return len(ctx.WritersByVar[vname]) > 0
 }
 
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
 func init() { registerRule(&UninitializedVariableRule{}) }

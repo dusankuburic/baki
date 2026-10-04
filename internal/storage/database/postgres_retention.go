@@ -15,19 +15,12 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// DeleteUser performs GDPR-style account erasure for userID. It removes the
-// user's owned flows (cascading versions/analysis/triage/baselines/conversations)
-// and all per-user rows (tokens, settings, usage, org memberships, invites for
-// their email), and anonymizes personal data they authored on shared rows that
-// must be retained for security/forensic integrity (audit_events email/IP,
-// flow_versions/finding_status/flow_baselines created_by/updated_by).
-//
-// Erasure runs in its own transaction WITHOUT setting app.current_user_id, so
-// Row-Level Security is bypassed (app_rls_active()=false → allow-all). This is
-// correct for a maintenance/erasure path that must touch rows across all of the
-// user's flows — including those they only collaborated on — while the Go layer
-// has already authenticated the caller. Idempotent: a missing user is not an
-// error.
+// DeleteUser performs GDPR-style account erasure for userID: removes owned flows (cascading versions/
+// analysis/triage/baselines/conversations) and all per-user rows (tokens, settings, usage, org memberships,
+// invites for their email), and anonymizes PII authored on shared rows kept for forensic integrity (audit_events
+// email/IP, flow_versions/finding_status/flow_baselines created_by/updated_by). Runs in its own transaction WITHOUT
+// app.current_user_id — correct for a maintenance path that must touch rows across all of the user's flows while the
+// Go layer already authenticated the caller. Idempotent: a missing user is not an error.
 func (b *PostgresStorageBackend) DeleteUser(ctx context.Context, userID string) error {
 	var ownedFlowIDs []string
 	if err := b.withTx(ctx, func(tx *sql.Tx) error {
@@ -38,13 +31,9 @@ func (b *PostgresStorageBackend) DeleteUser(ctx context.Context, userID string) 
 		return err
 	}
 
-	// Best-effort blob cleanup for the flows that were just removed. Deferred
-	// via RegisterPostCommit rather than run inline: when this request carries
-	// the middleware's RLS transaction, withTx JOINS it and nothing is durable
-	// until the middleware commits, so deleting blobs here would orphan content
-	// belonging to rows that a rollback puts back. RegisterPostCommit runs fn
-	// inline when there is no registry (autocommit -- the write is already
-	// durable), so the standalone path is unchanged.
+	// Best-effort blob cleanup for the flows just removed, deferred via RegisterPostCommit: when this
+	// request carries the middleware's RLS transaction, withTx JOINS it and nothing is durable until the
+	// middleware commits — deleting blobs here would orphan content a rollback puts back.
 	if b.blobClient != nil {
 		for _, fid := range ownedFlowIDs {
 			flowID := fid
@@ -67,15 +56,8 @@ func (b *PostgresStorageBackend) deleteUserInTx(ctx context.Context, tx *sql.Tx,
 	// email (not user_id), and owned flows' blob content must be cleaned up.
 	var email string
 	if err := tx.QueryRowContext(ctx, `SELECT email FROM users WHERE id = $1`, userID).Scan(&email); err != nil {
-		// B1.8: a TRANSIENT scan error used to silently skip the org_invites
-		// cleanup keyed by email — a gap in an audited GDPR flow, so it must
-		// propagate. But "no rows" is not transient: it is the documented
-		// idempotent case (the user is already erased, or never existed).
-		// Treating it as an error broke DeleteUser's idempotency contract.
-		// The email is simply unknown here, which the `if email != ""` guard
-		// on the org_invites delete below already handles — so fall through
-		// and let the remaining per-user sweeps run, which cleans up any
-		// residue a partial prior erasure left behind.
+		// A transient scan error must propagate (a gap in an audited GDPR flow), but "no rows" is the
+		// documented idempotent case: the email is unknown and the remaining sweeps clean up any residue.
 		if !errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("erasure: read user email: %w", err)
 		}
@@ -134,35 +116,24 @@ func (b *PostgresStorageBackend) deleteUserInTx(ctx context.Context, tx *sql.Tx,
 	return ownedFlowIDs, nil
 }
 
-// ExportUserData assembles the user's personal data for a data-subject access /
-// portability request: profile, owned flows, settings, API tokens, and audit
-// history. Reads use the caller's request context (RLS-scoped to the user for
-// their own data).
+// ExportUserData assembles the user's personal data for a data-subject access/portability request:
+// profile, owned flows, settings, API tokens and audit history, on the caller's RLS-scoped context.
 func (b *PostgresStorageBackend) ExportUserData(ctx context.Context, userID string) (*interfaces.UserDataExport, error) {
 	user, err := b.LoadUserByID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	// Page through ALL of the user's flows: ListFlows clamps Limit<=0 to a
-	// default page size, so a single call would silently truncate the export
-	// for users with more flows than one page — unacceptable for a
-	// data-subject access request, which must be complete.
-	//
-	// FlowSortIDAsc, not the default: this walk pages with LIMIT/OFFSET, and
-	// the default ordering is on updated_at — a MUTABLE column. A flow saved
-	// while the export runs (the user in another tab, or a collaborator on a
-	// shared flow) jumps to the front of that ordering and pushes the row on
-	// the next page boundary out of the walk entirely. The completeness guards
-	// below then run only over the flows that survived it, so the export would
-	// pass every check it makes and still be missing data. Ordering on the
-	// immutable primary key means an update cannot move a row.
+	// Page through ALL of the user's flows: ListFlows clamps Limit<=0 to a default page size, so a single
+	// call would silently truncate the export — unacceptable for a data-subject access request. The walk is a
+	// keyset (FlowFilter.AfterID): every page costs the same instead of OFFSET re-reading earlier pages.
+	// FlowSortIDAsc, not the default: updated_at is MUTABLE — a flow saved mid-export jumps to the front and
+	// a cursor on a mutable key would chase that jump or skip the rows it displaced; the immutable primary
+	// key means an update cannot move a row across the cursor.
 	const exportPageSize = 500 // ListFlows' maximum page size
 	var flows []*interfaces.FlowDocument
-	for offset := 0; ; offset += exportPageSize {
-		page, err := b.ListFlows(ctx, interfaces.FlowFilter{
-			UserID: userID, SortBy: interfaces.FlowSortIDAsc,
-			Limit: exportPageSize, Offset: offset,
-		})
+	filter := interfaces.FlowFilter{UserID: userID, SortBy: interfaces.FlowSortIDAsc, Limit: exportPageSize}
+	for {
+		page, err := b.ListFlows(ctx, filter)
 		if err != nil {
 			return nil, fmt.Errorf("export: list flows: %w", err)
 		}
@@ -170,11 +141,10 @@ func (b *PostgresStorageBackend) ExportUserData(ctx context.Context, userID stri
 		if len(page) < exportPageSize {
 			break
 		}
+		filter.AfterID = page[len(page)-1].ID
 	}
-	// A data-subject export must be complete or fail. Transient blob failures
-	// already fail ListFlows; this catches the remaining case — a flow whose
-	// content blob is permanently missing (ListFlows returns it with nil
-	// content) — instead of silently shipping an export without its content.
+	// A data-subject export must be complete or fail: this catches a flow whose content blob is
+	// permanently missing (ListFlows returns it with nil content) instead of silently shipping without it.
 	for _, f := range flows {
 		if len(f.Content) == 0 && metadataRecordsContent(f.Metadata) {
 			return nil, fmt.Errorf("export: content for flow %s is unavailable; refusing to produce an incomplete export", f.ID)
@@ -213,14 +183,18 @@ func (b *PostgresStorageBackend) ExportUserData(ctx context.Context, userID stri
 	}, nil
 }
 
-// exportAuditEvents pages through the user's whole audit history. A single
-// Limit:1000 call silently truncated the trail for active accounts with no
-// indication in the bundle.
+// exportAuditEvents pages through the user's whole audit history (a single Limit:1000 call silently
+// truncated the trail for active accounts). The page size IS ListAuditEvents' clamp: it was 1000 while the
+// clamp was 500, so every page came back "short" and the walk stopped after the first one — at most 500
+// events, no error, no truncation marker. The walk is a keyset (see listAuditEventsSQL): OFFSET re-read every
+// earlier page per page, and on an append-heavy newest-first table an event logged mid-walk shifted the page
+// boundary and repeated a row; a keyset cannot.
 func (b *PostgresStorageBackend) exportAuditEvents(ctx context.Context, userID string) ([]*interfaces.AuditEvent, error) {
-	const auditPageSize = 1000
+	const auditPageSize = maxAuditLimit
 	audit := []*interfaces.AuditEvent{}
-	for offset := 0; ; offset += auditPageSize {
-		page, err := b.ListAuditEvents(ctx, interfaces.AuditFilter{UserID: userID, Limit: auditPageSize, Offset: offset})
+	var after *auditCursor
+	for {
+		page, err := b.listAuditEvents(ctx, interfaces.AuditFilter{UserID: userID, Limit: auditPageSize}, after)
 		if err != nil {
 			return nil, fmt.Errorf("export: list audit: %w", err)
 		}
@@ -228,13 +202,13 @@ func (b *PostgresStorageBackend) exportAuditEvents(ctx context.Context, userID s
 		if len(page) < auditPageSize {
 			return audit, nil
 		}
+		last := page[len(page)-1]
+		after = &auditCursor{createdAt: last.CreatedAt, id: last.ID}
 	}
 }
 
-// userExportSections are the bundle sections that follow the flows: chat
-// history on the user's own flows, the comments and triage decisions they
-// authored, their organisations, their active sessions and their personal
-// Azure AI Foundry resources and models.
+// userExportSections are the bundle sections that follow the flows: chat history on the user's own flows,
+// the comments and triage decisions they authored, their organisations, active sessions and personal Azure registry.
 type userExportSections struct {
 	conversations []*interfaces.ExportedConversation
 	comments      []*interfaces.FindingComment
@@ -244,11 +218,9 @@ type userExportSections struct {
 	azure         *interfaces.ExportedAzureRegistry
 }
 
-// exportUserSections loads userExportSections for both export paths, so the
-// buffered and the streamed bundle cannot drift apart again. (They did: the
-// sections were added to ExportUserData only, while the account-export handler
-// always streams on Postgres, so users never received them.) flowIDs are the
-// user's owned flows, which scope conversations and triage.
+// exportUserSections loads userExportSections for both export paths, so the buffered and the streamed bundle
+// cannot drift apart again (the sections were once added to ExportUserData only). flowIDs are the user's
+// owned flows, which scope conversations and triage.
 func (b *PostgresStorageBackend) exportUserSections(ctx context.Context, userID string, flowIDs []string) (*userExportSections, error) {
 	var out userExportSections
 	var err error
@@ -281,9 +253,8 @@ func (b *PostgresStorageBackend) exportUserSections(ctx context.Context, userID 
 	return &out, nil
 }
 
-// exportConversations returns every stored chat conversation on the given
-// (owned) flows. Chat with the assistant about your own flow is user-authored
-// content and belongs in the bundle.
+// exportConversations returns every stored chat conversation on the given (owned) flows — chat about your
+// own flow is user-authored content and belongs in the bundle.
 func (b *PostgresStorageBackend) exportConversations(ctx context.Context, flowIDs []string) ([]*interfaces.ExportedConversation, error) {
 	out := []*interfaces.ExportedConversation{}
 	if len(flowIDs) == 0 {
@@ -333,10 +304,8 @@ func (b *PostgresStorageBackend) exportAuthoredComments(ctx context.Context, use
 	return out, rows.Err()
 }
 
-// exportTriageDecisions returns the triage rows the user last updated on the
-// given (owned) flows — status changes, assignments and justifications they
-// recorded. Rows on those flows last touched by a collaborator are that
-// collaborator's content and stay out.
+// exportTriageDecisions returns the triage rows the user last updated on the given (owned) flows — rows on
+// those flows last touched by a collaborator are that collaborator's content and stay out.
 func (b *PostgresStorageBackend) exportTriageDecisions(ctx context.Context, userID string, flowIDs []string) ([]*interfaces.FindingStatus, error) {
 	out := []*interfaces.FindingStatus{}
 	if len(flowIDs) == 0 {
@@ -360,18 +329,14 @@ func (b *PostgresStorageBackend) exportTriageDecisions(ctx context.Context, user
 	return out, rows.Err()
 }
 
-// exportFlowPageSize bounds how many flows (with content) ExportUserDataTo
-// holds in memory at once. Smaller than ListFlows' max so the streaming export
-// keeps peak memory to one modest page rather than every flow's content.
+// exportFlowPageSize bounds how many flows (with content) ExportUserDataTo holds in memory at once — smaller
+// than ListFlows' max so peak memory stays one modest page rather than every flow's content.
 const exportFlowPageSize = 100
 
-// ExportUserDataTo streams the same JSON bundle as ExportUserData to w, but
-// fetches flows one page at a time and releases each page before the next, so
-// peak memory is bounded to a single page's content instead of every flow's
-// content at once. Callers MUST treat w as tainted if a non-nil error is
-// returned (partial JSON may have been written) — the HTTP handler streams to a
-// temp file and only forwards it to the client on success, preserving the
-// "complete or fail" guarantee a data-subject export requires.
+// ExportUserDataTo streams the same JSON bundle as ExportUserData to w, but fetches flows one page at a time,
+// so peak memory is bounded to a single page's content. Callers MUST treat w as tainted if a non-nil error is
+// returned (partial JSON may have been written) — the HTTP handler streams to a temp file and only forwards it
+// on success, preserving the "complete or fail" guarantee a data-subject export requires.
 func (b *PostgresStorageBackend) ExportUserDataTo(ctx context.Context, userID string, w io.Writer) error {
 	user, err := b.LoadUserByID(ctx, userID)
 	if err != nil {
@@ -410,14 +375,11 @@ func (b *PostgresStorageBackend) ExportUserDataTo(ctx context.Context, userID st
 	}
 	first := true
 	var flowIDs []string // owned flows, which scope the conversation and triage sections
-	// Immutable ordering, for the same reason as ExportUserData above: a
-	// concurrent save must not be able to drop a flow from a data-subject
-	// export.
-	for offset := 0; ; offset += exportFlowPageSize {
-		page, err := b.ListFlows(ctx, interfaces.FlowFilter{
-			UserID: userID, SortBy: interfaces.FlowSortIDAsc,
-			Limit: exportFlowPageSize, Offset: offset,
-		})
+	// Keyset walk (AfterID) over the immutable id ordering, for the same reasons as ExportUserData
+	// above: a concurrent save must not be able to drop a flow, and each page must cost the same.
+	filter := interfaces.FlowFilter{UserID: userID, SortBy: interfaces.FlowSortIDAsc, Limit: exportFlowPageSize}
+	for {
+		page, err := b.ListFlows(ctx, filter)
 		if err != nil {
 			return fmt.Errorf("export: list flows: %w", err)
 		}
@@ -445,6 +407,7 @@ func (b *PostgresStorageBackend) ExportUserDataTo(ctx context.Context, userID st
 		if len(page) < exportFlowPageSize {
 			break
 		}
+		filter.AfterID = page[len(page)-1].ID
 	}
 	if _, err := bw.WriteString(`]`); err != nil {
 		return err
@@ -486,12 +449,47 @@ func (b *PostgresStorageBackend) ExportUserDataTo(ctx context.Context, userID st
 	return bw.Flush()
 }
 
-// PurgeExpiredData removes stale rows whose retention has elapsed. It is
-// intended for a periodic background job (single-replica: run on the one
-// instance). auditRetentionDays <= 0 keeps audit_events indefinitely (only
-// expired tokens/invites are purged). Returns counts of rows removed.
+// purgeBatchSize is how many rows one DELETE of a growth table removes
+// (purgeBatched). A variable so tests can shrink it.
+var purgeBatchSize = 5000
+
+// purgeBatchedSQL renders the batched form of `DELETE FROM table WHERE cond`: rows are picked by physical
+// address (ctid) through the condition's own index, LIMIT $batch at a time, so each statement finishes well
+// inside statement_timeout whatever the backlog.
+func purgeBatchedSQL(table, cond string, batchParam int) string {
+	return fmt.Sprintf(`DELETE FROM %s WHERE ctid = ANY(ARRAY(SELECT ctid FROM %s WHERE %s LIMIT $%d))`, table, table, cond, batchParam)
+}
+
+// purgeBatched deletes every row of table matching cond, purgeBatchSize rows per statement, until a statement
+// removes nothing. Returns the rows removed so far with the first error, so a partial sweep is still counted.
+func (b *PostgresStorageBackend) purgeBatched(ctx context.Context, table, cond string, args ...any) (int, error) {
+	stmt := purgeBatchedSQL(table, cond, len(args)+1)
+	total := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		res, err := b.db.ExecContext(ctx, stmt, append(append([]any{}, args...), purgeBatchSize)...)
+		if err != nil {
+			return total, err
+		}
+		n, _ := res.RowsAffected()
+		total += int(n)
+		if n == 0 {
+			return total, nil
+		}
+	}
+}
+
+// PurgeExpiredData removes stale rows whose retention has elapsed — intended for a periodic background job
+// (single-replica). auditRetentionDays <= 0 keeps audit_events indefinitely (only expired tokens/invites purge).
+// The tables that grow without bound (audit_events, flow_analysis_history, usage_metrics, gov_alerts,
+// token_blacklist) are purged in batches of purgeBatchSize rows per statement: a single unbatched DELETE over a
+// large backlog timed out on every tick and never shrank it. Each table is swept independently — an error is
+// recorded and the remaining tables still run; the result carries every table's count, the error joins all failures.
 func (b *PostgresStorageBackend) PurgeExpiredData(ctx context.Context, auditRetentionDays int) (*interfaces.PurgeResult, error) {
 	out := &interfaces.PurgeResult{}
+	var errs []error
 
 	stmts := []struct {
 		sql  string
@@ -503,57 +501,60 @@ func (b *PostgresStorageBackend) PurgeExpiredData(ctx context.Context, auditRete
 		// Purge invites that expired, or were accepted more than 7 days ago
 		// (kept briefly so the accept event / audit can correlate).
 		{`DELETE FROM org_invites WHERE expires_at < NOW() OR (accepted_at IS NOT NULL AND accepted_at < NOW() - INTERVAL '7 days')`, &out.OrgInvites},
-		// Expired blacklist entries are pure dead weight (the token they
-		// reference has already expired), so purge them unconditionally —
-		// previously this was only done by a per-process goroutine that could
-		// die or be absent on some replicas, letting the table grow unbounded.
-		{`DELETE FROM token_blacklist WHERE expires_at < NOW()`, &out.TokenBlacklist},
-		// An expired share link can never be redeemed again (the lookup
-		// checks expires_at), so its row is dead weight — and one that still
-		// names a flow. Rows with no expiry are permanent links; kept.
+		// An expired share link can never be redeemed again, so its row is dead weight — and one
+		// that still names a flow. No-expiry rows are permanent links; kept.
 		{`DELETE FROM share_tokens WHERE expires_at IS NOT NULL AND expires_at < NOW()`, &out.ShareTokens},
 	}
-	// Deliberately NOT purged by age: conversations, knowledge documents and
-	// finding comments are user content, not telemetry. They go when their
-	// flow/org goes (ON DELETE CASCADE), never on a timer.
+	// Deliberately NOT purged by age: conversations, knowledge documents and finding comments are user
+	// content, not telemetry — they go when their flow/org goes (ON DELETE CASCADE), never on a timer.
 	for _, s := range stmts {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, fmt.Errorf("purge: %w", err))
+			return out, errors.Join(errs...)
+		}
 		res, err := b.db.ExecContext(ctx, s.sql)
 		if err != nil {
-			return out, fmt.Errorf("purge: %w", err)
+			errs = append(errs, fmt.Errorf("purge: %w", err))
+			continue
 		}
 		n, _ := res.RowsAffected()
 		*s.dest = int(n)
 	}
 
+	type batched struct {
+		table, cond string
+		args        []any
+		dest        *int
+	}
+	// Expired blacklist entries are pure dead weight, so purge them unconditionally — previously only a
+	// per-process goroutine did this, and it could die or be absent on some replicas, growing the table unbounded.
+	growth := []batched{{"token_blacklist", `expires_at < NOW()`, nil, &out.TokenBlacklist}}
 	if auditRetentionDays > 0 {
-		aged := []struct {
-			sql  string
-			dest *int
-		}{
-			{`DELETE FROM audit_events WHERE created_at < NOW() - ($1 * INTERVAL '1 day')`, &out.AuditEvents},
-			// flow_analysis_history is append-only (one row per analyze run)
-			// and the dashboard only reads the last 14–30 days, so age it out
-			// alongside audit data instead of letting it grow forever.
-			{`DELETE FROM flow_analysis_history WHERE analyzed_at < NOW() - ($1 * INTERVAL '1 day')`, &out.FlowAnalysisHistory},
-			// usage_metrics is append-only (one row per AI call) and drives
-			// the same dashboard's cost/trend views; age it out on the same
-			// retention window.
-			{`DELETE FROM usage_metrics WHERE created_at < NOW() - ($1 * INTERVAL '1 day')`, &out.UsageMetrics},
-			// gov_alerts is one row per alert per sweep, forever — the
-			// scanner's in-memory dedup does not read the table back, so
-			// ageing rows out cannot cause a re-alert. Same window as audit.
-			{`DELETE FROM gov_alerts WHERE created_at < NOW() - ($1 * INTERVAL '1 day')`, &out.GovAlerts},
-		}
-		for _, s := range aged {
-			res, err := b.db.ExecContext(ctx, s.sql, auditRetentionDays)
-			if err != nil {
-				return out, fmt.Errorf("purge: %w", err)
+		window := []any{auditRetentionDays}
+		growth = append(growth,
+			batched{"audit_events", `created_at < NOW() - ($1 * INTERVAL '1 day')`, window, &out.AuditEvents},
+			// flow_analysis_history is append-only and the dashboard only
+			// reads the last 14–30 days; age it out with the audit window.
+			batched{"flow_analysis_history", `analyzed_at < NOW() - ($1 * INTERVAL '1 day')`, window, &out.FlowAnalysisHistory},
+			// usage_metrics is append-only and drives the same dashboard's
+			// cost/trend views; same retention window.
+			batched{"usage_metrics", `created_at < NOW() - ($1 * INTERVAL '1 day')`, window, &out.UsageMetrics},
+			// gov_alerts is one row per alert per sweep, forever — ageing rows
+			// out cannot cause a re-alert (the scanner's dedup is in-memory).
+			batched{"gov_alerts", `created_at < NOW() - ($1 * INTERVAL '1 day')`, window, &out.GovAlerts},
+		)
+	}
+	for _, g := range growth {
+		n, err := b.purgeBatched(ctx, g.table, g.cond, g.args...)
+		*g.dest = n
+		if err != nil {
+			errs = append(errs, fmt.Errorf("purge %s: %w", g.table, err))
+			if ctx.Err() != nil {
+				break // nothing further can run
 			}
-			n, _ := res.RowsAffected()
-			*s.dest = int(n)
 		}
 	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 // rowsOfStrings reads the first column of a query into a []string. Used for the

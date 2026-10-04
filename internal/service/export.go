@@ -40,7 +40,6 @@ func (s *ExportService) CompareCurrentWith(newDoc *models.FlowDocument, oldPath 
 		return nil, fmt.Errorf("no current flow loaded")
 	}
 
-	// Load and parse old version
 	data, err := os.ReadFile(oldPath) // #nosec G304 -- reading a flow file the app was asked to diff
 	if err != nil {
 		return nil, fmt.Errorf("read old file: %w", err)
@@ -136,17 +135,16 @@ func (s *ExportService) ExportPDF(doc *models.FlowDocument, report *models.Analy
 	return pdfBytes, nil
 }
 
-// clientExportExts are the file types the findings panel renders in the
-// browser (CSV of the filtered list, SARIF, JUnit XML) and SaveClientExport may
-// write. An allowlist, not "any path": this endpoint writes caller-supplied
-// text, unlike the PDF/Markdown/HTML exports whose bytes the server renders.
+// clientExportExts are the file types the findings panel renders in the browser (CSV of
+// the filtered list, SARIF, JUnit XML) and SaveClientExport may write. An allowlist, not
+// "any path": this endpoint writes caller-supplied text, unlike the PDF/Markdown/HTML
+// exports whose bytes the server renders.
 var clientExportExts = map[string]bool{".csv": true, ".sarif": true, ".xml": true}
 
-// SaveClientExport writes a browser-rendered findings export to the path the
-// desktop native save dialog returned. The webview cannot write files itself,
-// so CSV/SARIF/JUnit used to fall back to an anchor download on desktop and
-// skip the save dialog the PDF/Markdown/HTML exports show. Desktop only — the
-// handler refuses it in cloud mode.
+// SaveClientExport writes a browser-rendered findings export to the path the desktop
+// native save dialog returned. The webview cannot write files itself, so CSV/SARIF/JUnit
+// used to fall back to an anchor download on desktop and skip the save dialog the
+// PDF/Markdown/HTML exports show. Desktop only — the handler refuses it in cloud mode.
 func (s *ExportService) SaveClientExport(path, content string) error {
 	if err := validateUserPath(path); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidInput, err)

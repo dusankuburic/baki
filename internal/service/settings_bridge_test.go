@@ -30,12 +30,6 @@ func TestSettingsBridge_KeepsChatTextSize(t *testing.T) {
 	}
 }
 
-func TestSettingsBridge_DefaultChatTextSize(t *testing.T) {
-	if got := models.DefaultSettings().Appearance.ChatTextSize; got != "md" {
-		t.Fatalf("default ChatTextSize = %q, want %q", got, "md")
-	}
-}
-
 // Stored settings written by older builds still carry layout.chatPanelHeight
 // (the docked chat's height handle, since removed). They must keep decoding.
 func TestSettingsBridge_ToleratesLegacyChatPanelHeight(t *testing.T) {

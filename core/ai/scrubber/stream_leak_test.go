@@ -6,11 +6,10 @@ import (
 )
 
 // fakeStripeLiveKey is assembled rather than written out: a contiguous
-// sk_live_… string in the source is what credential scanners match, and this
-// synthetic fixture blocked pushes of this repository under GitHub push
-// protection. Built at run time the value is identical, so the scrubber is
-// still tested against the real key shape. Same trick as the ghp_ sample in
-// stream_test.go.
+// sk_live_ string in the source is what credential scanners match, and this
+// fixture once blocked pushes of this repository under GitHub push
+// protection; built at run time the value is identical. Same trick as the
+// ghp_ sample in stream_test.go.
 var fakeStripeLiveKey = "sk_live_" + strings.Repeat("abcdefgh", 3)
 
 // secretSamples covers every class in secretRegexes, with the exact substring
@@ -46,33 +45,12 @@ func streamAll(in string, delta int) string {
 }
 
 // TestStreamScrubber_NoSecretSurvivesAnyChunking is the regression gate for the
-// most consequential scrubber defect: the class of scrubber on the path that
-// actually reaches the user's browser was weaker than the one used for whole
-// text.
-//
-// StreamScrubber holds a suffix that could still become a secret and releases
-// the rest. Release is decided by viablePrefixRegexes, each of which is meant
-// to match EVERY prefix of a possible secret. Three of them did not:
-//
-//   - the Slack pattern required the type letter and hyphen, so a buffer
-//     holding just "xox" was declared non-viable;
-//   - the PEM pattern required the full "-----BEGIN <TYPE> PRIVATE KEY-----"
-//     marker, so "-----BEGIN" alone was non-viable;
-//   - the JWT pattern required "eyJ" immediately after a separator, so a buffer
-//     ending at "." or at ".ey" was non-viable.
-//
-// A dead anchor is never revisited, so in each case the token was released in
-// fragments that individually match nothing, and the secret reached the client
-// in clear. Whether it leaked depended only on where the provider's chunk
-// boundaries happened to fall — the JWT masked correctly at 8- and 64-byte
-// deltas and leaked at 1, 3, 4 and 13.
-//
-// anchorRegex was separately missing AKIA/ASIA, AIza, xox, eyJ and -----BEGIN
-// entirely, so those anchors were never even found by release().
-//
-// This test asserts the property rather than a fixed expected string: across a
-// spread of chunk sizes that straddle every internal boundary, no sample's
-// secret may survive.
+// most consequential scrubber defect: the streaming scrubber on the path that
+// reaches the browser was weaker than the whole-text one. viablePrefixRegexes
+// must match EVERY prefix of a possible secret; when one did not, the anchor
+// was declared dead (dead anchors are never revisited) and the token leaked in
+// fragments, depending only on where the provider's chunk boundaries fell.
+// Asserts across chunk sizes that straddle every internal boundary.
 func TestStreamScrubber_NoSecretSurvivesAnyChunking(t *testing.T) {
 	// 1 and 2 exercise byte-at-a-time providers; the primes land boundaries
 	// inside markers and separators; the large sizes cover whole-chunk arrival.
@@ -80,8 +58,7 @@ func TestStreamScrubber_NoSecretSurvivesAnyChunking(t *testing.T) {
 
 	for _, c := range secretSamples {
 		t.Run(c.name, func(t *testing.T) {
-			// Baseline: the non-streaming scrubber must mask it, or the sample
-			// is testing nothing.
+			// Baseline: ScrubText must mask it, or the sample is testing nothing.
 			if strings.Contains(ScrubText(c.in), c.secret) {
 				t.Fatalf("fixture rot: ScrubText does not mask this sample, so the "+
 					"streaming comparison is meaningless\n  in: %q", c.in)
@@ -97,9 +74,8 @@ func TestStreamScrubber_NoSecretSurvivesAnyChunking(t *testing.T) {
 }
 
 // TestStreamScrubber_MatchesScrubTextOnCleanText guards the other direction:
-// text with no secret must stream through byte-identical. A scrubber that holds
-// or mangles ordinary prose is a visible product regression, and widening the
-// viability classes is exactly the kind of change that could cause it.
+// text with no secret must stream through byte-identical to ScrubText — a
+// scrubber that holds or mangles ordinary prose is a visible regression.
 func TestStreamScrubber_MatchesScrubTextOnCleanText(t *testing.T) {
 	clean := []string{
 		"Here is a summary of the flow. It reads a file and posts the result.",
@@ -110,11 +86,8 @@ func TestStreamScrubber_MatchesScrubTextOnCleanText(t *testing.T) {
 		"Unicode: héllo ✅ 日本語 — emoji and accents must survive chunking.",
 	}
 	for _, in := range clean {
-		// The contract is "streaming equals whole-text scrubbing", not
-		// "streaming is a no-op": ScrubText legitimately masks some of these
-		// (its Bearer pattern matches "Bearer scheme"). Comparing against the
-		// raw input would assert the scrubber does nothing, which is a
-		// different and wrong claim.
+		// The contract is "streaming equals whole-text scrubbing", not a no-op:
+		// ScrubText legitimately masks some of these (e.g. its Bearer pattern).
 		want := ScrubText(in)
 		for _, d := range []int{1, 3, 7, 64} {
 			if got := streamAll(in, d); got != want {
@@ -124,19 +97,12 @@ func TestStreamScrubber_MatchesScrubTextOnCleanText(t *testing.T) {
 	}
 }
 
-// TestStreamScrubber_LeadInAloneIsHeld is the structural invariant behind all
-// three bugs above, stated so the next pattern added here cannot repeat them.
-//
-// Feed ONLY the opening bytes of each secret — the part that arrives first in a
-// stream — and nothing may be emitted yet. If the scrubber releases a lead-in,
-// the anchor was judged non-viable on first sight; dead anchors are never
-// revisited, so everything that follows streams out unheld and the secret is
-// gone. That is precisely how "xox", "-----BEGIN" and a JWT's "…." each failed.
-//
-// This uses the real samples rather than anchorLiterals so the casing is the
-// casing that actually arrives on the wire: the literals are stored lower-cased
-// for equalFoldASCII's benefit, while the prefix patterns are case-sensitive
-// ("AIza", "eyJ"), and comparing those two directly tests nothing real.
+// TestStreamScrubber_LeadInAloneIsHeld is the structural invariant behind the
+// viability bugs: feed ONLY the opening bytes of each secret and nothing may be
+// emitted yet — a released lead-in means the anchor was judged non-viable on
+// first sight, and dead anchors are never revisited. Uses the real samples,
+// not anchorLiterals, so the casing is the casing that arrives on the wire
+// (the literals are stored lower-cased; the prefix patterns are case-sensitive).
 func TestStreamScrubber_LeadInAloneIsHeld(t *testing.T) {
 	for _, c := range secretSamples {
 		t.Run(c.name, func(t *testing.T) {
@@ -160,9 +126,9 @@ func TestStreamScrubber_LeadInAloneIsHeld(t *testing.T) {
 
 // TestStreamScrubber_AnchorRegexCoversEveryAnchorLiteral closes the gap that
 // made AKIA/AIza/xox/eyJ/PEM unreachable: anchorsByFirst is built from
-// anchorLiterals, but release() scans with anchorRegex. A literal absent from
-// the regex is only ever found as a PARTIAL anchor at a buffer boundary, never
-// as a complete one mid-buffer.
+// anchorLiterals but release() scans with anchorRegex, so a literal absent
+// from the regex is only ever a PARTIAL anchor at a buffer boundary, never a
+// complete one mid-buffer.
 func TestStreamScrubber_AnchorRegexCoversEveryAnchorLiteral(t *testing.T) {
 	for _, a := range anchorLiterals {
 		if !anchorRegex.MatchString(a) {
@@ -172,20 +138,12 @@ func TestStreamScrubber_AnchorRegexCoversEveryAnchorLiteral(t *testing.T) {
 }
 
 // TestStreamScrubber_LongSecretTailIsNotReleased is the regression gate for the
-// hold cap leaking the part of a credential that did not fit in its budget.
-//
-// holdBudget drops to streamMatchedHold (256) once the held text contains a
-// COMPLETE secret, on the reasoning that there is no point stalling the stream
-// further. capOverflow then emitted the whole buffer through ScrubText — masking
-// correctly — and reset to holdNone. But the value was still arriving, and its
-// `api_key=` lead-in had just been consumed, so every subsequent byte was
-// unrecognisable and streamed out verbatim.
-//
-// The leak was exactly len(secret) - 256: measured 44, 244 and 464 raw
-// characters for 300-, 500- and 720-character values, while ScrubText masked
-// every one of them to 23 bytes. That is precisely the shape of the credentials
-// worth stealing — JWTs, PEM bodies, GCP service-account JSON, Azure SAS URLs
-// are all far longer than 256 bytes.
+// hold cap: once held text contained a COMPLETE secret, holdBudget dropped to
+// streamMatchedHold (256) and capOverflow emitted the buffer masked and reset —
+// but the value kept arriving and its lead-in was consumed, so every
+// subsequent byte streamed out verbatim: a leak of len(secret)-256 raw chars,
+// hitting precisely the long credentials worth stealing (JWTs, PEM bodies,
+// SAS URLs).
 func TestStreamScrubber_LongSecretTailIsNotReleased(t *testing.T) {
 	// 'z' avoids colliding with the letters in "[REDACTED]".
 	for _, n := range []int{100, 257, 300, 500, 720, 2000} {
@@ -215,8 +173,8 @@ func TestStreamScrubber_LongSecretTailIsNotReleased(t *testing.T) {
 }
 
 // TestStreamScrubber_DrainDoesNotEatFollowingText is the other half: the drain
-// state swallows the tail of a masked secret, so it must stop at the value's end
-// or it would silently delete the assistant's next sentence.
+// state swallows the tail of a masked secret, so it must stop at the value's
+// end or it silently deletes the assistant's next sentence.
 func TestStreamScrubber_DrainDoesNotEatFollowingText(t *testing.T) {
 	const tail = "and here is the explanation that follows."
 	in := "api_key=" + strings.Repeat("z", 600) + " " + tail

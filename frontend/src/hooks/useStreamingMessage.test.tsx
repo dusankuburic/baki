@@ -153,9 +153,8 @@ describe('stall probe', () => {
     await vi.advanceTimersByTimeAsync(30_000)
 
     // The failure's code travels with it, so a recovered error gets the same
-    // handling as a live one.
-    // F-15: a fourth usage argument travels even when the failure carried
-    // none (undefined = unbilled).
+    // handling as a live one. The fourth usage argument travels even when
+    // the failure carried none (undefined = unbilled).
     expect(handler.onError).toHaveBeenCalledWith('provider exploded', 's1', 'PROVIDER_UNAVAILABLE', undefined)
   })
 

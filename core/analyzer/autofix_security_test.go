@@ -40,7 +40,6 @@ func TestUpgradeToHttpsPatch_RoundTripResolvesFinding(t *testing.T) {
 		t.Fatalf("expected http:// gone from patched source, got:\n%s", patched)
 	}
 
-	// Re-parse + re-analyze: finding must be gone.
 	doc2, err := parser.ParseText(patched, "Main.txt", int64(len(patched)))
 	if err != nil {
 		t.Fatalf("re-parse: %v", err)
@@ -87,7 +86,6 @@ func TestReplaceWithVariablePatch_HardcodedUICoordinates_RoundTrip(t *testing.T)
 
 	patched := ApplyPatch(source, ReplaceWithVariablePatch(block, propKey))
 
-	// Re-parse + re-analyze: finding must be gone.
 	doc2, err := parser.ParseText(patched, "Main.txt", int64(len(patched)))
 	if err != nil {
 		t.Fatalf("re-parse: %v", err)
@@ -129,7 +127,6 @@ func TestSanitizeCommandVarsPatch_RoundTripResolvesFinding(t *testing.T) {
 
 	patched := ApplyPatch(source, SanitizeCommandVarsPatch(block))
 
-	// Re-parse + re-analyze: finding must be gone.
 	doc2, err := parser.ParseText(patched, "Main.txt", int64(len(patched)))
 	if err != nil {
 		t.Fatalf("re-parse: %v", err)

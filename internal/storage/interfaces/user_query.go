@@ -9,14 +9,13 @@ import (
 )
 
 // UserRoleNone is the role filter (and stats bucket) for users whose stored
-// role is not one of the four valid roles: accounts written before the role
-// check existed, or by the storage contract suite. The admin list shows them
-// as unassigned so an operator can give them a role.
+// role is not one of the four valid roles — the admin list shows them as
+// unassigned so an operator can give them a role.
 const UserRoleNone = "none"
 
-// UserQuery filters the admin user list. Q is matched case-insensitively as a
-// substring of the email or the display name; Role is "" (every user), a valid
-// auth.Role, or UserRoleNone. Limit and Offset page the ordered result.
+// UserQuery filters the admin user list. Q is a case-insensitive substring of
+// the email or display name; Role is "" (every user), a valid auth.Role, or
+// UserRoleNone; Limit/Offset page the ordered result.
 type UserQuery struct {
 	Q      string
 	Role   string
@@ -42,11 +41,10 @@ func (q UserQuery) Matches(u *User) bool {
 	}
 }
 
-// Apply runs the query over an in-memory user set: it keeps the users Matches
-// accepts, orders them newest first (created_at descending, id ascending as the
-// tiebreaker — the order the Postgres backend uses), and returns the page
-// Offset/Limit select together with the match count. A non-positive Limit
-// takes everything after Offset. The page is never nil.
+// Apply runs the query over an in-memory user set: keeps what Matches accepts,
+// orders newest first (created_at desc, id asc — the Postgres order), returns
+// the Offset/Limit page plus the match count. Non-positive Limit takes
+// everything after Offset; the page is never nil.
 func (q UserQuery) Apply(users []*User) ([]*User, int) {
 	matched := make([]*User, 0, len(users))
 	for _, u := range users {

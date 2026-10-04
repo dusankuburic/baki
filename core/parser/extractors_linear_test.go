@@ -14,13 +14,11 @@ import (
 // them without flaking on a loaded machine.
 const linearScanBudget = 2 * time.Second
 
-// scanSize is small enough that the linear version is instant and large enough
-// that the quadratic version cannot finish inside the budget. At 200 KB the
-// pre-fix scanners performed ~2×10¹⁰ byte comparisons; a 2 MB line (the actual
-// limit on /api/analysis/analyze-raw) was ~2×10¹² — tens of minutes of pinned
-// CPU that no request timeout could interrupt, because the parser takes no
-// context. Using 200 KB keeps this test fast once fixed while still failing
-// unmistakably if the rewind ever returns.
+// scanSize is small enough that the linear version is instant and large
+// enough that the quadratic version cannot finish inside the budget (at
+// 200 KB the pre-fix scanners performed ~2×10¹⁰ byte comparisons; the 2 MB
+// line the endpoint accepts was tens of minutes of CPU no request timeout
+// could interrupt).
 const scanSize = 200 * 1024
 
 // TestParseProperties_UnterminatedKeyRunIsLinear is the regression gate for the
@@ -32,11 +30,9 @@ const scanSize = 200 * 1024
 // terminator, so it fails the same test — which is why skipping the whole run is
 // behaviour-preserving.
 func TestParseProperties_UnterminatedKeyRunIsLinear(t *testing.T) {
-	// The trailing "Key: V" is load-bearing, not decoration: parseProperties
-	// short-circuits on a line with no ':' anywhere, so an input consisting only
-	// of the long run never reaches the scanner and the test would pass without
-	// exercising anything. The real key must also still be found afterwards,
-	// which is what proves skipping the run did not skip past it.
+	// The trailing "Key: V" is load-bearing: parseProperties short-circuits on
+	// a line with no ':' anywhere, and the real key must still be found
+	// afterwards, which is what proves skipping the run did not skip past it.
 	line := "Excel.ReadCell " + strings.Repeat("a", scanSize) + " Key: V"
 
 	done := make(chan map[string]string, 1)

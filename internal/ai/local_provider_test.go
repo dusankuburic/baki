@@ -1,6 +1,6 @@
 package ai
 
-// F-50: the local models provider (Foundry Local, Ollama, LM Studio) —
+// The local models provider (Foundry Local, Ollama, LM Studio) —
 // loopback-only validation, the egress-policy gate, listing, chat, the
 // key-less request, the context window and the shared client.
 

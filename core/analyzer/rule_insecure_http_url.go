@@ -7,10 +7,9 @@ import (
 )
 
 // InsecureHttpUrlRule flags network actions whose target URL uses cleartext
-// http:// (no TLS). Credentials, tokens, or PII sent over http:// are
-// interceptable on the wire. The existing hardcoded-url rule classifies URLs
-// only as Portability; this rule raises the security bar by treating cleartext
-// transport as a Security finding (independently of whether the URL is static).
+// http:// (no TLS) — credentials, tokens, or PII sent over it are interceptable
+// on the wire. Unlike the hardcoded-url rule (Portability only), this treats
+// cleartext transport as a Security finding whether or not the URL is static.
 type InsecureHttpUrlRule struct{}
 
 func (r *InsecureHttpUrlRule) ID() string   { return "insecure-http-url" }

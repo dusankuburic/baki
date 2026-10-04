@@ -22,10 +22,8 @@ const (
 	auditWorkers   = 8
 	auditWriteTTL  = 5 * time.Second
 
-	// Batching knobs. The worker accumulates events and flushes on the first of
-	// (auditFlushSize reached | auditFlushDelay elapsed | shutdown). A single
-	// multi-row INSERT then persists the batch in one round-trip, multiplying
-	// throughput so the 256-buffer is far less likely to fill and drop.
+	// Batching knobs: the worker flushes on the first of (auditFlushSize reached | auditFlushDelay
+	// elapsed | shutdown) — one multi-row INSERT per batch, so the 256-buffer rarely fills and drops.
 	auditFlushSize    = 64
 	auditFlushDelay   = 100 * time.Millisecond
 	auditWriteRetries = 1 // bounded retry on a transient flush failure
@@ -66,9 +64,8 @@ const (
 	AuditActionTokenCreate     = "token.create"
 	AuditActionTokenRevoke     = "token.revoke"
 	AuditActionMigrationStart  = "admin.migration_start"
-	// Added by the feature-completeness audit: these mutations previously left
-	// no trail at all (share links and policy rewrites being the highest
-	// blast-radius non-admin actions).
+	// Added by the feature-completeness audit: these mutations previously left no trail at all
+	// (share links and policy rewrites being the highest blast-radius non-admin actions).
 	AuditActionCommentAdd       = "finding.comment_add"
 	AuditActionCommentDelete    = "finding.comment_delete"
 	AuditActionShareLinkCreate  = "flow.share_link_create"
@@ -84,34 +81,26 @@ const (
 	AuditActionScanNow          = "admin.scan_now"
 	AuditActionAlertDismiss     = "governance.alert_dismiss"
 	AuditActionAlertClear       = "governance.alert_clear"
-	// These four were emitted as raw strings before; the values are kept so
-	// existing rows stay filterable.
+	// These four were emitted as raw strings before; the values are kept so existing rows stay filterable.
 	AuditActionOrgChannelSave   = "org_channel_save"
 	AuditActionOrgChannelDelete = "org_channel_delete"
 	AuditActionOrgRuleSave      = "org_rule_save"
 	AuditActionOrgRuleDelete    = "org_rule_delete"
 	AuditActionSSOLink          = "auth.sso_link"
 	AuditActionSSOUnlink        = "auth.sso_unlink"
-	// AuditActionProvidersTest: an org admin's connection test of the
-	// organisation's shared provider credential, a billed call on the
-	// org's resource (the per-user test of one's own key is not audited).
+	// AuditActionProvidersTest: an org admin's billed test of the organisation's shared provider
+	// credential (the per-user test of one's own key is not audited).
 	AuditActionProvidersTest = "providers.test"
-	// The Azure AI Foundry model registry (Part 9): a resource ("connection")
-	// or a model created, updated or removed — the caller's own (resource
-	// type azure_connection / azure_model, the id) or an organisation's
-	// (resource type org, the org's id; the ids in the meta). The meta never
-	// carries a secret, a description or any credential setting beyond the
-	// auth mode.
+	// The Azure AI Foundry model registry: a resource or model created/updated/removed — the
+	// caller's own (azure_connection / azure_model) or an organisation's (org). Meta never a secret.
 	AuditActionAzureConnectionSave   = "azure.connection_save"
 	AuditActionAzureConnectionDelete = "azure.connection_delete"
 	AuditActionAzureModelSave        = "azure.model_save"
 	AuditActionAzureModelDelete      = "azure.model_delete"
 )
 
-// AllAuditActions is the closed set of audit action strings the handlers
-// emit. The admin audit UI builds its filter from this list (GET
-// /api/admin/audit/actions), so a new constant must be added here too — the
-// test in audit_actions_test.go enforces that.
+// AllAuditActions is the closed set of audit action strings the handlers emit; the admin audit UI
+// builds its filter from it, so a new constant must be added here too (audit_actions_test.go enforces).
 func AllAuditActions() []string {
 	return []string{
 		AuditActionLogin, AuditActionLogout, AuditActionRegister, AuditActionPasswordChange,
@@ -141,20 +130,17 @@ var (
 	auditOnce   sync.Once
 	auditClosed atomic.Bool // guards against send-on-closed-channel panic
 
-	// auditSpiller is the optional on-disk overflow sink for events that don't
-	// fit the in-memory pool. Configured via SetAuditSpillConfig before
-	// InitAuditPool; nil keeps the "divert to log fallback" behaviour.
+	// auditSpiller is the optional on-disk overflow sink for events that don't fit the in-memory
+	// pool; configured via SetAuditSpillConfig before InitAuditPool, nil keeps the log fallback.
 	auditSpiller *auditSpillStore
 	// spillStopCh signals auditSpillReaper to exit; spillReaperWg waits for it.
 	spillStopCh   chan struct{}
 	spillReaperWg sync.WaitGroup
 )
 
-// SetAuditSpillConfig enables the on-disk spill queue for audit events that
-// overflow the in-memory pool. dir "" → temp dir; maxBytes <=0 → 10 MB. Must be
-// called before InitAuditPool. When the pool later has capacity, a reaper
-// drains spilled events back into the pool so a transient overload doesn't
-// drop events (only sustained overload beyond the spill cap degrades).
+// SetAuditSpillConfig enables the on-disk spill queue for overflow events (dir "" → temp dir;
+// maxBytes <=0 → 10 MB); call before InitAuditPool. A reaper drains spilled events back once the
+// pool has capacity, so only overload beyond the spill cap degrades.
 func SetAuditSpillConfig(dir string, maxBytes int64) error {
 	s, err := newAuditSpiller(dir, maxBytes)
 	if err != nil {
@@ -185,13 +171,9 @@ func InitAuditPool(backend storageif.StorageBackend) {
 	})
 }
 
-// auditShutdownBudget bounds how long ShutdownAuditPool waits for the workers
-// to flush. The wait used to be unbounded: eight workers flushing to a slow or
-// unreachable database blew past fx's 25s StopTimeout and the process was
-// SIGKILLed mid-shutdown — taking the storage close that follows with it.
-// Events still queued when the budget expires are dropped from the audit log
-// with a warning; losing a few audit rows is the lesser harm. A var so tests
-// can shorten it.
+// auditShutdownBudget bounds how long ShutdownAuditPool waits for the workers to flush: an
+// unbounded wait once blew past fx's StopTimeout and the process was SIGKILLed mid-shutdown.
+// Events still queued at expiry are dropped with a warning — the lesser harm. A var for tests.
 var auditShutdownBudget = 5 * time.Second
 
 func ShutdownAuditPool() {
@@ -230,16 +212,9 @@ func waitWithBudget(wg *sync.WaitGroup, d time.Duration) bool {
 	}
 }
 
-// auditEnqueue attempts to deliver event to the audit worker pool. Returns
-// (true, "") when enqueued. When the pool is shutting down it returns
-// (false, "closed"); when the bounded queue is full it returns (false, "full").
-//
-// It is safe to call concurrently with ShutdownAuditPool: a send that races
-// with close() is recovered rather than panicking. The atomic flag above is a
-// fast path — ShutdownAuditPool sets the flag and closes the channel as two
-// separate statements, so a goroutine that observed auditClosed == false just
-// before the close() would otherwise panic on the send. The recover closes that
-// residual TOCTOU window.
+// auditEnqueue attempts to deliver event to the audit worker pool: (true, "") enqueued,
+// (false, "closed") when shutting down, (false, "full") when the bounded queue is full. The
+// atomic flag is a fast path; the recover closes the residual TOCTOU window of a send racing close.
 func auditEnqueue(event *storageif.AuditEvent) (sent bool, reason string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -257,16 +232,14 @@ func auditEnqueue(event *storageif.AuditEvent) (sent bool, reason string) {
 	}
 }
 
-// auditBatchSink is an optional capability of StorageBackend: persisting a
-// batch of audit events in one round-trip. The Postgres backend implements it;
-// backends that don't (filesystem, fakes) fall back to per-event writes.
+// auditBatchSink is an optional StorageBackend capability: persisting a batch of audit events in
+// one round-trip. Postgres implements it; backends that don't fall back to per-event writes.
 type auditBatchSink interface {
 	SaveAuditEvents(ctx context.Context, events []*storageif.AuditEvent) error
 }
 
-// auditWriter is the narrow write capability the audit worker needs. Declared
-// separately so the worker depends only on what it uses and tests can supply a
-// minimal fake without implementing the whole StorageBackend interface.
+// auditWriter is the narrow write capability the audit worker needs, declared separately so tests
+// can supply a minimal fake without implementing the whole StorageBackend interface.
 type auditWriter interface {
 	SaveAuditEvent(ctx context.Context, event *storageif.AuditEvent) error
 }
@@ -276,9 +249,9 @@ func auditWorker(backend storageif.StorageBackend) {
 	batchSink, _ := backend.(auditBatchSink)
 	var buf []*storageif.AuditEvent
 
-	// On an unrecoverable panic outside the flush path, divert any buffered-but-
-	// unflushed events to the fallback sink rather than dropping them silently.
-	// (Events mid-write are salvaged by the flush-local recover below.)
+	// On an unrecoverable panic outside the flush path, divert buffered-but-unflushed events to
+	// the fallback sink rather than dropping them (events mid-write are salvaged by the flush-local
+	// recover below).
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Warn("audit worker panicked, salvaging buffered events", "err", r, "buffered", len(buf))
@@ -300,9 +273,8 @@ func auditWorker(backend storageif.StorageBackend) {
 		}
 		batch := buf
 		buf = nil
-		// A panic inside the write path (e.g. a driver-level fault) would
-		// otherwise lose the whole in-flight batch and kill the worker.
-		// Isolate the batch per-event and let the worker keep running.
+		// A panic inside the write path would otherwise lose the whole in-flight batch and kill
+		// the worker: isolate the batch per-event and let the worker keep running.
 		defer func() {
 			if r := recover(); r != nil {
 				slog.Warn("audit flush panicked, isolating in-flight batch", "err", r, "events", len(batch))
@@ -331,11 +303,8 @@ func auditWorker(backend storageif.StorageBackend) {
 	}
 }
 
-// auditSpillReaper drains the on-disk spill queue back into the in-memory pool
-// whenever there is capacity. It runs on a 500 ms tick: cheap enough that
-// replay latency stays sub-second under recovery, infrequent enough to avoid
-// contending with the hot write path. It stops on spillStopCh (closed by
-// ShutdownAuditPool).
+// auditSpillReaper drains the on-disk spill queue back into the pool whenever there is capacity,
+// on a 500 ms tick (sub-second replay latency without contending with the hot write path).
 func auditSpillReaper() {
 	defer spillReaperWg.Done()
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -350,12 +319,9 @@ func auditSpillReaper() {
 	}
 }
 
-// replaySpilled moves drained spill events into the pool. It only runs while the
-// pool has ample room (< half full) so replay never starves fresh events: a
-// fresh auditEnqueue always finds capacity ahead of a backlog replay. Within one
-// tick it drains batches until the pool fills past half or the spill empties; a
-// partial-batch failure (pool filled mid-batch) re-spills the unconsumed
-// remainder (without double-counting the spilled metric) and yields.
+// replaySpilled moves drained spill events into the pool, only while it has ample room (< half
+// full) so replay never starves fresh events. A partial-batch failure re-spills the unconsumed
+// remainder (without double-counting the metric) and yields.
 func replaySpilled() {
 	if auditSpiller == nil {
 		return
@@ -385,12 +351,9 @@ func replaySpilled() {
 	}
 }
 
-// writeAuditBatch persists a batch with a bounded retry. It prefers a single
-// batched write (when the backend supports it); on any failure it falls back to
-// per-event writes so a single bad row can't poison the whole batch. Events that
-// still fail after retry are diverted to the log fallback sink and metered, so a
-// DB hiccup is visible (pad_audit_dropped_total{reason="write_failed"}) rather
-// than silently lost.
+// writeAuditBatch persists a batch with a bounded retry: a single batched write when the backend
+// supports it, falling back to per-event writes so a bad row can't poison the batch. Events still
+// failing after retry go to the log fallback sink (pad_audit_dropped_total{reason="write_failed"}).
 func writeAuditBatch(backend auditWriter, sink auditBatchSink, events []*storageif.AuditEvent) {
 	if sink != nil {
 		if err := saveAuditBatchWithRetry(sink, events); err == nil {
@@ -439,17 +402,10 @@ func writeOneAuditEvent(backend auditWriter, e *storageif.AuditEvent) {
 	}
 }
 
-// auditFallback emits an event to the structured-log sink (stderr → container
-// logs → Log Analytics) when it can't be enqueued to the DB pool. This keeps the
-// event discoverable instead of silently lost; pair with the pad_audit_dropped_total
-// metric to alert when the DB sink falls behind.
-//
-// PII is REDACTED here: container logs are far more broadly readable (and
-// retained/indexed differently) than the access-controlled audit table, and a
-// DB outage would otherwise dump every event's email/IP/meta into them. The
-// user_id plus masked email/IP keep the event attributable — an operator can
-// resolve the full identity through the users table — without the raw values
-// living in log storage.
+// auditFallback emits an event to the structured-log sink when it can't be enqueued to the DB pool,
+// keeping it discoverable (pair with pad_audit_dropped_total). PII is REDACTED here: container logs
+// are more broadly readable than the audit table, and a DB outage would otherwise dump every
+// event's email/IP/meta into them — masked values plus user_id keep the event attributable.
 func auditFallback(reason string, event *storageif.AuditEvent) {
 	metrics.RecordAuditDropped(reason)
 	slog.Error("audit event diverted to log fallback sink",
@@ -461,16 +417,14 @@ func auditFallback(reason string, event *storageif.AuditEvent) {
 		"resource_type", event.ResourceType,
 		"resource_id", event.ResourceID,
 		"ip", redactIP(event.IP),
-		// Meta values may carry free-form PII (names, emails, target ids
-		// typed by users); the keys alone say what KIND of change happened.
+		// Meta values may carry free-form PII; the keys alone say what KIND of change happened.
 		"meta_keys", metaKeys(event.Meta),
 		"created_at", event.CreatedAt,
 	)
 }
 
-// redactEmail keeps the first character of the local part and the full domain
-// ("dusan@example.com" → "d***@example.com"): enough to correlate log lines
-// with a known account without exposing the address itself.
+// redactEmail keeps the first character of the local part and the full domain — enough to
+// correlate log lines with a known account without exposing the address itself.
 func redactEmail(email string) string {
 	if email == "" {
 		return ""
@@ -482,10 +436,8 @@ func redactEmail(email string) string {
 	return email[:1] + "***" + email[at:]
 }
 
-// redactIP keeps the network prefix and masks the host part: the first two
-// groups of an IPv4 ("203.0.113.7" → "203.0.x.x") or the first segment of an
-// IPv6 — enough to distinguish "office vs unknown network" in an incident
-// without logging the full client address.
+// redactIP keeps the network prefix and masks the host part ("203.0.113.7" → "203.0.x.x") —
+// enough to distinguish "office vs unknown network" without logging the full address.
 func redactIP(ip string) string {
 	if ip == "" {
 		return ""
@@ -499,8 +451,7 @@ func redactIP(ip string) string {
 	return "***"
 }
 
-// metaKeys returns the sorted key set of an audit meta map (values omitted —
-// they are free-form and may carry PII).
+// metaKeys returns the sorted key set of an audit meta map (values omitted — free-form, may carry PII).
 func metaKeys(meta map[string]string) []string {
 	if len(meta) == 0 {
 		return nil
@@ -513,11 +464,8 @@ func metaKeys(meta map[string]string) []string {
 	return keys
 }
 
-// salvageAuditBatch persists events that were in flight when the worker hit a
-// panic. Each event is written independently with its own panic guard: a
-// re-panic on the same faulty driver can't abort the salvage, and an event that
-// still can't be written is diverted to the log fallback sink (auditFallback)
-// so it stays discoverable rather than silently lost.
+// salvageAuditBatch persists events that were in flight when the worker hit a panic: each written
+// independently with its own panic guard (a re-panic can't abort the salvage), failures to auditFallback.
 func salvageAuditBatch(backend auditWriter, events []*storageif.AuditEvent) {
 	for _, e := range events {
 		func() {
@@ -555,12 +503,9 @@ func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Req
 	}
 	if auditCh != nil {
 		if _, reason := auditEnqueue(event); reason != "" {
-			// "closed" (shutting down) or "full" (pool saturated under load).
-			// On "full", spill to the durable on-disk queue first so a transient
-			// overload can be replayed rather than lost to logs; only divert to
-			// the log fallback if there's no spill store or it rejected the
-			// event (at cap). "closed" always goes to the fallback (the reaper
-			// is shutting down too, so spilling would never drain).
+			// On "full", spill to the durable on-disk queue first so a transient overload can be
+			// replayed; only divert to the log fallback with no spill store or at its cap.
+			// "closed" (shutting down) always goes to the fallback — the reaper is stopping too.
 			if reason == "full" && auditSpiller != nil && auditSpiller.Spill(event) {
 				return
 			}

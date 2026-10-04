@@ -32,9 +32,8 @@ type SSOClient interface {
 	Exchange(ctx context.Context, code, pkceVerifier, nonce string) (*sso.Identity, error)
 }
 
-// IdentityStore is the optional storage capability for SSO identity links,
-// implemented by the Postgres backend (same optional-capability pattern as
-// RefreshTokenStore).
+// IdentityStore is the optional storage capability for SSO identity links, implemented by the
+// Postgres backend (same optional-capability pattern as RefreshTokenStore).
 type IdentityStore interface {
 	SaveIdentityLink(ctx context.Context, link *storageif.IdentityLink) error
 	LoadIdentityLink(ctx context.Context, provider, subject string) (*storageif.IdentityLink, error)
@@ -42,18 +41,16 @@ type IdentityStore interface {
 	DeleteIdentityLink(ctx context.Context, userID, provider string) error
 }
 
-// ssoFlowCookie carries the per-login CSRF state, OIDC nonce, and PKCE
-// verifier between the /start redirect and the /callback. HttpOnly — the SPA
-// never sees it.
+// ssoFlowCookie carries the per-login CSRF state, OIDC nonce and PKCE verifier between the /start
+// redirect and the /callback. HttpOnly — the SPA never sees it.
 const ssoFlowCookie = "pad_sso_flow"
 
 type ssoFlowState struct {
 	State    string `json:"s"`
 	Nonce    string `json:"n"`
 	Verifier string `json:"v"`
-	// LinkUserID marks a "link this IdP identity to my existing account"
-	// round trip started from account settings by an authenticated user
-	// (handleSSOLinkStart). The callback then links instead of logging in.
+	// LinkUserID marks a "link this IdP identity to my existing account" round trip started from
+	// account settings by an authenticated user (handleSSOLinkStart); the callback then links.
 	LinkUserID string `json:"l,omitempty"`
 }
 
@@ -98,14 +95,12 @@ func (h *AuthHandler) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
-// beginSSOFlow mints the per-attempt state/nonce/PKCE verifier, stores them in
-// the HttpOnly flow cookie and returns the IdP authorization URL. linkUserID,
-// when set, turns the callback into an account-link instead of a login. On
-// failure the error response has already been written and ok is false.
+// beginSSOFlow mints the per-attempt state/nonce/PKCE verifier into the HttpOnly flow cookie and
+// returns the IdP authorization URL; linkUserID turns the callback into an account-link. On failure
+// the error response has been written and ok is false.
 func (h *AuthHandler) beginSSOFlow(w http.ResponseWriter, r *http.Request, linkUserID string) (string, bool) {
-	// State, Nonce, and a PKCE verifier (two tokens = 86 chars, within PKCE's
-	// 43-128 bounds). Any crypto/rand failure fails the request rather than
-	// weakening the login flow.
+	// State, Nonce and a PKCE verifier (two tokens = 86 chars, within PKCE's 43-128 bounds). Any
+	// crypto/rand failure fails the request rather than weakening the login flow.
 	toks, err := randomTokens(4)
 	if err != nil {
 		render.Error(w, fmt.Errorf("failed to initialize login: %w", err), http.StatusInternalServerError)
@@ -138,14 +133,9 @@ func (h *AuthHandler) beginSSOFlow(w http.ResponseWriter, r *http.Request, linkU
 	return authURL, true
 }
 
-// handleSSOLinkStart begins an IdP round trip that LINKS the asserted identity
-// to the caller's existing account. This is the "link <provider> from your
-// account settings" step resolveSSOUser has always pointed users at for a
-// verified account with the same email — it did not exist, so anyone who
-// registered by email before SSO was enabled could never use SSO. The SPA
-// calls it as an authenticated XHR (a top-level navigation cannot carry the
-// bearer token), receives the IdP URL and navigates there; the flow cookie set
-// here follows the browser to /callback.
+// handleSSOLinkStart begins an IdP round trip that LINKS the asserted identity to the caller's
+// existing account — the step resolveSSOUser points users at. Called as an authenticated XHR (a
+// top-level navigation cannot carry the bearer token): the SPA receives the IdP URL and navigates.
 // @Summary      Start linking an SSO identity to the current account
 // @Tags         sso
 // @Produce      json
@@ -171,9 +161,8 @@ func (h *AuthHandler) handleSSOLinkStart(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, map[string]string{"url": authURL})
 }
 
-// linkSSOIdentity attaches ident to userID. An identity already linked to a
-// different account is refused (one external identity maps to exactly one
-// local user); re-linking to the same account is a no-op.
+// linkSSOIdentity attaches ident to userID: an identity already linked to a different account is
+// refused (one external identity maps to exactly one local user); re-linking the same one is a no-op.
 func (h *AuthHandler) linkSSOIdentity(ctx context.Context, userID string, ident *sso.Identity) error {
 	provider := h.ssoClient.ProviderName()
 	if existing, err := h.identityStore.LoadIdentityLink(ctx, provider, ident.Subject); err == nil {
@@ -228,9 +217,8 @@ func (h *AuthHandler) handleSSOLinks(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, out)
 }
 
-// handleSSOUnlink removes the caller's link for one provider. Refused when
-// the account has no password: the link is then its only way to sign in and
-// removing it would lock the user out.
+// handleSSOUnlink removes the caller's link for one provider. Refused when the account has no
+// password: the link is then its only way to sign in and removing it would lock the user out.
 // @Summary      Unlink an SSO identity from the current account
 // @Tags         sso
 // @Param        provider path string true "Provider name"
@@ -320,9 +308,8 @@ func (h *AuthHandler) handleSSOCallback(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if flow.LinkUserID != "" {
-		// Account-link round trip (handleSSOLinkStart): the caller proved
-		// ownership of the local account when they started it and has now
-		// proved control of the IdP identity — attach, do not log in.
+		// Account-link round trip (handleSSOLinkStart): the caller proved the local account at
+		// start and has now proved control of the IdP identity — attach, do not log in.
 		if err := h.linkSSOIdentity(r.Context(), flow.LinkUserID, ident); err != nil {
 			logger.Warn("sso: identity link failed", "err", err)
 			redirectSSOError(w, r, "could not link this identity — it may already belong to another account")
@@ -420,14 +407,11 @@ func (h *AuthHandler) handleSSOExchange(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// resolveSSOUser maps a verified IdP identity to a local user:
-//  1. an existing identity link wins;
-//  2. otherwise an existing account with the same verified email is linked;
-//  3. otherwise a new account is provisioned (JIT) with no usable password.
-//
-// Both linking and provisioning require the IdP to assert the email as
-// verified — auto-linking on an unverified email would let an attacker who
-// controls a sloppy IdP account take over the matching local account.
+// resolveSSOUser maps a verified IdP identity to a local user: an existing link wins; else an
+// account with the same verified email is linked; else a new account is JIT-provisioned with no
+// usable password. Linking and provisioning both require the IdP to assert the email as verified —
+// auto-linking on an unverified email would let an attacker who controls a sloppy IdP account take
+// over the matching local account.
 func (h *AuthHandler) resolveSSOUser(ctx context.Context, ident *sso.Identity) (*storageif.User, error) {
 	provider := h.ssoClient.ProviderName()
 	ident.Email = strings.ToLower(ident.Email)
@@ -451,39 +435,27 @@ func (h *AuthHandler) resolveSSOUser(ctx context.Context, ident *sso.Identity) (
 	if existing, err := h.backend.LoadUserByEmail(ctx, ident.Email); err == nil {
 		newLink.UserID = existing.ID
 
-		// Security: if the local account was NOT email_verified (e.g. created
-		// via an open registration form without confirmation), it is
-		// vulnerable to pre-account takeover.
-		//
-		// By linking it now to a verified SSO identity, we take ownership.
-		// We MUST clear the existing password hash so the "shadow"
-		// registration's password (known to an attacker) can no longer be
-		// used to log in. This forces the account to only use the secure IdP.
+		// Security: an unverified local account (e.g. an open-registration "shadow" with a
+		// password an attacker knows) is a pre-account-takeover risk. Linking it to a verified
+		// SSO identity takes ownership: clear the password hash so the shadow's password can no
+		// longer log in, forcing the account onto the IdP.
 		if !existing.EmailVerified {
 			existing.EmailVerified = true
 			existing.Password = "" // Strip the insecure password hash
 			if err := h.backend.SaveUser(ctx, existing); err != nil {
 				return nil, fmt.Errorf("failed to harden account — try again")
 			}
-			// Invalidate any outstanding password-reset / email-verify tokens
-			// for this account. Clearing the password closes the shadow-login
-			// vector, but an attacker who created the shadow registration could
-			// have already requested a reset link — without this, that link
-			// would remain redeemable and let them re-arm a known password
-			// AFTER the legitimate owner takes the account over via SSO.
+			// Outstanding reset/verify tokens must go too: an attacker who created the shadow could
+			// have a reset link that would re-arm a known password after the owner takes over via SSO.
 			if err := h.backend.InvalidateUserTokens(ctx, existing.ID,
 				storageif.TokenPurposePasswordReset, storageif.TokenPurposeEmailVerify); err != nil {
 				logger.Error("failed to invalidate outstanding reset/verify tokens during SSO account hardening", "error", err, "userID", existing.ID)
 			}
 			logger.Info("account takeover prevented: cleared password on unverified account linked to verified SSO identity", "userID", existing.ID, "email", redactEmail(ident.Email))
 		} else {
-			// The existing account is ALREADY verified. Do NOT auto-link a new
-			// IdP identity to it: an attacker who controls an IdP that asserts
-			// the victim's email as verified could otherwise SSO straight into
-			// the victim's account (OIDC pre-account takeover via email
-			// linking). We only got here because no link exists yet for this
-			// (provider, subject); the legitimate owner must add the provider
-			// from account settings, where they authenticate as that owner.
+			// Already verified: do NOT auto-link a new IdP identity — an attacker controlling an
+			// IdP that asserts the victim's email as verified could SSO straight into the account.
+			// The owner must add the provider from account settings.
 			return nil, fmt.Errorf("an account with this email already exists — link %s from your account settings", provider)
 		}
 
@@ -532,9 +504,8 @@ func readSSOFlowCookie(r *http.Request) (*ssoFlowState, error) {
 	return &flow, nil
 }
 
-// redirectSSOError sends the browser back to the SPA with a human-readable
-// error in the URL fragment. Deliberately a redirect, not an error page: the
-// user is mid-login in a browser, not an API client.
+// redirectSSOError sends the browser back to the SPA with a human-readable error in the URL
+// fragment. Deliberately a redirect, not an error page: the user is mid-login in a browser.
 func redirectSSOError(w http.ResponseWriter, r *http.Request, msg string) {
 	http.Redirect(w, r, "/#ssoError="+url.QueryEscape(msg), http.StatusFound)
 }
@@ -545,9 +516,8 @@ func requestIsTLS(r *http.Request) bool {
 	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
-// randomToken returns a 43-character URL-safe random string (256 bits). It
-// returns an error rather than panicking on crypto/rand failure so the HTTP
-// handler can fail the request cleanly instead of crashing the process.
+// randomToken returns a 43-character URL-safe random string (256 bits); it errors rather than
+// panicking on crypto/rand failure so the handler can fail the request cleanly.
 func randomToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {

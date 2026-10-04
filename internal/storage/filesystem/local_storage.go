@@ -21,15 +21,8 @@ import (
 	"pad-core/models"
 )
 
-// LocalStorageBackend implements StorageBackend on the local file system.
-//
-// It is NOT the desktop app's store: in local mode no StorageBackend is
-// injected at all (provideStorageBackend returns nil), and the desktop keeps
-// flows in memory with settings and conversations in its own files. This
-// backend has two live uses: the SOURCE of the legacy-server migration
-// (PAD_DATA_DIR, see internal/migration), and the in-process storage behind
-// the API test router. Features built on it (versions, triage, comments,
-// tokens) are therefore exercised by tests but unreachable in the desktop app.
+// LocalStorageBackend implements StorageBackend on the local file system — NOT the desktop app's store
+// (local mode injects no StorageBackend at all). Live uses: the legacy-server migration source and the API test router.
 type LocalStorageBackend struct {
 	dataDir      string
 	mu           sync.RWMutex // guards users, orgs, and sharing maps
@@ -46,25 +39,15 @@ type LocalStorageBackend struct {
 	sharing      map[string][]*interfaces.Collaborator
 	apiTokens    map[string]*interfaces.APIToken  // guarded by apiTokenMu
 	userTokens   map[string]*interfaces.UserToken // keyed by token hash; guarded by userTokenMu
-	// flowMeta caches listing metadata per flow ID (see flowMetaEntry);
-	// guarded by metaMu. Invalidated by Stat (mtime+size) on refresh and kept
-	// current by SaveFlow/DeleteFlow.
+	// flowMeta caches listing metadata per flow ID (see flowMetaEntry),
+	// guarded by metaMu; invalidated by Stat (mtime+size) on refresh.
 	metaMu   sync.RWMutex
 	flowMeta map[string]*flowMetaEntry
 }
 
-// atomicWrite writes data to path durably: it writes to a sibling temp file
-// then renames it over the destination. Rename is atomic on the same
-// filesystem, so a crash mid-write can never leave a truncated/corrupt file at
-// path — readers see either the old contents or the complete new contents.
-//
-// The temp name is unique per call (os.CreateTemp, O_EXCL): a fixed
-// path+".tmp" let two concurrent writers to the same destination interleave
-// their O_TRUNC writes on one shared temp file, publishing a mixed or
-// truncated body via the rename — settings.json has exactly that exposure
-// (SaveSettings/SaveUserSettings/SaveOrgSettings all write it with no lock).
-// The dot-prefixed name keeps a crash-orphaned temp out of the .json-suffix
-// filters (e.g. refreshMetaIndex) that scan these directories.
+// atomicWrite writes data to path durably via a unique sibling temp file + rename (atomic — a crash mid-write
+// can never leave a truncated file). The temp name must be unique per call: a fixed path+".tmp" let concurrent
+// writers interleave O_TRUNC writes and publish a mixed body; the dot-prefix keeps orphaned temps out of .json filters.
 func atomicWrite(path string, data []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".baki-tmp-*")
 	if err != nil {
@@ -96,44 +79,23 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
-// renameOverOpenReader renames oldpath over newpath, tolerating the one way
-// Windows departs from POSIX rename semantics: replacing a file that another
-// goroutine momentarily holds open for reading (Go's os.ReadFile opens with
-// FILE_SHARE_READ|WRITE and no FILE_SHARE_DELETE, so a LoadFlow racing a Save
-// holds exactly such a handle) fails instead of atomically swapping the file.
-// The failure surfaces as either ERROR_SHARING_VIOLATION (32) or
-// ERROR_ACCESS_DENIED (5)/EACCES/EPERM depending on Windows build and
-// filesystem — Go maps only the latter to ErrPermission, so errno 32 must be
-// matched on the raw errno (isSharingViolation) or it is invisible to
-// errors.Is. The reader's handle closes within microseconds, so a short
-// bounded retry turns the spurious denial into a success. Whether an error is
-// retryable at all is platform policy (transientSharingConflict): on non-Windows
-// POSIX rename is atomic over open files, and fs.ErrPermission there means a
-// genuine, permanent permission problem — retrying it just burned 20×100 ms
-// while the caller (often holding flowMu) serialized every other save.
-//
-// The implementation lives in internal/storage/atomicfile, shared with the
-// Azure AI Foundry registry file.
+// renameOverOpenReader renames oldpath over newpath, tolerating the one way Windows departs from POSIX
+// rename semantics: replacing a file another goroutine momentarily holds open for reading (a LoadFlow racing
+// a Save) fails with a sharing violation instead of atomically swapping — the handle closes within
+// microseconds, so a short bounded retry succeeds. On non-Windows, rename is atomic over open files and
+// EPERM is a genuine permission problem — no retry. Impl: internal/storage/atomicfile.
 func renameOverOpenReader(oldpath, newpath string) error {
 	return atomicfile.RenameOverOpenReader(oldpath, newpath)
 }
 
-// readFileTolerant is the read-side mirror of renameOverOpenReader: while a
-// writer's rename is replacing the destination, a concurrent OPEN of the same
-// path fails with the same transient sharing violation (a LoadFlow racing a
-// Save — the mirror of the race the writer retry handles). The replacement
-// completes within microseconds, so the same bounded retry applies. On
-// non-Windows transientSharingConflict is false and reads fail through
-// immediately. Every caller passes a dataDir-relative path it validated.
+// readFileTolerant is the read-side mirror of renameOverOpenReader: a concurrent OPEN while the writer's
+// rename replaces the destination fails with the same transient sharing violation, so the same bounded retry applies.
 func readFileTolerant(path string) ([]byte, error) {
 	return atomicfile.ReadFileTolerant(path)
 }
 
-// safePathSegment reports whether s is safe to use as a single on-disk path
-// segment (no separators, no parent-dir escape, non-empty). It mirrors
-// service.safeConvComponent so every flowID/scope-keyed path in this backend
-// gets the same traversal defense-in-depth as the service-layer convFilePath,
-// rather than relying solely on upstream UUID generation + authorization.
+// safePathSegment reports whether s is safe as a single on-disk path segment (no separators, no
+// parent-dir escape, non-empty); mirrors service.safeConvComponent for traversal defense-in-depth.
 func safePathSegment(s string) bool {
 	if s == "" || s == "." || s == ".." {
 		return false
@@ -141,22 +103,12 @@ func safePathSegment(s string) bool {
 	return !strings.ContainsAny(s, `/\`) && !strings.Contains(s, "..")
 }
 
-// staleTempMaxAge bounds how old a ".baki-tmp-*" file must be before the
-// startup sweep considers it crash-orphaned. atomicWrite removes its temp on
-// every failure path, so the only way one survives is the process dying
-// between CreateTemp and the rename; a live writer's temp is at most one
-// retry cycle old (~2 s worst case in renameOverOpenReader), so 10 minutes
-// never sweeps a temp a concurrent writer still owns. The old fixed
-// "<name>.tmp" self-overwrote on the next write, so stranding was bounded by
-// construction — the unique names traded that for needing this sweep.
+// staleTempMaxAge bounds how old a ".baki-tmp-*" file must be before the startup sweep considers it
+// crash-orphaned: atomicWrite removes its temp on every failure path, so only a process death leaves one.
 const staleTempMaxAge = 10 * time.Minute
 
-// sweepStaleTemps removes crash-orphaned atomicWrite temps under root, up to
-// a bounded depth (dataDir itself is flat: flows/, conversations/<scope>/,
-// versions/<id>/ — depth 3 covers every dir atomicWrite writes into without
-// walking arbitrarily deep trees on every startup). Best-effort: walk and
-// remove errors are logged, never fatal — a stuck temp costs disk space, it
-// must not cost the backend.
+// sweepStaleTemps removes crash-orphaned atomicWrite temps under root, to a bounded depth (3 covers
+// every dir atomicWrite writes into). Best-effort: errors are logged, never fatal.
 func sweepStaleTemps(root string) {
 	const maxDepth = 3
 	cutoff := time.Now().Add(-staleTempMaxAge)
@@ -214,9 +166,8 @@ func NewLocalStorageBackend(dataDir string) (*LocalStorageBackend, error) {
 	}, nil
 }
 
-// flowPath builds the on-disk path for a flow document. Flow IDs can
-// originate from uploaded flow files, so they get the same traversal guard
-// as every other flowID-keyed path in this backend.
+// flowPath builds the on-disk path for a flow document; IDs can originate from uploaded files, so
+// they get the same traversal guard as every other flowID-keyed path in this backend.
 func (lsb *LocalStorageBackend) flowPath(id string) (string, error) {
 	if !safePathSegment(id) {
 		return "", fmt.Errorf("invalid flow id %q", id)
@@ -224,8 +175,7 @@ func (lsb *LocalStorageBackend) flowPath(id string) (string, error) {
 	return filepath.Join(lsb.dataDir, "flows", id+".json"), nil
 }
 
-// SaveFlow saves a flow document to the local file system.
-// In local mode OCC is enforced via flowMu + a version comparison.
+// SaveFlow saves a flow document; OCC is enforced via flowMu + a version comparison.
 func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.FlowDocument) error {
 	lsb.flowMu.Lock()
 	defer lsb.flowMu.Unlock()
@@ -235,10 +185,7 @@ func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.F
 		return err
 	}
 
-	// Check for existing version to enforce OCC. The version comes from the
-	// metadata index when fresh (Stat-validated by refreshMetaIndex) — a full
-	// read+unmarshal of the stored document under this lock was pure overhead
-	// for the common case. A stale/missing index entry falls back to the read.
+	// OCC version check: from the metadata index when fresh (Stat-validated), else a full read.
 	existingVersion := -1
 	if idx, idxErr := lsb.refreshMetaIndex(ctx); idxErr == nil {
 		lsb.metaMu.RLock()
@@ -258,14 +205,11 @@ func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.F
 		}
 		flow.Version = existingVersion + 1
 	} else {
-		// New flow: force the initial version to match the Postgres backend
-		// (INSERT ... VALUES (..., 0)), so a caller passing a stale non-zero
-		// Version (e.g. a doc reused across saves) can't fabricate a starting
-		// version that would then reject a legitimate Version=0 save.
+		// Force the initial version to 0 like Postgres, so a stale non-zero Version cannot
+		// fabricate a starting version that rejects a legitimate Version=0 save.
 		flow.Version = 0
 	}
 
-	// Create flows directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(flowPath), 0750); err != nil {
 		return fmt.Errorf("failed to create flows directory: %w", err)
 	}
@@ -279,11 +223,11 @@ func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.F
 		return fmt.Errorf("failed to write flow file: %w", err)
 	}
 
-	// Keep the metadata index current for this flow so the next listing
-	// doesn't re-read the file we just wrote.
+	// Keep the index current so the next listing doesn't re-read the file we just wrote.
 	if info, statErr := os.Stat(flowPath); statErr == nil {
 		header := *flow
 		header.Content = nil
+		header.Source = "" // see flowMetaEntry: the index must not hold bodies
 		lsb.metaMu.Lock()
 		if lsb.flowMeta == nil {
 			lsb.flowMeta = make(map[string]*flowMetaEntry)
@@ -318,34 +262,29 @@ func (lsb *LocalStorageBackend) LoadFlow(ctx context.Context, id string) (*inter
 	return &flow, nil
 }
 
-// LoadFlowHeader returns the flow's metadata with nil Content. The filesystem
-// backend stores content inline, so this just loads and drops it — kept in
-// interface parity with the database backend (which skips a blob fetch).
+// LoadFlowHeader returns the flow's metadata with nil Content and empty Source (interface parity;
+// no header caller may depend on either).
 func (lsb *LocalStorageBackend) LoadFlowHeader(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
 	flow, err := lsb.LoadFlow(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	flow.Content = nil
+	flow.Source = ""
 	return flow, nil
 }
 
-// flowMetaEntry is the cached listing metadata for one stored flow. The index
-// lets ListFlows/CountFlows answer from Stat checks (mtime+size) instead of
-// reading + fully JSON-parsing every flow file per listing — the defining
-// scalability issue of this backend (a 1,000-flow library paid 1,000 reads +
-// unmarshals per page render, twice, once more for the count).
+// flowMetaEntry is the cached listing metadata for one stored flow, letting ListFlows/CountFlows answer
+// from Stat checks instead of reading + parsing every flow file. The header holds neither body: the index
+// lives as long as the backend, so a kept Source would pin every legacy flow's full PAD text for the process lifetime.
 type flowMetaEntry struct {
-	header  interfaces.FlowDocument // metadata fields only; Content always nil
+	header  interfaces.FlowDocument // metadata fields only; Content nil, Source empty
 	modTime time.Time
 	size    int64
 }
 
-// refreshMetaIndex brings the flow-metadata index up to date: new or changed
-// files (Stat mtime/size mismatch) are read once and their HEADER extracted
-// (a partial unmarshal — the file is lexed but the content tree is never
-// built); unchanged files reuse their cached entry; deleted files drop out.
-// Entries for SaveFlow-written files are updated in place by SaveFlow itself.
+// refreshMetaIndex brings the flow-metadata index up to date: new/changed files (Stat mtime/size
+// mismatch) are read once and their HEADER extracted; unchanged reuse the cached entry; deleted drop out.
 func (lsb *LocalStorageBackend) refreshMetaIndex(ctx context.Context) (map[string]*flowMetaEntry, error) {
 	flowsDir := filepath.Join(lsb.dataDir, "flows")
 	files, err := os.ReadDir(flowsDir)
@@ -384,6 +323,7 @@ func (lsb *LocalStorageBackend) refreshMetaIndex(ctx context.Context) (map[strin
 			continue // corrupt: skip (matches previous skip behavior)
 		}
 		h.Content = nil
+		h.Source = "" // see flowMetaEntry: the index must not hold bodies
 		lsb.flowMeta[flowID] = &flowMetaEntry{header: h, modTime: info.ModTime(), size: info.Size()}
 	}
 	for id := range lsb.flowMeta {
@@ -394,15 +334,8 @@ func (lsb *LocalStorageBackend) refreshMetaIndex(ctx context.Context) (map[strin
 	return lsb.flowMeta, nil
 }
 
-// ListFlows lists flow documents matching the given filter.
-//
-// Metadata phase answers from the cached index (Stat-validated); full content
-// is loaded ONLY for the flows on the requested page when the caller didn't
-// ask for MetadataOnly — previously every listing read and fully parsed every
-// stored flow, including all filtered-out ones.
-// UpdateFlowTags: tags are a cloud-library concept (organizational labels on
-// stored flows); desktop flows are file-backed and carry no tag storage.
-// Clean error rather than a silent no-op so callers can branch on mode.
+// UpdateFlowTags: tags are a cloud-library concept; desktop flows are file-backed. Clean error
+// rather than a silent no-op so callers can branch on mode.
 func (lsb *LocalStorageBackend) UpdateFlowTags(ctx context.Context, flowID string, tags []string) error {
 	return fmt.Errorf("flow tags require a storage backend (cloud mode)")
 }
@@ -416,7 +349,7 @@ func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces
 	lsb.metaMu.RLock()
 	flows := make([]*interfaces.FlowDocument, 0, len(index))
 	for id, e := range index {
-		doc := e.header // copy; Content nil
+		doc := e.header // copy; Content nil, Source empty
 		doc.ID = id
 		if !lsb.matchesFilter(&doc, filter) {
 			continue
@@ -425,8 +358,7 @@ func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces
 	}
 	lsb.metaMu.RUnlock()
 
-	// Match the Postgres backend's ordering (flowOrderBy) so pagination is
-	// stable and the two backends return flows in the same relative order.
+	// Match the Postgres backend's ordering (flowOrderBy) so pagination is stable across backends.
 	sortFlows(flows, filter.SortBy)
 
 	if filter.Offset > 0 {
@@ -451,30 +383,10 @@ func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces
 	return flows, nil
 }
 
-// sortFlows orders flows in place to mirror the Postgres flowOrderBy clause, so
-// the filesystem backend's pagination is stable and consistent with the
-// database backend. Default (unset/unknown sort) = updated_at DESC.
-//
-// Every comparator ends in a comparison on ID, which is what actually makes the
-// claim in the paragraph above true. Two things conspired to break it before:
-// ListFlows builds its slice by ranging a MAP (random order per call), and
-// slices.SortFunc is NOT a stable sort. So a group of flows comparing equal came
-// out in a different arbitrary order on every call.
-//
-// Ties are the ordinary case here, not a corner one: SaveFlow persists whatever
-// UpdatedAt the caller supplied and never stamps one itself, so every flow
-// written without an explicit timestamp carries the ZERO time and ties with all
-// the others. A bulk import sharing one timestamp does the same.
-//
-// That matters because ListFlows is walked page-by-page with LIMIT/OFFSET by
-// migration.Migrator.migrateFlows and scanner.ScanOnce. Re-ordering between
-// pages shifts rows across the boundary, so the walk silently skips some and
-// returns others twice — measured at 3 of 40 flows lost with zero-time ties and
-// 14 of 40 with a shared timestamp. In the migrator that is silent data loss:
-// the run reports the flows it saw and no errors.
-//
-// ID is unique, so each comparator is now a total order and the sort's own
-// stability no longer matters.
+// sortFlows orders flows in place to mirror the Postgres flowOrderBy clause, so pagination is stable
+// across backends. Every comparator ends in an ID comparison: ListFlows builds its slice by ranging a
+// MAP and slices.SortFunc is NOT stable, so without a unique tiebreaker the LIMIT/OFFSET walkers
+// silently skip and repeat rows (measured: 3 of 40 flows lost).
 func sortFlows(flows []*interfaces.FlowDocument, sort interfaces.FlowSort) {
 	byID := func(a, b *interfaces.FlowDocument) int { return strings.Compare(a.ID, b.ID) }
 	switch sort {
@@ -506,9 +418,7 @@ func sortFlows(flows []*interfaces.FlowDocument, sort interfaces.FlowSort) {
 			return byID(a, b)
 		})
 	case interfaces.FlowSortBlocksDesc:
-		// Mirror the Postgres ORDER BY COALESCE((metadata->>'BlockCount')::int, 0)
-		// DESC, updated_at DESC. BlockCount lives on FlowMetadata, which is
-		// populated even when MetadataOnly is set, so this works for list views.
+		// Mirror the Postgres ORDER BY COALESCE(BlockCount,0) DESC, updated_at DESC.
 		slices.SortFunc(flows, func(a, b *interfaces.FlowDocument) int {
 			if c := cmp.Compare(b.Metadata.BlockCount, a.Metadata.BlockCount); c != 0 {
 				return c
@@ -531,10 +441,8 @@ func sortFlows(flows []*interfaces.FlowDocument, sort interfaces.FlowSort) {
 	}
 }
 
-// CountFlows returns the total number of flows matching the filter, ignoring
-// Limit/Offset. Answers from the same Stat-validated metadata index as
-// ListFlows — previously this re-read and re-parsed every stored flow file on
-// every call (the library handler calls list AND count per page render).
+// CountFlows returns the total matching the filter, ignoring Limit/Offset, from the Stat-validated
+// metadata index.
 func (lsb *LocalStorageBackend) CountFlows(ctx context.Context, filter interfaces.FlowFilter) (int, error) {
 	index, err := lsb.refreshMetaIndex(ctx)
 	if err != nil {
@@ -553,30 +461,21 @@ func (lsb *LocalStorageBackend) CountFlows(ctx context.Context, filter interface
 	return count, nil
 }
 
-// matchesFilter returns true if the flow satisfies all set filter conditions.
-// Flows with no OwnerID are visible to everyone (backwards compatibility with pre-auth files).
-// Note: org filtering here only matches OrganizationID equality — membership of
-// UserID in that org is enforced upstream by the service layer (AuthzService)
-// before the filter reaches storage.
-//
-// DELIBERATE DIVERGENCE: collaborator grants are intentionally not checked here.
-// The local/desktop backend is single-user; sharing/collaborator logic only
-// applies in cloud mode (Postgres). The Postgres flowFilterWhere includes an
-// EXISTS subquery on flow_collaborators — this filesystem implementation does not.
+// matchesFilter returns true if the flow satisfies all set filter conditions. Flows with no OwnerID
+// are visible to everyone (pre-auth compatibility); org membership of UserID is enforced upstream.
+// DELIBERATE DIVERGENCE: collaborator grants are not checked — the local/desktop backend is
+// single-user, sharing applies only in cloud mode.
 func (lsb *LocalStorageBackend) matchesFilter(flow *interfaces.FlowDocument, f interfaces.FlowFilter) bool {
-	// AllFlows is an explicit opt-in for operational enumeration (migration)
-	// that bypasses owner/org scoping. Otherwise an empty scope matches
-	// nothing, mirroring the Postgres backend's defense-in-depth guard.
+	// AllFlows is the operational-enumeration opt-in (migration) that bypasses owner/org scoping;
+	// otherwise an empty scope matches nothing, mirroring the Postgres defense-in-depth guard.
 	if !f.AllFlows {
 		if f.UserID == "" && f.OrganizationID == "" && len(f.OrganizationIDs) == 0 {
 			return false
 		}
 		ownerMatch := flow.OwnerID == "" || flow.OwnerID == f.UserID
 		orgMatch := f.OrganizationID != "" && flow.OrganizationID == f.OrganizationID
-		// OrganizationIDs widens the org scope to multiple orgs the caller
-		// belongs to (Postgres uses an IN list); mirror that here so the FS
-		// backend doesn't return more rows than Postgres would for the same
-		// filter.
+		// OrganizationIDs widens the org scope (Postgres uses an IN list); mirror it so the FS
+		// backend doesn't return more rows than Postgres would.
 		if !orgMatch && len(f.OrganizationIDs) > 0 {
 			for _, oid := range f.OrganizationIDs {
 				if flow.OrganizationID == oid {
@@ -592,12 +491,15 @@ func (lsb *LocalStorageBackend) matchesFilter(flow *interfaces.FlowDocument, f i
 	if f.Query != "" && !strings.Contains(strings.ToLower(flow.Name), strings.ToLower(f.Query)) {
 		return false
 	}
-	// CreatedAfter / CreatedBefore mirror Postgres's strict > / < comparisons
-	// so the two backends agree on which flows a filter returns.
+	// CreatedAfter / CreatedBefore mirror Postgres's strict > / < comparisons.
 	if f.CreatedAfter != nil && !flow.CreatedAt.After(*f.CreatedAfter) {
 		return false
 	}
 	if f.CreatedBefore != nil && !flow.CreatedAt.Before(*f.CreatedBefore) {
+		return false
+	}
+	// Keyset cursor (FlowFilter.AfterID), mirroring Postgres's id > $n.
+	if f.AfterID != "" && flow.ID <= f.AfterID {
 		return false
 	}
 	return true
@@ -610,10 +512,8 @@ func (lsb *LocalStorageBackend) DeleteFlow(ctx context.Context, id string) error
 		return err
 	}
 
-	// Take flowMu so a concurrent SaveFlow can't read the file, find it still
-	// present, and rewrite it (at a bumped version) after this delete — which
-	// would silently resurrect the flow the user just deleted. SaveFlow holds
-	// the same mutex across its load-version-check-write critical section.
+	// Take flowMu so a concurrent SaveFlow can't find the file still present and rewrite it after
+	// this delete — silently resurrecting the flow the user just deleted.
 	lsb.flowMu.Lock()
 	defer lsb.flowMu.Unlock()
 
@@ -621,8 +521,7 @@ func (lsb *LocalStorageBackend) DeleteFlow(ctx context.Context, id string) error
 		return fmt.Errorf("failed to delete flow file: %w", err)
 	}
 
-	// Drop the metadata index entry so listings immediately stop reporting
-	// the deleted flow (no Stat round-trip needed to notice).
+	// Drop the index entry so listings immediately stop reporting the deleted flow.
 	lsb.metaMu.Lock()
 	delete(lsb.flowMeta, id)
 	lsb.metaMu.Unlock()
@@ -694,7 +593,6 @@ func (lsb *LocalStorageBackend) SaveConversation(ctx context.Context, flowID, sc
 	}
 	conversationPath := filepath.Join(lsb.dataDir, "conversations", scope, flowID+".json")
 
-	// Create conversations directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(conversationPath), 0750); err != nil {
 		return fmt.Errorf("failed to create conversations directory: %w", err)
 	}
@@ -734,8 +632,7 @@ func (lsb *LocalStorageBackend) LoadConversation(ctx context.Context, flowID, sc
 	return messages, nil
 }
 
-// DeleteConversation removes the on-disk conversation for a flow+scope. A
-// missing file is treated as success so the operation is idempotent.
+// DeleteConversation removes the on-disk conversation for a flow+scope; a missing file is success.
 func (lsb *LocalStorageBackend) DeleteConversation(ctx context.Context, flowID, scope string) error {
 	if !safePathSegment(scope) || !safePathSegment(flowID) {
 		return fmt.Errorf("invalid conversation identifier")
@@ -747,10 +644,8 @@ func (lsb *LocalStorageBackend) DeleteConversation(ctx context.Context, flowID, 
 	return nil
 }
 
-// SaveUsageMetric is a no-op: the filesystem backend does not track AI usage
-// metrics (local mode has no multi-tenant accounting).
+// SaveUsageMetric is a no-op: the filesystem backend tracks no AI usage metrics.
 func (b *LocalStorageBackend) SaveUsageMetric(ctx context.Context, metric *interfaces.UsageMetric) error {
-	// Local storage does not track usage metrics
 	return nil
 }
 
@@ -758,17 +653,20 @@ func (b *LocalStorageBackend) GetDailyUsage(ctx context.Context, userID, orgID s
 	return 0, nil
 }
 
-func (b *LocalStorageBackend) SaveKnowledgeDocument(ctx context.Context, doc *interfaces.KnowledgeDocument) error {
+func (b *LocalStorageBackend) SaveKnowledgeDocument(ctx context.Context, _ string, doc *interfaces.KnowledgeDocument) error {
 	return nil
 }
-func (b *LocalStorageBackend) DeleteKnowledgeDocument(ctx context.Context, orgID, id string) error {
+func (b *LocalStorageBackend) DeleteKnowledgeDocument(ctx context.Context, _, orgID, id string) error {
 	return nil
 }
 func (b *LocalStorageBackend) DeleteKnowledgeDocumentByName(ctx context.Context, orgID, filename string) error {
 	return nil
 }
-func (b *LocalStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string, limit int) ([]*interfaces.KnowledgeDocument, error) {
+func (b *LocalStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string, limit, offset int) ([]*interfaces.KnowledgeDocument, error) {
 	return nil, nil
+}
+func (b *LocalStorageBackend) ListKnowledgeDocumentIDsByFilename(ctx context.Context, orgID, filename string) ([]string, int, error) {
+	return nil, 0, nil
 }
 func (b *LocalStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID string, chunks []interfaces.KnowledgeChunk) error {
 	return nil
@@ -800,22 +698,12 @@ func (b *LocalStorageBackend) ListAuditEvents(ctx context.Context, filter interf
 	return []*interfaces.AuditEvent{}, nil
 }
 
-// ErrPoliciesUnsupported is returned by the policy methods that would otherwise
-// have to invent a result. Named policies are an org-scoped, cloud-mode feature;
-// this backend has no orgs and nowhere to put them.
+// ErrPoliciesUnsupported is returned by the policy methods that would otherwise have to invent a
+// result: named policies are an org-scoped cloud-mode feature; this backend has no orgs.
 var ErrPoliciesUnsupported = errors.New("named policies require cloud mode (this deployment stores flows locally)")
 
-// Policies — not persisted in local mode (no orgs).
-//
-// SavePolicy and DeletePolicy used to return nil, i.e. SUCCESS, and do nothing.
-// Desktop mode has a backend (this one), and the handler's availability guard
-// only checks for a nil backend, so the path is reachable: a user saved a policy,
-// was told it worked, and it was gone — with every later run silently gating on
-// a policy that did not exist. A silent success is worse than an error, because
-// it leaves the caller nothing to act on.
-//
-// Get/List keep returning "nothing here", which is accurate: there genuinely are
-// no stored policies, and callers already handle the empty case.
+// Policies — not persisted in local mode (no orgs). Save/Delete return an error: a silent success is
+// worse (a user saved a policy, was told it worked, and it was gone); Get/List keep returning "nothing here".
 func (b *LocalStorageBackend) SavePolicy(ctx context.Context, p *models.Policy) error {
 	return ErrPoliciesUnsupported
 }
@@ -829,11 +717,8 @@ func (b *LocalStorageBackend) DeletePolicy(ctx context.Context, orgID, id string
 	return ErrPoliciesUnsupported
 }
 
-// Flow versioning (test router / legacy data only — see LocalStorageBackend).
-// versionDir is the per-flow directory holding one JSON file per snapshot:
-// {dataDir}/versions/{flowID}/{version}.json. Flow IDs originate from uploads,
-// so they get the same traversal guard (safePathSegment) as every other
-// flowID-keyed path in this backend.
+// Flow versioning (test router / legacy data only). versionDir is the per-flow directory holding
+// one JSON per snapshot: {dataDir}/versions/{flowID}/{version}.json (traversal-guarded).
 func (lsb *LocalStorageBackend) versionDir(flowID string) (string, error) {
 	if !safePathSegment(flowID) {
 		return "", fmt.Errorf("invalid flow id %q", flowID)
@@ -841,10 +726,8 @@ func (lsb *LocalStorageBackend) versionDir(flowID string) (string, error) {
 	return filepath.Join(lsb.dataDir, "versions", flowID), nil
 }
 
-// SaveFlowVersion assigns the next version number atomically (max existing + 1
-// under flowMu) and persists the snapshot. Filesystem equivalent of the
-// Postgres FOR UPDATE + MAX+1 path. The desktop app does not reach it: local
-// mode injects no StorageBackend, so its version routes answer 503.
+// SaveFlowVersion assigns the next version atomically (max existing + 1 under flowMu) and persists
+// the snapshot — the FS equivalent of Postgres's FOR UPDATE + MAX+1.
 func (lsb *LocalStorageBackend) SaveFlowVersion(ctx context.Context, v *interfaces.FlowVersion) error {
 	dir, err := lsb.versionDir(v.FlowID)
 	if err != nil {
@@ -855,8 +738,7 @@ func (lsb *LocalStorageBackend) SaveFlowVersion(ctx context.Context, v *interfac
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create versions dir: %w", err)
 	}
-	// Assign the next version (max existing + 1). The caller's v.Version is
-	// ignored — same as the Postgres backend, which computes it atomically.
+	// The caller's v.Version is ignored — same as Postgres, which computes it atomically.
 	existing, _ := os.ReadDir(dir)
 	max := 0
 	for _, e := range existing {
@@ -876,8 +758,7 @@ func (lsb *LocalStorageBackend) SaveFlowVersion(ctx context.Context, v *interfac
 	return nil
 }
 
-// ListFlowVersions returns snapshots newest-first, optionally capped by limit
-// (0 = a sensible default to avoid unbounded reads on huge histories).
+// ListFlowVersions returns snapshots newest-first, optionally capped by limit (0 = a sensible default).
 func (lsb *LocalStorageBackend) ListFlowVersions(ctx context.Context, flowID string, limit int) ([]*interfaces.FlowVersion, error) {
 	dir, err := lsb.versionDir(flowID)
 	if err != nil {
@@ -912,8 +793,7 @@ func (lsb *LocalStorageBackend) ListFlowVersions(ctx context.Context, flowID str
 	return versions, nil
 }
 
-// LoadFlowVersion reads a specific snapshot. Returns ErrNotFound when the
-// version or flow has no history.
+// LoadFlowVersion reads one snapshot; ErrNotFound when the version or flow has no history.
 func (lsb *LocalStorageBackend) LoadFlowVersion(ctx context.Context, flowID string, version int) (*interfaces.FlowVersion, error) {
 	dir, err := lsb.versionDir(flowID)
 	if err != nil {
@@ -973,19 +853,15 @@ func (lsb *LocalStorageBackend) getDefaultSettings() *interfaces.AppSettings {
 }
 
 // ---- User operations ----
-//
-// Concurrency contract (mirrors apitokens.go): the maps store privately-owned
-// structs and every read returns a VALUE COPY, so a caller holding a returned
-// user can never race a concurrent UpdateUser* write. Writers store copies so
-// a caller mutating its argument after Save can't corrupt the store.
+// Concurrency contract: the maps store privately-owned structs and every read returns a VALUE COPY,
+// so a caller holding a returned user can never race a concurrent UpdateUser* write.
 
 func (lsb *LocalStorageBackend) SaveUser(ctx context.Context, user *interfaces.User) error {
 	user.Email = strings.ToLower(user.Email)
 	cp := *user
 	lsb.mu.Lock()
 	defer lsb.mu.Unlock()
-	// Reject an email collision with a different user ID to mirror the Postgres
-	// UNIQUE(email) constraint (O(1) via the email index).
+	// Mirror the Postgres UNIQUE(email) constraint (O(1) via the email index).
 	if otherID, ok := lsb.usersByEmail[cp.Email]; ok && otherID != cp.ID {
 		return interfaces.ErrEmailExists
 	}
@@ -998,9 +874,8 @@ func (lsb *LocalStorageBackend) SaveUser(ctx context.Context, user *interfaces.U
 	return nil
 }
 
-// CreateUser inserts a new user under the users mutex so the empty-check and
-// the insert are atomic — two concurrent first-time registrations cannot both
-// be promoted to RoleAdmin. Returns ErrEmailExists on email collision.
+// CreateUser inserts under the users mutex so the empty-check and insert are atomic (two
+// concurrent first-time registrations cannot both become RoleAdmin). ErrEmailExists on collision.
 func (lsb *LocalStorageBackend) CreateUser(ctx context.Context, user *interfaces.User) error {
 	user.Email = strings.ToLower(user.Email)
 	cp := *user
@@ -1014,8 +889,7 @@ func (lsb *LocalStorageBackend) CreateUser(ctx context.Context, user *interfaces
 	role := cp.Role
 	if len(lsb.users) == 0 && auth.AllowBootstrap(ctx) {
 		role = auth.RoleAdmin
-		// Mirrors the Postgres backend: the bootstrap admin is email-verified so
-		// a deployment without SMTP can still sign in its first administrator.
+		// Bootstrap admin is email-verified so a deployment without SMTP can sign in its first admin.
 		cp.EmailVerified = true
 		user.EmailVerified = true
 	}
@@ -1077,17 +951,9 @@ func (lsb *LocalStorageBackend) ListUsers(ctx context.Context, limit, offset int
 		cp := *u
 		users = append(users, &cp)
 	}
-	// Newest-first, tie-broken by ID to match the postgres backend's
-	// `ORDER BY created_at DESC, id ASC`.
-	//
-	// The ID tiebreaker is what makes this actually stable, which the comment
-	// here used to claim without delivering: the slice is built by ranging a
-	// MAP (random order per call) and sort.Slice is not a stable sort, so any
-	// group of users sharing a CreatedAt came out in a different arbitrary
-	// order every call — and this list is offset-paginated by the admin UI, so
-	// that dropped and repeated users across page boundaries. Ties are easy to
-	// hit: a seeded install or a bulk import creates accounts within the same
-	// clock tick.
+	// Newest-first, tie-broken by ID to match Postgres `ORDER BY created_at DESC, id ASC`: the slice is
+	// built by ranging a MAP and sort.Slice is not stable — without the tiebreaker offset pagination
+	// dropped and repeated users across page boundaries.
 	sort.Slice(users, func(i, j int) bool {
 		if !users[i].CreatedAt.Equal(users[j].CreatedAt) {
 			return users[i].CreatedAt.After(users[j].CreatedAt)
@@ -1163,9 +1029,8 @@ func (lsb *LocalStorageBackend) UpdateUserPassword(ctx context.Context, id strin
 	return interfaces.ErrNotFound
 }
 
-// DeleteUser erases a local user record. Desktop/local mode is single-user and
-// not subject to GDPR multi-tenant erasure semantics, so this only removes the
-// in-memory user entry (idempotent). Flow files on disk are left untouched.
+// DeleteUser erases a local user record (in-memory only, idempotent); local mode is single-user,
+// not subject to GDPR erasure. Flow files on disk are left untouched.
 func (lsb *LocalStorageBackend) DeleteUser(ctx context.Context, id string) error {
 	lsb.mu.Lock()
 	defer lsb.mu.Unlock()
@@ -1176,8 +1041,7 @@ func (lsb *LocalStorageBackend) DeleteUser(ctx context.Context, id string) error
 	return nil
 }
 
-// ExportUserData returns a minimal data export for a local user. Local mode has
-// no per-user token/audit tables, so only the profile is included.
+// ExportUserData returns a minimal export (profile only) — local mode has no per-user token/audit tables.
 func (lsb *LocalStorageBackend) ExportUserData(ctx context.Context, id string) (*interfaces.UserDataExport, error) {
 	lsb.mu.Lock()
 	defer lsb.mu.Unlock()
@@ -1207,10 +1071,8 @@ func (lsb *LocalStorageBackend) UpdateUserProfile(ctx context.Context, id string
 }
 
 // ---- Organisation operations ----
-//
-// Same copy-on-read/copy-on-write contract as the user store: readers get
-// value copies (with the Members slice cloned, since MutateOrg's callback can
-// modify elements in place), writers store copies.
+// Same copy-on-read/copy-on-write contract as the user store (Members slice cloned — MutateOrg's
+// callback can modify elements in place).
 
 func (lsb *LocalStorageBackend) SaveOrg(ctx context.Context, org *interfaces.Organisation) error {
 	cp := cloneOrg(org)
@@ -1256,9 +1118,8 @@ func (lsb *LocalStorageBackend) DeleteOrg(ctx context.Context, id string) error 
 	return interfaces.ErrNotFound
 }
 
-// cloneOrg returns a deep-enough copy for the copy-on-read/write contract:
-// the struct itself plus a fresh Members backing array (members are values,
-// and MutateOrg callbacks can modify them in place).
+// cloneOrg returns a deep-enough copy for the copy-on-read/write contract: struct plus a fresh
+// Members backing array.
 func cloneOrg(o *interfaces.Organisation) interfaces.Organisation {
 	cp := *o
 	cp.Members = append([]interfaces.OrgMember(nil), o.Members...)
@@ -1266,10 +1127,8 @@ func cloneOrg(o *interfaces.Organisation) interfaces.Organisation {
 }
 
 // ---- Dashboard ----
-// The filesystem backend is not used as the live StorageBackend in desktop mode
-// (that path runs with a nil backend and sources the dashboard from the in-memory
-// analyzer cache). These satisfy the interface for tests/migration; persistence is
-// a no-op and the aggregate is empty.
+// Not the live StorageBackend in desktop mode (that path runs with a nil backend); these satisfy
+// the interface for tests/migration — persistence is a no-op and the aggregate is empty.
 
 func (lsb *LocalStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *interfaces.FlowAnalysis) error {
 	return nil
@@ -1279,8 +1138,7 @@ func (lsb *LocalStorageBackend) LoadFlowHealth(ctx context.Context, flowID strin
 	return nil, nil
 }
 
-// LoadFlowHealthBatch: local mode doesn't persist analysis snapshots, so there is
-// no health to return — an empty (non-nil) map, matching the cloud contract.
+// LoadFlowHealthBatch: local mode persists no snapshots — an empty (non-nil) map, per the cloud contract.
 func (lsb *LocalStorageBackend) LoadFlowHealthBatch(ctx context.Context, flowIDs []string) (map[string]*interfaces.HealthSnapshot, error) {
 	return map[string]*interfaces.HealthSnapshot{}, nil
 }
@@ -1293,8 +1151,7 @@ func (lsb *LocalStorageBackend) FlowDashboardAdvanced(ctx context.Context, owner
 	return &interfaces.DashboardAdvancedData{Security: interfaces.DashboardSecurity{}}, nil
 }
 
-// Analytics reads: local mode persists no analysis history, so every read is
-// empty (the analytics route is cloud-only anyway).
+// Analytics reads: local mode persists no analysis history, so every read is empty.
 func (lsb *LocalStorageBackend) LoadAnalysisSnapshots(ctx context.Context, flowIDs []string) ([]interfaces.AnalysisSnapshotRow, error) {
 	return []interfaces.AnalysisSnapshotRow{}, nil
 }
@@ -1349,10 +1206,8 @@ func (lsb *LocalStorageBackend) RevokeRefreshTokenForUser(ctx context.Context, j
 	return nil
 }
 
-// MutateOrg applies fn to a CLONE of the stored org and, on success, stores
-// the clone — the callback's mutations never touch the instance previously
-// handed to concurrent readers (copy-on-write, matching the rest of this
-// section).
+// MutateOrg applies fn to a CLONE and stores the clone on success — the callback's mutations never
+// touch the instance previously handed to concurrent readers.
 func (lsb *LocalStorageBackend) MutateOrg(ctx context.Context, id string, fn func(*interfaces.Organisation) error) error {
 	lsb.mu.Lock()
 	defer lsb.mu.Unlock()
@@ -1369,9 +1224,7 @@ func (lsb *LocalStorageBackend) MutateOrg(ctx context.Context, id string, fn fun
 }
 
 // ---- Sharing operations ----
-//
-// Copy-on-read/copy-on-write like the user/org stores above: readers get
-// fresh slices of value copies; writers store copies.
+// Copy-on-read/copy-on-write like the user/org stores above.
 
 func (lsb *LocalStorageBackend) ListCollaborators(ctx context.Context, flowID string, limit int) ([]*interfaces.Collaborator, error) {
 	lsb.mu.RLock()
@@ -1395,9 +1248,7 @@ func (lsb *LocalStorageBackend) ListCollaboratorsBatch(ctx context.Context, flow
 	return result, nil
 }
 
-// cloneCollabs returns a fresh slice of value copies (nil-safe: an empty,
-// non-nil slice for nil input, matching the interface's "empty not nil"
-// convention).
+// cloneCollabs returns a fresh slice of value copies (nil-safe: empty non-nil for nil input).
 func cloneCollabs(in []*interfaces.Collaborator) []*interfaces.Collaborator {
 	out := make([]*interfaces.Collaborator, len(in))
 	for i, c := range in {
@@ -1453,13 +1304,9 @@ func (lsb *LocalStorageBackend) RemoveCollaborator(ctx context.Context, flowID, 
 	return interfaces.ErrNotFound
 }
 
-// Org custom rules are a cloud governance feature — desktop has no orgs. The
-// single-user path keeps using the deployment-level rule file
-// (PAD_CUSTOM_RULES), which the resolver falls back to when there is no org.
-//
-// Save/Delete report the mode mismatch rather than silently succeeding; List
-// returns empty (not an error) because the ANALYSIS path calls it on every run
-// and must degrade to "no org rules", not fail the analysis.
+// Org custom rules are a cloud governance feature — desktop has no orgs (the single-user path keeps the
+// deployment-level PAD_CUSTOM_RULES file). Save/Delete report the mode mismatch; List returns empty
+// because the ANALYSIS path calls it on every run and must degrade to "no org rules", not fail.
 func (b *LocalStorageBackend) SaveOrgCustomRule(ctx context.Context, rule *interfaces.OrgCustomRule) error {
 	return fmt.Errorf("org custom rules require a storage backend (cloud mode)")
 }
@@ -1470,8 +1317,7 @@ func (b *LocalStorageBackend) ListOrgCustomRules(ctx context.Context, orgID stri
 	return nil, nil
 }
 
-// Org channels are a cloud-library governance feature (per-org routing of
-// external notifications); desktop has no orgs to route for.
+// Org channels are a cloud-library governance feature; desktop has no orgs to route for.
 func (b *LocalStorageBackend) SaveOrgChannel(ctx context.Context, ch *interfaces.OrgChannel) error {
 	return fmt.Errorf("org channels require a storage backend (cloud mode)")
 }
@@ -1482,8 +1328,8 @@ func (b *LocalStorageBackend) ListOrgChannels(ctx context.Context, orgID string,
 	return nil, nil
 }
 
-// SearchFlowContents: the filesystem backend has no queryable content store
-// (flows are parsed files); the service falls back to its legacy scan.
+// SearchFlowContents: the filesystem backend has no queryable content store; the service falls
+// back to its legacy scan.
 func (b *LocalStorageBackend) SearchFlowContents(ctx context.Context, filter interfaces.FlowFilter, needle string, limit int) ([]*interfaces.FlowDocument, error) {
 	return nil, interfaces.ErrContentSearchUnsupported
 }

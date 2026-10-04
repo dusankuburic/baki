@@ -59,7 +59,7 @@ func TestGetLocalConfig_RefusedWhereUnavailable(t *testing.T) {
 	}
 }
 
-// B11: the context window is validated and stored with the base URL; a
+// The context window is validated and stored with the base URL; a
 // refused window stores nothing.
 func TestSaveLocalConfig_ContextWindow(t *testing.T) {
 	setLocalModelsEgress(t, egress.AllowLoopback)

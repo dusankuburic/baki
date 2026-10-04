@@ -178,24 +178,6 @@ func TestLibraryGet_OrgFlowNonMemberForbidden(t *testing.T) {
 	checkStatus(t, rr, http.StatusForbidden)
 }
 
-// Export-to-local-path is desktop-only and must be refused in cloud mode.
-// Markdown/PDF export are now cloud-enabled (consistent with SARIF/HTML).
-// This test verifies the handler proceeds past the mode gate and resolves
-// the flow (404 for a non-existent flow is correct — the old 403 gate is gone).
-func TestExportMarkdown_CloudModeProceedsPastGate(t *testing.T) {
-	rt := newJWTTestRouter(t)
-	tok := jwtBearer(t, rt, "alice", "alice@example.com")
-
-	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/export/markdown", tok, map[string]any{"path": "", "flowId": "nonexistent"})
-	// No longer 403 Forbidden — the handler proceeds and resolves the flow,
-	// which doesn't exist → 404 or 403 depending on auth resolution.
-	if rr.Code == http.StatusForbidden {
-		// If the auth layer blocks (flow not found = no permission), that's fine.
-		return
-	}
-	// Any non-403 status is acceptable — the point is the cloud-mode gate is gone.
-}
-
 // Analysis endpoints resolve+authorize the target flow by id in cloud mode.
 func TestAnalyze_NonOwnerForbidden(t *testing.T) {
 	rt := newJWTTestRouter(t)

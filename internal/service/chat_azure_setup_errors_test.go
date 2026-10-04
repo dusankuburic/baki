@@ -21,14 +21,12 @@ import (
 // removed" (review R3), and a resource whose stored credentials cannot be
 // decrypted asks for them again instead of "try again in a moment" (R5).
 
-// A failed lookup of the caller's organisation role is a setup error — the
-// organisation's entries could not be consulted — not ErrModelNotAvailable,
-// the "removed" signal on which the client marks the model Removed and may
-// re-pin the thread. The turn fails with the generic setup error and the
-// preview with that error (a masked 500), whether the id is an organisation
-// entry's or the server default, and nothing of the store's error reaches
-// the client. The caller's own entries still answer: they come first, so
-// theirs is the answer either way.
+// A failed lookup of the caller's organisation role is a setup error — the organisation's
+// entries could not be consulted — not ErrModelNotAvailable, the "removed" signal on
+// which the client marks the model Removed and may re-pin the thread. The turn fails with
+// the generic setup error and the preview with that error (a masked 500), whether the id
+// is an organisation entry's or the server default, and nothing of the store's error
+// reaches the client; the caller's own entries still answer (they come first).
 func TestChatAzureRegistry_RoleLookupFailureIsTheGenericSetupError(t *testing.T) {
 	ctx := context.Background()
 	e := newAzChatEnv(t)
@@ -133,13 +131,12 @@ func TestRegistryCredentialOrg(t *testing.T) {
 	}
 }
 
-// A resource whose stored credentials the keystore cannot decrypt (the
-// server's encryption key changed; the registry shows "unreadable") fails
-// the turn as PROVIDER_NOT_CONFIGURED with copy that asks for the
-// credentials again — the member's own resource in Settings → AI Accounts,
-// an organisation's through its admin, with the shared flag — never the
-// generic "try again in a moment". Nothing reaches Azure, and the keystore's
-// error stays in the log.
+// A resource whose stored credentials the keystore cannot decrypt (the server's
+// encryption key changed; the registry shows "unreadable") fails the turn as
+// PROVIDER_NOT_CONFIGURED with copy that asks for the credentials again — the member's
+// own resource in Settings → AI Accounts, an organisation's through its admin, with the
+// shared flag — never the generic "try again in a moment". Nothing reaches Azure; the
+// keystore's error stays in the log.
 func TestChatAzureRegistry_UnreadableCredentials(t *testing.T) {
 	e := newAzChatEnv(t)
 	foundry := newAzChatFoundry(t)

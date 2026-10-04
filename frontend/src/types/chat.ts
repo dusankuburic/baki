@@ -68,8 +68,8 @@ export interface ChatMessage {
   // the backend sent one; drives the bubble's "Open settings" action. Error
   // bubbles are never persisted, so this never reaches the server.
   errorCode?: string
-  // True when the failure came from the organisation's shared credential
-  // (F-42): the bubble then also offers the Organizations settings section,
+  // True when the failure came from the organisation's shared credential:
+  // the bubble then also offers the Organizations settings section,
   // where an admin — not the member — can fix it. Never persisted.
   errorShared?: boolean
   toolCalls?: ToolCallRecord[]
@@ -91,7 +91,7 @@ export interface ChatRequest {
   systemPrompt?: string
   temperature?: number
   maxTokens?: number
-  // F-19: the provider's reasoning depth; omitted keeps the provider default.
+  // The provider's reasoning depth; omitted keeps the provider default.
   reasoningEffort?: ReasoningEffort
   excludeContext?: boolean
   useTools?: boolean

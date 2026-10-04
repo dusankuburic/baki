@@ -1,59 +1,6 @@
-// bakicli is the headless CLI for PAD Analyzer. It parses one or more Power
-// Automate Desktop flow files, runs static analysis, and exits with a
-// non-zero code when findings at or above the specified severity threshold
-// are present. This makes it suitable for use in CI/CD pipelines.
-//
-// Usage:
-//
-//	bakicli [flags] <file.txt | folder | ->       Analyze (default) and gate
-//	bakicli fix [flags] <file|folder> ...         Apply auto-fixers (dry-run unless -apply)
-//	bakicli diff [flags] <old.txt> <new.txt>      Compare two flows structurally
-//	bakicli diff-reports [flags] <old> <new>      Compare two saved JSON reports (findings level)
-//	bakicli rules [-format json] [rule-id]        List or describe rules (JSON includes thresholds)
-//	bakicli rules test [flags] <rules.json> <flow> Try custom rules against a fixture flow
-//	bakicli suppressions [flags] <file|folder|->  List inline pad-ignore directives, flag stale ones
-//	bakicli report [flags] [report.json]          Record a run on a PAD Analyzer server (CI webhook)
-//	bakicli init [-o .bakirc.json]                Generate a starter config
-//	bakicli watch [flags] <file|folder>           Re-analyze on every save (Ctrl-C to stop)
-//	bakicli migrate down [flags] <version>        Roll the server schema back (operator-only)
-//	bakicli --version                             Print version
-//	bakicli -h / bakicli <subcommand> -h          This overview / a subcommand's flags
-//
-// Flags (analyze):
-//
-//	-fail-on string   Minimum severity that causes a non-zero exit: error, warning, info (default "error")
-//	-format  string   Output format: text, json, sarif, junit, csv, html (default "text")
-//	-report-json path Also write the JSON report (findings, stats, policy verdict) to this
-//	                  file whatever -format is, so CI derives its summary from the SAME run
-//	-rules   string   Comma-separated list of rule IDs to enable (empty = all enabled)
-//	-custom-rules     Path to a custom rules JSON file (additive to the config's inline rules)
-//	-config  string   Config file path for defaults (default ".bakirc.json"; set to "" to skip)
-//	-policy  string   Path to a policy JSON file; gates on the policy's rules +
-//	                  GateSeverity instead of -fail-on (a named, shareable ruleset).
-//	                  The verdict is embedded in json/sarif/junit output.
-//	-baseline string  Baseline JSON file (finding fingerprints). When set, the gate
-//	                  fails only on NEW findings since the baseline (the ratchet),
-//	                  not pre-existing ones — so a team can adopt the gate without
-//	                  fixing everything first. Commit the baseline file alongside
-//	                  the flow. A missing baseline gates on everything; capture
-//	                  a clean run with -update-baseline.
-//	-update-baseline string  Write the current run's findings as the baseline to
-//	                  this file and exit 0 (accept the current state).
-//	-new-from-rev     Git revision; gate only on findings absent at that revision
-//	-quiet            Suppress informational output; only print findings
-//
-// A config file (.bakirc.json) is auto-discovered from the current directory.
-// CLI flags override config values. Generate a starter with `bakicli init`.
-//
-// # Exit Codes
-//
-//	0  Gate passed (no findings at or above the threshold / policy passed / no stale suppressions)
-//	1  Gate failed (findings at or above -fail-on, policy violated, -fail-on-stale hit,
-//	   or an output write error)
-//	2  Usage error, invalid config/policy, parse error, or file not found
-//
-// Exit 2 means NO report was produced — CI steps must not upload the (empty)
-// output file in that case.
+// bakicli is the headless CLI for PAD Analyzer: parse Power Automate Desktop
+// flows, run static analysis, exit non-zero when findings meet the severity
+// threshold (CI/CD gate). See printUsage for subcommands, flags, exit codes.
 package main
 
 import (
@@ -82,26 +29,21 @@ import (
 	"pad-core/parser"
 )
 
-// version is set via -ldflags "-X main.version=..." at build time. "dev" when
-// built without ldflags (go run / go build without flags).
+// version is set via -ldflags "-X main.version=..."; "dev" without ldflags.
 var version = "dev"
 
 func main() {
-	// The parser mints one UUID per block; batched randomness (still
-	// crypto-seeded) avoids a crypto/rand syscall per block on large flows
-	// and in the per-fix re-parse loop.
+	// Batched randomness: the parser mints one UUID per block, so avoid a
+	// crypto/rand syscall per block.
 	uuid.EnableRandPool()
 
-	// --version / -v short-circuits before any subcommand dispatch.
 	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
 		fmt.Printf("bakicli %s\n", version)
 		return
 	}
 
-	// Subcommand dispatch (backward-compatible): "fix" / "diff" / "rules" /
-	// "init" / "watch" route to their own flagsets; anything else (-flags, a
-	// bare file/folder) runs the legacy analyze flow unchanged so existing CI
-	// invocations keep working.
+	// Anything unrecognized (-flags, a bare file/folder) runs the legacy
+	// analyze flow so existing CI invocations keep working.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "fix":
@@ -136,10 +78,6 @@ func main() {
 	runAnalyze()
 }
 
-// printUsage is the top-level -h. The default flag output listed the analyze
-// flags only — no subcommands, no formats, no exit codes — so the one place a
-// CI author looks first said nothing about `fix`, `suppressions` or what a 2
-// means.
 func printUsage() {
 	w := flag.CommandLine.Output()
 	fmt.Fprintf(w, `bakicli %s — static analysis for Power Automate Desktop flows
@@ -184,10 +122,8 @@ func runAnalyze() {
 	newFromRev := flag.String("new-from-rev", "", "git revision (e.g. origin/main); gate only on findings NOT present at that revision")
 	updateBaseline := flag.String("update-baseline", "", "write the current run's findings as the baseline to this file and exit 0 (accept current state)")
 	configFlag := flag.String("config", ".bakirc.json", "config file path (set to empty to skip auto-discovery)")
-	// CI needs BOTH a code-scanning artifact (sarif) and numbers for a job
-	// summary. Producing the latter with a second `-format json` invocation
-	// meant a second analysis that did not carry -rules/-policy/-baseline, so
-	// the summary disagreed with the gate. One run, two outputs.
+	// One run, two outputs: CI derives its summary from the SAME run as the
+	// gate, not a diverging second `-format json` invocation.
 	reportJSON := flag.String("report-json", "", "also write the JSON report (with the policy verdict) to this file, whatever -format is")
 	quiet := flag.Bool("quiet", false, "suppress informational output")
 	flag.Usage = printUsage
@@ -198,10 +134,7 @@ func runAnalyze() {
 		os.Exit(2)
 	}
 
-	// -policy short-circuits before the baseline ratchet logic, so combining it
-	// with -baseline/-update-baseline silently drops the baseline behavior (no
-	// file written, no drift gate). Reject the combination up front so an
-	// operator's intent isn't quietly ignored — run them as separate steps.
+	// -policy short-circuits the baseline ratchet; reject the combination up front.
 	if *newFromRev != "" && (*baselineFlag != "" || *updateBaseline != "" || *policyFlag != "") {
 		fmt.Fprintln(os.Stderr, "bakicli: -new-from-rev cannot be combined with -baseline, -update-baseline or -policy "+
 			"(they are three different ways to decide what counts as a violation; pick one)")
@@ -212,8 +145,7 @@ func runAnalyze() {
 		os.Exit(2)
 	}
 
-	// Load config file and apply its settings for flags NOT explicitly set
-	// on the command line (CLI flags override config). -config="" skips loading.
+	// Apply the config's settings only for flags NOT set on the command line.
 	setFlags := make(map[string]bool)
 	flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
 	var loadedCfg *bakiConfig
@@ -268,8 +200,8 @@ func runAnalyze() {
 	settings := buildSettingsFromConfig(loadedCfg)
 	report := analyzer.RunAnalysis(doc, rules, settings, nil)
 
-	// A policy, when supplied, is the authoritative gate (its own rule set +
-	// GateSeverity), replacing -fail-on. Load it up front so a bad file fails fast.
+	// A policy is the authoritative gate (its rules + GateSeverity), replacing
+	// -fail-on; load up front so a bad file fails fast.
 	var policyResult *models.PolicyResult
 	if *policyFlag != "" {
 		policy, err := loadPolicy(*policyFlag)
@@ -280,10 +212,7 @@ func runAnalyze() {
 		policyResult = analyzer.EvaluatePolicy(report, policy)
 	}
 
-	// The policy verdict and the analysed root travel with every structured
-	// format: an uploaded SARIF/JUnit/JSON that omitted the verdict could not
-	// say WHY the gate failed, and SARIF locations that were bare basenames
-	// could not be placed on a PR.
+	// Structured formats carry the policy verdict and analysed root so SARIF/JUnit/JSON can say why the gate failed.
 	exportOpts := export.Options{Policy: policyResult}
 	exportOpts.SourceRoot, exportOpts.SourceRootURI = sarifSourceRoot(target)
 	jsonReport := cliReport{AnalysisReport: report, Policy: policyResult}
@@ -340,8 +269,6 @@ func runAnalyze() {
 		return
 	}
 
-	// -update-baseline: ratchet the current run's findings into the baseline
-	// file and exit 0. Use after accepting the current state (e.g. a green run).
 	if *updateBaseline != "" {
 		if err := writeBaseline(*updateBaseline, report); err != nil {
 			fmt.Fprintf(os.Stderr, "bakicli: failed to write baseline: %v\n", err)
@@ -353,13 +280,8 @@ func runAnalyze() {
 		return
 	}
 
-	// -new-from-rev: gate on findings that did not exist at a git revision. This
-	// is the baseline ratchet without a committed artifact — it needs no file to
-	// maintain and works correctly on the very first run, which is what lets a
-	// team with thousands of existing findings adopt a gate today rather than
-	// "next quarter". The comparison analyses the SAME files as they were at
-	// that revision and reuses ComputeDrift, so "new" means exactly the same
-	// thing it means for -baseline.
+	// -new-from-rev: the ratchet without a committed artifact; reuses
+	// ComputeDrift so "new" means what it means for -baseline.
 	if *newFromRev != "" {
 		oldFiles, err := flowFilesAtRev(target, *newFromRev)
 		if err != nil {
@@ -397,9 +319,8 @@ func runAnalyze() {
 		return
 	}
 
-	// -baseline: gate on NEW findings only (the ratchet). A missing baseline
-	// file is treated as "no baseline yet" — gate on everything so the first
-	// run is green only when clean, then capture it with -update-baseline.
+	// -baseline: gate on NEW findings only (the ratchet); a missing baseline
+	// gates on everything.
 	if *baselineFlag != "" {
 		keys, hadBaseline, err := loadBaseline(*baselineFlag)
 		if err != nil {
@@ -431,16 +352,12 @@ func runAnalyze() {
 	}
 }
 
-// cliReport is the JSON document `-format json` and `-report-json` emit: the
-// AnalysisReport's fields at the top level (the shape readReport/diff-reports
-// decode is unchanged) plus the policy verdict when -policy gated the run, so a
-// stored report says whether and why the gate failed.
+// cliReport is what -format json/-report-json emit: an AnalysisReport plus the policy verdict.
 type cliReport struct {
 	*models.AnalysisReport
 	Policy *models.PolicyResult `json:"policy,omitempty"`
 }
 
-// writeJSONFile writes v as indented JSON to path (0600, operator-supplied path).
 func writeJSONFile(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -449,12 +366,9 @@ func writeJSONFile(path string, v any) error {
 	return os.WriteFile(path, append(data, '\n'), 0o600) // #nosec G306 -- report file, operator path
 }
 
-// sarifSourceRoot derives export.Options.SourceRoot/SourceRootURI for a CLI
-// target: the analysed root (the folder, or the file's directory) relative to
-// the working directory, which in CI is the repository checkout that SARIF
-// %SRCROOT% denotes. A target outside the working directory anchors %SRCROOT%
-// at the analysed root itself so URIs stay resolvable rather than sprouting
-// "../" segments; stdin has no root.
+// sarifSourceRoot derives SourceRoot/SourceRootURI: the analysed root relative
+// to the working directory (what CI %SRCROOT% denotes); a target outside cwd
+// anchors %SRCROOT% at the analysed root; stdin has none.
 func sarifSourceRoot(target string) (root, rootURI string) {
 	if target == "-" {
 		return "", ""
@@ -481,7 +395,6 @@ func sarifSourceRoot(target string) (root, rootURI string) {
 	return rel, fileURI(cwd)
 }
 
-// fileURI renders an absolute path as a file:// URI (file:///C:/x on Windows).
 func fileURI(abs string) string {
 	p := filepath.ToSlash(abs)
 	if !strings.HasPrefix(p, "/") {
@@ -547,37 +460,14 @@ func load(target string) (*models.FlowDocument, error) {
 	return parser.ParseText(string(data), filepath.Base(target), info.Size())
 }
 
-// loadFolder loads a multi-file flow folder the same way `fix`/`watch` see it:
-// top-level .txt AND .pad member files, with .bakiignore patterns honored.
-// analyze/diff previously hard-wired ParseFolder (.txt only, ignore-blind), so
-// a file excluded from `fix` still failed the `analyze` gate and .pad members
-// were silently invisible — one folder, two disagreeing file sets.
-// loadFolder reads every .txt/.pad flow under dir, RECURSIVELY.
-//
-// It used to be os.ReadDir with `if e.IsDir() { continue }`, so a repository
-// whose flows live in subdirectories — the normal layout — analysed only
-// whatever happened to sit at the top level and said nothing about the files it
-// never opened. A repo organised as billing/, hr/, teamA/ failed outright with
-// "no .txt or .pad files found"; one with a single stray top-level file reported
-// a clean pass having looked at almost none of the input. For a CI gate that is
-// the worst possible failure mode.
-//
-// Keys are paths RELATIVE to dir (slash-separated), not bare base names, so
-// teamA/Main.txt and teamB/Main.txt stay distinct instead of one silently
-// replacing the other in the map. shouldIgnoreFile already took a relative path
-// and already understood directory-prefix patterns like "vendor/", so the
-// recursive shape was designed for and simply never wired up.
+// loadFolder loads every .txt/.pad flow under dir recursively, honoring
+// .bakiignore; keys are slash-paths relative to dir so same-named flows stay distinct.
 func loadFolder(dir string) (*models.FlowDocument, error) {
 	ignorePatterns := loadIgnorePatterns(dir)
 	files := make(map[string]string)
 
-	// Reads go through a root-scoped handle rather than the raw walked path.
-	// bakicli runs on untrusted content in CI (the GitHub Action analyses PR
-	// branches), and ParseError.Snippet embeds VERBATIM SOURCE into the SARIF
-	// that is uploaded to code scanning — so a symlink committed as
-	// flows/x.txt -> /etc/passwd or at a CI secret file would have its contents
-	// parsed and published. os.Root refuses any traversal that escapes dir, and
-	// it closes the symlink TOCTOU window that gosec G122 flags.
+	// Read via os.Root, never the walked path: ParseError.Snippet embeds
+	// verbatim source into the uploaded SARIF — a symlink must not escape dir (TOCTOU, gosec G122).
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, fmt.Errorf("open folder: %w", err)
@@ -598,13 +488,11 @@ func loadFolder(dir string) (*models.FlowDocument, error) {
 			if rel == "." {
 				return nil
 			}
-			// Skip dot-directories (.git, .github, …): descending into them is
-			// slow and never yields a flow the operator meant to analyse.
+			// Skip dot-directories (.git, .github, …): never operator-intended.
 			if strings.HasPrefix(d.Name(), ".") {
 				return fs.SkipDir
 			}
-			// An ignored directory is pruned rather than walked, so "vendor/"
-			// costs nothing on a large tree.
+			// Prune ignored directories so "vendor/" costs nothing on a large tree.
 			if shouldIgnoreFile(rel+"/", ignorePatterns) || shouldIgnoreFile(rel, ignorePatterns) {
 				return fs.SkipDir
 			}
@@ -618,8 +506,7 @@ func loadFolder(dir string) (*models.FlowDocument, error) {
 		if shouldIgnoreFile(rel, ignorePatterns) {
 			return nil
 		}
-		// Symlinks are skipped outright: WalkDir reports them via Lstat, and a
-		// flow that is a link adds nothing an operator intended to analyse.
+		// Symlinks are skipped: WalkDir reports them via Lstat.
 		if d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
@@ -645,8 +532,7 @@ func loadFolder(dir string) (*models.FlowDocument, error) {
 	if perr != nil {
 		return nil, perr
 	}
-	// ParseFiles is path-less (upload-shaped); analyze/diff output paths read
-	// naturally with the folder recorded.
+	// ParseFiles is path-less; record the folder so output paths read naturally.
 	doc.FilePath = dir
 	return doc, nil
 }
@@ -664,10 +550,8 @@ func selectRules(rulesFlag, customRulesPath string, inline []analyzer.CustomRule
 		}
 		all = append(all, custom...)
 	}
-	// Inline rules from the config file (see bakiConfig.CustomRulesInline).
-	// A bad entry is SKIPPED WITH A WARNING, matching LoadCustomRules — never
-	// silently, which is how R0-5 found operators believing a typo'd rule was
-	// enforcing.
+	// Inline rules from the config file. A bad entry is SKIPPED WITH A WARNING,
+	// matching LoadCustomRules — never silently.
 	for i, cfg := range inline {
 		r, err := analyzer.NewCustomRule(cfg)
 		if err != nil {
@@ -700,20 +584,9 @@ func selectRules(rulesFlag, customRulesPath string, inline []analyzer.CustomRule
 	return out
 }
 
-// isValidFailOn reports whether s is a threshold the gate understands.
-//
-// It matters that this is checked rather than tolerated: shouldFail falls back
-// to error-gating for anything it does not recognise, so an unvalidated typo
-// ("warnings", "none", "high") does not fail loudly — it quietly gates on a
-// different severity than the one asked for, which is the CI failure mode this
-// repo keeps finding. Every entry point that accepts a threshold, from a flag
-// OR from .bakirc.json, runs it through here first.
-//
-// "none" is deliberately NOT accepted. The GitHub Action documents it, but it
-// handles the semantics itself (it maps none→info for the CLI and skips the
-// failure step entirely), so the CLI seeing "none" means someone expects
-// report-only behaviour it does not implement — better to say so than to gate
-// on errors and look like it worked.
+// isValidFailOn reports whether s is a gate threshold; validated everywhere
+// because shouldFail silently falls back to error-gating on a typo. "none" is
+// rejected — the GitHub Action maps it to info itself.
 func isValidFailOn(s string) bool {
 	switch s {
 	case string(models.SeverityError), string(models.SeverityWarning), string(models.SeverityInfo):
@@ -738,14 +611,8 @@ func shouldFail(findings []models.Finding, threshold string) bool {
 	for _, f := range findings {
 		r, known := rank[string(f.Severity)]
 		if !known {
-			// Fail CLOSED on a severity this binary does not recognise. The
-			// zero value from a plain map lookup ranks below every threshold,
-			// so an unrecognised severity used to mean "never trips the gate" —
-			// the single worst direction for a CI gate to guess in. Custom
-			// rules are now validated at load (analyzer.NewCustomRule), so
-			// reaching here implies a newer producer than this binary; treat
-			// that as at least as severe as the threshold rather than ignoring
-			// it.
+			// Fail CLOSED on an unrecognised severity: a plain lookup would rank
+			// it below every threshold and never trip the gate.
 			return true
 		}
 		if r >= min {
@@ -757,15 +624,8 @@ func shouldFail(findings []models.Finding, threshold string) bool {
 
 // ---- bakicli watch ----
 
-// runWatch re-analyzes a flow (file or folder) every time it changes on disk —
-// a tight feedback loop for an author editing in the PAD designer who wants the
-// gate to re-run on every save. Uses an mtime-polling watcher (no fsnotify
-// dependency; cross-platform; a single watcher on a CLI is cheap) with a short
-// debounce so the multiple mtime bumps of one save fire one analysis.
-//
-// Exits 0 on Ctrl-C (SIGINT/SIGTERM). Per-run exit code is NOT used (watch mode
-// is informational); each run prints a findings summary and, unless -quiet, the
-// finding list.
+// runWatch re-analyzes on every change via mtime-polling with a short debounce
+// (one save → one analysis); exits 0 on Ctrl-C.
 func runWatch(args []string) {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
 	failOn := fs.String("fail-on", "error", "minimum severity flagged in each run's summary: error, warning, info")
@@ -788,19 +648,14 @@ func runWatch(args []string) {
 	}
 	target := fs.Arg(0)
 
-	// Config discovery + defaults, identical to analyze: CLI flags win, the
-	// .bakirc.json fills unset ones. Watch previously ignored the config and
-	// the baseline/policy gates entirely, so the local feedback loop was
-	// WEAKER than the CI gate it was supposed to preview.
+	// Same config merge as analyze: CLI flags win, .bakirc.json fills unset
+	// ones — watch must preview the same gate, not a weaker one.
 	if *policyFlag != "" && *baselineFlag != "" {
 		fmt.Fprintln(os.Stderr, "bakicli watch: -policy cannot be combined with -baseline (same restriction as analyze)")
 		os.Exit(2)
 	}
 	setFlags := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
-	// Kept, not discarded: the config also carries inline custom rules and the
-	// per-rule profile, and watch must preview the SAME gate analyze applies
-	// (R0-7). Dropping it here would make the local loop weaker than CI again.
 	var watchCfg *bakiConfig
 	if *configFlag != "" {
 		if cfg, err := loadConfig(*configFlag); err != nil {
@@ -822,10 +677,8 @@ func runWatch(args []string) {
 			}
 		}
 	}
-	// AFTER the config merge, not before it. The check used to run against the
-	// flag alone, so a typo'd `failOn` in .bakirc.json passed validation and
-	// then replaced the validated value — leaving watch previewing an
-	// error-severity gate while the config asked for something else, silently.
+	// Validate AFTER the config merge: a typo'd failOn in .bakirc.json used to
+	// silently replace the validated value.
 	if !isValidFailOn(*failOn) {
 		fmt.Fprintf(os.Stderr, "bakicli watch: unknown -fail-on value %q (%s)\n", *failOn, failOnUsage)
 		os.Exit(2)
@@ -869,11 +722,6 @@ func runWatch(args []string) {
 			fmt.Fprintf(os.Stderr, "bakicli watch: parse error: %v\n", err)
 			return
 		}
-		// The config's per-rule profile (enabled/severity/thresholds), not
-		// DefaultSettings(): watch loaded the file for fail-on/rules/policy but
-		// analysed with defaults, so `ruleConfig` was silently ignored here
-		// while analyze honoured it — the local preview ran a different gate
-		// than the CI it claims to mirror.
 		report := analyzer.RunAnalysis(doc, rules, buildSettingsFromConfig(watchCfg), nil)
 		if !*quiet {
 			fmt.Println(separator())
@@ -913,10 +761,8 @@ func runWatch(args []string) {
 		}
 	}
 
-	// Initial run immediately.
 	analyzeOnce()
 
-	// Snapshot mtimes; loop until a change or signal.
 	mtimes := snapshotMt(files)
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
@@ -932,8 +778,8 @@ func runWatch(args []string) {
 				continue
 			}
 			mtimes = cur
-			// Debounce: a single save can bump mtime several times; wait one
-			// poll interval for the write to settle, then run once.
+			// Debounce: one save can bump mtime several times; wait one poll
+			// interval for the write to settle, then run once.
 			if debounce != nil {
 				debounce.Stop()
 			}
@@ -943,8 +789,8 @@ func runWatch(args []string) {
 	}
 }
 
-// snapshotMt records the current modtime of each file (zero on a missing file
-// so a delete+recreate is detected as a change).
+// snapshotMt records each file's modtime (zero on a missing file so a
+// delete+recreate is detected as a change).
 func snapshotMt(files []string) map[string]time.Time {
 	out := make(map[string]time.Time, len(files))
 	for _, f := range files {
@@ -973,10 +819,8 @@ func separator() string {
 	return strings.Repeat("-", 60)
 }
 
-// loadBaseline reads a baseline JSON file (a `[]string` of content-stable
-// finding fingerprints). A missing file returns (nil, false, nil) — i.e. "no
-// baseline established yet" — so the caller can gate on all findings and prompt
-// for -update-baseline. Any other read/parse error is returned.
+// loadBaseline reads a []string of finding fingerprints; a missing file
+// returns (nil, false, nil) — "no baseline yet".
 func loadBaseline(path string) (keys []string, hadBaseline bool, err error) {
 	data, readErr := os.ReadFile(path) // #nosec G304 -- baseline path is a CLI argument supplied by the operator
 	if readErr != nil {
@@ -992,10 +836,8 @@ func loadBaseline(path string) (keys []string, hadBaseline bool, err error) {
 	return ks, true, nil
 }
 
-// writeBaseline captures the current run's finding fingerprints as the accepted
-// baseline (a JSON `[]string`). The keys are content-stable (rule + subflow/
-// name/line/subject), so the baseline survives re-imports and CLI re-runs —
-// only genuinely new findings trip the gate afterwards.
+// writeBaseline captures the run's finding fingerprints; the keys are
+// content-stable, so re-imports don't trip the gate.
 func writeBaseline(path string, report *models.AnalysisReport) error {
 	keys := make([]string, 0, len(report.Findings))
 	seen := make(map[string]bool, len(report.Findings))
@@ -1033,9 +875,8 @@ func printText(report *models.AnalysisReport, quiet bool) {
 		fmt.Print("\n\n")
 	}
 
-	// Surface rule-skip events (safeCheck recovered a panic) on stderr so a CI
-	// operator can see findings may be incomplete. Stderr keeps it out of the
-	// report stream (which a pipe / file redirect captures from stdout).
+	// Rule-skip warnings (safeCheck recovered a panic) go to stderr so CI sees
+	// them without polluting the stdout report stream.
 	if report.Stats.RulesSkipped > 0 {
 		fmt.Fprintf(os.Stderr,
 			"warning: %d rule evaluation(s) were skipped due to internal errors; findings may be incomplete.\n",
@@ -1065,12 +906,7 @@ func printText(report *models.AnalysisReport, quiet bool) {
 
 // ---- bakicli fix ----
 
-// runFix applies deterministic auto-fixers headlessly to one or more flow files.
-// Accepts multiple files and folders (folder mode recursively finds .txt files).
-// Iterative: parse → analyze → apply the first auto-fixable finding's patch →
-// re-parse → repeat until no fixable finding remains, a fixer declines, or
-// --limit is hit. Dry-run by default (prints patched source to stdout); --apply
-// writes the file back.
+// runFix applies auto-fixers iteratively (parse → analyze → patch → re-parse); dry-run by default.
 func runFix(args []string) {
 	fs := flag.NewFlagSet("fix", flag.ExitOnError)
 	apply := fs.Bool("apply", false, "write the fixed source back to the file (default: dry-run, print to stdout)")
@@ -1078,24 +914,16 @@ func runFix(args []string) {
 	limit := fs.Int("limit", 50, "maximum fix iterations (safety cap against a fixer that doesn't resolve)")
 	format := fs.String("format", "text", "summary format: text, json")
 	quiet := fs.Bool("quiet", false, "suppress per-fix log")
-	// `fix` reads the SAME .bakirc.json as `analyze`. Without this the two
-	// commands disagreed about the rule set: a rule disabled in the config was
-	// not reported by `analyze` but was still auto-fixed here, rewriting the
-	// flow to resolve a finding the team had switched off — and a custom rule
-	// carrying an autoFix was reported but never applied. That also broke the
-	// org-rules-export → CI parity promise documented on bakiConfig.
+	// `fix` reads the SAME .bakirc.json as `analyze` so a rule disabled in
+	// the config is never auto-fixed here.
 	configFlag := fs.String("config", ".bakirc.json", "config file path (set to empty to skip auto-discovery)")
 	customRulesFlag := fs.String("custom-rules", "", "path to custom rules JSON file")
-	// Off by default: these fixes change what the flow DOES at runtime, not how
-	// it handles failure. sanitize-command-vars strips the variables out of a
-	// command line (`robocopy %Src% %Dst% /MIR` becomes `robocopy   /MIR`) and
-	// mask-sensitive-variable swaps a live credential for a literal. Both are
-	// legitimate "stop the bleed" actions, and neither should happen to a
-	// developer who typed `bakicli fix` expecting a tidy-up.
+	// Off by default: these fixes change what the flow DOES at runtime, not
+	// how it handles failure.
 	unsafeFlag := fs.Bool("unsafe", false,
 		"also apply fixes that change runtime behaviour (command sanitisation, credential masking)")
-	// The atomic replace protects against a crash mid-write, not against a
-	// fixer that did the wrong thing; the flow source is the user's only copy.
+	// Keep the original before the atomic replace; the flow source is the
+	// user's only copy.
 	backup := fs.Bool("backup", false, "with -apply, keep the original as <file>.bak before replacing a changed file")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: bakicli fix [flags] <file.txt> [file2.txt ...] [folder]")
@@ -1152,9 +980,7 @@ func runFix(args []string) {
 	}
 }
 
-// expandFixTargets resolves a path argument to a list of files. A directory is
-// walked recursively for .txt/.pad files. A file path is returned as-is.
-// Files matching .bakiignore patterns in the walked root are skipped.
+// expandFixTargets resolves a path arg to files: dirs walked recursively for .txt/.pad honoring .bakiignore; files as-is.
 func expandFixTargets(path string) ([]string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -1188,9 +1014,6 @@ func expandFixTargets(path string) ([]string, error) {
 	return files, nil
 }
 
-// fixOneFile loads, fixes, and optionally writes a single flow file. Returns
-// the number of fixes applied. With backup, a changed file's original bytes
-// are kept as <file>.bak (same permissions) before the atomic replace.
 func fixOneFile(file string, apply, backup bool, opts analyzer.FixOptions, quiet bool) (int, error) {
 	data, err := os.ReadFile(file) // #nosec G304 -- path is a CLI argument supplied by the operator
 	if err != nil {
@@ -1221,8 +1044,6 @@ func fixOneFile(file string, apply, backup bool, opts analyzer.FixOptions, quiet
 	return fixed, nil
 }
 
-// writeBackup writes the original bytes of file to <file>.bak, preserving the
-// source file's permission bits.
 func writeBackup(file string, data []byte) error {
 	mode := os.FileMode(0o600)
 	if info, err := os.Stat(file); err == nil {
@@ -1236,14 +1057,9 @@ func writeBackup(file string, data []byte) error {
 	return nil
 }
 
-// atomicWriteFile writes data to path atomically: it writes to a temp file in
-// the same directory, then renames it over path. An interrupted write (crash,
-// Ctrl-C, disk full) therefore leaves the ORIGINAL file intact instead of a
-// half-written, truncated flow — `fix --apply` must never corrupt the user's
-// automation source, which (unlike a regenerable baseline/config) can't be
-// recovered. The original file's permission mode is preserved: a plain
-// os.WriteFile over an existing file keeps its mode, so the temp+rename path
-// must restore it explicitly (a fresh temp defaults to 0600).
+// atomicWriteFile writes via a temp file in the same directory renamed over
+// path, so an interrupted write leaves the original intact; the original's
+// permission mode is restored (a fresh temp is 0600).
 func atomicWriteFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	mode := os.FileMode(0o600) // default for a not-yet-existing target
@@ -1277,8 +1093,7 @@ func atomicWriteFile(path string, data []byte) error {
 	return nil
 }
 
-// printFixSummary emits the fix-run summary (to stderr so it doesn't mix with
-// the patched source on stdout in dry-run mode).
+// printFixSummary goes to stderr so it never mixes with the patched source on stdout in dry-run mode.
 func printFixSummary(format string, quiet bool, fixed int, applied bool, file string) {
 	if quiet && format == "text" {
 		return
@@ -1305,8 +1120,7 @@ func applySuffix(applied bool, file string) string {
 	return " (dry-run; use --apply to write)"
 }
 
-// parseRuleSet parses a comma-separated rule-ID list into a set, returning nil
-// for an empty list (meaning "all rules"). Shared by runFix's --rule.
+// parseRuleSet parses a comma-separated rule-ID list into a set; nil (empty) means all rules.
 func parseRuleSet(rulesFlag string) map[string]bool {
 	if rulesFlag == "" {
 		return nil
@@ -1322,9 +1136,6 @@ func parseRuleSet(rulesFlag string) map[string]bool {
 
 // ---- bakicli diff ----
 
-// runDiff compares two flow files and prints the structural (DiffFlows) or
-// semantic (CompareFlows) difference. Default output is human-readable text;
-// --format json emits the model.
 func runDiff(args []string) {
 	fs := flag.NewFlagSet("diff", flag.ExitOnError)
 	format := fs.String("format", "text", "output format: text, json")
@@ -1386,8 +1197,6 @@ func runDiff(args []string) {
 	}
 }
 
-// diffHasChanges returns true when the structural diff contains any
-// added/removed/modified blocks.
 func diffHasChanges(d *models.FlowDiff) bool {
 	if d == nil {
 		return false
@@ -1405,7 +1214,6 @@ func diffHasChanges(d *models.FlowDiff) bool {
 	return false
 }
 
-// printDiffText renders a structural FlowDiff as +/-/~ block lines per subflow.
 func printDiffText(d *models.FlowDiff, oldPath, newPath string) {
 	fmt.Printf("diff %s → %s\n", oldPath, newPath)
 	if d == nil || len(d.Subflows) == 0 {
@@ -1416,7 +1224,7 @@ func printDiffText(d *models.FlowDiff, oldPath, newPath string) {
 		fmt.Printf("\nsubflow %s (%s)\n", sf.Name, sf.Change)
 		for _, b := range sf.Blocks {
 			if b.Change == models.ChangeNone || b.Change == "" {
-				continue // skip unchanged blocks — show only real changes
+				continue
 			}
 			label := blockDiffLabel(b)
 			fmt.Printf("  %s %s\n", changeSymbol(b.Change), label)
@@ -1424,8 +1232,6 @@ func printDiffText(d *models.FlowDiff, oldPath, newPath string) {
 	}
 }
 
-// printComparisonText renders a semantic FlowComparison as a one-line summary
-// per subflow plus totals.
 func printComparisonText(c *models.FlowComparison, oldPath, newPath string) {
 	if c == nil {
 		fmt.Println("no comparison")
@@ -1471,8 +1277,6 @@ func comparisonSymbol(change string) string {
 	}
 }
 
-// blockDiffLabel picks a human-readable name from whichever side of a
-// structural BlockDiff is present.
 func blockDiffLabel(b models.BlockDiff) string {
 	if b.New != nil {
 		return b.New.Name + " (" + b.New.RawType + ")"
@@ -1483,7 +1287,6 @@ func blockDiffLabel(b models.BlockDiff) string {
 	return "(empty)"
 }
 
-// blockName picks a name from either side of a semantic BlockComparison.
 func blockName(b models.BlockComparison) string {
 	if b.BlockB != nil {
 		return b.BlockB.Name
@@ -1496,11 +1299,6 @@ func blockName(b models.BlockComparison) string {
 
 // ---- bakicli rules ----
 
-// runRules lists all registered rules or describes a single rule in detail.
-//
-//	  //
-//		bakicli rules              → table of all rules (ID, severity, category, auto-fix)
-//		bakicli rules <rule-id>    → detailed description of one rule
 func runRules(args []string) {
 	fs := flag.NewFlagSet("rules", flag.ExitOnError)
 	format := fs.String("format", "text", "output format: text, json")
@@ -1520,12 +1318,8 @@ func runRules(args []string) {
 	describeRule(fs.Arg(0))
 }
 
-// runRulesTest tries custom rules against a fixture flow: load the rule file
-// (array or single object), validate every entry (construction errors are
-// FATAL here — the whole point is authoring feedback), run ONLY the custom
-// rules against the flow, and print per-rule match counts plus each finding.
-// Exit codes: 2 invalid rule file, 1 no rule matched (--fail-on-none turns
-// the usual 0 into 1 when you expect a match).
+// runRulesTest tries custom rules against a flow; construction errors are
+// fatal. Exit 2 invalid rule file, 1 no match unless --fail-on-none.
 func runRulesTest(args []string) {
 	fs := flag.NewFlagSet("rules test", flag.ExitOnError)
 	failOnNone := fs.Bool("fail-on-none", false, "exit 1 when no rule matched")
@@ -1593,9 +1387,7 @@ func runRulesTest(args []string) {
 	fmt.Printf("%d finding(s)\n", matched)
 }
 
-// readCustomRuleConfigs accepts the custom-rules file in either shape: the
-// canonical array used by -custom-rules, or a single rule object (handier
-// while iterating on one rule).
+// readCustomRuleConfigs accepts the custom-rules file as an array or a single rule object.
 func readCustomRuleConfigs(path string) ([]analyzer.CustomRuleConfig, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- operator-supplied path
 	if err != nil {
@@ -1632,7 +1424,6 @@ func printRulesTable() {
 	fmt.Printf("\n%d rules (%d with auto-fix)\n", len(rules), countAutoFixable(rules))
 }
 
-// printRulesJSON emits the full rule catalog as JSON for CI/docgen consumers.
 func printRulesJSON() {
 	rules := analyzer.AllRules()
 	type ruleEntry struct {
@@ -1643,10 +1434,7 @@ func printRulesJSON() {
 		Severity    string `json:"defaultSeverity"`
 		Confidence  string `json:"confidence"`
 		AutoFix     string `json:"autoFix,omitempty"`
-		// Options are the rule's tunable thresholds with their defaults
-		// (deep-nesting maxDepth, wide-loop maxBlocks, …) — the same keys
-		// `.bakirc.json` ruleConfig.<id>.options accepts. Absent for rules
-		// with nothing to tune.
+		// Options: tunable thresholds — the keys .bakirc.json ruleConfig.<id>.options accepts.
 		Options map[string]any `json:"options,omitempty"`
 	}
 	defaults := models.DefaultSettings()
@@ -1705,9 +1493,6 @@ func countAutoFixable(rules []analyzer.Rule) int {
 
 // ---- bakicli init ----
 
-// runInit generates a starter .bakirc.json config file in the current directory
-// (or the path given by -o). The file contains all rules enabled with their
-// default severities, ready for the user to customize.
 func runInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	out := fs.String("o", ".bakirc.json", "output path for the config file")
@@ -1728,24 +1513,14 @@ func runInit(args []string) {
 
 // ---- bakicli migrate ----
 
-// maxDefaultDownSteps caps how many steps a single `migrate down` may roll back
-// without the operator raising --max-steps. A safety net against a fat-fingered
-// target version silently destroying many migrations' worth of schema/data.
+// maxDefaultDownSteps caps how far one `migrate down` may roll back without
+// the operator raising --max-steps.
 const maxDefaultDownSteps = 3
 
-// runMigrate implements `bakicli migrate down <version>`: an operator-only,
-// never-on-boot, never-over-HTTP schema rollback. It is the reverse of the
-// server's boot-time forward migrate().
-//
-// Guards (per the security review of this feature):
-//   - --max-steps (default 3): refuse to roll back more steps than this in one go.
-//   - interactive confirm requiring the operator to type the target version,
-//     unless --force skips it (non-interactive / scripted).
-//   - reversibility pre-check: every step in the path must have a downSQL; an
-//     irreversible step (the baseline) aborts before any destructive work.
-//   - a loud boot-reapply warning: a newer server binary re-applies the rolled-
-//     back steps on its next boot, so the rollback only sticks if the binary is
-//     rolled back too (or the step is removed from the binary).
+// runMigrate implements `bakicli migrate down <version>`: operator-only schema
+// rollback, the reverse of the server's boot-time forward migrate(). Guards:
+// --max-steps (default 3), typed confirm (--force skips), reversibility
+// pre-check, and a boot-reapply warning (a newer binary re-applies the steps).
 func runMigrate(args []string) {
 	if len(args) == 0 || args[0] != "down" {
 		printMigrateUsage()
@@ -1776,8 +1551,8 @@ func runMigrate(args []string) {
 		os.Exit(2)
 	}
 
-	// Connect. database.New runs the forward migrate (idempotent — a no-op when
-	// already current) so schema_migrations exists and the step set is loaded.
+	// database.New runs the idempotent forward migrate, so schema_migrations
+	// exists and the step set is loaded.
 	b, err := database.New(context.Background(), database.DefaultConfig(dsn))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bakicli migrate down: connect: %v\n", err)
@@ -1824,7 +1599,6 @@ func runMigrate(args []string) {
 		}
 	}
 
-	// Boot-reapply warning: the rollback is undone by a newer binary on next boot.
 	fmt.Println("\nWARNING: a newer server binary will RE-APPLY these steps on its next")
 	fmt.Println("boot (the forward migrate() runs at startup). For the rollback to stick,")
 	fmt.Println("deploy a binary that no longer contains these steps, or keep the server stopped.")
@@ -1862,8 +1636,7 @@ func printMigrateUsage() {
 	fmt.Fprintln(os.Stderr, "  -max-steps int    refuse to roll back more than this many steps (default 3)")
 }
 
-// bakiConfig is the .bakirc.json schema. All fields optional — missing fields
-// fall back to defaults (same as running without a config).
+// bakiConfig is the .bakirc.json schema; all fields optional (missing = defaults).
 type bakiConfig struct {
 	FailOn      string                  `json:"failOn,omitempty"`
 	Format      string                  `json:"format,omitempty"`
@@ -1872,34 +1645,15 @@ type bakiConfig struct {
 	Policy      string                  `json:"policy,omitempty"`
 	Verbose     *bool                   `json:"verbose,omitempty"`
 	RuleCfg     map[string]bakiRuleConf `json:"ruleConfig,omitempty"`
-	// CustomRulesInline carries rule definitions in the config file itself,
-	// alongside `customRules` (which is a PATH to a separate file).
-	//
-	// It exists so one fetched document can carry a team's whole analysis
-	// configuration: `GET /api/orgs/{id}/rules/export` emits exactly this
-	// shape, so a pipeline can do
-	//
-	//	curl -H "Authorization: Bearer $PAT" .../rules/export > .bakirc.json
-	//
-	// and gate on the SAME rules the org sees in the UI. Without it the profile
-	// (ruleConfig) and the rules (customRules) would be two artifacts that can
-	// drift apart — and a CI gate quietly enforcing a different rule set than
-	// the team configured is the failure mode this repo has hit before.
-	//
-	// Both sources are additive: a file referenced by `customRules` and these
-	// inline entries are all loaded.
+	// CustomRulesInline: rule definitions in the config, additive to customRules
+	// (a path); /api/orgs/{id}/rules/export emits exactly this shape.
 	CustomRulesInline []analyzer.CustomRuleConfig `json:"customRulesInline,omitempty"`
 }
 
 type bakiRuleConf struct {
 	Enabled  *bool  `json:"enabled,omitempty"`
 	Severity string `json:"severity,omitempty"`
-	// Options carries a rule's thresholds (deep-nesting maxDepth,
-	// duplicate-action minRepeats, wide-loop/large-subflow maxBlocks). This
-	// field did not exist: a threshold written in .bakirc.json was dropped by
-	// the JSON decoder and the rule kept its default, so the committed config
-	// and the enforced gate disagreed on exactly the number nobody re-checks.
-	// Mirrors models.RuleConfig.Options and the org export's `options`.
+	// Options: a rule's thresholds; mirrors models.RuleConfig.Options and the org export's options.
 	Options map[string]any `json:"options,omitempty"`
 }
 
@@ -1920,8 +1674,7 @@ func buildDefaultConfig() bakiConfig {
 			enabled = rc.Enabled
 		}
 		rc := bakiRuleConf{Severity: string(sev), Enabled: &enabled}
-		// Emit the thresholds the rule honours, so `init` documents that
-		// they exist and what they default to.
+		// Emit the thresholds the rule honours so `init` documents their defaults.
 		if d, ok := defaults.Analysis.Rules[r.ID()]; ok && len(d.Options) > 0 {
 			rc.Options = maps.Clone(d.Options)
 		}
@@ -1930,8 +1683,7 @@ func buildDefaultConfig() bakiConfig {
 	return cfg
 }
 
-// loadConfig reads a .bakirc.json from the given path. Returns nil if the file
-// doesn't exist (not an error — config is optional).
+// loadConfig reads a .bakirc.json; a missing file returns (nil, nil).
 func loadConfig(path string) (*bakiConfig, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- config path is a CLI argument
 	if err != nil {
@@ -1947,8 +1699,7 @@ func loadConfig(path string) (*bakiConfig, error) {
 	return &cfg, nil
 }
 
-// loadIgnorePatterns reads .bakiignore from dir (if present) and returns its
-// lines as glob patterns. A missing file returns nil (no exclusions).
+// loadIgnorePatterns reads .bakiignore lines as glob patterns; missing file returns nil.
 func loadIgnorePatterns(dir string) []string {
 	data, err := os.ReadFile(filepath.Join(dir, ".bakiignore")) // #nosec G304 -- dir is a CLI argument supplied by the operator
 	if err != nil {
@@ -1965,8 +1716,7 @@ func loadIgnorePatterns(dir string) []string {
 	return patterns
 }
 
-// shouldIgnoreFile returns true if relPath matches any .bakiignore glob pattern.
-// Patterns are matched with filepath.Match (gitignore-style wildcards: * and ?).
+// shouldIgnoreFile matches relPath against patterns (filepath.Match wildcards, base-name, and "dir/" prefix).
 func shouldIgnoreFile(relPath string, patterns []string) bool {
 	for _, p := range patterns {
 		if matched, _ := filepath.Match(p, relPath); matched {
@@ -1986,9 +1736,7 @@ func shouldIgnoreFile(relPath string, patterns []string) bool {
 	return false
 }
 
-// buildSettingsFromConfig translates the .bakirc.json RuleCfg map into a
-// models.AppSettings so that per-rule enabled/severity overrides take effect
-// during analysis. Returns nil when no config is loaded (all rules default).
+// buildSettingsFromConfig translates RuleCfg into per-rule AppSettings overrides; nil when no config is loaded.
 func buildSettingsFromConfig(cfg *bakiConfig) *models.AppSettings {
 	if cfg == nil || len(cfg.RuleCfg) == 0 {
 		return nil
@@ -2009,19 +1757,10 @@ func buildSettingsFromConfig(cfg *bakiConfig) *models.AppSettings {
 	return &models.AppSettings{Analysis: models.AnalysisSettings{Rules: rules}}
 }
 
-// buildFixOptions assembles the fix loop's configuration from the config file
-// and the `fix` flags. Extracted from runFix so the wiring itself is testable:
-// the bug this exists to prevent was not in the loop but in the caller, which
-// never handed the loop a configuration at all.
-//
-// The rule set is assembled exactly as `analyze` assembles it (built-ins +
-// custom rules from the flag and from the config's inline block), so a fix run
-// can never see a different set of rules than the run that reported the
-// findings.
+// buildFixOptions assembles the fix config with the rule set assembled exactly
+// as `analyze` does, so a fix run never sees different rules.
 func buildFixOptions(cfg *bakiConfig, ruleFlag, customRulesPath string, limit int) analyzer.FixOptions {
-	// -rule scopes WHICH findings get fixed. When it is not given, the config's
-	// `rules` selection stands in: a config that narrows analysis to a rule set
-	// means the same thing for a fix run.
+	// -rule scopes which findings get fixed; without it the config's rules selection stands in.
 	ruleFilter := parseRuleSet(ruleFlag)
 	if ruleFilter == nil && cfg != nil && cfg.Rules != "" {
 		ruleFilter = parseRuleSet(cfg.Rules)
@@ -2034,10 +1773,6 @@ func buildFixOptions(cfg *bakiConfig, ruleFlag, customRulesPath string, limit in
 	}
 }
 
-// runDiffReports compares two saved analysis runs at the FINDINGS level
-// (`bakicli -format json run.json > old.json`, twice): added / removed /
-// persisted, with an optional gate. CI pipelines comparing branches had to
-// eyeball two JSON blobs — the server had this endpoint, the CLI didn't.
 func runDiffReports(args []string) {
 	fs := flag.NewFlagSet("diff-reports", flag.ExitOnError)
 	format := fs.String("format", "text", "output format: text, json")
@@ -2099,19 +1834,13 @@ func runDiffReports(args []string) {
 	}
 }
 
-// runSuppressions inventories the flow's inline `# pad-ignore` directives and
-// audits them: STALE directives (rule no longer fires on the target block)
-// silently mask future findings forever — a governance audit needs to see
-// them. Exit 1 with --fail-on-stale for CI enforcement.
+// runSuppressions inventories inline `# pad-ignore` directives and flags stale
+// ones — a stale directive silently masks future findings. Exit 1 with --fail-on-stale.
 func runSuppressions(args []string) {
 	fs := flag.NewFlagSet("suppressions", flag.ExitOnError)
 	format := fs.String("format", "text", "output format: text, json")
 	failOnStale := fs.Bool("fail-on-stale", false, "exit 1 when any stale directive exists")
 	customRulesFlag := fs.String("custom-rules", "", "path to custom rules JSON file")
-	// Same .bakirc.json as `analyze`/`fix`: "stale" means "this rule no longer
-	// fires here", which depends on the configured rule set, severities and
-	// thresholds. Judged against built-in defaults instead, -fail-on-stale
-	// failed builds over directives that were still doing their job.
 	configFlag := fs.String("config", ".bakirc.json", "config file path (set to empty to skip auto-discovery)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: bakicli suppressions [-format text|json] [-fail-on-stale] [-config .bakirc.json] <file.txt|folder|->")
@@ -2196,8 +1925,6 @@ func firstNonEmptyStr(a, b string) string {
 	return b
 }
 
-// readReport loads a saved AnalysisReport JSON (the `bakicli -format json`
-// output of a prior run).
 func readReport(path string) (*models.AnalysisReport, error) {
 	var r io.Reader
 	if path == "-" {
@@ -2217,8 +1944,6 @@ func readReport(path string) (*models.AnalysisReport, error) {
 	return &report, nil
 }
 
-// countAtOrAbove counts findings whose severity meets or exceeds min (for
-// gate summaries; severity rank error > warning > info).
 func countAtOrAbove(findings []models.Finding, min string) int {
 	rank := map[string]int{"error": 3, "warning": 2, "info": 1}
 	n := 0
@@ -2230,8 +1955,6 @@ func countAtOrAbove(findings []models.Finding, min string) int {
 	return n
 }
 
-// inlineRulesOf returns a config's inline custom rules, tolerating a nil config
-// (no .bakirc.json discovered).
 func inlineRulesOf(cfg *bakiConfig) []analyzer.CustomRuleConfig {
 	if cfg == nil {
 		return nil

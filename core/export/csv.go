@@ -10,16 +10,10 @@ import (
 	"pad-core/models"
 )
 
-// ReportToCSV serializes an analysis report as CSV (RFC 4180) — spreadsheet-
-// friendly for ops teams who paste findings into Excel for triage. One row per
-// finding, with a header row. doc may be nil; when provided, flow name, file
-// path and per-finding line numbers are populated.
-//
-// The first line is a `#` summary comment carrying the counts that have no
-// natural column — above all the number of findings hidden by inline
-// pad-ignore directives, which a sheet of the remaining rows cannot show.
-// Readers that want rows only skip it with csv.Reader.Comment = '#' (or
-// delete row 1 in a spreadsheet).
+// ReportToCSV serializes a report as CSV (RFC 4180): header plus one row per
+// finding; doc may be nil. The first line is a `#` summary comment (skip with
+// csv.Reader.Comment = '#') carrying the counts with no natural column,
+// including findings hidden by inline pad-ignore.
 func ReportToCSV(report *models.AnalysisReport, doc *models.FlowDocument) ([]byte, error) {
 	if report == nil {
 		report = &models.AnalysisReport{}
@@ -76,18 +70,16 @@ func ReportToCSV(report *models.AnalysisReport, doc *models.FlowDocument) ([]byt
 	return buf.Bytes(), nil
 }
 
-// csvCell prepares a value for a CSV cell: it normalizes newlines (structure)
-// and neutralizes spreadsheet formula injection (security). Applied to every
-// cell — for analyzer-constant fields (rule IDs, severities, UUIDs) the formula
-// guard is a no-op, so there's no behavior change for them.
+// csvCell prepares a value for a CSV cell: normalizes newlines (structure) and
+// neutralizes spreadsheet formula injection (security); for analyzer-constant
+// fields (rule IDs, severities, UUIDs) the formula guard is a no-op.
 func csvCell(s string) string {
 	return guardCSVFormula(sanitizeCSVField(s))
 }
 
 // sanitizeCSVField normalizes multi-line descriptions/suggestions into single
-// cells so they don't break the CSV row structure. Go's encoding/csv already
-// quotes fields containing newlines per RFC 4180, but some consumers (Excel)
-// handle quoted newlines poorly, so we replace them with spaces.
+// cells: encoding/csv already quotes newlines per RFC 4180, but some consumers
+// (Excel) handle quoted newlines poorly.
 func sanitizeCSVField(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
@@ -95,13 +87,11 @@ func sanitizeCSVField(s string) string {
 	return s
 }
 
-// guardCSVFormula neutralizes CSV (formula) injection. A finding field can embed
-// user-controlled text — a flow name, a variable name, a file path — and if that
-// text begins with a formula trigger (= + - @, or a leading tab/CR that some
-// apps also treat as one), opening the CSV in Excel / Google Sheets / LibreOffice
-// executes it (e.g. a flow named `=cmd|'/c calc'!A1`, or `=HYPERLINK()` for data
-// exfiltration). Prefixing a single quote forces the cell to be treated as text;
-// spreadsheet apps hide the leading apostrophe on display.
+// guardCSVFormula neutralizes CSV formula injection: user-controlled text
+// (flow/variable names, file paths) beginning with a trigger (= + - @, or a
+// leading tab/CR some apps also treat as one) executes when the CSV is opened
+// in Excel / Google Sheets / LibreOffice. A prefixed single quote forces text
+// treatment and is hidden on display.
 func guardCSVFormula(s string) string {
 	if s == "" {
 		return s

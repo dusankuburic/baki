@@ -13,12 +13,10 @@ import (
 )
 
 // toStorageMessages converts domain chat messages to the storage-layer type for
-// backend (cloud) persistence. It is the lossless inverse of toModelMessages;
-// the storage type carries Timestamp as an RFC3339Nano string (matching how
-// models.ChatMessage's time.Time marshals), so each message encodes identically
-// on both paths. (The filesystem path additionally wraps the message array in a
-// Conversation{FlowKey,Scope,UpdatedAt} envelope; the backend stores the bare
-// array. The per-message parity is what keeps the bridge lossless.)
+// backend (cloud) persistence; the lossless inverse of toModelMessages — the storage
+// type's RFC3339Nano Timestamp matches models.ChatMessage's time.Time marshaling, so
+// each message encodes identically on both paths (the filesystem path wraps the array
+// in a Conversation envelope; the backend stores the bare array).
 func toStorageMessages(msgs []models.ChatMessage) []storageif.ChatMessage {
 	out := make([]storageif.ChatMessage, len(msgs))
 	for i, m := range msgs {
@@ -206,15 +204,21 @@ func toModelMessages(msgs []storageif.ChatMessage) []models.ChatMessage {
 // Per-conversation persistence limits enforced by the helpers below, used by
 // the ChatService persistence path.
 const (
-	maxConvMessages     = 50
-	maxConvBytes        = 1 * 1024 * 1024 // 1 MiB
+	maxConvMessages = 200
+	maxConvBytes    = 1 * 1024 * 1024 // 1 MiB
+
+	// convFixedJSONBytes bounds the marshaled size of a ChatMessage's fixed fields
+	// (timestamp, token counts, prices, field names, JSON syntax) for
+	// evictConvMessages' sound upper bound: 256 comfortably covers the largest legal
+	// encoding (RFC3339 timestamp ~35 B, three shortest-round-trip floats ~25 B each,
+	// integers, names, braces).
+	convFixedJSONBytes  = 256
 	minRetainedConvMsgs = 4
 )
 
-// convFilePath resolves the on-disk path for a (scope, flowID) conversation,
-// rejecting any component that could traverse outside the conversations
-// directory. Both values flow straight into the path and scope can carry a
-// flow-derived block ID, so they must be validated before use.
+// convFilePath resolves the on-disk path for a (scope, flowID) conversation, rejecting
+// any component that could traverse outside the conversations directory: both values
+// flow straight into the path, and scope can carry a flow-derived block ID.
 func convFilePath(configDir, scope, flowID string) (string, error) {
 	if !safeConvComponent(scope) {
 		return "", fmt.Errorf("invalid conversation scope %q", scope)
@@ -234,14 +238,36 @@ func safeConvComponent(s string) bool {
 	return !strings.ContainsAny(s, `/\`) && !strings.Contains(s, "..")
 }
 
-// evictConvMessages trims an oversized history to stay within the byte budget,
-// never dropping below minRetainedConvMsgs recent turns. Each message is
-// serialized once (O(n)) and suffix sums give any tail's size in O(1).
+// evictConvMessages trims an oversized history to at most maxConvMessages messages AND
+// within the byte budget, never below minRetainedConvMsgs recent turns; each message is
+// serialized once (O(n)) and suffix sums give any tail's size in O(1). The byte check
+// used to return the list untrimmed whenever it fit the budget, so the message cap
+// never applied: a 60-message history under 1 MiB was stored whole.
 func evictConvMessages(messages []models.ChatMessage) []models.ChatMessage {
-	if len(messages) <= maxConvMessages {
+	n := len(messages)
+	// Fast path: the sizing pass marshals every message, dominating the cost of storing
+	// an ordinary text-only history (twice — the storage layer marshals again on write).
+	// A history that cannot reach either cap even at a SOUND byte upper bound skips it:
+	// json.Marshal escapes any string to at most 6x its bytes (one rune can become a
+	// 6-byte \uXXXX), so 6x the string fields plus convFixedJSONBytes per message bounds
+	// the marshaled size without marshaling. Tool-bearing and fix-bearing messages take
+	// the exact path: their nested records are not bounded here, and they are the
+	// minority of a history.
+	plain := true
+	bound := 2 // the array brackets; every element adds one comma
+	for i := range messages {
+		m := &messages[i]
+		if len(m.ToolCalls) > 0 || m.FixProposal != nil || len(m.FixProposals) > 0 {
+			plain = false
+			break
+		}
+		bound += convFixedJSONBytes + 1 + 6*(len(m.ID)+len(m.Role)+len(m.Content)+
+			len(m.ContextBlockID)+len(m.ContextSubflowID)+len(m.Provider)+
+			len(m.Model)+len(m.ModelLabel)+len(m.ServedModel)+len(m.FinishReason))
+	}
+	if plain && n <= maxConvMessages && bound <= maxConvBytes {
 		return messages
 	}
-	n := len(messages)
 	sizes := make([]int, n)
 	for i := range messages {
 		b, err := json.Marshal(messages[i])
@@ -263,7 +289,9 @@ func evictConvMessages(messages []models.ChatMessage) []models.ChatMessage {
 		}
 		return 2 + suffix[cut] + (k - 1)
 	}
-	if marshaledLen(0) <= maxConvBytes {
+	// Both bounds apply: a history under the count cap can still exceed the byte
+	// budget (large tool trails), and one under the budget can exceed the count cap.
+	if n <= maxConvMessages && marshaledLen(0) <= maxConvBytes {
 		return messages
 	}
 	cut := 0
@@ -276,9 +304,9 @@ func evictConvMessages(messages []models.ChatMessage) []models.ChatMessage {
 	return messages[cut:]
 }
 
-// atomicWriteConv writes data to a temp file in dir (mode 0600) and renames it
-// over dest. A partial/interrupted write leaves the previous conversation intact
-// rather than truncating the destination into an unparseable state.
+// atomicWriteConv writes data to a temp file in dir (mode 0600) and renames it over
+// dest; a partial/interrupted write leaves the previous conversation intact, never a
+// truncated, unparseable destination.
 func atomicWriteConv(dir, dest string, data []byte) error {
 	tmp, err := os.CreateTemp(dir, ".conv-*.tmp")
 	if err != nil {

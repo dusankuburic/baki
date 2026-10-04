@@ -51,7 +51,7 @@ func TestReindexOrg_PerPageCommit_Postgres(t *testing.T) {
 		_, _ = b.DB().ExecContext(context.Background(), `DELETE FROM knowledge_chunks WHERE doc_id = $1`, doc)
 		_, _ = b.DB().ExecContext(context.Background(), `DELETE FROM knowledge_documents WHERE id = $1`, doc)
 	})
-	if err := b.SaveKnowledgeDocument(ctx, &interfaces.KnowledgeDocument{ID: doc, OrgID: org, Filename: "big.md"}); err != nil {
+	if err := b.SaveKnowledgeDocument(ctx, "", &interfaces.KnowledgeDocument{ID: doc, OrgID: org, Filename: "big.md"}); err != nil {
 		t.Fatalf("SaveKnowledgeDocument: %v", err)
 	}
 	const n = 1200

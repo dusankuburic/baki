@@ -38,7 +38,6 @@ func TestRulesTestCmd_MatchAndNone(t *testing.T) {
 		t.Errorf("per-rule count missing: %q", out)
 	}
 
-	// No-match: exit 0 by default, 1 with --fail-on-none.
 	other := writeTempFlow(t, "#Region \"Main\"\n    COMMENT  nothing to see\n#EndRegion\n")
 	_, _, code = runBakicli(t, "rules", "test", good, other)
 	if code != 0 {

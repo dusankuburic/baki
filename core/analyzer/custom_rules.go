@@ -30,6 +30,10 @@ type CustomRuleConfig struct {
 
 type CustomRule struct {
 	config CustomRuleConfig
+	// digest is the compile-time RuleDigest of config: ruleSetDigest folds it
+	// into the analysis cache key on every call, and re-marshalling the config
+	// per call was the dominant cost of that key for custom rules.
+	digest string
 	sev    models.Severity
 	nameRe *regexp.Regexp
 	rawRe  *regexp.Regexp
@@ -41,10 +45,9 @@ type CustomRule struct {
 }
 
 // LoadCustomRules reads a custom-rules JSON file. Invalid entries are
-// skipped, but each skip is now REPORTED as a warning (index + rule id +
-// reason) — the old silent `continue` meant a typo'd regex or unknown autoFix
-// quietly removed a rule the operator believed was enforcing. Callers decide
-// where warnings surface (CLI stderr, server startup log).
+// skipped with a REPORTED warning (index + rule id + reason) — the old
+// silent continue meant a typo'd regex quietly removed a rule the operator
+// believed was enforcing. Callers decide where warnings surface.
 func LoadCustomRules(path string) ([]Rule, []string, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- custom-rules path is operator-configured
 	if err != nil {
@@ -79,25 +82,23 @@ func LoadCustomRules(path string) ([]Rule, []string, error) {
 }
 
 // RuleDigest implements analyzer.RuleDigester: it identifies this rule by its
-// full CONFIGURATION, not just its ID.
-//
-// The analysis cache keys on the rule set, and two orgs can legitimately define
-// different rules under the same ID (there is no global namespace for
-// user-authored rule IDs). Folding only the ID would let org B be served org A's
-// cached findings for a same-named, different-behaviour rule.
-//
-// encoding/json sorts map keys, so PropertyHas/PropertyNot serialise
-// deterministically and the digest is stable across processes.
-func (r *CustomRule) RuleDigest() string {
-	b, err := json.Marshal(r.config)
+// full CONFIGURATION, not just its ID — two orgs can legitimately define
+// different rules under the same ID, and folding only the ID would let org B
+// be served org A's cached findings. encoding/json sorts map keys, so the
+// digest is stable across processes.
+func (r *CustomRule) RuleDigest() string { return r.digest }
+
+// customRuleDigest computes the digest once, at compile time (see the
+// digest field).
+func customRuleDigest(cfg CustomRuleConfig) string {
+	b, err := json.Marshal(cfg)
 	if err != nil {
-		// Marshalling CustomRuleConfig cannot fail (plain strings and
-		// map[string]string). If it somehow did, fall back to a rendering that
-		// is still a faithful function of the config rather than to a constant
-		// — a constant would silently re-open the cross-tenant collision this
-		// method exists to close. Go renders map literals with sorted keys, so
-		// this stays deterministic.
-		b = []byte(fmt.Sprintf("%#v", r.config))
+		// Marshalling CustomRuleConfig cannot fail. If it somehow did, fall
+		// back to a rendering that is still a faithful function of the config
+		// — a constant would re-open the cross-tenant collision this digest
+		// closes (Go renders map literals with sorted keys, so it stays
+		// deterministic).
+		b = []byte(fmt.Sprintf("%#v", cfg))
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:8])
@@ -110,13 +111,10 @@ func NewCustomRule(cfg CustomRuleConfig) (*CustomRule, error) {
 	}
 	if cfg.Severity != "" {
 		// Validated here because this is where an untrusted string becomes a
-		// Severity: cfg comes from a .bakirc/-custom-rules JSON file and from
-		// POST /api/orgs/{id}/rules. An unrecognised value used to be accepted
-		// verbatim and then silently dropped by every downstream consumer — the
-		// finding disappeared from Markdown/HTML/PDF, became a PASSING JUnit
-		// testcase, was downgraded to "warning" in SARIF, and ranked 0 in
-		// bakicli's gate so it could never fail a build. An org author writing
-		// "critical" got a rule that looked configured and enforced nothing.
+		// Severity (from .bakirc/-custom-rules JSON and POST /api/orgs/{id}/rules).
+		// An unrecognised value used to be accepted verbatim and then silently
+		// dropped by every downstream consumer — the finding vanished from
+		// reports, became a PASSING JUnit testcase and could never fail the gate.
 		sev := models.Severity(cfg.Severity)
 		if !sev.Valid() {
 			return nil, fmt.Errorf("custom rule %q: invalid severity %q (must be one of %v)",
@@ -155,6 +153,7 @@ func NewCustomRule(cfg CustomRuleConfig) (*CustomRule, error) {
 			return nil, fmt.Errorf("custom rule %q: unknown autoFix %q", cfg.ID, cfg.AutoFix)
 		}
 	}
+	r.digest = customRuleDigest(cfg)
 	return r, nil
 }
 

@@ -22,17 +22,10 @@ func (r *InfiniteLoopRiskRule) Check(block *models.Block, ctx *RuleContext) []mo
 		return nil
 	}
 
-	// A loop that terminates BY CONSTRUCTION cannot run forever, whatever its
-	// body does. `LOOP FOREACH x IN Collection` consumes a fixed collection and
-	// `LOOP i FROM a TO b` has an end; neither needs an Exit Loop, and demanding
-	// one is simply wrong.
-	//
-	// This rule is Error severity, which is the GitHub Action's default
-	// fail-on threshold, and it previously judged every loop by
-	// hasExitCondition alone — a predicate that only understands `SET x TO y`.
-	// On the sample corpus it produced 204 of the 204 total Error findings, all
-	// on bounded loops: the default CI gate failed on essentially every real PAD
-	// flow, because a for-each loop is the most common construct there is.
+	// A loop that terminates BY CONSTRUCTION cannot run forever: FOREACH
+	// consumes a fixed collection, a counted range has an end. Judging every
+	// loop by hasExitCondition alone produced 204 of 204 Error findings on the
+	// corpus, all on bounded for-each loops.
 	switch block.Properties[parser.LoopKindProperty] {
 	case parser.LoopKindForEach, parser.LoopKindCounted:
 		return nil
@@ -55,31 +48,57 @@ func (r *InfiniteLoopRiskRule) Check(block *models.Block, ctx *RuleContext) []mo
 }
 
 func hasExitCondition(loop *models.Block) bool {
-	// Bounded counter loop: the loop header references a variable that is
-	// reassigned (SET) inside the loop body. The auto-generated retry loop
-	// (LOOP WHILE %RetryCount% < 3 … SET RetryCount TO %RetryCount% + 1) is the
-	// canonical case — without this recognition the missing-retry fixer would
-	// trade one finding for an infinite-loop-risk finding.
-	if loopConditionVarModified(loop) {
-		return true
+	// Two predicates, computed in ONE fused walk of the body: 1 — a bounded
+	// counter loop (the loop header references a variable reassigned inside
+	// the body; the auto-generated retry loop is the canonical case); 2 — an
+	// explicit Exit Loop/Break in the loop's OWN body — EXIT LOOP only exits
+	// the innermost enclosing loop, so walkLoopBody skips nested-loop subtrees
+	// for BOTH predicates. Only real control-flow constructs count (exact
+	// name/RawType token): the rule used to accept any value containing "Exit"
+	// or "Break", so `Display.ShowMessageBox Message: 'Exit code received'`
+	// declared the loop safe.
+	condVars := make(map[string]bool, len(loop.Variables))
+	for _, v := range loop.Variables {
+		condVars[v] = true
 	}
-	// An explicit Exit Loop / Break in the loop's OWN body. EXIT LOOP only
-	// exits the innermost enclosing loop, so an exit inside a nested loop does
-	// NOT terminate this one — walkLoopBody skips nested-loop subtrees.
-	//
-	// Only real control-flow constructs count: the isExitLoop predicate (exact
-	// name / RawType token) plus the parser's exact RawType for `EXIT LOOP` and
-	// `BREAK`. The rule used to ALSO accept any RawType or property VALUE that
-	// merely contained "Exit" or "Break", so a loop whose body only did
-	// `Display.ShowMessage Message: 'Exit code received'` was declared safe —
-	// a false negative on the one rule that guards against a hung robot.
-	found := false
+	condModified := false
+	exitFound := false
 	walkLoopBody(loop, func(b *models.Block) {
-		if isExitLoop(b) || isExitLoopRawType(b.RawType) {
-			found = true
+		if !exitFound && (isExitLoop(b) || isExitLoopRawType(b.RawType)) {
+			exitFound = true
+		}
+		// Once a predicate is answered, its per-block work stops; the shared
+		// walk itself is the same single pass either way.
+		if condModified || len(condVars) == 0 {
+			return
+		}
+		// A SET writes its _output variable; if it appears in the loop
+		// condition the loop MIGHT be bounded — but only if the write
+		// progresses toward the bound.
+		out := b.Properties["_output"]
+		if out == "" || !condVars[out] {
+			return
+		}
+		// PAD's idiomatic counter step is an ACTION, not a SET
+		// (`Variables.IncreaseVariable Value: 1 Name: Counter` — no _value
+		// referencing the variable); Increase/Decrease move monotonically,
+		// precisely progress.
+		switch b.RawType {
+		case "Variables.IncreaseVariable", "Variables.DecreaseVariable":
+			condModified = true
+			return
+		}
+		val := b.Properties["_value"]
+		wrapped := "%" + out + "%"
+		// Exclude non-progressing writes: a constant reset (`SET Found TO FALSE`
+		// — `WHILE %Found%=FALSE` never terminates) and a bare self-no-op
+		// `SET X TO %X%`; a real advance (`SET RetryCount TO %RetryCount% + 1`)
+		// references the var PLUS an operand.
+		if strings.Contains(val, wrapped) && strings.TrimSpace(val) != wrapped {
+			condModified = true
 		}
 	})
-	return found
+	return condModified || exitFound
 }
 
 // isExitLoopRawType reports whether rawType is exactly one of the parser's
@@ -92,10 +111,9 @@ func isExitLoopRawType(rawType string) bool {
 	return false
 }
 
-// walkLoopBody visits descendants of loop that are NOT inside a nested loop.
-// EXIT LOOP only exits the innermost enclosing loop, so an exit (or counter
-// modification) inside a nested loop must not count for an outer loop — the old
-// full-subtree walk let a nested-loop exit wrongly satisfy the outer loop.
+// walkLoopBody visits descendants of loop NOT inside a nested loop: EXIT LOOP
+// only exits the innermost enclosing loop, so a nested-loop exit must not
+// count for an outer loop (the old full-subtree walk let it).
 func walkLoopBody(loop *models.Block, fn func(*models.Block)) {
 	var walk func(b *models.Block)
 	walk = func(b *models.Block) {
@@ -111,57 +129,4 @@ func walkLoopBody(loop *models.Block, fn func(*models.Block)) {
 	walk(loop)
 }
 
-// loopConditionVarModified reports whether the loop's header references a
-// variable that is reassigned (via SET) somewhere in the loop's own body. Such
-// a loop is bounded: each iteration advances the referenced variable toward the
-// condition's bound. Recognizing this keeps generated retry/range loops from
-// being flagged as infinite.
-func loopConditionVarModified(loop *models.Block) bool {
-	if len(loop.Variables) == 0 {
-		return false
-	}
-	condVars := make(map[string]bool, len(loop.Variables))
-	for _, v := range loop.Variables {
-		condVars[v] = true
-	}
-	modified := false
-	walkLoopBody(loop, func(b *models.Block) {
-		if modified {
-			return
-		}
-		// A SET action writes its _output variable; if that variable appears in
-		// the loop condition the loop MIGHT be bounded — but only if the write
-		// actually progresses toward the bound.
-		out := b.Properties["_output"]
-		if out == "" || !condVars[out] {
-			return
-		}
-		// PAD's idiomatic counter step is an ACTION, not a SET:
-		// `Variables.IncreaseVariable Value: 1 Name: Counter`. It carries no
-		// _value referencing the variable, so the reference test below could
-		// never see it — and `LOOP WHILE %Counter% < 5` with exactly that body
-		// was reported as possibly infinite. Increase/Decrease move the variable
-		// monotonically, which is precisely progress toward a bound.
-		switch b.RawType {
-		case "Variables.IncreaseVariable", "Variables.DecreaseVariable":
-			modified = true
-			return
-		}
-		val := b.Properties["_value"]
-		wrapped := "%" + out + "%"
-		// Exclude non-progressing writes:
-		//  - a constant reset like `SET Found TO FALSE` (value doesn't reference
-		//    the var at all → the loop `WHILE %Found%=FALSE` never terminates); and
-		//  - a bare self-no-op `SET X TO %X%`.
-		// A real counter advance (`SET RetryCount TO %RetryCount% + 1`) references
-		// the var PLUS an operand, so it counts.
-		if strings.Contains(val, wrapped) && strings.TrimSpace(val) != wrapped {
-			modified = true
-		}
-	})
-	return modified
-}
-
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
 func init() { registerRule(&InfiniteLoopRiskRule{}) }

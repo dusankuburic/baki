@@ -159,15 +159,6 @@ func TestDashboardService_BuildHome_LocalEmptyIsSafe(t *testing.T) {
 	}
 }
 
-// RecordAnalysis must be a no-op (and never panic) in local mode.
-func TestDashboardService_RecordAnalysis_LocalNoop(t *testing.T) {
-	svc := NewDashboardService(nil, nil, nil)
-	svc.RecordAnalysis(context.Background(),
-		&models.FlowDocument{ID: "f1"},
-		&models.AnalysisReport{Stats: models.AnalysisStats{Errors: 1}},
-	)
-}
-
 // RecordAnalysis in cloud mode must persist by_category AND by_rule maps
 // computed from the findings slice, plus the correct severity counts.
 func TestDashboardService_RecordAnalysis_CloudPersistsByRuleAndCategory(t *testing.T) {

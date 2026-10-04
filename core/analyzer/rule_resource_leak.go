@@ -16,8 +16,8 @@ type resourcePair struct {
 	label       string
 }
 
-// Each entry covers one resource lifecycle. The open prefix must be specific enough
-// that it doesn't match unrelated actions; both prefixes are matched with a
+// Each entry covers one resource lifecycle. The open prefix must be specific
+// enough not to match unrelated actions; both prefixes are matched with a
 // case-insensitive HasPrefix (hasPrefixFold), so partial module names (e.g.
 // "Excel.Close") catch all Close variants and exporter casing differences
 // ("Ftp." vs "FTP.") do not matter.
@@ -37,7 +37,6 @@ var resourcePairs = []resourcePair{
 	{openPrefix: "WebAutomation.Launch", closePrefix: "WebAutomation.Close", closeAction: "WebAutomation.CloseWebBrowser", label: "web browser instance"},
 }
 
-// hasPrefixFold is strings.HasPrefix without case sensitivity.
 func hasPrefixFold(s, prefix string) bool {
 	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
 }
@@ -54,7 +53,7 @@ func matchResourcePair(rawType string) *resourcePair {
 	return nil
 }
 
-// closeActionName is the action the suggestion/fixer should name for the pair.
+// closeActionName is the action the suggestion/fixer names for the pair.
 func (p *resourcePair) closeActionName() string {
 	if p.closeAction != "" {
 		return p.closeAction
@@ -83,10 +82,10 @@ func (r *ResourceLeakRule) Check(block *models.Block, ctx *RuleContext) []models
 		return nil
 	}
 
-	// The resource is "closed" if some close-action block references the output
-	// variable. ClosedResourceVars precomputes, per close prefix, the set of all
-	// variables referenced by matching blocks (see buildClosedResourceVars), so
-	// this is O(1) instead of an O(blocks) scan per open action.
+	// Closed if some close-action block references the output variable.
+	// ClosedResourceVars precomputes, per close prefix, the variables referenced
+	// by matching blocks (see buildClosedResourceVars) — O(1) instead of an
+	// O(blocks) scan per open action.
 	if closed := ctx.ClosedResourceVars[matched.closePrefix]; closed[outputVar] {
 		return nil
 	}
@@ -123,11 +122,9 @@ func blockReferencesVar(b *models.Block, varName string) bool {
 	return false
 }
 
-// addReferencedVars records every variable that block b references into set,
-// mirroring blockReferencesVar exactly: a var counts as referenced if it appears
-// in b.Variables, or a property value equals the bare name, or a property value
-// equals "%name%". Adding the raw value covers the bare-name case; stripping the
-// %…% wrapper covers the wrapped case.
+// addReferencedVars records every variable b references, mirroring
+// blockReferencesVar exactly: in b.Variables, or a property value equal to the
+// bare name, or equal to "%name%" (add the raw value; strip the %…% wrapper).
 func addReferencedVars(set map[string]bool, b *models.Block) {
 	for _, v := range b.Variables {
 		set[v] = true
@@ -141,9 +138,8 @@ func addReferencedVars(set map[string]bool, b *models.Block) {
 }
 
 // buildClosedResourceVars indexes, per resource close-action prefix, the set of
-// variables referenced by any block performing that close. The resource-leak
-// rule then resolves "is this handle closed anywhere?" with an O(1) set lookup
-// instead of scanning every block for each open action (was O(opens·blocks)).
+// variables referenced by any block performing that close, so the rule resolves
+// "is this handle closed anywhere?" with an O(1) lookup (was O(opens·blocks)).
 func buildClosedResourceVars(ctx *RuleContext) map[string]map[string]bool {
 	out := make(map[string]map[string]bool)
 	for _, b := range ctx.AllBlocks {
@@ -163,6 +159,4 @@ func buildClosedResourceVars(ctx *RuleContext) map[string]map[string]bool {
 	return out
 }
 
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
 func init() { registerRule(&ResourceLeakRule{}) }

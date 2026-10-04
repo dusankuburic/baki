@@ -7,17 +7,15 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/andybalholm/brotli"
 )
 
-// compressibleTypes is the set of response content types eligible for
-// compression. It mirrors chi middleware.Compress's default allowlist. SSE
-// (text/event-stream) is intentionally excluded: compressing it would buffer
-// chunks and defeat token streaming. WebSocket upgrades (101 with no
-// content-type) are likewise skipped.
+// compressibleTypes is the set of response content types eligible for compression (chi's default allowlist).
+// SSE (text/event-stream) is intentionally excluded: compressing it would buffer chunks and defeat token streaming; WebSocket upgrades (101, no content-type) are skipped too.
 var compressibleTypes = map[string]struct{}{
 	"text/html":                {},
 	"text/css":                 {},
@@ -40,10 +38,7 @@ func isCompressibleContentType(ct string) bool {
 	return ok
 }
 
-// pickEncoding chooses the best supported encoding from an Accept-Encoding
-// header, honouring q-values (q=0 disqualifies). Preference order on a tie is
-// brotli > gzip > deflate, since brotli yields ~15-20% better ratios on text
-// than gzip for ~equal CPU. Returns "" when the client accepts none of them.
+// pickEncoding chooses the best supported encoding from an Accept-Encoding header, honouring q-values (q=0 disqualifies); ties go brotli > gzip > deflate (~15-20% better text ratios for ~equal CPU). Returns "" when the client accepts none.
 func pickEncoding(accept string) string {
 	if accept == "" {
 		return ""
@@ -82,6 +77,37 @@ func pickEncoding(accept string) string {
 	return ""
 }
 
+// NegotiateEncoding picks, from the codings on offer ("br", "gzip", "deflate"), the one Accept-Encoding ranks highest, for a handler that has the body already encoded (a precompressed file). A coding is acceptable at its own q-value, else the wildcard's; ties go brotli > gzip > deflate.
+func NegotiateEncoding(accept string, offered ...string) string {
+	if accept == "" || len(offered) == 0 {
+		return ""
+	}
+	explicit := make(map[string]float64, 4)
+	wildcard := -1.0
+	for _, part := range strings.Split(accept, ",") {
+		name, q, ok := parseAcceptPart(part)
+		if !ok {
+			continue
+		}
+		if name == "*" {
+			wildcard = q
+		} else {
+			explicit[name] = q
+		}
+	}
+	best, bestQ := "", 0.0
+	for _, enc := range offered {
+		q, ok := explicit[enc]
+		if !ok {
+			q = wildcard
+		}
+		if q > bestQ || (q == bestQ && q > 0 && pref(enc) > pref(best)) {
+			best, bestQ = enc, q
+		}
+	}
+	return best
+}
+
 func pref(enc string) int {
 	switch enc {
 	case "br":
@@ -118,9 +144,8 @@ func parseAcceptPart(part string) (string, float64, bool) {
 	return name, q, true
 }
 
-// parseFloat is a tiny float parser for q-values (avoids pulling strconv for
-// the one place we need it and keeps the error path explicit). Accepts the
-// "0", "1", "0.8", "1.0" forms browsers actually emit.
+// parseFloat is a tiny float parser for q-values, accepting the "0", "1",
+// "0.8", "1.0" forms browsers actually emit.
 func parseFloat(s string) (float64, bool) {
 	if s == "" {
 		return 0, false
@@ -169,58 +194,95 @@ func parseFloat(s string) (float64, bool) {
 	return val, true
 }
 
-// Pools reuse expensive encoder allocations across requests. Brotli and gzip
-// writers are the costly part; deflate reuses gzip's flate pool indirectly.
-// brotliQuality is the encoder level for dynamic responses.
-//
-// It was brotli.BestCompression (q11), which is pathological on content an
-// attacker controls. Measured on a 2 MB body, same machine:
-//
-//	                    q11              q5
-//	high-entropy        2.601s, 1.3x     64ms, 1.3x     <- 40x the CPU, IDENTICAL ratio
-//	realistic JSON      104ms, 23831x    10ms, 17190x   <- 10x the CPU, 1.4x the ratio
-//
-// On the adversarial case q11 buys literally nothing: incompressible input
-// cannot be compressed, so the extra effort is pure waste, and at ~0.8 MB/s a
-// few-megabyte response pins a core for seconds. Flow content reaches response
-// bodies (rule metadata, parse-error snippets, block names), so the payload is
-// caller-influenced. On the realistic case the body is already compressing
-// ~17,000x, which is far past the point where more ratio matters.
-//
-// q5 is the level nginx and most CDNs use for dynamic content, for the same
-// reason.
+// Pools reuse expensive encoder allocations across requests (brotli and gzip writers are the costly part; deflate reuses gzip's flate pool indirectly).
+// brotliQuality is the dynamic-response level: q11 (the old value) is pathological on caller-influenced content — measured on a 2 MB body, q11 spends 40x the CPU of q5 for an IDENTICAL ratio on high-entropy input, and 10x for a 1.4x ratio on realistic JSON. q5 is what nginx and most CDNs use for dynamic content.
 const brotliQuality = 5
 
-// NOTE on a minimum-size gate: there deliberately isn't one. render.JSON streams
-// through json.NewEncoder and sets no Content-Length, so skipping small bodies
-// would mean buffering every response until a threshold is reached — changing
-// streaming behaviour for SSE and large reports to save microseconds. At q5 the
-// per-request cost on a small body is negligible; q11 was the whole problem.
+// brotliQualityLarge is the level for large bodies: on real multi-megabyte bodies q5 runs ~50 MB/s for a 13x ratio while q1 runs ~280 MB/s for 10.6x — under a 40-user read mix brotli was 68% of all CPU, so large bodies take the fast level; small API JSON keeps q5.
+const brotliQualityLarge = 1
 
+// brotliWindowBits is the encoder window (LGWin): the library default of 22 grows a pooled encoder to 10-27 MiB after one large body, while 18 holds it at ~3.4 MiB flat for a marginal ratio loss on JSON.
+const brotliWindowBits = 18
+
+// largeBodySize is the body size from which the fast encoder level is used; the size is what is known when the encoder starts (Content-Length, or the bytes handed over so far — render.JSON writes the whole body in one call), so a body streaming in small pieces keeps the default level.
+const largeBodySize = 256 << 10
+
+// minCompressSize is the smallest body worth compressing: below it the encoder costs more than the bytes it saves, and framing can make a tiny body larger.
+// Most responses carry no Content-Length, so the decision is lazy — a compressible response of unknown size holds back status and body until the body reaches the threshold, the handler returns (send as is), or it flushes (compress); holding back under 1 KB is unobservable (net/http buffers 4 KB anyway).
+const minCompressSize = 1024
+
+// Each pool holds *pooledWriter: an encoder permanently pointed at its own
+// sink, which forwards to the current response (see pooledWriter).
 var (
 	brotliPool = sync.Pool{
-		New: func() any { return brotli.NewWriterLevel(nil, brotliQuality) },
+		New: func() any {
+			p := &pooledWriter{}
+			p.w = brotli.NewWriterOptions(&p.sink, brotli.WriterOptions{Quality: brotliQuality, LGWin: brotliWindowBits})
+			return p
+		},
+	}
+	// brotliFastPool serves bodies of largeBodySize and up (brotliQualityLarge).
+	brotliFastPool = sync.Pool{
+		New: func() any {
+			p := &pooledWriter{}
+			p.w = brotli.NewWriterOptions(&p.sink, brotli.WriterOptions{Quality: brotliQualityLarge, LGWin: brotliWindowBits})
+			return p
+		},
 	}
 	gzipPool = sync.Pool{
 		New: func() any {
-			w, _ := gzip.NewWriterLevel(nil, gzip.DefaultCompression)
-			return w
+			p := &pooledWriter{}
+			p.w, _ = gzip.NewWriterLevel(&p.sink, gzip.DefaultCompression)
+			return p
+		},
+	}
+	gzipFastPool = sync.Pool{
+		New: func() any {
+			p := &pooledWriter{}
+			p.w, _ = gzip.NewWriterLevel(&p.sink, gzip.BestSpeed)
+			return p
 		},
 	}
 	flatePool = sync.Pool{
 		New: func() any {
-			w, _ := flate.NewWriter(nil, flate.DefaultCompression)
-			return w
+			p := &pooledWriter{}
+			p.w, _ = flate.NewWriter(&p.sink, flate.DefaultCompression)
+			return p
+		},
+	}
+	flateFastPool = sync.Pool{
+		New: func() any {
+			p := &pooledWriter{}
+			p.w, _ = flate.NewWriter(&p.sink, flate.BestSpeed)
+			return p
 		},
 	}
 )
 
-// Compress returns middleware that negotiates brotli > gzip > deflate from the
-// request's Accept-Encoding and applies the encoder only to compressible
-// content types. Brotli is preferred because it beats gzip ~15-20% on text
-// payloads. Non-compressible responses (SSE, WebSocket upgrades, binary blobs)
-// pass through unchanged. The Flusher/Hijacker/Pusher interfaces are delegated
-// so streaming and protocol-upgrade handlers keep working.
+// encoderPoolFor picks the pool for an encoding: the fast level when the body
+// is known to be at least largeBodySize at encoder start.
+func encoderPoolFor(encoding string, fast bool) encoderPool {
+	switch encoding {
+	case "br":
+		if fast {
+			return &brotliFastPool
+		}
+		return &brotliPool
+	case "gzip":
+		if fast {
+			return &gzipFastPool
+		}
+		return &gzipPool
+	case "deflate":
+		if fast {
+			return &flateFastPool
+		}
+		return &flatePool
+	}
+	return nil
+}
+
+// Compress returns middleware that negotiates brotli > gzip > deflate from Accept-Encoding and applies the encoder only to compressible content types; non-compressible responses (SSE, WebSocket upgrades, binary blobs) pass through unchanged. Flusher/Hijacker/Pusher are delegated.
 func Compress(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		enc := pickEncoding(r.Header.Get("Accept-Encoding"))
@@ -237,21 +299,24 @@ func Compress(next http.Handler) http.Handler {
 	})
 }
 
-// compressWriter wraps the underlying ResponseWriter and lazily installs a
-// compression encoder once it sees a compressible Content-Type at WriteHeader
-// or the first Write. Until then it is a transparent pass-through, so
-// non-compressible responses (SSE, upgrades, binary) behave exactly as without
-// the middleware.
+// compressWriter wraps the underlying ResponseWriter and lazily installs a compression encoder once it sees a compressible Content-Type at WriteHeader or the first Write; until then it is a transparent pass-through.
 type compressWriter struct {
 	http.ResponseWriter
 	encoding string
-	encoder  io.WriteCloser
-	started  bool // compression initialised
+	// encoder is concrete, not io.WriteCloser: Flush through an interface
+	// assertion would fail silently and leave every flushed byte buffered.
+	encoder *pooledWriter
+	started bool // compression decided (or deferred, below)
+	// deferring: compressible, size unknown and under minCompressSize so far.
+	// status (0 = implicit 200) and buf are held back until the size decides.
+	deferring bool
+	status    int
+	buf       []byte
+	// fast records that the encoder started at the fast level (largeBodySize).
+	fast bool
 }
 
-// init decides whether to compress based on the response's Content-Type. It is
-// called from WriteHeader and Write. When it compresses it sets Content-Encoding,
-// drops Content-Length (now invalid), and primes the encoder.
+// init decides whether to compress based on Content-Type and, when known, Content-Length; called from WriteHeader, Write and Flush. A compressible body of unknown size defers the decision (see minCompressSize).
 func (c *compressWriter) init() {
 	if c.started {
 		return
@@ -266,26 +331,72 @@ func (c *compressWriter) init() {
 	if !isCompressibleContentType(ct) {
 		return // leave encoder nil → passthrough
 	}
+	if cl := c.Header().Get("Content-Length"); cl != "" {
+		hint := int64(0)
+		if n, err := strconv.ParseInt(cl, 10, 64); err == nil {
+			if n < minCompressSize {
+				return // known small: passthrough, Content-Length kept
+			}
+			hint = n
+		}
+		c.startEncoder(hint)
+		return
+	}
+	c.deferring = true
+}
+
+// startEncoder sets Content-Encoding, drops Content-Length (now invalid), and primes the encoder; a sizeHint of largeBodySize or up gets the fast level.
+func (c *compressWriter) startEncoder(sizeHint int64) {
 	c.Header().Set("Content-Encoding", c.encoding)
 	c.Header().Del("Content-Length")
-	switch c.encoding {
-	case "br":
-		w := brotliPool.Get().(*brotli.Writer)
-		w.Reset(c.ResponseWriter)
-		c.encoder = &pooledWriter{w: w, put: func(v any) { brotliPool.Put(v) }}
-	case "gzip":
-		w := gzipPool.Get().(*gzip.Writer)
-		w.Reset(c.ResponseWriter)
-		c.encoder = &pooledWriter{w: w, put: func(v any) { gzipPool.Put(v) }}
-	case "deflate":
-		w := flatePool.Get().(*flate.Writer)
-		w.Reset(c.ResponseWriter)
-		c.encoder = &pooledWriter{w: w, put: func(v any) { flatePool.Put(v) }}
+	c.fast = sizeHint >= largeBodySize
+	if pool := encoderPoolFor(c.encoding, c.fast); pool != nil {
+		c.encoder = acquireEncoder(pool, c.ResponseWriter)
+	}
+}
+
+// commitEncoded ends a deferral by compressing: the held-back status and
+// bytes go out through the encoder (sizeHint = the bytes known so far).
+func (c *compressWriter) commitEncoded(sizeHint int64) error {
+	c.deferring = false
+	c.startEncoder(sizeHint)
+	if c.status != 0 {
+		c.ResponseWriter.WriteHeader(c.status)
+	}
+	if len(c.buf) == 0 {
+		return nil
+	}
+	_, err := c.encoder.Write(c.buf)
+	c.buf = nil
+	return err
+}
+
+// commitPlain ends a deferral without compressing: the body stayed under
+// minCompressSize, so the held-back status and bytes go out as they are.
+func (c *compressWriter) commitPlain() {
+	c.deferring = false
+	if c.status != 0 {
+		c.ResponseWriter.WriteHeader(c.status)
+	}
+	if len(c.buf) > 0 {
+		_, _ = c.ResponseWriter.Write(c.buf)
+		c.buf = nil
 	}
 }
 
 func (c *compressWriter) WriteHeader(code int) {
+	// 1xx informational responses (103 Early Hints) go out at once; they are not the final status the compression decision belongs to. 101 is final: the connection switches protocols.
+	if code >= 100 && code <= 199 && code != http.StatusSwitchingProtocols {
+		c.ResponseWriter.WriteHeader(code)
+		return
+	}
 	c.init()
+	if c.deferring {
+		if c.status == 0 {
+			c.status = code
+		}
+		return
+	}
 	c.ResponseWriter.WriteHeader(code)
 }
 
@@ -294,39 +405,50 @@ func (c *compressWriter) Write(p []byte) (int, error) {
 		// No WriteHeader call: implicit 200. Decide compression now.
 		c.init()
 	}
+	if c.deferring {
+		if len(c.buf)+len(p) < minCompressSize {
+			c.buf = append(c.buf, p...)
+			return len(p), nil
+		}
+		if err := c.commitEncoded(int64(len(c.buf) + len(p))); err != nil {
+			return 0, err
+		}
+	}
 	if c.encoder == nil {
 		return c.ResponseWriter.Write(p)
 	}
 	return c.encoder.Write(p)
 }
 
-// close flushes and returns the encoder to its pool. Safe to call when
-// passthrough (encoder nil) — a no-op.
+// close sends a still-deferred small response as is, or flushes and returns the encoder to its pool. Safe to call when passthrough (encoder nil) — a no-op.
 func (c *compressWriter) close() {
+	if c.deferring {
+		c.commitPlain()
+		return
+	}
 	if c.encoder == nil {
 		return
 	}
 	_ = c.encoder.Close()
 }
 
-// Flush delegates to the underlying writer; when compressing, it also flushes
-// the encoder so already-buffered bytes reach the client (e.g. a handler that
-// flushes JSON progressively).
+// Flush delegates to the underlying writer; when compressing, it also flushes the encoder.
+// Flushing commits the headers, so a Flush before the first Write decides compression then; a flush also ends a deferral by compressing — a handler that flushes is streaming, and later chunks may follow.
 func (c *compressWriter) Flush() {
+	c.init()
+	if c.deferring {
+		_ = c.commitEncoded(int64(len(c.buf)))
+	}
 	if c.encoder != nil {
-		if f, ok := c.encoder.(interface{ Flush() error }); ok {
-			_ = f.Flush()
-		}
+		_ = c.encoder.Flush()
 	}
 	if f, ok := c.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
 }
 
-// Hijack delegates so WebSocket upgrades and other connection takeovers work
-// unchanged. Compression never applies to a hijacked connection: upgrades send
-// a 101 with no Content-Type, so init() leaves the encoder nil before any
-// Hijack can occur.
+// Hijack delegates so WebSocket upgrades work unchanged: upgrades send a 101
+// with no Content-Type, so init() leaves the encoder nil before any Hijack.
 func (c *compressWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if h, ok := c.ResponseWriter.(http.Hijacker); ok {
 		return h.Hijack()
@@ -348,16 +470,56 @@ func (c *compressWriter) Unwrap() http.ResponseWriter {
 	return c.ResponseWriter
 }
 
-// pooledWriter pairs an encoder with the pool it came from so Close returns it.
+// pooledWriter is a pooled encoder pointed for life at its own sink, which forwards to the response the encoder is currently serving.
+// The sink keeps a pooled encoder from retaining the last response: gzip and flate keep their destination after Close, so a writer pooled while pointed at the ResponseWriter holds it (and the request, its context, the connection's buffers) until a later Get or GC; with the sink in between, Close only clears the sink's target, and the one Reset per response happens at acquire.
 type pooledWriter struct {
-	w   io.WriteCloser
-	put func(any)
+	w    resettableEncoder
+	sink encoderSink
+	pool encoderPool // where Close returns the writer
+}
+
+// encoderPool is the part of sync.Pool the encoder pools are used through; an
+// interface so a test can use a deterministic one.
+type encoderPool interface {
+	Get() any
+	Put(any)
+}
+
+// encoderSink forwards an encoder's output to the response it is serving; nil
+// between responses.
+type encoderSink struct{ w io.Writer }
+
+func (s *encoderSink) Write(p []byte) (int, error) { return s.w.Write(p) }
+
+// acquireEncoder takes a writer from pool and points it at dst.
+func acquireEncoder(pool encoderPool, dst io.Writer) *pooledWriter {
+	p := pool.Get().(*pooledWriter)
+	p.pool = pool
+	p.sink.w = dst
+	p.w.Reset(&p.sink)
+	return p
+}
+
+// resettableEncoder is what the brotli, gzip and flate writers have in
+// common: re-pointable at a new destination and flushable mid-stream.
+type resettableEncoder interface {
+	io.WriteCloser
+	Reset(dst io.Writer)
+	Flush() error
 }
 
 func (p *pooledWriter) Write(b []byte) (int, error) { return p.w.Write(b) }
+
+// Flush writes out everything written so far in a form the client can decode
+// now (a sync flush), without ending the stream.
+func (p *pooledWriter) Flush() error { return p.w.Flush() }
+
+// Close finishes the stream and pools the writer, detached from the response
+// first (see pooledWriter).
 func (p *pooledWriter) Close() error {
 	err := p.w.Close()
-	p.put(p.w)
+	p.sink.w = nil
+	p.pool.Put(p)
 	return err
 }
 

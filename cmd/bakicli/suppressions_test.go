@@ -41,13 +41,11 @@ func TestSuppressionsCmd(t *testing.T) {
 		t.Errorf("inventory summary missing:\n%s", out)
 	}
 
-	// Stale present → gate fails.
 	_, _, code = runBakicli(t, "suppressions", "-fail-on-stale", flow)
 	if code != 1 {
 		t.Errorf("fail-on-stale with stale directives: exit %d, want 1", code)
 	}
 
-	// JSON shape.
 	out, _, _ = runBakicli(t, "suppressions", "-format", "json", flow)
 	var entries []map[string]any
 	if err := json.Unmarshal([]byte(out), &entries); err != nil {

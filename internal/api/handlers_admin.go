@@ -16,24 +16,17 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// ScanNowFunc triggers an out-of-band governance sweep (a manual run of the
-// scanner's periodic pass). Nil when scanning isn't available (non-cloud); the
-// admin endpoint reports 503 in that case. The run is async — the func returns
-// once the sweep completes, but the HTTP handler does not block on it.
+// ScanNowFunc triggers an out-of-band governance sweep (a manual run of the scanner's periodic
+// pass). Nil when scanning isn't available (the endpoint reports 503); the run is async.
 type ScanNowFunc func(ctx context.Context)
 
-// manualRunTimeout caps an admin-triggered background scan so a stalled
-// sweep can't leak a goroutine forever. Generous by design — a full library
-// sweep over thousands of flows can take many minutes, and each flow is itself
-// bounded internally (perFlowScanTimeout / sweepTimeout).
+// manualRunTimeout caps an admin-triggered background scan so a stalled sweep can't leak a
+// goroutine forever. Generous: a full library sweep takes minutes, each flow bounded internally.
 const manualRunTimeout = 30 * time.Minute
 
-// runDetached runs an admin-triggered job on its own goroutine, bounded by
-// manualRunTimeout and guarded against panics. The scheduled scanner loop
-// recovers its own panics; the manual trigger did not, so a panic the nightly
-// run would have logged and survived took the whole process down when an
-// admin pressed "scan now". location is the pad_panics_total label (a closed
-// set: the callers here), label the log text.
+// runDetached runs an admin-triggered job on its own goroutine, bounded by manualRunTimeout and
+// guarded against panics — the manual trigger did not recover, so a panic the nightly run survived
+// took the process down when an admin pressed "scan now". location is the pad_panics_total label.
 func runDetached(location, label string, run func(ctx context.Context)) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), manualRunTimeout)
@@ -254,11 +247,8 @@ func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// Revoke the user's refresh tokens so they must re-authenticate and pick up
-	// their new role. Without this, their existing access JWT (up to 15 min TTL)
-	// retains the old role — a demoted admin keeps admin access until the token
-	// expires. Revoking refresh tokens ensures no new access tokens can be
-	// minted with the stale role.
+	// Revoke the refresh tokens so the user must re-authenticate and pick up the new role: their
+	// existing access JWT keeps the old role until it expires, and no new one may be minted stale.
 	if rs, ok := h.backend.(RefreshTokenStore); ok {
 		if err := rs.RevokeUserRefreshTokens(r.Context(), id); err != nil {
 			slog.Warn("failed to revoke refresh tokens after role change", "userID", id, "error", err)
@@ -282,11 +272,8 @@ func (h *AdminHandler) handleAdminAuditActions(w http.ResponseWriter, r *http.Re
 	render.JSON(w, AllAuditActions())
 }
 
-// auditEventView is the wire shape of an audit entry. The storage struct stays
-// untagged because the on-disk spill queue persists it as JSON lines, so the
-// camelCase keys the admin table reads (action, email, createdAt, meta) are
-// built here. Before this the table received Action/Email/CreatedAt and showed
-// blank cells with "Invalid Date" on every row.
+// auditEventView is the wire shape of an audit entry: the storage struct stays untagged (the
+// on-disk spill queue persists it as JSON lines), so the camelCase keys are built here.
 type auditEventView struct {
 	ID           string            `json:"id"`
 	UserID       string            `json:"userId"`
@@ -403,11 +390,10 @@ func (h *AdminHandler) handleMigrationStatus(w http.ResponseWriter, r *http.Requ
 
 // --- Background-loop manual triggers ---
 //
-// The scanner normally runs on its own periodic loop (gated by
-// PAD_SCAN_INTERVAL). This endpoint lets an admin demand an immediate run — useful after a policy change, a known upstream
-// update, or when the loop is configured with a long interval. Both are
-// fire-and-forget: a full sweep can take minutes, so the handler acknowledges
-// with {started: true} and runs the work on a detached, bounded context.
+// The scanner normally runs on its periodic loop (PAD_SCAN_INTERVAL); this endpoint lets an admin
+// demand an immediate run — after a policy change, or with a long interval configured.
+// Fire-and-forget: a full sweep can take minutes, so the handler acknowledges {started: true} and
+// runs the work on a detached, bounded context.
 
 // @Summary      Run environment scanner
 // @Tags         admin

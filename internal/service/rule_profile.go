@@ -6,65 +6,49 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
 	"pad-core/logger"
 	"pad-core/models"
 )
 
-// ruleProfileTTL bounds how long a resolved profile is reused without
-// re-reading storage.
-//
-// Writes invalidate explicitly (see Invalidate), which is exact on a single
-// replica. It is NOT exact across replicas: replica B never sees replica A's
-// invalidation, so without a TTL an org's rule change could take until the next
-// restart to reach every replica. 30s keeps a stale profile bounded without
-// making the analysis path re-query storage on every run.
+// ruleProfileTTL bounds profile reuse: invalidation is exact per replica only —
+// 30s bounds cross-replica staleness without re-querying storage every run.
 const ruleProfileTTL = 30 * time.Second
 
-// DeploymentCustomRules are the rules loaded from PAD_CUSTOM_RULES, compiled
-// once at boot.
-//
-// A named type, not a bare []analyzer.Rule, so fx can tell it apart from any
-// other rule slice in the graph. It is also what breaks the dependency cycle
-// this feature would otherwise have: the resolver needs the deployment rules
-// and the AnalysisService needs the resolver, so the rules have to be their own
-// node rather than an accessor on the service.
+// ruleProfileCacheMax bounds the cache by org count; entries expire by TTL
+// anyway, so this only caps orgs analyzing within one TTL (oldest re-resolves).
+const ruleProfileCacheMax = 256
+
+// DeploymentCustomRules are the PAD_CUSTOM_RULES rules compiled once at boot — a
+// named type (fx disambiguation) and the node breaking the resolver cycle.
 type DeploymentCustomRules []analyzer.Rule
 
-// RuleProfile is the fully resolved analysis configuration for one org (or for
-// no org, in desktop/local mode): the settings the engine reads rule
-// enable/severity/options from, and the exact rule set to run.
+// RuleProfile is the fully resolved analysis configuration for one org (or no
+// org, locally): the settings the engine reads and the exact rule set to run.
 type RuleProfile struct {
 	Settings *models.AppSettings
 	Rules    []analyzer.Rule
 }
 
 // RuleProfileResolver answers "what rules, at what severity, for this flow's
-// org".
-//
-// Before R4 the answer was a single process-global value: rule enable/severity
-// came from the deployment settings singleton and custom rules from one
-// server-side JSON file. In a multi-tenant deployment that meant one tenant's
-// rule toggle changed analysis for every other tenant.
-//
-// Resolution is layered, most specific winning, merged PER RULE ID so an org
-// that overrides two rules still inherits the rest:
-//
-//	org profile (org_settings + org_custom_rules)
-//	  → deployment settings + PAD_CUSTOM_RULES file
-//	    → built-in rule defaults
+// org" per tenant (pre-R4 one tenant's toggle changed every tenant). Resolution
+// is layered, most specific winning, merged per rule id: org profile →
+// deployment settings + PAD_CUSTOM_RULES → built-in defaults.
 type RuleProfileResolver struct {
 	backend  storageif.StorageBackend
 	settings SettingsProvider
-	// deploymentRules are the PAD_CUSTOM_RULES file's rules, compiled once at
-	// boot. They remain deployment-wide on purpose: an operator-managed file is
-	// a legitimate way to ship rules to every tenant, and removing it would
-	// break existing installs.
+	// deploymentRules are the PAD_CUSTOM_RULES file's rules, boot-compiled;
+	// deployment-wide on purpose — an operator file is a legitimate way to ship
+	// rules to every tenant.
 	deploymentRules DeploymentCustomRules
 
 	mu     sync.RWMutex
 	cached map[string]*cachedProfile
+	// flights deduplicates cold resolves per org (see Resolve).
+	flights singleflight.Group
 }
 
 type cachedProfile struct {
@@ -81,9 +65,8 @@ func NewRuleProfileResolver(backend storageif.StorageBackend, settings SettingsP
 	}
 }
 
-// Invalidate drops an org's cached profile so the next analysis re-resolves it.
-// An empty orgID clears every entry (a deployment-settings change affects all
-// orgs, since they inherit from it).
+// Invalidate drops an org's cached profile (every entry when orgID is empty —
+// a deployment-settings change affects all orgs, which inherit from it).
 func (r *RuleProfileResolver) Invalidate(orgID string) {
 	if r == nil {
 		return
@@ -97,14 +80,9 @@ func (r *RuleProfileResolver) Invalidate(orgID string) {
 	delete(r.cached, orgID)
 }
 
-// Resolve returns the profile for orgID. An empty orgID (desktop/local mode, or
-// a flow with no org) yields exactly the pre-R4 behaviour: deployment settings
-// plus the file-loaded custom rules.
-//
-// Storage failures degrade to the deployment layer rather than failing the
-// analysis: an org losing its custom rules for one run is bad, but a flow that
-// cannot be analyzed at all because the settings table hiccuped is worse. The
-// degradation is logged, never silent.
+// Resolve returns the profile for orgID (empty = pre-R4 deployment behaviour).
+// Storage failures degrade to the deployment layer, logged — an org losing its
+// rules for a run beats a flow that cannot be analyzed at all.
 func (r *RuleProfileResolver) Resolve(ctx context.Context, orgID string) *RuleProfile {
 	if r == nil {
 		return &RuleProfile{Settings: nil, Rules: analyzer.AllRules()}
@@ -113,12 +91,52 @@ func (r *RuleProfileResolver) Resolve(ctx context.Context, orgID string) *RulePr
 		return p
 	}
 
-	profile := r.resolveUncached(ctx, orgID)
+	// One cold build per org: concurrent analyses for the same org (a
+	// "fix all" batch, the scanner sweep, interactive analyses) each ran
+	// the full resolve — two storage reads plus a regex compile per custom
+	// rule — racing to write identical cache entries. The resolve runs
+	// detached from the caller's cancellation so a caller that abandons
+	// its request mid-resolve does not hand every waiter its degraded
+	// (storage-unavailable) profile; the inner re-check serves callers that
+	// waited out a flight which already refreshed the entry. The builder
+	// never returns an error, so the ignored flight error is inert.
+	v, _, _ := r.flights.Do(orgID, func() (any, error) {
+		if p := r.cachedFor(orgID); p != nil {
+			return p, nil
+		}
+		return r.resolveUncached(context.WithoutCancel(ctx), orgID), nil
+	})
+	profile := v.(*RuleProfile)
 
 	r.mu.Lock()
-	r.cached[orgID] = &cachedProfile{profile: profile, resolved: time.Now()}
+	now := time.Now()
+	r.pruneLocked(now)
+	r.cached[orgID] = &cachedProfile{profile: profile, resolved: now}
 	r.mu.Unlock()
 	return profile
+}
+
+// pruneLocked makes room for one insert: it drops expired profiles — reads
+// skip them, but nothing removed them, so every org that ever ran an analysis
+// (deleted orgs included) kept its rule set, compiled custom-rule regexes and
+// settings clone for the life of the process — then, while the cache is at
+// ruleProfileCacheMax, the oldest. Caller holds r.mu. One pass per insert, and
+// an org inserts at most once per ruleProfileTTL.
+func (r *RuleProfileResolver) pruneLocked(now time.Time) {
+	for id, c := range r.cached {
+		if now.Sub(c.resolved) >= ruleProfileTTL {
+			delete(r.cached, id)
+		}
+	}
+	for len(r.cached) >= ruleProfileCacheMax {
+		oldest, oldestAt, first := "", time.Time{}, true
+		for id, c := range r.cached {
+			if first || c.resolved.Before(oldestAt) {
+				oldest, oldestAt, first = id, c.resolved, false
+			}
+		}
+		delete(r.cached, oldest)
+	}
 }
 
 func (r *RuleProfileResolver) cachedFor(orgID string) *RuleProfile {

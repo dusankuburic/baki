@@ -24,6 +24,17 @@ var unboundedLabels = map[string]string{
 	"block_id": "one series per block, forever",
 }
 
+// closedLabelValues are labels that ARE allowed, but only over a fixed value
+// set: the value is client-controlled at the source, so anything outside the
+// set means a caller forgot to normalise it. net/http accepts any token as a
+// request method, so a verbatim r.Method is one series per invented method.
+var closedLabelValues = map[string]map[string]struct{}{
+	"method": {
+		"GET": {}, "HEAD": {}, "POST": {}, "PUT": {}, "PATCH": {}, "DELETE": {},
+		"CONNECT": {}, "OPTIONS": {}, "TRACE": {}, "OTHER": {},
+	},
+}
+
 // TestMetrics_NoUnboundedLabels walks the gathered metrics and fails on a label
 // whose cardinality the server does not control.
 //
@@ -43,6 +54,7 @@ var unboundedLabels = map[string]string{
 func TestMetrics_NoUnboundedLabels(t *testing.T) {
 	// Touch the recorders most at risk so their series exist to be inspected.
 	RecordAIUsageCost(0.01)
+	HTTPRequestsTotal.WithLabelValues("GET", "/", "200").Inc()
 
 	families, err := registry.Gather()
 	if err != nil {
@@ -59,6 +71,12 @@ func TestMetrics_NoUnboundedLabels(t *testing.T) {
 				if why, bad := unboundedLabels[name]; bad {
 					t.Errorf("metric %q carries unbounded label %q: %s",
 						mf.GetName(), lp.GetName(), why)
+				}
+				if allowed, closed := closedLabelValues[name]; closed {
+					if _, ok := allowed[lp.GetValue()]; !ok {
+						t.Errorf("metric %q label %q has value %q outside its closed set",
+							mf.GetName(), lp.GetName(), lp.GetValue())
+					}
 				}
 			}
 		}

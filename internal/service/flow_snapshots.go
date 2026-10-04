@@ -17,18 +17,25 @@ import (
 	"github.com/google/uuid"
 )
 
-// maxSnapshotsPerFlow bounds the in-memory undo ring: a session's last N
-// pre-mutation states per flow. Enough for "undo the last few fixes" without
-// unbounded retention (cloud mode has durable versions for real history).
+// maxSnapshotsPerFlow bounds the in-memory undo ring: the session's last N pre-mutation states per flow
+// (cloud mode has durable versions for real history).
 const maxSnapshotsPerFlow = 10
 
 // maxSnapshotFlows bounds how many flows keep undo rings (B1.1 LRU).
 const maxSnapshotFlows = 64
 
-// SourceSnapshot is one pre-mutation state of a flow's source text: the
-// bytes exactly as they were BEFORE a fix/batch/save wrote them. Session-
-// scoped (in-memory) — the undo affordance for "that fix made it worse",
-// not a version-control system.
+// maxSnapshotBytes bounds the source bytes the WHOLE store retains: the count bounds alone allowed 640 full
+// source copies (6+ GiB at the 10 MiB request cap) for what is only an undo affordance. 256 MiB keeps every
+// ring 10 deep for flows up to ~400 KiB; past it the LRU ring's oldest snapshots go first (snapshotStore.push).
+// That is the DESKTOP budget; in cloud mode maxSnapshotBytesCloud keeps the ring at 8% of GOMEMLIMIT
+// (flow_versions are explicit "save version" rows only, so this ring IS the undo of a cloud fix).
+const (
+	maxSnapshotBytes      int64 = 256 << 20
+	maxSnapshotBytesCloud int64 = 64 << 20
+)
+
+// SourceSnapshot is one pre-mutation state of a flow's source text, session-scoped (in-memory) — the undo
+// affordance for "that fix made it worse", not a version-control system.
 type SourceSnapshot struct {
 	ID        string    `json:"id"`
 	FlowID    string    `json:"flowId"`
@@ -36,73 +43,145 @@ type SourceSnapshot struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// Bytes is the source text captured; omitted from list JSON (size only).
 	Bytes int64 `json:"bytes"`
-	// TargetPath is the desktop file the snapshot restores to ("" = cloud:
-	// restore goes through the stored-source persist path).
+	// TargetPath is the desktop file the snapshot restores to ("" = cloud: via the stored-source persist path).
 	TargetPath string `json:"targetPath,omitempty"`
 
-	// Files is the per-file source map for FOLDER snapshots (nil for
-	// single-file snapshots, which use `source`). Restore re-parses the map
-	// with ParseFiles so the folder structure survives the undo.
+	// Files is the per-file source map for FOLDER snapshots (nil for single-file, which use `source`); restore
+	// re-parses the map with ParseFiles so the folder structure survives the undo.
 	Files map[string]string `json:"-"`
 
 	source string `json:"-"`
+	// retained is what the store charged against maxSnapshotBytes (fixed at push) — recorded rather than
+	// recomputed so every release subtracts exactly what was added.
+	retained int64
 }
 
-// snapshotStore is the per-flow ring. Keyed by desktop FilePath (stable
-// across re-parses) or cloud flow ID.
-//
-// B1.1: the map of rings is LRU-bounded (maxSnapshotFlows) — it used to grow
-// a key per flow ever mutated, each holding up to maxSnapshotsPerFlow full
-// source copies FOREVER (folder snapshots copy every member file), an
-// unbounded heap leak on long-lived instances. Touching a ring (push, list,
-// take) refreshes its LRU position so an active flow's undo history never
-// evicts while in use.
+// retainedBytes is the heap a snapshot pins (Bytes, the display size, counts only member texts).
+func (snap *SourceSnapshot) retainedBytes() int64 {
+	n := int64(len(snap.source))
+	for name, text := range snap.Files {
+		n += int64(len(name) + len(text))
+	}
+	return n
+}
+
+// snapshotStore is the per-flow ring, keyed by desktop FilePath (stable across re-parses) or cloud flow ID.
+// The map of rings is LRU-bounded (maxSnapshotFlows): touching a ring refreshes its recency, so an active
+// flow's undo history never evicts while in use. total is the retained size of every snapshot in every ring,
+// kept exact across pushes, trims, eviction and whole-ring removal.
 type snapshotStore struct {
 	mu    sync.Mutex
-	rings *lru.Cache[string, []*SourceSnapshot]
+	rings *lru.Cache[string, *snapshotRing]
+	// total and maxBytes are guarded by mu. maxBytes is maxSnapshotBytes; a
+	// field so tests can exercise eviction without allocating 256 MiB.
+	total    int64
+	maxBytes int64
+}
+
+// snapshotRing is one flow's undo history, oldest first. The LRU holds a pointer so budget eviction can drop
+// an entry in place: re-Add()ing a changed slice would refresh the ring's recency and move the next eviction
+// onto a different flow's history.
+type snapshotRing struct {
+	snaps []*SourceSnapshot
+	bytes int64 // sum of snaps' retained sizes
 }
 
 func newSnapshotStore() *snapshotStore {
-	// lru.New only errors on size <= 0; the constant keeps this unreachable.
-	rings, err := lru.New[string, []*SourceSnapshot](maxSnapshotFlows)
+	return newSnapshotStoreWithBudget(maxSnapshotBytes)
+}
+
+// newSnapshotStoreWithBudget builds the store with the given byte budget.
+func newSnapshotStoreWithBudget(maxBytes int64) *snapshotStore {
+	st := &snapshotStore{maxBytes: maxBytes}
+	// Fires for capacity eviction (Add) and drop (Remove); every store path holds st.mu around those calls, so
+	// the callback already runs under st.mu and must not lock it again.
+	onEvict := func(_ string, r *snapshotRing) {
+		st.total -= r.bytes
+		// Empty the evicted ring too: golang-lru keeps the last evicted value in its eviction buffer until
+		// overwritten, which would otherwise pin that ring's full sources.
+		clear(r.snaps)
+		r.snaps, r.bytes = nil, 0
+	}
+	// lru.NewWithEvict only errors on size <= 0.
+	rings, err := lru.NewWithEvict[string, *snapshotRing](maxSnapshotFlows, onEvict)
 	if err != nil {
 		panic(err)
 	}
-	return &snapshotStore{rings: rings}
+	st.rings = rings
+	return st
 }
 
-func (st *snapshotStore) push(key string, snap *SourceSnapshot) []*SourceSnapshot {
+// push records snap as key's newest entry, then enforces the per-flow count
+// and the store-wide byte budget.
+func (st *snapshotStore) push(key string, snap *SourceSnapshot) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	ring, _ := st.rings.Get(key)
-	ring = append(ring, snap)
-	if len(ring) > maxSnapshotsPerFlow {
-		ring = ring[len(ring)-maxSnapshotsPerFlow:]
+	snap.retained = snap.retainedBytes()
+	if snap.retained > st.maxBytes {
+		// Larger than the whole budget: storing it would evict every other flow's history and then itself;
+		// the ring's older entries stay valid restore points.
+		logger.Warn("source snapshot exceeds the undo budget; not kept", "flow", snap.FlowID, "bytes", snap.retained, "budget", st.maxBytes)
+		return
 	}
-	st.rings.Add(key, ring)
-	return ring
+	r, ok := st.rings.Get(key)
+	if !ok {
+		r = &snapshotRing{}
+		st.rings.Add(key, r) // may evict the LRU ring (onEvict settles total)
+	}
+	r.snaps = append(r.snaps, snap)
+	r.bytes += snap.retained
+	st.total += snap.retained
+	if n := len(r.snaps) - maxSnapshotsPerFlow; n > 0 {
+		st.dropOldest(r, n)
+	}
+	// Budget: evict the LRU ring's oldest entry until under. key's ring was just refreshed, so it is the
+	// oldest only when it is the last ring left — and its newest entry (snap) is never the one dropped.
+	for st.total > st.maxBytes {
+		oldestKey, oldest, ok := st.rings.GetOldest()
+		if !ok {
+			break
+		}
+		if len(oldest.snaps) <= 1 {
+			st.rings.Remove(oldestKey) // onEvict settles total
+			continue
+		}
+		st.dropOldest(oldest, 1)
+	}
+}
+
+// dropOldest removes r's n oldest snapshots IN PLACE (survivors shift forward, tail cleared): a plain reslice
+// left the dropped pointers in the backing array ahead of the slice, and append's growth kept that array alive,
+// so a 10-entry ring pinned up to ~19 full sources. Caller holds st.mu.
+func (st *snapshotStore) dropOldest(r *snapshotRing, n int) {
+	for _, old := range r.snaps[:n] {
+		r.bytes -= old.retained
+		st.total -= old.retained
+	}
+	kept := copy(r.snaps, r.snaps[n:])
+	clear(r.snaps[kept:])
+	r.snaps = r.snaps[:kept]
 }
 
 func (st *snapshotStore) list(key string) []*SourceSnapshot {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	v, ok := st.rings.Get(key)
+	r, ok := st.rings.Get(key)
 	if !ok {
 		return nil
 	}
-	out := make([]*SourceSnapshot, len(v))
-	copy(out, v)
+	out := make([]*SourceSnapshot, len(r.snaps))
+	copy(out, r.snaps)
 	return out
 }
 
 func (st *snapshotStore) take(key, id string) (*SourceSnapshot, bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	v, ok := st.rings.Get(key)
+	r, ok := st.rings.Get(key)
 	if !ok {
 		return nil, false
 	}
-	for _, s := range v {
+	for _, s := range r.snaps {
 		if s.ID == id {
 			return s, true
 		}
@@ -114,7 +193,7 @@ func (st *snapshotStore) take(key, id string) (*SourceSnapshot, bool) {
 func (st *snapshotStore) drop(key string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	st.rings.Remove(key)
+	st.rings.Remove(key) // onEvict settles total
 }
 
 // flowSnapshotKey returns the stable per-flow identity for the undo ring.
@@ -125,17 +204,30 @@ func flowSnapshotKey(doc *models.FlowDocument) string {
 	return doc.ID
 }
 
-// snapshotDesktopFile captures the CURRENT bytes of targetPath before a
-// mutation writes them. Missing file → no snapshot (nothing to undo into).
-func (s *FlowService) snapshotDesktopFile(doc *models.FlowDocument, targetPath, label string) {
-	if s.snapshots == nil {
+// The snapshot* builders below CAPTURE a pre-mutation state without recording it: the caller hands it to
+// pushSnapshot only once the write persisted. They used to push on capture, so a mutation that was then
+// rejected (OCC conflict, parse-error gate, write error) still consumed an undo slot and pinned a full source
+// copy. Each returns nil when there is nothing to capture; pushSnapshot ignores nil.
+
+// pushSnapshot records snap in doc's undo ring — only after the mutation it precedes has persisted.
+func (s *FlowService) pushSnapshot(doc *models.FlowDocument, snap *SourceSnapshot) {
+	if s.snapshots == nil || snap == nil {
 		return
+	}
+	s.snapshots.push(flowSnapshotKey(doc), snap)
+}
+
+// snapshotDesktopFile captures the CURRENT bytes of targetPath before a
+// mutation writes them. Missing file → nil (nothing to undo into).
+func (s *FlowService) snapshotDesktopFile(doc *models.FlowDocument, targetPath, label string) *SourceSnapshot {
+	if s.snapshots == nil {
+		return nil
 	}
 	data, err := os.ReadFile(targetPath) // #nosec G304 -- path derived from doc.FilePath like the mutation itself
 	if err != nil {
-		return // pre-first-save or externally deleted: nothing to capture
+		return nil // pre-first-save or externally deleted: nothing to capture
 	}
-	s.snapshots.push(flowSnapshotKey(doc), &SourceSnapshot{
+	return &SourceSnapshot{
 		ID:         uuid.NewString(),
 		FlowID:     doc.ID,
 		Label:      label,
@@ -143,39 +235,38 @@ func (s *FlowService) snapshotDesktopFile(doc *models.FlowDocument, targetPath, 
 		Bytes:      int64(len(data)),
 		TargetPath: targetPath,
 		source:     string(data),
-	})
+	}
 }
 
-// snapshotCloudSource captures the flow's current source (stored, or the
-// serialized form for ingested flows) before a cloud mutation persists a new
-// one.
-func (s *FlowService) snapshotCloudSource(doc *models.FlowDocument, label string) {
-	if s.snapshots == nil {
-		return
-	}
+// snapshotCloudSource captures the flow's current source (stored, or serialized for ingested flows).
+func (s *FlowService) snapshotCloudSource(doc *models.FlowDocument, label string) *SourceSnapshot {
 	source := doc.Source
 	if source == "" {
 		source = parser.SerializeDocument(doc)
 	}
-	if source == "" {
-		return
+	return s.snapshotCloudSourceText(doc, source, label)
+}
+
+// snapshotCloudSourceText is snapshotCloudSource for a caller already holding the canonical source text: the
+// fix paths derive it anyway, and re-serializing walked the whole block tree a second time per fix.
+func (s *FlowService) snapshotCloudSourceText(doc *models.FlowDocument, source, label string) *SourceSnapshot {
+	if s.snapshots == nil || source == "" {
+		return nil
 	}
-	s.snapshots.push(flowSnapshotKey(doc), &SourceSnapshot{
+	return &SourceSnapshot{
 		ID:        uuid.NewString(),
 		FlowID:    doc.ID,
 		Label:     label,
 		CreatedAt: time.Now().UTC(),
 		Bytes:     int64(len(source)),
 		source:    source,
-	})
+	}
 }
 
-// snapshotCloudFiles captures a FOLDER flow's per-file sources before a
-// multi-file mutation (fix/batch). Bytes carries the combined size for list
-// display; restore re-parses the map so the folder shape survives.
-func (s *FlowService) snapshotCloudFiles(doc *models.FlowDocument, files map[string]string, label string) {
+// snapshotCloudFiles captures a FOLDER flow's per-file sources before a multi-file mutation.
+func (s *FlowService) snapshotCloudFiles(doc *models.FlowDocument, files map[string]string, label string) *SourceSnapshot {
 	if s.snapshots == nil || len(files) == 0 {
-		return
+		return nil
 	}
 	var total int64
 	cp := make(map[string]string, len(files))
@@ -183,23 +274,21 @@ func (s *FlowService) snapshotCloudFiles(doc *models.FlowDocument, files map[str
 		total += int64(len(text))
 		cp[name] = text
 	}
-	s.snapshots.push(flowSnapshotKey(doc), &SourceSnapshot{
+	return &SourceSnapshot{
 		ID:        uuid.NewString(),
 		FlowID:    doc.ID,
 		Label:     label,
 		CreatedAt: time.Now().UTC(),
 		Bytes:     total,
 		Files:     cp,
-	})
+	}
 }
 
-// snapshotDesktopFiles captures the pre-mutation bytes of the member files a
-// desktop FOLDER batch is about to rewrite, as ONE undo entry. TargetPath
-// carries the folder so restore knows where the files live; Files carries the
-// per-file bytes. Restore writes each file back and re-parses the folder.
-func (s *FlowService) snapshotDesktopFiles(doc *models.FlowDocument, files map[string]string, label string) {
+// snapshotDesktopFiles captures the pre-mutation bytes of the member files a desktop FOLDER batch is about to
+// rewrite, as ONE undo entry; restore writes each file back and re-parses the folder.
+func (s *FlowService) snapshotDesktopFiles(doc *models.FlowDocument, files map[string]string, label string) *SourceSnapshot {
 	if s.snapshots == nil || len(files) == 0 || doc.FilePath == "" {
-		return
+		return nil
 	}
 	var total int64
 	cp := make(map[string]string, len(files))
@@ -207,7 +296,7 @@ func (s *FlowService) snapshotDesktopFiles(doc *models.FlowDocument, files map[s
 		total += int64(len(text))
 		cp[name] = text
 	}
-	s.snapshots.push(flowSnapshotKey(doc), &SourceSnapshot{
+	return &SourceSnapshot{
 		ID:         uuid.NewString(),
 		FlowID:     doc.ID,
 		Label:      label,
@@ -215,7 +304,7 @@ func (s *FlowService) snapshotDesktopFiles(doc *models.FlowDocument, files map[s
 		Bytes:      total,
 		TargetPath: doc.FilePath,
 		Files:      cp,
-	})
+	}
 }
 
 // ListSourceSnapshots returns the flow's undo ring, newest last.
@@ -226,9 +315,8 @@ func (s *FlowService) ListSourceSnapshots(doc *models.FlowDocument) []*SourceSna
 	return s.snapshots.list(flowSnapshotKey(doc))
 }
 
-// RestoreSourceSnapshot writes the snapshot's bytes back: desktop re-writes
-// the recorded file; cloud persists through the stored-source path. Returns
-// the re-loaded document.
+// RestoreSourceSnapshot writes the snapshot's bytes back: desktop re-writes the recorded file; cloud persists
+// through the stored-source path. Returns the re-loaded document.
 func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.FlowDocument, snapshotID string) (*models.FlowDocument, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
@@ -242,37 +330,41 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 	}
 
 	if snap.TargetPath != "" && snap.Files != nil {
-		// Desktop FOLDER batch: write every recorded member back into the
-		// folder (TargetPath), then re-parse once. The current bytes of those
-		// same members are snapshotted first so the restore is itself
-		// undoable, matching the single-file branch below.
+		// Desktop FOLDER batch: write every recorded member back, then re-parse once. The current bytes are
+		// snapshotted first so the restore is itself undoable — recorded once a member was actually rewritten
+		// (a later write failure leaves the earlier ones changed, and those must stay undoable).
 		current := make(map[string]string, len(snap.Files))
 		for name := range snap.Files {
 			if data, rerr := os.ReadFile(filepath.Join(snap.TargetPath, name)); rerr == nil { // #nosec G304 -- recorded member of the flow folder
 				current[name] = string(data)
 			}
 		}
-		s.snapshotDesktopFiles(doc, current, "before restore")
+		before := s.snapshotDesktopFiles(doc, current, "before restore")
+		wrote := false
 		for name, text := range snap.Files {
 			target := filepath.Join(snap.TargetPath, name)
 			if err := atomicWriteConv(snap.TargetPath, target, []byte(text)); err != nil {
+				if wrote {
+					s.pushSnapshot(doc, before)
+				}
 				return nil, fmt.Errorf("restore snapshot (%s): %w", name, err)
 			}
+			wrote = true
 		}
+		s.pushSnapshot(doc, before)
 		s.InvalidateSearchIndex(doc.ID)
 		logger.Info("folder snapshot restored", "flow", doc.ID, "snapshot", snapshotID, "label", snap.Label)
 		return s.LoadFlowFolder(snap.TargetPath)
 	}
 
 	if snap.TargetPath != "" {
-		// Desktop: restore the recorded file. A folder flow's cross-subflow
-		// indexes are rebuilt by the folder reload below. Snapshot the
-		// CURRENT bytes first so the restore is itself undoable (parity with
-		// the cloud branch).
-		s.snapshotDesktopFile(doc, snap.TargetPath, "before restore")
+		// Desktop: restore the recorded file; the CURRENT bytes are snapshotted first so the restore is
+		// itself undoable, recorded once the write landed.
+		before := s.snapshotDesktopFile(doc, snap.TargetPath, "before restore")
 		if err := atomicWriteConv(filepath.Dir(snap.TargetPath), snap.TargetPath, []byte(snap.source)); err != nil {
 			return nil, fmt.Errorf("restore snapshot: %w", err)
 		}
+		s.pushSnapshot(doc, before)
 		// The restored bytes replaced the file: derived caches are stale.
 		s.InvalidateSearchIndex(doc.ID)
 		if doc.FilePath != "" {
@@ -281,8 +373,7 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 			}
 			return s.LoadFlowFromPath(doc.FilePath)
 		}
-		// Snapshot recorded a file but the doc has no FilePath anymore
-		// (switched docs?): restore the file and report via parse.
+		// Snapshot recorded a file but the doc has no FilePath anymore (switched docs?): report via parse.
 		restored, perr := parser.ParseText(snap.source, filepath.Base(snap.TargetPath), snap.Bytes)
 		if perr != nil {
 			return nil, fmt.Errorf("re-parse restored source: %w", perr)
@@ -290,13 +381,11 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 		return restored, nil
 	}
 
-	// Folder snapshot: re-parse the per-file map and persist the folder
-	// through the same OCC path (a folder restored as a single combined text
-	// would collapse the structure — the exact hazard SaveSource guards
-	// against). The current state is snapshotted first, so the restore is
-	// itself undoable.
+	// Folder snapshot: re-parse the per-file map and persist through the same OCC path (a folder restored as a
+	// single combined text would collapse the structure — the hazard SaveSource guards against). The current
+	// state is snapshotted first, so the restore is itself undoable.
 	if snap.Files != nil {
-		s.snapshotCloudFiles(doc, parser.SerializeFiles(doc), "before restore")
+		before := s.snapshotCloudFiles(doc, parser.SerializeFiles(doc), "before restore")
 		combined := parseFilesPreservingIdentity(snap.Files, doc)
 		if combined == nil {
 			return nil, fmt.Errorf("restore: re-parse snapshot files failed")
@@ -305,25 +394,25 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 		if err != nil {
 			return nil, err
 		}
+		s.pushSnapshot(doc, before)
 		logger.Info("folder snapshot restored", "flow", doc.ID, "snapshot", snapshotID, "label", snap.Label)
 		return updated, nil
 	}
 
-	// Cloud: persist the old source through the standard path (OCC, re-parse,
-	// SaveFlow) — and snapshot the CURRENT state first so the restore itself
-	// is undoable.
-	s.snapshotCloudSource(doc, "before restore")
+	// Cloud: persist the old source through the standard path (OCC, re-parse, SaveFlow); the CURRENT state is
+	// snapshotted first so the restore itself is undoable.
+	before := s.snapshotCloudSource(doc, "before restore")
 	updated, err := s.persistCloudSource(ctx, doc, snap.source)
 	if err != nil {
 		return nil, err
 	}
+	s.pushSnapshot(doc, before)
 	logger.Info("source snapshot restored", "flow", doc.ID, "snapshot", snapshotID, "label", snap.Label)
 	return updated, nil
 }
 
-// SourceMeta is the cheap change-detection signal for the desktop watcher:
-// size + mtime of the flow's backing file (folder flows report the combined
-// max mtime + total size across member files so ANY member edit registers).
+// SourceMeta is the cheap change-detection signal for the desktop watcher: size + mtime (folders report the
+// combined max mtime + total size so ANY member edit registers).
 type SourceMeta struct {
 	Size    int64  `json:"size"`
 	ModTime string `json:"modTime"`
@@ -331,9 +420,7 @@ type SourceMeta struct {
 	Files int `json:"files"`
 }
 
-// GetSourceMeta stats the flow's backing file(s) without reading content —
-// the desktop watcher polls this. Cloud flows return Files=0 (nothing to
-// watch; cloud sync arrives over the websocket flow-change channel instead).
+// GetSourceMeta stats the flow's backing file(s) without reading content; cloud flows return Files=0.
 func (s *FlowService) GetSourceMeta(doc *models.FlowDocument) (*SourceMeta, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
@@ -343,15 +430,14 @@ func (s *FlowService) GetSourceMeta(doc *models.FlowDocument) (*SourceMeta, erro
 	}
 	info, err := os.Stat(doc.FilePath)
 	if err != nil {
-		// The watcher treats stat failure as "gone" (Files=0) rather than an
-		// error: a file deleted between polls is a normal editor save dance.
+		// The watcher treats stat failure as "gone" (Files=0), not an error: a file deleted between polls is
+		// a normal editor save dance.
 		return &SourceMeta{Files: 0}, nil
 	}
 	if !info.IsDir() {
 		return &SourceMeta{Size: info.Size(), ModTime: info.ModTime().UTC().Format(time.RFC3339Nano), Files: 1}, nil
 	}
-	// Folder: aggregate member files (the same *.txt/*.pad set loadFolder
-	// consumes) so any member's edit moves the numbers.
+	// Folder: aggregate member files (the same *.txt/*.pad set loadFolder consumes) so any edit moves the numbers.
 	var total int64
 	var latest time.Time
 	entries, err := os.ReadDir(doc.FilePath)

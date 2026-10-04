@@ -2,25 +2,15 @@ package analyzer
 
 import "pad-core/models"
 
-// maxParseErrorFindings bounds how many ParseErrors are converted into
-// findings.
-//
-// The conversion was 1:1 and uncapped, and a parse error costs as little as five
-// bytes of input ("ELSE\n"), so the finding count scaled with the file size:
-// measured 2,048 findings from 10 KB, 20,480 from 100 KB and 209,715 from 1 MB,
-// the last allocating 894 MB — against an endpoint that accepts 2 MB. Each
-// finding is then serialised into the response, which is where the ~141x
-// request-to-response amplification and the multi-hundred-megabyte bodies came
-// from, and each is retained by the report cache afterwards.
-//
-// A hundred is far more than anyone acts on: a file this broken is fixed by
-// looking at the first few errors, not the twenty-thousandth. The cap is about
-// what the SERVER will materialise, not about hiding the problem — the count is
-// always reported in full, and the gate still fails because parse-error is Error
-// severity and the first one is enough.
+// maxParseErrorFindings bounds how many ParseErrors become findings: the
+// conversion was 1:1 and uncapped, a parse error costs as little as five bytes
+// of input ("ELSE\n"), and every finding was serialised into the response and
+// retained by the report cache — 209,715 findings (894 MB allocated) from a
+// 1 MB upload. A hundred bounds what the SERVER materialises, not visibility:
+// the count is always reported in full and the gate still fails on the first
+// Error-severity parse error.
 const maxParseErrorFindings = 100
 
-// severityForParseError maps a ParseError's severity string onto the model.
 func severityForParseError(s string) models.Severity {
 	switch s {
 	case "warning":
@@ -33,10 +23,9 @@ func severityForParseError(s string) models.Severity {
 }
 
 // buildParseErrorFindings converts parse errors into findings, capped at
-// maxParseErrorFindings and followed by a summary finding when it truncates.
-//
-// It is shared by the per-block rule and the engine's document-level fallback so
-// the two cannot drift — they previously carried the same loop twice.
+// maxParseErrorFindings with a summary finding when it truncates; shared by the
+// per-block rule and the engine's document-level fallback so the two cannot
+// drift.
 func buildParseErrorFindings(errs []models.ParseError, blockID, subflowID string) []models.Finding {
 	if len(errs) == 0 {
 		return nil
@@ -66,12 +55,9 @@ func buildParseErrorFindings(errs []models.ParseError, blockID, subflowID string
 		return out
 	}
 
-	// Report the truncation instead of silently dropping it. A report that
-	// quietly omits findings is indistinguishable from a cleaner file, which is
-	// the failure this codebase has had to correct more than once.
-	//
-	// The summary carries the highest severity among the errors that were NOT
-	// shown, so truncation can never lower the report's severity ceiling.
+	// Report the truncation instead of silently dropping it; the summary
+	// carries the highest severity among the errors NOT shown, so truncation
+	// can never lower the report's severity ceiling.
 	worst := models.SeverityInfo
 	rank := map[models.Severity]int{models.SeverityInfo: 1, models.SeverityWarning: 2, models.SeverityError: 3}
 	for _, pe := range errs[maxParseErrorFindings:] {

@@ -1,4 +1,4 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {describe, it, expect, vi, beforeEach, beforeAll} from 'vitest'
 import {render, screen, waitFor, fireEvent} from '@testing-library/react'
 import {ToastProvider} from '@/components/shared/Toast'
 import {useAnalysisStore} from '@/stores/analysisStore'
@@ -57,6 +57,13 @@ function renderHome() {
   )
 }
 
+// The chart cards are lazy (HomeDashboard imports them through this module);
+// loading it once up front keeps the real recharts import's cost out of each
+// test's wait budget.
+beforeAll(async () => {
+  await import('./home/HomeChartCards')
+})
+
 beforeEach(() => {
   vi.clearAllMocks()
   getHome.mockResolvedValue(emptyData)
@@ -84,7 +91,7 @@ describe('HomeDashboard', () => {
     expect(screen.queryByText('Security posture')).toBeNull()
     expect(screen.queryByText('Open analytics')).toBeNull()
 
-    expect(screen.getByText('Top rules')).toBeInTheDocument()
+    expect(await screen.findByText('Top rules', {}, {timeout: 5000})).toBeInTheDocument()
     expect(screen.getByText('Recent flows')).toBeInTheDocument()
     expect(screen.getByText('Health distribution')).toBeInTheDocument()
     expect(screen.getByText('Flow complexity')).toBeInTheDocument()
@@ -101,7 +108,7 @@ describe('HomeDashboard', () => {
     renderHome()
     await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
 
-    expect(screen.getByText('Health trend')).toBeInTheDocument()
+    expect(await screen.findByText('Health trend', {}, {timeout: 5000})).toBeInTheDocument()
     expect(screen.getByText('AI usage')).toBeInTheDocument()
     expect(screen.getByText('Recent activity')).toBeInTheDocument()
     expect(screen.getByText('Security posture')).toBeInTheDocument()
@@ -114,7 +121,7 @@ describe('HomeDashboard', () => {
   it('"Details" opens the analytics page at the card\'s section', async () => {
     getHome.mockResolvedValue({...emptyData, isCloud: true})
     renderHome()
-    await waitFor(() => expect(screen.getByText('Health trend')).toBeInTheDocument())
+    expect(await screen.findByText('Health trend', {}, {timeout: 5000})).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', {name: 'Open Health trend in analytics'}))
     expect(useUIStore.getState().mainPaneView).toBe('dashboard')

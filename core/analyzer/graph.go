@@ -21,14 +21,13 @@ func buildSubflowNameIndex(doc *models.FlowDocument) map[string]string {
 	return idx
 }
 
-// isSubflowCall reports whether b invokes another subflow.
 func isSubflowCall(b *models.Block) bool {
 	return b.RawType == "CALL" || b.RawType == "DISABLED_CALL" || b.Type == models.BlockTypeSubflow
 }
 
 // resolveCallTargetID returns the target subflow ID for a call block using the
-// name index, or "" when the target can't be resolved. Centralizes the call
-// target heuristics so the execution graph and the metrics call graph agree.
+// name index, or "" when unresolvable; centralizes the heuristics so the
+// execution graph and the metrics call graph agree.
 func resolveCallTargetID(b *models.Block, nameIndex map[string]string) string {
 	targetName := ""
 	// 1. "Call X" / "Call X (disabled)" naming convention.
@@ -59,7 +58,6 @@ func BuildExecutionGraph(doc *models.FlowDocument, report *models.AnalysisReport
 	edges := make([]models.GraphEdge, 0)
 	edgeMap := make(map[string]bool)
 
-	// Subflow error/warn counts
 	errCounts := make(map[string]int)
 	warnCounts := make(map[string]int)
 
@@ -87,7 +85,6 @@ func BuildExecutionGraph(doc *models.FlowDocument, report *models.AnalysisReport
 			WarnCount:  warnCounts[sf.ID],
 		})
 
-		// Find calls to other subflows using the shared resolver.
 		walkSubflowBlocks(sf, func(b *models.Block) {
 			if !isSubflowCall(b) {
 				return

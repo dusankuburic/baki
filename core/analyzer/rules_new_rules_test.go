@@ -116,7 +116,6 @@ func TestCircularSubflowRule(t *testing.T) {
 		ctx := buildContext(flow, nil)
 		rule := &CircularSubflowRule{}
 
-		// Fire on first block of subflow A
 		got := rule.Check(callB, ctx)
 		if len(got) != 1 {
 			t.Fatalf("expected 1 finding for cyclic subflow A, got %d", len(got))
@@ -125,7 +124,6 @@ func TestCircularSubflowRule(t *testing.T) {
 			t.Errorf("ruleID = %q", got[0].RuleID)
 		}
 
-		// Fire on first block of subflow B
 		gotB := rule.Check(callA, ctx)
 		if len(gotB) != 1 {
 			t.Fatalf("expected 1 finding for cyclic subflow B, got %d", len(gotB))

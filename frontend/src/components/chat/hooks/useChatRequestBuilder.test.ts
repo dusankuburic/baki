@@ -231,7 +231,7 @@ describe('useChatRequestBuilder', () => {
   })
 })
 
-describe('useChatRequestBuilder reasoning effort (F-19)', () => {
+describe('useChatRequestBuilder reasoning effort', () => {
   it('sends the configured effort next to temperature/maxTokens and omits the default', () => {
     const settings = makeAISettings()
     const {result} = renderHook(() =>
@@ -244,8 +244,7 @@ describe('useChatRequestBuilder reasoning effort (F-19)', () => {
         getMessages: () => [],
       }),
     )
-    // ChatRequest types the field (it used to ride past the excess-property
-    // check as an untyped spread), with only the values the server accepts.
+    // ChatRequest types the field, with only the values the server accepts.
     expectTypeOf<ChatRequest['reasoningEffort']>().toEqualTypeOf<'low' | 'medium' | 'high' | undefined>()
     expectTypeOf<NonNullable<AISettings['providers']['openai']>['reasoningEffort']>().toEqualTypeOf<
       '' | 'low' | 'medium' | 'high' | undefined

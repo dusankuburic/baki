@@ -90,7 +90,7 @@ func TestResponsesInput_ReplaysProviderItems(t *testing.T) {
 	if legacy == nil {
 		t.Fatal("a replayed request must keep the legacy rebuild for the fallback")
 	}
-	legacyItems := inputItems(t, legacy)
+	legacyItems := inputItems(t, legacy())
 	if got := itemTypes(legacyItems); strings.Join(got, ",") != "message,message,message,function_call,function_call_output" {
 		t.Errorf("legacy types = %v", got)
 	}
@@ -572,7 +572,7 @@ func TestAzureFoundry_AgentServedModelResolvedThroughDeployments(t *testing.T) {
 	}
 }
 
-// F-23: one transient replay rejection falls back once and is memoised, but
+// One transient replay rejection falls back once and is memoised, but
 // later 200 turns that merely re-apply the memo must not refresh its TTL —
 // after it lapses, the replay is probed again and rejected just once more.
 func TestAzureFoundry_AgentReplayMemoNotRefreshedByEveryTurn(t *testing.T) {

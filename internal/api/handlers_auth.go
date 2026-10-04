@@ -34,23 +34,17 @@ type AuthHandler struct {
 	// (cloud mode with PAD_SSO_* set and a Postgres backend).
 	ssoClient     SSOClient
 	identityStore IdentityStore
-	// email renders/sends transactional mail (password reset, verification).
-	// Always non-nil — falls back to a log-only mailer when SMTP is unset.
+	// email sends transactional mail; always non-nil (log-only when SMTP unset).
 	email *mailer.Service
-	// authSvc owns credential verification (bcrypt timing/lockout) and
-	// password-mutation business logic; see internal/service/auth.go.
+	// authSvc owns credential verification (bcrypt timing/lockout); see internal/service/auth.go.
 	authSvc *service.AuthService
-	// onUserDeleted runs after handleAuthDeleteAccount erased the user (wired
-	// in di/services.go to ProviderService.InvalidateScope, mirroring
-	// SystemService.OnApiKeyChanged); nil = no hook (bare tests). The backend's
-	// DeleteUser cascades the user's provider keys in SQL — this hook is what
-	// tells the in-process caches.
+	// onUserDeleted runs after handleAuthDeleteAccount erased the user (wired to
+	// ProviderService.InvalidateScope): the SQL cascade does not reach the
+	// in-process caches.
 	onUserDeleted func(scope string)
-	// providers releases, on account erasure, what the SQL cascade does not
-	// reach: the process state of the user's own Azure AI Foundry credential
-	// (read before the cascade) and every organisation shared credential the
-	// user lent as an admin (disabled and audited). nil = none (bare tests,
-	// the desktop). Wired in di/services.go.
+	// providers releases, on account erasure, process state the SQL cascade does not
+	// reach: the user's own Azure credential and every org credential they lent as
+	// an admin. nil = none (bare tests, desktop).
 	providers *service.ProviderService
 }
 
@@ -58,43 +52,27 @@ func NewAuthHandler(tokenStore RefreshTokenStore, backend storageif.StorageBacke
 	return &AuthHandler{tokenStore: tokenStore, backend: backend, security: security, ssoClient: ssoClient, identityStore: identityStore, email: email, authSvc: authSvc}
 }
 
-// OnUserDeleted registers the hook handleAuthDeleteAccount runs after a
-// successful erasure. Post-construction wiring (same pattern as
-// SystemService.OnApiKeyChanged): set once at boot in di, before requests are
-// served.
+// OnUserDeleted registers the post-erasure hook; set once at boot in di.
 func (h *AuthHandler) OnUserDeleted(fn func(scope string)) {
 	h.onUserDeleted = fn
 }
 
-// SetProviderService wires the provider service account erasure releases
-// credentials through (see providers). Set once at boot, before requests are
-// served.
+// SetProviderService wires the provider service account erasure releases credentials through; set once at boot.
 func (h *AuthHandler) SetProviderService(p *service.ProviderService) {
 	h.providers = p
 }
 
-// credentials is the shared {email, password} JSON body of the register and
-// login endpoints. Extracted so the decode + email-normalization logic lives in
-// one place instead of being duplicated across the two handlers.
 type credentials struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
 
-// refreshCookieName is the HttpOnly cookie that carries the refresh token,
-// keeping it out of JS-accessible storage (localStorage is XSS-readable).
-// The cookie is SET on login/refresh and READ (cookie-first, body-fallback)
-// on refresh/logout, so the browser auto-sends it on same-origin /api/auth
-// POSTs. HttpOnly means document.cookie/XSS can't read it; SameSite=Lax
-// blocks cross-site CSRF POSTs against /refresh; Path=/api/auth confines it to
-// the auth endpoints. The body refreshToken field is still returned and
-// accepted for backward compatibility.
+// refreshCookieName: HttpOnly keeps document.cookie/XSS out, SameSite=Lax blocks cross-site
+// CSRF POSTs, Path=/api/auth confines it. The body field stays for compat.
 const refreshCookieName = "pad_refresh"
 
-// isHTTPS reports whether the request reached the server over TLS (directly or
-// via a trusted proxy's X-Forwarded-Proto). The refresh cookie is a long-lived
-// credential, so Secure is set only when transport is actually encrypted —
-// otherwise localhost/dev over http could never set or send it.
+// isHTTPS reports whether the request reached the server over TLS (directly or via a trusted
+// proxy's X-Forwarded-Proto); the refresh cookie's Secure flag is set only for encrypted transport.
 func isHTTPS(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
@@ -139,9 +117,6 @@ func clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// refreshTokenFromRequest returns the refresh token from the HttpOnly cookie
-// (preferred) or, for backward compatibility, the JSON body field. Returns ""
-// when neither is present.
 func (h *AuthHandler) refreshTokenFromRequest(r *http.Request, bodyToken string) string {
 	if c, err := r.Cookie(refreshCookieName); err == nil && c.Value != "" {
 		return c.Value
@@ -149,15 +124,9 @@ func (h *AuthHandler) refreshTokenFromRequest(r *http.Request, bodyToken string)
 	return bodyToken
 }
 
-// decodeCredentials reads the request body and returns the normalized email
-// (lowercased/trimmed via validateEmail) together with the raw password.
-//
-// Two errors are returned so each caller can apply its own policy:
-//   - err:      a malformed/missing JSON body (both handlers treat this as 400).
-//   - emailErr: an email-validation failure. Register treats it as a 400, but
-//     login ignores it and lets the user lookup decide, so that an empty or
-//     malformed email yields 401 "invalid credentials" rather than revealing
-//     input-validation rules (and without changing the login response shape).
+// decodeCredentials returns the normalized email and raw password with two errors for caller policy:
+// err is a malformed body (both 400); register answers emailErr 400, login ignores it — a malformed
+// email yields 401 "invalid credentials" without revealing rules.
 func decodeCredentials(r *http.Request) (email, password string, emailErr error, err error) {
 	var c credentials
 	if err = json.NewDecoder(r.Body).Decode(&c); err != nil {
@@ -184,9 +153,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if h.security.Features.DisableSignUp {
-		// 403, not 404, so a closed deployment clearly signals "signups disabled"
-		// rather than "endpoint moved". The frontend hides the form via
-		// GET /api/system/features, so this only fires if a runner hits the API directly.
+		// 403, not 404: a closed deployment clearly signals "signups disabled"; the form is hidden via /api/system/features.
 		render.Error(w, fmt.Errorf("account registration is disabled on this instance"), http.StatusForbidden)
 		return
 	}
@@ -212,8 +179,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 
 	user, err := h.authSvc.Register(r.Context(), email, password)
 	if err != nil {
-		// Let render.Error auto-map: ErrEmailExists → 409, everything else
-		// (incl. ErrPasswordHashFailed and DB outages) → 500.
+		// render.Error auto-maps: ErrEmailExists → 409, everything else → 500.
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -225,9 +191,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		"role":  user.Role,
 	}
 	if user.EmailVerified {
-		// No verification round trip is pending (the bootstrap admin is created
-		// verified — see CreateUser), so issue the session directly instead of
-		// sending the user to a login they would immediately pass anyway.
+		// No verification round trip pending (bootstrap admin is created verified): issue the session directly.
 		pair, ok := h.issueSession(w, r, user.ID, user.Email, user.Role)
 		if !ok {
 			return
@@ -245,8 +209,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	h.authSvc.SendVerificationEmail(r.Context(), user)
-	// verificationRequired tells the client this is NOT a session: the user
-	// must follow the emailed link (or ask for a resend) before logging in.
+	// verificationRequired: this is NOT a session — the user must follow the emailed link first.
 	render.JSON(w, map[string]any{
 		"status":               "ok",
 		"user":                 userJSON,
@@ -254,10 +217,8 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// issueSession mints a token pair, persists the refresh token, sets the
-// HttpOnly refresh cookie and records the login audit event — the tail every
-// successful credential exchange shares. On failure it has already written the
-// error response and returns ok=false.
+// issueSession mints a token pair, persists the refresh token, sets the HttpOnly cookie and records
+// the login audit; on failure it has written the error and returns ok=false.
 func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, userID, email string, role auth.Role) (*auth.TokenPair, bool) {
 	pair, err := h.security.AuthMgr.Issue(userID, email, role)
 	if err != nil {
@@ -273,8 +234,7 @@ func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, userI
 		}
 	}
 
-	// Set the HttpOnly refresh cookie. The body field is still returned by
-	// callers for backward compatibility with existing clients.
+	// Set the HttpOnly refresh cookie; callers still return the body field for backward compatibility.
 	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt)
 
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLogin, "user", userID, nil)
@@ -339,9 +299,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	metrics.RecordAuthOp("login")
-	// Login ignores the email-validation error (emailErr) and normalizes only:
-	// an empty/malformed email proceeds to the lookup and returns 401, avoiding
-	// leaking input rules.
+	// Login ignores emailErr and normalizes only (see decodeCredentials): a malformed email returns 401.
 	email, password, _, err := decodeCredentials(r)
 	if err != nil {
 		render.Error(w, err, http.StatusBadRequest)
@@ -353,11 +311,8 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authenticate owns the timing-attack-safe credential check (dummy bcrypt
-	// for a missing user, real bcrypt BEFORE the lock check) and the
-	// failed-attempt/lockout bookkeeping — see internal/service/auth.go for
-	// why this ordering must not change. The switch below only translates its
-	// outcome into audit events and HTTP responses.
+	// Authenticate owns the timing-attack-safe credential check and the failed-attempt/lockout bookkeeping
+	// (internal/service/auth.go — that ordering must not change); this switch only translates outcomes.
 	result := h.authSvc.Authenticate(r.Context(), email, password)
 	switch result.Outcome {
 	case service.LoginUserNotFound:
@@ -377,8 +332,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	case service.LoginEmailNotVerified:
 		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLoginFailure, "user", result.User.ID, map[string]string{"reason": "email_not_verified"})
-		// Machine-readable code so the login page can offer "resend the link"
-		// instead of a bare error (see handleAuthResendVerification).
+		// Machine-readable code so the login page can offer "resend the link".
 		render.ErrorWithCode(w, fmt.Errorf("email not verified — check your inbox for a verification link"), http.StatusForbidden, "email_not_verified")
 		return
 	}
@@ -388,11 +342,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// The client validates the login response against a schema that requires
-	// a `user` object (frontend/src/api/schemas.lazy.ts LoginResponseSchema) —
-	// the same shape register's verified branch returns. Tokens alone made
-	// every successful login fail client-side with "Response validation
-	// failed: user: Invalid input".
+	// The client validates against LoginResponseSchema, which requires a `user` object — tokens alone failed validation.
 	render.JSON(w, map[string]any{
 		"user": map[string]any{
 			"id":    user.ID,
@@ -427,8 +377,7 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Prefer the HttpOnly cookie over the body field; the body fallback keeps
-	// existing clients working.
+	// Prefer the HttpOnly cookie; the body fallback keeps old clients working.
 	refreshTok := h.refreshTokenFromRequest(r, req.RefreshToken)
 
 	claims, err := h.security.AuthMgr.VerifyRefresh(refreshTok)
@@ -438,12 +387,8 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if h.tokenStore == nil {
-		// In JWT mode a nil token store is a misconfiguration: the replay/
-		// rotation safeguards (single-use enforcement, cross-user mismatch
-		// check, replay-triggered session revocation) all depend on it. Fail
-		// closed rather than silently skipping them — otherwise a stolen
-		// refresh token can be replayed indefinitely. Local (non-JWT) mode
-		// has no token store by design and refreshes statelessly.
+		// In JWT mode a nil token store is a misconfiguration: the replay and rotation safeguards all
+		// depend on it — fail closed, else a stolen refresh token replays indefinitely.
 		if h.security.JWTEnabled {
 			logger.Error("refresh requested in JWT mode without a token store (misconfiguration); rejecting",
 				"user_id", claims.UserID, "token_id", claims.ID)
@@ -451,10 +396,8 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	} else {
-		// Use the atomic verify-and-revoke to eliminate the race window
-		// between separate VerifyRefresh and RevokeRefreshToken calls.
-		// Two concurrent requests with the same jti: only one succeeds
-		// because the UPDATE...RETURNING is atomic at the DB level.
+		// Atomic verify-and-revoke: of two concurrent requests with the same
+		// jti only one succeeds (UPDATE...RETURNING is atomic at the DB).
 		info, err := h.tokenStore.VerifyAndRevokeRefreshToken(r.Context(), claims.ID)
 		if err != nil {
 			if errors.Is(err, storageif.ErrTokenAlreadyRevoked) {
@@ -469,9 +412,7 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 			render.Error(w, fmt.Errorf("failed to process token refresh"), http.StatusInternalServerError)
 			return
 		}
-		// A1.3: Cross-check the DB-verified owner against the JWT claims to
-		// prevent a forged token (different UserID in claims) from rotating
-		// another user's refresh token into a new session.
+		// A1.3: a forged token must not rotate another user's refresh token.
 		if info.UserID != claims.UserID {
 			logger.Warn("refresh token user mismatch", "claimsUserID", claims.UserID, "dbUserID", info.UserID, "tokenID", claims.ID)
 			render.Error(w, fmt.Errorf("session compromised — please log in again"), http.StatusUnauthorized)
@@ -479,15 +420,13 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Reload the user from the DB so the new token reflects the CURRENT role
-	// and email, not whatever was baked into the refresh-token claims.
+	// Reload the user so the new token reflects the CURRENT role and email, not the refresh-token claims.
 	issueRole := claims.Role
 	issueEmail := claims.Email
 	if h.backend != nil {
 		user, err := h.backend.LoadUserByID(r.Context(), claims.UserID)
 		if err != nil {
-			// A1.2: Fail closed — a deleted or non-existent user must NOT be
-			// able to refresh tokens indefinitely from stale JWT claims.
+			// A1.2: fail closed — a deleted user must not refresh from stale claims.
 			logger.Warn("refresh for deleted/missing user", "userID", claims.UserID, "error", err)
 			render.Error(w, fmt.Errorf("account not found — please log in again"), http.StatusUnauthorized)
 			return
@@ -560,8 +499,6 @@ func (h *AuthHandler) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, resp)
 }
 
-// handleAuthUpdateProfile lets a user set their own display name and avatar
-// URL. Both fields are optional and may be cleared by sending an empty string.
 // @Summary      Update profile
 // @Description  handleAuthUpdateProfile lets a user set their own display name and avatar URL. Both fields are optional and may be cleared by sending an empty string.
 // @Tags         auth
@@ -626,12 +563,8 @@ func (h *AuthHandler) handleAuthUpdateProfile(w http.ResponseWriter, r *http.Req
 	})
 }
 
-// handleAuthDeleteAccount performs self-service account erasure (GDPR "right to
-// be forgotten"). It requires the caller to confirm by supplying their own
-// email — auth is Bearer (not cookies), but the confirmation still guards
-// against stolen-token / drive-by deletion. The caller's current access token
-// is revoked immediately so the erased account can't keep acting until its
-// short-lived JWT would have expired.
+// handleAuthDeleteAccount performs self-service account erasure (GDPR "right to be forgotten"): the
+// caller confirms with their own email — guarding against stolen-token deletion — and the access token is revoked immediately.
 // @Summary      Delete account (GDPR)
 // @Description  Self-service account erasure.
 // @Tags         auth
@@ -663,9 +596,7 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Read before the erasure cascades the user's provider keys away: the
-	// Azure AI Foundry document names the credential whose process state
-	// (Entra ID token source, cached listing) must be released with it.
+	// Read before the erasure cascades the provider keys away: the Azure document names the credential to release.
 	var releaseOwn func()
 	if h.providers != nil {
 		releaseOwn = h.providers.PrepareAccountErasure(h.security.KeyScope(r))
@@ -678,14 +609,9 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 	if releaseOwn != nil {
 		releaseOwn()
 	}
-	// An organisation credential the user lent as an admin does not cascade
-	// with the account (org_provider_keys is keyed by org): disable it.
+	// An org credential the user lent as an admin does not cascade with the account (org_provider_keys is org-keyed): disable it.
 	disableLentCredentials(r, h.backend, h.security.TrustedProxies, h.providers, claims.UserID, lenderReasonAccountDeleted)
 
-	// The erasure cascaded the user's provider keys in SQL; drop whatever the
-	// in-process caches still hold for that scope (DI wires this to
-	// ProviderService.InvalidateScope). KeyScope is exactly what those caches
-	// are keyed by.
 	if h.onUserDeleted != nil {
 		h.onUserDeleted(h.security.KeyScope(r))
 	}
@@ -700,8 +626,6 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// handleAuthExportAccount returns a data-subject access / portability bundle for
-// the caller's own account.
 // @Summary      Export account data
 // @Description  GDPR data-subject export: profile, owned flows (with content), settings, API tokens, the complete audit history, chat conversations on owned flows, the comments and triage decisions the user authored, organisation memberships and active sessions. Content other users authored on shared flows is out of scope.
 // @Tags         auth
@@ -720,12 +644,8 @@ func (h *AuthHandler) handleAuthExportAccount(w http.ResponseWriter, r *http.Req
 	}
 	filename := fmt.Sprintf("baki-account-export-%s.json", claims.UserID)
 
-	// When the backend can stream the export (the Postgres backend, which
-	// offloads flow content to blob storage), build it into a temp file so peak
-	// memory is one page of flows rather than every flow's content at once. The
-	// temp file also preserves the "complete or fail" guarantee: nothing reaches
-	// the client until the whole export succeeded, so a mid-stream error still
-	// becomes a clean 4xx/5xx.
+	// When the backend can stream, build the export into a temp file: peak memory is one page of flows
+	// and nothing reaches the client until the whole export succeeded (a mid-stream error stays a clean 4xx/5xx).
 	if streamer, ok := h.backend.(userDataStreamer); ok {
 		if h.exportAccountStreamed(w, r, streamer, claims.UserID, filename) {
 			logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionDataExport, "user", claims.UserID, nil)
@@ -749,24 +669,21 @@ func (h *AuthHandler) handleAuthExportAccount(w http.ResponseWriter, r *http.Req
 }
 
 // userDataStreamer is implemented by backends that can stream a data-subject
-// export incrementally (currently the Postgres backend). Optional: backends
-// without it fall back to the buffered ExportUserData path.
+// export incrementally; backends without it use the buffered path.
 type userDataStreamer interface {
 	ExportUserDataTo(ctx context.Context, userID string, w io.Writer) error
 }
 
-// exportAccountStreamed builds the export into a temp file, then forwards it to
-// the client only on success. Returns true when the response was written
-// successfully (so the caller should log the audit event).
+// exportAccountStreamed builds the export into a temp file and forwards it
+// only on success; true means the response was written (log the audit event).
 func (h *AuthHandler) exportAccountStreamed(w http.ResponseWriter, r *http.Request, streamer userDataStreamer, userID, filename string) bool {
 	tmp, err := os.CreateTemp("", "baki-export-*.json")
 	if err != nil {
 		render.Error(w, fmt.Errorf("export: create temp file: %w", err), http.StatusInternalServerError)
 		return false
 	}
-	// os.CreateTemp already opens 0600; assert it explicitly so the data-subject
-	// export's owner-only mode is visible at the call site and survives a future
-	// swap to an API with a different default umask.
+	// os.CreateTemp already opens 0600; assert it so the owner-only mode
+	// survives a future API swap with a different default umask.
 	_ = os.Chmod(tmp.Name(), 0o600)
 	defer func() { _ = os.Remove(tmp.Name()) }()
 	defer func() { _ = tmp.Close() }()
@@ -787,8 +704,7 @@ func (h *AuthHandler) exportAccountStreamed(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	if _, err := io.Copy(w, tmp); err != nil {
-		// Headers/body may be partly written; the connection is the only signal
-		// left. Log and stop — can't turn this into a clean HTTP error.
+		// Headers/body may be partly written; the connection is the only signal left — log and stop.
 		logger.Warn("export: failed streaming temp file to client", "user_id", userID, "error", err)
 		return false
 	}
@@ -796,8 +712,7 @@ func (h *AuthHandler) exportAccountStreamed(w http.ResponseWriter, r *http.Reque
 }
 
 // handleAuthSessions lists the caller's active sessions (non-revoked,
-// non-expired refresh tokens). In local (non-JWT) mode, or if no token store
-// is configured, it returns an empty list.
+// non-expired refresh tokens); without a token store it returns an empty list.
 // @Summary      List active sessions for the current user
 // @Tags         auth
 // @Produce      json
@@ -827,8 +742,6 @@ func (h *AuthHandler) handleAuthSessions(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, sessions)
 }
 
-// handleAuthSessionRevoke revokes one of the caller's own sessions (refresh
-// tokens) by ID, e.g. to sign out a lost device.
 // @Summary      Revoke a session
 // @Description  handleAuthSessionRevoke revokes one of the caller's own sessions (refresh tokens) by ID, e.g. to sign out a lost device.
 // @Tags         auth
@@ -877,7 +790,6 @@ func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		logger.Warn("logout: failed to decode body, proceeding without refresh token revocation", "error", err)
 	}
 
-	// Prefer the HttpOnly cookie; fall back to the body for compat.
 	refreshTok := h.refreshTokenFromRequest(r, req.RefreshToken)
 	if refreshTok != "" && h.tokenStore != nil {
 		claims, err := h.security.AuthMgr.VerifyRefresh(refreshTok)
@@ -888,7 +800,6 @@ func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Clear the HttpOnly refresh cookie.
 	clearRefreshCookie(w, r)
 
 	if tokenStr := auth.ExtractToken(r); tokenStr != "" {
@@ -961,9 +872,8 @@ func (h *AuthHandler) handleAuthChangePassword(w http.ResponseWriter, r *http.Re
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// handleAuthForgotPassword issues a password-reset token and emails its link.
-// It always responds 200 with the same body whether or not the email exists, so
-// the endpoint cannot be used to enumerate accounts.
+// handleAuthForgotPassword issues a reset token and emails its link; always
+// 200 with the same body, so the endpoint cannot enumerate accounts.
 // @Summary      Request password reset
 // @Description  handleAuthForgotPassword issues a password-reset token and emails its link. It always responds 200 with the same body whether or not the email exists, so the endpoint cannot be used to enumerate accounts.
 // @Tags         auth
@@ -1006,8 +916,6 @@ func (h *AuthHandler) handleAuthForgotPassword(w http.ResponseWriter, r *http.Re
 	render.JSON(w, ok)
 }
 
-// handleAuthResetPassword redeems a reset token and sets a new password,
-// revoking all of the user's existing sessions.
 // @Summary      Reset password with token
 // @Description  handleAuthResetPassword redeems a reset token and sets a new password, revoking all of the user's existing sessions.
 // @Tags         auth
@@ -1062,8 +970,6 @@ func (h *AuthHandler) handleAuthResetPassword(w http.ResponseWriter, r *http.Req
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// handleAuthVerifyEmail redeems an email-verification token and marks the user's
-// email verified.
 // @Summary      Verify email address
 // @Description  handleAuthVerifyEmail redeems an email-verification token and marks the user's email verified.
 // @Tags         auth
@@ -1105,9 +1011,8 @@ func (h *AuthHandler) handleAuthVerifyEmail(w http.ResponseWriter, r *http.Reque
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// validateEmail rejects malformed or over-long addresses and returns a
-// normalized (lowercased) version. RFC 5321 caps an address at 254 chars;
-// net/mail.ParseAddress handles the structural validation.
+// validateEmail rejects malformed or over-long addresses and returns the
+// normalized (lowercased) form; RFC 5321 caps an address at 254 chars.
 func validateEmail(email string) (string, error) {
 	if len(email) > 254 {
 		return "", fmt.Errorf("email too long")
@@ -1119,10 +1024,8 @@ func validateEmail(email string) (string, error) {
 	return strings.ToLower(addr.Address), nil
 }
 
-// validatePasswordStrength enforces a basic password policy. The upper bound is
-// 72 bytes because bcrypt (used by auth.HashPassword) silently ignores anything
-// past 72 — without this cap, the tail of a long password would not actually
-// protect the account.
+// validatePasswordStrength enforces the password policy. The 72-byte cap is because bcrypt
+// silently ignores anything past 72 — the tail would not protect the account.
 func validatePasswordStrength(pw string) error {
 	if len(pw) < 12 {
 		return fmt.Errorf("password must be at least 12 characters")
@@ -1167,20 +1070,15 @@ func (h *AuthHandler) handleWSTicket(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	var userID, email string
 	var role auth.Role
-	// accessJTI/accessExp carry the authenticating access token's identity so
-	// the eventual WebSocket connection can re-check revocation (logout) and
-	// enforce the access token's expiry. Empty in local/static-token mode.
+	// accessJTI/accessExp carry the authenticating access token's identity so the WebSocket
+	// connection can re-check revocation (logout) and expiry. Empty in local/static-token mode.
 	var accessJTI string
 	var accessExp time.Time
 	if claims != nil {
 		userID, email, role = claims.UserID, claims.Email, claims.Role
 		accessJTI = claims.ID
-		// claims.ID and claims.ExpiresAt are populated for both JWT access
-		// tokens (JTI + 15-min expiry) and personal access tokens (a stable
-		// pat:<id> JTI + the PAT's expiry, set by ClaimsForPAT in
-		// verifyAPIToken). Carrying them into the WS ticket lets the re-authz
-		// loop disconnect a revoked PAT's live socket and enforce the PAT's
-		// expiry.
+		// Populated for both JWT access tokens and PATs; carrying them into the WS ticket lets the
+		// re-authz loop disconnect a revoked PAT's live socket and enforce its expiry.
 		if claims.ExpiresAt != nil {
 			accessExp = claims.ExpiresAt.Time
 		}

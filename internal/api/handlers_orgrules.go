@@ -13,14 +13,10 @@ import (
 	"pad-core/analyzer"
 )
 
-// Per-org custom analyzer rules (R4).
-//
-// Reads require org membership; writes require org admin — the same split as
-// org channels. Analysis configuration decides what a team is told about its
-// own flows, so letting any member rewrite it is the multi-tenancy defect this
-// feature exists to close: before R4, rule enable/severity lived in the
-// DEPLOYMENT settings singleton behind a plain RoleMember check, so one
-// member's toggle silently changed analysis for every tenant.
+// Per-org custom analyzer rules (R4): reads require org membership, writes org admin. Analysis
+// configuration decides what a team is told about its own flows — before R4, rule enable/severity
+// lived in the DEPLOYMENT settings singleton behind a plain RoleMember check, so one member's
+// toggle silently changed analysis for every tenant.
 
 // orgCustomRuleOut is the wire shape. Config is echoed back parsed rather than
 // as a raw blob so the editor round-trips a typed object.
@@ -38,9 +34,8 @@ func toOrgRuleOut(r *storageif.OrgCustomRule) orgCustomRuleOut {
 		ID: r.ID, RuleID: r.RuleID, Enabled: r.Enabled,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
-	// A stored row that no longer parses is surfaced as an empty config rather
-	// than dropped: the admin needs to SEE the broken rule to delete it. The
-	// analysis path skips it (with a warning) either way.
+	// A stored row that no longer parses is surfaced as an empty config, not dropped: the admin
+	// needs to SEE the broken rule to delete it (the analysis path skips it either way).
 	_ = json.Unmarshal(r.Config, &out.Config)
 	return out
 }
@@ -100,10 +95,8 @@ func (h *OrgHandler) handleOrgRuleSave(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("config.id is required — it is the rule id that appears on findings"), http.StatusBadRequest)
 		return
 	}
-	// Compile before storing. This is the SAME construction path
-	// /api/analysis/custom-rules/validate reports on and that the analysis
-	// resolver uses, so the editor's preview, this endpoint, and the analyzer
-	// cannot disagree about whether a rule is valid.
+	// Compile before storing — the SAME construction path /api/analysis/custom-rules/validate
+	// reports on and the analysis resolver uses, so preview, this endpoint and the analyzer agree.
 	if _, err := analyzer.NewCustomRule(req.Config); err != nil {
 		render.Error(w, fmt.Errorf("invalid rule: %w", err), http.StatusBadRequest)
 		return
@@ -162,43 +155,32 @@ func (h *OrgHandler) handleOrgRuleDelete(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// invalidateRuleProfile drops the org's cached rule profile so the next
-// analysis re-resolves. Without it a rule change would not take effect until
-// the resolver's TTL elapsed — long enough for an admin to save a rule, re-run
-// analysis, and conclude it does not work.
+// invalidateRuleProfile drops the org's cached rule profile so the next analysis re-resolves;
+// without it a rule change waits out the resolver's TTL — long enough for an admin to save a rule,
+// re-run analysis, and conclude it does not work.
 func (h *OrgHandler) invalidateRuleProfile(orgID string) {
 	if h.ruleProfiles != nil {
 		h.ruleProfiles.Invalidate(orgID)
 	}
 }
 
-// orgRuleExport is a `.bakirc.json`-shaped document: the org's per-rule profile
-// plus its custom rules, INLINE.
-//
-// The field names and shapes mirror cmd/bakicli's bakiConfig exactly, so a
-// pipeline can do
-//
-//	curl -H "Authorization: Bearer $PAT" .../api/orgs/$ORG/rules/export > .bakirc.json
-//	bakicli -format sarif ./flows
-//
-// and gate on the same rules the team sees in the UI. Two artifacts (a profile
-// and a separate rules file) would be free to drift apart, and a CI gate quietly
-// enforcing a different rule set than the team configured is the failure mode
-// B6 was about.
+// orgRuleExport is a `.bakirc.json`-shaped document: the org's per-rule profile plus its custom
+// rules, INLINE. The field names and shapes mirror cmd/bakicli's bakiConfig exactly, so a pipeline
+// can `curl .../rules/export > .bakirc.json` then `bakicli -format sarif ./flows` and gate on the
+// same rules the team sees in the UI — two artifacts would drift apart, and a CI gate quietly
+// enforcing a different rule set is the B6 failure mode.
 type orgRuleExport struct {
 	RuleConfig        map[string]orgRuleExportConf `json:"ruleConfig,omitempty"`
 	CustomRulesInline []analyzer.CustomRuleConfig  `json:"customRulesInline,omitempty"`
 }
 
-// orgRuleExportConf mirrors bakiRuleConf. Enabled is a POINTER for the same
-// reason it is there: the CLI treats an absent `enabled` as "leave at default",
-// so emitting a bare false for every unset rule would silently disable rules the
-// org never touched.
+// orgRuleExportConf mirrors bakiRuleConf; Enabled is a POINTER because the CLI treats absent as
+// "leave at default" — emitting a bare false would silently disable rules the org never touched.
 type orgRuleExportConf struct {
 	Enabled  *bool  `json:"enabled,omitempty"`
 	Severity string `json:"severity,omitempty"`
-	// Options: the rule's thresholds. The export used to omit them, so a team
-	// that tightened maxDepth in its org settings saw CI gate on the default.
+	// Options: the rule's thresholds — the export used to omit them, so a team that tightened
+	// maxDepth in its org settings saw CI gate on the default.
 	Options map[string]any `json:"options,omitempty"`
 }
 
@@ -214,9 +196,8 @@ func (h *OrgHandler) handleOrgRuleExport(w http.ResponseWriter, r *http.Request)
 		render.Error(w, fmt.Errorf("org custom rules require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
 		return
 	}
-	// Member, not admin: a CI pipeline runs as a service account that needs to
-	// READ the configuration it gates on, and reading a rule set discloses
-	// nothing an org member cannot already see in the UI.
+	// Member, not admin: a CI pipeline runs as a service account that needs to READ the
+	// configuration it gates on, and reading a rule set discloses nothing a member cannot see.
 	org := h.requireMember(w, r)
 	if org == nil {
 		return
@@ -245,9 +226,8 @@ func (h *OrgHandler) handleOrgRuleExport(w http.ResponseWriter, r *http.Request)
 	for _, stored := range rules {
 		var cfg analyzer.CustomRuleConfig
 		if err := json.Unmarshal(stored.Config, &cfg); err != nil {
-			// Refuse rather than emit a partial config. A CI gate silently
-			// missing one of the org's rules is exactly the "gate that cannot
-			// fail" shape; the admin needs to fix or delete the broken rule.
+			// Refuse rather than emit a partial config: a CI gate silently missing one of the
+			// org's rules is exactly the "gate that cannot fail" shape; the admin must fix it.
 			render.Error(w, fmt.Errorf("rule %q is stored in an unreadable form; delete and re-create it", stored.RuleID), http.StatusConflict)
 			return
 		}

@@ -16,8 +16,7 @@ import (
 // SrcJTI / SrcExp are ONLY populated on WebSocket connect tickets: they carry
 // the JTI and expiry of the ACCESS token that authorized the ticket-issuance
 // request, so the WebSocket handler can re-check the access token's revocation
-// (logout / explicit revoke) and close the connection when the access token
-// expires. They are omitted (omitempty) on ordinary access tokens.
+// and close the connection when it expires. Omitted on ordinary access tokens.
 type Claims struct {
 	UserID string           `json:"uid"`
 	Email  string           `json:"email"`
@@ -72,26 +71,26 @@ const (
 	defaultAccessTTL  = 15 * time.Minute
 	defaultRefreshTTL = 24 * time.Hour
 	// wsTicketTTL bounds how long a WebSocket connect ticket is valid. Tickets
-	// are exchanged for a live connection within seconds of issuance, so the
-	// window is deliberately tiny to limit replay if one leaks (e.g. via a
-	// proxy access log that records the ?ticket= query parameter).
+	// are exchanged for a live connection within seconds, so the window is
+	// deliberately tiny to limit replay if one leaks (e.g. via a proxy access
+	// log that records the ?ticket= query parameter).
 	wsTicketTTL = 30 * time.Second
 	// wsTicketAudience tags tickets so they cannot be used as API access tokens
 	// (and access tokens cannot be used as tickets).
 	wsTicketAudience = "pad-ws-ticket"
-	// ssoTicketTTL bounds how long an SSO login exchange ticket is valid. The
+	// ssoTicketTTL bounds how long an SSO login exchange ticket is valid: the
 	// ticket rides the OIDC callback redirect (URL fragment) and is exchanged
-	// for a token pair immediately by the SPA, so the window stays small.
+	// immediately by the SPA, so the window stays small.
 	ssoTicketTTL = 60 * time.Second
 	// ssoTicketAudience tags SSO exchange tickets so they are not usable as
 	// access tokens, refresh tokens, or WS tickets (and vice versa).
 	ssoTicketAudience = "pad-sso-ticket"
 	// refreshAudience tags refresh tokens with a distinct audience from access
-	// tokens. Without this, a refresh token (same secret, structurally
-	// identical claims) would pass Verify() and be usable as a bearer access
-	// token — bypassing the short access TTL and the rotation/replay checks
-	// that only run at /auth/refresh. Verify() enforces m.audience and
-	// VerifyRefresh() enforces this, so neither token works in the other's role.
+	// tokens: without it, a refresh token (same secret, structurally identical
+	// claims) would pass Verify() and serve as a bearer access token —
+	// bypassing the short access TTL and the rotation/replay checks that only
+	// run at /auth/refresh. Verify() enforces m.audience, VerifyRefresh()
+	// enforces this; neither token works in the other's role.
 	refreshAudience = "pad-refresh"
 )
 
@@ -178,12 +177,10 @@ func (m *Manager) Issue(userID, email string, role Role) (*TokenPair, error) {
 }
 
 // IssueWSTicket creates a short-lived, single-use ticket the client exchanges
-// for a WebSocket connection. It keeps the long-lived access token out of the
-// WS URL (which is otherwise recorded in proxy/server logs and browser history).
-//
-// accessJTI / accessExp are the JTI and expiry of the access token that
-// authorized this request; they are embedded in the ticket so the WebSocket
-// handler can re-check the access token's revocation (logout) and enforce its
+// for a WebSocket connection, keeping the long-lived access token out of the
+// WS URL (otherwise recorded in proxy/server logs and browser history).
+// accessJTI / accessExp (the authorizing access token's) are embedded so the
+// WebSocket handler can re-check its revocation (logout) and enforce its
 // expiry on the live socket. Returns the signed ticket and its expiry.
 func (m *Manager) IssueWSTicket(userID, email string, role Role, accessJTI string, accessExp time.Time) (string, time.Time, error) {
 	now := time.Now()
@@ -230,8 +227,8 @@ func (m *Manager) VerifyWSTicket(tokenStr string) (*Claims, error) {
 
 // ConsumeWSTicket verifies a WS ticket and immediately marks its jti as
 // consumed via the shared blacklist (AddIfAbsent), making the ticket truly
-// single-use across all replicas. In local mode (in-memory blacklist) this
-// is equivalent to the previous process-local map.
+// single-use across all replicas (equivalent to the old process-local map in
+// local mode).
 func (m *Manager) ConsumeWSTicket(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
 		jwt.WithAudience(wsTicketAudience), jwt.WithIssuer(m.issuer))
@@ -251,9 +248,8 @@ func (m *Manager) ConsumeWSTicket(tokenStr string) (*Claims, error) {
 		if err != nil {
 			// Fail-closed: the single-use check could not be performed, so
 			// reject the ticket. The entry was NOT inserted, so the caller
-			// may retry once the store recovers — this avoids the replay
-			// window where a bare "already used" on a DB error would both
-			// reject now and permit a later replay.
+			// may retry once the store recovers — a bare "already used" on a
+			// DB error would reject now AND permit a later replay.
 			return nil, fmt.Errorf("auth: ws ticket single-use check unavailable: %w", err)
 		}
 		if !added {
@@ -265,7 +261,7 @@ func (m *Manager) ConsumeWSTicket(tokenStr string) (*Claims, error) {
 
 // IssueSSOTicket creates a short-lived, single-use ticket that carries an
 // authenticated SSO identity from the OIDC callback redirect to the SPA,
-// which exchanges it for a real token pair. This keeps access/refresh tokens
+// which exchanges it for a real token pair — keeping access/refresh tokens
 // out of redirect URLs entirely.
 func (m *Manager) IssueSSOTicket(userID, email string, role Role) (string, error) {
 	now := time.Now()
@@ -341,22 +337,15 @@ func (m *Manager) Verify(tokenStr string) (*Claims, error) {
 }
 
 // VerifyIgnoreExpiry parses and validates an access token, returning its claims
-// even if the token has expired. It still verifies the cryptographic signature,
-// the audience, and the issuer.
+// even if the token has expired. It still verifies the signature, audience and
+// issuer.
 //
-// The audience/issuer re-check below is load-bearing, not belt-and-braces.
-// jwt/v5 JOINS all claim-validation failures into one error, so
-// errors.Is(err, ErrTokenExpired) reports true when the token is expired AND
-// its audience is wrong. Tolerating expiry by that test alone therefore
-// tolerated audience confusion: an expired WS ticket, SSO ticket, or refresh
-// token — all signed with the same secret — was accepted here as an access
-// token, claims and role included. Verified with a hand-signed expired
-// wsTicketAudience token; see TestVerifyIgnoreExpiry_RejectsWrongAudience.
-//
-// Both current callers only feed the result to Revoke (de-privileging, and
-// already behind an authenticated route), so this was not exploitable — but it
-// is exactly the primitive a future caller would misuse, and the doc comment
-// promised a guarantee the code did not deliver.
+// The audience/issuer re-check below is load-bearing: jwt/v5 JOINS all
+// claim-validation failures into one error, so errors.Is(err, ErrTokenExpired)
+// reports true when the token is expired AND its audience is wrong. Tolerating
+// expiry by that test alone accepted audience confusion — an expired WS
+// ticket, SSO ticket or refresh token (same secret) passed as an access token,
+// claims and role included. See TestVerifyIgnoreExpiry_RejectsWrongAudience.
 func (m *Manager) VerifyIgnoreExpiry(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
 		jwt.WithAudience(m.audience), jwt.WithIssuer(m.issuer))
@@ -399,10 +388,10 @@ func (m *Manager) Revoke(claims *Claims) {
 }
 
 // RevokeJTI blacklists an arbitrary JTI for the given TTL, without needing a
-// Claims struct. It is used to revoke personal access tokens: a PAT is not a
-// JWT (it has no Claims), so Revoke cannot be used. The TTL should cover at
-// least one cycle of the WS re-authz loop (2 min) so a live socket authenticated
-// by the revoked credential is disconnected before the entry expires.
+// Claims struct — used to revoke personal access tokens (a PAT is not a JWT,
+// so Revoke cannot be used). The TTL should cover at least one cycle of the
+// WS re-authz loop (2 min) so a live socket authenticated by the revoked
+// credential is disconnected before the entry expires.
 func (m *Manager) RevokeJTI(jti string, ttl time.Duration) {
 	if m.blacklist == nil || jti == "" || ttl <= 0 {
 		return
@@ -411,18 +400,16 @@ func (m *Manager) RevokeJTI(jti string, ttl time.Duration) {
 }
 
 // PATJTI derives a stable, revocable JTI from a personal access token's id.
-// PATs are not JWTs (they carry no JTI), so without a synthetic one a
-// WebSocket ticket issued from a PAT-authenticated request embeds an empty
-// SrcJTI — the WS re-authz loop then calls IsRevoked("") which is always false,
-// so a revoked PAT's live socket is never disconnected. The "pat:" prefix
-// keeps it out of the JWT-JTI namespace. Used both when authenticating a PAT
-// (to populate the claims the WS ticket embeds) and when deleting a PAT (to
-// blacklist the same id).
+// PATs are not JWTs (no JTI), so without a synthetic one a WS ticket issued
+// from a PAT-authenticated request embeds an empty SrcJTI — the WS re-authz
+// loop then calls IsRevoked(""), always false, so a revoked PAT's live socket
+// is never disconnected. The "pat:" prefix keeps it out of the JWT-JTI
+// namespace. Used both when authenticating a PAT and when deleting one.
 func PATJTI(tokenID string) string { return "pat:" + tokenID }
 
 // ClaimsForPAT builds the Claims for a personal access token, carrying a stable
-// JTI (PATJTI) and the token's expiry. This lets a WebSocket ticket issued from
-// a PAT-authenticated request embed a real SrcJTI/SrcExp so the live socket is
+// JTI (PATJTI) and the token's expiry, so a WS ticket issued from a
+// PAT-authenticated request embeds a real SrcJTI/SrcExp: the live socket is
 // disconnectable on PAT revocation and respects the PAT's expiry.
 func ClaimsForPAT(userID, email string, role Role, tokenID string, expiresAt *time.Time, scopes []string) *Claims {
 	c := &Claims{UserID: userID, Email: email, Role: role, Scopes: scopes}
@@ -434,10 +421,10 @@ func ClaimsForPAT(userID, email string, role Role, tokenID string, expiresAt *ti
 }
 
 // IsRevoked returns true if the given JTI has been blacklisted. Today only
-// logout (and any explicit access-token Revoke) blacklists an access JTI;
-// password change and refresh-replay revoke refresh tokens, not access tokens.
-// Used by long-lived connections (SSE, WebSocket) to periodically re-validate
-// after the initial middleware check.
+// logout (and an explicit access-token Revoke) blacklists an access JTI;
+// password change and refresh-replay revoke refresh tokens. Used by
+// long-lived connections (SSE, WebSocket) to re-validate after the initial
+// middleware check.
 func (m *Manager) IsRevoked(jti string) bool {
 	if m.blacklist == nil || jti == "" {
 		return false
@@ -471,29 +458,27 @@ func (m *Manager) keyFunc(token *jwt.Token) (any, error) {
 }
 
 // defaultBcryptCost trades hash strength against login/registration latency:
-// cost 12 takes ~0.2 s per hash and per verification on typical server
-// hardware while staying above the OWASP minimum of 10. Existing hashes
-// created at a higher cost keep verifying (bcrypt embeds the cost in the hash).
+// cost 12 takes ~0.2 s per hash and per verification on typical hardware while
+// staying above the OWASP minimum of 10. Existing hashes created at a higher
+// cost keep verifying (bcrypt embeds the cost in the hash).
 const defaultBcryptCost = 12
 
 // bcryptCost is the cost new hashes are created with: defaultBcryptCost, or
 // the cost a test binary set with SetBcryptCostForTesting.
 var bcryptCost = defaultBcryptCost
 
-// dummyBcryptHash is a bcrypt hash at bcryptCost that a login for an
-// unknown account is checked against (CheckDummyPassword), so it takes as
-// long as a wrong password for a real account. Precomputed for
-// defaultBcryptCost; TestDummyBcryptHash_MatchesDefaultCost keeps the two
-// in step, or the timing equalisation would drift away from real hashes.
+// dummyBcryptHash is a bcrypt hash at bcryptCost that a login for an unknown
+// account is checked against (CheckDummyPassword), so it takes as long as a
+// wrong password for a real account. Precomputed for defaultBcryptCost;
+// TestDummyBcryptHash_MatchesDefaultCost keeps the two in step.
 var dummyBcryptHash = "$2a$12$R.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v"
 
 // SetBcryptCostForTesting makes new hashes, and the dummy hash unknown-account
 // logins are checked against, use cost; the returned func restores both. Test
-// binaries only, from TestMain before any test runs (it is not safe to call
-// while anything hashes): at the production cost every register, login and
-// password-change test pays ~0.2 s per bcrypt operation, many times that
-// under -race. Verification always runs at the cost a hash embeds, so this
-// cannot weaken a stored hash.
+// binaries only, from TestMain before any test runs (not safe while anything
+// hashes): at the production cost every auth test pays ~0.2 s per bcrypt
+// operation, many times that under -race. Verification always runs at the
+// cost a hash embeds, so this cannot weaken a stored hash.
 func SetBcryptCostForTesting(cost int) (restore func()) {
 	prevCost, prevDummy := bcryptCost, dummyBcryptHash
 	bcryptCost = cost
@@ -510,9 +495,9 @@ func HashPassword(password string) (string, error) {
 }
 
 // CheckDummyPassword spends the time of a password verification against the
-// dummy hash (see dummyBcryptHash) and discards the result: the unknown-
-// account branch of a login calls it so that branch cannot be told apart from
-// a wrong password by its response time.
+// dummy hash and discards the result: the unknown-account branch of a login
+// calls it so that branch cannot be told apart from a wrong password by its
+// response time.
 func CheckDummyPassword(password string) {
 	_ = bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(password))
 }

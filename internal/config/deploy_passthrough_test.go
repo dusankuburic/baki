@@ -33,8 +33,8 @@ var deployPassthroughKnobs = []struct {
 // TestDeployPassthrough_FoundryKnobsReachEveryDeploymentPath keeps the two
 // compose files, the Bicep template (the README's production runbook) and
 // the CI deploy in sync for the four Azure Foundry / knowledge-base
-// operator knobs: the compose files forwarded them while an ACA operator
-// could not set any of them without forking the template.
+// operator knobs: without the wiring an ACA operator cannot set any of them
+// without forking the template.
 func TestDeployPassthrough_FoundryKnobsReachEveryDeploymentPath(t *testing.T) {
 	for name, path := range deployPassthroughFiles {
 		t.Run(name, func(t *testing.T) {

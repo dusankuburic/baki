@@ -66,7 +66,6 @@ interface PendingPreview {
 export function useAIChat({turnModel, exportModelName, sendBlocked = false}: UseAIChatOptions) {
   const {t} = useTranslation('chat')
   const doc = useFlowStore(s => s.document)
-  const selectedBlockId = useFlowStore(s => s.selectedBlockId)
   const readOnly = useFlowStore(s => s.readOnly)
 
   const {provider, model: selectedModel} = turnModel
@@ -92,7 +91,7 @@ export function useAIChat({turnModel, exportModelName, sendBlocked = false}: Use
     doc,
     flowThreads,
     activeThreadId,
-    // F-21: a conversation load that reports an in-flight stream (a reload
+    // A conversation load that reports an in-flight stream (a reload
     // happened mid-turn) re-attaches through the app-wide engine.
     resumeActiveStream: engine.resumeAfterReload,
   })
@@ -149,7 +148,7 @@ export function useAIChat({turnModel, exportModelName, sendBlocked = false}: Use
     [executeSend],
   )
 
-  // Queue a follow-up while this thread is streaming (U1.6). Replaces the
+  // Queue a follow-up while this thread is streaming. Replaces the
   // previous queued message (one per thread); the stream host sends it the
   // moment the thread is idle, with the thread's provider/model as they are
   // now — a pick made before it drains does not redirect it.
@@ -315,7 +314,6 @@ export function useAIChat({turnModel, exportModelName, sendBlocked = false}: Use
 
   return {
     doc,
-    selectedBlockId,
     readOnly,
     activeThreadId,
     activeThread,

@@ -22,9 +22,9 @@ export interface DoneMeta {
   outputCostPerM?: number
 }
 
-// ErrorUsage is what a BILLED failure reports beyond its message (F-15):
+// ErrorUsage is what a BILLED failure reports beyond its message:
 // the token counts (they reach the thread totals / the meter) plus the same
-// done-meta a done event carries, and the shared-credential flag (F-42).
+// done-meta a done event carries, and the shared-credential flag.
 // Every field is optional; an unbilled error carries none of them.
 export interface ErrorUsage {
   tokensIn?: number

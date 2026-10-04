@@ -11,8 +11,6 @@ import (
 
 func newSvc() *OrgService { return NewOrgService(NewMemOrgStore()) }
 
-// ---- Create ----
-
 func TestCreate_ReturnsOrgWithOwnerAsAdmin(t *testing.T) {
 	svc := newSvc()
 	org, err := svc.Create(context.Background(), "Acme Corp", "owner-1")
@@ -44,8 +42,6 @@ func TestCreate_EmptyOwnerReturnsError(t *testing.T) {
 	}
 }
 
-// ---- Get ----
-
 func TestGet_ExistingOrg(t *testing.T) {
 	svc := newSvc()
 	org, _ := svc.Create(context.Background(), "Test", "u1")
@@ -66,8 +62,6 @@ func TestGet_NotFoundReturnsError(t *testing.T) {
 	}
 }
 
-// ---- ListForUser ----
-
 func TestListForUser_ReturnsOnlyUserOrgs(t *testing.T) {
 	svc := newSvc()
 	svc.Create(context.Background(), "Org A", "alice")
@@ -80,8 +74,6 @@ func TestListForUser_ReturnsOnlyUserOrgs(t *testing.T) {
 	}
 	_ = orgC
 }
-
-// ---- AddMember ----
 
 func TestAddMember_Success(t *testing.T) {
 	svc := newSvc()
@@ -115,8 +107,6 @@ func TestAddMember_InvalidRoleReturnsError(t *testing.T) {
 	}
 }
 
-// ---- RemoveMember ----
-
 func TestRemoveMember_Success(t *testing.T) {
 	svc := newSvc()
 	org, _ := svc.Create(context.Background(), "Test", "owner")
@@ -149,8 +139,6 @@ func TestRemoveMember_NotFoundReturnsError(t *testing.T) {
 		t.Errorf("expected ErrMemberNotFound, got %v", err)
 	}
 }
-
-// ---- SetRole ----
 
 func TestSetRole_Success(t *testing.T) {
 	svc := newSvc()
@@ -187,8 +175,6 @@ func TestSetRole_TwoAdmins_DemoteOneIsAllowed(t *testing.T) {
 	}
 }
 
-// ---- Delete ----
-
 func TestDelete_RemovesOrg(t *testing.T) {
 	svc := newSvc()
 	org, _ := svc.Create(context.Background(), "Test", "owner")
@@ -206,8 +192,6 @@ func TestDelete_NotFoundReturnsError(t *testing.T) {
 		t.Errorf("expected ErrOrgNotFound, got %v", err)
 	}
 }
-
-// ---- AcceptInvite ----
 
 // TestAcceptInvite_RejectsUnverifiedEmail guards H12: a caller whose email is
 // not verified must not be able to accept an invite, even when the email

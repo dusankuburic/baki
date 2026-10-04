@@ -11,7 +11,10 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// ---- Organisation invite operations ----
+// Reads use b.query(ctx) — the request's RLS transaction when there is one
+// (org_invites has no RLS policy) — so an invite read inside an authenticated
+// request does not take a second pooled connection. Writes keep b.db (see the
+// note atop postgres_users.go).
 
 func (b *PostgresStorageBackend) SaveOrgInvite(ctx context.Context, invite *interfaces.OrgInvite) error {
 	if invite.CreatedAt.IsZero() {
@@ -32,7 +35,7 @@ func (b *PostgresStorageBackend) SaveOrgInvite(ctx context.Context, invite *inte
 }
 
 func (b *PostgresStorageBackend) ListOrgInvites(ctx context.Context, orgID string) ([]*interfaces.OrgInvite, error) {
-	rows, err := b.db.QueryContext(ctx, `
+	rows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT id, org_id, email, role, invited_by, token_hash, expires_at, accepted_at, created_at
 		FROM org_invites WHERE org_id = $1 ORDER BY created_at DESC`, orgID)
 	if err != nil {
@@ -55,14 +58,14 @@ func (b *PostgresStorageBackend) ListOrgInvites(ctx context.Context, orgID strin
 }
 
 func (b *PostgresStorageBackend) GetOrgInvite(ctx context.Context, orgID, inviteID string) (*interfaces.OrgInvite, error) {
-	row := b.db.QueryRowContext(ctx, `
+	row := b.query(ctx).QueryRowContext(ctx, `
 		SELECT id, org_id, email, role, invited_by, token_hash, expires_at, accepted_at, created_at
 		FROM org_invites WHERE id = $1 AND org_id = $2`, inviteID, orgID)
 	return scanOrgInvite(row)
 }
 
 func (b *PostgresStorageBackend) GetOrgInviteByTokenHash(ctx context.Context, tokenHash string) (*interfaces.OrgInvite, error) {
-	row := b.db.QueryRowContext(ctx, `
+	row := b.query(ctx).QueryRowContext(ctx, `
 		SELECT id, org_id, email, role, invited_by, token_hash, expires_at, accepted_at, created_at
 		FROM org_invites WHERE token_hash = $1`, tokenHash)
 	return scanOrgInvite(row)

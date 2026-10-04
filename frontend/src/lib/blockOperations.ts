@@ -2,20 +2,24 @@ import {useCallback} from 'react'
 import {flowApi} from '@/api'
 import {useFlowStore} from '@/stores/flowStore'
 import {useToast, useConfirm} from '@/components/shared'
-import {refreshAfterBlockEdit} from '@/lib/blockEdit'
+import {refreshAfterBlockEdit, runBlockEdit} from '@/lib/blockEdit'
+import type {FlowDocument} from '@/types'
 
-// useBlockOperations is the ONE implementation of block mutations (U3b):
+// useBlockOperations is the ONE implementation of block mutations:
 // move/duplicate/delete/rename with their confirm + per-action-undo toasts
 // and the same-flow refresh. Extracted from BlockCard so the canvas keyboard
 // shortcuts and the multi-select bulk bar run the exact same code path as
-// the context menu.
+// the context menu. Every mutation goes through the flow's edit lane
+// (runBlockEdit): one request in flight per flow, a burst applies the last
+// document once, re-analysis debounced.
 const refresh = refreshAfterBlockEdit
 
 // capturePreMutationSnapshot reads the NEWEST ring entry BEFORE the mutation
-// runs (F1.6): the server snapshots the pre-state as part of the write, and
+// runs: the server snapshots the pre-state as part of the write, and
 // capturing up front is immune to the concurrent-mutation race — reading the
 // newest entry AFTER two near-simultaneous mutations could label the wrong
-// pre-state as this action's undo target.
+// pre-state as this action's undo target. It runs inside the lane, right
+// before its own mutation, so a queued edit captures the state it changes.
 async function capturePreMutationSnapshot(flowId: string): Promise<string | undefined> {
   try {
     const snaps = await flowApi.listSnapshots(flowId)
@@ -56,40 +60,56 @@ export function useBlockOperations() {
     [toast, undoTo],
   )
 
+  // lanedMutation runs one undoable mutation through the flow's edit lane:
+  // the pre-mutation snapshot is captured inside the lane (immediately before
+  // the mutation, so a queued edit captures the state it changes), the
+  // applied document is refreshed by runBlockEdit itself, and the undo toast
+  // lands only when the edit produced one.
+  const lanedMutation = useCallback(
+    async <T extends {document?: FlowDocument}>(
+      flowId: string,
+      op: () => Promise<T>,
+      undoTitle: string,
+      errTitle: string,
+      onSuccess?: () => void,
+    ) => {
+      try {
+        const res = await runBlockEdit(flowId, async () => {
+          const preSnap = await capturePreMutationSnapshot(flowId)
+          return {...(await op()), preSnap}
+        })
+        if (res?.document) {
+          onSuccess?.()
+          await withUndoToast(res.preSnap, undoTitle)
+        }
+      } catch (e) {
+        toast.error(errTitle, {description: String(e)})
+      }
+    },
+    [toast, withUndoToast],
+  )
+
   const moveBlock = useCallback(
     async (blockId: string, direction: 'up' | 'down') => {
       const doc = useFlowStore.getState().document
       if (!doc) return
-      const preSnap = await capturePreMutationSnapshot(doc.id)
-      try {
-        const res = await flowApi.moveBlock(doc.id, blockId, direction)
-        if (res?.document) {
-          refresh(res.document)
-          await withUndoToast(preSnap, direction === 'up' ? 'Block moved up' : 'Block moved down')
-        }
-      } catch (e) {
-        toast.error('Move failed', {description: String(e)})
-      }
+      await lanedMutation(
+        doc.id,
+        () => flowApi.moveBlock(doc.id, blockId, direction),
+        direction === 'up' ? 'Block moved up' : 'Block moved down',
+        'Move failed',
+      )
     },
-    [toast, withUndoToast],
+    [lanedMutation],
   )
 
   const duplicateBlock = useCallback(
     async (blockId: string) => {
       const doc = useFlowStore.getState().document
       if (!doc) return
-      const preSnap = await capturePreMutationSnapshot(doc.id)
-      try {
-        const res = await flowApi.duplicateBlock(doc.id, blockId)
-        if (res?.document) {
-          refresh(res.document)
-          await withUndoToast(preSnap, 'Block duplicated')
-        }
-      } catch (e) {
-        toast.error('Duplicate failed', {description: String(e)})
-      }
+      await lanedMutation(doc.id, () => flowApi.duplicateBlock(doc.id, blockId), 'Block duplicated', 'Duplicate failed')
     },
-    [toast, withUndoToast],
+    [lanedMutation],
   )
 
   const removeBlock = useCallback(
@@ -103,18 +123,9 @@ export function useBlockOperations() {
       if (!ok) return
       const doc = useFlowStore.getState().document
       if (!doc) return
-      const preSnap = await capturePreMutationSnapshot(doc.id)
-      try {
-        const res = await flowApi.removeBlock(doc.id, blockId)
-        if (res?.document) {
-          refresh(res.document)
-          await withUndoToast(preSnap, 'Block deleted')
-        }
-      } catch (e) {
-        toast.error('Delete failed', {description: String(e)})
-      }
+      await lanedMutation(doc.id, () => flowApi.removeBlock(doc.id, blockId), 'Block deleted', 'Delete failed')
     },
-    [confirm, toast, withUndoToast],
+    [confirm, lanedMutation],
   )
 
   const removeBlocks = useCallback(
@@ -129,19 +140,15 @@ export function useBlockOperations() {
       if (!ok) return
       const doc = useFlowStore.getState().document
       if (!doc) return
-      const preSnap = await capturePreMutationSnapshot(doc.id)
-      try {
-        const res = await flowApi.removeBlocks(doc.id, blockIds)
-        if (res?.document) {
-          useFlowStore.getState().clearBlockSelection()
-          refresh(res.document)
-          await withUndoToast(preSnap, `${blockIds.length} blocks deleted`)
-        }
-      } catch (e) {
-        toast.error('Bulk delete failed', {description: String(e)})
-      }
+      await lanedMutation(
+        doc.id,
+        () => flowApi.removeBlocks(doc.id, blockIds),
+        `${blockIds.length} blocks deleted`,
+        'Bulk delete failed',
+        () => useFlowStore.getState().clearBlockSelection(),
+      )
     },
-    [confirm, toast, withUndoToast],
+    [confirm, lanedMutation],
   )
 
   const renameBlock = useCallback(
@@ -149,10 +156,9 @@ export function useBlockOperations() {
       const doc = useFlowStore.getState().document
       if (!doc) return
       try {
-        const res = await flowApi.renameBlock(doc.id, blockId, name)
+        const res = await runBlockEdit(doc.id, () => flowApi.renameBlock(doc.id, blockId, name))
         if (res?.document) {
           useFlowStore.getState().setRenamingBlock(null)
-          refresh(res.document)
           const refs = res.gotoRefsUpdated ?? 0
           toast.success(
             'Renamed',

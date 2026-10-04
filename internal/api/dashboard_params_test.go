@@ -179,3 +179,40 @@ func TestParseAnalyticsQuery_Rejects(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadLocationCached: the analytics parser resolves tz on every request
+// and time.LoadLocation re-reads the zoneinfo file each call, so the cache
+// must return the SAME *time.Location for a repeated zone (parsed once).
+// Failures are not cached: an unknown zone keeps erroring, so misconfigured
+// clients cannot pin garbage in the map or later see it resolve.
+func TestLoadLocationCached(t *testing.T) {
+	loc1, err := loadLocationCached("Asia/Tokyo")
+	if err != nil {
+		t.Fatalf("Asia/Tokyo: %v", err)
+	}
+	loc2, err := loadLocationCached("Asia/Tokyo")
+	if err != nil {
+		t.Fatalf("Asia/Tokyo (cached): %v", err)
+	}
+	if loc1 != loc2 {
+		t.Error("a repeated zone must return the same *time.Location (parsed once, then cached)")
+	}
+	if _, err := loadLocationCached("Mars/Phobos"); err == nil {
+		t.Error("an unknown zone must still error")
+	}
+	// The failed lookup must not poison the cache: the same bad name errors
+	// again, and the good zone still resolves to the cached pointer.
+	if _, err := loadLocationCached("Mars/Phobos"); err == nil {
+		t.Error("an unknown zone must keep erroring on every request")
+	}
+	if again, err := loadLocationCached("Asia/Tokyo"); err != nil || again != loc1 {
+		t.Errorf("good zone after a failed lookup = %v, %v; want %v, nil", again, err, loc1)
+	}
+	// End to end: two parses of the same query hand out one location.
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	q1 := mustParse(t, "tz=Asia/Tokyo", now)
+	q2 := mustParse(t, "tz=Asia/Tokyo", now)
+	if q1.Loc != q2.Loc || q1.Loc != loc1 {
+		t.Error("parseAnalyticsQuery must hand out the cached location pointer")
+	}
+}

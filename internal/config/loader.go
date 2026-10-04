@@ -32,11 +32,10 @@ func parseFloatOrError(envVar, val string) (float64, error) {
 	return f, nil
 }
 
-// parseDurationOrError validates a duration-string env var (e.g. "30s", "5m",
-// "1h") at load time rather than at runtime consumption. Returns the original
-// string (the fields are stored as strings consumed later by time.ParseDuration)
-// so callers can keep their existing storage type while gaining fail-fast
-// validation.
+// parseDurationOrError validates a duration-string env var (e.g. "30s", "5m")
+// at load time rather than at runtime consumption. Returns the original string
+// (fields stay strings, consumed later by time.ParseDuration) so callers gain
+// fail-fast validation.
 func parseDurationOrError(envVar, val string) (string, error) {
 	if _, err := time.ParseDuration(val); err != nil {
 		return "", fmt.Errorf("config: %s=%q is not a valid duration (use e.g. \"30s\", \"5m\", \"1h\"): %w", envVar, val, err)
@@ -62,9 +61,8 @@ func LoadRaw(path string) (*Config, error) {
 }
 
 // LoadFromEnvRaw reads PAD_* environment variables into a Config without
-// validating. The caller is responsible for calling Validate on the result.
-// Use this when you need to adjust the config (e.g. inject secrets)
-// before the config is validated.
+// validating; the caller is responsible for calling Validate on the result.
+// Use this when you need to adjust the config (e.g. inject secrets) first.
 func LoadFromEnvRaw() (*Config, error) {
 	cfg := Default()
 	if err := applyEnvVars(cfg); err != nil {
@@ -75,9 +73,9 @@ func LoadFromEnvRaw() (*Config, error) {
 }
 
 // applyModeDefaults sets defaults that depend on the deployment mode, for
-// values the operator did not set. Default() is mode-agnostic and uses the
-// desktop's debug log level, so a cloud server logged at debug unless
-// PAD_LOG_LEVEL was set, while the documented cloud default is info.
+// values the operator did not set: Default() uses the desktop's debug log
+// level, so a cloud server would log at debug unless PAD_LOG_LEVEL was set,
+// while the documented cloud default is info.
 func applyModeDefaults(cfg *Config) {
 	if cfg.Mode == ModeCloud && os.Getenv("PAD_LOG_LEVEL") == "" {
 		cfg.Log.Level = "info"
@@ -87,7 +85,7 @@ func applyModeDefaults(cfg *Config) {
 // envBinding maps one PAD_* environment variable to a setter that parses its
 // value and assigns it into Config. The typed constructors below (strEnv,
 // intEnv, floatEnv, durEnv, boolEnv) build these, so each variable is one
-// declarative table row instead of a hand-written if-block.
+// declarative table row.
 type envBinding struct {
 	key   string
 	apply func(*Config, string) error
@@ -144,9 +142,9 @@ func boolEnv(key string, set func(*Config, bool)) envBinding {
 }
 
 // envBindings is the declarative table of every simple one-variable→one-field
-// binding. Variables needing bespoke handling (list-splitting, the
-// block, PAD_STORAGE normalisation, the PAD_AUDIT_RETENTION_DAYS >= 0 guard) are
-// applied separately in applyEnvVars.
+// binding. Variables needing bespoke handling (list-splitting, PAD_STORAGE
+// normalisation, the PAD_AUDIT_RETENTION_DAYS >= 0 guard) are applied
+// separately in applyEnvVars.
 var envBindings = []envBinding{
 	// Server / mode
 	strEnv("PAD_MODE", func(c *Config, v string) { c.Mode = DeploymentMode(v) }),
@@ -203,9 +201,9 @@ var envBindings = []envBinding{
 	durEnv("PAD_DB_CONN_MAX_LIFETIME", func(c *Config, d string) { c.Storage.DBConnMaxLifetime = d }),
 	durEnv("PAD_DB_CONN_MAX_IDLE_TIME", func(c *Config, d string) { c.Storage.DBConnMaxIdleTime = d }),
 	durEnv("PAD_DB_STATEMENT_TIMEOUT", func(c *Config, d string) { c.Storage.DBStatementTimeout = d }),
-	// Knowledge-base embedding dimension. Sets the contract for which chunks are
-	// pgvector-searchable; mismatched embeddings are excluded from the vector
-	// index rather than corrupting similarity search.
+	// Knowledge-base embedding dimension: sets the contract for which chunks
+	// are pgvector-searchable; mismatched embeddings are excluded from the
+	// vector index rather than corrupting similarity search.
 	intEnv("PAD_EMBEDDING_DIM", func(c *Config, n int) { c.Storage.EmbeddingDim = n }),
 	// Knowledge-base embedding provider pin (the only way to embed the shared
 	// corpus with Azure AI Foundry). Validated against EmbeddingProviderIDs.
@@ -255,9 +253,9 @@ var envBindings = []envBinding{
 	boolEnv("PAD_FEATURE_DISABLE_SIGNUP", func(c *Config, b bool) { c.Features.DisableSignUp = b }),
 }
 
-// applyEnvVars reads PAD_* environment variables into cfg.
-// It returns an error only for syntactically invalid numeric/duration/bool
-// values; all other validation is deferred to Validate().
+// applyEnvVars reads PAD_* environment variables into cfg. Returns an error
+// only for syntactically invalid numeric/duration/bool values; all other
+// validation is deferred to Validate().
 func applyEnvVars(cfg *Config) error {
 	for _, b := range envBindings {
 		if v := os.Getenv(b.key); v != "" {
@@ -300,9 +298,9 @@ func applyListEnv(key string, dst *[]string) {
 }
 
 // applyStorageBackendEnv normalises PAD_STORAGE case/whitespace so a capitalised
-// "Database" or "LOCAL" isn't silently treated as an unknown backend — without
-// this, the cloud-mode storage check passes vacuously (the literal "Database" !=
-// "database") and the deployment runs with NO backend.
+// "Database" or "LOCAL" isn't silently treated as unknown — without this, the
+// cloud-mode storage check passes vacuously ("Database" != "database") and the
+// deployment runs with NO backend.
 func applyStorageBackendEnv(cfg *Config) error {
 	v := os.Getenv("PAD_STORAGE")
 	if v == "" {
@@ -340,10 +338,9 @@ func applyAuditRetentionEnv(cfg *Config) error {
 const minSecretLength = 32
 
 // knownWeakSecrets are placeholder/example values that must never be used as a
-// real signing secret in cloud mode. Most are caught by the length floor
-// (minSecretLength), but several common documented placeholders are ≥32 chars
-// (copy-pasted from tutorials, READMEs, jwt.io, boilerplate) and would slip
-// past length alone — the blocklist rejects them explicitly.
+// real signing secret in cloud mode. Most are caught by the length floor, but
+// several common documented placeholders are ≥32 chars (copy-pasted from
+// tutorials, READMEs, jwt.io, boilerplate) and would slip past length alone.
 var knownWeakSecrets = map[string]bool{
 	// Generic placeholders / boilerplate.
 	"change-me-in-production":           true,
@@ -370,11 +367,11 @@ var knownWeakSecrets = map[string]bool{
 	strings.Repeat("a", 36): true,
 }
 
-// isLowEntropy catches pathologically weak secrets that are long enough to pass
-// the length floor but have near-zero actual entropy — a single repeated byte
-// ("aaaa…", "0000…") or a short tile (2–4 bytes) repeated to fill the string
-// ("ababab…", "abcdabcd…"). A genuinely random secret is astronomically
-// unlikely to match either shape, so this has no realistic false-positive risk.
+// isLowEntropy catches secrets long enough to pass the length floor but with
+// near-zero actual entropy — a single repeated byte ("aaaa…") or a short tile
+// (2–4 bytes) repeated to fill the string ("ababab…"). A random secret is
+// astronomically unlikely to match either shape, so false positives are not a
+// realistic risk.
 func isLowEntropy(s string) bool {
 	if len(s) < minSecretLength {
 		return false
@@ -432,10 +429,9 @@ func Validate(cfg *Config) error {
 	// Cloud (multi-tenant) mode MUST enforce authentication. The entire authz
 	// stack is gated on Auth.Enabled: RequireRole returns true unconditionally,
 	// the JWT middleware falls back to a single shared bearer token, and the
-	// RLS transaction wrapper becomes a no-op. An operator who sets
-	// PAD_MODE=cloud but forgets PAD_AUTH_ENABLED=true would otherwise deploy a
-	// system where every tenant's data is reachable with no real auth. Fail
-	// closed instead of silently running unauthenticated.
+	// RLS transaction wrapper becomes a no-op — PAD_MODE=cloud without
+	// PAD_AUTH_ENABLED=true would leave every tenant's data reachable with no
+	// real auth. Fail closed.
 	if cfg.Mode == ModeCloud && !cfg.Auth.Enabled {
 		return errors.New("config: cloud mode requires PAD_AUTH_ENABLED=true (multi-tenant deployments must enforce authentication)")
 	}
@@ -448,10 +444,10 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("config: auth.secret must be at least %d characters and not a known placeholder in cloud mode (set PAD_AUTH_SECRET to a long random value)", minSecretLength)
 	}
 	// The dedicated encryption key protects stored provider credentials at rest
-	// (AES-256-GCM). Apply the same strength gate as the JWT secret so a weak
-	// PAD_ENCRYPTION_KEY can't make a DB leak trivially brute-forceable. When
-	// unset, the auth secret is used as a backward-compat fallback (warned in
-	// main.go), so only enforce when an explicit key is provided.
+	// (AES-256-GCM); apply the same strength gate so a weak PAD_ENCRYPTION_KEY
+	// can't make a DB leak trivially brute-forceable. When unset, the auth
+	// secret is the backward-compat fallback (warned in main.go), so only
+	// enforce when an explicit key is provided.
 	if cfg.Mode == ModeCloud && cfg.Auth.EncryptionKey != "" && isWeakSecret(cfg.Auth.EncryptionKey) {
 		return fmt.Errorf("config: auth.encryption_key must be at least %d characters and not a known placeholder in cloud mode (set PAD_ENCRYPTION_KEY to a long random value)", minSecretLength)
 	}
@@ -469,7 +465,7 @@ func Validate(cfg *Config) error {
 		return errors.New("config: storage.database_url is required when storage.backend is database")
 	}
 	// Azure Blob Storage: a container is required, plus exactly one auth source —
-	// either an account name (Managed Identity, the prod default) or a connection
+	// an account name (Managed Identity, the prod default) or a connection
 	// string (emulator / non-MI). A bare account or bare container is a misconfig.
 	if cfg.Storage.AzureBlobConnectionString != "" {
 		if cfg.Storage.AzureStorageContainer == "" {
@@ -479,9 +475,8 @@ func Validate(cfg *Config) error {
 		(cfg.Storage.AzureStorageAccount == "" || cfg.Storage.AzureStorageContainer == "") {
 		return errors.New("config: PAD_AZURE_STORAGE_ACCOUNT and PAD_AZURE_STORAGE_CONTAINER must both be set to enable blob storage")
 	}
-	// SSO must be fully configured or not at all — a partial config (e.g. issuer
-	// without redirect URL) silently failing at first login is worse than a
-	// startup error.
+	// SSO must be fully configured or not at all — a partial config silently
+	// failing at first login is worse than a startup error.
 	sso := cfg.Auth.SSO
 	if (sso.IssuerURL != "" || sso.ClientID != "" || sso.RedirectURL != "") && !sso.Enabled() {
 		return errors.New("config: PAD_SSO_ISSUER, PAD_SSO_CLIENT_ID, and PAD_SSO_REDIRECT_URL must all be set to enable SSO (client secret is optional for PKCE-only public clients)")
@@ -525,19 +520,12 @@ func validateEmbeddingProvider(id string) error {
 }
 
 // validateProfilingConfig refuses to expose the profiler without a shared
-// secret.
-//
-// /debug/pprof/* is guarded by MetricsGuard, whose private-IP allowlist keys off
-// r.RemoteAddr. Behind a reverse proxy — PAD_BEHIND_PROXY=true, the posture the
-// Dockerfile and infra/main.bicep ship — RemoteAddr is the proxy, which is
-// always private, so that check passes for every request off the public
-// internet. The bearer token is then the only real gate, and /debug/pprof/heap
-// hands out a dump of live process memory: the JWT signing secret, decrypted
-// provider keys, flow content, chat history.
-//
-// So: profiling on, token off is refused outright rather than warned about.
-// There is no deployment shape where that combination is safe and no default we
-// could pick on the operator's behalf.
+// secret. /debug/pprof/* is guarded by MetricsGuard, whose private-IP
+// allowlist keys off r.RemoteAddr; behind a reverse proxy (PAD_BEHIND_PROXY)
+// RemoteAddr is the proxy, always private, so the bearer token is the only
+// real gate — and /debug/pprof/heap hands out a dump of live process memory
+// (JWT signing secret, decrypted provider keys, flow content). Profiling on +
+// token off is refused outright: no deployment shape makes that safe.
 func validateProfilingConfig(cfg *Config) error {
 	if cfg.Server.PprofEnabled && strings.TrimSpace(cfg.Server.MetricsToken) == "" {
 		return errors.New("config: PAD_PPROF_ENABLED=true requires PAD_METRICS_TOKEN — /debug/pprof/heap dumps live process memory (auth secret, provider API keys, flow content), and the private-IP allowlist that would otherwise guard it is bypassed whenever a reverse proxy is in front (PAD_BEHIND_PROXY)")
@@ -545,16 +533,13 @@ func validateProfilingConfig(cfg *Config) error {
 	return nil
 }
 
-// validateTLSConfig enforces the plaintext-credentials safety net:
-//
-//   - If TLSCert/TLSKey are partially set (one without the other), that's a
-//     misconfiguration — refuse.
-//   - In cloud mode with auth enabled, the operator must explicitly choose
-//     one of: serve TLS directly (TLSCert+TLSKey), or declare a trusted
-//     reverse proxy in front (BehindProxy=true). Otherwise the binary on
-//     port 80 would broadcast JWTs and passwords in plaintext. The flag
-//     pair is the smallest "I know what I'm doing" surface that prevents
-//     the most common accidental misdeploy.
+// validateTLSConfig enforces the plaintext-credentials safety net: partially
+// set TLSCert/TLSKey is a misconfiguration and refused; in cloud mode with
+// auth enabled the operator must explicitly serve TLS directly
+// (TLSCert+TLSKey) or declare a trusted reverse proxy (BehindProxy=true) —
+// otherwise the binary would broadcast JWTs and passwords in plaintext. The
+// flag pair is the smallest "I know what I'm doing" surface that prevents the
+// most common accidental misdeploy.
 func validateTLSConfig(cfg *Config) error {
 	hasCert := strings.TrimSpace(cfg.Server.TLSCert) != ""
 	hasKey := strings.TrimSpace(cfg.Server.TLSKey) != ""
@@ -569,17 +554,17 @@ func validateTLSConfig(cfg *Config) error {
 
 // validateAzureFoundryAllowedHosts enforces that each entry in
 // PAD_AZURE_FOUNDRY_ALLOWED_HOSTS is a bare host name or a "*.suffix" glob
-// with at least two DNS labels. The consumer (the Azure AI Foundry endpoint
-// validator) compares host names exactly or by "*." suffix, so a URL-shaped
-// entry (scheme, port, path) silently never matched — every save failed with
-// HOST_NOT_ALLOWED and no boot diagnostic pointed at the variable — while
-// "*", "*." and a TLD-only glob such as "*.com" silently widened the
-// allow-list to nearly any host. IP literals are never Azure endpoints.
+// with at least two DNS labels. The consumer compares host names exactly or
+// by "*." suffix, so a URL-shaped entry (scheme, port, path) silently never
+// matched — every save failed with HOST_NOT_ALLOWED and no boot diagnostic
+// pointed at the variable — while "*", "*." and a TLD-only glob such as
+// "*.com" silently widened the allow-list to nearly any host. IP literals are
+// never Azure endpoints.
 //
-// A glob must not span hosts that other parties can create: one over a
-// public suffix ("*.co.uk", "*.azurewebsites.net" — the Public Suffix List,
-// ICANN and private sections) or over, above or inside a multi-tenant Azure /
-// hosting zone (multiTenantHostZones: any Azure customer can stand up
+// A glob must not span hosts other parties can create: one over a public
+// suffix ("*.co.uk" — the Public Suffix List, ICANN and private sections) or
+// over, above or inside a multi-tenant Azure / hosting zone
+// (multiTenantHostZones: any Azure customer can stand up
 // "<anything>.azure-api.net" and have the server send users' credentials and
 // trust its answers). Exact hosts in those zones stay allowed — an
 // operator's own API Management front is "contoso-ai.azure-api.net", listed
@@ -619,17 +604,14 @@ func validateAzureFoundryAllowedHosts(entries []string) error {
 
 // multiTenantHostZones are Azure and hosting DNS zones in which any customer
 // can create a host name that terminates TLS with code the customer controls
-// (an API Management instance, a web app, a Traffic Manager profile, a VM's
-// DNS label, a Front Door or CDN endpoint, a storage account, an Azure ML
-// managed online endpoint, a Databricks model-serving endpoint behind
-// azuredatabricks.net, an Entra application proxy on msappproxy.net, an
-// App Service Environment, an HDInsight gateway, a Spring Apps instance, …).
-// A PAD_AZURE_FOUNDRY_ALLOWED_HOSTS glob may not cover one. APPEND-ONLY after
+// (API Management, web apps, Traffic Manager, cloud service roles, Front
+// Door/CDN, storage accounts, Azure ML online endpoints, Databricks, Entra
+// app proxy, ASE, HDInsight, Spring Apps, …). A
+// PAD_AZURE_FOUNDRY_ALLOWED_HOSTS glob may not cover one. APPEND-ONLY after
 // azure-mobile.net: multiTenantZoneOf returns the first match and callers
 // depend on cloudapp.azure.com / blob.core.windows.net winning. ml.azure.com
-// is deliberately absent (parent matching already covers it) and
-// servicebus.windows.net is an exact PSL entry, refused by the public-suffix
-// rule.
+// is deliberately absent (parent matching covers it); servicebus.windows.net
+// is an exact PSL entry, refused by the public-suffix rule.
 var multiTenantHostZones = []string{
 	"azure-api.net",
 	"azurewebsites.net",
@@ -665,11 +647,10 @@ func multiTenantZoneOf(name string) string {
 }
 
 // validateTrustedProxies enforces that each entry in PAD_TRUSTED_PROXIES is
-// either a parseable IP or a parseable CIDR, and that no entry is a wildcard
-// that would effectively disable rate-limit isolation. The rate limiter only
-// honors X-Forwarded-For when the request's RemoteAddr matches a trusted
-// proxy, so a misconfigured allowlist of "*" or "0.0.0.0/0" would silently
-// let any client spoof its IP.
+// a parseable IP or CIDR, and none is a wildcard that would disable
+// rate-limit isolation. The rate limiter honors X-Forwarded-For only when the
+// request's RemoteAddr matches a trusted proxy, so "*" or "0.0.0.0/0" would
+// silently let any client spoof its IP.
 func validateTrustedProxies(entries []string) error {
 	for _, raw := range entries {
 		e := strings.TrimSpace(raw)

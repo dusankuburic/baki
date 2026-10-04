@@ -10,10 +10,9 @@ import (
 	"pad-core/logger"
 )
 
-// PagedResponse is the standard envelope for paginated list endpoints.
-// Items holds the page contents; Total is the full collection size (may be
-// len(Items) when a count query is unavailable); Offset and Limit echo the
-// request pagination parameters so clients can construct next/prev links.
+// PagedResponse is the standard envelope for paginated list endpoints: Items holds the page;
+// Total is the full collection size; Offset/Limit echo the request pagination so clients can
+// build next/prev links.
 type PagedResponse[T any] struct {
 	Items  []T `json:"items"`
 	Total  int `json:"total"`
@@ -29,11 +28,9 @@ func JSON(w http.ResponseWriter, data any) {
 	}
 }
 
-// JSONStatus encodes data as JSON and writes it with the given status code.
-// Use this instead of w.WriteHeader(code) followed by JSON(w, ...): that
-// sequence sets Content-Type AFTER the header block is flushed (WriteHeader
-// sends the headers), so the 201 ships without Content-Type and the subsequent
-// Encode triggers a superfluous WriteHeader(200).
+// JSONStatus encodes data as JSON with the given status code. Use this instead of
+// w.WriteHeader(code) followed by JSON(w, ...): that order sets Content-Type after the header
+// block is flushed, so the 201 ships without Content-Type and Encode triggers a superfluous 200.
 func JSONStatus(w http.ResponseWriter, code int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -42,12 +39,9 @@ func JSONStatus(w http.ResponseWriter, code int, data any) {
 	}
 }
 
-// ErrorResponse is the standard error envelope returned by all API endpoints.
-// Code is a stable machine-readable string clients can switch on;
-// Message is human-readable; RequestID links to distributed traces;
-// Details carries optional structured fields a client needs to recover
-// from the error (a failed re-index request's resume cursor), never
-// secret material — put only data that may be shown to the caller in it.
+// ErrorResponse is the standard error envelope: Code is a stable machine-readable string clients
+// switch on; Message human-readable; RequestID links to traces; Details carries structured fields
+// a client needs to recover from the error — never secret material, only what may be shown.
 type ErrorResponse struct {
 	Code      string         `json:"code"`
 	Message   string         `json:"message"`
@@ -87,6 +81,23 @@ func statusCode(status int) string {
 // Error writes a structured JSON error response. Pass code=0 to auto-map
 // domain errors (ErrNotFound → 404, ErrPermissionDenied → 403, etc.).
 func Error(w http.ResponseWriter, err error, code int) {
+	code = errorStatus(err, code)
+	writeError(w, err, code, statusCode(code))
+}
+
+// ErrorUnlogged writes exactly the response Error would — same status mapping, machine code and
+// 5xx masking — but without the per-request ERROR log every 5xx otherwise emits. For 5xx
+// conditions that are configuration, not failure, and that an unauthenticated caller can trigger
+// at will: the unconfigured CI webhook once answered each call with a 503 AND an ERROR line, so
+// anyone could flood the error log and its alerting. The caller owns reporting, once per process.
+func ErrorUnlogged(w http.ResponseWriter, err error, code int) {
+	code = errorStatus(err, code)
+	writeErrorBody(w, err, code, statusCode(code), nil)
+}
+
+// errorStatus resolves the status Error and ErrorUnlogged write: code=0 means 500, and a 500 is
+// narrowed to the status a known domain error implies.
+func errorStatus(err error, code int) int {
 	if code == 0 {
 		code = http.StatusInternalServerError
 	}
@@ -101,17 +112,19 @@ func Error(w http.ResponseWriter, err error, code int) {
 			code = http.StatusBadRequest
 		case errors.Is(err, service.ErrConflict) || errors.Is(err, storageif.ErrEmailExists) || errors.Is(err, storageif.ErrOrgInviteExists) || errors.Is(err, storageif.ErrVersionConflict):
 			code = http.StatusConflict
+		case errors.Is(err, storageif.ErrRLSUnavailable):
+			// The request's RLS transaction could not be started: a transient
+			// pool/server condition the client retries.
+			code = http.StatusServiceUnavailable
 		}
 	}
-	writeError(w, err, code, statusCode(code))
+	return code
 }
 
-// ErrorWithCode writes the standard error envelope with an explicit
-// machine-readable code (e.g. "CHAT_CAPACITY_REACHED") instead of the
-// HTTP-status-derived default. Use it for domain errors that clients switch
-// on — it decouples frontend classification from the human-readable message
-// (which is masked on 5xx and may be reworded). Prefer a 4xx status so the
-// message survives the internal-error masking in writeError.
+// ErrorWithCode writes the standard envelope with an explicit machine-readable code (e.g.
+// "CHAT_CAPACITY_REACHED") instead of the HTTP-status-derived default — decoupling frontend
+// classification from the message (masked on 5xx, may be reworded). Prefer a 4xx status so the
+// message survives the internal-error masking.
 func ErrorWithCode(w http.ResponseWriter, err error, code int, machineCode string) {
 	if code == 0 {
 		code = http.StatusInternalServerError
@@ -119,11 +132,9 @@ func ErrorWithCode(w http.ResponseWriter, err error, code int, machineCode strin
 	writeError(w, err, code, machineCode)
 }
 
-// ErrorWithCodeAndDetails is ErrorWithCode with a structured details object
-// on the envelope — machine-switchable fields the client needs to recover
-// from the error (e.g. a resumable re-index's nextCursor and the chunks it
-// committed before failing). The 5xx message masking in writeError does
-// NOT cover Details: only put data that may be shown to the caller in it.
+// ErrorWithCodeAndDetails is ErrorWithCode with a structured details object — machine-switchable
+// fields the client needs to recover (e.g. a resumable re-index's nextCursor). The 5xx message
+// masking does NOT cover Details: only put data that may be shown to the caller in it.
 func ErrorWithCodeAndDetails(w http.ResponseWriter, err error, code int, machineCode string, details map[string]any) {
 	if code == 0 {
 		code = http.StatusInternalServerError
@@ -139,15 +150,19 @@ func writeErrorWithDetails(w http.ResponseWriter, err error, code int, machineCo
 	if code >= 500 {
 		logger.Error("internal server error", "error", err)
 	}
+	writeErrorBody(w, err, code, machineCode, details)
+}
 
+// writeErrorBody writes the error envelope without logging; every render error path funnels
+// through it so the wire shape (and the 5xx masking) is defined in one place.
+func writeErrorBody(w http.ResponseWriter, err error, code int, machineCode string, details map[string]any) {
 	msg := err.Error()
 	if code >= 500 {
 		msg = "internal server error"
 	}
 
-	// X-Request-ID is stamped by the access-log middleware before the handler
-	// runs, so it is already present in the response header by the time we
-	// reach here.
+	// X-Request-ID is stamped by the access-log middleware before the handler runs, so it is
+	// already present in the response header here.
 	reqID := w.Header().Get("X-Request-ID")
 
 	w.Header().Set("Content-Type", "application/json")

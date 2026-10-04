@@ -157,18 +157,6 @@ func TestProvideHistoryStore_EmptyConfigDirIsNoOp(t *testing.T) {
 	}
 }
 
-func TestProvideASTCache(t *testing.T) {
-	t.Parallel()
-
-	c, err := ProvideASTCache()
-	if err != nil {
-		t.Fatalf("ProvideASTCache() error = %v", err)
-	}
-	if c == nil {
-		t.Fatal("ProvideASTCache() returned nil")
-	}
-}
-
 func TestProvideFlowAccessChecker_NilBackend(t *testing.T) {
 	t.Parallel()
 

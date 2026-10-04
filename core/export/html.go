@@ -25,8 +25,8 @@ func healthClass(score int) string {
 }
 
 // ReportToHTML renders a self-contained HTML report (inline CSS, no external
-// assets) suitable for `bakicli -format html > report.html`, CI artifacts, and
-// browser viewing. All finding-controlled text is HTML-escaped.
+// assets) for `bakicli -format html > report.html`, CI artifacts, and browser
+// viewing. All finding-controlled text is HTML-escaped.
 func ReportToHTML(report *models.AnalysisReport, doc *models.FlowDocument) string {
 	if report == nil {
 		report = &models.AnalysisReport{}

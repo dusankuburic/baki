@@ -18,13 +18,9 @@ import (
 	"pad-core/logger"
 )
 
-// Azure AI Foundry (Microsoft Foundry) is configured per user with a small
-// JSON document instead of a bare API key: the resource endpoint, the
-// credential (an API key or a Microsoft Entra ID service principal), and
-// optional deployment names / project endpoint. The document is what the
-// KeyStore holds under the "azure-foundry" provider id, so the factory's
-// one-secret-per-provider contract (and every keys.save/has/delete route)
-// keeps working unchanged; NewAzureFoundryProvider parses it.
+// Azure AI Foundry is configured per user with a small JSON document instead of a bare API key: the resource
+// endpoint, the credential (API key or Entra ID service principal) and optional deployment names / project
+// endpoint — the document is what the KeyStore holds under the "azure-foundry" provider id.
 
 const (
 	azureFoundryProviderID = "azure-foundry"
@@ -32,39 +28,22 @@ const (
 	AzureFoundryProviderID = azureFoundryProviderID
 
 	// AzureAuthModeAPIKey authenticates with the resource's API key (header
-	// api-key). Works for model inference only — Foundry Agent Service
-	// routes reject keys.
+	// api-key); model inference only — agent routes reject keys.
 	AzureAuthModeAPIKey = "api_key"
-	// AzureAuthModeEntra authenticates as a Microsoft Entra ID service
-	// principal (client-credentials flow, scope https://ai.azure.com/.default).
-	// Required for agents; works for everything.
+	// AzureAuthModeEntra authenticates as a Microsoft Entra ID service principal
+	// (client-credentials flow, scope https://ai.azure.com/.default); required for agents.
 	AzureAuthModeEntra = "entra"
-	// AzureAuthModeEntraCLI authenticates as the Azure CLI's signed-in USER
-	// (azidentity.NewAzureCLICredential — the CLI's first-party, tenant-
-	// pre-consented public client: no app registration, no client secret;
-	// MFA and Conditional Access are handled by `az login`, the token cache
-	// is the CLI's own). Desktop app only: a server-side `az login` would be
-	// the operator's identity, not the user's (F-51).
+	// AzureAuthModeEntraCLI authenticates as the Azure CLI's signed-in USER (its first-party public client:
+	// no app registration or secret). Desktop only — a server-side `az login` would be the operator's identity.
 	AzureAuthModeEntraCLI = "entra_cli"
 
-	// azureConfigMaxBytes bounds the stored document. The Windows Credential
-	// Manager (desktop keyring) rejects secrets above 2560 bytes; a real
-	// document is a few hundred.
+	// azureConfigMaxBytes bounds the stored document: the Windows Credential Manager (desktop keyring) rejects
+	// secrets above 2560 bytes; a real document is a few hundred.
 	azureConfigMaxBytes = 2048
 
-	// azureMaxDeployments bounds the "additional deployments" list so the
-	// whole document stays under azureConfigMaxBytes with realistic worst-case
-	// values: 64-character resource and project names on the longest host
-	// suffixes, an 84-character API key or a 40-character Entra client secret
-	// plus both GUIDs, 64-character chat and embedding deployment names, and
-	// 16 additional 64-character names encode to about 1750 bytes (20 would
-	// leave no room for a longer secret). Encode still enforces the byte cap.
+	// azureMaxDeployments bounds the "additional deployments" list so the document stays under azureConfigMaxBytes.
 	azureMaxDeployments = 16
 
-	// azureMaxClaudeDeployments bounds the Claude deployments list. Encode
-	// still enforces the byte cap: Claude deployments are usually named
-	// after their model (about 20 characters), and a document naming the
-	// maximum of every list with 64-character names is not a realistic one.
 	azureMaxClaudeDeployments = 20
 )
 
@@ -78,9 +57,8 @@ const (
 	AzureCfgErrInvalidAuth     = "INVALID_AUTH"
 	AzureCfgErrMissingSecret   = "MISSING_SECRET"
 	AzureCfgErrInvalidDeploy   = "INVALID_DEPLOYMENT"
-	// AzureCfgErrMissingDeploy: the document names no chat deployment
-	// (chatDeployment or deployments) and nothing can list one — only Entra
-	// ID with a project endpoint can (the project deployments listing).
+	// AzureCfgErrMissingDeploy: the document names no chat deployment (chatDeployment or deployments) and nothing
+	// can list one — only Entra ID with a project endpoint can.
 	AzureCfgErrMissingDeploy = "MISSING_DEPLOYMENT"
 )
 
@@ -101,8 +79,7 @@ type AzureFoundryAuth struct {
 	Mode string `json:"mode"`
 	// Key is the resource API key (AzureAuthModeAPIKey).
 	Key string `json:"key,omitempty"`
-	// TenantID, ClientID and ClientSecret describe the app registration
-	// (AzureAuthModeEntra).
+	// TenantID, ClientID and ClientSecret describe the app registration (AzureAuthModeEntra).
 	TenantID     string `json:"tenantId,omitempty"`
 	ClientID     string `json:"clientId,omitempty"`
 	ClientSecret string `json:"clientSecret,omitempty"`
@@ -110,38 +87,26 @@ type AzureFoundryAuth struct {
 
 // AzureFoundryConfig is the stored per-user document.
 type AzureFoundryConfig struct {
-	// Endpoint is the resource endpoint, e.g. https://my-res.openai.azure.com
-	// or https://my-res.services.ai.azure.com (no path).
+	// Endpoint is the resource endpoint, e.g. https://my-res.openai.azure.com or https://my-res.services.ai.azure.com (no path).
 	Endpoint string           `json:"endpoint"`
 	Auth     AzureFoundryAuth `json:"auth"`
-	// ProjectEndpoint (optional) is the Foundry project endpoint,
-	// https://<res>.services.ai.azure.com/api/projects/<project>, which
-	// unlocks the project's agents (Entra ID only) and deployment metadata.
+	// ProjectEndpoint (optional) is the Foundry project endpoint, https://<res>.services.ai.azure.com/api/projects/<project>,
+	// which unlocks the project's agents (Entra ID only) and deployment metadata.
 	ProjectEndpoint string `json:"projectEndpoint,omitempty"`
-	// ChatDeployment is the deployment offered as the default model;
-	// EmbeddingDeployment (optional) the one used for the knowledge base.
-	// Deployments (optional, ≤ azureMaxDeployments) are further chat
-	// deployments offered in the model picker. No data-plane route lists an
-	// API-key caller's deployments (GET /openai/v1/models is the resource's
-	// model CATALOGUE), so the picker shows exactly these names — plus the
-	// project's deployments with Entra ID and a project endpoint. Saving
-	// requires a chat deployment (ChatDeployment or Deployments) unless
-	// Entra ID + project endpoint can list them (MISSING_DEPLOYMENT).
+	// ChatDeployment is the deployment offered as the default model; EmbeddingDeployment (optional) the
+	// knowledge-base one; Deployments (≤ azureMaxDeployments) further chat deployments — an API-key caller's
+	// deployments are not listable, so the picker shows exactly these names. Saving requires a chat deployment
+	// unless the project listing can supply one (MISSING_DEPLOYMENT).
 	ChatDeployment      string   `json:"chatDeployment,omitempty"`
 	EmbeddingDeployment string   `json:"embeddingDeployment,omitempty"`
 	Deployments         []string `json:"deployments,omitempty"`
-	// ClaudeDeployments (optional, ≤ azureMaxClaudeDeployments) are the
-	// resource's Claude deployments, which answer on the Anthropic Messages
-	// route ({endpoint}/anthropic/v1/messages), not on /openai/v1 (404).
-	// They are offered in the model picker as "claude:<name>" (see
-	// azure_claude.go) and count as chat deployments for the save-time
-	// rule. With Entra ID and a project endpoint the project listing also
-	// discovers them (modelPublisher "Anthropic").
+	// ClaudeDeployments (≤ azureMaxClaudeDeployments) answer on the Anthropic Messages route
+	// ({endpoint}/anthropic/v1/messages), not /openai/v1 (404); offered as "claude:<name>" and also discovered
+	// by the project listing (modelPublisher "Anthropic").
 	ClaudeDeployments []string `json:"claudeDeployments,omitempty"`
 }
 
-// AzureFoundryPublicConfig is the redacted view returned to clients: every
-// field but the secrets, plus whether a secret is stored.
+// AzureFoundryPublicConfig is the redacted view returned to clients: every field but the secrets, plus whether a secret is stored.
 type AzureFoundryPublicConfig struct {
 	Configured          bool     `json:"configured"`
 	Endpoint            string   `json:"endpoint,omitempty"`
@@ -156,8 +121,7 @@ type AzureFoundryPublicConfig struct {
 	ClaudeDeployments   []string `json:"claudeDeployments,omitempty"`
 }
 
-// Configured reports whether the document names an endpoint (an empty
-// KeyStore value parses to an unconfigured config).
+// Configured reports whether the document names an endpoint (an empty KeyStore value parses to an unconfigured config).
 func (c AzureFoundryConfig) Configured() bool { return c.Endpoint != "" }
 
 // HasSecret reports whether the credential for the selected mode is present.
@@ -174,7 +138,6 @@ func (c AzureFoundryConfig) HasSecret() bool {
 	return false
 }
 
-// Public returns the redacted view.
 func (c AzureFoundryConfig) Public() AzureFoundryPublicConfig {
 	if !c.Configured() {
 		return AzureFoundryPublicConfig{}
@@ -194,8 +157,7 @@ func (c AzureFoundryConfig) Public() AzureFoundryPublicConfig {
 	}
 }
 
-// chatDeployments is every chat deployment the document names: the default
-// (ChatDeployment) first, then the additional ones.
+// chatDeployments is every chat deployment the document names: the default (ChatDeployment) first, then the additional ones.
 func (c AzureFoundryConfig) chatDeployments() []string {
 	out := make([]string, 0, 1+len(c.Deployments))
 	if c.ChatDeployment != "" {
@@ -204,16 +166,14 @@ func (c AzureFoundryConfig) chatDeployments() []string {
 	return append(out, c.Deployments...)
 }
 
-// listsProjectDeployments reports whether the project deployments listing is
-// reachable: it needs a project endpoint and Entra ID (the project data plane
-// rejects API keys).
+// listsProjectDeployments reports whether the project deployments listing is reachable: it needs a project
+// endpoint and Entra ID (the project data plane rejects API keys).
 func (c AzureFoundryConfig) listsProjectDeployments() bool {
 	return c.ProjectEndpoint != "" && (c.Auth.Mode == AzureAuthModeEntra || c.Auth.Mode == AzureAuthModeEntraCLI)
 }
 
-// azureEgressBlocksInternal reports whether the operator's runtime policy is
-// the cloud one (the desktop/local app installs egress.AllowLoopback): the
-// CLI-sign-in auth mode is refused under it.
+// azureEgressBlocksInternal reports whether the operator's runtime policy is the cloud one (the desktop/local
+// app installs egress.AllowLoopback): the CLI-sign-in auth mode is refused under it.
 func azureEgressBlocksInternal() bool {
 	azureRuntime.mu.RLock()
 	defer azureRuntime.mu.RUnlock()
@@ -232,10 +192,8 @@ func (c AzureFoundryConfig) Encode() (string, error) {
 	return string(raw), nil
 }
 
-// Fingerprint identifies the credential set without revealing it (a changed
-// key or endpoint must never reuse another's cache). It deliberately leaves
-// the deployment names out; the model-listing cache, whose entries are built
-// from them, extends it (azureModelsCacheKey).
+// Fingerprint identifies the credential set without revealing it (a changed key or endpoint must never reuse
+// another's cache). It deliberately leaves the deployment names out; the model-listing cache extends it.
 func (c AzureFoundryConfig) Fingerprint() string {
 	h := sha256.New()
 	for _, part := range []string{c.Endpoint, c.ProjectEndpoint, c.Auth.Mode, c.Auth.Key, c.Auth.TenantID, c.Auth.ClientID, c.Auth.ClientSecret} {
@@ -245,10 +203,8 @@ func (c AzureFoundryConfig) Fingerprint() string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// ParseAzureFoundryConfig decodes the stored document. An empty string is a
-// valid, unconfigured config (the metadata provider is built with "").
-// Unknown fields are rejected so a document written by a newer build is not
-// silently truncated by an older one.
+// ParseAzureFoundryConfig decodes the stored document ("" is a valid, unconfigured config). Unknown fields are
+// rejected so a document written by a newer build is not silently truncated by an older one.
 func ParseAzureFoundryConfig(raw string) (AzureFoundryConfig, error) {
 	var cfg AzureFoundryConfig
 	if strings.TrimSpace(raw) == "" {
@@ -266,9 +222,8 @@ func ParseAzureFoundryConfig(raw string) (AzureFoundryConfig, error) {
 	return cfg, nil
 }
 
-// Normalize trims every field and canonicalises the endpoints (lower-case
-// host, no trailing slash) so equal configurations compare equal. Parse does
-// it; the API layer calls it on a freshly decoded request body.
+// Normalize trims every field and canonicalises the endpoints (lower-case host, no trailing slash) so equal
+// configurations compare equal. Parse does it; the API layer calls it on a freshly decoded request body.
 func (c *AzureFoundryConfig) Normalize() { c.normalize() }
 
 func (c *AzureFoundryConfig) normalize() {
@@ -283,18 +238,12 @@ func (c *AzureFoundryConfig) normalize() {
 	c.EmbeddingDeployment = strings.TrimSpace(c.EmbeddingDeployment)
 	seen := map[string]bool{strings.ToLower(c.ChatDeployment): true, strings.ToLower(c.EmbeddingDeployment): true}
 	c.Deployments = normalizeAzureDeployments(c.Deployments, seen)
-	// A name already listed as a chat-completions deployment is dropped
-	// here: one deployment answers on one route, and the ordinary lists
-	// came first.
+	// A name already listed as a chat-completions deployment is dropped: one deployment answers on one route.
 	c.ClaudeDeployments = normalizeAzureDeployments(c.ClaudeDeployments, seen)
 }
 
-// normalizeAzureDeployments trims a list of deployment names, drops blanks,
-// duplicates (case-insensitively — Azure deployment names are) and the names
-// in seen (the chat and embedding deployment, and the lists normalised
-// before this one), keeping the first occurrence's order and spelling and
-// adding what it keeps to seen. nil when nothing is left, so an empty list is
-// omitted from the stored document.
+// normalizeAzureDeployments trims a list of deployment names, dropping blanks, case-insensitive duplicates and
+// the names in seen, keeping first-occurrence order; nil when nothing is left.
 func normalizeAzureDeployments(names []string, seen map[string]bool) []string {
 	var out []string
 	for _, n := range names {
@@ -320,15 +269,12 @@ func normalizeAzureURL(raw string) string {
 	u.Scheme = strings.ToLower(u.Scheme)
 	u.Host = strings.ToLower(u.Host)
 	u.Path = strings.TrimRight(u.Path, "/")
-	// A bare trailing "?" (an address-bar copy) carries nothing; kept,
-	// String() re-emits it and every join yields "host?/openai/…" — a 404 on
-	// every call after a save that succeeded. A real query string is left for
-	// Validate to reject.
+	// A bare trailing "?" (an address-bar copy): kept, String() re-emits it and every join yields
+	// "host?/openai/…" — a 404 on every call after a save that succeeded. A real query string is left for Validate.
 	if u.RawQuery == "" {
 		u.ForceQuery = false
 	}
-	// The explicit default port is the default: drop it so equal endpoints
-	// compare equal (fingerprint, breaker and memo keys).
+	// The explicit default port is the default: drop it so equal endpoints compare equal (fingerprint, breaker and memo keys).
 	if u.Port() == "443" {
 		u.Host = strings.TrimSuffix(u.Host, ":443")
 	}
@@ -336,42 +282,29 @@ func normalizeAzureURL(raw string) string {
 }
 
 var (
-	// azureFoundryHostSuffixes are the DNS suffixes Microsoft documents for
-	// Foundry / Azure OpenAI resources in the Azure public cloud (the only
-	// cloud supported): the Azure OpenAI and Foundry resource hosts and the
-	// Cognitive Services custom subdomain. Serverless (MaaS) model endpoints
-	// (<deployment>.<region>.models.ai.azure.com) are NOT listed and actively
-	// refused (see validateAzureEndpoint): this provider speaks only
-	// /openai/v1, which those endpoints do not serve — every call would 404.
-	// A user-supplied endpoint outside the suffixes is refused (the credential
-	// would otherwise be posted to an arbitrary host of the user's choosing —
-	// with the server's egress). The broader ".ai.azure.com" is deliberately
-	// not listed: it covers Microsoft's own portal and service hosts, which
-	// are no resource's endpoint.
+	// azureFoundryHostSuffixes are the DNS suffixes Microsoft documents for Foundry / Azure OpenAI resources in
+	// the Azure public cloud. Serverless (MaaS) endpoints (<deployment>.<region>.models.ai.azure.com) are refused
+	// (they do not serve /openai/v1); the broader ".ai.azure.com" is not listed — it covers portal/service hosts.
 	azureFoundryHostSuffixes = []string{
 		".openai.azure.com",
 		".services.ai.azure.com",
 		".cognitiveservices.azure.com",
 	}
 	azureDeploymentName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
-	// azureProjectPath: the project name starts with a letter or digit, so
-	// "." and ".." (also as %2e%2e, which url.Parse decodes) can never make
-	// the joined project routes climb out of /api/projects/.
+	// azureProjectPath: the project name starts with a letter or digit, so "." and ".." (also as %2e%2e, which
+	// url.Parse decodes) can never make the joined project routes climb out of /api/projects/.
 	azureProjectPath = regexp.MustCompile(`^/api/projects/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	azureGUID        = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	// azureTenantDomain is a tenant's verified domain name
-	// (contoso.onmicrosoft.com, contoso.com): lower-case DNS labels, at least
-	// two. The input is lower-cased by normalize.
+	// azureTenantDomain is a tenant's verified domain name (contoso.onmicrosoft.com, contoso.com): lower-case
+	// DNS labels, at least two. The input is lower-cased by normalize.
 	azureTenantDomain = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 )
 
-// azureMultiTenantAuthorities are the Entra ID pseudo-tenants that are not a
-// tenant: a client-credentials sign-in needs the app's home tenant.
+// azureMultiTenantAuthorities are the Entra ID pseudo-tenants that are not a tenant: a client-credentials sign-in needs the app's home tenant.
 var azureMultiTenantAuthorities = map[string]bool{"common": true, "organizations": true, "consumers": true}
 
-// validAzureTenantID accepts a directory (tenant) ID — a GUID — or one of
-// the tenant's domain names (contoso.onmicrosoft.com), and refuses the
-// multi-tenant pseudo-tenants and IP literals.
+// validAzureTenantID accepts a directory (tenant) ID — a GUID — or one of the tenant's domain names
+// (contoso.onmicrosoft.com), and refuses the multi-tenant pseudo-tenants and IP literals.
 func validAzureTenantID(id string) bool {
 	if azureGUID.MatchString(id) {
 		return true
@@ -383,9 +316,8 @@ func validAzureTenantID(id string) bool {
 	return err != nil
 }
 
-// Validate checks the document's shape and the endpoint allow-list. It does
-// no DNS resolution and no network I/O (the dial-time guard covers runtime),
-// so it is cheap enough to run on every provider construction.
+// Validate checks the document's shape and the endpoint allow-list. It does no DNS resolution and no network
+// I/O (the dial-time guard covers runtime), so it is cheap enough to run on every provider construction.
 func (c AzureFoundryConfig) Validate(hosts azureHostPolicy) error {
 	if !c.Configured() {
 		return azureCfgErr(AzureCfgErrInvalidEndpoint, "the Azure AI Foundry endpoint is required")
@@ -420,10 +352,8 @@ func (c AzureFoundryConfig) Validate(hosts azureHostPolicy) error {
 			return azureCfgErr(AzureCfgErrInvalidAuth, "the client secret is too long")
 		}
 	case AzureAuthModeEntraCLI:
-		// The CLI's signed-in user is the credential: an optional tenant,
-		// never a client id or secret (F-51). Desktop only — a server-side
-		// `az login` would be the operator's identity, not the user's, so a
-		// cloud deployment's egress policy refuses the mode outright.
+		// The CLI's signed-in user is the credential: an optional tenant, never a client id or secret. Desktop
+		// only — a cloud deployment's egress policy refuses the mode outright.
 		if azureEgressBlocksInternal() {
 			return azureCfgErr(AzureCfgErrInvalidAuth, "the Azure CLI sign-in mode is available in the desktop app only — use a Microsoft Entra ID service principal on a server deployment")
 		}
@@ -451,12 +381,8 @@ func (c AzureFoundryConfig) Validate(hosts azureHostPolicy) error {
 	return nil
 }
 
-// validateChatTarget is the save-time rule that the document names a chat
-// deployment (ChatDeployment, Deployments or ClaudeDeployments), unless
-// Entra ID with a project endpoint lets the project deployments listing
-// supply them. It is not part of Validate, which also runs on every provider
-// construction: a document stored before the rule (or one used only for
-// knowledge-base embeddings) keeps working until the user next saves it.
+// validateChatTarget is the save-time rule that the document names a chat deployment, unless Entra ID with a
+// project endpoint lets the listing supply one; out of Validate, which runs on every provider construction.
 func (c AzureFoundryConfig) validateChatTarget() error {
 	if len(c.chatDeployments()) > 0 || len(c.ClaudeDeployments) > 0 || c.listsProjectDeployments() {
 		return nil
@@ -478,8 +404,7 @@ func validateAzureEndpoint(raw string, hosts azureHostPolicy, project bool) erro
 	if u.Scheme != "https" {
 		return azureCfgErr(code, "the %s must use https://", label)
 	}
-	// ForceQuery: a bare trailing "?" that bypassed normalisation would join
-	// into "host?/openai/…".
+	// ForceQuery: a bare trailing "?" that bypassed normalisation would join into "host?/openai/…".
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return azureCfgErr(code, "the %s must not carry credentials, a query string or a fragment", label)
 	}
@@ -493,19 +418,15 @@ func validateAzureEndpoint(raw string, hosts azureHostPolicy, project bool) erro
 	} else if u.Path != "" {
 		return azureCfgErr(code, "the endpoint must be the resource root, without a path (https://<resource>.openai.azure.com)")
 	}
-	// The serverless refusal runs BEFORE the allow-list on purpose: the
-	// provider only speaks /openai/v1, which a *.models.ai.azure.com endpoint
-	// never serves (every call would 404), so an operator listing the zone in
-	// PAD_AZURE_FOUNDRY_ALLOWED_HOSTS must still get the migration message
-	// instead of a saved document that cannot work.
+	// The serverless refusal runs BEFORE the allow-list: the provider only speaks /openai/v1, which a
+	// *.models.ai.azure.com endpoint never serves — the operator gets the migration message, not a dead document.
 	if !project && strings.HasSuffix(strings.ToLower(u.Hostname()), ".models.ai.azure.com") {
 		return azureCfgErr(code, "serverless API endpoints (*.models.ai.azure.com) are not supported: deploy the model to a Foundry resource and use https://<resource>.services.ai.azure.com")
 	}
 	if !hosts.allows(u.Hostname()) {
 		if project {
-			// Its own code: HOST_NOT_ALLOWED is mapped by the client to fixed
-			// copy about the RESOURCE endpoint, which would tell a user whose
-			// resource endpoint is fine that it is wrong.
+			// Its own code: HOST_NOT_ALLOWED is mapped by the client to fixed copy about the RESOURCE endpoint,
+			// which would mislead here.
 			return azureCfgErr(AzureCfgErrInvalidProject, "the project endpoint host %q is not an Azure AI Foundry host (expected <resource>.services.ai.azure.com; the operator can allow other hosts with PAD_AZURE_FOUNDRY_ALLOWED_HOSTS)", u.Hostname())
 		}
 		return azureCfgErr(AzureCfgErrHostNotAllowed, "host %q is not an Azure AI Foundry endpoint (expected *.openai.azure.com, *.services.ai.azure.com or *.cognitiveservices.azure.com in the Azure public cloud; the operator can allow other hosts with PAD_AZURE_FOUNDRY_ALLOWED_HOSTS)", u.Hostname())
@@ -513,21 +434,17 @@ func validateAzureEndpoint(raw string, hosts azureHostPolicy, project bool) erro
 	return nil
 }
 
-// azureHostPolicy is the endpoint allow-list: Microsoft's suffixes plus the
-// operator's extra hosts (exact names or "*.suffix" globs) for API Management
-// fronts and private DNS zones.
+// azureHostPolicy is the endpoint allow-list: Microsoft's suffixes plus the operator's extra hosts (exact names
+// or "*.suffix" globs) for API Management fronts and private DNS zones.
 type azureHostPolicy struct {
 	extra []string
 }
 
 func (p azureHostPolicy) allows(host string) bool {
 	host = strings.ToLower(host)
-	// DNS names never contain ':', '%', '[' or ']'. Refusing them rejects
-	// every IP-literal form before the suffix check, including a zoned IPv6
-	// literal whose zone carries an allowed suffix
-	// ("https://[::1%25.openai.azure.com]" has the host
-	// "::1%.openai.azure.com", which net.ParseIP does not accept but net/http
-	// dials as [::1]) and 4-in-6 forms; netip.ParseAddr catches what is left.
+	// DNS names never contain ':', '%', '[' or ']': refusing them rejects every IP-literal form before the
+	// suffix check — including a zoned IPv6 literal whose zone carries an allowed suffix ("[::1%25.openai.
+	// azure.com]" dials as [::1]); netip.ParseAddr catches what is left.
 	if host == "" || strings.ContainsAny(host, ":%[]") {
 		return false
 	}
@@ -555,60 +472,37 @@ func (p azureHostPolicy) allows(host string) bool {
 	return false
 }
 
-// AzureFoundryOptions is the operator-level configuration applied once at
-// boot (ConfigureAzureFoundry).
+// AzureFoundryOptions is the operator-level configuration applied once at boot (ConfigureAzureFoundry).
 type AzureFoundryOptions struct {
-	// Egress is the outbound policy: egress.BlockInternal (cloud) installs a
-	// dial-time guard that refuses private, loopback and link-local
-	// addresses for every Azure request — a user-controlled endpoint must
-	// not become a probe into the server's network. Behind an HTTP(S) proxy
-	// the guard judges the Azure host in the proxy hook and lets the hop to
-	// the proxy through (egress.GuardAllowListedTransport — safe only because
-	// every endpoint host is on the allow-list). egress.AllowLoopback
-	// (desktop/local mode, single user on their own machine) installs none.
+	// Egress is the outbound policy: egress.BlockInternal (cloud) installs a dial-time guard refusing private,
+	// loopback and link-local addresses for every Azure request — a user-controlled endpoint must not become a
+	// probe into the server's network (behind a proxy the guard judges the Azure host, letting the hop through,
+	// sound only because every endpoint host is allow-listed). egress.AllowLoopback (desktop) installs none.
 	Egress egress.Policy
-	// ExtraAllowedHosts extends the endpoint allow-list
-	// (PAD_AZURE_FOUNDRY_ALLOWED_HOSTS).
+	// ExtraAllowedHosts extends the endpoint allow-list (PAD_AZURE_FOUNDRY_ALLOWED_HOSTS).
 	ExtraAllowedHosts []string
-	// AllowPrivateEgress relaxes the dial-time guard to
-	// egress.AllowPrivateNetwork (PAD_AI_ALLOW_PRIVATE_EGRESS) — for
-	// private-link endpoints, whose privatelink.* names resolve to RFC 1918
-	// addresses by design. Only RFC 1918 and unique-local addresses are
-	// opened: loopback, link-local (169.254.169.254), unspecified and the
+	// AllowPrivateEgress relaxes the dial-time guard to egress.AllowPrivateNetwork — for private-link
+	// endpoints. Only RFC 1918 and unique-local addresses open: loopback, link-local (169.254.169.254) and the
 	// other special-purpose ranges stay refused.
 	AllowPrivateEgress bool
-	// Transport is a TEST SEAM — nil in production. When non-nil, the Azure
-	// client every provider and the Entra ID token requests use
-	// (azureHTTPClient) is built on this RoundTripper instead of the shared
-	// transport, still refusing redirects (egress.NoRedirects). The egress
-	// dial-time guard cannot wrap an arbitrary RoundTripper, so the seam
-	// BYPASSES it whatever Egress says: never set it outside tests.
+	// Transport is a TEST SEAM (nil in production): the Azure client is built on this RoundTripper instead of
+	// the shared transport, bypassing the egress guard whatever Egress says — never set it outside tests.
 	Transport http.RoundTripper
 }
 
-// azureResponseHeaderTimeout is the ResponseHeaderTimeout of every transport
-// the Azure client is built on, raised from the shared client's 30 s: a
-// deployment that refuses stream:true (o1) is memoised into the
-// non-streaming streamViaChat fallback, and such an answer routinely reasons
-// for minutes before the first header — the shared floor aborted it while the
-// tokens were billed, unretried (Go's header timeout satisfies
-// context.DeadlineExceeded, which the retry wrapper excludes). SSE streams
-// deliver headers at once, so the raise costs nothing there. Kept under the
-// chat layer's 10-minute stream cap, which stays the real bound. A variable
-// so tests can shorten it.
+// azureResponseHeaderTimeout (raised from the shared 30 s) covers a stream-refusing deployment's non-streaming
+// fallback, which can reason for minutes before the first header — the shared floor aborted it while the tokens
+// were billed, and a header timeout satisfies context.DeadlineExceeded, which the retry wrapper excludes.
 var azureResponseHeaderTimeout = 5 * time.Minute
 
-// azureTransport clones base with the Azure ResponseHeaderTimeout applied
-// (azureResponseHeaderTimeout); a clone so the shared client and every other
-// provider keep their own settings.
+// azureTransport clones base with the Azure ResponseHeaderTimeout applied, so the shared client keeps its own settings.
 func azureTransport(base *http.Transport) *http.Transport {
 	t := base.Clone()
 	t.ResponseHeaderTimeout = azureResponseHeaderTimeout
 	return t
 }
 
-// sharedTransportBase is the shared client's transport as an *http.Transport,
-// falling back to http.DefaultTransport when it is not one.
+// sharedTransportBase is the shared client's transport as an *http.Transport, falling back to http.DefaultTransport.
 func sharedTransportBase() *http.Transport {
 	if t, ok := sharedHTTPClient.Transport.(*http.Transport); ok {
 		return t
@@ -616,18 +510,10 @@ func sharedTransportBase() *http.Transport {
 	return http.DefaultTransport.(*http.Transport)
 }
 
-// unconfiguredAzureClient is the zero-value client, served until
-// ConfigureAzureFoundry runs (DI at boot; tests and non-DI entrypoints may
-// never call it): the shared transport with redirects refused. The zero value
-// used to be the raw sharedHTTPClient, which FOLLOWS redirects — before any
-// operator policy exists, a 307/308 from a user-supplied endpoint could steer
-// a credential-bearing request to a host validation never saw. Refusing
-// redirects needs no policy decision, so it applies in that state too; the
-// dial-time private-address guard deliberately does not (which policy to
-// enforce is the operator's call, and desktop/local mode installs none — a
-// LAN-hosted endpoint is a legitimate target there). This is exactly the
-// client ConfigureAzureFoundry builds for desktop/local mode, so an
-// unconfigured runtime behaves like a local one instead of a fail-open one.
+// unconfiguredAzureClient is the zero-value client served until ConfigureAzureFoundry runs: the shared
+// transport with redirects refused (the raw sharedHTTPClient FOLLOWS redirects, and a 307/308 could steer a
+// credential-bearing request to a host validation never saw) and no dial guard — exactly the desktop/local
+// client, so an unconfigured runtime is not a fail-open one.
 func unconfiguredAzureClient() *http.Client {
 	return &http.Client{Timeout: 0, Transport: azureTransport(sharedTransportBase()), CheckRedirect: egress.NoRedirects}
 }
@@ -636,17 +522,14 @@ var azureRuntime = struct {
 	mu     sync.RWMutex
 	opts   AzureFoundryOptions
 	client *http.Client
-	// configured records that ConfigureAzureFoundry ran. Until then
-	// azureHTTPClient serves unconfiguredAzureClient and warns once, so an
-	// entrypoint that forgets the operator wiring says so in the log instead
-	// of silently dialing user-supplied endpoints unguarded.
+	// configured records that ConfigureAzureFoundry ran. Until then azureHTTPClient serves
+	// unconfiguredAzureClient and warns once, so an entrypoint that forgets the operator wiring says so in the log.
 	configured bool
 	warned     bool
 }{client: unconfiguredAzureClient()}
 
-// ConfigureAzureFoundry installs the operator options and builds the HTTP
-// client every Azure AI Foundry provider instance uses. Called from DI at
-// boot; tests that construct providers directly never need it.
+// ConfigureAzureFoundry installs the operator options and builds the HTTP client every Azure AI Foundry
+// provider instance uses. Called from DI at boot; tests that construct providers directly never need it.
 func ConfigureAzureFoundry(opts AzureFoundryOptions) {
 	var client *http.Client
 	switch {
@@ -671,18 +554,10 @@ func ConfigureAzureFoundry(opts AzureFoundryOptions) {
 	azureRuntime.mu.Unlock()
 }
 
-// guardedAzureTransport clones base (keeping its pool settings and its Proxy
-// function — HTTP(S)_PROXY for the shared client), raises the Azure
-// ResponseHeaderTimeout (azureTransport) and installs the egress
-// guard under policy (egress.BlockInternal, or egress.AllowPrivateNetwork
-// for PAD_AI_ALLOW_PRIVATE_EGRESS) with d as the dialer: a direct connection is judged on the concrete
-// IP at connect time; a proxied request is judged on the Azure host in the
-// proxy hook, and the hop to the operator's proxy goes through (a proxy on a
-// private address is the normal corporate setup, and judging it refused every
-// Azure call while leaving the real target unchecked). Trusting the proxy hop
-// is sound here only because azureHostPolicy restricts every endpoint to
-// allow-listed hosts whose DNS no tenant controls; tenant-supplied targets
-// (notify webhooks) use egress.GuardTransport, which fails closed instead.
+// guardedAzureTransport clones base, applies the Azure ResponseHeaderTimeout and installs the egress guard: a
+// direct connection is judged on the concrete IP at connect time, a proxied one on the Azure host in the proxy
+// hook — trusting the proxy hop is sound only because azureHostPolicy allow-lists every endpoint (tenant-supplied
+// targets use egress.GuardTransport, which fails closed instead).
 func guardedAzureTransport(base *http.Transport, d *net.Dialer, policy egress.Policy) *http.Transport {
 	t := azureTransport(base)
 	egress.GuardAllowListedTransport(t, d, policy)
@@ -710,9 +585,8 @@ func currentAzureHostPolicy() azureHostPolicy {
 	return azureHostPolicy{extra: azureRuntime.opts.ExtraAllowedHosts}
 }
 
-// ValidateAzureFoundryConfig validates a document against the operator's
-// host policy plus the save-time chat-deployment rule (the API layer calls
-// this before storing).
+// ValidateAzureFoundryConfig validates a document against the operator's host policy plus the save-time
+// chat-deployment rule (the API layer calls this before storing).
 func ValidateAzureFoundryConfig(cfg AzureFoundryConfig) error {
 	if err := cfg.Validate(currentAzureHostPolicy()); err != nil {
 		return err

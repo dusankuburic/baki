@@ -40,7 +40,7 @@ func (c *countingEmbedder) Embed(_ context.Context, text []string) ([][]float32,
 func seedManyChunks(store *testutil.FakeBackend, docs, n int) {
 	ctx := context.Background()
 	for d := range docs {
-		_ = store.SaveKnowledgeDocument(ctx, &interfaces.KnowledgeDocument{ID: fmt.Sprintf("doc-%02d", d), OrgID: "org-1", Filename: fmt.Sprintf("doc-%02d.md", d)})
+		_ = store.SaveKnowledgeDocument(ctx, "", &interfaces.KnowledgeDocument{ID: fmt.Sprintf("doc-%02d", d), OrgID: "org-1", Filename: fmt.Sprintf("doc-%02d.md", d)})
 	}
 	chunks := make([]interfaces.KnowledgeChunk, n)
 	for i := range n {
@@ -192,7 +192,7 @@ func (g *gateEmbedder) Embed(ctx context.Context, text []string) ([][]float32, e
 func TestAddDocument_RefusedWhileReindexing(t *testing.T) {
 	store := &testutil.FakeBackend{}
 	seedCorpus(store, []float32{1, 0}, "alpha rule", "beta rule")
-	_ = store.SaveKnowledgeDocument(context.Background(), &interfaces.KnowledgeDocument{ID: "doc-other", OrgID: "org-2", Filename: "other.md"})
+	_ = store.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "doc-other", OrgID: "org-2", Filename: "other.md"})
 	gate := &gateEmbedder{entered: make(chan struct{}), release: make(chan struct{})}
 	svc := guardService(store, gate)
 

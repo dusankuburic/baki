@@ -514,7 +514,6 @@ func TestCopilotAuth_GetSessionToken_FreshOnFirstCall(t *testing.T) {
 func TestCopilotAuth_GetSessionToken_Concurrency(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simulate some work
 		time.Sleep(50 * time.Millisecond)
 		callCount++
 		w.Header().Set("Content-Type", "application/json")

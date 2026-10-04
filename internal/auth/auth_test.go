@@ -357,9 +357,8 @@ func TestManager_RefreshToken_BothTokensValid(t *testing.T) {
 //
 // jwt/v5 joins claim-validation failures, so a token that is BOTH expired and
 // wrongly-audienced still satisfies errors.Is(err, jwt.ErrTokenExpired).
-// VerifyIgnoreExpiry tolerates expiry by design, so before the explicit
-// re-check it accepted an expired WS ticket / SSO ticket / refresh token — all
-// signed with the same secret — as a valid access token, role included.
+// Before the explicit re-check, VerifyIgnoreExpiry therefore accepted an
+// expired WS/SSO ticket or refresh token (same secret) as an access token.
 func TestVerifyIgnoreExpiry_RejectsWrongAudience(t *testing.T) {
 	const secret = "test-secret-that-is-long-enough-32bytes!!"
 	m := NewManagerWithTTL(secret, time.Minute, time.Hour, "iss", "aud", nil)

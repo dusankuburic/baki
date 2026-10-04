@@ -15,10 +15,8 @@ import (
 	"pad-core/models"
 )
 
-// dashboardCacheTTL bounds how long a stale dashboard result is served. The
-// landing page triggers ~16 sequential DB queries (FlowDashboardData +
-// FlowDashboardAdvanced); a 30s TTL collapses rapid re-loads and concurrent
-// opens into one pair of queries without making data noticeably stale.
+// dashboardCacheTTL bounds how long a stale dashboard result is served — the
+// landing page triggers ~16 sequential DB queries, so 30s collapses re-loads.
 const dashboardCacheTTL = 30 * time.Second
 
 type dashCacheEntry struct {
@@ -26,15 +24,8 @@ type dashCacheEntry struct {
 	fetchedAt time.Time
 }
 
-// DashboardService assembles the welcome ("home") dashboard payload and persists
-// per-flow analysis summaries that back it.
-//
-// Mode is inferred from the backend: in cloud mode the backend is a Postgres
-// store and health/findings come from the durable flow_analysis table (so the
-// dashboard is populated on first load across sessions and replicas). In
-// local/desktop mode the backend is nil; health/findings come from the
-// in-process analyzer cache via AnalysisService.ComputeDashboard, and token
-// usage is not tracked.
+// DashboardService assembles the welcome ("home") dashboard payload and persists per-flow analysis
+// summaries — cloud reads the durable flow_analysis table, local (nil backend) the analyzer cache.
 type DashboardService struct {
 	backend  storageif.DashboardStore
 	analysis *AnalysisService
@@ -43,19 +34,15 @@ type DashboardService struct {
 	dashMu    sync.Mutex
 	dashCache map[string]*dashCacheEntry
 	// anaCache holds analytics payloads keyed by user + canonical query
-	// (dashboard_analytics.go); it shares dashMu and the TTL, and empties for
-	// a user whenever their home entry does.
+	// (dashboard_analytics.go); shares dashMu and the TTL, empties with the home entry.
 	anaCache map[string]*anaCacheEntry
-	// anaSeq numbers anaCache inserts so the entry-cap eviction has a
-	// deterministic tie-break when several entries share one fetchedAt (the
-	// clock is coarse under a tight insert loop); without it the victim among
-	// ties followed map iteration order and the oldest entry could survive.
+	// anaSeq numbers anaCache inserts so entry-cap eviction has a deterministic
+	// tie-break when entries share one fetchedAt; map order otherwise picked the victim.
 	anaSeq uint64
 	anaSF  singleflight.Group
 	scope  scopeResolver
-	// dashSF collapses concurrent cold-cache builds for the same user so a cache
-	// miss under load runs buildCloud once (not N×), avoiding a thundering herd
-	// of ~16 sequential DB queries per concurrent caller.
+	// dashSF collapses concurrent cold-cache builds per user — one buildCloud
+	// run on a miss, not a thundering herd of ~16 DB queries per caller.
 	dashSF singleflight.Group
 }
 
@@ -71,11 +58,8 @@ func NewDashboardService(backend storageif.DashboardStore, analysis *AnalysisSer
 
 const dashboardTokenDays = 14
 
-// fixabilityStub combines the finding-side counts (from the DB rollup in cloud
-// mode, the session cache locally) with the rule-side counts from the static
-// catalog, so "11 of 29 rules" is always exact. Shared by buildCloud and
-// buildLocal so the two modes cannot drift. Nil-safe when no analysis service
-// is wired (catalog counts stay 0).
+// fixabilityStub combines finding-side counts with rule-side counts from the
+// static catalog so "11 of 29 rules" is exact; shared by both modes, nil-safe.
 func (s *DashboardService) fixabilityStub(available, total int) models.FixabilityStub {
 	totalRules, autoFixableRules := 0, 0
 	if s.analysis != nil {
@@ -90,10 +74,8 @@ func (s *DashboardService) fixabilityStub(available, total int) models.Fixabilit
 	}
 }
 
-// ruleSeverities maps rule ID → effective severity ("error"/"warning"/"info")
-// from the live catalog. GetRules applies user severity overrides, so the
-// dashboard tint matches what the findings themselves report. Nil-safe: returns
-// nil when no analysis service is wired (map reads then yield "").
+// ruleSeverities maps rule ID → effective severity from the live catalog (with
+// user overrides, so the tint matches the findings). Nil when no analysis service.
 func (s *DashboardService) ruleSeverities() map[string]string {
 	if s.analysis == nil {
 		return nil
@@ -106,9 +88,8 @@ func (s *DashboardService) ruleSeverities() map[string]string {
 	return out
 }
 
-// RecordAnalysis persists a flow's latest analysis summary so the dashboard can
-// show it later. Best-effort: failures are logged, never surfaced to the caller,
-// and a no-op in local mode (the session cache is the source there).
+// RecordAnalysis persists a flow's latest analysis summary for the dashboard —
+// best-effort, a no-op in local mode (session cache is the source there).
 func (s *DashboardService) RecordAnalysis(ctx context.Context, doc *models.FlowDocument, report *models.AnalysisReport) {
 	if s.backend == nil || doc == nil || report == nil {
 		return
@@ -130,9 +111,8 @@ func (s *DashboardService) RecordAnalysis(ctx context.Context, doc *models.FlowD
 		if f.RuleID != "" {
 			byRule[f.RuleID]++
 		}
-		// Confidence drives the dashboard's "how much to trust" donut. A
-		// finding with no explicit confidence is treated as the engine default
-		// (medium), matching what the catalog accessor reports.
+		// Confidence drives the "how much to trust" donut; a finding with no
+		// explicit confidence counts as the engine default (medium).
 		conf := string(f.Confidence)
 		if conf == "" {
 			conf = string(models.ConfidenceMedium)
@@ -158,17 +138,15 @@ func (s *DashboardService) RecordAnalysis(ctx context.Context, doc *models.FlowD
 	if err := s.backend.SaveFlowAnalysis(ctx, fa); err != nil {
 		logger.Warn("dashboard: persist flow analysis failed", "flowId", doc.ID, "err", err)
 	}
-	// The analysis summaries this dashboard renders just changed for this
-	// owner — drop their cached payload so the next load reflects it instead
-	// of waiting out the TTL.
+	// This owner's summaries just changed — drop their cached payload so the
+	// next load reflects it instead of waiting out the TTL.
 	if doc.OwnerID != "" {
 		s.InvalidateDashboardCache(doc.OwnerID)
 	}
 }
 
-// BuildHome assembles the dashboard payload for userID. It never hard-fails: on
-// a data-source error it logs and returns a valid, sparse payload (availability
-// flags false) so the UI can render honest empty states rather than an error.
+// BuildHome assembles the dashboard payload for userID; it never hard-fails —
+// on error it returns a valid sparse payload so the UI renders honest empty states.
 func (s *DashboardService) BuildHome(ctx context.Context, userID string) *models.DashboardHomeData {
 	if s.backend == nil {
 		out := s.buildLocal()
@@ -181,10 +159,7 @@ func (s *DashboardService) BuildHome(ctx context.Context, userID string) *models
 	if entry, ok := s.dashCache[userID]; ok && time.Since(entry.fetchedAt) < dashboardCacheTTL {
 		s.dashMu.Unlock()
 		// Do NOT mutate entry.data here: it is a shared pointer handed to every
-		// concurrent caller for this user, and writing to it after releasing the
-		// lock races the other callers' JSON marshal of the same struct. The
-		// cached value was already stored with IsCloud=true (set on `out` below
-		// before it is cached), so no write is needed on the hit path.
+		// concurrent caller, and writing after unlocking races their JSON marshal.
 		return entry.data
 	}
 	s.dashMu.Unlock()
@@ -198,11 +173,8 @@ func (s *DashboardService) BuildHome(ctx context.Context, userID string) *models
 		// to serve for 30s and avoids hammering the DB on a transient error).
 		s.dashMu.Lock()
 		s.dashCache[userID] = &dashCacheEntry{data: out, fetchedAt: time.Now()}
-		// The TTL governs freshness, not lifetime — without this sweep the map
-		// grew with every distinct user forever (a slow leak bounded only by
-		// user count × payload size). Entries past the TTL are dead weight the
-		// hit check would skip anyway, so drop them at write time; the map then
-		// tracks only users active within the last TTL window.
+		// The TTL governs freshness, not lifetime — sweep entries past it at
+		// write time or the map grows with every distinct user forever.
 		for id, entry := range s.dashCache {
 			if time.Since(entry.fetchedAt) >= dashboardCacheTTL {
 				delete(s.dashCache, id)
@@ -218,9 +190,8 @@ func (s *DashboardService) BuildHome(ctx context.Context, userID string) *models
 	return emptyHome()
 }
 
-// InvalidateDashboardCache clears the cached dashboard data for a user (or all
-// users when userID is empty). Called after settings changes or flow uploads
-// that materially change what the dashboard should show.
+// InvalidateDashboardCache clears the cached dashboard data for a user (all
+// users when empty) — after settings changes or uploads that change the view.
 func (s *DashboardService) InvalidateDashboardCache(userID string) {
 	s.dashMu.Lock()
 	defer s.dashMu.Unlock()
@@ -243,8 +214,7 @@ func (s *DashboardService) InvalidateDashboardCache(userID string) {
 func (s *DashboardService) buildCloud(ctx context.Context, userID string) *models.DashboardHomeData {
 	out := emptyHome()
 	// B1.5: the base and advanced queries are independent — run them
-	// concurrently (16 sequential round-trips used to gate every cold
-	// dashboard load).
+	// concurrently (16 sequential round-trips used to gate every cold load).
 	var (
 		data *storageif.DashboardData
 		adv  *storageif.DashboardAdvancedData
@@ -260,9 +230,8 @@ func (s *DashboardService) buildCloud(ctx context.Context, userID string) *model
 		return advErr
 	})
 	_ = g.Wait()
-	// Best-effort halves (parity with the old sequential behavior): the base
-	// sections render when the base fetch made it, advanced appended when its
-	// fetch made it; each failure logs and leaves its half empty.
+	// Best-effort halves: the base sections render when the base fetch made
+	// it, advanced appended when its fetch made it; each failure leaves its half empty.
 	if dataErr != nil {
 		logger.Warn("dashboard: build cloud data failed", "userId", userID, "err", dataErr)
 	}
@@ -354,9 +323,8 @@ func (s *DashboardService) buildCloud(ctx context.Context, userID string) *model
 		})
 	}
 
-	// Workflow (cloud-only team-triage funnel + MTTR). Available is true once
-	// any finding has been triaged; local mode never sets this (no persistent
-	// triage), so the UI shows a placeholder there.
+	// Workflow (cloud-only team-triage funnel + MTTR): Available once any
+	// finding has been triaged; local mode never sets it (no persistent triage).
 	wfTotal := 0
 	for _, n := range adv.Workflow.Funnel {
 		wfTotal += n
@@ -392,9 +360,8 @@ func (s *DashboardService) buildLocal() *models.DashboardHomeData {
 		ByCategory: sortedCategories(stats.FindingsByCategory),
 	}
 
-	// Rule frequency — derived from the same in-memory stats that feed the
-	// Analytics Dashboard. Sorted by count descending so the top offenders
-	// appear first.
+	// Rule frequency — same in-memory stats that feed the Analytics Dashboard,
+	// sorted by count descending so the top offenders appear first.
 	out.RuleFreq = sortedRuleFreq(stats.FindingsByRule, s.ruleSeverities())
 
 	// Per-flow complexity scatter — derived from the SAME deduped snapshot
@@ -418,17 +385,14 @@ func (s *DashboardService) buildLocal() *models.DashboardHomeData {
 	}
 
 	// v3 analytics from the session cache: confidence distribution, fix
-	// availability, and the health histogram. Local mode has no per-day time
-	// series, so SeverityTrend stays empty (the UI shows a placeholder, as it
-	// already does for HealthTrend here).
+	// availability, health histogram. No per-day series locally, so trends stay empty.
 	conf, totalFindings, autoFixable := analyticsFromReports(reports)
 	out.ConfidenceDist = conf
 	out.HealthBuckets = bucketHealth(healthScores)
 	out.Fixability = s.fixabilityStub(autoFixable, totalFindings)
 
-	// Recent flows — from the settings store (same source as the sidebar
-	// "Recent" list). Only populated when the flow service is available
-	// (always true in local mode via DI).
+	// Recent flows — from the settings store (the sidebar "Recent" source);
+	// only when the flow service is wired (always true in local mode via DI).
 	if s.flowSvc != nil {
 		files, err := s.flowSvc.RecentFiles()
 		if err == nil {
@@ -470,8 +434,7 @@ func emptyHome() *models.DashboardHomeData {
 }
 
 // sortedCategories renders a category→count map as a stable slice ordered by
-// count descending then name, so the radar chart's axes don't reshuffle between
-// requests.
+// count desc then name, so the radar chart's axes don't reshuffle between requests.
 func sortedCategories(m map[string]int) []models.FindingCategory {
 	out := make([]models.FindingCategory, 0, len(m))
 	for cat, n := range m {
@@ -494,10 +457,8 @@ func copyIntMap(m map[string]int) map[string]int {
 	return out
 }
 
-// analyticsFromReports folds a set of analysis reports into the org-wide
-// confidence distribution and fix-availability tallies the dashboard renders.
-// A finding with no explicit confidence is treated as the engine default
-// (medium), matching what the catalog accessor and RecordAnalysis report.
+// analyticsFromReports folds analysis reports into the confidence distribution
+// and fix-availability tallies; missing confidence counts as the default (medium).
 func analyticsFromReports(reports []*models.AnalysisReport) (confidence map[string]int, totalFindings, autoFixable int) {
 	confidence = map[string]int{}
 	for _, r := range reports {
@@ -544,9 +505,7 @@ func bucketHealth(scores []int) []models.HealthBucketStub {
 }
 
 // sortedRuleFreq renders a rule→count map as a stable slice ordered by count
-// descending then rule name, capping at 15 entries so the card doesn't overflow.
-// severities is the catalog's rule→severity map for the bar tint; missing rules
-// leave TopSeverity empty and the UI falls back to its static map.
+// desc then name, capped at 15; severities tints bars, missing rules fall back in the UI.
 func sortedRuleFreq(m map[string]int, severities map[string]string) []models.RuleFrequencyStub {
 	out := make([]models.RuleFrequencyStub, 0, len(m))
 	for rule, count := range m {

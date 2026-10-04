@@ -11,28 +11,22 @@ import (
 	"pad-analyzer/internal/api/render"
 )
 
-// registerRoutes applies chi's inner middleware layer (below) and the full
-// route table. It runs after the outer layers built by BuildHandler
-// (middleware_chain.go, same package) — see that file's doc comment for the
-// complete, resolved end-to-end order.
+// registerRoutes applies chi's inner middleware layer and the full route table; it runs after the
+// outer layers built by BuildHandler (middleware_chain.go — see that file's doc for the resolved order).
 func registerRoutes(rt *Router, r chi.Router) {
 	// Cross-cutting middleware — applied to every request in order.
 	r.Use(rt.securityHeaders)
 	r.Use(rt.corsHeaders)
 
-	// API version alias: transparently rewrite /api/v1/... → /api/... so new
-	// clients can target /api/v1/ while existing clients keep using /api/.
-	// Future breaking changes land on /api/v2/ only; /api/ stays backward-
-	// compatible. The rewrite happens before jwtAuth and routing so the rest
-	// of the pipeline is unaware of the version prefix.
-	//
-	// The rule lives in canonicalRequestPath (middleware_chain.go) because the
-	// rate-limit classifier — which runs OUTSIDE this mux, before any of this
-	// applies — has to predict the same result. Two copies drifted once
-	// already and that was a rate-limit bypass; keep it one function.
+	// API version alias: the rewrite must stay identical to canonicalRequestPath (middleware_chain.go),
+	// which the rate-limit classifier runs outside this mux — the copies drifted once into a bypass.
+	// chi routes on RawPath, so strip it there too or an escaped "/" in an id 404s.
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			req.URL.Path = canonicalRequestPath(req.URL.Path)
+			if req.URL.RawPath != "" {
+				req.URL.RawPath = stripVersionAlias(req.URL.RawPath)
+			}
 			next.ServeHTTP(w, req)
 		})
 	})
@@ -46,9 +40,8 @@ func registerRoutes(rt *Router, r chi.Router) {
 	h := rt.handlers
 
 	// --- Swagger UI ---
-	// Always registered. In cloud mode (JWTEnabled), the swagger handler
-	// checks for a valid JWT so the schema isn't browsable unauthenticated.
-	// In local mode, open access.
+	// Always registered; in cloud mode the handler checks for a valid JWT so the schema isn't
+	// browsable unauthenticated. In local mode, open access.
 	swaggerH := swaggerHandler()
 	r.Get("/swagger", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/swagger/index.html", http.StatusMovedPermanently)
@@ -73,28 +66,12 @@ func registerRoutes(rt *Router, r chi.Router) {
 	r.Get("/healthz", h.Sys.handleLiveness)
 	r.Get("/readyz", h.Sys.handleReadiness)
 	r.Get("/api/health", h.Sys.handleReadiness)
-	// /metrics is protected by a private-IP allowlist to prevent public internet
-	// access to internal operational data. Supplement this with Azure NSG /
-	// ACA ingress rules that block /metrics from the public load balancer, and
-	// set PAD_METRICS_TOKEN — behind a reverse proxy the allowlist alone passes
-	// for every request (see MetricsGuard). Router.warnIfMetricsExposed logs at
-	// boot when that combination is live.
+	// /metrics: private-IP allowlist alone passes for every request behind a reverse proxy — also set
+	// PAD_METRICS_TOKEN and NSG/ACA ingress rules (warnIfMetricsExposed logs that combination at boot).
 	r.Handle("/metrics", middleware.MetricsGuard(rt.trustedProxies, rt.metricsToken)(middleware.MetricsHandler()))
-	// /debug/pprof/* — Go runtime profiling. OPT-IN (PAD_PPROF_ENABLED), unlike
-	// /metrics, and never registered at all when disabled: an unregistered route
-	// 404s no matter what the guard would have decided.
-	//
-	// It used to be registered unconditionally behind the same private-IP guard
-	// as /metrics. That guard reads r.RemoteAddr, which behind a reverse proxy
-	// is the proxy itself — always private — so it passed for every request off
-	// the public internet. With PAD_METRICS_TOKEN unset (its default, and
-	// documented nowhere at the time) that made /debug/pprof/heap a public heap
-	// dump: auth secret, decrypted provider keys, flow content, chat history.
-	// infra/main.bicep ships ACA ingress external:true and the Dockerfile sets
-	// PAD_BEHIND_PROXY=true, so that was the shipped posture, not a corner case.
-	//
-	// Config validation refuses PAD_PPROF_ENABLED=true without a token, so the
-	// guard below always has a real secret to check.
+	// /debug/pprof/*: OPT-IN (PAD_PPROF_ENABLED) — it used to sit unconditionally behind the private-IP
+	// guard, making /debug/pprof/heap a public heap dump behind a proxy; validation refuses the flag
+	// without a token.
 	if rt.pprofEnabled {
 		// A dedicated ServeMux so the handlers don't leak onto
 		// http.DefaultServeMux (which other imports might accidentally expose).
@@ -279,13 +256,11 @@ func registerRoutes(rt *Router, r chi.Router) {
 			r.Post("/revoke", h.Provider.handleRevokeCopilotAuth)
 			r.Get("/user", h.Provider.handleGetCopilotUser)
 		})
-		// Azure AI Foundry: the caller's model registry (Part 9) — resources
-		// ("connections": an endpoint + credential document each, see
-		// ai.AzureFoundryConfig) and the models registered on them. /test and
-		// /connections/{connectionId}/discover dial Azure (their own rate
-		// buckets, outside the RLS transaction: azureOutboundRoute).
-		// /config is the deprecated single-document form (resource
-		// "default"); has/delete use /api/keys.
+		// Azure AI Foundry: the caller's model registry — resources ("connections": an endpoint +
+		// credential document each) and the models registered on them. /test and
+		// /connections/{connectionId}/discover dial Azure (own rate buckets, outside the RLS
+		// transaction: azureOutboundRoute). /config is the deprecated single-document form; has/delete
+		// use /api/keys.
 		r.Route("/azure-foundry", func(r chi.Router) {
 			r.Get("/config", h.Provider.handleGetAzureFoundryConfig)
 			r.Post("/config", h.Provider.handleSaveAzureFoundryConfig)
@@ -359,7 +334,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 					r.Put("/role", h.Org.handleOrgMemberRoleUpdate)
 				})
 			})
-			// Per-org custom analyzer rules (R4). Reads: member. Writes: admin.
+			// Per-org custom analyzer rules. Reads: member. Writes: admin.
 			r.Route("/rules", func(r chi.Router) {
 				r.Get("/", h.Org.handleOrgRuleList)
 				r.Get("/export", h.Org.handleOrgRuleExport)
@@ -378,12 +353,9 @@ func registerRoutes(rt *Router, r chi.Router) {
 				r.Post("/reindex", h.Org.handleKnowledgeReindex)
 				r.Delete("/{docId}", h.Org.handleKnowledgeDelete)
 			})
-			// Organisation-shared Azure AI Foundry resources and models (G7,
-			// Part 9): the same sub-paths as the caller's own registry. Read:
-			// admin or member. Write, delete, test, discover: admin. /config
-			// is the deprecated single-document form (resource "default",
-			// read by any member); /test also serves its body-less org
-			// credential test.
+			// Organisation-shared Azure AI Foundry resources and models — same sub-paths as the
+			// caller's own registry. Read: admin or member; write/delete/test/discover: admin.
+			// /config is the deprecated single-document form; /test also serves its body-less org test.
 			r.Route("/providers/azure-foundry", func(r chi.Router) {
 				r.Get("/config", h.Org.handleOrgAzureFoundryConfigGet)
 				r.Post("/config", h.Org.handleOrgAzureFoundryConfigSave)

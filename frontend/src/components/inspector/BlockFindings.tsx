@@ -2,7 +2,7 @@ import {memo, useMemo} from 'react'
 import {AlertTriangle, AlertCircle, Info, Sparkles} from 'lucide-react'
 import clsx from 'clsx'
 import {useFlowStore} from '@/stores/flowStore'
-import {useAnalysisStore} from '@/stores/analysisStore'
+import {useAnalysisStore, findingsByBlockOf} from '@/stores/analysisStore'
 import {useUIStore} from '@/stores/uiStore'
 import {categoryBadgeClass} from '@/lib/findingsColors'
 import {stageFindingFix} from '@/lib/fixWithAI'
@@ -28,8 +28,10 @@ const EMPTY: Finding[] = []
 function BlockFindings() {
   const docId = useFlowStore(s => s.document?.id ?? null)
   const blockId = useFlowStore(s => s.selectedBlockId)
+  // The per-block index is built on demand and cached per report object, so
+  // this selector is stable until the report (or the block) changes.
   const indexedFindings = useAnalysisStore(s =>
-    docId && blockId ? (s.findingsByBlock.get(docId)?.get(blockId) ?? EMPTY) : EMPTY,
+    docId && blockId ? (findingsByBlockOf(s.reports.get(docId)).get(blockId) ?? EMPTY) : EMPTY,
   )
   const setInspectorTab = useUIStore(s => s.setInspectorTab)
   const setInspectorCollapsed = useUIStore(s => s.setInspectorCollapsed)

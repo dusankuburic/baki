@@ -11,7 +11,7 @@ import {useSettingsStore} from '@/stores/settingsStore'
 import type {StreamHandler} from '@/hooks/useStreamingMessage'
 
 let capturedHandler: StreamHandler | null = null
-// The engine's reload-reattach path (F-21) calls resumeInto; tests capture
+// The engine's reload-reattach path calls resumeInto; tests capture
 // the call and replay what a resume would deliver through the handler.
 let capturedResume: {streamId: string; opts: {mode?: 'delta' | 'full'; onGone?: () => void} | undefined} | null = null
 // Resolves "registered" so paths that await it can proceed; a test swaps in a
@@ -1236,8 +1236,7 @@ describe('useChatStreamEngine', () => {
 })
 
 // Seeds a thread with a live slot for `streamId` and returns the StreamMeta
-// to begin its accumulator with (module-scope twin of the describe-local
-// seedThread above, for the describes appended below it).
+// to begin its accumulator with.
 function seedSlotThread(threadId: string, streamId: string, provider: string) {
   const st = useChatStore.getState()
   useChatStore.setState({
@@ -1272,9 +1271,9 @@ function seedSlotThread(threadId: string, streamId: string, provider: string) {
   return {provider: provider as never, model: 'my-deployment'}
 }
 
-// F-40: a finished tool's "running" label must not pulse through the silent
+// A finished tool's "running" label must not pulse through the silent
 // reasoning phase that follows it.
-describe('useChatStreamEngine tool-result status clearing (F-40)', () => {
+describe('useChatStreamEngine tool-result status clearing', () => {
   it('clears its own running label and re-arms thinking before any text', () => {
     const {result} = renderEngine()
     act(() => {
@@ -1350,9 +1349,9 @@ describe('useChatStreamEngine tool-result status clearing (F-40)', () => {
   })
 })
 
-// F-15: a billed failure's usage reaches the error bubble and the thread
-// totals; F-42: the shared-credential flag rides the bubble.
-describe('useChatStreamEngine error usage (F-15/F-42)', () => {
+// A billed failure's usage reaches the error bubble and the thread
+// totals; the shared-credential flag rides the bubble.
+describe('useChatStreamEngine error usage', () => {
   it('counts a billed failure: usage and rates land on the bubble and the totals move', () => {
     const {result} = renderEngine()
     act(() => {
@@ -1407,8 +1406,8 @@ describe('useChatStreamEngine error usage (F-15/F-42)', () => {
   })
 })
 
-// F-21: re-attaching a stream the conversation load reports as in-flight.
-describe('useChatStreamEngine resumeAfterReload (F-21)', () => {
+// Re-attaching a stream the conversation load reports as in-flight.
+describe('useChatStreamEngine resumeAfterReload', () => {
   function seedIdleThread(threadId: string) {
     const st = useChatStore.getState()
     useChatStore.setState({
@@ -1511,10 +1510,10 @@ describe('useChatStreamEngine resumeAfterReload (F-21)', () => {
   })
 })
 
-// F-43: the served-model listing refetch is keyed by thread AND deployment
+// The served-model listing refetch is keyed by thread AND deployment
 // AND served model, so a second deployment in the same thread is annotated
 // too.
-describe('useChatStreamEngine served-model refetch key (F-43)', () => {
+describe('useChatStreamEngine served-model refetch key', () => {
   it('refetches for a second deployment and for a router that changes served model', () => {
     const {result} = renderEngine()
     const epoch0 = useChatStore.getState().providerEpoch
@@ -1685,9 +1684,9 @@ describe('useChatStreamEngine model labels', () => {
     })
   }
 
-  // C11: a re-attached stream used to be labelled with the thread's pin —
-  // wrong for a turn that went to a stand-in — else the settings' default,
-  // and the save after done then overwrote the server's correct copy.
+  // A re-attached stream must not be labelled with the thread's pin —
+  // wrong for a turn that went to a stand-in — nor with the settings'
+  // default, and the save after done then overwrote the server's correct copy.
   it('labels a re-attached stream with its turn’s record: the model it went to, not the thread’s pin', async () => {
     const {result} = renderEngine()
     seedIdle('threadA', {

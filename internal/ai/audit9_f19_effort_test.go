@@ -1,6 +1,6 @@
 package ai
 
-// F-19 (reasoning-effort control): the chat-completions reasoning_effort,
+// Reasoning-effort control: the chat-completions reasoning_effort,
 // its repairs and the gpt-5.6 "none" override, and Claude's
 // output_config.effort inside the claudeRemovesSampling branch.
 
@@ -103,7 +103,7 @@ func TestOpenAICompat_ReasoningEffortParameterRepairMemoises(t *testing.T) {
 	}
 }
 
-// TestOpenAICompat_ReasoningEffortDropIsNotReasoningOff (A2): on the Stream +
+// TestOpenAICompat_ReasoningEffortDropIsNotReasoningOff: on the Stream +
 // tools path, a non-reasoning model refusing the user's effort outright is
 // the generic drop, not the gpt-5.6 "none" repair — no reasoning_off notice
 // (the model never reasoned), and the second turn is one request.

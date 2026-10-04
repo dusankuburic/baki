@@ -26,15 +26,22 @@ type CopilotSessionToken struct {
 	ExpiresAt int64  `json:"expires_at"`
 }
 
-// CopilotAuth handles the two-step Copilot authentication:
-// 1. GitHub OAuth device flow (with Copilot's VS Code client ID)
-// 2. Copilot session token exchange and caching
+// CopilotAuth handles Copilot authentication: the GitHub OAuth device flow
+// (Copilot's VS Code client ID) and the session-token exchange and cache.
 type CopilotAuth struct {
 	client        *http.Client
 	mu            sync.Mutex
 	sessionTokens map[string]*CopilotSessionToken
-	flight        singleflight.Group
+	// lastSweep is when GetSessionToken last dropped expired entries
+	// (guarded by mu); see copilotTokenSweepInterval.
+	lastSweep time.Time
+	flight    singleflight.Group
 }
+
+// copilotTokenSweepInterval throttles the expired-entry sweep of the
+// session-token map: it walked the whole map under the mutex on EVERY call,
+// and tokens live ~30 minutes, so once a minute keeps the map just as bounded.
+const copilotTokenSweepInterval = time.Minute
 
 func NewCopilotAuth() *CopilotAuth {
 	return &CopilotAuth{client: authHTTPClient, sessionTokens: make(map[string]*CopilotSessionToken)}
@@ -152,26 +159,28 @@ func (a *CopilotAuth) ExchangeToken(ctx context.Context, githubToken string) (*C
 	return &token, nil
 }
 
-// GetSessionToken returns a valid Copilot session token, refreshing if expired or within 5 min of expiry.
-// Uses singleflight so concurrent callers with the same GitHub token share a single HTTP exchange,
-// while different tokens proceed independently. The mutex is never held during network I/O.
-// The flight is keyed by the token's hash (the cache key — the raw token never
-// sits in the singleflight map) and the exchange runs detached from the
-// callers' cancellation, mirroring entraTokenSource.Token: the shared exchange
-// must not fail for every joiner because the first caller's ctx ended, and it
-// still fills the cache for the next caller after a joiner gives up.
-// authHTTPClient's 30 s timeout bounds the detached exchange.
+// GetSessionToken returns a valid session token, refreshing within 5 min of
+// expiry. singleflight shares one exchange per GitHub token (keyed by the
+// token's hash — the raw token never sits in the map); the exchange runs
+// detached from the callers' cancellation, mirroring entraTokenSource.Token,
+// so one joiner's ended ctx cannot fail the shared exchange, and
+// authHTTPClient's 30 s timeout bounds it. The mutex is never held during I/O.
 func (a *CopilotAuth) GetSessionToken(ctx context.Context, githubToken string) (string, error) {
 	cacheKey := tokenHash(githubToken)
 	a.mu.Lock()
 	if a.sessionTokens == nil {
 		a.sessionTokens = make(map[string]*CopilotSessionToken)
 	}
-	now := time.Now().Unix()
-	// Sweep expired entries so users who never return don't accumulate forever.
-	for k, v := range a.sessionTokens {
-		if v.ExpiresAt <= now {
-			delete(a.sessionTokens, k)
+	wall := time.Now()
+	now := wall.Unix()
+	// Sweep expired entries so users who never return don't accumulate
+	// forever — at most once per copilotTokenSweepInterval.
+	if wall.Sub(a.lastSweep) >= copilotTokenSweepInterval {
+		a.lastSweep = wall
+		for k, v := range a.sessionTokens {
+			if v.ExpiresAt <= now {
+				delete(a.sessionTokens, k)
+			}
 		}
 	}
 	if st := a.sessionTokens[cacheKey]; st != nil && st.ExpiresAt > now+300 {

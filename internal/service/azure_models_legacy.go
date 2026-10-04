@@ -21,24 +21,17 @@ import (
 
 // The legacy single document and the registry.
 //
-// Before Part 9 a user (and an organisation) kept ONE Azure AI Foundry
-// document: the credential plus comma-separated deployment names. The
-// registry imports it, lazily and once per owner (ensureLegacyImported):
-// the document becomes resource "default" — its credential stays exactly
-// where it was, under the historical key — and each deployment it names an
-// entry. For one release the single-document routes keep working on
-// resource "default" (legacyGetConfig, legacySaveConfig, …): they map the
-// deployment fields onto registry entries and save only the credential part
-// of the document, carrying its old deployment fields over unchanged — a
-// binary rolled back to the single-document release still finds them, and
-// no field is ever added to a document (that binary's parser is strict).
+// Before Part 9 a user (and an organisation) kept ONE Azure AI Foundry document: the credential plus
+// comma-separated deployment names. The registry imports it, lazily and once per owner: the document becomes
+// resource "default" (its credential stays under the historical key) and each deployment it names an entry.
+// For one release the single-document routes keep working on resource "default": they map the deployment fields
+// onto registry entries and save only the credential part, carrying the old fields over unchanged — a rolled-back
+// binary still finds them, and no field is ever added to a document (that binary's parser is strict).
 
-// azureImportMemoTTL is how long an owner whose import marker was seen
-// skips the marker read.
+// azureImportMemoTTL is how long an owner whose import marker was seen skips the marker read.
 const azureImportMemoTTL = 60 * time.Second
 
-// azureMemoPrune bounds the memo maps: past it, an insert prunes expired
-// entries first.
+// azureMemoPrune bounds the memo maps: past it, an insert prunes expired entries first.
 const azureMemoPrune = 512
 
 func (s *AzureModelService) importMemoFresh(owner storageif.AzureOwner) bool {
@@ -48,9 +41,7 @@ func (s *AzureModelService) importMemoFresh(owner storageif.AzureOwner) bool {
 	return ok && s.now().Sub(at) < azureImportMemoTTL
 }
 
-// recordImportMemo remembers owner's marker once the transaction that wrote
-// (or read) it committed: a rolled-back request must not hide the registry
-// from the next read for a minute.
+// recordImportMemo remembers owner's marker once its transaction committed — a rolled-back request must not hide the registry.
 func (s *AzureModelService) recordImportMemo(ctx context.Context, owner storageif.AzureOwner) {
 	storagedb.RegisterPostCommit(ctx, func() {
 		s.memoMu.Lock()
@@ -67,8 +58,7 @@ func (s *AzureModelService) recordImportMemo(ctx context.Context, owner storagei
 	})
 }
 
-// forgetOwner drops what the service remembers of owner (its registry went
-// with an account or an organisation).
+// forgetOwner drops what the service remembers of owner (its registry went with an account or organisation).
 func (s *AzureModelService) forgetOwner(owner storageif.AzureOwner) {
 	s.memoMu.Lock()
 	defer s.memoMu.Unlock()
@@ -77,8 +67,7 @@ func (s *AzureModelService) forgetOwner(owner storageif.AzureOwner) {
 	delete(s.deferredMemo, owner)
 }
 
-// importDeferredFresh reports whether owner's legacy import was deferred
-// (no free resource slot or name) less than azureImportMemoTTL ago.
+// importDeferredFresh reports whether owner's legacy import was deferred less than azureImportMemoTTL ago.
 func (s *AzureModelService) importDeferredFresh(owner storageif.AzureOwner) bool {
 	s.memoMu.Lock()
 	defer s.memoMu.Unlock()
@@ -114,10 +103,8 @@ const (
 	azureLegacyUnreadable
 )
 
-// readLegacyDocument reads owner's legacy document (the "azure-foundry"
-// key): missing, readable, or unreadable — ONLY a decrypt or parse failure.
-// Any other keystore failure is returned (the import then waits for the
-// next read).
+// readLegacyDocument reads owner's legacy document (the "azure-foundry" key): missing, readable, or unreadable —
+// ONLY a decrypt or parse failure; any other keystore failure is returned and the import waits for the next read.
 func (s *AzureModelService) readLegacyDocument(owner storageif.AzureOwner, scope string) (azureLegacyState, ai.AzureFoundryConfig, error) {
 	raw, err := s.readCredential(owner, scope, ai.AzureDefaultConnectionID)
 	switch {
@@ -135,9 +122,7 @@ func (s *AzureModelService) readLegacyDocument(owner storageif.AzureOwner, scope
 	return azureLegacyReadable, cfg, nil
 }
 
-// savedDefaultModel reads the caller's saved "Default for new chats" for
-// Azure AI Foundry (read-only): their own settings with per-user
-// registries, the desktop settings otherwise.
+// savedDefaultModel reads the caller's saved "Default for new chats": their own settings with per-user registries, the desktop's otherwise.
 func (s *AzureModelService) savedDefaultModel(ctx context.Context, scope string) (string, error) {
 	if s.perUserOwners {
 		if s.userSettings == nil || scope == "" {
@@ -161,31 +146,16 @@ func (s *AzureModelService) savedDefaultModel(ctx context.Context, scope string)
 	return "", nil
 }
 
-// ensureLegacyImported imports owner's legacy document into the registry
-// when the owner has no import marker yet (Part 9 "Legacy import"):
-// resource "default" (named after its endpoint host's first label; created
-// even for an unreadable document, whose status then says so) and one entry
-// per deployment it names — the chat deployment (an organisation's default
-// for members), the additional and Claude deployments, the embedding
-// deployment (the knowledge-base model) and, for a user, the saved default
-// model when it is an "agent:" id or a deployment the document does not list
-// (one the project listing used to offer). Entry ids are deterministic. It
-// runs as the system — no audit row, no user id written — under the owner
-// lock (re-checking the marker), stops at the model limit (logged) and never
-// fails the read: any keystore or database failure skips it, without marker
-// or memo, and the next read retries. So does a document whose resource
-// "default" cannot be created yet (the owner's resource limit is reached, or
-// no name is free): marking that owner imported would leave the legacy
-// document without its resource for good — and the orphan sweep never takes
-// the legacy key, the rollback credential.
+// ensureLegacyImported imports owner's legacy document into the registry once per owner (Part 9 "Legacy import"):
+// resource "default" (created even for an unreadable document, whose status then says so) and one entry per
+// deployment it names — chat, additional, Claude, embedding, and for a user the saved default model when it
+// names an unlisted deployment. Entry ids are deterministic. It runs as the system (no audit row) under the
+// owner lock (marker re-checked), stops at the model limit (logged) and never fails the read: any keystore or
+// database failure skips it without marker or memo and the next read retries — as does a document whose
+// "default" cannot be created yet (limit reached, or no name free).
 //
-// It reports whether owner is IMPORTED: the marker is present (found, or
-// written now), or there is no legacy document to import. false means the
-// import is PENDING — a legacy document exists, or the keystore could not
-// tell, and it is not in the registry yet — and the read paths must not
-// answer as if that document did not exist: no "not available" for a raw
-// id, no server default, no fallback to the organisation's credential or
-// the caller's personal model (see errAzureImportPending).
+// It reports whether owner is IMPORTED (marker present, or no legacy document); false means PENDING — the read
+// paths must not answer as if the document did not exist (see errAzureImportPending).
 func (s *AzureModelService) ensureLegacyImported(ctx context.Context, owner storageif.AzureOwner, scope string) (imported bool) {
 	if s.importMemoFresh(owner) {
 		return true
@@ -200,13 +170,10 @@ func (s *AzureModelService) ensureLegacyImported(ctx context.Context, owner stor
 		return true
 	}
 	if s.importDeferredFresh(owner) {
-		// Waiting for a free resource slot (or name): retried after the
-		// backoff, or at once when a resource is removed here. The marker
-		// read above still sees another replica's import.
+		// Waiting for a free slot (or name): retried after the backoff, or at once when a resource is removed.
 		return false
 	}
-	// Read before the owner lock: a keystore read can take its timeout, and
-	// nothing may wait on the lock for it.
+	// Read before the owner lock: a keystore read can take its timeout, and nothing may wait on the lock for it.
 	state, cfg, err := s.readLegacyDocument(owner, scope)
 	if err != nil {
 		logger.Warn("azure registry: reading the legacy configuration failed; the import waits for the next read", "owner", owner.String(), "error", err)
@@ -244,25 +211,17 @@ func (s *AzureModelService) ensureLegacyImported(ctx context.Context, owner stor
 	return true
 }
 
-// errLegacyImportDeferred: the legacy document's resource "default" cannot be
-// created yet — the owner is at the resource limit, or every candidate name
-// is taken. The import writes no marker; it is retried after a minute's
-// backoff (deferredMemo), or at the next read once a resource is removed.
+// errLegacyImportDeferred: the legacy document's resource "default" cannot be created yet (limit reached, or
+// every candidate name taken). No marker is written; retried after a minute's backoff, or once a resource is removed.
 var errLegacyImportDeferred = errors.New("azure registry: the legacy import's resource \"default\" cannot be created yet")
 
-// errAzureImportPending is the answer of a read path that cannot answer
-// while an owner's legacy import is pending (ensureLegacyImported false):
-// the server default and a raw pre-registry id resolve through the legacy
-// document, which is not in the registry yet, and the knowledge base's
-// embedder may be its embedding deployment. Never ErrModelNotAvailable (the
-// client would re-pin the thread) and never another owner's model or
-// credential. The chat maps it to its generic setup error, the knowledge
-// base to a 503; both are retried.
+// errAzureImportPending is the answer of a read path that cannot answer while an owner's legacy import is pending:
+// the server default and a raw pre-registry id resolve through the legacy document, and the KB's embedder may be
+// its embedding deployment. Never ErrModelNotAvailable (the client would re-pin the thread) and never another
+// owner's model or credential; the chat maps it to its generic setup error, the KB to a 503 — both retried.
 var errAzureImportPending = errors.New("the Azure AI Foundry configuration is still being moved to the model registry — try again in a moment")
 
-// legacyDocumentMayExist reports whether owner may have a legacy document
-// ("azure-foundry"): the keystore says so, or cannot say (a failure counts
-// as yes — the import stays pending rather than read as absent).
+// legacyDocumentMayExist reports whether owner may have a legacy document; a keystore failure counts as yes (the import stays pending).
 func (s *AzureModelService) legacyDocumentMayExist(owner storageif.AzureOwner, scope string) bool {
 	var (
 		has bool
@@ -283,10 +242,8 @@ func (s *AzureModelService) legacyDocumentMayExist(owner storageif.AzureOwner, s
 	return has
 }
 
-// importLegacyLocked writes the import (the owner lock held). Idempotent: a
-// retry after a partial import finds the rows it already wrote. A document
-// whose resource "default" cannot be created yet is errLegacyImportDeferred
-// (no marker: a later read imports it once a slot or a name is free).
+// importLegacyLocked writes the import (owner lock held); idempotent — a retry finds the rows it already wrote.
+// A "default" that cannot be created yet is errLegacyImportDeferred (no marker).
 func (s *AzureModelService) importLegacyLocked(ctx context.Context, owner storageif.AzureOwner, state azureLegacyState, cfg ai.AzureFoundryConfig, savedDefault string) error {
 	if state == azureLegacyMissing {
 		return nil
@@ -322,8 +279,7 @@ func (s *AzureModelService) importLegacyLocked(ctx context.Context, owner storag
 	return nil
 }
 
-// defaultConnectionNames are the names resource "default" is created under,
-// in order: name, then name-2 … name-9 (another resource may have the name).
+// defaultConnectionNames are the names resource "default" is created under, in order: name, then name-2 … name-9.
 func defaultConnectionNames(name string) []string {
 	out := []string{name}
 	for i := 2; i <= 9; i++ {
@@ -332,13 +288,10 @@ func defaultConnectionNames(name string) []string {
 	return out
 }
 
-// importDefaultConnection creates resource "default" (idempotently): false,
-// with no error, when it cannot exist yet — the resource limit is reached,
-// or every candidate name is taken. The callers decide what that means (the
-// import waits, a single-document save is refused).
+// importDefaultConnection creates resource "default" (idempotently): false, with no error, when it cannot exist
+// yet — the limit is reached, or every candidate name is taken (the callers decide what that means).
 func (s *AzureModelService) importDefaultConnection(ctx context.Context, owner storageif.AzureOwner, name string) (bool, error) {
-	// A retry after a partial import finds it — even at the resource limit,
-	// which the stores check before any uniqueness rule.
+	// A retry after a partial import finds it — even at the limit, which the stores check before any uniqueness rule.
 	if _, err := s.registry.GetConnection(ctx, owner, ai.AzureDefaultConnectionID); err == nil {
 		return true, nil
 	} else if !errors.Is(err, storageif.ErrAzureConnectionNotFound) {
@@ -355,8 +308,7 @@ func (s *AzureModelService) importDefaultConnection(ctx context.Context, owner s
 		if created {
 			return true, nil
 		}
-		// Skipped: resource "default" exists (a retry), or another resource
-		// has the name.
+		// Skipped: resource "default" exists (a retry), or another resource has the name.
 		if _, gerr := s.registry.GetConnection(ctx, owner, ai.AzureDefaultConnectionID); gerr == nil {
 			return true, nil
 		} else if !errors.Is(gerr, storageif.ErrAzureConnectionNotFound) {
@@ -366,11 +318,9 @@ func (s *AzureModelService) importDefaultConnection(ctx context.Context, owner s
 	return false, nil
 }
 
-// legacyAzureEntryID is an imported entry's deterministic id: the first ten
-// base-36 characters of sha256("azure-legacy\0"+owner+"\0"+ns+"\0"+
-// lower(name)) — the same on every retry, every replica and every release,
-// so an import that ran twice (a retry, two replicas) meets itself at the
-// primary key.
+// legacyAzureEntryID is an imported entry's deterministic id: the first ten base-36 characters of
+// sha256("azure-legacy\0"+owner+"\0"+ns+"\0"+lower(name)) — the same on every retry and replica, so an
+// import that ran twice meets itself at the primary key.
 func legacyAzureEntryID(owner storageif.AzureOwner, ns, name string) string {
 	sum := sha256.Sum256([]byte("azure-legacy\x00" + owner.String() + "\x00" + ns + "\x00" + strings.ToLower(name)))
 	s := new(big.Int).SetBytes(sum[:]).Text(36)
@@ -388,8 +338,7 @@ type azureLegacyEntry struct {
 	def  bool // an organisation's default for members
 }
 
-// legacyEntrySpecs lists the entries cfg's deployment fields name (see
-// ensureLegacyImported), savedDefault included for a user.
+// legacyEntrySpecs lists the entries cfg's deployment fields name, savedDefault included for a user.
 func legacyEntrySpecs(org bool, cfg ai.AzureFoundryConfig, savedDefault string) []azureLegacyEntry {
 	defaultTarget := legacyDefaultTarget(cfg)
 	var out []azureLegacyEntry
@@ -441,8 +390,7 @@ func legacyEntrySpecs(org bool, cfg ai.AzureFoundryConfig, savedDefault string) 
 	return out
 }
 
-// legacyEntryRecords are legacyEntrySpecs as registry records of resource
-// "default".
+// legacyEntryRecords are legacyEntrySpecs as registry records of resource "default".
 func legacyEntryRecords(owner storageif.AzureOwner, cfg ai.AzureFoundryConfig, savedDefault string) []storageif.AzureModelRecord {
 	specs := legacyEntrySpecs(owner.IsOrg(), cfg, savedDefault)
 	out := make([]storageif.AzureModelRecord, 0, len(specs))
@@ -471,14 +419,10 @@ func legacyEntryRecord(owner storageif.AzureOwner, e azureLegacyEntry) storageif
 
 // ---- The single-document routes on resource "default" (one release) ----
 
-// legacyPublic is doc's public view with the deployment fields built from
-// the registry's entries of resource "default" — never from the document's
-// stale fields: the chat deployment is the entry of the document's own chat
-// deployment when it is still registered (else the first chat entry in
-// display order, the server default's order), the
-// additional deployments the other chat entries, the Claude deployments the
-// Claude entries, the embedding deployment the knowledge-base model when it
-// is on "default" (else the oldest embedding entry). Agents have no field.
+// legacyPublic is doc's public view with the deployment fields built from the registry's entries of resource
+// "default" — never from the document's stale fields: the chat deployment is the entry of the document's own
+// chat deployment when still registered (else the first chat entry in display order), the additional deployments
+// the other chat entries, the Claude deployments the Claude entries, the embedding deployment the KB model.
 func (s *AzureModelService) legacyPublic(ctx context.Context, owner storageif.AzureOwner, doc ai.AzureFoundryConfig) (ai.AzureFoundryPublicConfig, error) {
 	pub := doc.Public()
 	pub.ChatDeployment, pub.EmbeddingDeployment = "", ""
@@ -505,8 +449,7 @@ func (s *AzureModelService) legacyPublic(ctx context.Context, owner storageif.Az
 		}
 	}
 	pub.EmbeddingDeployment = embedding
-	// Display order, the order the server default picks the first chat
-	// entry in when the saved chat deployment is gone.
+	// Display order, the order the server default picks in when the saved chat deployment is gone.
 	sort.SliceStable(chatRecs, func(i, j int) bool {
 		a, b := chatRecs[i], chatRecs[j]
 		return azureEntryLess(a.Purpose, a.PurposeCustom, false, a.DisplayName, a.ID, b.Purpose, b.PurposeCustom, false, b.DisplayName, b.ID)
@@ -532,9 +475,8 @@ func (s *AzureModelService) legacyPublic(ctx context.Context, owner storageif.Az
 	return pub, nil
 }
 
-// legacyGetConfig is GetAzureFoundryConfig on the registry: the default
-// resource's document, its deployment fields from the registry. A missing
-// or unreadable document reads as unconfigured (the user enters it again).
+// legacyGetConfig is GetAzureFoundryConfig on the registry: the default resource's document, deployment fields
+// from the registry; a missing or unreadable document reads as unconfigured.
 func (s *AzureModelService) legacyGetConfig(ctx context.Context, scope string) (ai.AzureFoundryPublicConfig, error) {
 	owner := s.userOwner(scope)
 	s.prepareOwner(ctx, owner, scope)
@@ -548,8 +490,7 @@ func (s *AzureModelService) legacyGetConfig(ctx context.Context, scope string) (
 	return s.legacyPublic(ctx, owner, doc)
 }
 
-// legacyOrgGetConfig is GetOrgAzureFoundryConfig on the registry (see
-// legacyGetConfig); an unreadable document is ErrOrgCredentialUnreadable.
+// legacyOrgGetConfig is GetOrgAzureFoundryConfig on the registry; an unreadable document is ErrOrgCredentialUnreadable.
 func (s *AzureModelService) legacyOrgGetConfig(ctx context.Context, orgID string) (OrgAzureFoundryConfig, error) {
 	owner := storageif.AzureOrgOwner(orgID)
 	s.ensureLegacyImported(ctx, owner, "")
@@ -586,28 +527,19 @@ func (s *AzureModelService) legacyOrgGetConfig(ctx context.Context, orgID string
 	return out, nil
 }
 
-// The single-document routes store the document exactly as saved, its
-// deployment fields included: they are that route's own fields, a binary
-// rolled back past the registry finds what the route last saved, and the
-// server default's first rule keeps following the saved chat deployment
-// (serverDefault). Only these routes write the fields; a credential saved
-// through the registry carries them over unchanged, and no other document
-// ever has them.
+// The single-document routes store the document exactly as saved, deployment fields included: they are that
+// route's own fields, a binary rolled back past the registry finds what the route last saved, and the server
+// default keeps following the saved chat deployment. Only these routes write the fields; a credential saved
+// through the registry carries them over unchanged, and no other document ever has them.
 
-// The single-document saves span the keystore (the document) and the
-// registry (resource "default" and its entries), with no transaction
-// spanning the two — the same order as a registry credential change
-// (UpdateConnection): everything the entry sync can be refused for is
-// checked first (checkLegacySync), the previous document is snapshotted,
-// the document saved, the entries synced; a sync that still fails (a race,
-// a store failure) puts the previous document back (an organisation's with
-// its writer, lender and stamp) — or, when it cannot, returns an
-// AzureCredentialChangedError the handler audits.
+// The single-document saves span the keystore and the registry with no transaction across the two — the same
+// order as a registry credential change: everything the entry sync can be refused for is checked first
+// (checkLegacySync), the previous document snapshotted, the document saved, the entries synced; a sync that
+// still fails puts the previous document back (an organisation's with its writer, lender and stamp) — or, when
+// it cannot, returns an AzureCredentialChangedError the handler audits.
 
-// legacySaveConfig is SaveAzureFoundryConfig on the registry: the route's
-// own validation (deployment rules included), the document saved to the
-// default resource as is, then its deployment fields mapped onto the
-// default resource's entries (syncLegacyEntries).
+// legacySaveConfig is SaveAzureFoundryConfig on the registry: the route's own validation, the document saved to
+// the default resource as is, then its deployment fields mapped onto that resource's entries.
 func (s *AzureModelService) legacySaveConfig(ctx context.Context, scope string, cfg ai.AzureFoundryConfig) error {
 	owner := s.userOwner(scope)
 	s.prepareOwner(ctx, owner, scope)
@@ -643,10 +575,8 @@ func (s *AzureModelService) legacySaveConfig(ctx context.Context, scope string, 
 	return nil
 }
 
-// legacyOrgSaveConfig is SaveOrgAzureFoundryConfig on the registry: the
-// same checks (the Azure CLI refused, compare-and-swap on updatedAt, the
-// repair of an unreadable row), the credential part saved, the deployment
-// fields mapped onto the organisation's default resource.
+// legacyOrgSaveConfig is SaveOrgAzureFoundryConfig on the registry: the same checks (CLI refused, CAS on
+// updatedAt, unreadable-row repair), the credential saved, fields mapped onto the org's default resource.
 func (s *AzureModelService) legacyOrgSaveConfig(ctx context.Context, orgID, updatedBy string, expected time.Time, cfg ai.AzureFoundryConfig) (string, error) {
 	owner := storageif.AzureOrgOwner(orgID)
 	s.ensureLegacyImported(ctx, owner, "")
@@ -699,9 +629,7 @@ func (s *AzureModelService) legacyOrgSaveConfig(ctx context.Context, orgID, upda
 	return formatOrgKeyStamp(at), nil
 }
 
-// forgetReplacement releases what the process may have kept for saved, a
-// document that was stored for a moment and is now replaced by the previous
-// one again (nothing when it is the same credential).
+// forgetReplacement releases what the process may have kept for saved, a document stored for a moment and now replaced.
 func forgetReplacement(prev ai.AzureFoundryConfig, hadPrev bool, saved ai.AzureFoundryConfig) func() {
 	return func() {
 		if !hadPrev || prev.Fingerprint() != saved.Fingerprint() {
@@ -710,8 +638,7 @@ func forgetReplacement(prev ai.AzureFoundryConfig, hadPrev bool, saved ai.AzureF
 	}
 }
 
-// legacyDefaultName is the name resource "default" gets for cfg: its
-// endpoint host's first label, else "Azure AI Foundry".
+// legacyDefaultName is the name resource "default" gets for cfg: its endpoint host's first label, else a fixed name.
 func legacyDefaultName(cfg ai.AzureFoundryConfig) string {
 	if name := connectionNameFromHost(cfg.Endpoint); validAzureText(name, name, 1, storageif.AzureNameMaxLen) {
 		return name
@@ -719,13 +646,9 @@ func legacyDefaultName(cfg ai.AzureFoundryConfig) string {
 	return "Azure AI Foundry"
 }
 
-// checkLegacySync refuses, before anything is written, what
-// syncLegacyEntries would be refused for when it maps cfg's deployment
-// fields onto owner's resource "default": a registry that takes no writes
-// (a newer app's list file), a missing resource "default" with no free
-// resource slot or no free name (by the store's own name rule), more models
-// than the limit once the entries the fields drop are gone and the ones
-// they add are in.
+// checkLegacySync refuses, before anything is written, what syncLegacyEntries would be refused for: a read-only
+// registry, a missing resource "default" with no free slot or name, or more models than the limit once the
+// fields' drops and adds are settled.
 func (s *AzureModelService) checkLegacySync(ctx context.Context, owner storageif.AzureOwner, cfg ai.AzureFoundryConfig) error {
 	if s.registry.State(ctx).State == storageif.AzureRegistryReadOnly {
 		return storageif.ErrAzureRegistryReadOnly
@@ -788,14 +711,11 @@ func (s *AzureModelService) checkLegacySync(ctx context.Context, owner storageif
 	return nil
 }
 
-// syncLegacyEntries maps a single-document save's deployment fields straight
-// onto resource "default" (created when missing, named after its host):
-// missing entries are created (deterministic ids), entries of the fields'
-// kinds that are no longer named are deleted, a chat entry named as a Claude
-// deployment (or the reverse) changes kind in place; agents stay. The
-// embedding deployment becomes the knowledge-base model, and — for an
-// organisation — the document's default the default for members, when
-// nothing else holds them. No delta import: the fields are the list.
+// syncLegacyEntries maps a single-document save's deployment fields straight onto resource "default" (created
+// when missing): missing entries are created (deterministic ids), entries no longer named are deleted, a chat
+// entry named as a Claude deployment (or the reverse) changes kind in place; agents stay. The embedding
+// deployment becomes the knowledge-base model, and for an organisation the document's default the default for
+// members, when nothing else holds them.
 func (s *AzureModelService) syncLegacyEntries(ctx context.Context, owner storageif.AzureOwner, cfg ai.AzureFoundryConfig) error {
 	specs := legacyEntrySpecs(owner.IsOrg(), cfg, "")
 	return s.registry.WithOwnerLock(ctx, owner, func(lctx context.Context) error {
@@ -866,9 +786,7 @@ func (s *AzureModelService) syncLegacyEntries(ctx context.Context, owner storage
 	})
 }
 
-// settleLegacyDesignations gives the knowledge-base and default-for-members
-// designations to the entries a single-document save names for them, when
-// no other model holds them.
+// settleLegacyDesignations gives the KB and default-for-members designations to the entries a save names for them.
 func (s *AzureModelService) settleLegacyDesignations(ctx context.Context, owner storageif.AzureOwner, specs []azureLegacyEntry) error {
 	models, err := s.registry.ListModels(ctx, owner)
 	if err != nil {
@@ -901,10 +819,8 @@ func (s *AzureModelService) settleLegacyDesignations(ctx context.Context, owner 
 	return nil
 }
 
-// legacyDeleteDefault is the single-document delete (/api/keys/delete
-// {provider:"azure-foundry"}, the org DELETE): resource "default" with its
-// models, and its credential after the commit — or, when the registry has
-// no such resource, the document alone.
+// legacyDeleteDefault is the single-document delete: resource "default" with its models, credential after the
+// commit — or, with no such resource, the document alone.
 func (s *AzureModelService) legacyDeleteDefault(ctx context.Context, owner storageif.AzureOwner, scope string) error {
 	s.prepareOwner(ctx, owner, scope)
 	_, err := s.deleteConnection(ctx, owner, scope, ai.AzureDefaultConnectionID, AzureDeleteOptions{Cascade: true, Force: true})
@@ -923,9 +839,8 @@ func (s *AzureModelService) legacyDeleteDefault(ctx context.Context, owner stora
 	return nil
 }
 
-// legacyTest is the single-document connection test (/api/providers/test,
-// the org test route): resource "default", else the first resource, tested
-// as a resource — an authenticated probe, no model call.
+// legacyTest is the single-document connection test: resource "default", else the first resource, tested as a
+// resource — an authenticated probe, no model call.
 func (s *AzureModelService) legacyTest(ctx context.Context, as AzureScope) (*models.ProviderTestResult, error) {
 	owner, err := s.ownerFor(as)
 	if err != nil {

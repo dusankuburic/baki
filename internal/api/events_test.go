@@ -3,9 +3,11 @@ package api
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -191,5 +193,163 @@ func TestDeliver_ReplacesOversizedFlowLoaded(t *testing.T) {
 	m.Emit("analysis:complete", map[string]string{"blob": big})
 	if len(ch) != 0 {
 		t.Fatalf("oversized non-convertible event occupied a buffer slot: %q", string(<-ch))
+	}
+}
+
+// openUserStream opens an SSE stream on srv as userID (the test clientKey reads
+// the X-Test-User header) and returns a channel of its "data: " lines plus a
+// func that closes the stream.
+func openUserStream(t *testing.T, srv *httptest.Server, userID string) (<-chan string, func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Test-User", userID)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	lines := make(chan string, 16)
+	// Closed by t.Cleanup too, so a failing test cannot leave the stream
+	// open: httptest.Server.Close waits for every handler to return.
+	var once sync.Once
+	closeStream := func() { once.Do(func() { cancel(); resp.Body.Close() }) }
+	t.Cleanup(closeStream)
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			if strings.HasPrefix(sc.Text(), "data: ") {
+				lines <- sc.Text()
+			}
+		}
+	}()
+	return lines, closeStream
+}
+
+// waitUntil polls cond for up to two seconds.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestEventManager_PerUserIndexFollowsConnections drives registration through
+// HandleEvents: a targeted event reaches every stream of its user and no
+// other, HasSubscriber answers per user, and a user whose last stream closes
+// leaves no index entry behind.
+func TestEventManager_PerUserIndexFollowsConnections(t *testing.T) {
+	m := NewEventManager(make(chan struct{}))
+	m.SetClientKeyFunc(func(r *http.Request) string { return "user:" + r.Header.Get("X-Test-User") })
+	srv := httptest.NewServer(http.HandlerFunc(m.HandleEvents))
+	// A cleanup, not a defer: cleanups run after the streams' own (LIFO), so
+	// Close does not wait on a stream a failed assertion left open.
+	t.Cleanup(srv.Close)
+
+	a1, closeA1 := openUserStream(t, srv, "alice")
+	a2, closeA2 := openUserStream(t, srv, "alice")
+	b1, _ := openUserStream(t, srv, "bob")
+	waitUntil(t, "three registered streams", func() bool {
+		m.clientsMu.Lock()
+		defer m.clientsMu.Unlock()
+		return len(m.clients) == 3
+	})
+
+	m.clientsMu.Lock()
+	aliceConns, bobConns := len(m.byUser["alice"]), len(m.byUser["bob"])
+	m.clientsMu.Unlock()
+	if aliceConns != 2 || bobConns != 1 {
+		t.Fatalf("index = alice:%d bob:%d, want 2 and 1", aliceConns, bobConns)
+	}
+	if !m.HasSubscriber("alice") || !m.HasSubscriber("bob") || m.HasSubscriber("carol") || !m.HasSubscriber("") {
+		t.Fatal("HasSubscriber disagrees with the connected streams")
+	}
+
+	m.EmitTo("alice", "chat:event", map[string]string{"n": "1"})
+	for i, ch := range []<-chan string{a1, a2} {
+		select {
+		case line := <-ch:
+			if !strings.Contains(line, "chat:event") {
+				t.Fatalf("alice stream %d got %q", i, line)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("alice stream %d never received her event", i)
+		}
+	}
+	select {
+	case line := <-b1:
+		t.Fatalf("bob received alice's event: %q", line)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	closeA1()
+	closeA2()
+	waitUntil(t, "alice's streams to unregister", func() bool { return !m.HasSubscriber("alice") })
+	m.clientsMu.Lock()
+	_, stale := m.byUser["alice"]
+	m.clientsMu.Unlock()
+	if stale {
+		t.Fatal("a user with no streams left kept an index entry")
+	}
+	if !m.HasSubscriber("bob") {
+		t.Fatal("bob's stream was dropped from the index")
+	}
+}
+
+// TestDeliver_TargetedCostIndependentOfOtherClients: a user-targeted event
+// must not walk every connected client of every tenant under clientsMu —
+// one user's chat stream would cost O(all SSE clients) per chunk. With the per-user
+// index the cost must not grow with the number of OTHER users' clients. The
+// gap being guarded is two orders of magnitude (10k map entries per event vs
+// none: ~50ms vs well under 1ms for the batch here), so the 5x-plus-5ms bound
+// leaves ample room for scheduler noise and coarse timers (Windows can report
+// 0 for the uncrowded batch); the minimum of several interleaved trials is
+// compared to discount pauses.
+func TestDeliver_TargetedCostIndependentOfOtherClients(t *testing.T) {
+	const others, events, trials = 10000, 50, 7
+	build := func(n int) (*EventManager, chan []byte) {
+		m := NewEventManager(make(chan struct{}))
+		ch := make(chan []byte, events)
+		m.clientsMu.Lock()
+		m.addClientLocked(ch, "alice")
+		for i := range n {
+			m.addClientLocked(make(chan []byte, 1), fmt.Sprintf("user-%d", i))
+		}
+		m.clientsMu.Unlock()
+		return m, ch
+	}
+	run := func(m *EventManager, ch chan []byte) time.Duration {
+		start := time.Now()
+		for range events {
+			m.EmitTo("alice", "chat:event", "x")
+		}
+		d := time.Since(start)
+		if len(ch) != events {
+			t.Fatalf("alice received %d/%d events", len(ch), events)
+		}
+		for len(ch) > 0 {
+			<-ch
+		}
+		return d
+	}
+	alone, aloneCh := build(0)
+	crowded, crowdedCh := build(others)
+	minAlone, minCrowded := time.Duration(1<<62), time.Duration(1<<62)
+	for range trials {
+		minAlone = min(minAlone, run(alone, aloneCh))
+		minCrowded = min(minCrowded, run(crowded, crowdedCh))
+	}
+	if minCrowded > 5*minAlone+5*time.Millisecond {
+		t.Fatalf("targeted delivery scales with other users' clients: %v with %d others vs %v alone",
+			minCrowded, others, minAlone)
 	}
 }

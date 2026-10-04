@@ -7,16 +7,9 @@ import (
 	"time"
 )
 
-// aliasModelProviders lists the providers whose model IDs are ALIASES chosen by
-// the user rather than model names: an Azure AI Foundry deployment called
-// "my-gpt4o" (or a model-router deployment) tells the catalogue nothing about
-// the model's context window or output cap. For these providers the concrete
-// model each alias served last is remembered (recordServedModel) and folded
-// back into the model list (enrichServedModels). They are unpriced
-// (auditedProvider.pricingFor): usage rows record the tokens at $0 with the
-// model each response reports, never the memo of an earlier call. Every other
-// provider's IDs are the model names themselves, so nothing is memoised for
-// them and their pricing never consults the served model.
+// aliasModelProviders lists the providers whose model IDs are user-chosen ALIASES, not model names (a Foundry
+// deployment called "my-gpt4o" tells the catalogue nothing): the model each alias served last is memoised
+// (recordServedModel) and folded back into the model list (enrichServedModels). They are unpriced.
 var aliasModelProviders = map[string]bool{
 	"azure-foundry": true,
 }
@@ -25,48 +18,83 @@ const (
 	// servedMemoMax bounds the memo (entries are tiny; the cap only matters
 	// for a pathological caller that invents deployment names).
 	servedMemoMax = 4096
-	// servedMemoTTL is how long a served-model observation stays valid: a
-	// deployment can be re-pointed at another model, so a stale mapping must
-	// eventually expire even if the deployment is never called again.
+	// servedMemoTTL is how long an observation stays valid: a deployment can be re-pointed, so a stale
+	// mapping must expire even if the deployment is never called again.
 	servedMemoTTL = 24 * time.Hour
 )
 
 type servedEntry struct {
 	model string
 	seen  time.Time
-	// varied records that the alias has been served by more than one model
-	// (compared after normalizeServedModel, so a date-version bump does not
-	// count) within the TTL — a model-router deployment under any name. Such
-	// an alias has no single context window or output cap.
+	// resource is the scope's resource segment — the servedByResource bucket the key belongs to, kept so
+	// eviction can unindex an entry without re-deriving it.
+	resource string
+	// varied records that the alias has been served by more than one model (compared after
+	// normalizeServedModel, so a date-version bump does not count) within the TTL — a model-router: no
+	// single context window or output cap.
 	varied bool
 }
 
 var (
 	servedMu   sync.Mutex
 	servedMemo = map[string]servedEntry{}
+	// servedByResource indexes the memo, resource → the full keys of every entry whose scope ends in that
+	// resource: lookups scan only this bucket, exact by verifying the full suffix per key. Maintained in
+	// lockstep with servedMemo (indexServedKeyLocked / deleteServedKeyLocked).
+	servedByResource = map[string]map[string]struct{}{}
 )
 
-// servedKey scopes the memo per user AND resource: two users' Azure resources
-// may both have a deployment called "chat" that points at different models,
-// and one user's observation must never leak into another's model list. The
-// audited wrapper passes scope = user + "\x00" + resource endpoint for alias
-// providers (see servedMemoResourcer), so a new resource's same-named
-// deployment never inherits the old resource's mapping.
+// servedKey scopes the memo per user AND resource: two users' resources may both have a deployment called
+// "chat" pointing at different models, and one user's observation must never leak into another's model list.
 func servedKey(scope, providerID, requestModel string) string {
 	return scope + "\x00" + providerID + "\x00" + requestModel
 }
 
-// isModelRouterAlias reports whether a deployment name denotes a model router
-// (the portal default "model-router", the REST sample "model-router-deployment"):
-// each call may be answered by a different model, so what served the last
-// call says nothing about this call's context window, output cap or price.
+// servedResourceOf returns the resource a scope is keyed to: the segment after its last separator (a scope
+// with no separator is its own resource).
+func servedResourceOf(scope string) string {
+	if i := strings.LastIndex(scope, "\x00"); i >= 0 {
+		return scope[i+1:]
+	}
+	return scope
+}
+
+// indexServedKeyLocked files key under res in servedByResource. Called
+// with servedMu held, for every key that enters servedMemo.
+func indexServedKeyLocked(key, res string) {
+	bucket := servedByResource[res]
+	if bucket == nil {
+		bucket = map[string]struct{}{}
+		servedByResource[res] = bucket
+	}
+	bucket[key] = struct{}{}
+}
+
+// deleteServedKeyLocked drops key from servedMemo AND its servedByResource bucket (whose emptied remains go
+// too — the index must never outgrow the memo). Called with servedMu held.
+func deleteServedKeyLocked(key string) {
+	e, ok := servedMemo[key]
+	if !ok {
+		return
+	}
+	delete(servedMemo, key)
+	if bucket := servedByResource[e.resource]; bucket != nil {
+		delete(bucket, key)
+		if len(bucket) == 0 {
+			delete(servedByResource, e.resource)
+		}
+	}
+}
+
+// isModelRouterAlias reports whether a deployment name denotes a model router ("model-router",
+// "model-router-deployment"): each call may be answered by a different model, so the last call's model says
+// nothing about this call's window, cap or price.
 func isModelRouterAlias(id string) bool {
 	return strings.Contains(strings.ToLower(id), "model-router")
 }
 
-// recordServedModel remembers that requestModel (an alias) was served by
-// served. No-op for providers whose IDs are model names, for empty values, and
-// when the alias already IS the model.
+// recordServedModel remembers that requestModel (an alias) was served by served; no-op for providers whose
+// IDs are model names, for empty values, and when the alias already IS the model.
 func recordServedModel(scope, providerID, requestModel, served string) {
 	if !aliasModelProviders[providerID] {
 		return
@@ -82,17 +110,16 @@ func recordServedModel(scope, providerID, requestModel, served string) {
 	if len(servedMemo) >= servedMemoMax {
 		for k, e := range servedMemo {
 			if now.Sub(e.seen) > servedMemoTTL {
-				delete(servedMemo, k)
+				deleteServedKeyLocked(k)
 			}
 		}
-		// Still full after expiring: drop entries until there is room. Map
-		// iteration order is random, which is an acceptable eviction policy
-		// for a cache this cheap to repopulate (one chat turn).
+		// Still full after expiring: drop entries until there is room — random map order, acceptable for a
+		// cache this cheap to repopulate (one chat turn).
 		for k := range servedMemo {
 			if len(servedMemo) < servedMemoMax {
 				break
 			}
-			delete(servedMemo, k)
+			deleteServedKeyLocked(k)
 		}
 	}
 	key := servedKey(scope, providerID, requestModel)
@@ -100,15 +127,15 @@ func recordServedModel(scope, providerID, requestModel, served string) {
 	if prev, ok := servedMemo[key]; ok && now.Sub(prev.seen) <= servedMemoTTL {
 		changed := normalizeServedModel(prev.model) != normalizeServedModel(served)
 		varied = prev.varied || changed
-		// A stable alias now answered by a different model was re-pointed
-		// (or is a router seen varying for the first time): the window its
-		// earlier rejection stated belonged to the old model. A known router
-		// keeps its learned minimum — its served model changes every call.
+		// A stable alias now answered by a different model was re-pointed: the window its earlier rejection
+		// stated belonged to the old model. A known router keeps its learned minimum.
 		if changed && !prev.varied && !isModelRouterAlias(requestModel) {
 			forgetContextWindow(scope, providerID, requestModel)
 		}
 	}
-	servedMemo[key] = servedEntry{model: served, seen: now, varied: varied}
+	res := servedResourceOf(scope)
+	servedMemo[key] = servedEntry{model: served, seen: now, varied: varied, resource: res}
+	indexServedKeyLocked(key, res)
 }
 
 // lookupServedEntry returns the memo entry for requestModel (expired entries
@@ -122,18 +149,15 @@ func lookupServedEntry(scope, providerID, requestModel string) (servedEntry, boo
 		return servedEntry{}, false
 	}
 	if time.Since(e.seen) > servedMemoTTL {
-		delete(servedMemo, key)
+		deleteServedKeyLocked(key)
 		return servedEntry{}, false
 	}
 	return e, true
 }
 
-// lookupServedModelForResource returns the model most recently seen serving
-// requestModel on one resource, whichever user's call observed it: a
-// deployment serves the same model for every caller of its resource, so
-// this is safe for decisions about the request (the Claude sampling policy)
-// and never reaches a model list. Aliases observed with more than one served
-// model (routers) are skipped. A linear scan of the bounded memo.
+// lookupServedModelForResource returns the model most recently seen serving requestModel on one resource,
+// whichever user's call observed it (a deployment serves the same model for every caller of its resource);
+// safe for decisions about the request, never reaches a model list. Varied aliases (routers) are skipped.
 func lookupServedModelForResource(resource, providerID, requestModel string) (string, bool) {
 	if resource == "" || requestModel == "" {
 		return "", false
@@ -144,7 +168,8 @@ func lookupServedModelForResource(resource, providerID, requestModel string) (st
 	defer servedMu.Unlock()
 	var best servedEntry
 	found := false
-	for k, e := range servedMemo {
+	for k := range servedByResource[resource] {
+		e := servedMemo[k] // a missing key reads as long-expired and skips
 		if !strings.HasSuffix(k, suffix) || e.varied || now.Sub(e.seen) > servedMemoTTL {
 			continue
 		}
@@ -166,16 +191,12 @@ func resetServedModels() {
 	servedMu.Lock()
 	defer servedMu.Unlock()
 	servedMemo = map[string]servedEntry{}
+	servedByResource = map[string]map[string]struct{}{}
 }
 
-// enrichServedModels fills in, for alias providers, what the memo knows about
-// each entry: the served model (ServedModel, and " · <model>" appended to the
-// display name) and — when that model is catalogued, only for an alias that
-// has always been served by the same model — its context window and output
-// cap. A model router (by name, or an alias observed with more than one
-// served model) keeps the listing's conservative window: the next call may be
-// routed to a smaller-window model than the last one. Entries that already
-// carry a served model (learned from a deployments listing) are left alone.
+// enrichServedModels fills in what the memo knows about each alias entry: the served model (ServedModel plus
+// the " · <model>" display suffix) and — when that model is catalogued, only for an alias always served by
+// the same model — its window and output cap. A router keeps the listing's conservative window.
 func enrichServedModels(scope, providerID string, models []ModelInfo) []ModelInfo {
 	if !aliasModelProviders[providerID] {
 		return models
@@ -194,22 +215,19 @@ func enrichServedModels(scope, providerID string, models []ModelInfo) []ModelInf
 	return models
 }
 
-// applyServedModel annotates a model-list entry with the model behind it,
-// limits included — for authoritative sources (the project deployments
-// listing's modelName) whose mapping is fixed.
+// applyServedModel annotates a model-list entry with the model behind it, limits included — for authoritative
+// sources (the project listing's modelName) whose mapping is fixed.
 func applyServedModel(providerID string, m *ModelInfo, served string) {
 	annotateServedModel(providerID, m, served, true)
 }
 
-// annotateServedModel sets the served model and the display suffix;
-// withLimits also copies the catalogue context window and output cap. No
-// price: alias providers are unpriced (catalogEntryFor).
+// annotateServedModel sets the served model and the display suffix; withLimits also copies the catalogue
+// window and output cap. No price: alias providers are unpriced.
 func annotateServedModel(providerID string, m *ModelInfo, served string, withLimits bool) {
 	m.ServedModel = served
 	if entry, ok := catalogEntryFor(providerID, served); ok {
-		// Claude on Azure AI Foundry uses the catalogue window too: Anthropic's
-		// Foundry page gives the same windows as the Claude API (1M for
-		// Opus/Sonnet 4.6+ and 5.x, 200k for the rest).
+		// Claude on Foundry uses the catalogue window too: Anthropic's Foundry page gives the same windows
+		// as the Claude API (1M for Opus/Sonnet 4.6+ and 5.x, 200k for the rest).
 		if withLimits && entry.ContextLimit > 0 {
 			m.ContextLimit = entry.ContextLimit
 		}
@@ -226,31 +244,22 @@ func annotateServedModel(providerID string, m *ModelInfo, served string, withLim
 // aliases (Azure AI Foundry deployment names) rather than model names.
 func UsesModelAliases(providerID string) bool { return aliasModelProviders[providerID] }
 
-// ReservationPricer is implemented by the audited wrapper — the provider the
-// factory hands out — and answers the rate an in-flight budget reservation
-// for model is priced at (see auditedProvider.ReservationPricing). The chat
-// service prefers it over its own listing lookup: the listing price of a
-// router is the memo of an EARLIER routed call.
+// ReservationPricer is implemented by the audited wrapper and answers the rate an in-flight budget
+// reservation for model is priced at; the chat service prefers it over its own listing lookup (a router's
+// listing price is the memo of an EARLIER routed call).
 type ReservationPricer interface {
 	ReservationPricing(ctx context.Context, model string) Pricing
 }
 
-// UsagePricer is implemented by the audited wrapper and answers the
-// per-million rates a finished turn was billed at (see
-// auditedProvider.UsagePricing), so the chat service can put the model that
-// answered and its rate on the done payload without a listing refetch.
+// UsagePricer is implemented by the audited wrapper and answers the rates a finished turn was billed at, so
+// the chat service can put the answering model and its rate on the done payload without a listing refetch.
 type UsagePricer interface {
 	UsagePricing(ctx context.Context, model, served string) (Pricing, bool)
 }
 
-// pricingMetricModel keeps the pricing-fallback metric's model label bounded:
-// alias providers' request models are user-chosen strings (deployment names),
-// so they are collapsed to one "deployment" label; non-alias providers keep a
-// model's own name only while the catalogue knows it — a fallback for a name
-// the catalogue has never heard of (the request model is client-chosen) would
-// otherwise mint one permanent counter series per unique string, the same
-// cardinality trap aiUsageCostTotal and metricToolLabel already fixed. The
-// real name still lives on the UsageMetric row; only the metric collapses it.
+// pricingMetricModel keeps the pricing-fallback metric's model label bounded: aliases collapse to one
+// "deployment" label, non-alias providers keep a catalogued model's name else "uncatalogued" — a fallback
+// for an unknown client-chosen name would mint one permanent series per unique string.
 func pricingMetricModel(providerID, modelID string) string {
 	if aliasModelProviders[providerID] {
 		return "deployment"

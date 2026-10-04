@@ -6,6 +6,7 @@ export type EventType =
   | 'presence.join'
   | 'presence.leave'
   | 'presence.update'
+  | 'presence.sync'
   | 'block.update'
   | 'block.create'
   | 'block.delete'
@@ -27,6 +28,14 @@ export interface PresencePayload {
   displayName?: string
   avatarUrl?: string
   selectedBlockId?: string
+}
+
+// PresenceSyncPayload is the snapshot the server sends to a joining
+// connection only, right after its own presence.join: everyone currently in
+// the room (deduplicated by userId, the joiner included). Without it a new
+// client only ever learned about peers who joined after it did.
+export interface PresenceSyncPayload {
+  users: PresencePayload[]
 }
 
 export interface BlockPayload {

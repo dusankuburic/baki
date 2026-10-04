@@ -129,9 +129,9 @@ describe('BlockView drag-to-reorder (R3.3)', () => {
     expect(draggedId).toBe('b1')
     expect(refId).toBe('b2')
     expect(position === 'before' || position === 'after').toBe(true)
-    // Success: the doc swaps in and re-analysis fires.
+    // Success: the doc swaps in and re-analysis fires (debounced per flow).
     await waitFor(() => expect(useFlowStore.getState().document?.name).toBe('F-updated'))
-    expect(analyzeFlow).toHaveBeenCalledWith('flow-1')
+    await waitFor(() => expect(analyzeFlow).toHaveBeenCalledWith('flow-1'))
   })
 
   it('read-only flows render rows inert (no draggable, no drop handling)', () => {

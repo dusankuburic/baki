@@ -47,14 +47,14 @@ func TracingEnabled(otlpEndpoint string) bool {
 //     OpenTelemetry agent only accepts gRPC and advertises that by injecting
 //     OTEL_EXPORTER_OTLP_PROTOCOL=grpc alongside its endpoint. Honour the
 //     standard variable ("grpc", "http/protobuf", "http/json") and default to
-//     HTTP so existing OTLP/HTTP collectors keep working unchanged.
+//     HTTP so existing OTLP/HTTP collectors keep working.
 //
 //  2. Endpoint form. WithEndpoint expects a bare "host:port" and assumes TLS;
 //     handed a full URL it treats the whole string as a hostname and every
 //     export fails DNS. The ACA agent injects a URL
-//     ("http://otel.service.k8se-apps:4317/"), and so does anyone following the
-//     OpenTelemetry spec for this variable. Use WithEndpointURL for anything
-//     with a scheme, which also derives TLS-vs-plaintext from it.
+//     ("http://otel.service.k8se-apps:4317/"), and so does anyone following
+//     the OpenTelemetry spec. Use WithEndpointURL for anything with a scheme,
+//     which also derives TLS-vs-plaintext from it.
 func newTraceExporter(ctx context.Context, endpoint string) (*otlptrace.Exporter, error) {
 	hasScheme := strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://")
 	// A bare "host:port" with no scheme keeps the historical meaning: TLS on.
@@ -148,9 +148,9 @@ func Init(ctx context.Context, serviceName, version, otlpEndpoint string) (func(
 		// No exporter means nothing consumes spans, but otelhttp still asks
 		// the provider for a tracer per request — with the default
 		// ParentBased(AlwaysSample) sampler it gets a real RECORDING span
-		// that is started, scoped and ended for pure overhead. NeverSample
-		// makes those spans non-recording no-ops. (runtime.Start below is
-		// left as-is: one process-lifetime goroutine, not per-request work.)
+		// started, scoped and ended for pure overhead. NeverSample makes
+		// those no-ops. (runtime.Start below is one process-lifetime
+		// goroutine, not per-request work.)
 		tracerProvider = sdktrace.NewTracerProvider(
 			sdktrace.WithResource(res),
 			sdktrace.WithSampler(sdktrace.NeverSample()),

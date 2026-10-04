@@ -292,7 +292,7 @@ func TestRunToolLoop_TruncatedToolCallIsNotExecuted(t *testing.T) {
 	}
 }
 
-// F-11: malformed argument JSON with a NON-limit finish no longer aborts the
+// Malformed argument JSON with a NON-limit finish must not abort the
 // turn with the raise-Max-tokens copy. The call is announced, answered with a
 // retryable "not valid JSON" tool result (ok=false), the loop sends that
 // result back (second provider request whose last message is the error tool
@@ -388,13 +388,13 @@ func TestTurnGenerationParams_ReasoningFloor(t *testing.T) {
 		{"o4-mini-small", 4096, 8192},
 		{"prod-reasoner", 4096, 16384}, // served model reveals the reasoner
 		{"claude:opus", 4096, 16384},
-		// grok-4's documented cap (8192, audit #9 F-01) re-clamps the floor:
+		// grok-4's documented cap (8192) re-clamps the floor:
 		// the catalogue limits, not the floor, bound the request.
 		{"grok-4", 4096, 8192},
-		// A model router always gets the floor (audit #9 F-03): the last
+		// A model router always gets the floor: the last
 		// routed non-reasoner must not suppress it for the next call.
 		{"model-router", 4096, 16384},
-		// A Claude deployment whose model nobody knows yet is floored (F-04)
+		// A Claude deployment whose model nobody knows yet is floored
 		// while a named non-thinking Claude model is not.
 		{"claude:prod-opus", 4096, 16384},
 		{"claude:claude-haiku-4-5", 4096, 4096},
@@ -409,9 +409,9 @@ func TestTurnGenerationParams_ReasoningFloor(t *testing.T) {
 	if _, got := turnGenerationParams(context.Background(), small, models.ChatRequest{Model: "gpt-5", MaxTokens: 4096}, turnModel{resolved: "gpt-5"}); got != 10000 {
 		t.Errorf("backstop: max tokens %d, want 10000", got)
 	}
-	// F-29: the backstop is the MODEL's window (the listing entry), not the
+	// The backstop is the MODEL's window (the listing entry), not the
 	// provider-wide placeholder — a 1M-window Claude deployment's 128000
-	// output cap used to be clamped to 124000 by the Azure 128000 default.
+	// output cap must not be clamped to 124000 by the Azure 128000 default.
 	big := &itemsProvider{id: "azure-foundry", limit: 128000, models: []ai.ModelInfo{
 		{ID: "claude:opus", ServedModel: "claude-opus-5-5", ContextLimit: 1_000_000, MaxOutputTokens: 128000},
 	}}
@@ -482,7 +482,7 @@ func TestStreamChatMessage_SendsReasoningFloorAndTemperatureSet(t *testing.T) {
 	if got.MaxTokens != 4096 || got.TemperatureSet {
 		t.Errorf("gpt-4o was sent max tokens %d (temperature set %v), want 4096 and unset", got.MaxTokens, got.TemperatureSet)
 	}
-	// F-19: the validated per-provider reasoning-effort choice reaches the
+	// The validated per-provider reasoning-effort choice reaches the
 	// provider request; "" (the default) is omitted.
 	got = run(models.ChatRequest{Model: "gpt-5", MaxTokens: 4096, ReasoningEffort: "high"})
 	if got.ReasoningEffort != "high" {

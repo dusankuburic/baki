@@ -12,17 +12,10 @@ import (
 )
 
 // azureRegistryData is one owner's Azure AI Foundry registry held in memory:
-// the engine behind the file store (its single personal owner) and
-// MemoryAzureRegistry (any owner). It applies the v25 schema's rules in Go,
-// in the order Postgres applies them, so the three AzureRegistryStore
-// implementations answer alike (the contract suite pins it):
-//
-//	validation (the CHECKs) → the limit → uniqueness → the resource must exist
-//
-// Postgres raises unique violations when the row is inserted and checks
-// foreign keys at the end of the statement, hence uniqueness before
-// existence. Records go in and out as copies, so no caller can alias the
-// stored state.
+// the engine behind the file store and MemoryAzureRegistry. It applies the v25
+// schema's rules in Go in Postgres's order — validation (CHECKs) → limit →
+// uniqueness → existence — so the three implementations answer alike (the
+// contract suite pins it). Records go in and out as copies.
 type azureRegistryData struct {
 	connections []interfaces.AzureConnectionRecord
 	models      []interfaces.AzureModelRecord
@@ -33,9 +26,9 @@ type azureRegistryData struct {
 // so a compare-and-swap token round-trips identically on every store.
 func azureNow() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }
 
-// azureBump is the next UpdatedAt after prev: now, but always strictly
-// later than prev (Postgres: GREATEST(clock_timestamp(), updated_at + 1µs)),
-// so every update hands out a new compare-and-swap token.
+// azureBump is the next UpdatedAt after prev: now, but always strictly later
+// (Postgres: GREATEST(clock_timestamp(), updated_at + 1µs)), so every update
+// hands out a fresh CAS token.
 func azureBump(prev time.Time) time.Time {
 	now := azureNow()
 	if !now.After(prev) {
@@ -44,9 +37,8 @@ func azureBump(prev time.Time) time.Time {
 	return now
 }
 
-// azureTokenMatches compares a caller's compare-and-swap token with the
-// stored UpdatedAt at microsecond precision, as Postgres does (pgx drops
-// the nanoseconds when it encodes the parameter).
+// azureTokenMatches compares a caller's compare-and-swap token with the stored UpdatedAt at microsecond
+// precision, as Postgres does (pgx drops the nanoseconds when it encodes the parameter).
 func azureTokenMatches(expected, stored time.Time) bool {
 	return expected.Truncate(time.Microsecond).Equal(stored)
 }
@@ -179,9 +171,8 @@ func (d *azureRegistryData) connectionConflict(rec interfaces.AzureConnectionRec
 	return nil
 }
 
-// connectionNameTaken is connectionConflict's name rule on its own: whether
-// a resource other than exceptID has name (strings.ToLower equality, the
-// rule this engine's writes enforce).
+// connectionNameTaken is connectionConflict's name rule on its own: whether a
+// resource other than exceptID has name (strings.ToLower equality).
 func (d *azureRegistryData) connectionNameTaken(name, exceptID string) bool {
 	lower := strings.ToLower(name)
 	for _, c := range d.connections {
@@ -192,10 +183,8 @@ func (d *azureRegistryData) connectionNameTaken(name, exceptID string) bool {
 	return false
 }
 
-// stamp is a creation time later than every CreatedAt already in d, so
-// creation order stays total even for creates within one microsecond —
-// the in-memory store is that fast; Postgres' clock_timestamp() moves on
-// between statements.
+// stamp is a creation time later than every CreatedAt already in d, so creation order stays total even
+// for creates within one microsecond — the in-memory store is that fast; Postgres' clock moves between statements.
 func (d *azureRegistryData) stamp() time.Time {
 	now := azureNow()
 	for _, c := range d.connections {
@@ -356,10 +345,8 @@ func (d *azureRegistryData) deleteConnection(id string) ([]interfaces.AzureModel
 	return deleted, nil
 }
 
-// modelConflict reports the uniqueness rule rec would break — the primary
-// key, the deployment within its resource and namespace
-// (case-insensitively), then a designation already held — skipping row
-// skip.
+// modelConflict reports the uniqueness rule rec would break — the primary key, the deployment within its
+// resource and namespace (case-insensitively), then a designation already held — skipping row skip.
 func (d *azureRegistryData) modelConflict(rec interfaces.AzureModelRecord, skip int) error {
 	ns := interfaces.AzureModelNamespace(rec.Kind)
 	dep := strings.ToLower(rec.Deployment)
@@ -521,9 +508,9 @@ func (d *azureRegistryData) markImported() time.Time {
 	return *d.importedAt
 }
 
-// checkInvariants verifies loaded state against every rule a write would
-// have enforced (the file store refuses — quarantines — a file that breaks
-// one, rather than serving state no write path could have produced).
+// checkInvariants verifies loaded state against every rule a write would have
+// enforced — the file store quarantines a file that breaks one rather than
+// serving state no write path could have produced.
 func (d *azureRegistryData) checkInvariants(owner interfaces.AzureOwner) error {
 	for i, c := range d.connections {
 		if err := interfaces.ValidateAzureConnectionRecord(c); err != nil {
@@ -550,11 +537,9 @@ func (d *azureRegistryData) checkInvariants(owner interfaces.AzureOwner) error {
 // ---- MemoryAzureRegistry ----
 
 // MemoryAzureRegistry is an in-process AzureRegistryStore for any number of
-// owners, with the file store's rules (same engine) and no persistence. It
-// backs the test fake (internal/testutil.FakeAzureRegistry); nothing in
-// production uses it. By default it behaves like the transactional store
-// (PendingWrites false); EnablePendingWrites switches it to the file
-// store's two-step create.
+// owners with the file store's rules (same engine) and no persistence; it
+// backs the test fake, nothing in production. Transactional by default
+// (PendingWrites false); EnablePendingWrites switches to the two-step create.
 type MemoryAzureRegistry struct {
 	mu            sync.Mutex
 	owners        map[interfaces.AzureOwner]*azureRegistryData
@@ -576,9 +561,9 @@ func NewMemoryAzureRegistry() *MemoryAzureRegistry {
 	}
 }
 
-// EnablePendingWrites makes the store behave like the file store: creates
-// may be Pending, stamped with bootID, which BootID then reports. Calling
-// it again with another id simulates a restart (earlier rows keep theirs).
+// EnablePendingWrites makes the store behave like the file store: creates may
+// be Pending, stamped with bootID, which BootID reports. Calling it again with
+// another id simulates a restart (earlier rows keep theirs).
 func (m *MemoryAzureRegistry) EnablePendingWrites(bootID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -594,7 +579,7 @@ func (m *MemoryAzureRegistry) SetStatus(status interfaces.AzureRegistryStatus) {
 
 // SetHook installs fn, called with the method name at the start of every
 // AzureRegistryStore method; a non-nil error is returned instead of running
-// the method (failure injection for the fake).
+// the method — failure injection for the fake.
 func (m *MemoryAzureRegistry) SetHook(fn func(method string) error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

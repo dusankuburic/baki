@@ -42,7 +42,7 @@ func TestKnowledgeReindex_CursorRoundTrip(t *testing.T) {
 	store := &auditRecordingBackend{FakeBackend: &testutil.FakeBackend{}}
 	const docs, ceiling = 2, 10000
 	for d := range docs {
-		_ = store.SaveKnowledgeDocument(bgCtx(), &storageif.KnowledgeDocument{ID: fmt.Sprintf("doc-%d", d), OrgID: org.ID, Filename: fmt.Sprintf("doc-%d.md", d)})
+		_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: fmt.Sprintf("doc-%d", d), OrgID: org.ID, Filename: fmt.Sprintf("doc-%d.md", d)})
 	}
 	chunks := make([]storageif.KnowledgeChunk, ceiling+1)
 	for i := range chunks {
@@ -179,7 +179,7 @@ func TestKnowledge_DeadlineIs504(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	store := &testutil.FakeBackend{}
-	_ = store.SaveKnowledgeDocument(bgCtx(), &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
+	_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", []storageif.KnowledgeChunk{{ID: "c1", DocID: "doc-1", Content: "retry every call", Embedding: []float32{1, 0}}})
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(deadlineEmbedder{}))
 	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
@@ -282,7 +282,7 @@ func (r *rateLimitOnCallEmbedder) Embed(_ context.Context, text []string) ([][]f
 	return out, nil
 }
 
-// TestKnowledgeReindex_FailedPageCarriesResumeCursor (F-13): a 429 on the
+// TestKnowledgeReindex_FailedPageCarriesResumeCursor: a 429 on the
 // second page keeps the 429 mapping (and Retry-After) but carries the
 // committed pages' resume cursor in the error envelope's details and audits
 // the partial run, so the client resumes instead of restarting from zero.
@@ -297,7 +297,7 @@ func TestKnowledgeReindex_FailedPageCarriesResumeCursor(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	store := &auditRecordingBackend{FakeBackend: &testutil.FakeBackend{}}
-	_ = store.SaveKnowledgeDocument(bgCtx(), &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
+	_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
 	// 501 chunks: page 1 commits the first 500 (five 100-input batches), the
 	// sixth batch is throttled.
 	chunks := make([]storageif.KnowledgeChunk, 501)

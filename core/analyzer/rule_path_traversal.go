@@ -7,12 +7,10 @@ import (
 )
 
 // PathTraversalRiskRule flags file-system actions that use a VARIABLE path
-// (e.g. File.OpenTextFile Path: %UserInput%) — a path-traversal vector when the
-// variable can carry ../ sequences. The existing file-op rules check for missing
-// error handlers / hardcoded paths; this one raises the security concern that a
-// caller-controlled path can escape the intended directory (read/write of
-// arbitrary files). A static/hardcoded path is NOT flagged (covered by the
-// portability rule); only variable paths are.
+// (e.g. File.OpenTextFile Path: %UserInput%) — a traversal vector when the
+// variable can carry ../ sequences that escape the intended directory
+// (read/write of arbitrary files). A static/hardcoded path is NOT flagged
+// (covered by the portability rule); only variable paths are.
 type PathTraversalRiskRule struct{}
 
 func (r *PathTraversalRiskRule) ID() string   { return "path-traversal-risk" }
@@ -34,10 +32,9 @@ var fileActionPrefixes = []string{
 // pathPropertySuffixes — property keys that carry a path, matched by SUFFIX
 // (lower-cased) because PAD names them per action: File.WriteText → File,
 // File.Delete → Files, File.Copy → FilesToCopy + Destination, Folder.Create →
-// FolderPath, Folder.GetFiles → Folder, Archive.Zip → ArchivePath. The rule
-// used to hold an exact allow-list (path, filepath, destination, folderpath…)
-// that named NONE of the keys the parser emits for the common actions, so on
-// real flows it never fired — a security rule that could not fire.
+// FolderPath, Archive.Zip → ArchivePath. The old exact allow-list named none
+// of the keys the parser emits for the common actions, so on real flows the
+// rule never fired.
 var pathPropertySuffixes = []string{"file", "files", "folder", "folders", "path", "paths", "destination", "source", "directory"}
 
 func isPathProperty(key string) bool {

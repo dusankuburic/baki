@@ -25,7 +25,7 @@ func TestChatService_CloudConversationRoundTrip(t *testing.T) {
 		{ID: "2", Role: "assistant", Content: "hi", Provider: "claude", Model: "claude-sonnet-4-6", FinishReason: "stop", TokensIn: 12, TokensOut: 7},
 	}
 
-	if err := svc.SaveConversation(ctx, doc, "claude", msgs); err != nil {
+	if err := svc.SaveConversation(ctx, doc.ID, "claude", msgs); err != nil {
 		t.Fatalf("SaveConversation: %v", err)
 	}
 	// It went to the backend, not the filesystem.
@@ -33,7 +33,7 @@ func TestChatService_CloudConversationRoundTrip(t *testing.T) {
 		t.Fatal("conversation was not persisted to the backend in cloud mode")
 	}
 
-	got, err := svc.GetConversation(ctx, doc, "claude")
+	got, err := svc.GetConversation(ctx, doc.ID, "claude")
 	if err != nil {
 		t.Fatalf("GetConversation: %v", err)
 	}
@@ -50,10 +50,10 @@ func TestChatService_CloudConversationRoundTrip(t *testing.T) {
 	}
 
 	// Clear deletes it; a later read returns empty, not an error.
-	if err := svc.ClearConversation(ctx, doc, "claude"); err != nil {
+	if err := svc.ClearConversation(ctx, doc.ID, "claude"); err != nil {
 		t.Fatalf("ClearConversation: %v", err)
 	}
-	if got, err := svc.GetConversation(ctx, doc, "claude"); err != nil || len(got) != 0 {
+	if got, err := svc.GetConversation(ctx, doc.ID, "claude"); err != nil || len(got) != 0 {
 		t.Errorf("after clear: got %d msgs, err %v", len(got), err)
 	}
 }
@@ -66,13 +66,13 @@ func TestChatService_LocalModeUsesFilesystem(t *testing.T) {
 	doc := &models.FlowDocument{ID: "flow-1"}
 	ctx := context.Background()
 
-	if err := svc.SaveConversation(ctx, doc, "claude", []models.ChatMessage{{ID: "1", Role: "user", Content: "hi"}}); err != nil {
+	if err := svc.SaveConversation(ctx, doc.ID, "claude", []models.ChatMessage{{ID: "1", Role: "user", Content: "hi"}}); err != nil {
 		t.Fatalf("SaveConversation: %v", err)
 	}
 	if len(backend.Conversations) != 0 {
 		t.Error("local mode wrote to the backend; expected filesystem only")
 	}
-	got, err := svc.GetConversation(ctx, doc, "claude")
+	got, err := svc.GetConversation(ctx, doc.ID, "claude")
 	if err != nil || len(got) != 1 {
 		t.Fatalf("GetConversation: got %d err %v", len(got), err)
 	}

@@ -166,7 +166,7 @@ describe('ChatHeader', () => {
   })
 })
 
-describe('ChatHeader Foundry agent tools item (F-39)', () => {
+describe('ChatHeader Foundry agent tools item', () => {
   const agent: ModelDetail = {
     id: 'm/triage0000',
     displayName: 'Triage',
@@ -194,7 +194,7 @@ describe('ChatHeader Foundry agent tools item (F-39)', () => {
     await openOverflow(user)
     const item = screen.getByRole('menuitem', {name: 'Tools: defined by the agent'})
     expect(item).toHaveAttribute('aria-disabled', 'true')
-    // C14: it says why — and stays in the arrow-key order, so keyboard and
+    // It says why — and stays in the arrow-key order, so keyboard and
     // screen-reader users reach it (a plain `disabled` item was skipped).
     expect(item).toHaveAccessibleDescription('An agent runs the tools set up in its Azure AI Foundry definition')
     await user.keyboard('{ArrowDown}{ArrowDown}') // New chat → Tools
@@ -240,7 +240,7 @@ describe('ChatHeader Foundry agent tools item (F-39)', () => {
   })
 })
 
-describe('ChatHeader context window formatting (F-44)', () => {
+describe('ChatHeader context window formatting', () => {
   it('renders a 1M context window as "1M", not "1000k"', async () => {
     const user = userEvent.setup()
     const big: ModelDetail = {

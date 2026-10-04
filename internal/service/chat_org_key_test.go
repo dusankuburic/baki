@@ -200,7 +200,7 @@ func TestPreviewContext_SharedCredentialRoleRule(t *testing.T) {
 
 // A credential failure on the org's shared credential tells the member to
 // ask their org admin; the same failure on their own key keeps the
-// Settings copy. F-42: classifyFailureShared sets the shared flag for
+// Settings copy. classifyFailureShared sets the shared flag for
 // exactly those three credential errors and nothing else.
 func TestClassifyFailure_SharedCredentialCopy(t *testing.T) {
 	for _, err := range []error{ai.ErrApiKeyInvalid, ai.ErrProviderPermissionDenied, ai.ErrProviderConfigInvalid} {

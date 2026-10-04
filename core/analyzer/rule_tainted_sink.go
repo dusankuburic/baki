@@ -8,13 +8,9 @@ import (
 
 // TaintedSinkRule flags dangerous sinks (shell commands, SQL, HTTP, file
 // writes, process launches) that directly reference user-controlled input
-// variables (Input_*/input_*/UserInput_* prefix). This is the classic taint-
-// tracking finding: untrusted data reaches a dangerous sink without validation.
-//
-// The full data-flow engine (computeTaintPaths) tracks indirect flows through
-// intermediate assignments; this rule catches the common direct case — the
-// source variable is used verbatim in the sink block's properties — as a
-// per-block O(1) check during the main analysis walk.
+// variables (Input_*/input_*/UserInput_* prefix) — the classic taint-tracking
+// finding. The full data-flow engine (computeTaintPaths) tracks indirect
+// flows; this catches the common direct case as a per-block O(1) check.
 type TaintedSinkRule struct{}
 
 func (r *TaintedSinkRule) ID() string   { return "tainted-sink" }

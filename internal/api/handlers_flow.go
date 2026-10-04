@@ -20,15 +20,11 @@ import (
 	"pad-core/models"
 )
 
-// maxConcurrentUploadsPerUser bounds the number of in-flight uploads a single
-// user may have. Each upload can be up to the global body limit (10 MiB) / 50
-// MiB blob cap, so without a per-user guard one account could fan out many
-// concurrent large parses and DB writes. The request-timeout middleware bounds
-// how long an overflowing request waits before it is rejected.
+// maxConcurrentUploadsPerUser bounds one user's in-flight uploads (each a
+// large parse plus DB writes) so one account cannot fan out many.
 const maxConcurrentUploadsPerUser = 3
 
-// uploadLimiter is a per-user counting semaphore that throttles concurrent
-// uploads. Slots are cheap channels keyed by user ID; an empty userID (local /
+// uploadLimiter is a per-user counting semaphore; an empty userID (local /
 // unauthenticated) bypasses the limit.
 type uploadLimiter struct {
 	mu   sync.Mutex
@@ -39,10 +35,8 @@ func newUploadLimiter() *uploadLimiter {
 	return &uploadLimiter{sems: make(map[string]chan struct{})}
 }
 
-// acquire reserves an upload slot for userID, returning a release callback. If
-// the user already holds maxConcurrentUploadsPerUser uploads it waits until the
-// request context is cancelled (request timeout / client disconnect), in which
-// case ok is false and the caller should reject with 429.
+// acquire reserves an upload slot, returning a release callback; at the max
+// it waits for the context, then returns ok false (caller rejects with 429).
 func (l *uploadLimiter) acquire(ctx context.Context, userID string) (release func(), ok bool) {
 	if userID == "" {
 		return func() {}, true
@@ -58,17 +52,8 @@ func (l *uploadLimiter) acquire(ctx context.Context, userID string) (release fun
 	case sem <- struct{}{}:
 		return func() {
 			<-sem
-			// Drop the entry once the last holder releases so the map doesn't
-			// grow unboundedly with lifetime-distinct-user count (a monotonic
-			// memory leak in multi-tenant cloud). A fresh channel is recreated
-			// on the user's next upload via the !exists branch above.
-			//
-			// The identity check (cur == sem) guards a release-vs-release race:
-			// if another release already deleted this entry and a later upload
-			// recreated a *different* channel under the same userID, we must
-			// not delete that newer channel. len==0 also guarantees no sender
-			// is currently blocked on this sem (a blocked sender only exists
-			// when the buffered channel is full, i.e. len==cap>0).
+			// Drop the entry when the last holder releases so the map does not grow unboundedly;
+			// cur == sem guards a release race that recreated a different channel, and len==0 means no sender is blocked.
 			l.mu.Lock()
 			if cur, ok := l.sems[userID]; ok && cur == sem && len(sem) == 0 {
 				delete(l.sems, userID)
@@ -99,9 +84,7 @@ func NewFlowHandler(flowSvc *service.FlowService, docProvider service.DocumentPr
 	}
 }
 
-// SetFlowNotifier wires the WebSocket hub so that apply-fix, save-source, and
-// suppress-in-source broadcast a flow-changed event to connected collaborators
-// (triggering useFlowChangeSync to reload content on other viewers).
+// SetFlowNotifier wires the WebSocket hub: apply-fix, save-source and suppress-in-source broadcast a flow-changed event to connected viewers.
 func (h *FlowHandler) SetFlowNotifier(n FlowNotifier) {
 	h.notifier = n
 }
@@ -140,11 +123,7 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// Stash the raw source for single-file flows so cloud-mode apply-fix/
-	// preview-fix (which patch line-based source) have the original text.
-	// Multi-file flows are NOT supported for cloud fix — per-file source
-	// storage is a future enhancement. Leave Source empty there; the fix
-	// path returns a clear error ("source not available").
+	// Stash the raw source for single-file flows so cloud-mode apply-fix/preview-fix have the original text.
 	if len(req.Files) == 1 {
 		for _, text := range req.Files {
 			doc.Source = text
@@ -161,9 +140,7 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 			render.Error(w, err, http.StatusInternalServerError)
 			return
 		}
-		// flow.upload was declared (and offered as an audit-log filter) but
-		// never emitted, so the audit trail could not show who brought a
-		// flow into the deployment.
+		// flow.upload was once declared but never emitted; emit it so the trail shows who brought a flow in.
 		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowUpload, "flow", doc.ID, map[string]string{"name": doc.Name})
 	}
 
@@ -197,10 +174,7 @@ func (h *FlowHandler) handleLoadFlowFromPath(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// No analytics reset here: session analytics key on the file's path
-	// (analyzer.StableFlowID), so re-analyzing this file replaces its own entry
-	// and other flows' analytics survive. Only opening a base FOLDER resets the
-	// session (see handleLoadFlowFolder).
+	// No analytics reset here: session analytics key on the file's path; only opening a base FOLDER resets.
 	render.JSON(w, doc)
 }
 
@@ -232,10 +206,7 @@ func (h *FlowHandler) handleLoadFlowFolder(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// Opening a base folder is a deliberate workspace switch — the ONLY action
-	// that resets the desktop session analytics. Single-file loads and batch
-	// analyses accumulate into the session instead (stable per-path identity
-	// prevents double-counting).
+	// Opening a base folder is a deliberate workspace switch — the ONLY action that resets desktop session analytics.
 	analyzer.DefaultCache.Clear()
 	render.JSON(w, doc)
 }
@@ -336,11 +307,7 @@ func (h *FlowHandler) handleRevealInFileManager(w http.ResponseWriter, r *http.R
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// handleReimport re-reads the currently-loaded flow's source file (desktop),
-// re-parses it, and returns the fresh document — so a user who fixed something
-// in Power Automate Desktop can re-import + re-analyze in one click without
-// navigating the file picker. Uses doc.FilePath (the already-loaded path), so
-// there's no path-injection surface. Cloud flows have no on-disk source → 403.
+// handleReimport re-reads the loaded flow's source file via doc.FilePath (no path-injection surface); cloud → 403.
 // @Summary      Re-import flow from disk
 // @Description  handleReimport re-reads the currently-loaded flow's source file (desktop), re-parses it, and returns the fresh document — so a user who fixed something in Power Automate Desktop can re-import + re-analyze in one click without navigating the file picker. Uses doc.FilePath (the already-loaded path), so there's no path-injection surface. Cloud flows have no on-disk source → 403.
 // @Tags         flow
@@ -387,20 +354,15 @@ func (h *FlowHandler) handleReimport(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// Drop only the re-imported flow's stale analytics entry (the source may
-	// have changed on disk); the rest of the session's analytics survive.
+	// Drop only the re-imported flow's stale analytics entry; the rest of the session's analytics survive.
 	analyzer.DefaultCache.Invalidate(analyzer.StableFlowID(fresh))
-	// The flow's content changed on disk (edited in PAD): derived caches —
-	// search index, chat context — must not serve the pre-import state.
+	// Derived caches (search index, chat context) must not serve the pre-import state.
 	h.flowSvc.InvalidateSearchIndex(fresh.ID)
 	render.JSON(w, fresh)
 }
 
-// handleSuppressInSource writes a `# pad-ignore[ruleId]` directive into the
-// flow's source file before the given block, re-parses, and returns the updated
-// document. Desktop/local only — cloud flows have no on-disk source. This is
-// the first end-to-end apply-fix: the suppression travels with the file (honored
-// by the analyzer, CLI gate, baselines, CI), unlike a UI-only suppression.
+// handleSuppressInSource writes a `# pad-ignore[ruleId]` directive into the source before the
+// block and re-parses. Desktop/local only; the suppression travels with the file (analyzer, CLI gate, baselines, CI).
 // @Summary      Insert pad-ignore directive
 // @Description  handleSuppressInSource writes a `# pad-ignore[ruleId]` directive into the flow's source file before the given block, re-parses, and returns the updated document. Desktop/local only — cloud flows have no on-disk source. This is the first end-to-end apply-fix: the suppression travels with the file (honored by the analyzer, CLI gate, baselines, CI), unlike a UI-only suppression.
 // @Tags         flow
@@ -444,10 +406,8 @@ func (h *FlowHandler) handleSuppressInSource(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, updated)
 }
 
-// handleApplyFix applies a deterministic auto-fix (e.g. wrap-in-error-handler)
-// to a block in the flow's source file, re-parses, and returns the updated
-// document. Desktop/local only. The finding carries the available fixType in
-// its AutoFix field; the frontend shows "Apply fix" only when that is set.
+// handleApplyFix applies a deterministic auto-fix to a block in the source
+// file. Desktop/local only; the finding carries the fixType in its AutoFix field.
 // @Summary      Apply an auto-fix
 // @Description  handleApplyFix applies a deterministic auto-fix (e.g. wrap-in-error-handler) to a block in the flow's source file, re-parses, and returns the updated document. Desktop/local only. The finding carries the available fixType in its AutoFix field; the frontend shows "Apply fix" only when that is set.
 // @Tags         flow
@@ -466,10 +426,8 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 		RuleID   string `json:"ruleId"`
 		Variable string `json:"variable"`
 		Property string `json:"property"`
-		// Unsafe is the explicit opt-in for behaviour-changing fixers
-		// (replace-with-variable & co.). The batch endpoint and the CLI already
-		// required it; this single-fix route applied them on a bare POST.
-		// Without it such a fix is rejected with 400 (service gate).
+		// Unsafe is the explicit opt-in for behaviour-changing fixers; without
+		// it such a fix is a 400 (service gate).
 		Unsafe bool `json:"unsafe"`
 	}
 	if !decodeBody(w, r, &req) {
@@ -499,10 +457,7 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, updated)
 }
 
-// handlePreviewFix returns the before/after source text for a fix WITHOUT
-// writing. The frontend renders a diff so the user can review the change
-// before committing. Works in both desktop (local source file) and cloud
-// (stored raw source) modes for single-file flows.
+// handlePreviewFix returns the before/after source for a fix WITHOUT writing.
 // @Summary      Preview an auto-fix diff
 // @Description  handlePreviewFix returns the before/after source text for a fix WITHOUT writing. The frontend renders a diff so the user can review the change before committing. Works in both desktop (local source file) and cloud (stored raw source) modes for single-file flows.
 // @Tags         flow
@@ -541,10 +496,8 @@ func (h *FlowHandler) handlePreviewFix(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, result)
 }
 
-// handleApplyFixBatch applies multiple auto-fixes in one pass (iterative loop,
-// persisted once). The frontend's bulk-action bar derives the rule set from the
-// selected findings; the server fixes every auto-fixable finding whose rule is
-// in that set (re-parsing between fixes so line shifts don't corrupt targets).
+// handleApplyFixBatch applies every auto-fixable finding whose rule is in the
+// request's set, re-parsing between fixes so line shifts don't corrupt targets.
 // @Summary      Apply fixes in bulk
 // @Description  handleApplyFixBatch applies multiple auto-fixes in one pass (iterative loop, persisted once). The frontend's bulk-action bar derives the rule set from the selected findings; the server fixes every auto-fixable finding whose rule is in that set (re-parsing between fixes so line shifts don't corrupt targets).
 // @Tags         flow
@@ -582,7 +535,7 @@ func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request
 			}
 		}
 	}
-	updated, applied, err := h.flowSvc.ApplyFixBatch(r.Context(), doc, ruleFilter, req.Limit)
+	out, err := h.flowSvc.ApplyFixBatchResult(r.Context(), doc, ruleFilter, req.Limit)
 	if err != nil {
 		if errors.Is(err, storageif.ErrVersionConflict) {
 			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
@@ -594,12 +547,17 @@ func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request
 	if h.notifier != nil {
 		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
 	}
-	render.JSON(w, map[string]any{"document": updated, "applied": applied})
+	// `partial`: the deadline ended the loop early; the applied fixes ARE persisted and the client can
+	// re-run. The timeout middleware only cancels r.Context(), so this response still reaches the client.
+	resp := map[string]any{"document": out.Doc, "applied": out.Applied, "partial": out.Partial}
+	if out.Partial && out.Reason != nil {
+		resp["partialReason"] = out.Reason.Error()
+	}
+	render.JSON(w, resp)
 }
 
-// handleListSourceSnapshots returns the flow's undo ring (newest last):
-// the pre-mutation states captured by every fix/batch/source-save path this
-// session. Editor access (restoring is an edit; listing previews it).
+// handleListSourceSnapshots returns the flow's undo ring (newest last).
+// Editor access (restoring is an edit; listing previews it).
 // @Summary      List undo snapshots
 // @Tags         flow
 // @Produce      json
@@ -613,10 +571,8 @@ func (h *FlowHandler) handleListSourceSnapshots(w http.ResponseWriter, r *http.R
 	render.JSON(w, map[string]any{"snapshots": h.flowSvc.ListSourceSnapshots(doc)})
 }
 
-// handleRestoreSourceSnapshot writes a snapshot's bytes back (undo for the
-// last fix/batch/save). Desktop re-writes the recorded file; cloud persists
-// through the standard OCC path — and snapshots the current state first, so
-// a restore is itself undoable.
+// handleRestoreSourceSnapshot writes a snapshot's bytes back (undo for the last fix/batch/save),
+// snapshotting the current state first so a restore is itself undoable.
 // @Summary      Restore undo snapshot
 // @Tags         flow
 // @Accept       json
@@ -651,9 +607,8 @@ func (h *FlowHandler) handleRestoreSourceSnapshot(w http.ResponseWriter, r *http
 	render.JSON(w, map[string]any{"document": updated})
 }
 
-// handleUpdateFlowTags replaces a flow's organizational tags (business unit,
-// criticality, environment). Editor access. Tags are metadata, not content:
-// no version bump, so re-tagging can't trip OCC for a concurrent editor.
+// handleUpdateFlowTags replaces a flow's organizational tags. Editor access.
+// Tags are metadata: no version bump, so re-tagging can't trip OCC.
 // @Summary      Set flow tags
 // @Tags         flow
 // @Accept       json
@@ -676,8 +631,7 @@ func (h *FlowHandler) handleUpdateFlowTags(w http.ResponseWriter, r *http.Reques
 		render.Error(w, fmt.Errorf("flowId is required"), http.StatusBadRequest)
 		return
 	}
-	// Editor: tags change how the flow is governed/found, so they're an edit.
-	// Permission-only check — a metadata write needs no content resolution.
+	// Tags change how the flow is governed/found, so they're an edit; a metadata write needs no content resolution.
 	if !requireFlowPerm(w, r, h.flowSvc, h.security, req.FlowID, "editor") {
 		return
 	}
@@ -693,9 +647,8 @@ func (h *FlowHandler) handleUpdateFlowTags(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, map[string]any{"tags": normalized})
 }
 
-// handleRemoveBlock deletes one block (with descendants) from the flow
-// source — the visual editor's delete. Parse-gated + snapshotted server-side
-// (undo via the snapshot endpoints). Editor access.
+// handleRemoveBlock deletes one block (with descendants) from the source —
+// parse-gated + snapshotted server-side (undo via the snapshot endpoints).
 // @Summary      Remove a block
 // @Tags         flow
 // @Accept       json
@@ -706,8 +659,6 @@ func (h *FlowHandler) handleRemoveBlock(w http.ResponseWriter, r *http.Request) 
 	h.handleBlockEdit(w, r, "remove")
 }
 
-// handleDuplicateBlock inserts a verbatim copy of one block directly after
-// it. Editor access.
 // @Summary      Duplicate a block
 // @Tags         flow
 // @Accept       json
@@ -756,8 +707,6 @@ func (h *FlowHandler) handleBlockEdit(w http.ResponseWriter, r *http.Request, ki
 	render.JSON(w, map[string]any{"document": updated})
 }
 
-// handleUpdateBlockProperties applies a batch of property edits to one block
-// (targeted in-line replaces; other properties' text untouched). Editor.
 // @Summary      Update block properties
 // @Tags         flow
 // @Accept       json
@@ -788,7 +737,7 @@ func (h *FlowHandler) handleUpdateBlockProperties(w http.ResponseWriter, r *http
 			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
 			return
 		}
-		render.Error(w, err, http.StatusConflict) // guards carry their own guidance
+		render.Error(w, err, http.StatusConflict)
 		return
 	}
 	if h.notifier != nil {
@@ -797,7 +746,6 @@ func (h *FlowHandler) handleUpdateBlockProperties(w http.ResponseWriter, r *http
 	render.JSON(w, map[string]any{"document": updated})
 }
 
-// handleMoveBlock reorders a block among its siblings ({"up"|"down"}).
 // @Summary      Move a block
 // @Tags         flow
 // @Accept       json
@@ -837,7 +785,6 @@ func (h *FlowHandler) handleMoveBlock(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, map[string]any{"document": updated})
 }
 
-// handleRemoveBlocks bulk-deletes blocks in one patch (U3b multi-select).
 // @Summary      Bulk delete blocks
 // @Tags         flow
 // @Accept       json
@@ -867,7 +814,7 @@ func (h *FlowHandler) handleRemoveBlocks(w http.ResponseWriter, r *http.Request)
 			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
 			return
 		}
-		render.Error(w, err, http.StatusConflict) // guards carry their own guidance
+		render.Error(w, err, http.StatusConflict)
 		return
 	}
 	if h.notifier != nil {
@@ -876,8 +823,8 @@ func (h *FlowHandler) handleRemoveBlocks(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, map[string]any{"document": updated})
 }
 
-// handleRenameBlock renames LABEL/COMMENT blocks (rewriting same-file GOTO
-// references for labels). @Summary Rename a block
+// handleRenameBlock renames LABEL/COMMENT blocks, rewriting same-file GOTO
+// references for labels. @Summary Rename a block
 // @Tags         flow
 // @Accept       json
 // @Produce      json
@@ -907,7 +854,7 @@ func (h *FlowHandler) handleRenameBlock(w http.ResponseWriter, r *http.Request) 
 			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
 			return
 		}
-		render.Error(w, err, http.StatusConflict) // guards carry their own guidance
+		render.Error(w, err, http.StatusConflict)
 		return
 	}
 	if h.notifier != nil {
@@ -916,9 +863,8 @@ func (h *FlowHandler) handleRenameBlock(w http.ResponseWriter, r *http.Request) 
 	render.JSON(w, map[string]any{"document": updated, "gotoRefsUpdated": gotoRefs})
 }
 
-// handleMoveBlockTo reorders a block before/after a reference sibling —
-// the primitive drag-and-drop maps to. Same-scope only (re-parenting
-// refused). Editor access.
+// handleMoveBlockTo reorders a block before/after a reference sibling (what
+// drag-and-drop maps to). Same-scope only; re-parenting refused.
 // @Summary      Move a block relative to another
 // @Tags         flow
 // @Accept       json
@@ -950,7 +896,7 @@ func (h *FlowHandler) handleMoveBlockTo(w http.ResponseWriter, r *http.Request) 
 			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
 			return
 		}
-		render.Error(w, err, http.StatusConflict) // guards carry their own guidance
+		render.Error(w, err, http.StatusConflict)
 		return
 	}
 	if h.notifier != nil {
@@ -959,8 +905,6 @@ func (h *FlowHandler) handleMoveBlockTo(w http.ResponseWriter, r *http.Request) 
 	render.JSON(w, map[string]any{"document": updated})
 }
 
-// handleGetSourceMeta returns the cheap file stat signal the desktop
-// watcher polls (size + mtime; folder flows aggregate members). Viewer.
 // @Summary      Get flow file change signal
 // @Tags         flow
 // @Produce      json
@@ -979,9 +923,6 @@ func (h *FlowHandler) handleGetSourceMeta(w http.ResponseWriter, r *http.Request
 	render.JSON(w, meta)
 }
 
-// handleGetSource returns the raw PAD source text for the flow. Desktop: reads
-// the file — for folder flows the member named by ?file= (Main.txt when
-// omitted). Cloud: returns the stored source. Viewer access.
 // @Summary      Get raw flow source
 // @Description  handleGetSource returns the raw PAD source text for the flow. Desktop: reads the file (folder flows: the member named by ?file=, Main.txt when omitted). Cloud: returns the stored source. Viewer access.
 // @Tags         flow
@@ -1004,8 +945,6 @@ func (h *FlowHandler) handleGetSource(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, map[string]string{"source": source})
 }
 
-// handleSaveSource replaces the flow's raw source text (from the in-app source
-// editor), re-parses, and returns the updated document. Editor access.
 // @Summary      Save edited flow source
 // @Description  handleSaveSource replaces the flow's raw source text (from the in-app source editor), re-parses, and returns the updated document. Editor access.
 // @Tags         flow
@@ -1021,7 +960,7 @@ func (h *FlowHandler) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 		FlowID string `json:"flowId"`
 		Source string `json:"source"`
 		// File names the member of a desktop folder flow being saved (bare
-		// filename; Main.txt when empty). Ignored for single-file flows.
+		// filename; Main.txt when empty).
 		File string `json:"file"`
 	}
 	if !decodeBody(w, r, &req) {
@@ -1083,10 +1022,7 @@ func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, res)
 }
 
-// librarySearchAvailable answers 503 in local/desktop mode, where there is no
-// stored library to search. The service used to return a clean empty result
-// there, which the UI could not tell apart from "no matches". Same shape as
-// triageAvailable / policyAvailable.
+// librarySearchAvailable answers 503 in local mode, where the service used to return an empty result the UI could not tell from "no matches".
 func (h *FlowHandler) librarySearchAvailable(w http.ResponseWriter) bool {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("library search requires a storage backend (cloud mode)"), http.StatusServiceUnavailable)
@@ -1095,9 +1031,6 @@ func (h *FlowHandler) librarySearchAvailable(w http.ResponseWriter) bool {
 	return true
 }
 
-// handleSearchLibrary runs a query across every flow the caller can access
-// (cross-flow / org-wide search), merging per-flow hits into one result set.
-// Each hit is stamped with its source flowId/flowName so the UI can group them.
 // @Summary      Search cloud library
 // @Description  handleSearchLibrary runs a query across every flow the caller can access (cross-flow / org-wide search), merging per-flow hits into one result set. Each hit is stamped with its source flowId/flowName so the UI can group them.
 // @Tags         flow

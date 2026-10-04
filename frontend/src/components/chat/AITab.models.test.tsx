@@ -333,7 +333,6 @@ describe('AITab per-thread model', () => {
   })
 })
 
-// Regressions from the Part 9 review round (ids from the review).
 describe('AITab per-thread model: review fixes', () => {
   const LEGACY: ModelDetail = {
     id: 'm/legacy0000',
@@ -359,7 +358,7 @@ describe('AITab per-thread model: review fixes', () => {
   ]
   const pinOfT1 = () => threadModelOf(useChatStore.getState().threads.find(th => th.id === T1)!)
 
-  // C1: unpinned, the stand-in's first reply became the thread's last reply,
+  // Unpinned, the stand-in's first reply became the thread's last reply,
   // and legacy inference adopted the stand-in for good.
   it("a legacy thread whose model is only unavailable keeps it: a reply from the stand-in doesn't move it", async () => {
     const user = userEvent.setup()
@@ -401,7 +400,7 @@ describe('AITab per-thread model: review fixes', () => {
     expect(notice()).toBeNull()
   })
 
-  // C2: Azure configured with no models (its legacy import is pending) read
+  // Azure configured with no models (its legacy import is pending) read
   // as "every model removed", and the thread moved to another model.
   it('a thread keeps its Azure model while Azure lists nothing to chat with — no notice, no move', async () => {
     vi.mocked(providersApi.listProviders).mockResolvedValue([azure([])])
@@ -414,7 +413,7 @@ describe('AITab per-thread model: review fixes', () => {
     expect(screen.queryByText(/^No Azure AI Foundry models yet\. Add the deployments/)).toBeNull()
   })
 
-  // C3: with nothing to pick, focus never entered the popup, so Escape went
+  // With nothing to pick, focus never entered the popup, so Escape went
   // to the chat (leaving focus mode) and the popup stayed.
   it('the picker with nothing to pick takes focus; Escape closes it, not focus mode', async () => {
     const user = userEvent.setup()
@@ -432,7 +431,7 @@ describe('AITab per-thread model: review fixes', () => {
     expect(useUIStore.getState().chatFocus).toBe(true)
   })
 
-  // C4: a refused send whose listing refetch failed returned the text
+  // A refused send whose listing refetch failed returned the text
   // silently — no notice (it waited for a listing), no toast.
   it('a send refused for its model says so at once, and the notice shows even when the refetch fails', async () => {
     const user = userEvent.setup()
@@ -454,7 +453,7 @@ describe('AITab per-thread model: review fixes', () => {
     )
   })
 
-  // C5: the guidance held the composer only; a suggested prompt (or a
+  // The guidance held the composer only; a suggested prompt (or a
   // template, or Regenerate) still went out with model ''.
   it('a suggested prompt sends nothing while Azure has no model to chat with, and says why', async () => {
     const user = userEvent.setup()
@@ -478,7 +477,7 @@ describe('AITab per-thread model: review fixes', () => {
     expect(useChatStore.getState().getMessages(T1)).toHaveLength(0)
   })
 
-  // C7: the status region sat in a tree that rendered only once the
+  // The status region sat in a tree that rendered only once the
   // providers were checked, so it was inserted already holding a notice
   // raised by that first listing — and a region inserted with its text is
   // not announced.
@@ -519,7 +518,7 @@ describe('AITab per-thread model: review fixes', () => {
     }
   })
 
-  // C8: Dismiss unmounted the focused button and focus fell to <body>.
+  // Dismiss unmounted the focused button and focus fell to <body>.
   it('Dismiss moves focus to the model picker, which names the model the thread now uses', async () => {
     const user = userEvent.setup()
     vi.mocked(providersApi.listProviders).mockResolvedValue([azure([GPT])])
@@ -535,7 +534,7 @@ describe('AITab per-thread model: review fixes', () => {
     expect(picker()).toHaveAccessibleName(/GPT-4\.1/)
   })
 
-  // C10: sent while an unpinned thread's history loaded, a turn pinned the
+  // Sent while an unpinned thread's history loaded, a turn pinned the
   // new-chat default, and legacy inference never ran on that history.
   it("a send while the thread's history loads pins nothing; the history's own model then does", async () => {
     const user = userEvent.setup()
@@ -562,7 +561,7 @@ describe('AITab per-thread model: review fixes', () => {
     )
   })
 
-  // C13: an inactive thread's tab tooltip ignored its own history.
+  // An inactive thread's tab tooltip ignored its own history.
   it("an inactive legacy thread's tab tooltip names its own model", async () => {
     const T2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
     seed({provider: 'azure-foundry', model: GPT.id, modelLabel: 'GPT-4.1'})

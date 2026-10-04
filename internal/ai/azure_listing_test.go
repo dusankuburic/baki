@@ -33,7 +33,7 @@ func TestAzureFoundry_ModelsIncludeProjectDeploymentsAndAgents(t *testing.T) {
 				{"name": "vec", "type": "ModelDeployment", "modelName": "Cohere-v3-english", "capabilities": map[string]any{"embeddings": true}},
 			}})
 		case "/api/projects/p1/agents":
-			// F-24: both the first page and the after= continuation ask for
+			// Both the first page and the after= continuation ask for
 			// the List Agents maximum page size, not the default 20.
 			if got := r.URL.Query().Get("limit"); got != "100" {
 				t.Errorf("agents listing limit = %q, want 100", got)
@@ -144,7 +144,7 @@ func expireAzureListing(t *testing.T, cfg AzureFoundryConfig) {
 	azureModelsCache.m[azureModelsCacheKey(cfg)] = e
 }
 
-// Finding #24 / PERF-5: a listing cut short by a transient project failure is
+// a listing cut short by a transient project failure is
 // served for at most azureModelsRetryAfter — not re-fetched on every turn
 // (up to the 10 s extras bound each) while the failure lasts, and never
 // hidden for the full TTL — then asked again; a definitive refusal (403 on
@@ -205,7 +205,7 @@ func TestAzureFoundry_IncompleteProjectListingIsServedBriefly(t *testing.T) {
 	}
 }
 
-// Finding #24 / PERF-5: a caller whose own context is cancelled gets the
+// a caller whose own context is cancelled gets the
 // document's deployments at once and never poisons the cache with a listing
 // cut by its deadline; the shared flight it started completes detached and
 // serves the next caller (one agents call in total).
@@ -228,7 +228,7 @@ func TestAzureFoundry_CancelledListingIsNotCached(t *testing.T) {
 	}
 }
 
-// Finding #28: a project endpoint that hangs costs the listing at most the
+// a project endpoint that hangs costs the listing at most the
 // extras bound; the configured deployments are still listed.
 func TestAzureFoundry_ProjectExtrasAreBounded(t *testing.T) {
 	prev := azureProjectExtrasTimeout
@@ -260,7 +260,7 @@ func (f *failingCred) GetToken(context.Context, policy.TokenRequestOptions) (azc
 	return azcore.AccessToken{}, errors.New("AADSTS7000215: Invalid client secret provided")
 }
 
-// Finding #28: after the token fetch failed the project extras are skipped —
+// after the token fetch failed the project extras are skipped —
 // no second and third token attempt, no project request.
 func TestAzureFoundry_ProjectExtrasSkippedAfterTokenFailure(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, _ map[string]any) {
@@ -282,7 +282,7 @@ func TestAzureFoundry_ProjectExtrasSkippedAfterTokenFailure(t *testing.T) {
 	}
 }
 
-// Finding #20: the cache key covers the deployment names, so two users of one
+// the cache key covers the deployment names, so two users of one
 // resource and credential never see each other's deployments.
 func TestAzureFoundry_ListingCacheIsPerDocument(t *testing.T) {
 	srv, _ := entraProjectServer(t, 200, func(_ int, w http.ResponseWriter) {
@@ -370,7 +370,7 @@ func TestAzureFoundry_Project401RetriesOnceThenIsDefinitive(t *testing.T) {
 	})
 }
 
-// PERF-5: concurrent cold-cache listings of one document share one flight —
+// concurrent cold-cache listings of one document share one flight —
 // one deployments GET and one agents GET — and every caller gets the result;
 // the two project routes are fetched concurrently.
 func TestAzureFoundry_ConcurrentColdListingsShareOneFlight(t *testing.T) {
@@ -431,7 +431,7 @@ func TestAzureFoundry_ConcurrentColdListingsShareOneFlight(t *testing.T) {
 	}
 }
 
-// L-ai-2: a body cut short on a 200 (connection reset, deadline) is reported
+// a body cut short on a 200 (connection reset, deadline) is reported
 // as the read error it is — not "parse deployments" — and stays transient.
 func TestAzureFoundry_ProjectBodyReadErrorIsTransient(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, _ map[string]any) {
@@ -479,7 +479,7 @@ func TestAzureFoundry_ProjectBodyReadErrorIsTransient(t *testing.T) {
 	}
 }
 
-// L-ai-3 (with PERF-5's concurrent fetches): a 429 on the deployments route
+// a 429 on the deployments route
 // abandons the agents fetch — the project asked for back-off and the agents
 // route shares its quota — instead of paging on; the listing is incomplete
 // and the configured deployments are still returned.
@@ -522,7 +522,7 @@ func TestAzureFoundry_ProjectThrottleSkipsAgents(t *testing.T) {
 	}
 }
 
-// L-ai-5: one malformed item costs that entry, not the page — the listing is
+// one malformed item costs that entry, not the page — the listing is
 // complete and cached instead of being re-fetched on every turn for as long
 // as the deployment exists.
 func TestAzureFoundry_MalformedDeploymentItemIsSkipped(t *testing.T) {
@@ -602,12 +602,11 @@ func TestAzureFoundry_AgentOnCustomDeploymentResolvesItsModel(t *testing.T) {
 	}
 }
 
-// F-49: the deployments listing follows nextLink continuation pages — a
+// The deployments listing follows nextLink continuation pages — a
 // regression that stops following them silently hides every deployment
-// beyond the first page from the model picker. The page-1 nextLink is built
-// from the test server's own https URL because the continuation guard
-// (sameProjectHost) only follows links that stay on the project host over
-// https.
+// beyond the first page. The page-1 nextLink is built from the test
+// server's own https URL (the continuation guard only follows same-host
+// https links).
 func TestAzureFoundry_ProjectDeploymentsFollowNextLink(t *testing.T) {
 	var srv *azureTestServer
 	srv = newAzureTLSTestServer(t, func(w http.ResponseWriter, r *http.Request, _ int, _ map[string]any) {
@@ -655,7 +654,7 @@ func TestAzureFoundry_ProjectDeploymentsFollowNextLink(t *testing.T) {
 	}
 }
 
-// F-49: a continuation link that does not stay on the https project host —
+// A continuation link that does not stay on the https project host —
 // an off-host https link or a same-host plain-http one — is dropped, so the
 // Entra bearer never leaves the project host. The truncated listing counts
 // as complete: page 1 only, one deployments GET, cached for the full TTL.

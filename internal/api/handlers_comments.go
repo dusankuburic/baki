@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
+	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
-	"pad-core/analyzer"
 	"pad-core/logger"
 )
 
@@ -86,7 +88,10 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	userID := h.security.CallerID(r)
-	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	// Header, not the resolved document: the write needs the editor check and
+	// the flow's name (for the alerts and the email), never its content.
+	flow, err := h.flowSvc.GetAuthorizedHeader(r.Context(), req.FlowID, userID, "editor")
+	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -101,51 +106,81 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Best-effort comment notification: if the finding has an assignee who is
-	// NOT the commenter, email them so they discover the comment asynchronously.
-	// Detached so the response isn't delayed by SMTP.
-	//
-	// #nosec G118 -- the request context is deliberately NOT used. This work must
-	// outlive the response: inheriting r.Context() would cancel the email the
-	// instant the handler returns. notifyFindingComment builds its own bounded
-	// context (bestEffortTimeout) rather than running unbounded.
-	go h.notifyFindingComment(req.FlowID, req.FindingKey, userID, req.Body)
-
-	// In-app bell alerts (R2-5): the assignee AND prior distinct commenters
-	// (excluding the actor) each get a targeted alert. Synchronous best-effort
-	// — the comment write already committed.
-	h.recordCommentAlerts(req, userID, comment)
+	// The fan-out (bell alerts for the assignee and prior commenters, the assignee's email) is
+	// best-effort and runs AFTER the commit, detached: the post-commit hook only ENQUEUES onto
+	// h.alerts (capped, drained on shutdown) — running inline needed a second pooled connection
+	// while the request's RLS transaction pinned the first, and the middleware runs hooks before
+	// the response is complete.
+	actorEmail := claimsEmail(r.Context())
+	flowName := flow.Name
+	storagedb.RegisterPostCommit(r.Context(), func() {
+		fanOut := func() {
+			h.fanOutComment(req.FlowID, req.FindingKey, flowName, userID, actorEmail, req.Body, comment.ID)
+		}
+		if !h.alerts.Go(fanOut) {
+			// Pool saturated or draining: the bell rows must not be lost (they
+			// never could be when this ran inline), so pay the round trips here.
+			fanOut()
+		}
+	})
 
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionCommentAdd, "flow", req.FlowID, map[string]string{"findingKey": req.FindingKey, "commentId": comment.ID})
 	render.JSON(w, comment)
 }
 
-// recordCommentAlerts delivers targeted comment_added alerts to the finding's
-// assignee and everyone who previously commented on it (deduped, actor
-// excluded). Names resolve best-effort; an unresolvable user is skipped.
-func (h *AnalysisHandler) recordCommentAlerts(req struct {
-	FlowID     string `json:"flowId"`
-	FindingKey string `json:"findingKey"`
-	Body       string `json:"body"`
-}, actorID string, comment *storageif.FindingComment) {
+// claimsEmail is the caller's email from the request's auth claims ("" when unauthenticated or in
+// local mode): the display-name fallback the detached notifications use without a user lookup.
+func claimsEmail(ctx context.Context) string {
+	if c := auth.ClaimsFromContext(ctx); c != nil {
+		return c.Email
+	}
+	return ""
+}
+
+// fanOutComment is the detached work of one comment: the actor's display name resolved ONCE, then
+// the targeted alerts recorded and the assignee emailed. Runs on h.alerts (the email hops to
+// h.emails so a stalled relay never holds the alert rows back), bounded by bestEffortTimeout.
+func (h *AnalysisHandler) fanOutComment(flowID, findingKey, flowName, actorID, actorEmail, body, commentID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Warn("finding-comment fan-out panicked", "err", r)
+		}
+	}()
 	if h.backend == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
 	defer cancel()
+	actorName := h.callerDisplayName(ctx, actorID, actorEmail)
+	h.recordCommentAlerts(ctx, flowID, findingKey, flowName, actorID, actorName, commentID)
+	h.emails.Go(func() {
+		ectx, ecancel := context.WithTimeout(context.Background(), bestEffortTimeout)
+		defer ecancel()
+		h.notifyFindingComment(ectx, flowID, findingKey, flowName, actorID, actorName, body)
+	})
+}
+
+// recordCommentAlerts delivers targeted comment_added alerts to the finding's assignee and everyone
+// who previously commented (deduped, actor excluded). Names resolve best-effort.
+func (h *AnalysisHandler) recordCommentAlerts(ctx context.Context, flowID, findingKey, flowName, actorID, actorName, commentID string) {
 	targets := map[string]bool{}
-	// Assignee.
-	if statuses, err := h.backend.ListFindingStatuses(ctx, req.FlowID); err == nil {
+	// Assignee: one primary-key row when the backend offers it (storageif.FindingStatusGetter, as
+	// priorAssignee uses); the fallback lists the whole flow's statuses for the single row.
+	if g, ok := h.backend.(storageif.FindingStatusGetter); ok {
+		if st, err := g.GetFindingStatus(ctx, flowID, findingKey); err == nil && st != nil && st.AssigneeID != "" {
+			targets[st.AssigneeID] = true
+		}
+	} else if statuses, err := h.backend.ListFindingStatuses(ctx, flowID); err == nil {
 		for _, st := range statuses {
-			if st.FindingKey == req.FindingKey && st.AssigneeID != "" {
+			if st.FindingKey == findingKey && st.AssigneeID != "" {
 				targets[st.AssigneeID] = true
 			}
 		}
 	}
 	// Prior commenters.
-	if prior, err := h.backend.ListFindingComments(ctx, req.FlowID, req.FindingKey); err == nil {
+	if prior, err := h.backend.ListFindingComments(ctx, flowID, findingKey); err == nil {
 		for _, c := range prior {
-			if c.AuthorID != "" && c.ID != comment.ID {
+			if c.AuthorID != "" && c.ID != commentID {
 				targets[c.AuthorID] = true
 			}
 		}
@@ -153,22 +188,19 @@ func (h *AnalysisHandler) recordCommentAlerts(req struct {
 	if len(targets) == 0 {
 		return
 	}
-	flowName := ""
-	if doc, err := h.flowSvc.GetAuthorized(ctx, req.FlowID, actorID, "viewer"); err == nil && doc != nil {
-		flowName = doc.Name
-	}
-	title := h.ruleDisplayName(ruleIDFromFindingKey(req.FindingKey))
+	title := h.ruleDisplayName(ruleIDFromFindingKey(findingKey))
+	message := fmt.Sprintf("New comment from %s", actorName)
 	for target := range targets {
 		if target == actorID {
 			continue // never notify the actor about their own comment
 		}
-		h.recordFindingAlert(&storageif.GovernanceAlert{
-			ID:         fmt.Sprintf("%s|comment_added|%s|%s|%s", req.FlowID, req.FindingKey, comment.ID, target),
-			FlowID:     req.FlowID,
+		h.recordFindingAlert(ctx, &storageif.GovernanceAlert{
+			ID:         fmt.Sprintf("%s|comment_added|%s|%s|%s", flowID, findingKey, commentID, target),
+			FlowID:     flowID,
 			FlowName:   flowName,
 			Type:       "comment_added",
 			Title:      title,
-			Message:    fmt.Sprintf("New comment from %s", h.callerDisplayName(actorID)),
+			Message:    message,
 			Severity:   "info",
 			TargetUser: target,
 		})
@@ -178,16 +210,16 @@ func (h *AnalysisHandler) recordCommentAlerts(req struct {
 // ruleIDFromFindingKey extracts the rule prefix ("rule:block" keys); the whole
 // key when the separator is absent.
 func ruleIDFromFindingKey(key string) string {
-	if idx := indexByte(key, ':'); idx > 0 {
+	if idx := strings.IndexByte(key, ':'); idx > 0 {
 		return key[:idx]
 	}
 	return key
 }
 
-// notifyFindingComment emails the finding's assignee when someone else comments.
-// Best-effort: any error (no assignee, user not found, SMTP down) is logged and
-// swallowed — the comment write already succeeded.
-func (h *AnalysisHandler) notifyFindingComment(flowID, findingKey, commenterID, body string) {
+// notifyFindingComment emails the finding's assignee when someone else comments. Best-effort: any
+// error is logged and swallowed — the comment write already succeeded. The commenter's and flow's
+// names arrive resolved (fanOutComment); re-resolving them is what the fan-out exists to avoid.
+func (h *AnalysisHandler) notifyFindingComment(ctx context.Context, flowID, findingKey, flowName, commenterID, commenterName, body string) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Warn("finding-comment notification panicked", "err", r)
@@ -196,15 +228,14 @@ func (h *AnalysisHandler) notifyFindingComment(flowID, findingKey, commenterID, 
 	if h.email == nil || h.backend == nil {
 		return
 	}
-	// Bound the detached work so a slow DB/SMTP can't keep the process (or a DB
-	// connection) alive indefinitely on shutdown. Mirrors the context.WithTimeout
-	// pattern used by the other detached background handlers (audit, providers).
-	ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
-	defer cancel()
 
-	// Find the assignee for this finding.
+	// Find the assignee: one primary-key row when the backend offers it, else the flow's statuses.
 	assigneeID := ""
-	if statuses, err := h.backend.ListFindingStatuses(ctx, flowID); err == nil {
+	if g, ok := h.backend.(storageif.FindingStatusGetter); ok {
+		if st, err := g.GetFindingStatus(ctx, flowID, findingKey); err == nil && st != nil {
+			assigneeID = st.AssigneeID
+		}
+	} else if statuses, err := h.backend.ListFindingStatuses(ctx, flowID); err == nil {
 		for _, st := range statuses {
 			if st.FindingKey == findingKey {
 				assigneeID = st.AssigneeID
@@ -224,47 +255,18 @@ func (h *AnalysisHandler) notifyFindingComment(flowID, findingKey, commenterID, 
 	if assigneeName == "" {
 		assigneeName = assignee.Email
 	}
-
-	commenterName := "A reviewer"
-	if u, err := h.backend.LoadUserByID(ctx, commenterID); err == nil && u != nil {
-		if u.DisplayName != "" {
-			commenterName = u.DisplayName
-		} else if u.Email != "" {
-			commenterName = u.Email
-		}
+	// The flow name arrives resolved through the ACTOR's access; the email only names the flow when
+	// the assignee can read it themselves (an editor may assign a non-collaborator).
+	if h.flowSvc != nil && h.flowSvc.CheckFlowPermission(ctx, flowID, assigneeID, "viewer") != nil {
+		flowName = ""
 	}
 
 	// Use the rule name (extracted from the findingKey prefix) as the title.
-	findingTitle := findingKey
-	ruleID := findingKey
-	if idx := indexByte(findingKey, ':'); idx > 0 {
-		ruleID = findingKey[:idx]
-	}
-	for _, rule := range analyzer.AllRules() {
-		if rule.ID() == ruleID {
-			findingTitle = rule.Name()
-			break
-		}
-	}
-
-	flowName := ""
-	if doc, err := h.flowSvc.GetAuthorized(ctx, flowID, assigneeID, "viewer"); err == nil && doc != nil {
-		flowName = doc.Name
-	}
+	findingTitle := h.ruleDisplayName(ruleIDFromFindingKey(findingKey))
 
 	if err := h.email.SendFindingComment(ctx, assignee.Email, assigneeName, commenterName, flowName, findingTitle, body); err != nil {
 		logger.Warn("failed to send finding-comment notification", "assignee", assigneeID, "error", err)
 	}
-}
-
-// indexByte returns the index of the first occurrence of b in s, or -1.
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
 }
 
 // @Summary      Delete a comment
@@ -292,10 +294,9 @@ func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Req
 		render.Error(w, err, 0)
 		return
 	}
-	// Editors may delete only their own comments; flow admins (owner,
-	// org admin, admin-tier collaborator) may moderate any comment. Try the
-	// author-scoped delete first — the common case — and only pay for the
-	// second flow-authz resolve when moderating someone else's comment.
+	// Editors may delete only their own comments; flow admins (owner, org admin, admin-tier
+	// collaborator) may moderate any. Author-scoped delete first — the common case; the second
+	// flow-authz resolve is paid only when moderating someone else's comment.
 	err := h.backend.DeleteFindingComment(r.Context(), req.FlowID, req.CommentID, userID)
 	if errors.Is(err, storageif.ErrNotCommentAuthor) {
 		if adminErr := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "admin"); adminErr == nil {
@@ -393,10 +394,9 @@ func (h *FlowHandler) handleListShares(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := h.security.CallerID(r)
-	// Require editor (not viewer): share-token metadata (IDs, creator, expiry)
-	// is need-to-know for owners/editors managing links, not for read-only
-	// collaborators. create/revoke already require editor — list must too, so a
-	// viewer can't enumerate active share links on a flow.
+	// Require editor (not viewer): share-token metadata (IDs, creator, expiry) is need-to-know for
+	// owners/editors — create/revoke already require editor, so list must too, else a viewer could
+	// enumerate active share links on a flow.
 	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
 		render.Error(w, err, 0)
 		return
@@ -445,10 +445,9 @@ func (h *FlowHandler) handleRevokeShare(w http.ResponseWriter, r *http.Request) 
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// handleViewShared is an UNAUTHENTICATED endpoint: a holder of the raw token
-// can view the flow's current analysis report (read-only). The token hash is
-// looked up in the backend; if found and not expired, the flow's analysis is
-// returned. No JWT required.
+// handleViewShared is an UNAUTHENTICATED endpoint: a holder of the raw token views the flow's
+// current analysis report read-only — the token hash is looked up in the backend and, found and
+// unexpired, no JWT is required.
 // @Summary      View shared report
 // @Description  Unauthenticated read-only report for share-link holders.
 // @Tags         share

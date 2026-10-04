@@ -292,14 +292,12 @@ func TestBackendSettingsProvider_ConcurrentGetRefreshesOnce(t *testing.T) {
 	}
 }
 
-// TestSystemServiceAndAnalysisAgreeOnDeploymentSettings is the regression test
-// for the split-brain itself: settings saved through SystemService (which backs
-// POST /api/system/settings) must be what the analysis path reads back.
-//
-// Before the fix these were two different stores in cloud mode — SystemService
-// wrote to Postgres while every analysis reader consulted a local file that was
-// recreated from defaults on each container start — so an administrator's saved
-// configuration had no effect on analysis at all.
+// TestSystemServiceAndAnalysisAgreeOnDeploymentSettings is the regression test for the
+// split-brain itself: settings saved through SystemService (which backs
+// POST /api/system/settings) must be what the analysis path reads back. Before the fix
+// these were two different stores in cloud mode — SystemService wrote to Postgres while
+// every analysis reader consulted a local file recreated from defaults on each container
+// start — so an administrator's saved configuration had no effect on analysis at all.
 func TestSystemServiceAndAnalysisAgreeOnDeploymentSettings(t *testing.T) {
 	t.Parallel()
 

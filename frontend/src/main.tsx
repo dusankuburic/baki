@@ -22,6 +22,22 @@ if (!isTauri() && !isSharedView) {
   }
 }
 
+// Warm the chunks the first screen needs, in parallel with the entry's own
+// evaluation. There are no modulepreload hints (vite.config.ts explains why),
+// so without this the first paint is a chain of serial round trips: entry →
+// React mounts → the router's lazy(HomeDashboard) → its own imports. Vite
+// dedupes the dynamic-import promise, so the later `lazy()` picks up the
+// request already in flight. The Home chunk only when Home is what the shell
+// opens on (the default, unless a ?view= deep link chose another system
+// view); BlockView is where opening any flow lands, so always.
+// A chunk that fails here fails again at the lazy() that needs it, where the
+// error boundary handles it; the warm-up itself reports nothing.
+const swallow = () => {}
+if (!isSharedView) {
+  if (useUIStore.getState().mainPaneView === 'home') void import('@/components/dashboard/HomeDashboard').catch(swallow)
+  void import('@/components/flow/BlockView').catch(swallow)
+}
+
 // Register the service worker for offline shell caching — web + production
 // builds only. In Tauri the frontend is served from a localhost sidecar and a
 // SW would interfere with the IPC bridge; under `vite dev` the SW's

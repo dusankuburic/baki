@@ -11,13 +11,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// TestSliceFrom_RuneBoundary covers the delta-resume offset, which arrives as a
-// raw byte count on a public endpoint and is therefore untrusted.
-//
-// Slicing mid-rune produces invalid UTF-8, and encoding/json does not reject
-// that — it substitutes U+FFFD, so a caller silently receives a replacement
-// character welded to the front of the resumed tail. That is corruption with no
-// error anywhere.
+// TestSliceFrom_RuneBoundary covers the delta-resume offset, which arrives as a raw byte
+// count on a public endpoint and is therefore untrusted: slicing mid-rune produces
+// invalid UTF-8, and encoding/json does not reject that — it substitutes U+FFFD, so a
+// caller silently receives a replacement character welded to the front of the resumed
+// tail (corruption with no error anywhere).
 func TestSliceFrom_RuneBoundary(t *testing.T) {
 	const buf = "héllo wörld ✅ done" // multi-byte at offsets 1, 8 and 12
 
@@ -63,14 +61,11 @@ func TestSliceFrom_RuneBoundary(t *testing.T) {
 	})
 }
 
-// newMiniRedis stands up an in-process Redis so the cross-replica resume path
-// can be exercised without an external dependency.
-//
-// The project previously deferred work on this path for want of a Redis test
-// harness ("modifying them without a Redis test harness repeats the documented
-// but NOT validated trap"). miniredis was already a dependency and already used
-// by the rate-limiter and WebSocket backplane suites; the resume backplane just
-// never got one, so it was the only Redis path with zero coverage.
+// newMiniRedis stands up an in-process Redis so the cross-replica resume path can be
+// exercised without an external dependency. The project previously deferred work on this
+// path for want of a Redis test harness; miniredis was already a dependency (rate-limiter
+// and WebSocket backplane suites) — the resume backplane just never got one, making it
+// the only Redis path with zero coverage.
 func newMiniRedis(t *testing.T) *redis.Client {
 	t.Helper()
 	mr, err := miniredis.Run()

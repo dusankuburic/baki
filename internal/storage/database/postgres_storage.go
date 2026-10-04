@@ -1,6 +1,5 @@
-// Package database implements StorageBackend backed by PostgreSQL.
-// It is intended for cloud/multi-tenant deployments.  Local desktop mode uses
-// the filesystem backend instead.
+// Package database implements StorageBackend backed by PostgreSQL, intended for cloud/multi-tenant
+// deployments; local desktop mode uses the filesystem backend instead.
 package database
 
 import (
@@ -49,21 +48,19 @@ type PostgresStorageBackend struct {
 
 	blobClient *azblob.Client
 	container  string
-	// cleaner runs deferred blob-cleanup work on a bounded worker pool. Non-nil
-	// only when blob storage is configured (created in New). Backends built
-	// directly (some tests) leave it nil; scheduleBlobCleanup falls back to a
-	// detached goroutine in that case.
+	// cleaner runs deferred blob-cleanup work on a bounded worker pool; nil when blob storage is not
+	// configured or the backend was built directly (some tests) — scheduleBlobCleanup then detaches.
 	cleaner *blobCleaner
 
-	// embeddingDim is the configured vector dimension for knowledge-base
-	// embeddings. Chunks whose embedding width differs are kept (JSONB) but
-	// excluded from the pgvector index so similarity search stays well-defined.
-	// 0 ⇒ 1536 (the constructor applies the default).
+	// embeddingDim is the configured vector dimension for knowledge-base embeddings; chunks whose
+	// width differs are kept (JSONB) but excluded from the pgvector index. 0 ⇒ 1536.
 	embeddingDim int
-	// hasPgvector is true when the `vector` extension is installed AND the
-	// knowledge_chunks.embedding_vec column exists — i.e. SearchKnowledge can
-	// push similarity ordering into the database. Detected once after migrate.
+	// hasPgvector is true when the `vector` extension AND knowledge_chunks.embedding_vec exist —
+	// SearchKnowledge can then push similarity ordering into the database. Detected once after migrate.
 	hasPgvector bool
+	// hnswIterativeScan is true when pgvector knows hnsw.iterative_scan (0.8+): the HNSW scan can
+	// then keep walking until the org filter has let LIMIT rows through. Detected once after migrate.
+	hnswIterativeScan bool
 
 	// azureExportConfig supplies the data-subject export's Azure resource
 	// configuration (SetAzureExportConfigSource); nil until DI installs it.
@@ -72,22 +69,17 @@ type PostgresStorageBackend struct {
 
 // Config holds the connection settings for the PostgreSQL backend.
 type Config struct {
-	DSN             string
-	MaxOpenConns    int
+	DSN          string
+	MaxOpenConns int
+	// MaxIdleConns caps the idle connections kept for reuse; <= 0 (the default) means "as many as MaxOpenConns" — see poolLimits.
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
-	// StatementTimeout is applied to every pooled connection as Postgres
-	// statement_timeout AND lock_timeout, so a runaway query or a lock wait
-	// is cancelled server-side. The per-request Go deadline does not
-	// reliably cancel a backend mid-statement, and streaming routes carry a
-	// much longer deadline. 0 disables (a maintenance escape hatch).
-	// Migrations lift it for their own session (see liftSessionTimeouts).
+	// StatementTimeout is applied to every pooled connection as Postgres statement_timeout AND lock_timeout,
+	// cancelling a runaway query or lock wait server-side. 0 disables; migrations lift it for their session.
 	StatementTimeout time.Duration
-	// RequireSSL, when true, refuses to open a DSN whose sslmode does not
-	// enforce an encrypted connection (sslmode=disable/allow/prefer or unset).
-	// This is a fail-fast guard so a misconfigured cloud deployment carrying
-	// credentials over plaintext is caught at boot rather than silently allowed.
+	// RequireSSL, when true, refuses a DSN whose sslmode does not enforce an encrypted connection — a
+	// fail-fast guard so a misconfigured cloud deployment carrying credentials over plaintext is caught at boot.
 	RequireSSL bool
 
 	AzureStorageAccount   string
@@ -97,16 +89,17 @@ type Config struct {
 	AzureBlobConnectionString string
 
 	// EmbeddingDim is the configured knowledge-base embedding dimension. 0 ⇒
-	// default 1536 (OpenAI text-embedding-3-small). Chunks whose embedding width
-	// differs are excluded from the pgvector index (see PostgresStorageBackend).
+	// default 1536; mismatched chunks are excluded from the pgvector index.
 	EmbeddingDim int
 }
 
 func DefaultConfig(dsn string) Config {
 	return Config{
-		DSN:             dsn,
-		MaxOpenConns:    25,
-		MaxIdleConns:    5,
+		DSN:          dsn,
+		MaxOpenConns: 25,
+		// 0 = match MaxOpenConns (poolLimits), so an operator raising
+		// PAD_DB_MAX_OPEN_CONNS does not reintroduce idle churn.
+		MaxIdleConns:    0,
 		ConnMaxLifetime: time.Hour,
 		ConnMaxIdleTime: 5 * time.Minute,
 		// Bounded by default: an unbounded query is the outage nobody can see.
@@ -115,33 +108,27 @@ func DefaultConfig(dsn string) Config {
 }
 
 // New opens a PostgreSQL connection, configures the pool, and runs migrations.
-// ctx is used for migrations and, when Azure Managed Identity is configured, for
-// the initial token validation. With Managed Identity a fresh Entra token is
-// injected per connection by azureMIConnector, so there is no background
-// refresh goroutine to manage.
+// With Managed Identity a fresh Entra token is injected per connection by
+// azureMIConnector (no background refresh goroutine).
 func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	pgxCfg, err := pgx.ParseConfig(cfg.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
 	}
 
-	// Fail fast on an insecure connection when the operator (or cloud-mode
-	// default) requires TLS. Checked after parsing so a malformed DSN still
-	// surfaces its real error, and before any network/blob setup so it never
-	// depends on a reachable server.
+	// Fail fast on an insecure connection when TLS is required — checked after parsing (a malformed DSN
+	// surfaces its real error) and before any network/blob setup.
 	if cfg.RequireSSL && !sslModeIsSecure(cfg.DSN) {
 		return nil, fmt.Errorf("postgres: TLS required but DSN sslmode=%q is insecure; use sslmode=require or verify-full", sslModeFromDSN(cfg.DSN))
 	}
 
 	b := &PostgresStorageBackend{}
 
-	// Initialize Azure Blob Storage if configured: a container plus an auth source
-	// (account name → Managed Identity, the prod default; or a connection string
-	// → emulator / non-MI).
+	// Initialize Azure Blob Storage if configured: a container plus an auth source (account name →
+	// Managed Identity, the prod default; or a connection string → emulator / non-MI).
 	if cfg.AzureStorageContainer != "" && (cfg.AzureStorageAccount != "" || cfg.AzureBlobConnectionString != "") {
-		// Explicit retry policy: the SDK retries on 429/5xx by default, but we set
-		// bounds so a slow/unavailable blob backend can't extend a request
-		// unboundedly. MaxRetryDelay caps backoff; TryTimeout bounds each attempt.
+		// Explicit retry bounds so a slow/unavailable blob backend can't extend a request unboundedly:
+		// MaxRetryDelay caps backoff, TryTimeout bounds each attempt.
 		blobOpts := &azblob.ClientOptions{
 			ClientOptions: azcore.ClientOptions{
 				Retry: policy.RetryOptions{
@@ -174,10 +161,8 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 		b.blobClient = client
 		b.container = cfg.AzureStorageContainer
 		b.cleaner = newBlobCleaner()
-		// Probe the container so misconfiguration surfaces in logs immediately,
-		// but do NOT fail startup: a transient blob outage during a pod restart
-		// must not block boot (the DB may be perfectly healthy). The readiness
-		// probe (CheckBlob) keeps the pod out of rotation until blob is reachable.
+		// Probe the container so misconfiguration surfaces in logs immediately, but do NOT fail startup:
+		// the readiness probe (CheckBlob) keeps the pod out of rotation until blob is reachable.
 		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		_, err = client.ServiceClient().NewContainerClient(cfg.AzureStorageContainer).GetProperties(checkCtx, nil)
 		cancel()
@@ -188,11 +173,9 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 		slog.Info("azure: blob storage enabled", "account", cfg.AzureStorageAccount, "container", cfg.AzureStorageContainer)
 	}
 
-	// Server-side statement and lock budgets on every connection (both the
-	// password and the Managed-Identity connector copy pgxCfg, RuntimeParams
-	// included). Deliberately NOT idle_in_transaction_session_timeout: the RLS
-	// middleware holds a transaction open for the whole handler, and a chat
-	// stream legitimately idles in it for minutes.
+	// Server-side statement and lock budgets on every connection. Deliberately NOT
+	// idle_in_transaction_session_timeout: the RLS middleware holds a transaction
+	// open through a chat stream that legitimately idles for minutes.
 	if cfg.StatementTimeout > 0 {
 		if pgxCfg.RuntimeParams == nil {
 			pgxCfg.RuntimeParams = map[string]string{}
@@ -209,10 +192,8 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 
 	var db *sql.DB
 	if pgxCfg.Password == "managed-identity" {
-		// Managed Identity: a fresh Entra token is injected per connection by the
-		// connector (no shared mutable password field, so no data race with the
-		// driver opening connections). Validate once up front to fail fast on bad
-		// credentials / RBAC.
+		// Managed Identity: a fresh Entra token is injected per connection by the connector (no shared
+		// mutable password field, so no data race). Validate once up front to fail fast on bad RBAC.
 		provider, err := newAzureTokenProvider()
 		if err != nil {
 			return nil, fmt.Errorf("azure: create credential: %w", err)
@@ -230,8 +211,9 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 		}
 	}
 
-	db.SetMaxOpenConns(cfg.MaxOpenConns)
-	db.SetMaxIdleConns(cfg.MaxIdleConns)
+	maxOpen, maxIdle := poolLimits(cfg)
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxIdle)
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 	idleTime := cfg.ConnMaxIdleTime
 	if idleTime == 0 {
@@ -246,35 +228,30 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	}
 
 	// Apply the embedding-dimension contract (default config.DefaultEmbeddingDim,
-	// the same width the AI factory asks embedding models for). Chunks whose
-	// width differs are kept but excluded from the pgvector index.
+	// the width the AI factory asks embedding models for).
 	b.embeddingDim = cfg.EmbeddingDim
 	if b.embeddingDim <= 0 {
 		b.embeddingDim = config.DefaultEmbeddingDim
 	}
 
 	// Detect whether pgvector is available so SearchKnowledge can push the
-	// similarity ordering into the database. Falls back to Go-side ranking
-	// (rankKnowledgeChunks) when the extension or column is absent — local mode
-	// and any deployment without the vector extension keep working unchanged.
+	// similarity ordering into the database; without it the Go-side ranker
+	// keeps local mode and extension-less deployments working.
 	b.hasPgvector = detectPgvector(ctx, db)
+	if b.hasPgvector {
+		b.hnswIterativeScan = detectHNSWIterativeScan(ctx, db)
+	}
 
-	// Surface a silently-disabled security layer. Every RLS policy in this
-	// schema is defense-in-depth behind the Go authz layer, but "defense in
-	// depth" is only true if the depth exists — and a superuser/BYPASSRLS
-	// connection role makes every policy inert no matter how they are written
-	// (FORCE ROW LEVEL SECURITY does not apply to such roles either). Nothing
-	// in the running system otherwise reveals this: queries succeed, tests
-	// pass, and the schema still lists the policies.
+	// Surface a silently-disabled security layer: a superuser/BYPASSRLS role makes
+	// every RLS policy inert, and nothing else reveals it — queries succeed, tests
+	// pass, the schema still lists the policies.
 	warnIfRLSBypassed(ctx, db)
 
 	return b, nil
 }
 
-// rlsBypassedByRole reports whether the connection's current role ignores
-// Row-Level Security — i.e. it is a superuser or carries BYPASSRLS. The second
-// return is false when the question could not be answered (no connection, or
-// the catalog is unreadable), so callers can stay quiet rather than guess.
+// rlsBypassedByRole reports whether the connection's current role ignores Row-Level Security (a superuser
+// or BYPASSRLS). The third return is false when the question could not be answered, so callers stay quiet.
 func rlsBypassedByRole(ctx context.Context, db *sql.DB) (role string, bypassed bool, known bool) {
 	err := db.QueryRowContext(ctx,
 		`SELECT current_user, rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user`,
@@ -286,10 +263,9 @@ func rlsBypassedByRole(ctx context.Context, db *sql.DB) (role string, bypassed b
 }
 
 // warnIfRLSBypassed logs once at startup when the configured database role
-// defeats Row-Level Security. It deliberately WARNS rather than refusing to
-// boot: the shipped docker-compose default connects as `postgres`, so failing
-// closed would brick existing deployments on upgrade. The operator gets the
-// exact remediation instead.
+// defeats Row-Level Security. WARNS rather than refusing to boot: the
+// docker-compose default connects as `postgres`, so failing closed would
+// brick existing deployments on upgrade.
 func warnIfRLSBypassed(ctx context.Context, db *sql.DB) {
 	role, bypassed, known := rlsBypassedByRole(ctx, db)
 	if !known || !bypassed {
@@ -301,13 +277,25 @@ func warnIfRLSBypassed(ctx context.Context, db *sql.DB) {
 		"remediation", "connect as a role created with NOSUPERUSER NOBYPASSRLS that owns the application database")
 }
 
+// poolLimits resolves the pool's open/idle caps. The idle cap defaults to the
+// open cap: with 25 open but only 5 idle, every burst above five queries
+// closed and re-dialled the surplus (TLS + auth, an Entra token under MI) — a
+// load simulation opened 505 connections where 15 sufficed. Idle connections
+// are still reaped after ConnMaxIdleTime; an explicit MaxIdleConns still wins.
+func poolLimits(cfg Config) (maxOpen, maxIdle int) {
+	maxOpen, maxIdle = cfg.MaxOpenConns, cfg.MaxIdleConns
+	if maxIdle <= 0 && maxOpen > 0 {
+		maxIdle = maxOpen
+	}
+	return maxOpen, maxIdle
+}
+
 func (b *PostgresStorageBackend) Ping(ctx context.Context) error {
 	return b.db.PingContext(ctx)
 }
 
-// CheckBlob verifies that the configured blob container is reachable. It returns
-// nil when blob storage is not configured (nothing to check), so it is safe to
-// call unconditionally from a readiness probe.
+// CheckBlob verifies the configured blob container is reachable; nil when blob
+// storage is not configured, so a readiness probe can call it unconditionally.
 func (b *PostgresStorageBackend) CheckBlob(ctx context.Context) error {
 	if b.blobClient == nil {
 		return nil
@@ -325,26 +313,22 @@ func (b *PostgresStorageBackend) Close() error {
 	return b.db.Close()
 }
 
-// DB exposes the underlying *sql.DB for callers that need pool-level
-// telemetry (e.g. the metrics package's ObservePostgresPool). Not part
-// of the StorageBackend interface — only the concrete Postgres backend
-// has a pool to observe.
+// DB exposes the underlying *sql.DB for pool-level telemetry (e.g.
+// metrics.ObservePostgresPool) — only this backend has a pool to observe.
 func (b *PostgresStorageBackend) DB() *sql.DB { return b.db }
 
 // HasPgvector reports whether server-side vector similarity search is active
-// (the vector extension + embedding_vec column are present). Exposed for
-// observability/health and integration tests; SearchKnowledge falls back to
-// the in-Go ranker when this is false.
+// (vector extension + embedding_vec column); exposed for observability and
+// tests — SearchKnowledge falls back to the in-Go ranker when false.
 func (b *PostgresStorageBackend) HasPgvector() bool { return b.hasPgvector }
 
 // EmbeddingDim returns the configured knowledge-base embedding dimension.
 func (b *PostgresStorageBackend) EmbeddingDim() int { return b.embeddingDim }
 
-// detectPgvector reports whether the `vector` extension is installed AND the
-// knowledge_chunks.embedding_vec column exists — the two prerequisites for
-// pushing similarity search into the database. A failure or absence returns
-// false (logged at info, not warn: absence is the normal local-mode /
-// no-extension case, not an error condition).
+// detectPgvector reports whether the `vector` extension AND
+// knowledge_chunks.embedding_vec exist — the prerequisites for pushing
+// similarity search into the database; absence is the normal local-mode
+// case, logged at info.
 func detectPgvector(ctx context.Context, db *sql.DB) bool {
 	var ok bool
 	// pg_vector is a query that only succeeds when both the extension is loaded

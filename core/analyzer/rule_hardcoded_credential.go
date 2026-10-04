@@ -20,16 +20,14 @@ func (r *HardcodedCredentialRule) DefaultSeverity() models.Severity { return mod
 func (r *HardcodedCredentialRule) Category() string                 { return "Security" }
 
 // Patterns use [^%"'\s] for the secret value portion to exclude PAD variable
-// references (%VarName%) which are non-whitespace but not literal secrets.
-// sensitiveVarName matches variable names — and, since the key-aware check
-// below, action property KEYS — that are likely to hold credentials.
+// references (%VarName%). sensitiveVarName matches names — and, since the
+// key-aware check below, action property KEYS — likely to hold credentials.
 var sensitiveVarName = regexp.MustCompile(`(?i)(password|passwd|pwd|passphrase|api[_\-]?key|token|secret|credential|auth[_\-]?key|bearer|access[_\-]?key)`)
 
 var credentialPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)password\s*[:=]\s*["'][^%"'\s]{4,}["']`),
-	// Unquoted `password=…;` as it appears inside a connection string
-	// (`Server=x;Database=y;Password=hunter2;`). The parser strips the outer
-	// quotes from the property, so the quoted form above never saw it.
+	// Unquoted `password=…;` as it appears inside a connection string; the
+	// parser strips the outer quotes, so the quoted form above never saw it.
 	regexp.MustCompile(`(?i)\b(?:password|passwd|pwd)\s*=\s*[^%"'\s;]{4,}\s*(?:;|$)`),
 	regexp.MustCompile(`(?i)api[_-]?key\s*[:=]\s*["'][^%"'\s]{16,}["']`),
 	regexp.MustCompile(`(?i)token\s*[:=]\s*["'][^%"'\s]{16,}["']`),
@@ -37,13 +35,10 @@ var credentialPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 }
 
-// credentialActionProperties names, per action, the property keys that carry a
-// secret by the action's own contract but whose NAME does not say so — the
-// generic key check (sensitiveVarName) cannot see them. Seeded from the AI
-// scrubber's action table (core/ai/scrubber, sensitiveActions); the entries
-// there whose key is already Password/Passphrase are covered by the key check,
-// and ConnectionString is covered by the `password=` pattern (a connection
-// string without a password is not a credential).
+// credentialActionProperties names, per action, the property keys that carry
+// a secret by the action's own contract but whose NAME does not say so (the
+// generic key check cannot see them); seeded from the AI scrubber's
+// sensitiveActions. Keys named Password/ConnectionString are already covered.
 var credentialActionProperties = map[string][]string{
 	"Cryptography.DecryptTextWithAES":     {"Key"},
 	"Cryptography.EncryptTextWithAES":     {"Key"},
@@ -85,12 +80,10 @@ func (r *HardcodedCredentialRule) Check(block *models.Block, ctx *RuleContext) [
 			}
 		}
 
-		// Key-aware check: the property is a credential by the action's
-		// contract (`Email.SendEmailSMTP … Password: 'hunter2'`), whatever the
-		// value looks like. The value patterns above only ever inspected the
-		// VALUE, so a plain password under a Password: key was never flagged —
-		// although the replace-with-variable fixer for exactly this case has
-		// existed (and been tested) all along.
+		// Key-aware check: the property is a credential by the action's contract
+		// (`Email.SendEmailSMTP … Password: 'hunter2'`), whatever the value looks
+		// like — the value patterns above only inspect the VALUE, so a plain
+		// password under a Password: key was never flagged.
 		if !patternFlagged[key] && isCredentialProperty(block, key, val) {
 			flag(key)
 			findings = append(findings, models.Finding{
@@ -157,14 +150,12 @@ func (r *HardcodedCredentialRule) Check(block *models.Block, ctx *RuleContext) [
 }
 
 // isCredentialProperty reports whether property key on an ACTION block is a
-// credential-typed property holding a literal (non-%Var%) value worth flagging.
-//
-// A key qualifies when its name says credential (sensitiveVarName: Password,
-// ApiKey, Token, Secret, …) or when the action's contract says so
-// (credentialActionProperties). Parser-synthesised keys (`_output`, `_var`,
-// `_value`) are skipped: `=> %Password%` names the OUTPUT variable, and the
-// SET-variable form is handled separately above. Placeholders (`****`, `True`,
-// a bare number) and anything shorter than four characters are not secrets.
+// credential-typed property holding a literal (non-%Var%) value worth flagging:
+// by name (sensitiveVarName: Password, ApiKey, Token, Secret, …) or by the
+// action's contract (credentialActionProperties). Parser-synthesised keys
+// (`_output`, `_var`, `_value`) are skipped — `=> %Password%` names the OUTPUT
+// variable and the SET-variable form is handled separately above. Placeholders
+// (`****`, `True`, a bare number) and anything under four chars are not secrets.
 func isCredentialProperty(block *models.Block, key, val string) bool {
 	if block.Type != models.BlockTypeAction || strings.HasPrefix(key, "_") {
 		return false
@@ -211,11 +202,10 @@ func isCredentialPlaceholder(v string) bool {
 }
 
 // isHighEntropySecret flags long random-looking alphanumeric literals. The
-// thresholds are deliberately conservative: hex digests top out at 4.0 bits
-// so they never match, and mixed-case Base62 identifiers (file/record IDs,
-// typically 22-43 chars) fall under the 48-char floor — those were the main
-// false-positive source. Labeled secrets shorter than this are still caught
-// by the credentialPatterns regexes above.
+// thresholds are deliberately conservative: hex digests top out at 4.0 bits so
+// they never match, and mixed-case Base62 identifiers (file/record IDs,
+// typically 22-43 chars) fall under the 48-char floor — the main false-positive
+// source. Shorter labeled secrets are still caught by credentialPatterns.
 func isHighEntropySecret(s string) bool {
 	if len(s) < 48 {
 		return false
@@ -245,8 +235,7 @@ func shannonEntropy(s string) float64 {
 	}
 	var entropy float64
 	// total must be the rune count, not the byte length: freq counts runes, so
-	// dividing by byte length under-states entropy for multibyte UTF-8 (each
-	// multibyte rune's probability is divided by a too-large total).
+	// dividing by byte length under-states entropy for multibyte UTF-8.
 	total := float64(len([]rune(s)))
 	for _, count := range freq {
 		p := count / total
@@ -257,6 +246,4 @@ func shannonEntropy(s string) float64 {
 	return entropy
 }
 
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
 func init() { registerRule(&HardcodedCredentialRule{}) }

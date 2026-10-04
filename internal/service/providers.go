@@ -17,39 +17,25 @@ import (
 	"pad-core/models"
 )
 
-// dynamicModelTTL bounds how long a CONFIGURED provider's live model list
-// (fetched from the provider's API) is reused. Provider catalogs change
-// rarely; without a cache, opening the settings panel twice fanned out an
-// upstream HTTP call per provider per request, and a slow upstream stalled
-// the response for up to the request timeout.
+// dynamicModelTTL bounds how long a CONFIGURED provider's live model list is reused (else every Settings open fans out upstream calls).
 const dynamicModelTTL = 10 * time.Minute
 
-// emptyListingTTL caches a configured provider's EMPTY live listing briefly:
-// long enough that opening Settings twice does not fan out a second upstream
-// call for a provider with no entitlements, short enough that a listing that
-// fills in (a deployment created, a role granted) shows up soon.
+// emptyListingTTL caches an EMPTY live listing briefly: no second upstream call, fills in soon.
 const emptyListingTTL = 30 * time.Second
 
-// invalidation is a per-key or per-scope invalidation mark: the generation
-// it was made at and when, so stale marks can be pruned.
+// invalidation is a per-key or per-scope invalidation mark: the generation it was made at and when.
 type invalidation struct {
 	gen uint64
 	at  time.Time
 }
 
-// invalidationFence keeps a mark long past any in-flight listing
-// (liveModelsBudget + grace, or a caller's own deadline).
+// invalidationFence keeps a mark long past any in-flight listing (liveModelsBudget + grace, or a caller's deadline).
 const invalidationFence = dynamicModelTTL
 
-// liveModelsBudget bounds each configured provider's live listing in
-// ListProviders. The listings run concurrently, so the whole response stays
-// well under the client's 30 s request timeout even when one upstream hangs;
-// a provider that misses the budget is listed from its metadata instead. A
-// variable so tests can shorten it.
+// liveModelsBudget bounds each provider's live listing so the response stays under the client timeout; a miss falls back to metadata. Variable for tests.
 var liveModelsBudget = 8 * time.Second
 
-// liveModelsGrace is how long ListProviders waits past liveModelsBudget for a
-// listing that ignores its context before falling back to the metadata.
+// liveModelsGrace is how long ListProviders waits past liveModelsBudget for a listing that ignores its context.
 const liveModelsGrace = 500 * time.Millisecond
 
 // ProviderService manages AI provider configuration, authentication, and connectivity.
@@ -58,23 +44,14 @@ type ProviderService struct {
 	copilotAuth *ai.CopilotAuth
 	factory     *ai.ProviderFactory
 	secrets     KeyStore
-	// orgKeys holds organisations' shared credentials (G7); nil on the
-	// desktop and in local mode, where the org routes report it missing.
+	// orgKeys holds organisations' shared credentials; nil on the desktop and in local mode.
 	orgKeys OrgKeyStore
-	// azure is the Azure AI Foundry model registry (Part 9). With it, every
-	// call site that knew only the single "azure-foundry" document acts on
-	// the registry — its resource "default", or every resource; nil (a
-	// service built without it, in tests) keeps the single-document
-	// behaviour.
+	// azure is the Azure AI Foundry model registry; nil (tests) keeps the single-document behaviour.
 	azure *AzureModelService
 
 	modelMu    sync.Mutex
 	modelCache map[string]modelCacheEntry // key: scope + "\x00" + providerID
-	// modelGen is a monotonic stamp bumped by every invalidation (under
-	// modelMu). A listing records it when it starts and writes back only if
-	// neither its key nor its scope was invalidated after that stamp — the
-	// pre-save listing must not stay cached for dynamicModelTTL, but one
-	// user's Azure save must not discard another user's in-flight listing.
+	// modelGen is a monotonic stamp bumped by every invalidation; a listing writes back only if not invalidated after its stamp.
 	modelGen         uint64
 	invalidatedKeys  map[string]invalidation
 	invalidatedScope map[string]invalidation
@@ -82,8 +59,7 @@ type ProviderService struct {
 
 type modelCacheEntry struct {
 	models []ai.ModelInfo
-	// defaultModel is the CONFIGURED provider's default, which can differ
-	// from the metadata provider's.
+	// defaultModel is the CONFIGURED provider's default, which can differ from the metadata provider's.
 	defaultModel string
 	expiresAt    time.Time
 }
@@ -101,53 +77,33 @@ func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factor
 	}
 }
 
-// SetOrgKeyStore enables organisation-shared credentials (G7). Set once at
-// boot, before requests are served; nil leaves the org methods reporting
-// ErrOrgKeyStoreUnavailable and ListProviders ignoring the org.
+// SetOrgKeyStore enables organisation-shared credentials; set once at boot — nil leaves org methods reporting ErrOrgKeyStoreUnavailable.
 func (s *ProviderService) SetOrgKeyStore(store OrgKeyStore) { s.orgKeys = store }
 
-// SetAzureModels wires the Azure AI Foundry model registry (Part 9). Set
-// once at boot, before requests are served.
+// SetAzureModels wires the Azure AI Foundry model registry; set once at boot, before requests are served.
 func (s *ProviderService) SetAzureModels(azure *AzureModelService) { s.azure = azure }
 
-// AzureModels is the wired Azure AI Foundry model registry (nil without
-// one).
+// AzureModels is the wired Azure AI Foundry model registry (nil without one).
 func (s *ProviderService) AzureModels() *AzureModelService { return s.azure }
 
-// OrgKeysAvailable reports whether this deployment can hold organisation
-// credentials (cloud mode with the database keystore).
+// OrgKeysAvailable reports whether this deployment can hold organisation credentials (cloud mode).
 func (s *ProviderService) OrgKeysAvailable() bool { return s.orgKeys != nil }
 
-// ErrOrgKeyStoreUnavailable is returned by the organisation credential
-// methods on a deployment without an org secret store (desktop, local mode).
+// ErrOrgKeyStoreUnavailable is returned by org credential methods where no org secret store exists (desktop, local mode).
 var ErrOrgKeyStoreUnavailable = errors.New("organisation credentials require the database keystore (cloud mode)")
 
-// ErrOrgCredentialUnreadable: the organisation's shared document exists but
-// could not be read — a decrypt failure after a deployment key rotation, a
-// database error, a document this build cannot parse. Reported instead of
-// "not configured", which would have told an admin the org has none while
-// its members keep failing on it. The HTTP layer maps it to 500
-// ORG_CREDENTIAL_UNREADABLE.
+// ErrOrgCredentialUnreadable: the org's shared document exists but cannot be read (not "not configured"). Maps to 500.
 var ErrOrgCredentialUnreadable = errors.New("the organisation's shared Azure AI Foundry configuration could not be read")
 
-// ErrOrgCredentialConflict: an org save carried an updatedAt that no longer
-// matches the stored document (another admin saved or removed it since the
-// caller read it), or none while a document exists. Nothing was written; the
-// HTTP layer maps it to 409 CONFLICT.
+// ErrOrgCredentialConflict: an org save carried a stale updatedAt. Nothing was written; maps to 409 CONFLICT.
 var ErrOrgCredentialConflict = errors.New("the organisation's shared configuration changed since it was loaded — reload it and apply your edit again")
 
-// OrgRoleUsesSharedCredential reports whether an organisation role may run
-// on the org's shared credential (G7): admins and members. Viewers and
-// guests — and anyone outside the org, including a per-flow collaborator on
-// one of its flows — need a credential of their own.
+// OrgRoleUsesSharedCredential reports whether a role may run on the org's shared credential: admins and members only.
 func OrgRoleUsesSharedCredential(role auth.Role) bool {
 	return role == auth.RoleAdmin || role == auth.RoleMember
 }
 
-// listingScope names whose credential a provider listing runs on: the
-// caller's own (cacheScope = scope) or the organisation's shared one
-// (cacheScope = ai.OrgScope(orgID), shared = true), so the cached live
-// listing is keyed — and invalidated — by the credential it was built from.
+// listingScope names whose credential a listing runs on, so the cached listing is keyed and invalidated by that credential.
 type listingScope struct {
 	scope      string
 	orgID      string
@@ -160,20 +116,7 @@ func personalScope(scope string) listingScope {
 	return listingScope{scope: scope, cacheScope: scope}
 }
 
-// dynamicModels returns the configured provider's live model list, cached for
-// dynamicModelTTL per (scope, provider). Static metadata providers are cheap
-// (no network) and are NOT cached. An empty listing is cached only for
-// emptyListingTTL (the next call soon retries instead of pinning "no
-// models"). Nothing is cached when the caller's budget expired while it ran
-// (it may be cut short), or when an InvalidateModels / InvalidateScope for
-// this key ran meanwhile (it describes the previous configuration).
-//
-// Alias providers (Azure AI Foundry) are never cached here: their listing is
-// built from the user's own document plus, with Entra ID and a project
-// endpoint, the project listing, which the provider caches itself per
-// credential set and deployment names — and only when complete. A second,
-// blind cache here would pin a degraded listing (agents missing after a
-// transient project failure) for dynamicModelTTL.
+// dynamicModels returns a configured provider's live list, cached per (scope, provider); alias providers and invalidated runs are never cached.
 func (s *ProviderService) dynamicModels(ctx context.Context, ls listingScope, providerID string) (models []ai.ModelInfo, defaultModel string, ok bool) {
 	scope := ls.cacheScope
 	key := scope + "\x00" + providerID
@@ -186,9 +129,7 @@ func (s *ProviderService) dynamicModels(ctx context.Context, ls listingScope, pr
 	gen := s.modelGen
 	s.modelMu.Unlock()
 
-	// Member-first: with no org (personalScope) this is the caller's own
-	// key; with one it is the org's credential exactly when the caller has
-	// none — the same rule that decided ls.shared.
+	// Member-first: the org's credential exactly when the caller has none.
 	realProvider, err := s.factory.ForOrg(ls.scope, ls.orgID, providerID)
 	if err != nil {
 		return nil, "", false
@@ -206,9 +147,7 @@ func (s *ProviderService) dynamicModels(ctx context.Context, ls listingScope, pr
 		}
 		s.modelMu.Lock()
 		if !s.invalidatedSinceLocked(key, scope, gen) {
-			// Insert-time pruning: expired entries are never removed by reads,
-			// so this is the only thing that keeps a departed user's keys from
-			// accumulating in the map forever.
+			// Insert-time pruning: expired entries are never removed by reads, so a departed user's keys cannot accumulate.
 			s.pruneModelCacheLocked(time.Now())
 			s.modelCache[key] = modelCacheEntry{models: models, defaultModel: defaultModel, expiresAt: time.Now().Add(ttl)}
 		}
@@ -217,9 +156,7 @@ func (s *ProviderService) dynamicModels(ctx context.Context, ls listingScope, pr
 	return models, defaultModel, true
 }
 
-// invalidatedSinceLocked reports whether key or its scope was invalidated
-// after the generation stamp gen (taken when the listing started). Caller
-// holds modelMu.
+// invalidatedSinceLocked reports whether key or its scope was invalidated after gen. Caller holds modelMu.
 func (s *ProviderService) invalidatedSinceLocked(key, scope string, gen uint64) bool {
 	if inv, ok := s.invalidatedKeys[key]; ok && inv.gen > gen {
 		return true
@@ -228,35 +165,17 @@ func (s *ProviderService) invalidatedSinceLocked(key, scope string, gen uint64) 
 	return ok && inv.gen > gen
 }
 
-// modelCacheMax bounds the live-listing cache's size, mirroring the ai
-// package's azureModelsCacheMax for its Azure model listings.
+// modelCacheMax bounds the live-listing cache's size, mirroring ai's azureModelsCacheMax.
 const modelCacheMax = 512
 
-// pruneModelCacheLocked drops expired entries first — they are invisible to
-// reads already, and nothing else ever removes them, so without this a
-// departed or deleted user's entries accumulated forever — then, while the
-// map is at modelCacheMax, the entry closest to expiry (the least valuable:
-// the next read would drop it anyway). Mirrors pruneAzureModelsCacheLocked in
-// internal/ai. Bounded work: one pass over the map per insert, plus one pass
-// per eviction.
+// pruneModelCacheLocked drops expired entries first, then the closest to expiry at modelCacheMax. Caller holds modelMu.
 func (s *ProviderService) pruneModelCacheLocked(now time.Time) {
 	for k, e := range s.modelCache {
 		if !now.Before(e.expiresAt) {
 			delete(s.modelCache, k)
 		}
 	}
-	// Invalidation marks only fence listings that were in flight when they
-	// were made; past invalidationFence none can be, so the mark is dead.
-	for k, inv := range s.invalidatedKeys {
-		if now.Sub(inv.at) > invalidationFence {
-			delete(s.invalidatedKeys, k)
-		}
-	}
-	for k, inv := range s.invalidatedScope {
-		if now.Sub(inv.at) > invalidationFence {
-			delete(s.invalidatedScope, k)
-		}
-	}
+	s.pruneInvalidationsLocked(now)
 	for len(s.modelCache) >= modelCacheMax {
 		oldest, oldestExp, first := "", time.Time{}, true
 		for k, e := range s.modelCache {
@@ -268,15 +187,27 @@ func (s *ProviderService) pruneModelCacheLocked(now time.Time) {
 	}
 }
 
-// InvalidateScope drops every cached live listing belonging to one scope
-// (user): account deletion cascades the user's provider keys in SQL, and this
-// is what tells the in-process cache. Also bumps the generation so a listing
-// already in flight for that user does not write itself back (same fence as
-// InvalidateModels).
+// pruneInvalidationsLocked drops dead marks (past invalidationFence); runs on every insert AND invalidation. Caller holds modelMu.
+func (s *ProviderService) pruneInvalidationsLocked(now time.Time) {
+	for k, inv := range s.invalidatedKeys {
+		if now.Sub(inv.at) > invalidationFence {
+			delete(s.invalidatedKeys, k)
+		}
+	}
+	for k, inv := range s.invalidatedScope {
+		if now.Sub(inv.at) > invalidationFence {
+			delete(s.invalidatedScope, k)
+		}
+	}
+}
+
+// InvalidateScope drops every cached listing of one scope and bumps the generation against in-flight listings.
 func (s *ProviderService) InvalidateScope(scope string) {
 	s.modelMu.Lock()
+	now := time.Now()
+	s.pruneInvalidationsLocked(now)
 	s.modelGen++
-	s.invalidatedScope[scope] = invalidation{gen: s.modelGen, at: time.Now()}
+	s.invalidatedScope[scope] = invalidation{gen: s.modelGen, at: now}
 	prefix := scope + "\x00"
 	for k := range s.modelCache {
 		if strings.HasPrefix(k, prefix) {
@@ -286,23 +217,19 @@ func (s *ProviderService) InvalidateScope(scope string) {
 	s.modelMu.Unlock()
 }
 
-// InvalidateModels drops the cached live listing for one (scope, provider) so
-// a configuration change (new Azure deployment names, rotated credential,
-// removed key) shows up on the next listing instead of after
-// dynamicModelTTL, and bumps the generation so a listing already in flight
-// for the old configuration does not write itself back.
+// InvalidateModels drops one (scope, provider) cached listing so a config change shows immediately.
 func (s *ProviderService) InvalidateModels(scope, providerID string) {
 	key := scope + "\x00" + providerID
 	s.modelMu.Lock()
+	now := time.Now()
+	s.pruneInvalidationsLocked(now)
 	s.modelGen++
-	s.invalidatedKeys[key] = invalidation{gen: s.modelGen, at: time.Now()}
+	s.invalidatedKeys[key] = invalidation{gen: s.modelGen, at: now}
 	delete(s.modelCache, key)
 	s.modelMu.Unlock()
 }
 
-// chatModels drops the entries that are not chat models (embedding
-// deployments, flagged by the provider): they stay in Models() for pricing
-// but are never offered in the chat picker or chosen as its default.
+// chatModels drops non-chat entries (embedding deployments): kept in Models() for pricing, never in the chat picker.
 func chatModels(in []ai.ModelInfo) []ai.ModelInfo {
 	out := make([]ai.ModelInfo, 0, len(in))
 	for _, m := range in {
@@ -313,12 +240,7 @@ func chatModels(in []ai.ModelInfo) []ai.ModelInfo {
 	return out
 }
 
-// chooseDefaultModel picks the model the UI preselects for a configured
-// provider: the provider's own default when the live listing has it, else the
-// metadata fallback when it has that, else the first chat-capable entry
-// (skipping agents, embedding deployments and non-chat model families), else
-// the first entry that is not an embedding deployment. A user-named Azure AI
-// Foundry resource rarely has a deployment called "gpt-4.1".
+// chooseDefaultModel picks the UI preselection: the provider's default, else the metadata fallback, else the first chat-capable entry.
 func chooseDefaultModel(preferred string, models []ai.ModelInfo, fallback string) string {
 	has := func(id string) bool {
 		for _, m := range models {
@@ -350,13 +272,10 @@ func chooseDefaultModel(preferred string, models []ai.ModelInfo, fallback string
 	return preferred
 }
 
-// nonChatModelFamilies are id fragments of models the chat-completions route
-// cannot serve — image, speech, transcription, realtime-audio, video and
-// embedding models — which a deployment listing may contain.
+// nonChatModelFamilies are id fragments of models the chat route cannot serve (image, speech, transcription, realtime, video, embedding).
 var nonChatModelFamilies = []string{"dall-e", "gpt-image", "whisper", "tts", "transcribe", "realtime", "sora", "embed"}
 
-// isNonChatModelID is the heuristic that keeps a non-chat deployment from
-// being chosen as the chat default or connection-test model.
+// isNonChatModelID keeps a non-chat deployment from being chosen as the chat default or connection-test model.
 func isNonChatModelID(id string) bool {
 	lower := strings.ToLower(id)
 	for _, f := range nonChatModelFamilies {
@@ -367,17 +286,7 @@ func isNonChatModelID(id string) bool {
 	return false
 }
 
-// connectionTestModels lists the models the connection test tries, in order.
-// Alias providers (Azure AI Foundry): the configured chat deployment first —
-// tried even when the live listing lacks it — then the free model, then the
-// first chat-capable listed model, so a resource whose deployments carry
-// custom names still passes. Every other provider: when the live listing
-// (5 s budget) has the catalogue default, the default then the free model;
-// when it lacks it, the first chat-capable listed model goes FIRST — a
-// catalogue default the listing lacks is a guaranteed miss, so the test
-// costs one call and, when both fail, the report is about a model the token
-// actually has. providerID is the registry id (the wrapped chain's ID() is
-// the raw provider's).
+// connectionTestModels lists the test's candidates in order: default first (aliases: the configured deployment), free model next.
 func (s *ProviderService) connectionTestModels(ctx context.Context, provider ai.Provider, providerID string) []string {
 	var candidates []string
 	add := func(id string) {
@@ -418,10 +327,7 @@ func (s *ProviderService) connectionTestModels(ctx context.Context, provider ai.
 	return candidates
 }
 
-// azureProjectProbe explains an empty Azure AI Foundry candidate list (an
-// Entra ID + project document that names no deployment): the token
-// refusal or the project listing's failure. A package variable so tests
-// replace the network call.
+// azureProjectProbe explains an empty Azure candidate list (an Entra ID + project document naming no deployment). Replaceable in tests.
 var azureProjectProbe = ai.ProbeAzureFoundryProject
 
 // liveListing is one configured provider's live listing (dynamicModels).
@@ -431,8 +337,7 @@ type liveListing struct {
 	ok           bool
 }
 
-// startLiveListing runs dynamicModels for one provider in the background
-// under its own liveModelsBudget (still bounded by the request context).
+// startLiveListing runs dynamicModels for one provider under its own liveModelsBudget, bounded by the request context.
 func (s *ProviderService) startLiveListing(ctx context.Context, ls listingScope, providerID string) <-chan liveListing {
 	ch := make(chan liveListing, 1)
 	go func() {
@@ -451,8 +356,7 @@ func (s *ProviderService) startLiveListing(ctx context.Context, ls listingScope,
 	return ch
 }
 
-// awaitLiveListing returns the listing once it arrives, or a failed one when
-// wait expires first (a listing that ignores its context).
+// awaitLiveListing returns the listing once it arrives, or a failed one when wait expires first.
 func awaitLiveListing(wait context.Context, ch <-chan liveListing) liveListing {
 	select {
 	case l := <-ch:
@@ -467,10 +371,7 @@ func awaitLiveListing(wait context.Context, ch <-chan liveListing) liveListing {
 	}
 }
 
-// isConfigured reports whether the caller has credentials for a provider.
-// OAuth device-flow tokens and manual API keys are both resolved under the
-// caller's scope (per-user in cloud mode). Azure AI Foundry with the model
-// registry: at least one resource of the caller's own.
+// isConfigured reports whether the caller has credentials for a provider (OAuth tokens and manual keys both count).
 func (s *ProviderService) isConfigured(scope, providerID string) bool {
 	switch providerID {
 	case ai.AzureFoundryProviderID:
@@ -496,10 +397,7 @@ func (s *ProviderService) isConfigured(scope, providerID string) bool {
 	}
 }
 
-// isOrgConfigured reports whether the organisation holds a shared credential
-// for a provider. Copilot is per member only (OAuth or PAT), never shared.
-// Azure AI Foundry with the model registry: the organisation holds at least
-// one resource.
+// isOrgConfigured reports whether the organisation holds a shared credential; Copilot is per member only.
 func (s *ProviderService) isOrgConfigured(orgID, providerID string) bool {
 	if s.orgKeys == nil || orgID == "" {
 		return false
@@ -526,9 +424,7 @@ func (s *ProviderService) isOrgConfigured(orgID, providerID string) bool {
 	}
 }
 
-// resolveListing decides whose credential a provider is listed on (G7,
-// member-first): the caller's own when they have one, else the org's shared
-// one when there is an org and it has one. configured is false when neither.
+// resolveListing decides whose credential a provider is listed on (G7, member-first): the caller's own, else the org's.
 func (s *ProviderService) resolveListing(scope, orgID, providerID string) (ls listingScope, configured bool) {
 	if s.isConfigured(scope, providerID) {
 		return personalScope(scope), true
@@ -539,24 +435,7 @@ func (s *ProviderService) resolveListing(scope, orgID, providerID string) (ls li
 	return personalScope(scope), false
 }
 
-// ListProviders lists every provider with its models and default. The
-// configured providers' live listings run concurrently, each under
-// liveModelsBudget; one that fails or misses the budget falls back to the
-// metadata catalogue, and the order stays AvailableProviders'.
-//
-// orgID ("" = none) adds the organisation's shared credentials (G7): a
-// provider the caller has not configured but the org has is listed as
-// configured and Shared, its live listing built from — and cached under —
-// the org's credential. The caller must already be verified an admin or
-// member of orgID (OrgRoleUsesSharedCredential — the handler does); this
-// method does not check.
-//
-// Azure AI Foundry with the model registry is listed from the registry
-// (azureProviderInfo), never from a live listing: its models are the
-// caller's registered entries and orgID's shared ones, and nothing about it
-// waits on the network. A registry that cannot be read fails the listing —
-// an Azure entry without its models would read as "every model was
-// removed" to a client, which then re-pins its threads.
+// ListProviders lists every provider with models and default; live listings run concurrently under liveModelsBudget.
 func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string) (providers []models.ProviderInfo, err error) {
 	defer logger.Guard("App.ListProviders", &err)
 
@@ -566,9 +445,7 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 	shared := make([]bool, len(metas))
 	live := make([]<-chan liveListing, len(metas))
 	for i, meta := range metas {
-		// The local models provider is listed only when this process may use
-		// it (desktop) and the caller configured it: an unconfigured card
-		// would offer a server nobody set up.
+		// The local models provider is listed only when this process may use it (desktop) and the caller configured it.
 		if meta.ID == ai.LocalProviderID && (!ai.LocalModelsAvailable() || !s.isConfigured(scope, meta.ID)) {
 			continue
 		}
@@ -613,15 +490,10 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 				modelInfos = chatModels(l.models)
 				switch {
 				case ai.UsesModelAliases(meta.ID) && l.defaultModel != "":
-					// The user's own configuration names the default (Azure
-					// AI Foundry: the chat deployment). It wins even when the
-					// listing lacks it — a project listing may omit it and
-					// the name is what the user deployed.
+					// The user's configuration names the default (the chat deployment); it wins even when the listing lacks it.
 					defaultModel = l.defaultModel
 				case ai.UsesModelAliases(meta.ID):
-					// Nothing named (Entra ID + project endpoint): the first
-					// chat-capable listed deployment, never the catalogue's
-					// reference name.
+					// Nothing named: the first chat-capable listed deployment, never the catalogue's reference name.
 					defaultModel = chooseDefaultModel("", modelInfos, "")
 				default:
 					defaultModel = chooseDefaultModel(l.defaultModel, modelInfos, defaultModel)
@@ -642,9 +514,7 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 		}
 
 		contextLimit := p.ContextLimit()
-		// The local provider's window is the caller's configured one, which
-		// the key-less metadata provider cannot know; the live listing
-		// carries it on every entry.
+		// The local provider's window is the caller's configured one, which the key-less metadata provider cannot know.
 		if meta.ID == ai.LocalProviderID && len(modelInfos) > 0 && modelInfos[0].ContextLimit > 0 {
 			contextLimit = modelInfos[0].ContextLimit
 		}
@@ -664,24 +534,12 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 	return providers, nil
 }
 
-// fromAzureRegistry reports whether providerID's listing entry comes from
-// the Azure AI Foundry model registry (azureProviderInfo) rather than a live
-// listing: Azure AI Foundry, with the registry wired.
+// fromAzureRegistry reports whether providerID's listing entry comes from the Azure registry (never a live listing).
 func (s *ProviderService) fromAzureRegistry(providerID string) bool {
 	return s.azure != nil && providerID == ai.AzureFoundryProviderID
 }
 
-// azureProviderInfo is the Azure AI Foundry listing entry built from the
-// model registry (AzureModelService.PickerListing, network-free): the
-// caller's chat, Claude and agent entries and orgID's shared ones — "m/<id>"
-// ids with purpose, status, window and aliases, in display order — the
-// server default ("" when no entry can run), and whether to suggest
-// discovering the models of the caller's migrated project. Configured and
-// Shared keep the listing contract of every other provider (the member-first
-// rule of resolveListing): configured when the caller has a resource of
-// their own OR runs on the organisation's shared ones, shared in the second
-// case only. The name, auth type and provider-wide window stay the
-// catalogue's.
+// azureProviderInfo builds the Azure Foundry listing from the registry (network-free).
 func (s *ProviderService) azureProviderInfo(ctx context.Context, scope, orgID string, meta ai.ProviderMetadata, p ai.MetadataProvider) (models.ProviderInfo, error) {
 	listing, err := s.azure.PickerListing(ctx, scope, orgID)
 	if err != nil {
@@ -700,25 +558,12 @@ func (s *ProviderService) azureProviderInfo(ctx context.Context, scope, orgID st
 	}, nil
 }
 
-// TestProviderConnection sends a tiny chat request to the candidates of
-// connectionTestModels in order. Credentials are judged by the first answer
-// that says something about them: a success, an invalid key or a rate limit
-// (the key works). A model-level rejection — 404 DeploymentNotFound, 400
-// OperationNotSupported, insufficient balance on one model — says nothing
-// about the credentials, so the next candidate is tried while the budget
-// lasts; when every candidate fails, the reported error is the first
-// candidate's (the configured default's), which names what the user set up.
-// An outage (the upstream unreachable or failing after the retry wrapper's
-// attempts, an open circuit, an invalid stored document) is not model-level
-// either way: the test stops there instead of repeating the same retries
-// against the same outage for every candidate.
+// TestProviderConnection sends a tiny chat request per candidate; model-level rejections try the next, outages stop.
 func (s *ProviderService) TestProviderConnection(ctx context.Context, scope, providerID string) (result *models.ProviderTestResult, err error) {
 	defer logger.Guard("App.TestProviderConnection", &err)
 
 	if providerID == ai.AzureFoundryProviderID && s.azure != nil {
-		// Deprecated for Azure AI Foundry (the registry's test route tests
-		// one resource or model): resource "default", else the first one,
-		// probed as a resource — no model call.
+		// Deprecated for Azure AI Foundry (the registry's test route tests one resource or model): no model call.
 		return s.azure.legacyTest(ctx, AzureScope{Scope: scope})
 	}
 	provider, err := s.factory.For(scope, providerID)
@@ -734,11 +579,7 @@ func (s *ProviderService) TestProviderConnection(ctx context.Context, scope, pro
 	}), nil
 }
 
-// TestOrgProviderConnection is TestProviderConnection for an organisation's
-// SHARED credential (G7): the provider is built from the org's credential
-// only — never the admin's own — so the result says whether what the org's
-// members will run on works. scope is the admin's, for usage attribution of
-// the test call.
+// TestOrgProviderConnection is TestProviderConnection for an org's SHARED credential — the provider is built from the org's credential only; scope is the admin's, for attribution.
 func (s *ProviderService) TestOrgProviderConnection(ctx context.Context, scope, orgID, providerID string) (result *models.ProviderTestResult, err error) {
 	defer logger.Guard("App.TestOrgProviderConnection", &err)
 	if s.orgKeys == nil {
@@ -761,9 +602,7 @@ func (s *ProviderService) TestOrgProviderConnection(ctx context.Context, scope, 
 	}), nil
 }
 
-// runConnectionTest is the shared body of the connection tests; rawDoc
-// returns the stored Azure AI Foundry document (or "") for the project
-// probe that explains an empty candidate list.
+// runConnectionTest is the shared body of the connection tests; rawDoc returns the stored Azure document for the project probe.
 func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Provider, providerID string, rawDoc func() string) *models.ProviderTestResult {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -779,10 +618,7 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 			}
 		}
 		if providerID == ai.AzureFoundryProviderID {
-			// An Entra ID + project document may name nothing and rely on the
-			// project listing; when that listing is empty, its failure
-			// (rejected credentials, a missing role, a wrong project) is the
-			// answer, not "name a deployment".
+			// An Entra ID + project document may rely on the project listing; an empty listing's failure is the answer.
 			if raw := rawDoc(); raw != "" {
 				if perr := azureProjectProbe(ctx, raw); perr != nil {
 					msg = connectionTestError(providerID, "the project endpoint", perr)
@@ -805,13 +641,7 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 			return &models.ProviderTestResult{Ok: true, Latency: latency}
 		}
 		if errors.Is(chatErr, ai.ErrProviderPermissionDenied) || errors.Is(chatErr, ai.ErrEntraCredentialsRejected) || errors.Is(chatErr, ai.ErrEntraTokenRejected) || errors.Is(chatErr, ai.ErrClaudeEntraOnly) {
-			// Auth failures (they also match ErrApiKeyInvalid) whose one-line
-			// text is what the user needs: the principal and the data action
-			// its missing role grants, Entra ID's AADSTS code, Azure's
-			// explanation for a rejected Entra ID access token, or the
-			// Entra-only refusal a key gets against a Claude Mythos
-			// deployment. "invalid API key" named a key an Entra ID
-			// principal does not have.
+			// Auth failures whose one-line text is what the user needs (missing role, AADSTS code, Entra-only refusal).
 			latency := int(time.Since(start).Milliseconds())
 			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: connectionTestError(providerID, "", chatErr)}
 		}
@@ -820,19 +650,12 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: "invalid API key"}
 		}
 		if errors.Is(chatErr, ai.ErrRateLimited) || errors.Is(chatErr, ai.ErrOutputLimit) {
-			// The credentials work: a rate limit is the resource answering,
-			// and an output-limit stop is a reply the model spent entirely on
-			// hidden reasoning (always-thinking models under the test's
-			// 16-token cap) — the call itself succeeded.
+			// The credentials work: a rate limit is the resource answering; an output-limit stop is hidden reasoning under the 16-token cap.
 			latency := int(time.Since(start).Milliseconds())
 			return &models.ProviderTestResult{Ok: true, Latency: latency}
 		}
 		if errors.Is(chatErr, ai.ErrProviderDown) || errors.Is(chatErr, ai.ErrCircuitOpen) || errors.Is(chatErr, ai.ErrProviderConfigInvalid) {
-			// Nothing model-level: the upstream is unreachable or failing
-			// (RetryingProvider already spent its attempts and folded
-			// transport errors into ErrProviderDown), its circuit is open, or
-			// the stored document is invalid. The next candidate would only
-			// repeat the same retries against the same outage.
+			// Nothing model-level: the next candidate would only repeat the same retries against the same outage.
 			latency := int(time.Since(start).Milliseconds())
 			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: connectionTestError(providerID, "", chatErr)}
 		}
@@ -848,14 +671,7 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 	return &models.ProviderTestResult{Ok: false, Latency: latency, Error: connectionTestError(providerID, "", firstErr)}
 }
 
-// connectionTestError is the text a connection test reports for err. A
-// failure to connect — a DNS, dial, proxy or TLS failure, or the egress
-// guard refusing the address — is fixed copy (egress.DescribeFailure): the
-// raw text names the address the host resolved to and the operator's
-// HTTP(S) proxy, which a client must never see; the detail goes to the
-// server log. Anything else (an HTTP answer, Azure's explanation, a
-// validation error) is the error's own text. target names what could not be
-// reached ("" = the endpoint).
+// connectionTestError is the test's text for err: a connect failure (DNS, dial, proxy, TLS, egress) is fixed copy — the raw text names addresses a client must never see.
 func connectionTestError(providerID, target string, err error) string {
 	what, ok := egress.DescribeFailure(err)
 	if !ok {
@@ -887,8 +703,7 @@ func (s *ProviderService) PollGitHubAuth(ctx context.Context, scope string, devi
 		if saveErr := s.secrets.Save(scope, "github-models-token", result.Token); saveErr != nil {
 			logger.Error("failed to save github token", "error", saveErr)
 		} else {
-			// A replacement token may carry other entitlements: the previous
-			// token's cached listing must not outlive it (mirrors Revoke).
+			// A replacement token may carry other entitlements: drop the previous token's cached listing (mirrors Revoke).
 			s.InvalidateModels(scope, "github-models")
 		}
 		result.Token = ""
@@ -902,9 +717,7 @@ func (s *ProviderService) RevokeGitHubAuth(scope string) (err error) {
 	if err := s.secrets.Delete(scope, "github-models-token"); err != nil {
 		return err
 	}
-	// github-models is a cacheable live listing: drop it so the revoked
-	// credential's models disappear immediately instead of after
-	// dynamicModelTTL (mirrors DeleteApiKey's hook).
+	// Drop the cached listing so the revoked credential's models disappear immediately.
 	s.InvalidateModels(scope, "github-models")
 	return nil
 }
@@ -939,35 +752,24 @@ func (s *ProviderService) PollCopilotAuth(ctx context.Context, scope string, dev
 		if saveErr := s.secrets.Save(scope, "copilot-oauth-token", result.Token); saveErr != nil {
 			logger.Error("failed to save copilot oauth token", "error", saveErr)
 		} else {
-			// A replacement token may carry other entitlements: the previous
-			// token's cached listing must not outlive it (mirrors Revoke).
+			// A replacement token may carry other entitlements: drop the previous token's cached listing (mirrors Revoke).
 			s.InvalidateModels(scope, "copilot")
 		}
 		result.Token = ""
-		// C-4: pre-warm the Copilot session-token cache so the first chat turn
-		// doesn't pay the session-token exchange RTT on the critical path.
-		// ListProviders will also warm it on next session load, but firing it
-		// now covers the turn the user sends immediately after connecting.
+		// Pre-warm the Copilot session-token cache so the first chat turn doesn't pay the exchange RTT.
 		s.preWarmCopilot(scope)
 	}
 
 	return result, nil
 }
 
-// preWarmCopilot best-effort resolves the configured Copilot GitHub token and
-// triggers a background session-token exchange so the cache is primed before
-// the first chat turn. Fire-and-forget: errors are logged and swallowed (the
-// token will be exchanged lazily on first Stream if this fails). The context
-// is detached from the caller and bounded so a slow exchange can't linger.
+// preWarmCopilot triggers a background session-token exchange so the cache is primed before the first chat turn.
 func (s *ProviderService) preWarmCopilot(scope string) {
 	if s.copilotAuth == nil {
 		return
 	}
 	go func() {
-		// The exchange is HTTP+JSON into provider-owned code; a panic here
-		// would crash the whole process (nothing above recovers a detached
-		// goroutine). Match startLiveListing: recover, log, and let the
-		// first Stream exchange lazily instead.
+		// A panic in this detached goroutine would crash the process; recover and let the first Stream exchange lazily.
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Warn("copilot session-token pre-warm panicked", "panic", r)
@@ -994,9 +796,7 @@ func (s *ProviderService) RevokeCopilotAuth(scope string) (err error) {
 	if err := s.secrets.Delete(scope, "copilot-oauth-token"); err != nil {
 		return err
 	}
-	// copilot is a cacheable live listing: drop it so the revoked
-	// credential's models disappear immediately instead of after
-	// dynamicModelTTL (mirrors DeleteApiKey's hook).
+	// Drop the cached listing so the revoked credential's models disappear immediately.
 	s.InvalidateModels(scope, "copilot")
 	return nil
 }
@@ -1014,11 +814,7 @@ func (s *ProviderService) GetCopilotUser(ctx context.Context, scope string) (use
 
 // --- Local models configuration ---
 
-// GetLocalConfig returns the caller's stored local models configuration (base
-// URL and stored context window). An absent or unreadable document is the
-// unconfigured state. Where local models are unavailable (cloud) it refuses
-// with the *ai.LocalConfigError a save gets (LOCAL_MODELS_UNAVAILABLE), so
-// the settings UI drops the section instead of offering an unusable form.
+// GetLocalConfig returns the caller's stored local models configuration; absent or unreadable is unconfigured.
 func (s *ProviderService) GetLocalConfig(scope string) (cfg ai.LocalPublicConfig, err error) {
 	defer logger.Guard("App.GetLocalConfig", &err)
 	if err := ai.CheckLocalModelsAvailable(); err != nil {
@@ -1036,12 +832,7 @@ func (s *ProviderService) GetLocalConfig(scope string) (cfg ai.LocalPublicConfig
 	return parsed.Public(), nil
 }
 
-// SaveLocalConfig validates the base URL (loopback http(s) server root, and
-// only where the runtime egress policy allows loopback) and the context
-// window (0 = the default, else 1024..2000000 tokens), and stores the
-// document. Refusals are *ai.LocalConfigError values carrying a client code.
-// The cached listing of the previous configuration is dropped (its entries
-// carry the previous window).
+// SaveLocalConfig validates the base URL and context window (0 = default, else 1024..2000000), stores and drops the cached listing.
 func (s *ProviderService) SaveLocalConfig(scope, baseURL string, contextWindow int) (cfg ai.LocalConfig, err error) {
 	defer logger.Guard("App.SaveLocalConfig", &err)
 	cfg, err = ai.NewLocalConfigForSave(baseURL, contextWindow)
@@ -1061,11 +852,7 @@ func (s *ProviderService) SaveLocalConfig(scope, baseURL string, contextWindow i
 
 // --- Azure AI Foundry configuration ---
 
-// GetAzureFoundryConfig returns the caller's stored Azure AI Foundry document
-// with the secrets removed. A missing or unreadable document reads as
-// unconfigured (the user re-enters it). Deprecated with the model registry
-// (one release): it reads resource "default", its deployment fields built
-// from the registry's entries, never from the document's stale ones.
+// GetAzureFoundryConfig returns the caller's stored document, secrets removed; missing/unreadable = unconfigured.
 func (s *ProviderService) GetAzureFoundryConfig(scope string) (cfg ai.AzureFoundryPublicConfig, err error) {
 	defer logger.Guard("App.GetAzureFoundryConfig", &err)
 	if s.azure != nil {
@@ -1083,24 +870,7 @@ func (s *ProviderService) GetAzureFoundryConfig(scope string) (cfg ai.AzureFound
 	return parsed.Public(), nil
 }
 
-// SaveAzureFoundryConfig validates and stores the document. A request that
-// omits the secret keeps the stored one — for an API key whenever the auth
-// mode matches, for Microsoft Entra ID only when the tenant ID and client ID
-// are unchanged (the same service principal), and for either only while the
-// endpoint host is unchanged (carryAzureSecret: a changed host is
-// MISSING_SECRET, the secret must be re-entered) — so editing a deployment
-// name never asks the user to re-enter a key but rotating to a
-// DIFFERENT principal cannot silently attach the old principal's secret
-// (which Entra ID would later reject with AADSTS7000215). A changed principal
-// with no secret fails validation like any missing secret. Validation
-// failures are *ai.AzureConfigError values carrying a client code. When the
-// saved document's credential differs from the previous one's, what the
-// process kept for the previous credential (its Entra ID token source and
-// cached listing) is released with it. Deprecated with the model registry
-// (one release): the deployment fields are mapped onto resource "default"'s
-// entries (missing ones created, removed ones deleted) and only the
-// credential part is saved, the document's old deployment fields carried
-// over unchanged (a rolled-back binary still reads them).
+// SaveAzureFoundryConfig validates and stores the document; an omitted secret is carried per carryAzureSecret.
 func (s *ProviderService) SaveAzureFoundryConfig(scope string, cfg ai.AzureFoundryConfig) (err error) {
 	defer logger.Guard("App.SaveAzureFoundryConfig", &err)
 	if s.azure != nil {
@@ -1133,31 +903,10 @@ func (s *ProviderService) SaveAzureFoundryConfig(scope string, cfg ai.AzureFound
 	return nil
 }
 
-// --- Organisation-shared Azure AI Foundry configuration (G7) ---
-//
-// Trust model: an org admin is untrusted (anyone can create an org), so the
-// shared document is only what that admin lends the org's members. Members
-// read its public form (no secret, ever); admins write it; admins and
-// members — never viewers, guests or outside collaborators — may run on it,
-// a member's own document winning over it for chat (ProviderFactory.ForOrg),
-// while the knowledge base prefers it (one corpus, one resource). Usage on
-// it is attributed to the org but never budget-gated: Azure deployments are
-// not priced by baki (their cost is read in the Azure portal), so the org's
-// daily budget does not count them. The row goes with the organisation.
-// When the admin who supplied its secret (the lender, secret_set_by) stops
-// being an admin — demoted, removed, account deleted — it is disabled
-// (DisableOrgAzureFoundryConfigSavedBy): the credential was theirs to lend,
-// and an edit by another admin that kept the stored secret does not make it
-// theirs (it moves updated_by only, never secret_set_by).
+// --- Organisation-shared Azure AI Foundry configuration ---
+// Trust model: the shared document is only what an admin lends — members read, admins write, admins+members run on it; a demoted lender disables it.
 
-// OrgAzureFoundryConfig is an organisation's shared Azure AI Foundry
-// document in its public form, with who shared it and when. UpdatedBy is the
-// lender's display name — the admin who supplied the stored secret, resolved
-// by the handler from SecretSetByID (an edit that kept the secret does not
-// change who lends it); UpdatedByID is the admin who last saved the
-// document. UpdatedAt is the last save, RFC 3339 with the store's full
-// sub-second precision — a save sends it back verbatim as its
-// compare-and-swap token.
+// OrgAzureFoundryConfig is the org's shared document in public form with who shared it and when; UpdatedAt is the CAS token.
 type OrgAzureFoundryConfig struct {
 	ai.AzureFoundryPublicConfig
 	Shared        bool   `json:"shared"`
@@ -1167,13 +916,7 @@ type OrgAzureFoundryConfig struct {
 	SecretSetByID string `json:"-"`
 }
 
-// GetOrgAzureFoundryConfig returns the organisation's shared document with
-// the secrets removed; a missing document reads as unconfigured (Configured
-// false, Shared false). One that exists but cannot be read (a decrypt or
-// database failure, an unparseable document) is ErrOrgCredentialUnreadable,
-// not "unconfigured": the org HAS a credential its members are failing on.
-// Deprecated with the model registry (one release): the organisation's
-// resource "default", its deployment fields built from the registry.
+// GetOrgAzureFoundryConfig returns the org's shared document, secrets removed; unreadable-but-present is ErrOrgCredentialUnreadable.
 func (s *ProviderService) GetOrgAzureFoundryConfig(orgID string) (cfg OrgAzureFoundryConfig, err error) {
 	defer logger.Guard("App.GetOrgAzureFoundryConfig", &err)
 	if s.orgKeys == nil {
@@ -1211,21 +954,7 @@ func (s *ProviderService) GetOrgAzureFoundryConfig(orgID string) (cfg OrgAzureFo
 	return out, nil
 }
 
-// SaveOrgAzureFoundryConfig is SaveAzureFoundryConfig for the organisation's
-// shared document: the same validation, the same carry-over of an omitted
-// secret from the stored document (endpoint hosts unchanged), the same
-// release of a replaced credential's process state. updatedBy is the saving
-// admin's user id; it becomes the credential's lender only when the save
-// supplies the secret — a carried-over secret keeps its lender. The org's
-// cached listings (every member's, under ai.OrgScope) are dropped so the new
-// deployments show up on the next listing.
-//
-// Compare-and-swap: expectedUpdatedAt is the updatedAt the admin's GET
-// returned ("" when it said configured:false). The write happens only while
-// the stored document still carries it — or, for "", while there is none —
-// else ErrOrgCredentialConflict and nothing is written, so two admins
-// editing at once can no longer silently overwrite each other. Returns the
-// new updatedAt (the next save's token).
+// SaveOrgAzureFoundryConfig is SaveAzureFoundryConfig for the org's shared document: same carry rules; CAS on expectedUpdatedAt (else 409).
 func (s *ProviderService) SaveOrgAzureFoundryConfig(orgID, updatedBy, expectedUpdatedAt string, cfg ai.AzureFoundryConfig) (updatedAt string, err error) {
 	defer logger.Guard("App.SaveOrgAzureFoundryConfig", &err)
 	if s.orgKeys == nil {
@@ -1236,20 +965,13 @@ func (s *ProviderService) SaveOrgAzureFoundryConfig(orgID, updatedBy, expectedUp
 		return "", err
 	}
 	cfg.Normalize()
-	// The Azure CLI sign-in mode is a personal, desktop-only credential: it
-	// runs as whoever is signed into `az` on the machine that chats. An
-	// org-shared document is used by every member on their own machines, so
-	// it must be an API key or a service principal. Refused here, at save
-	// time, in every deployment mode — the provider-level validation only
-	// refuses the mode on server deployments (F-51).
+	// The Azure CLI sign-in is a personal, desktop-only credential (whoever is signed into `az`); an org document must be an API key or service principal.
 	if cfg.Auth.Mode == ai.AzureAuthModeEntraCLI {
 		return "", &ai.AzureConfigError{Code: ai.AzureCfgErrInvalidAuth,
 			Message: "the Azure CLI sign-in mode cannot be shared with an organisation — save it as your own Azure AI Foundry configuration, or share an API key or Microsoft Entra ID service principal"}
 	}
 	if s.azure != nil && s.azure.OrgRegistriesAvailable() {
-		// Deprecated with the model registry: the credential part is saved
-		// (the same compare-and-swap and repair as below), the deployment
-		// fields are mapped onto the organisation's resource "default".
+		// Deprecated with the registry: only the credential part is saved (same CAS).
 		at, err := s.azure.legacyOrgSaveConfig(context.Background(), orgID, updatedBy, expected, cfg)
 		if err != nil {
 			return "", err
@@ -1257,17 +979,7 @@ func (s *ProviderService) SaveOrgAzureFoundryConfig(orgID, updatedBy, expectedUp
 		s.InvalidateScope(ai.OrgScope(orgID))
 		return at, nil
 	}
-	// A token-less save that supplies a fresh secret may be the repair of
-	// an unreadable stored row (a decrypt failure after a key rotation, a
-	// document this build cannot parse): its GET fails with
-	// ErrOrgCredentialUnreadable and hands back no compare-and-swap token,
-	// so the zero-expected branch below would answer 409 against the very
-	// row the save is meant to replace. The row's OrgKeyMeta stamp becomes
-	// the token instead — a true compare-and-swap, so two admins repairing
-	// at once cannot overwrite each other — and hadPrev stays false (the
-	// stored document is unusable, nothing is carried and the repairing
-	// admin becomes the new lender). Any other stored state (no row, a
-	// readable document, a store error) keeps today's path.
+	// A token-less save with a fresh secret may repair an unreadable row: the row's OrgKeyMeta stamp becomes the token.
 	if expected.IsZero() && cfg.HasSecret() {
 		stamp, repair, rerr := unreadableOrgStamp(s.orgKeys, orgID, ai.AzureFoundryProviderID)
 		if rerr != nil {
@@ -1289,10 +1001,7 @@ func (s *ProviderService) SaveOrgAzureFoundryConfig(orgID, updatedBy, expectedUp
 	if err != nil {
 		return "", err
 	}
-	// Validation passed, so the document holds a secret: one the request did
-	// not supply was carried over from the stored document, and its lender
-	// stays. The compare-and-swap guarantees the row carried over from is the
-	// row being replaced.
+	// Validation passed, so the document holds a secret: an unsupplied one was carried, and its lender stays.
 	secretCarried := !supplied
 	at, ok, err := s.orgKeys.SaveOrgIfUnchanged(orgID, ai.AzureFoundryProviderID, raw, updatedBy, secretCarried, expected)
 	if err != nil {
@@ -1309,11 +1018,7 @@ func (s *ProviderService) SaveOrgAzureFoundryConfig(orgID, updatedBy, expectedUp
 	return formatOrgKeyStamp(at), nil
 }
 
-// DeleteOrgAzureFoundryConfig removes the organisation's shared document,
-// releases what the process kept for its credential and drops the org's
-// cached listings. Deleting a missing document is a no-op. Deprecated with
-// the model registry (one release): it removes the organisation's resource
-// "default" with its models (the credential after the commit).
+// DeleteOrgAzureFoundryConfig removes the org's shared document, releases process state and drops cached listings; missing = no-op.
 func (s *ProviderService) DeleteOrgAzureFoundryConfig(orgID string) (err error) {
 	defer logger.Guard("App.DeleteOrgAzureFoundryConfig", &err)
 	if s.orgKeys == nil {
@@ -1337,31 +1042,14 @@ func (s *ProviderService) DeleteOrgAzureFoundryConfig(orgID string) (err error) 
 	return nil
 }
 
-// DisableOrgAzureFoundryConfigSavedBy disables the organisation's shared
-// Azure AI Foundry credentials when userID is the admin who supplied their
-// secret — the lender, secret_set_by (updated_by only for a row no save has
-// stamped since the v24 backfill) — called when that admin is demoted,
-// removed from the org or deletes their account: the credential was theirs
-// to lend, and a key its owner can no longer manage must not stay live for
-// the org. Another admin's later edit that kept the stored secret does not
-// save it from its lender's departure, and does not make the editor a
-// lender either. The delete is conditional on the stored secret_set_by, so a
-// newer save by another admin with their own secret is kept. Family-wide:
-// every resource's credential userID lent goes (see
-// DisableOrgAzureCredentialsSavedBy, which names the keys for the audit
-// rows); disabled reports whether any did — the F-48 sharedCredentialDisabled
-// flag. A deployment without an org store has nothing to disable.
+// DisableOrgAzureFoundryConfigSavedBy disables the org's credentials userID lent (secret_set_by); a newer admin's save is kept.
 func (s *ProviderService) DisableOrgAzureFoundryConfigSavedBy(orgID, userID string) (disabled bool, err error) {
 	defer logger.Guard("App.DisableOrgAzureFoundryConfigSavedBy", &err)
 	keys, err := s.DisableOrgAzureCredentialsSavedBy(orgID, userID)
 	return len(keys) > 0, err
 }
 
-// DisableOrgCredentialsSavedBy is DisableOrgAzureFoundryConfigSavedBy for
-// every organisation whose shared credentials userID lent (account erasure:
-// the membership rows go with the account, the credential rows do not).
-// Returns the orgs disabled; an org that fails is logged and skipped so the
-// others are still disabled. DisableOrgAzureCredentialsLentBy names the keys.
+// DisableOrgCredentialsSavedBy is the family-wide version for every org userID lent credentials to (account erasure).
 func (s *ProviderService) DisableOrgCredentialsSavedBy(userID string) (orgIDs []string, err error) {
 	defer logger.Guard("App.DisableOrgCredentialsSavedBy", &err)
 	refs, err := s.DisableOrgAzureCredentialsLentBy(userID)
@@ -1376,12 +1064,7 @@ func (s *ProviderService) DisableOrgCredentialsSavedBy(userID string) (orgIDs []
 	return orgIDs, nil
 }
 
-// PrepareOrgDeletion reads what the process must release when orgID is
-// deleted — every Azure AI Foundry credential of the organisation (each one's
-// Entra ID token source and cached listings) — while the rows still exist
-// (they cascade with the organisation, as do its registry rows), and returns
-// the release to run once the delete succeeded: forget those credentials,
-// drop the org's cached listings and what the registry remembers of it.
+// PrepareOrgDeletion reads what to release when orgID is deleted and returns the post-delete release.
 func (s *ProviderService) PrepareOrgDeletion(orgID string) (release func()) {
 	var docs []string
 	if s.orgKeys != nil && orgID != "" {
@@ -1398,10 +1081,7 @@ func (s *ProviderService) PrepareOrgDeletion(orgID string) (release func()) {
 	}
 }
 
-// PrepareAccountErasure is PrepareOrgDeletion for a user's own credentials:
-// it reads every Azure AI Foundry credential of the user before the erasure
-// cascades them away (with the user's registry rows) and returns the release
-// that forgets them and drops the scope's cached listings.
+// PrepareAccountErasure is PrepareOrgDeletion for a user's own credentials, read before the erasure cascades them away.
 func (s *ProviderService) PrepareAccountErasure(scope string) (release func()) {
 	var docs []string
 	if s.secrets != nil {

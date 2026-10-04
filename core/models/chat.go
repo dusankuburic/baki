@@ -6,8 +6,7 @@ import (
 )
 
 // ToolCallRecord is one tool invocation behind an assistant message — the
-// transparency trail. It mirrors the wire `tool_result` event and is persisted
-// with the conversation so the trail survives reloads.
+// transparency trail, persisted with the conversation so it survives reloads.
 type ToolCallRecord struct {
 	Name       string `json:"name"`
 	Label      string `json:"label,omitempty"`
@@ -16,8 +15,7 @@ type ToolCallRecord struct {
 	Summary    string `json:"summary,omitempty"`
 }
 
-// FixItemSnapshot is one fix inside a (possibly batch) approval record, with
-// its own resolved outcome.
+// FixItemSnapshot is one fix inside a batch approval record, with its own resolved outcome.
 type FixItemSnapshot struct {
 	RuleID     string `json:"ruleId"`
 	FixType    string `json:"fixType"`
@@ -28,11 +26,9 @@ type FixItemSnapshot struct {
 	Message    string `json:"message,omitempty"`
 }
 
-// FixProposalSnapshot persists an apply_fix approval prompt together with its
-// resolved outcome on the assistant message, so the decision record outlives
-// the stream (and its transient approval card). Items carries per-fix outcomes
-// for batch approvals (empty for single-fix records, whose fields are the
-// item).
+// FixProposalSnapshot persists an apply_fix approval prompt with its resolved
+// outcome on the assistant message (outliving the stream); Items carries
+// per-fix outcomes for batch approvals (empty for single-fix records).
 type FixProposalSnapshot struct {
 	ProposalID string            `json:"proposalId"`
 	RuleID     string            `json:"ruleId"`
@@ -56,31 +52,25 @@ type ChatMessage struct {
 	TokensOut        int       `json:"tokensOut,omitempty"`
 	Provider         string    `json:"provider,omitempty"`
 	Model            string    `json:"model,omitempty"`
-	// ModelLabel is the model's friendly name when the message was sent —
-	// an Azure AI Foundry registry entry's display name, whose Model is the
-	// opaque "m/<entryId>" — so history, bubbles and exports keep naming the
-	// model after it is renamed or removed. Empty for catalogue models.
+	// ModelLabel is the model's friendly name at send time (Model is the opaque
+	// "m/<entryId>"), so history and exports keep naming it after renames;
+	// empty for catalogue models.
 	ModelLabel string `json:"modelLabel,omitempty"`
-	// ServedModel is the model that actually answered when Model is an
-	// alias the provider resolves (an Azure AI Foundry deployment,
-	// model-router, an agent); InputCostPerM / OutputCostPerM are the USD
-	// per 1M token rates the turn was billed at. All three come from the
-	// stream's done event and are saved with the message so a reloaded
-	// conversation keeps its served-model tag and prices the turn at what it
-	// cost, not at the current listing. Zero/empty = not reported.
+	// ServedModel is the model that actually answered when Model is a resolvable
+	// alias, and Input/OutputCostPerM the USD per 1M rates billed — all from the
+	// stream's done event, so a reloaded conversation prices the turn at what it
+	// cost. Zero/empty = not reported.
 	ServedModel    string  `json:"servedModel,omitempty"`
 	InputCostPerM  float64 `json:"inputCostPerM,omitempty"`
 	OutputCostPerM float64 `json:"outputCostPerM,omitempty"`
 	FinishReason   string  `json:"finishReason,omitempty"`
 	// ToolCalls records the tool invocations behind this assistant message.
 	ToolCalls []ToolCallRecord `json:"toolCalls,omitempty"`
-	// FixProposal snapshots the (single) apply_fix approval record, if any.
-	// LEGACY field: superseded by FixProposals; kept so conversations saved
-	// before the array migration still load.
+	// FixProposal snapshots the single apply_fix approval record — LEGACY,
+	// superseded by FixProposals; kept for pre-migration conversations.
 	FixProposal *FixProposalSnapshot `json:"fixProposal,omitempty"`
-	// FixProposals snapshots every apply_fix/apply_fixes approval record on
-	// this message — a stream can carry several sequential proposals, and a
-	// batch carries several fixes behind one approval.
+	// FixProposals snapshots every apply_fix/apply_fixes approval record: a
+	// stream can carry several sequential proposals, a batch several fixes.
 	FixProposals []FixProposalSnapshot `json:"fixProposals,omitempty"`
 }
 
@@ -95,46 +85,32 @@ type ChatRequest struct {
 	SystemPrompt        string        `json:"systemPrompt,omitempty"`
 	Temperature         float64       `json:"temperature,omitempty"`
 	MaxTokens           int           `json:"maxTokens,omitempty"`
-	// ReasoningEffort is the per-provider choice of reasoning depth for
-	// reasoning deployments (Settings → AI Behavior): "", "low", "medium" or
-	// "high" — anything else is refused. Merged onto the request by the
-	// client's request builder from the persisted provider setting; ""
-	// keeps the provider default. Only reasoning models use it; the wire
-	// repair path drops it again for models that reject the parameter.
+	// ReasoningEffort is the per-provider reasoning depth ("", "low", "medium",
+	// "high"; anything else is refused), merged from the persisted setting.
+	// Only reasoning models use it; the wire repair path drops it when rejected.
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
-	// UseTools opts this request into the read-only tool/agent loop. It only
-	// takes effect when the resolved provider supports tools; otherwise the
-	// normal streaming path runs.
+	// UseTools opts into the read-only tool/agent loop; only effective when the provider supports tools.
 	UseTools bool `json:"useTools,omitempty"`
-	// ExcludeContext skips injecting flow/block context into the prompt so the
-	// user can ask a free-form question without the document being attached.
+	// ExcludeContext skips flow/block context injection for free-form questions.
 	ExcludeContext bool `json:"excludeContext,omitempty"`
-	// ClientStreamID, when set, is a client-generated UUID used as the stream
-	// identifier. It lets the client subscribe its SSE listener BEFORE creating
-	// the stream, so the backend can begin emitting immediately without the
-	// extra /chat/begin round-trip (C-1). Must be a UUID; collisions are
-	// rejected. When absent the backend generates the ID and the client must
-	// send /chat/begin after subscribing (legacy two-POST handshake).
+	// ClientStreamID is a client UUID used as the stream identifier, letting
+	// the client subscribe its SSE listener BEFORE creating the stream (no
+	// /chat/begin round-trip); collisions are rejected. Absent ⇒ the backend
+	// generates the ID (legacy two-POST handshake).
 	ClientStreamID string `json:"clientStreamId,omitempty"`
-	// ConversationID is the client thread this turn belongs to. It is the
-	// server-side conversation key (history reconstruction + persistence).
-	// Before it existed the key was ContextBlockID-or-"flow", so every
-	// flow-scoped thread on a flow shared ONE stored conversation: thread B was
-	// answered with thread A's history and each save clobbered the other.
-	// Must be a single safe path/key segment (a UUID); the handler rejects
-	// anything else.
+	// ConversationID is the client thread and the server-side conversation key
+	// (history + persistence); before it existed the key was
+	// ContextBlockID-or-"flow" and every flow-scoped thread shared ONE stored
+	// conversation. Must be a single safe path/key segment (UUID).
 	ConversationID string `json:"conversationId,omitempty"`
-	// UserMessageID / AssistantMessageID are the client's ids for this turn's
-	// two messages (UUIDs). The server persists its own copies of the turn
-	// (user turn at stream start, answer at the end) under these same ids, so a
-	// client that merges a reloaded conversation with the messages it already
-	// holds can dedupe by id instead of showing the turn twice. Anything that is
-	// not a UUID is ignored and the server mints its own id.
+	// UserMessageID / AssistantMessageID are the client's UUIDs for this turn's
+	// two messages; the server persists its own copies under the same ids so a
+	// reloaded conversation dedupes by id. Non-UUIDs are ignored.
 	UserMessageID      string `json:"userMessageId,omitempty"`
 	AssistantMessageID string `json:"assistantMessageId,omitempty"`
-	// TemperatureSet reports that the request body carried a "temperature"
-	// key, so an explicit 0 (deterministic sampling) is honoured instead of
-	// being read as "provider default". Set by UnmarshalJSON; never on the wire.
+	// TemperatureSet reports the request body carried a "temperature" key, so
+	// an explicit 0 is honoured instead of read as "provider default"; set by
+	// UnmarshalJSON, never on the wire.
 	TemperatureSet bool `json:"-"`
 }
 
@@ -158,10 +134,9 @@ func (r *ChatRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ConversationKey returns the key under which this turn's conversation is
-// stored and reconstructed: the thread's ConversationID when the client sent
-// one, otherwise the legacy ContextBlockID-or-"flow" scope (older clients and
-// conversations saved before threads had their own keys).
+// ConversationKey returns the key this conversation is stored and
+// reconstructed under: the thread's ConversationID when sent, else the legacy
+// ContextBlockID-or-"flow" scope.
 func (r ChatRequest) ConversationKey() string {
 	if r.ConversationID != "" {
 		return r.ConversationID
@@ -193,44 +168,38 @@ type ModelDetail struct {
 	InputCostPerM  float64 `json:"inputCostPerM"`
 	OutputCostPerM float64 `json:"outputCostPerM"`
 	// SupportsTools reports whether the provider family behind this model
-	// supports the agentic tool loop (native function calling, or the
-	// marker-based fallback). Provider-level granularity: families that mix
-	// per-model support (GitHub Models) report true — the runtime degrades
-	// gracefully per model (ErrToolsUnsupported).
+	// supports the agentic tool loop. Provider-level granularity: mixed
+	// families (GitHub Models) report true — the runtime degrades per model
+	// (ErrToolsUnsupported).
 	SupportsTools bool `json:"supportsTools"`
 
-	// The fields below describe an Azure AI Foundry model registry entry (ID
-	// "m/<entryId>"); catalogue models leave them empty. Embedding entries
-	// are never listed.
-	//
+	// The fields below describe an Azure AI Foundry registry entry (ID
+	// "m/<entryId>"); catalogue models leave them empty, embedding entries are
+	// never listed.
 	// Kind is the entry's kind: "chat", "claude" or "agent".
 	Kind string `json:"kind,omitempty"`
 	// Purpose is a preset key (general, documentation, fixes, review,
-	// refactoring, testing) or "custom" with PurposeCustom's text; the
-	// picker groups by it.
+	// refactoring, testing) or "custom" with PurposeCustom's text; the picker
+	// groups by it.
 	Purpose       string `json:"purpose,omitempty"`
 	PurposeCustom string `json:"purposeCustom,omitempty"`
-	// Description is shown under the name in the picker. Admin-written for
-	// shared entries: clients render it as plain text only.
+	// Description is shown under the name in the picker; admin-written, plain text only.
 	Description string `json:"description,omitempty"`
-	// Shared marks an organisation's entry (not the caller's own); OrgID and
-	// OrgName name that organisation.
+	// Shared marks an organisation's entry (not the caller's own); OrgID and OrgName name it.
 	Shared  bool   `json:"shared,omitempty"`
 	OrgID   string `json:"orgId,omitempty"`
 	OrgName string `json:"orgName,omitempty"`
 	// ConnectionID / ConnectionName name the entry's resource.
 	ConnectionID   string `json:"connectionId,omitempty"`
 	ConnectionName string `json:"connectionName,omitempty"`
-	// Status is "ready", or why the entry cannot be used right now
+	// Status is "ready" or why the entry cannot be used right now
 	// (needs_credentials, unreadable, invalid_config, unsupported);
 	// StatusReason carries the copy.
 	Status       string `json:"status,omitempty"`
 	StatusReason string `json:"statusReason,omitempty"`
-	// Aliases are the pre-registry ids the entry answers for ("gpt-4.1",
-	// "claude:x", "agent:y") — only entries of the resource "default".
+	// Aliases are the pre-registry ids the entry answers for ("gpt-4.1", "claude:x", "agent:y").
 	Aliases []string `json:"aliases,omitempty"`
-	// IsDefault marks the server default for new chats; IsOrgDefault the
-	// organisation's "Default for members".
+	// IsDefault marks the server default for new chats; IsOrgDefault the organisation's default.
 	IsDefault    bool `json:"isDefault,omitempty"`
 	IsOrgDefault bool `json:"isOrgDefault,omitempty"`
 }
@@ -239,8 +208,7 @@ type ProviderInfo struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Configured bool   `json:"configured"`
-	// Shared is true when the caller has no credential of their own for the
-	// provider and the listing runs on their organisation's shared one.
+	// Shared is true when the caller has no credential of their own and the listing runs on the organisation's shared one.
 	Shared       bool          `json:"shared,omitempty"`
 	Models       []ModelDetail `json:"models"`
 	DefaultModel string        `json:"defaultModel"`

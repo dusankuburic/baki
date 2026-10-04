@@ -16,15 +16,12 @@ import (
 	"pad-core/logger"
 )
 
-// Foundry PROJECT endpoint extras (Entra ID only — the project data plane
-// rejects API keys): the deployments listing, which reveals the model behind
-// each deployment name, and the project's prompt agents, which the chat model
-// picker offers as "Agent · <name>" entries with the id "agent:<name>".
+// Foundry PROJECT endpoint extras (Entra ID only — the project data plane rejects API keys): the deployments
+// listing, which reveals the model behind each deployment name, and the project's prompt agents, which the chat
+// model picker offers as "Agent · <name>" entries with the id "agent:<name>".
 
-// agentModelPrefix marks a model id that names a Foundry agent rather than a
-// deployment. The chat service forces the tool loop for such ids (an agent's
-// function call must be answered) and the provider routes them to the
-// Responses API.
+// agentModelPrefix marks a model id that names a Foundry agent rather than a deployment: the chat service
+// forces the tool loop for such ids and the provider routes them to the Responses API.
 const agentModelPrefix = "agent:"
 
 // IsAgentModel reports whether a model id names a Foundry agent.
@@ -39,34 +36,19 @@ const azureProjectAPIVersion = "v1"
 const (
 	azureProjectMaxPages  = 10
 	azureProjectMaxAgents = 200
-	// azureProjectAgentsPageSize is the List Agents `limit`: the operation's
-	// documented maximum (the default page is 20 agents). A page of skipped
-	// kinds still counts against azureProjectMaxPages but not against the
-	// agent cap. The deployments route has no documented limit and sends none.
+	// azureProjectAgentsPageSize is the List Agents `limit`: the operation's documented maximum (the default
+	// page is 20 agents). A page of skipped kinds still counts against azureProjectMaxPages but not the cap.
 	azureProjectAgentsPageSize = 100
-	// azureProjectMaxBody caps one project page (a page of deployments or
-	// agents is a few KB).
+	// azureProjectMaxBody caps one project page (a page of deployments or agents is a few KB).
 	azureProjectMaxBody = 4 << 20
 )
 
-// projectExtras merges the project deployments listing into the document's
-// deployments and appends the project's agents, reporting whether the result
-// is complete (cacheable for the full TTL). The project listing is
-// authoritative for what a deployment serves and lists the deployments the
-// document does not name. Everything here is best effort: a definitive
-// refusal (403, or a 401 that survived a fresh token — a missing role; 404
-// classic hub project; 400 unsupported api-version) leaves the document's
-// deployments intact and still counts as complete, so it is not re-requested
-// on every chat turn; a transient failure (network, 5xx, 429, a token that
-// cannot be obtained, the caller's deadline) returns what is known as
-// incomplete, which the caller serves only briefly (azureModelsRetryAfter).
-//
-// The two listings run concurrently (each is paginated, and both sit on the
-// time-to-first-token path of an Entra ID + project user). A deployments
-// failure that makes the agents call pointless — the token cannot be
-// obtained, or the project asked for back-off (429: the agents route shares
-// its quota, and the listing is incomplete either way) — cancels the agents
-// fetch instead of letting it page on.
+// projectExtras merges the project deployments listing into the document's deployments and appends the
+// project's agents, reporting completeness. Everything is best effort: a definitive refusal (403, a 401 that
+// survived a fresh token, 404, 400) leaves the document's deployments and counts as COMPLETE — not re-requested
+// every turn; a transient failure returns what is known as incomplete (served briefly, azureModelsRetryAfter).
+// The two paginated listings run concurrently; a deployments failure that makes the agents call pointless
+// (unobtainable token, 429 — the agents route shares its quota) cancels the agents fetch.
 func (p *AzureFoundryProvider) projectExtras(ctx context.Context, models []ModelInfo) ([]ModelInfo, bool) {
 	if !p.cfg.listsProjectDeployments() {
 		return models, true
@@ -104,8 +86,7 @@ func (p *AzureFoundryProvider) projectExtras(ctx context.Context, models []Model
 		logger.Warn("azure ai foundry: project deployments unavailable; skipping the agents", "error", depErr)
 		return models, false
 	case errors.Is(depErr, ErrApiKeyInvalid) && definitiveProjectFailure(depErr):
-		// A fresh token was refused too: the principal has no role on the
-		// project, and the agents route answers the same way.
+		// A fresh token was refused too: the principal has no role on the project, and the agents route too.
 		logger.Warn("azure ai foundry: project not accessible to the entra id principal; listing the configured deployments only", "error", depErr)
 		return models, true
 	case errors.Is(depErr, ErrRateLimited):
@@ -122,8 +103,7 @@ func (p *AzureFoundryProvider) projectExtras(ctx context.Context, models []Model
 	return append(models, p.agentModels(agents, deployedModels)...), complete && ctx.Err() == nil
 }
 
-// deployedModelNames maps each listed deployment (lower-cased name) to the
-// model it serves, for resolving what an agent runs on.
+// deployedModelNames maps each listed deployment (lower-cased name) to the model it serves.
 func deployedModelNames(deployments []projectDeployment) map[string]string {
 	out := make(map[string]string, len(deployments))
 	for _, d := range deployments {
@@ -134,14 +114,9 @@ func deployedModelNames(deployments []projectDeployment) map[string]string {
 	return out
 }
 
-// mergeProjectDeployments applies the project listing to the document's
-// entries — the model behind each one (price, window and output cap from the
-// catalogue, replacing any guess made from the deployment name) and the
-// embedding flag — then appends the project's other deployments in listing
-// order. A deployment the listing reports as Anthropic-published is a Claude
-// deployment: it is listed under its "claude:<name>" id (the Anthropic
-// Messages route), and a document entry that named it as a chat-completions
-// deployment is re-listed under that id, since /openai/v1 cannot serve it.
+// mergeProjectDeployments applies the project listing to the document's entries (the model behind each one,
+// the embedding flag) and appends the project's other deployments in listing order. A deployment the listing
+// reports as Anthropic-published is a Claude deployment, listed under its "claude:<name>" id.
 func (p *AzureFoundryProvider) mergeProjectDeployments(models []ModelInfo, deployments []projectDeployment) []ModelInfo {
 	byID := make(map[string]projectDeployment, len(deployments))
 	for _, d := range deployments {
@@ -204,16 +179,13 @@ func (p *AzureFoundryProvider) mergeProjectDeployments(models []ModelInfo, deplo
 type projectDeployment struct {
 	name      string
 	modelName string
-	// embedding: the deployment serves an embedding model (its capabilities
-	// say embeddings without chat completion, or its model name says so).
+	// embedding: the deployment serves an embedding model (its capabilities say embeddings without chat completion, or its model name says so).
 	embedding bool
-	// claude: the deployment's model is published by Anthropic, so it
-	// answers on the Anthropic Messages route (azure_claude.go).
+	// claude: the deployment's model is published by Anthropic, so it answers on the Anthropic Messages route.
 	claude bool
 }
 
-// listingID is the model-list id the deployment is offered under: the
-// deployment name, prefixed for a Claude deployment.
+// listingID is the model-list id the deployment is offered under: the deployment name, prefixed for a Claude deployment.
 func (d projectDeployment) listingID() string {
 	if d.claude {
 		return claudeModelPrefix + d.name
@@ -232,12 +204,8 @@ func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]p
 		if err != nil {
 			return nil, err
 		}
-		// The page envelope (value / nextLink) is stable; item bodies vary by
-		// deployment kind, so each is decoded on its own and an undecodable
-		// one (a future kind whose capabilities are not a string map) costs
-		// that entry, not the whole page — which used to make the listing
-		// incomplete, hence uncached and re-fetched on every turn, for as
-		// long as that deployment existed.
+		// Each item is decoded on its own: an undecodable one costs that entry, not the whole page (which used
+		// to make the listing incomplete, hence uncached and re-fetched every turn).
 		var parsed struct {
 			Value    []json.RawMessage `json:"value"`
 			NextLink string            `json:"nextLink"`
@@ -263,10 +231,8 @@ func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]p
 				continue
 			}
 			if conn := strings.TrimSpace(d.ConnectionName); conn != "" {
-				// A deployment that comes from a project CONNECTION (an AI
-				// gateway / external model endpoint) is reachable through that
-				// connection only — the resource's /openai/v1 route answers
-				// 404 for its name — so it is not offered.
+				// A deployment that comes from a project CONNECTION (an AI gateway / external model endpoint) is
+				// reachable through that connection only — /openai/v1 answers 404 for its name.
 				logger.Debug("azure ai foundry: skipping a connection deployment not callable on /openai/v1",
 					"deployment", name, "connection", conn)
 				continue
@@ -281,19 +247,16 @@ func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]p
 		next = p.sameProjectHost(parsed.NextLink)
 	}
 	if next != "" {
-		// The listing was cut by the page cap with more pages pending — say
-		// so, or a deployment the model picker is missing looks like a bug in
-		// the merge instead of a truncation nobody reported.
+		// The listing was cut by the page cap with more pages pending — say so, or a missing deployment looks like a merge bug.
 		logger.Warn("azure ai foundry: project deployments listing stopped at the page cap; deployments beyond it are not listed",
 			"pages", azureProjectMaxPages, "listed", len(out))
 	}
 	return out, nil
 }
 
-// isClaudeDeployment reports whether a listed project deployment is a Claude
-// deployment (served on the Anthropic Messages route): published by
-// Anthropic, a model named "claude…" (a listing that omits or misspells the
-// publisher), or a name the document itself lists as a Claude deployment.
+// isClaudeDeployment reports whether a listed deployment is a Claude deployment (the Anthropic Messages
+// route): published by Anthropic, a model named "claude…" (a listing that misspells the publisher), or a name
+// the document lists as a Claude deployment.
 func (p *AzureFoundryProvider) isClaudeDeployment(name, modelName, publisher string) bool {
 	if strings.EqualFold(strings.TrimSpace(publisher), anthropicModelPublisher) || isClaudeModelName(modelName) {
 		return true
@@ -306,14 +269,12 @@ func (p *AzureFoundryProvider) isClaudeDeployment(name, modelName, publisher str
 	return false
 }
 
-// isEmbeddingModelName reports whether a model name denotes an embedding
-// model (text-embedding-3-small, embed-v-4-0, Cohere-embed-v3-english, …).
+// isEmbeddingModelName reports whether a model name denotes an embedding model (text-embedding-3-small, embed-v-4-0, …).
 func isEmbeddingModelName(name string) bool {
 	return strings.Contains(strings.ToLower(name), "embed")
 }
 
-// capabilityTrue reads one flag of a project deployment's capabilities map,
-// whose values the service sends as strings ("true") — booleans accepted too.
+// capabilityTrue reads one flag of a project deployment's capabilities map, whose values the service sends as strings ("true").
 func capabilityTrue(caps map[string]any, key string) bool {
 	switch v := caps[key].(type) {
 	case bool:
@@ -324,8 +285,7 @@ func capabilityTrue(caps map[string]any, key string) bool {
 	return false
 }
 
-// azureProjectStatusError is a project route's answer other than 200, 401
-// (ErrApiKeyInvalid) and 429 (RateLimitError).
+// azureProjectStatusError is a project route's answer other than 200, 401 (ErrApiKeyInvalid) and 429 (RateLimitError).
 type azureProjectStatusError struct {
 	status  int
 	message string
@@ -346,41 +306,29 @@ func (e *azureProjectStatusError) Unwrap() error {
 	return nil
 }
 
-// definitiveProjectFailure reports whether a project listing failure is an
-// answer that will not change on a retry — a 4xx status error other than 408
-// (429 and a first 401 never become one): 403 or a 401 that survived a fresh
-// token (the principal lacks the role), 404 (a classic hub project without
-// the v1 routes), 400 (api-version not supported).
+// definitiveProjectFailure reports whether a project listing failure is an answer that will not change on a
+// retry — a 4xx status error other than 408 (403/no-role 401, a classic hub project's 404, api-version 400).
 func definitiveProjectFailure(err error) bool {
 	var se *azureProjectStatusError
 	return errors.As(err, &se) && se.status >= 400 && se.status < 500 && se.status != http.StatusRequestTimeout
 }
 
-// fetchAgents calls GET {project}/agents?api-version=v1&limit=<page size>
-// (paginated) and returns each agent the shared Responses route can run — prompt and workflow
-// agents, or no kind (older shapes). Hosted agents answer only on their own
-// endpoint, external (A2A) and voice agents are not Responses chat targets;
-// a disabled agent (state) or one whose latest version is still being
-// provisioned, failed or is being deleted (versions.latest.status) cannot
-// answer either. They are skipped and do not count toward the cap. Each
-// listed agent's kind is remembered (rememberAgentKind) so a workflow agent
-// is invoked with its preview opt-in header. agentModels turns the result
-// into model-list entries once the deployments listing is known.
+// fetchAgents calls GET {project}/agents?api-version=v1&limit=<page size> (paginated) and returns each agent
+// the shared Responses route can run (prompt and workflow agents, or no kind — older shapes); hosted, external
+// (A2A) and voice agents are skipped, as are disabled ones. Each kind is remembered (rememberAgentKind).
 func (p *AzureFoundryProvider) fetchAgents(ctx context.Context) ([]azureAgent, error) {
 	agents, _, err := p.fetchAgentsReport(ctx)
 	return agents, err
 }
 
-// azureAgentsReport is what fetchAgentsReport reports beyond the agents, for
-// discovery's warnings: how many listed agents it skipped as not runnable
-// here (kind or state), and whether a cap stopped the listing early.
+// azureAgentsReport is what fetchAgentsReport reports beyond the agents, for discovery's warnings: how many
+// listed agents it skipped as not runnable here (kind or state), and whether a cap stopped the listing early.
 type azureAgentsReport struct {
 	skipped   int
 	truncated bool
 }
 
-// fetchAgentsReport is fetchAgents with its report. An isolated provider
-// (discovery) remembers no agent kind.
+// fetchAgentsReport is fetchAgents with its report. An isolated provider (discovery) remembers no agent kind.
 func (p *AzureFoundryProvider) fetchAgentsReport(ctx context.Context) ([]azureAgent, azureAgentsReport, error) {
 	var out []azureAgent
 	var report azureAgentsReport
@@ -405,8 +353,7 @@ func (p *AzureFoundryProvider) fetchAgentsReport(ctx context.Context) ([]azureAg
 			items = parsed.Value
 		}
 		for _, raw := range items {
-			// Per item, as for deployments: one agent of an unexpected shape
-			// must not make the whole listing incomplete.
+			// Per item, as for deployments: one agent of an unexpected shape must not make the whole listing incomplete.
 			var a azureAgent
 			if err := json.Unmarshal(raw, &a); err != nil {
 				logger.Debug("azure ai foundry: skipping undecodable project agent item", "error", err)
@@ -444,8 +391,7 @@ func (p *AzureFoundryProvider) fetchAgentsReport(ctx context.Context) ([]azureAg
 			next = ""
 		}
 	}
-	// Both caps truncate silently otherwise; a missing agent in the picker
-	// then looks like a merge bug instead of a listing that was cut short.
+	// Both caps truncate silently otherwise; a missing agent in the picker then looks like a merge bug.
 	if next != "" {
 		logger.Warn("azure ai foundry: project agents listing stopped at the page cap; agents beyond it are not listed",
 			"pages", azureProjectMaxPages, "listed", len(out))
@@ -458,15 +404,9 @@ func (p *AzureFoundryProvider) fetchAgentsReport(ctx context.Context) ([]azureAg
 	return out, report, nil
 }
 
-// agentModels maps the listed agents to model-list entries ("agent:<name>",
-// "Agent · <name>"). The definition's model is the PROJECT DEPLOYMENT the
-// agent runs on, not a model name: the project listing (deployedModels,
-// authoritative) names the model behind it, and a deployment named after its
-// model (the portal default) resolves through the catalogue. Otherwise
-// ServedModel stays EMPTY so enrichServedModels can fill it from the memo
-// once the agent has answered — a pre-set deployment name blocked that
-// forever, leaving a custom-named deployment's agent with the default window
-// and no output cap.
+// agentModels maps the listed agents to model-list entries. The definition's model is the PROJECT DEPLOYMENT
+// the agent runs on, not a model name: deployedModels (authoritative) or the catalogue resolve it; otherwise
+// ServedModel stays EMPTY so enrichServedModels can fill it from the memo once the agent has answered.
 func (p *AzureFoundryProvider) agentModels(agents []azureAgent, deployedModels map[string]string) []ModelInfo {
 	out := make([]ModelInfo, 0, len(agents))
 	for _, a := range agents {
@@ -502,9 +442,8 @@ func (p *AzureFoundryProvider) agentModels(agents []azureAgent, deployedModels m
 	return out
 }
 
-// azureAgent is the subset of the agent object the listing needs. The model
-// and kind sit on the latest version's definition; older shapes carry them at
-// the top level, so both are read.
+// azureAgent is the subset of the agent object the listing needs. The model and kind sit on the latest
+// version's definition; older shapes carry them at the top level, so both are read.
 type azureAgent struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
@@ -513,8 +452,7 @@ type azureAgent struct {
 	State    string `json:"state"`
 	Versions struct {
 		Latest struct {
-			// Status is the latest version's provisioning status (creating |
-			// active | failed | deleting | deleted); optional.
+			// Status is the latest version's provisioning status (creating | active | failed | deleting | deleted); optional.
 			Status     string `json:"status"`
 			Definition struct {
 				Kind  string `json:"kind"`
@@ -536,8 +474,7 @@ func (a azureAgent) label() string {
 	return strings.TrimSpace(a.ID)
 }
 
-// kind is the agent kind (prompt | workflow | hosted | external | voice),
-// lower-cased; "" when the listing does not say.
+// kind is the agent kind (prompt | workflow | hosted | external | voice), lower-cased; "" when the listing does not say.
 func (a azureAgent) kind() string {
 	for _, k := range []string{a.Versions.Latest.Definition.Kind, a.Definition.Kind} {
 		if k = strings.ToLower(strings.TrimSpace(k)); k != "" {
@@ -547,11 +484,9 @@ func (a azureAgent) kind() string {
 	return ""
 }
 
-// runsViaAgentReference reports whether the shared
-// {project}/openai/v1/responses route can run the agent by agent_reference:
-// prompt and workflow agents can, and an absent kind (older shapes) is kept.
-// Hosted agents need their dedicated endpoint; external (A2A) and voice
-// agents are not Responses chat targets.
+// runsViaAgentReference reports whether the shared {project}/openai/v1/responses route can run the agent by
+// agent_reference: prompt and workflow agents, or an absent kind (older shapes). Hosted, external (A2A) and
+// voice agents are not Responses chat targets.
 func (a azureAgent) runsViaAgentReference() bool {
 	switch a.kind() {
 	case "", "prompt", agentKindWorkflow:
@@ -560,10 +495,8 @@ func (a azureAgent) runsViaAgentReference() bool {
 	return false
 }
 
-// usable reports whether the agent can answer now: its state is "enabled"
-// and its latest version, when the listing reports a status, is "active". An
-// absent state is an older listing shape that predates the field and is
-// kept.
+// usable reports whether the agent can answer now: state "enabled" and, when the listing reports a status, the
+// latest version "active". An absent state is an older listing shape that predates the field and is kept.
 func (a azureAgent) usable() bool {
 	if s := strings.TrimSpace(a.State); s != "" && !strings.EqualFold(s, "enabled") {
 		return false
@@ -574,25 +507,18 @@ func (a azureAgent) usable() bool {
 	return true
 }
 
-// agentKindWorkflow is the workflow agent kind. Workflow agents are a
-// preview gated by the Foundry-Features opt-in header on every call
-// (workflowFeatureHeader) and retire on December 1, 2026; they stay listed,
-// marked "(workflow)", until then.
+// agentKindWorkflow is the workflow agent kind — a preview gated by the Foundry-Features opt-in header on
+// every call (workflowFeatureHeader) that retires on December 1, 2026; they stay listed, marked "(workflow)", until then.
 const agentKindWorkflow = "workflow"
 
-// Workflow agents' preview opt-in: the Foundry-Features header and value the
-// project data plane requires on requests that run one.
+// Workflow agents' preview opt-in: the Foundry-Features header and value the project data plane requires.
 const (
 	foundryFeaturesHeader = "Foundry-Features"
 	workflowFeatureValue  = "WorkflowAgents=V1Preview"
 )
 
-// agentKinds remembers each listed agent's kind per project (the listing is
-// the only place it is reported), so the chat path knows to send the
-// workflow opt-in header without a listing call. Keyed by project endpoint +
-// lower-cased agent name (no secret); bounded, and as long-lived as the
-// served-model memo — an agent's kind does not change without a new listing
-// refreshing the entry.
+// agentKinds remembers each listed agent's kind per project (the listing is the only place it is reported), so
+// the chat path sends the workflow opt-in header without a listing call. Bounded; keyed by project + agent name.
 var agentKinds = struct {
 	sync.Mutex
 	m map[string]agentKindEntry
@@ -645,13 +571,9 @@ func resetAgentKinds() {
 	agentKinds.Unlock()
 }
 
-// deploymentModelResolver maps a deployment name to the model the cached
-// project deployments listing says it serves (modelName). An agent run's
-// response.model is the agent's DEPLOYMENT — a custom name such as
-// "prod-chat" prices at $0 and teaches the served-model memo nothing — so
-// the agent paths resolve it before it reaches pricing and the memo. Names
-// the listing does not know (a versioned model name, no cached listing)
-// pass through unchanged. The listing is read once per call (never fetched).
+// deploymentModelResolver maps a deployment name to the model the cached project listing says it serves: an
+// agent run's response.model is the agent's DEPLOYMENT — a custom name prices at $0 and teaches the memo
+// nothing — so the agent paths resolve it first. Unknown names pass through; the listing is read, never fetched.
 func (p *AzureFoundryProvider) deploymentModelResolver() func(string) string {
 	identity := func(s string) string { return s }
 	models, ok := p.cachedListing()
@@ -685,10 +607,8 @@ func (a azureAgent) model() string {
 	return ""
 }
 
-// sameProjectHost accepts a continuation link only when it stays on the
-// configured project host — a listing must not redirect the credential
-// elsewhere. A non-empty link that fails the check is logged: dropping it
-// silently truncated the listing with nothing in the log to show why.
+// sameProjectHost accepts a continuation link only when it stays on the configured project host — a listing
+// must not redirect the credential elsewhere; a rejected link is logged (dropping it silently truncated listings).
 func (p *AzureFoundryProvider) sameProjectHost(link string) string {
 	link = strings.TrimSpace(link)
 	if link == "" {
@@ -704,20 +624,17 @@ func (p *AzureFoundryProvider) sameProjectHost(link string) string {
 	return link
 }
 
-// projectGET performs an authenticated GET against the project endpoint and
-// returns the body of a 200; other statuses become classified errors. A 401
-// gets one retry with a fresh Entra token (a cached token can be revoked out
-// of band); a 401 that survives it is the principal's real permission (a
-// missing project role) and comes back as a definitive
-// *azureProjectStatusError that still unwraps to ErrApiKeyInvalid, so the
-// listing without project data is cached instead of re-asked every turn.
+// projectGET performs an authenticated project GET and returns a 200's body; other statuses become classified
+// errors. A 401 gets one retry with a fresh Entra token; a 401 that survives is a definitive
+// *azureProjectStatusError still unwrapping to ErrApiKeyInvalid, so the listing is cached instead of re-asked
+// every turn.
 func (p *AzureFoundryProvider) projectGET(ctx context.Context, rawURL string) ([]byte, error) {
-	// The two listings run concurrently on one provider: each call records
-	// the token IT sent, so a 401 invalidates that one (see entraTokenUse).
+	// The two listings run concurrently on one provider: each call records the token IT sent, so a 401
+	// invalidates that one (see entraTokenUse).
 	callCtx, use := withEntraTokenUse(ctx)
 	body, err := p.projectGETOnce(callCtx, rawURL)
-	// A token Entra ID refused to issue (errEntraToken, also ErrApiKeyInvalid)
-	// is not the project rejecting one: asking again is another failed sign-in.
+	// A token Entra ID refused to issue (errEntraToken, also ErrApiKeyInvalid) is not the project rejecting
+	// one: asking again is another failed sign-in.
 	if err == nil || p.tokens == nil || !errors.Is(err, ErrApiKeyInvalid) || errors.Is(err, errEntraToken) {
 		return body, err
 	}
@@ -749,10 +666,8 @@ func (p *AzureFoundryProvider) projectGETOnce(ctx context.Context, rawURL string
 		return nil, err
 	}
 	defer resp.Body.Close()
-	// The 200 path depends on the body, so a read error is reported as
-	// itself (a connection reset or the caller's deadline mid-body used to
-	// surface as "parse deployments: unexpected end of JSON input", and a
-	// body over the cap was cut without a word). Both stay non-definitive.
+	// The 200 path depends on the body, so a read error is reported as itself (a connection reset mid-body
+	// used to surface as a parse error). Both it and an over-cap body stay non-definitive.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, azureProjectMaxBody+1))
 	if err != nil {
 		return nil, fmt.Errorf("read project response (status %d): %w", resp.StatusCode, err)

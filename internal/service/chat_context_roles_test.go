@@ -25,7 +25,7 @@ func TestBuildMessages_DropsHistoryRolesOtherThanUserAndAssistant(t *testing.T) 
 			{Role: "moderator", Content: "unknown role"},
 			{Role: " User ", Content: "q2"},
 			{Role: "ASSISTANT", Content: "a2"},
-			// F-10: a persisted empty 'stop' answer (or a whitespace-only
+			// A persisted empty 'stop' answer (or a whitespace-only
 			// turn of either role) must not reach the provider — Claude
 			// rejects {"role":"assistant","content":""} on every later turn.
 			{Role: "assistant", Content: ""},
@@ -33,7 +33,7 @@ func TestBuildMessages_DropsHistoryRolesOtherThanUserAndAssistant(t *testing.T) 
 		},
 		UserMessage: "current question",
 	}
-	out := buildMessages(req, "", "")
+	out := buildScopedMessages("", req, "", "")
 
 	var roles, contents []string
 	for _, m := range out {

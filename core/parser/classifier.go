@@ -51,9 +51,9 @@ var exactMap = map[string]models.BlockType{
 	"ERROR_CAPTURE": models.BlockTypeAction,
 }
 
-// prefixEntry pairs a module prefix with the BlockType it implies.
-// Entries are sorted longest-first so the first match is always the most-specific one,
-// giving deterministic results regardless of Go's map-iteration randomness.
+// prefixEntry pairs a module prefix with the BlockType it implies; entries
+// sort longest-first so the first match is always the most-specific one,
+// deterministic regardless of map-iteration randomness.
 type prefixEntry struct {
 	prefix string
 	bt     models.BlockType
@@ -63,7 +63,6 @@ var prefixRules []prefixEntry
 
 func init() {
 	raw := []prefixEntry{
-		// ── Condition variants ────────────────────────────────────────────
 		{"UIAutomation.IfWindow", models.BlockTypeCondition},
 		{"UIAutomation.If", models.BlockTypeCondition},
 		{"System.IfProcess", models.BlockTypeCondition},
@@ -75,18 +74,14 @@ func init() {
 		{"Display.Else", models.BlockTypeCondition},
 		{"Text.Else", models.BlockTypeCondition},
 
-		// ── Subflow runners ───────────────────────────────────────────────
 		{"FlowControl.RunSubflow", models.BlockTypeSubflow},
 		{"FlowControl.RunDesktopFlow", models.BlockTypeSubflow},
 		{"FlowControl.Run", models.BlockTypeSubflow},
 
-		// ── Loop variants ─────────────────────────────────────────────────
 		{"Loop.", models.BlockTypeLoop},
 
-		// ── Variables: list / math / generation ops → ACTION ─────────────────
-		// These are standalone operations, not variable assignments.
-		// Longer prefixes sort before the catch-all "Variables." rule so they
-		// take precedence without any ordering changes needed here.
+		// These are standalone operations, not variable assignments; longer
+		// prefixes sort before the catch-all "Variables." rule, so they win.
 		{"Variables.CreateNewList", models.BlockTypeAction},
 		{"Variables.ClearList", models.BlockTypeAction},
 		{"Variables.AddItemToList", models.BlockTypeAction},
@@ -103,16 +98,14 @@ func init() {
 		{"Variables.GenerateRandomNumber", models.BlockTypeAction},
 		{"Variables.TruncateNumber", models.BlockTypeAction},
 
-		// ── Variable manipulation (catch-all for SET and future Variables.* ) ─
+		// Catch-all for SET and future Variables.*
 		{"Variables.", models.BlockTypeVariable},
 		{"DataTable.", models.BlockTypeVariable},
 
-		// ── Wait / Delay ──────────────────────────────────────────────────
 		{"Synchronization.", models.BlockTypeWait},
 
-		// ── All other known PAD modules default to ACTION ─────────────────
-		// Listing modules explicitly means any new action in these modules
-		// is classified correctly without code changes.
+		// All other known PAD modules default to ACTION; listing them
+		// explicitly classifies any new action in them without code changes.
 		{"ActiveDirectory.", models.BlockTypeAction},
 		{"AWS.", models.BlockTypeAction},
 		{"Azure.", models.BlockTypeAction},
@@ -164,23 +157,18 @@ func init() {
 	prefixRules = raw
 }
 
-// ClassifyBlockType maps a PAD rawType string to a BlockType.
-//
-// Resolution order:
-//  1. Exact match in exactMap (fast path, case-sensitive).
-//  2. Exact match after ToUpper normalisation (handles lowercase PAD variants).
-//  3. Longest-prefix match in prefixRules (deterministic — sorted, not iterated over a map).
-//  4. Any dotted identifier (Module.Action) → BlockTypeAction.
-//  5. Fallback → BlockTypeAction.
+// ClassifyBlockType maps a PAD rawType to a BlockType: (1) exactMap exact
+// match, (2) exact after ToUpper (lowercase PAD variants), (3) longest-prefix
+// in sorted prefixRules (deterministic), (4) any dotted identifier → ACTION,
+// (5) fallback ACTION.
 func ClassifyBlockType(rawType string) models.BlockType {
 	// 1. Fast exact match.
 	if bt, ok := exactMap[rawType]; ok {
 		return bt
 	}
 
-	// Dotted raw types (e.g. "Excel.Launch" — the majority of blocks) can
-	// never hit the exact-keyword map (no key contains '.'), so skip the
-	// allocating ToUpper copy for them and go straight to the prefix scan.
+	// Dotted raw types (the majority of blocks) can never hit the exact-keyword
+	// map (no key contains '.'), so skip the allocating ToUpper copy for them.
 	if !strings.Contains(rawType, ".") {
 		// 2. Case-insensitive fallback for exact keywords (handles "loop", "IF", etc.).
 		if bt, ok := exactMap[strings.ToUpper(rawType)]; ok {

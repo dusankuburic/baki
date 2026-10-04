@@ -185,7 +185,7 @@ describe('AzureConnectionModal: the form', () => {
     expect(screen.queryByRole('textbox', {name: 'Tenant ID'})).toBeNull()
   })
 
-  // F-51: the Azure CLI's signed-in user is the credential — desktop only,
+  // The Azure CLI's signed-in user is the credential — desktop only,
   // never for an organisation's resource (the host passes allowCli).
   it('offers the Azure CLI only where allowed, with no secret and an optional tenant', async () => {
     const {unmount} = renderModal()
@@ -312,7 +312,7 @@ describe('AzureConnectionModal: validation and focus', () => {
   })
 })
 
-// F-34: the placeholder promises the stored secret only while the server
+// The placeholder promises the stored secret only while the server
 // would carry it — another host, project host or Entra principal needs the
 // secret again, and the form says so before the round trip.
 describe('AzureConnectionModal: carrying the stored secret', () => {

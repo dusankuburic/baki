@@ -145,6 +145,4 @@ func providesInputs(block *models.Block, target *models.Subflow) bool {
 	return true
 }
 
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
 func init() { registerRule(&SubflowMismatchRule{}) }

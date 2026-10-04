@@ -220,7 +220,7 @@ func assertCost(t *testing.T, label string, got, want float64) {
 	}
 }
 
-// Finding #2: the served-model price lookup ran for EVERY provider, so a free
+// the served-model price lookup ran for EVERY provider, so a free
 // GitHub Models call answered as "gpt-4o-2024-11-20" was billed at the
 // catalogue's gpt-4o list price. Only alias providers consult the served
 // model; everyone else prices from their own listing exactly as before.
@@ -254,8 +254,8 @@ func TestAuditedProvider_ServedModelIgnoredForNonAliasProviders(t *testing.T) {
 	assertCost(t, "openai Stream", sink.next(t).EstimatedCost, costOf(100, 50, listing))
 }
 
-// Finding #9 (now unpriced): a model-router deployment is recorded with the
-// model that answered THIS call. Azure AI Foundry carries no price table, so
+// A model-router deployment is recorded with the model that answered THIS
+// call. Azure AI Foundry carries no price table, so
 // every case (router or stable alias, catalogued or unknown served model,
 // served model missing) records the tokens at $0, and the pricing-fallback
 // metric never moves for the alias provider.
@@ -332,9 +332,9 @@ func TestAuditedProvider_AzureAliasTurnsRecordZeroCostWithoutFallback(t *testing
 	}
 }
 
-// Finding #39 (now unpriced): a deployment named after a catalogued model
-// (Azure's portal default), an embedding deployment and an uncatalogued name
-// all record their tokens at $0 with no pricing-fallback metric.
+// A deployment named after a catalogued model (Azure's portal default), an
+// embedding deployment and an uncatalogued name all record their tokens at
+// $0 with no pricing-fallback metric.
 func TestAuditedProvider_AliasDeploymentNamesRecordZeroCost(t *testing.T) {
 	resetServedModels()
 	sink := newUsageSink()
@@ -357,7 +357,7 @@ func TestAuditedProvider_AliasDeploymentNamesRecordZeroCost(t *testing.T) {
 	}
 }
 
-// Finding #10: a model router (by name, or an alias seen served by more than
+// a model router (by name, or an alias seen served by more than
 // one model) must not take the last routed model's context window or output
 // cap — the next call may be routed to a smaller-window model. The served
 // model and display still follow the memo (Azure carries no price).

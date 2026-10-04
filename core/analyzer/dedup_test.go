@@ -50,8 +50,8 @@ func TestDeduplicateFindings_CollapsesTrueDuplicates(t *testing.T) {
 	}
 }
 
-// TestDeduplicateFindings_GroupOrderDeterministic guards M8: report.Groups
-// must be sorted (by BlockID, then primary finding title) so output is stable
+// TestDeduplicateFindings_GroupOrderDeterministic guards: the on-demand
+// finding groups must be sorted (by BlockID, then primary finding title) so output is stable
 // across runs despite Go's randomized map iteration. We run the dedup N times
 // to amplify any non-determinism and assert the order never varies.
 func TestDeduplicateFindings_GroupOrderDeterministic(t *testing.T) {

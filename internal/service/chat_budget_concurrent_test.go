@@ -8,11 +8,8 @@ import (
 	"pad-core/models"
 )
 
-// TestEnforceBudget_ConcurrentStreamsShareTheBudget: the daily budget was
-// read-then-act against the store, and usage rows land asynchronously after
-// each turn — so N streams started together all passed the same read
-// (measured 10× overspend on a $1 budget). Active streams now publish their
-// spend-so-far plus one reserved response, and every check counts the others.
+// Usage rows land asynchronously, so a budget check that only reads the store
+// lets N streams started together all pass the same read — count live streams.
 func TestEnforceBudget_ConcurrentStreamsShareTheBudget(t *testing.T) {
 	svc := &ChatService{
 		backend:  &testutil.FakeBackend{DailyUsage: 0},

@@ -1,6 +1,7 @@
 import {useTranslation} from 'react-i18next'
 import {ShieldCheck, AlertTriangle, Key, Lock} from 'lucide-react'
-import {ChartCard, StatTile} from '@/components/charts'
+import {ChartCard} from '@/components/charts/ChartCard'
+import {StatTile} from '@/components/charts/StatTile'
 import {DetailsAction} from './DetailsAction'
 import type {DashboardSecurity} from '@/types'
 

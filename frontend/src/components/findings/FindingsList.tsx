@@ -5,6 +5,7 @@ import clsx from 'clsx'
 import type {Finding, Severity} from '@/types'
 import {severityTone} from '@/lib/severityTone'
 import {refreshAfterBlockEdit} from '@/lib/blockEdit'
+import {bulkFixMessage} from '@/lib/bulkFixMessage'
 import type {BlockLookup} from '@/lib/tree'
 import {flowApi} from '@/api'
 import {useAnalysisStore, findingKey} from '@/stores/analysisStore'
@@ -108,11 +109,12 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
     const rules = Array.from(new Set(selected.map(f => f.ruleId)))
     setBatchFixing(true)
     try {
-      const {document: updated, applied} = await flowApi.applyFixBatch(docId, rules)
-      // Same-flow refresh (F1.1): preserve subflow/chat/selection, guard the
+      const {document: updated, applied, partial} = await flowApi.applyFixBatch(docId, rules)
+      // Same-flow refresh: preserve subflow/chat/selection, guard the
       // doc-switch race, and analyze the UPDATED flow by id.
       refreshAfterBlockEdit(updated)
-      toast.success('Applied fixes', {description: `${applied} fix(es) across ${rules.length} rule(s).`})
+      const msg = bulkFixMessage(applied, rules.length, partial === true)
+      toast[msg.variant](msg.title, {description: msg.description})
       clearFindingSelection()
     } catch (err) {
       toast.error('Bulk fix failed', {description: String(err)})
@@ -300,7 +302,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
                 {batchFixing ? t('selection.fixing') : t('selection.fixAll')}
               </button>
             )}
-            {/* Bulk triage (U4.4): the high-frequency queue actions on the
+            {/* Bulk triage: the high-frequency queue actions on the
                 whole selection — one optimistic update + one batch request. */}
             {currentUserId && (
               <button

@@ -10,7 +10,7 @@ import {useChatStore} from '@/stores/chatStore'
 import {ToastProvider} from '@/components/shared/Toast'
 import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
 import type {ChatMessage, ProviderInfo} from '@/types'
-import type {ReactNode} from 'react'
+import type {ComponentProps, ReactNode} from 'react'
 
 // react-virtuoso renders nothing in jsdom (zero-height scroller); render every
 // row, like the ChatMessageList tests do.
@@ -34,6 +34,22 @@ vi.mock('react-virtuoso', () => ({
     </div>
   ),
 }))
+
+// A memoised wrapper around the real list: it renders only when the list's
+// props change identity, which is what the real `memo(ChatMessageList)` keys
+// on. Counting its renders measures what the panel hands the list, not how
+// often the panel itself renders.
+const listRenders = vi.fn()
+vi.mock('./ChatMessageList', async importOriginal => {
+  const actual = await importOriginal<typeof import('./ChatMessageList')>()
+  const {memo} = await import('react')
+  const Real = actual.default
+  const Counted = memo(function CountedChatMessageList(props: ComponentProps<typeof Real>) {
+    listRenders()
+    return <Real {...props} />
+  })
+  return {...actual, default: Counted}
+})
 
 // jsdom has no matchMedia; focus mode is desktop-only.
 vi.mock('@/hooks/useMediaQuery', () => ({useIsDesktop: () => true, useMediaQuery: () => true}))
@@ -210,7 +226,7 @@ describe('AITab source-file selection (B1)', () => {
   })
 })
 
-// C23: the chat shortcuts listed in the help dialogs are bound while focus is
+// The chat shortcuts listed in the help dialogs are bound while focus is
 // inside the chat panel, and only there.
 describe('AITab chat shortcuts', () => {
   function seedChat(streaming: boolean) {
@@ -518,5 +534,29 @@ describe('AITab retry placement', () => {
     })
     await screen.findByText('first question')
     expect(screen.getAllByRole('button', {name: 'Retry'})).toHaveLength(1)
+  })
+
+  it('a canvas selection change re-renders the context bar but not the message list', async () => {
+    seed([m('u1', 'user', 'first question'), m('a1', 'assistant', 'an answer'), m('u2', 'user', 'second question')])
+    await act(async () => {
+      render(<ChatShell />)
+    })
+    await screen.findByText('second question')
+    expect(screen.queryByRole('button', {name: 'Focus selected block'})).not.toBeInTheDocument()
+    const before = listRenders.mock.calls.length
+    expect(before).toBeGreaterThan(0)
+
+    await act(async () => {
+      useFlowStore.getState().selectBlock('b2')
+    })
+    // The bar follows the selection (it offers the block as the thread's scope)...
+    expect(screen.getByRole('button', {name: 'Focus selected block'})).toBeInTheDocument()
+    // ...while the list got the same props as before and skipped the render.
+    expect(listRenders).toHaveBeenCalledTimes(before)
+
+    await act(async () => {
+      useFlowStore.getState().selectBlock('b3')
+    })
+    expect(listRenders).toHaveBeenCalledTimes(before)
   })
 })

@@ -7,8 +7,6 @@ import (
 	"pad-analyzer/internal/auth"
 )
 
-// --- Unified library authorization (org roles + collaborator tiers) ---
-
 // Org members must be able to read flows shared into their org — this was the
 // headline gap of the stubbed LibraryService.CanRead.
 func TestLibraryGet_OrgMemberCanRead(t *testing.T) {
@@ -108,8 +106,6 @@ func TestLibraryDelete_CollabAdminForbidden(t *testing.T) {
 	checkStatus(t, rr, http.StatusForbidden)
 }
 
-// --- Sharing management with the "admin" rank ---
-
 func TestCollaboratorAdd_CollabAdminAllowed(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	seedFlow(t, rt, "flow1", "alice")
@@ -149,8 +145,6 @@ func TestCollaboratorAdd_OrgAdminAllowed(t *testing.T) {
 	})
 	checkStatus(t, rr, http.StatusOK)
 }
-
-// --- Version creation authz ---
 
 func TestSaveVersion_ViewerCollaboratorForbidden(t *testing.T) {
 	rt, seed := newLibraryTestRouter(t)

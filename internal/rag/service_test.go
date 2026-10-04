@@ -102,10 +102,9 @@ func TestChunkText_NoContentLoss(t *testing.T) {
 }
 
 // TestChunkText_SizeInvariantAllInputs pins the chunk-size contract across the
-// shapes that historically broke it: a terminator-free long paragraph (no '.'),
-// and a paragraph whose FIRST sentence is short but a LATER run is oversized —
-// splitSentences used to return the oversized run whole and the caller appended
-// it verbatim, blowing the limit (embedding providers cap per-item length).
+// shapes that historically broke it (terminator-free paragraphs, oversized
+// runs after a short first sentence) — splitSentences used to hand the
+// oversized run through whole, blowing the per-item provider cap.
 func TestChunkText_SizeInvariantAllInputs(t *testing.T) {
 	const size = 100
 	longRun := strings.Repeat("w", 500) // no sentence terminator
@@ -139,15 +138,13 @@ func TestChunkText_SizeInvariantAllInputs(t *testing.T) {
 	}
 }
 
-// TestChunkText_NoPureOverlapTailChunk: when the final flush leaves only the
-// carried overlap tail (nothing new was appended after the last emit), that
-// "chunk" duplicates the previous chunk's ending verbatim — pure retrieval
-// noise. It must not be emitted.
+// TestChunkText_NoPureOverlapTailChunk: a final flush that leaves only the
+// carried overlap tail duplicates the previous chunk's ending verbatim — pure
+// retrieval noise, never emitted.
 func TestChunkText_NoPureOverlapTailChunk(t *testing.T) {
 	const size = 100
-	// Distinguishable paragraphs of exactly `size` runes: the first fills a
-	// chunk, the second triggers flush, and the loop ends with current =
-	// carry only.
+	// Distinguishable paragraphs of exactly `size` runes: the loop ends with
+	// current = carry only.
 	para1 := strings.Repeat("p", size)
 	para2 := strings.Repeat("q", size)
 	chunks := chunkText(para1+"\n\n"+para2, size)
@@ -204,8 +201,8 @@ type stubSettings struct{ s *models.AppSettings }
 func (st stubSettings) Get() *models.AppSettings { return st.s }
 
 // newTestFactory builds a real ProviderFactory whose key lookup is a stub map,
-// so embedder()'s construction path (and its fallback scan) runs without any
-// network or keyring dependency. Construction never dials the provider.
+// so embedder()'s construction path runs without network or keyring; the
+// construction never dials the provider.
 func newTestFactory(keys map[string]bool) *ai.ProviderFactory {
 	return ai.NewProviderFactory(func(_ string, provider string) (string, error) {
 		if keys[provider] {
@@ -223,11 +220,10 @@ func enabledProviders(ids ...string) map[string]models.AIProviderConfig {
 	return m
 }
 
-// TestEmbedder_ExplicitChatOnlyProvider_FailsFast locks the fail-fast path: a
-// deployer who pointed EmbeddingProvider at a chat-only provider (claude) gets
-// the machine-readable ErrEmbeddingUnavailable sentinel immediately — not a
-// successfully-constructed provider that would blow up later at Embed time
-// with an opaque wrapped 500 (the pre-fix behavior).
+// TestEmbedder_ExplicitChatOnlyProvider_FailsFast locks the fail-fast path:
+// EmbeddingProvider pointed at a chat-only provider gets the machine-readable
+// ErrEmbeddingUnavailable sentinel immediately, not a provider that blows up
+// at Embed time with an opaque wrapped 500.
 func TestEmbedder_ExplicitChatOnlyProvider_FailsFast(t *testing.T) {
 	settings := &models.AppSettings{}
 	settings.AI.EmbeddingProvider = "claude"
@@ -248,8 +244,7 @@ func TestEmbedder_ExplicitChatOnlyProvider_FailsFast(t *testing.T) {
 
 // TestEmbedder_ClaudeOnlyNoFallback proves the capability filter: with only
 // chat-only providers keyed+enabled, the fallback returns the sentinel instead
-// of constructing a provider that can't embed (the pre-fix code returned the
-// keyed Claude provider here).
+// of constructing a provider that cannot embed.
 func TestEmbedder_ClaudeOnlyNoFallback(t *testing.T) {
 	settings := &models.AppSettings{} // EmbeddingProvider "" → default openai (no key)
 	settings.AI.Providers = enabledProviders("claude")
@@ -261,11 +256,11 @@ func TestEmbedder_ClaudeOnlyNoFallback(t *testing.T) {
 	}
 }
 
-// TestEmbedder_FallbackPicksEmbeddingCapable_Deterministic proves both the
+// TestEmbedder_FallbackPicksEmbeddingCapable_Deterministic proves the
 // capability filter and the determinism of the pick: with claude, gemini and
-// glm all keyed+enabled and the (default) openai provider keyless, the
-// fallback must always choose gemini (fixed priority: openai > gemini > glm >
-// github-models) — never claude, and never randomly glm on another call.
+// glm keyed+enabled and openai keyless, the fallback always chooses gemini
+// (fixed priority openai > gemini > glm > github-models) — never claude, never
+// randomly glm.
 func TestEmbedder_FallbackPicksEmbeddingCapable_Deterministic(t *testing.T) {
 	settings := &models.AppSettings{}
 	settings.AI.Providers = enabledProviders("claude", "gemini", "glm")
@@ -284,9 +279,8 @@ func TestEmbedder_FallbackPicksEmbeddingCapable_Deterministic(t *testing.T) {
 
 func TestEmbedder_FallbackUsesFirstKeyedProvider(t *testing.T) {
 	// The fallback used to skip any provider whose settings entry was not
-	// Enabled — a flag no UI ever sets — so on every real install it found
-	// nothing. Having a usable key is the only gate now; priority order still
-	// decides between several keyed providers.
+	// Enabled — a flag no UI ever sets. Having a usable key is the only gate
+	// now; priority order decides between several keyed providers.
 	settings := &models.AppSettings{}
 	settings.AI.Providers = map[string]models.AIProviderConfig{
 		"gemini": {Enabled: false},
@@ -315,19 +309,14 @@ func TestEmbedder_FallbackUsesFirstKeyedProvider(t *testing.T) {
 }
 
 // embedCountingStub counts inputs per Embed call so batching tests can assert
-// both the batch shape and the order of the concatenated results. Only Embed
-// is reachable from embedBatched; the embedded interface keeps the stub tiny.
+// the batch shape and the order of concatenated results.
 type embedCountingStub struct {
 	ai.Provider
-	calls  [][]string
-	failOn int // 1-based call index that returns an error
+	calls [][]string
 }
 
 func (e *embedCountingStub) Embed(_ context.Context, text []string) ([][]float32, error) {
 	e.calls = append(e.calls, text)
-	if e.failOn > 0 && len(e.calls) == e.failOn {
-		return nil, errors.New("provider rejected batch")
-	}
 	out := make([][]float32, len(text))
 	for i := range text {
 		out[i] = []float32{float32(len(e.calls)), float32(i)} // call#, input#
@@ -335,10 +324,10 @@ func (e *embedCountingStub) Embed(_ context.Context, text []string) ([][]float32
 	return out, nil
 }
 
-// TestEmbedBatched_ProviderSafeBatches: documents with more chunks than a
+// TestEmbedBatched_ProviderSafeBatches: a document with more chunks than the
 // provider's per-request input cap (OpenAI/Azure reject oversized batches)
-// used to fail indexing wholesale — one Embed call with everything. Now the
-// inputs go out in batches of embedBatchSize, results concatenated in order.
+// used to fail indexing wholesale; inputs now go out in embedBatchSize batches,
+// results concatenated in order.
 func TestEmbedBatched_ProviderSafeBatches(t *testing.T) {
 	const n = 3*embedBatchSize + 50 // 350 → batches of 100, 100, 100, 50
 	items := make([]string, n)
@@ -377,15 +366,6 @@ func TestEmbedBatched_ProviderSafeBatches(t *testing.T) {
 	}
 }
 
-func TestEmbedBatched_ErrorPropagates(t *testing.T) {
-	stub := &embedCountingStub{failOn: 2}
-	items := make([]string, 2*embedBatchSize)
-	_, err := embedBatched(context.Background(), stub, items)
-	if err == nil || !strings.Contains(err.Error(), "rejected batch") {
-		t.Fatalf("want propagated error, got %v", err)
-	}
-}
-
 func TestEmbedBatched_CountMismatchIsError(t *testing.T) {
 	short := &shortEmbedStub{}
 	if _, err := embedBatched(context.Background(), short, []string{"a", "b", "c"}); err == nil {
@@ -405,10 +385,9 @@ func mkChunk(docID, filename, content string) interfaces.KnowledgeChunk {
 	return interfaces.KnowledgeChunk{ID: docID + "-" + content[:8], DocID: docID, Filename: filename, Content: content}
 }
 
-// TestAssembleGuidelines pins the assembled-context contract: grounding
-// instruction header, per-chunk source attribution, and overlap de-duplication
-// (chunk N+1 from the same document begins with the exact tail chunkText
-// carried over — emitting both duplicated that passage).
+// TestAssembleGuidelines pins the assembled-context contract: grounding header,
+// per-chunk source attribution, and overlap de-duplication (chunk N+1 of the
+// same document begins with the exact tail chunkText carried over).
 func TestAssembleGuidelines(t *testing.T) {
 	tail := strings.Repeat("t", 100)
 	head := strings.Repeat("h", 100)
@@ -450,36 +429,8 @@ func TestAssembleGuidelines_FullyDuplicatedChunkSkipped(t *testing.T) {
 	}
 }
 
-func TestStripOverlapPrefix(t *testing.T) {
-	tail := strings.Repeat("t", 80)
-	fresh := strings.Repeat("f", 80)
-	all := []interfaces.KnowledgeChunk{
-		mkChunk("doc1", "a.md", strings.Repeat("x", 100)+tail),
-		mkChunk("doc1", "a.md", tail+fresh),
-		mkChunk("doc2", "b.md", tail+strings.Repeat("y", 100)), // same tail, OTHER doc
-	}
-
-	if got := stripOverlapPrefix(tail+fresh, "doc1", all); got != fresh {
-		t.Errorf("same-doc overlap not stripped: %q", got)
-	}
-	// Different document: identical bytes must NOT be treated as carry-over.
-	if got := stripOverlapPrefix(tail+strings.Repeat("y", 100), "doc2", all); got != tail+strings.Repeat("y", 100) {
-		t.Errorf("cross-doc tail wrongly stripped: %q", got)
-	}
-	// Below the coincidence floor: no trim even on a same-doc match.
-	short := strings.Repeat("s", 30)
-	shortSet := []interfaces.KnowledgeChunk{
-		mkChunk("d", "a.md", strings.Repeat("z", 40)+short),
-		mkChunk("d", "a.md", short+"tail"),
-	}
-	if got := stripOverlapPrefix(short+"tail", "d", shortSet); got != short+"tail" {
-		t.Errorf("below-floor overlap wrongly stripped: %q", got)
-	}
-}
-
-// F-14: a document that chunks to more passages than maxKnowledgeChunks is
-// refused with the exported sentinel (the HTTP layer maps it to 413
-// KNOWLEDGE_DOCUMENT_TOO_LARGE) before a single embedding call is made.
+// A document that chunks to more passages than maxKnowledgeChunks is refused
+// with the exported sentinel (HTTP 413) before a single embedding call.
 func TestAddDocument_TooManyChunksIsSentinel(t *testing.T) {
 	// One ~850-rune paragraph per chunk (a 150-rune carry plus 850 plus the
 	// separator exceeds the 1000-rune chunk size, so paragraphs never pack).

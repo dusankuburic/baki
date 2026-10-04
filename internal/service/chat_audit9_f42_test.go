@@ -11,7 +11,7 @@ import (
 	"pad-core/models"
 )
 
-// F-42: the SSE error payload carries the shared-credential flag only when
+// The SSE error payload carries the shared-credential flag only when
 // set — the frontend's parser (chatEvent.ts) treats `shared === true` as the
 // only signal, so an unshared failure must not carry the key at all (it
 // parses a present-but-false key fine, but omission is the wire contract for
@@ -30,7 +30,7 @@ func TestErrorEventData_SharedFlag(t *testing.T) {
 	}
 }
 
-// F-42: a client that missed the live error event (reload, late begin) gets
+// A client that missed the live error event (reload, late begin) gets
 // the shared flag from the stored state too — ResumeStream answers with it,
 // BeginStream hands the snapshot back, and the wire form omits it when unset,
 // like errorCode.
@@ -64,7 +64,7 @@ func TestResumeAndBegin_CarryTheErrorSharedFlag(t *testing.T) {
 	}
 }
 
-// F-42: the org invalid-config failure — the one variant whose Accounts
+// The org invalid-config failure — the one variant whose Accounts
 // action has nothing the member can fix — is classified shared on the org
 // credential. (The full three-error matrix is
 // TestClassifyFailure_SharedCredentialCopy in chat_org_key_test.go.)
@@ -80,7 +80,7 @@ func TestClassifyFailureShared_OrgInvalidConfig(t *testing.T) {
 	}
 }
 
-// F-42 wiring: a provider failure on the organisation's shared credential
+// A provider failure on the organisation's shared credential
 // reaches the SSE error event with the shared flag (and the org-admin copy),
 // while the same provider failure on the member's own credential emits no
 // shared key at all — the parser treats presence as the only signal.

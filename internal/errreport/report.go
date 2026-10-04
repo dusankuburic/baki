@@ -1,19 +1,10 @@
-// Package errreport is the application's exception-aggregation funnel. Panics
+// Package errreport is the application's exception-aggregation funnel: panics
 // recovered at the HTTP boundary and notable errors from service code are
-// routed here, where they are:
-//
-//  1. recorded as structured logs (slog) and Prometheus counters, and
-//  2. forwarded to a pluggable Sink (e.g. a Sentry / Application Insights
-//     exception backend) when one has been registered.
-//
-// The default sink is nil, in which case only (1) applies — so the app gains
-// operational visibility (pad_panics_total / pad_errors_reported_total) without
-// any external dependency. Registering a concrete Sink (see Register) adds
-// deduplicating crash triage without touching any call site.
-//
-// This closes the "errors live only in logs/traces" gap: there is now a single
-// place that owns exception aggregation, with metrics always on and a backend
-// that can be dropped in.
+// logged (slog), counted (pad_panics_total / pad_errors_reported_total), and
+// forwarded to a pluggable Sink (Sentry, App Insights, …) when one has been
+// registered. The default nil sink keeps metrics always on without any
+// external dependency; Register adds deduplicating crash triage without
+// touching call sites — one place owns exception aggregation.
 package errreport
 
 import (

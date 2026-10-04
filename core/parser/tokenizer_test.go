@@ -267,15 +267,12 @@ func TestTokenize_Switch(t *testing.T) {
 		}
 	}
 
-	// SWITCH token name should carry the expression
 	if tokens[1].RawType != "SWITCH" {
 		t.Errorf("expected rawType SWITCH, got %q", tokens[1].RawType)
 	}
-	// CASE token
 	if tokens[2].RawType != "CASE" {
 		t.Errorf("expected rawType CASE, got %q", tokens[2].RawType)
 	}
-	// DEFAULT token
 	if tokens[6].RawType != "DEFAULT" {
 		t.Errorf("expected rawType DEFAULT, got %q", tokens[6].RawType)
 	}
@@ -291,7 +288,6 @@ func TestTokenize_GotoLabel(t *testing.T) {
 
 	tokens := Tokenize(input)
 
-	// Find GOTO and LABEL tokens
 	var gotoIdx, labelIdx = -1, -1
 	for i, tok := range tokens {
 		if tok.RawType == "GOTO" {
@@ -331,7 +327,6 @@ func TestTokenize_BlockComment_SingleLine(t *testing.T) {
 
 	tokens := Tokenize(input)
 
-	// Expect: SubflowStart, Comment, Action, SubflowEnd
 	kinds := []TokenKind{TokSubflowStart, TokComment, TokAction, TokSubflowEnd}
 	if len(tokens) != len(kinds) {
 		t.Fatalf("expected %d tokens, got %d", len(kinds), len(tokens))
@@ -355,7 +350,6 @@ func TestTokenize_BlockComment_MultiLine(t *testing.T) {
 
 	tokens := Tokenize(input)
 
-	// Expect: SubflowStart, Comment (multi-line merged), Action, SubflowEnd
 	kinds := []TokenKind{TokSubflowStart, TokComment, TokAction, TokSubflowEnd}
 	if len(tokens) != len(kinds) {
 		t.Fatalf("expected %d tokens, got %d", len(kinds), len(tokens))

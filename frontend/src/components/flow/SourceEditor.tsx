@@ -1,4 +1,4 @@
-import {useState, useEffect, useRef, useCallback, memo} from 'react'
+import {useState, useEffect, useRef, useCallback, memo, type RefObject} from 'react'
 import {useTranslation} from 'react-i18next'
 import {Save, RotateCcw, Code2, Plus} from 'lucide-react'
 import {flowApi, analysisApi} from '@/api'
@@ -6,6 +6,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useToast, useConfirm, Spinner} from '@/components/shared'
+import {countLines, lineCountAfterEdit, visibleLineRange} from '@/lib/textLines'
 import type {AnalysisReport} from '@/types'
 import AddActionForm, {insertBeforeLastRegionEnd} from './AddActionForm'
 
@@ -13,20 +14,92 @@ interface SourceEditorProps {
   onClose: () => void
 }
 
+// Lines rendered beyond the viewport on either side, so a scroll step never
+// shows a blank gutter before the next render.
+const GUTTER_BUFFER_LINES = 20
+// `leading-5` (textarea and gutter alike) until the textarea has been measured.
+const FALLBACK_LINE_HEIGHT_PX = 20
+// Viewport height until the textarea has been laid out (and in jsdom).
+const FALLBACK_VIEWPORT_PX = 800
+
 /**
- * Line-number gutter, memoized on the LINE COUNT only: typing re-splits the
- * source and re-rendered one <div> per line (thousands on real PAD exports)
- * per keystroke; now the gutter only re-renders when a line is added/removed.
+ * Line-number gutter rendering only the lines inside the textarea's viewport
+ * (plus a buffer either side), with spacers keeping the scroll geometry equal
+ * to the textarea's. One <div> per line meant 30k nodes for real PAD exports,
+ * and a single added line re-rendered all of them (369 ms). The textarea owns
+ * scrolling; the gutter mirrors its scrollTop and re-renders only when the
+ * viewport crosses a line boundary.
  */
-const LineGutter = memo(function LineGutter({lineCount}: {lineCount: number}) {
+const LineGutter = memo(function LineGutter({
+  lineCount,
+  textareaRef,
+}: {
+  lineCount: number
+  textareaRef: RefObject<HTMLTextAreaElement>
+}) {
+  const gutterRef = useRef<HTMLDivElement>(null)
+  const [scrollLine, setScrollLine] = useState(0)
+  const [metrics, setMetrics] = useState({height: FALLBACK_VIEWPORT_PX, lineHeight: FALLBACK_LINE_HEIGHT_PX})
+  const {lineHeight} = metrics
+
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    const onScroll = () => {
+      if (gutterRef.current) gutterRef.current.scrollTop = el.scrollTop
+      setScrollLine(Math.floor(el.scrollTop / lineHeight))
+    }
+    el.addEventListener('scroll', onScroll, {passive: true})
+    // ResizeObserver notifies once on observe, which is when the textarea is
+    // first measured; until then (and where it is unavailable) the fallbacks
+    // render a generous window.
+    let observer: ResizeObserver | null = null
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(() => {
+        const measured = parseFloat(getComputedStyle(el).lineHeight)
+        const next = {
+          height: el.clientHeight || FALLBACK_VIEWPORT_PX,
+          lineHeight: Number.isFinite(measured) && measured > 0 ? measured : FALLBACK_LINE_HEIGHT_PX,
+        }
+        setMetrics(prev => (prev.height === next.height && prev.lineHeight === next.lineHeight ? prev : next))
+      })
+      observer.observe(el)
+    }
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      observer?.disconnect()
+    }
+  }, [textareaRef, lineHeight])
+
+  const {first, end} = visibleLineRange(
+    scrollLine * lineHeight,
+    metrics.height,
+    lineHeight,
+    lineCount,
+    GUTTER_BUFFER_LINES,
+  )
+  const numbers = []
+  for (let i = first; i < end; i++) {
+    numbers.push(
+      <div key={i} className="leading-5">
+        {i + 1}
+      </div>,
+    )
+  }
+
   return (
-    <>
-      {Array.from({length: lineCount}, (_, i) => (
-        <div key={i} className="leading-5">
-          {i + 1}
-        </div>
-      ))}
-    </>
+    <div
+      ref={gutterRef}
+      data-testid="line-gutter"
+      className="flex-shrink-0 overflow-hidden py-2 pr-2 pl-3 text-right text-text-tertiary select-none bg-surface-2 border-r border-border-subtle"
+      // Sized for the widest number so the width does not jump while scrolling
+      // (only the visible numbers are in the DOM).
+      style={{minWidth: `max(3rem, calc(${String(lineCount).length}ch + 1.5rem))`}}
+    >
+      <div aria-hidden style={{height: first * lineHeight}} />
+      {numbers}
+      <div aria-hidden style={{height: (lineCount - end) * lineHeight}} />
+    </div>
   )
 })
 
@@ -56,7 +129,19 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   const {confirm} = useConfirm()
   const {t} = useTranslation('shell')
 
-  const [source, setSource] = useState('')
+  // The buffer carries its line count: each edit adjusts it by scanning only
+  // the changed region (lineCountAfterEdit) instead of re-splitting the
+  // whole source per keystroke.
+  const [buffer, setBuffer] = useState<{text: string; lines: number}>({text: '', lines: 1})
+  const source = buffer.text
+  const lineCount = buffer.lines
+  const setSource = useCallback((next: string | ((prev: string) => string)) => {
+    setBuffer(prev => {
+      const text = typeof next === 'function' ? next(prev.text) : next
+      if (text === prev.text) return prev
+      return {text, lines: prev.text === '' ? countLines(text) : lineCountAfterEdit(prev.text, text, prev.lines)}
+    })
+  }, [])
   const [original, setOriginal] = useState('')
   // memberFile is the folder member whose source is IN the buffer. It follows
   // the sidebar selection only while the buffer is clean: switching on a
@@ -79,7 +164,6 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [reloadNonce, setReloadNonce] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const gutterRef = useRef<HTMLDivElement>(null)
 
   // Load the raw source on mount.
   useEffect(() => {
@@ -130,7 +214,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   const cloudFolder = !!document?.isFolder && !document.filePath
 
   const handleSave = useCallback(async () => {
-    // readOnly guards the mod+S shortcut too (F1.5) — the button was already
+    // readOnly guards the mod+S shortcut too — the button was already
     // disabled, the keyboard path wasn't.
     // loadError: the buffer does not hold this flow's source, it holds
     // whatever was typed into an empty box. Saving it would overwrite the real
@@ -139,7 +223,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     setSaving(true)
     try {
       const updated = await flowApi.saveSource(document.id, source, memberFile)
-      // Same-flow refresh (F1.1): preserve subflow/chat/selection.
+      // Same-flow refresh: preserve subflow/chat/selection.
       useFlowStore.getState().applyRemoteDocumentUpdate(updated)
       setOriginal(source)
       // Best-effort re-analysis so findings reflect the edited source —
@@ -161,17 +245,20 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   const handleRevert = useCallback(() => {
     setSource(original)
     textareaRef.current?.focus()
-  }, [original])
+  }, [original, setSource])
 
   // handleInsertAction appends a composed action line to the end of the LAST
   // subflow region (the structured-editing slice): users who don't know PAD's
   // text format still build flows; power users see the raw line in the
   // editor before saving.
-  const handleInsertAction = useCallback((line: string) => {
-    setSource(prev => insertBeforeLastRegionEnd(prev, line))
-    setAddingAction(false)
-    textareaRef.current?.focus()
-  }, [])
+  const handleInsertAction = useCallback(
+    (line: string) => {
+      setSource(prev => insertBeforeLastRegionEnd(prev, line))
+      setAddingAction(false)
+      textareaRef.current?.focus()
+    },
+    [setSource],
+  )
 
   // Guard: confirm before discarding unsaved edits when switching to Block view.
   const handleClose = useCallback(async () => {
@@ -198,13 +285,6 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [handleSave])
-
-  // Sync line-number gutter scroll with the textarea.
-  const handleScroll = useCallback(() => {
-    if (gutterRef.current && textareaRef.current) {
-      gutterRef.current.scrollTop = textareaRef.current.scrollTop
-    }
-  }, [])
 
   if (loading) {
     return (
@@ -236,8 +316,6 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
       </div>
     )
   }
-
-  const lineCount = source.split('\n').length
 
   return (
     <div className="flex flex-col h-full bg-surface-1">
@@ -300,20 +378,13 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
 
       {addingAction && <AddActionForm onInsert={handleInsertAction} onClose={() => setAddingAction(false)} />}
 
-      {/* Editor: line-number gutter + textarea */}
+      {/* Editor: line-number gutter + textarea (the gutter follows the textarea's scroll) */}
       <div className="flex flex-1 overflow-hidden font-mono text-xs">
-        <div
-          ref={gutterRef}
-          className="flex-shrink-0 overflow-hidden py-2 pr-2 pl-3 text-right text-text-tertiary select-none bg-surface-2 border-r border-border-subtle"
-          style={{minWidth: '3rem'}}
-        >
-          <LineGutter lineCount={lineCount} />
-        </div>
+        <LineGutter lineCount={lineCount} textareaRef={textareaRef} />
         <textarea
           ref={textareaRef}
           value={source}
           onChange={e => setSource(e.target.value)}
-          onScroll={handleScroll}
           spellCheck={false}
           className="flex-1 bg-surface-1 text-text-primary p-2 outline-none resize-none leading-5 whitespace-pre overflow-auto"
           style={{tabSize: 4}}

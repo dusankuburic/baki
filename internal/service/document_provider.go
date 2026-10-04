@@ -13,8 +13,7 @@ import (
 	"pad-core/models"
 )
 
-// DocumentProvider abstracts the difference between single-user (local)
-// and multi-user (cloud) flow resolution.
+// DocumentProvider abstracts the difference between single-user (local) and multi-user (cloud) flow resolution.
 type DocumentProvider interface {
 	ResolveDoc(ctx context.Context, id string) (*models.FlowDocument, error)
 	SetCurrentDoc(doc *models.FlowDocument)
@@ -52,46 +51,65 @@ func (p *LocalDocumentProvider) CurrentDoc() *models.FlowDocument {
 	return p.doc
 }
 
-// cloudDocCacheSize bounds the resolved-document cache. Resolved docs are the
-// dominant per-request memory in cloud mode (a full FlowDocument per flow), so
-// the bound is modest — the goal is to make the hot flows (the one being
-// viewed/edited) free, not to cache the whole library.
-const cloudDocCacheSize = 32
+// The resolved-document cache is bounded by the heap it pins, not by entry count: docs differ in size by four
+// orders of magnitude, and the old 32-ENTRY bound let a handful of multi-MiB flows pin over a gigabyte in a
+// 1 GiB container (a GC spiral, then the OOM killer). The goal is unchanged — make the hot flows free, not
+// cache the whole library.
+const (
+	// cloudDocCacheBudget is the heap all cached documents may pin together (FlowDocumentCost each).
+	cloudDocCacheBudget int64 = 160 << 20
+	// cloudDocCacheMaxEntry is the largest document the cache keeps: above it a document is resolved per request
+	// and never cached — one such document would otherwise evict everything else for a single flow's benefit.
+	cloudDocCacheMaxEntry int64 = 48 << 20
+)
 
-// cloudDocEntry is a resolved document pinned to the storage version it was
-// loaded at. The version comparison is the cache's correctness mechanism: any
-// write (same process, another replica, the PAD-cloud ingester) bumps the
-// flow's OCC version, so the next header check sees a mismatch and reloads.
+// Cost model for a resolved FlowDocument (memory audit 2026-10-01; synthetic_10k: 912 B/block, 7.9× its
+// source): the parsed tree costs ~1 KiB per block, so a 10 MiB source (112k blocks) is ~111 MiB, plus the
+// raw Source carried for cloud-mode fixes.
+const (
+	docCostPerBlock int64 = 1024
+	docCostBase     int64 = 1024
+)
+
+// FlowDocumentCost estimates the heap doc pins, for byte-budgeted caches.
+func FlowDocumentCost(doc *models.FlowDocument) int64 {
+	if doc == nil {
+		return 0
+	}
+	blocks := len(doc.BlocksByID)
+	if doc.Metadata.BlockCount > blocks {
+		blocks = doc.Metadata.BlockCount
+	}
+	return docCostBase + int64(blocks)*docCostPerBlock + int64(len(doc.Source))
+}
+
+// cloudDocEntry is a resolved document pinned to the storage version it was loaded at: any write (same process,
+// another replica, the ingester) bumps the OCC version, so the next header check reloads.
 type cloudDocEntry struct {
 	version int
 	doc     *models.FlowDocument
 }
 
-// CloudDocumentProvider loads flows from a shared storage backend, caching the
-// resolved documents keyed by (flowID, version).
-//
-// A cold resolve costs a DB row read + a blob round-trip + a full JSON
-// unmarshal + an O(blocks) index rebuild — repeated per request on every
-// flow-scoped endpoint (search-as-you-type, diff, exports, every chat turn).
-// The cache replaces all but a cheap indexed header query on warm resolves.
-//
-// Correctness: SaveFlow bumps the flow's version on every write (OCC), and
-// ResolveDoc re-reads the header on EVERY call, so a cached doc is only served
-// while the stored version is unchanged — no TTL, no stale window, safe across
-// replicas. Concurrent cold loads of the same flow share one load via
-// singleflight.
-//
-// Contract: returned docs are SHARED READ-ONLY. Callers must not mutate them
-// (mutating paths — apply-fix, save-source — build new docs). This matches the
-// LocalDocumentProvider, which already hands the same pointer to every caller.
+// CloudDocumentProvider loads flows from a shared storage backend, caching resolved documents keyed by
+// (flowID, version). A cold resolve costs a DB row + a blob round-trip + a JSON unmarshal + an O(blocks) index
+// rebuild; the cache replaces all but a cheap indexed header query. Correctness: ResolveDoc re-reads the header
+// on EVERY call, so a cached doc is served only while the stored version is unchanged — no TTL, no stale window,
+// safe across replicas; concurrent cold loads share one load via singleflight.
+// Contract: returned docs are SHARED READ-ONLY (mutating paths build new docs). The cache is byte-weighted; a
+// document above cloudDocCacheMaxEntry is served but never cached.
 type CloudDocumentProvider struct {
 	storage storageif.StorageBackend
-	cache   cache.Cache
+	cache   *cache.SizedLRU
 	sf      singleflight.Group
 }
 
 func NewCloudDocumentProvider(storage storageif.StorageBackend) *CloudDocumentProvider {
-	c, _ := cache.NewLRUCache(cloudDocCacheSize) // size > 0 ⇒ error impossible
+	return newCloudDocumentProviderWithBudget(storage, cloudDocCacheBudget, cloudDocCacheMaxEntry)
+}
+
+// newCloudDocumentProviderWithBudget is NewCloudDocumentProvider with the cache bounds as parameters for tests.
+func newCloudDocumentProviderWithBudget(storage storageif.StorageBackend, budget, maxEntry int64) *CloudDocumentProvider {
+	c := cache.NewSizedLRU(budget, cache.WithMaxEntryCost(maxEntry))
 	return &CloudDocumentProvider{storage: storage, cache: c}
 }
 
@@ -99,16 +117,46 @@ func (p *CloudDocumentProvider) ResolveDoc(ctx context.Context, id string) (*mod
 	if p.storage == nil {
 		return nil, fmt.Errorf("cloud storage not configured")
 	}
-	// Cheap indexed header read (no blob) — both the existence check and the
-	// cache-validity check. NotFound propagates exactly as a cold LoadFlow
-	// would have returned it.
+	// Cheap indexed header read (no blob) — both the existence and cache-validity checks.
 	header, err := p.storage.LoadFlowHeader(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	return p.ResolveDocWithHeader(ctx, id, header)
+}
+
+// ResolveDocWithHeader is ResolveDoc for a caller that has JUST read the flow's header (GetAuthorized's authz
+// check): the cache-validity check reuses it instead of reading again. The header must be current — its version
+// decides whether the cached document may be served.
+func (p *CloudDocumentProvider) ResolveDocWithHeader(ctx context.Context, id string, header *storageif.FlowDocument) (*models.FlowDocument, error) {
+	if p.storage == nil {
+		return nil, fmt.Errorf("cloud storage not configured")
+	}
+	doc, _, err := p.resolve(ctx, id, header, true)
+	return doc, err
+}
+
+// ResolveDocUncached is ResolveDoc for a one-off read that must not displace the hot documents (the library
+// search's candidate scan). A current cached document is still served (and reported as cached); a load is not
+// cached, and dies with the request.
+func (p *CloudDocumentProvider) ResolveDocUncached(ctx context.Context, id string) (doc *models.FlowDocument, cached bool, err error) {
+	if p.storage == nil {
+		return nil, false, fmt.Errorf("cloud storage not configured")
+	}
+	header, err := p.storage.LoadFlowHeader(ctx, id)
+	if err != nil {
+		return nil, false, err
+	}
+	return p.resolve(ctx, id, header, false)
+}
+
+// resolve serves the cached document when its version is the header's, else loads it (one load per flow at a
+// time via singleflight) and caches it if store is set and it fits. Two callers sharing one flight get the
+// leader's caching decision — at worst a search-scan load leaves a concurrent resolve uncached for one request.
+func (p *CloudDocumentProvider) resolve(ctx context.Context, id string, header *storageif.FlowDocument, store bool) (*models.FlowDocument, bool, error) {
 	if v, ok := p.cache.Get(ctx, id); ok {
 		if entry, ok := v.(*cloudDocEntry); ok && entry.version == header.Version {
-			return entry.doc, nil
+			return entry.doc, true, nil
 		}
 	}
 	v, err, _ := p.sf.Do(id, func() (any, error) {
@@ -120,42 +168,39 @@ func (p *CloudDocumentProvider) ResolveDoc(ctx context.Context, id string) (*mod
 		if err != nil {
 			return nil, err
 		}
-		p.cache.Set(ctx, id, &cloudDocEntry{version: libDoc.Version, doc: doc}, 0)
+		if store {
+			p.cache.SetWithCost(ctx, id, &cloudDocEntry{version: libDoc.Version, doc: doc}, FlowDocumentCost(doc), 0)
+		}
 		return doc, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return v.(*models.FlowDocument), nil
+	return v.(*models.FlowDocument), false, nil
 }
 
-// resolveStoredFlow unmarshals stored flow content into a FlowDocument and
-// applies the cloud identity overrides.
+// resolveStoredFlow unmarshals stored flow content and applies the cloud identity overrides.
 func resolveStoredFlow(id string, libDoc *storageif.FlowDocument) (*models.FlowDocument, error) {
 	var doc models.FlowDocument
 	if err := json.Unmarshal(libDoc.Content, &doc); err != nil {
 		return nil, fmt.Errorf("invalid flow content: %w", err)
 	}
-	// The storage flow ID is authoritative — override the parser-minted UUID
-	// inside Content, so cloud-mode operations (apply-fix/preview-fix/save)
-	// key on the same ID the storage layer uses.
+	// The storage flow ID is authoritative — cloud-mode operations key on the same ID the storage layer uses.
 	doc.ID = id
 	doc.OwnerID = libDoc.OwnerID
 	doc.OrganizationID = libDoc.OrganizationID
-	doc.Source = libDoc.Source // raw PAD text for cloud-mode apply-fix/preview-fix
-	// FilePath is part of the client-supplied content blob (json:"filePath")
-	// and every desktop file path (GetSource, SaveSource, PatchFlow,
-	// snapshots, chat source files) selects itself with doc.FilePath != "".
-	// A stored flow must never carry one: that turned POST /api/library into
-	// an arbitrary server file read and write. Cloud flows patch doc.Source.
+	// Raw PAD text for cloud-mode apply-fix/preview-fix; the column wins over the copy in Content.
+	doc.Source = libDoc.Source
+	// A stored flow must never carry a FilePath: every desktop file path (GetSource, SaveSource, PatchFlow,
+	// snapshots) selects itself with doc.FilePath != "", and a stored one turned POST /api/library into an
+	// arbitrary server file read and write. Cloud flows patch doc.Source.
 	doc.FilePath = ""
 	doc.RebuildIndexes()
 	return &doc, nil
 }
 
-// Invalidate drops the cached document for a flow. Not required for
-// correctness (the version check self-heals after any write) but available to
-// callers that want an immediate drop, e.g. right after a same-process delete.
+// Invalidate drops the cached document for a flow — not required for correctness (the version check self-heals),
+// but immediate for a same-process delete.
 func (p *CloudDocumentProvider) Invalidate(flowID string) {
 	p.cache.Delete(context.Background(), flowID)
 }

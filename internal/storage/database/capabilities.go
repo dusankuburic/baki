@@ -7,19 +7,15 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// This file names the Postgres-only capabilities that callers outside this
-// package occasionally need beyond the storageif.StorageBackend role
-// interfaces (main.go and the RLS middleware are the only two). *
-// PostgresStorageBackend already implements each of these methods, so no
-// implementation changes are needed — only the call sites' type assertions
-// change, from the concrete *PostgresStorageBackend to the narrow interface
-// that names what's actually being used. That keeps the coupling to "this
-// needs a Postgres-backed store" visible and self-documenting at the
-// assertion site, rather than hidden behind an opaque concrete-type check.
+// Postgres-only capabilities that callers outside this package occasionally
+// need beyond the StorageBackend role interfaces (main.go and the RLS
+// middleware are the only two). Callers type-assert to the narrow interface
+// that names what is actually used, keeping the "needs a Postgres-backed
+// store" coupling visible at the assertion site.
 
 // SQLProvider is implemented by storage backends that expose their underlying
-// *sql.DB, for callers that need to build a companion store sharing the same
-// connection pool (e.g. a token store or blacklist keyed off the same DB).
+// *sql.DB, for callers building a companion store on the same pool (e.g. the
+// blacklist).
 type SQLProvider interface {
 	DB() *sql.DB
 }
@@ -37,9 +33,9 @@ type RLSBeginner interface {
 }
 
 // AzureRegistryProvider is implemented by storage backends that hold the
-// Azure AI Foundry model registry tables (migration v25). DI uses it only
-// with auth enabled — the tables' owners are real users and organisations —
-// and falls back to the <configDir>/azure-models.json file store otherwise.
+// Azure AI Foundry model registry tables (migration v25). DI uses it only with
+// auth enabled (the tables' owners are real users/orgs); otherwise the
+// azure-models.json file store serves.
 type AzureRegistryProvider interface {
 	AzureRegistry() interfaces.AzureRegistryStore
 }

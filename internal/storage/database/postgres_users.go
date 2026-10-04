@@ -14,6 +14,12 @@ import (
 )
 
 // ---- User operations ----
+// Reads go through b.query(ctx): inside an authenticated request that is the request's RLS transaction —
+// users, refresh_tokens, audit_events and usage_metrics carry no RLS policy, but reading via b.db would take
+// a SECOND pooled connection (the pool-exhaustion deadlock, rls.go) and see none of the request's own
+// uncommitted writes. Writes stay on b.db deliberately: login counters/lockouts, token rotation, audit events
+// and usage rows must persist even when the middleware rolls back on >= 400, and role/password/profile
+// updates are single autocommits whose visibility would change if they joined the request transaction.
 
 func (b *PostgresStorageBackend) SaveUser(ctx context.Context, user *interfaces.User) error {
 	now := time.Now().UTC()
@@ -46,12 +52,8 @@ func (b *PostgresStorageBackend) SaveUser(ctx context.Context, user *interfaces.
 	return nil
 }
 
-// CreateUser atomically inserts a new user. If the users table is empty at the
-// moment of insert, the user is promoted to RoleAdmin so the instance always
-// has an initial administrator. The count and the insert run in a single
-// SERIALIZABLE transaction; if the transaction loses a serialization race it
-// is retried a few times before giving up. Returns ErrEmailExists on a unique
-// email-constraint violation.
+// CreateUser atomically inserts a new user; an empty users table promotes the insert to
+// RoleAdmin (single SERIALIZABLE transaction, retried on race). ErrEmailExists on a unique violation.
 func (b *PostgresStorageBackend) CreateUser(ctx context.Context, user *interfaces.User) error {
 	now := time.Now().UTC()
 	if user.CreatedAt.IsZero() {
@@ -80,24 +82,20 @@ func (b *PostgresStorageBackend) tryCreateUser(ctx context.Context, user *interf
 	}
 	defer tx.Rollback()
 
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
-		return fmt.Errorf("count users: %w", err)
+	// EXISTS, not COUNT(*): the question is only "is this the first user" (the SIRead lock still
+	// makes two concurrent first registrations conflict; one retries).
+	var anyUser bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users)`).Scan(&anyUser); err != nil {
+		return fmt.Errorf("check for existing users: %w", err)
 	}
-	// Bootstrap: the very first user in an empty deployment becomes admin —
-	// but ONLY when the caller opted in via auth.WithAllowBootstrap (the
-	// registration path). SSO JIT provisioning (which calls CreateUser without
-	// the flag) must not claim admin, otherwise on a fresh deployment whoever
-	// reaches the SSO start URL first wins admin (privilege escalation).
+	// Bootstrap: the very first user becomes admin — but ONLY with auth.WithAllowBootstrap (the
+	// registration path); SSO JIT provisioning must not claim admin on a fresh deployment.
 	role := user.Role
 	emailVerified := user.EmailVerified
-	if count == 0 && auth.AllowBootstrap(ctx) {
+	if !anyUser && auth.AllowBootstrap(ctx) {
 		role = auth.RoleAdmin
-		// The bootstrap admin is also email-verified. Login refuses unverified
-		// accounts to block shadow-registration takeovers, but on an empty
-		// deployment there is nobody to impersonate — and a deployment with no
-		// SMTP relay (the docker-compose quick start) would otherwise lock its
-		// own first administrator out before anyone could ever sign in.
+		// The bootstrap admin is email-verified: nobody to impersonate on an empty deployment,
+		// and a no-SMTP deployment would otherwise lock out its own first administrator.
 		emailVerified = true
 	}
 
@@ -125,7 +123,7 @@ func (b *PostgresStorageBackend) LoadUserByEmail(ctx context.Context, email stri
 	email = strings.ToLower(email)
 	var user interfaces.User
 	var roleStr string
-	err := b.db.QueryRowContext(ctx,
+	err := b.query(ctx).QueryRowContext(ctx,
 		`SELECT id, email, password, role, email_verified, failed_login_attempts, locked_until, display_name, avatar_url, created_at, updated_at FROM users WHERE email = $1`,
 		email,
 	).Scan(&user.ID, &user.Email, &user.Password, &roleStr, &user.EmailVerified, &user.FailedLoginAttempts, &user.LockedUntil, &user.DisplayName, &user.AvatarURL, &user.CreatedAt, &user.UpdatedAt)
@@ -143,7 +141,7 @@ func (b *PostgresStorageBackend) LoadUserByEmail(ctx context.Context, email stri
 func (b *PostgresStorageBackend) LoadUserByID(ctx context.Context, id string) (*interfaces.User, error) {
 	var user interfaces.User
 	var roleStr string
-	err := b.db.QueryRowContext(ctx,
+	err := b.query(ctx).QueryRowContext(ctx,
 		`SELECT id, email, password, role, email_verified, failed_login_attempts, locked_until, display_name, avatar_url, created_at, updated_at FROM users WHERE id = $1`,
 		id,
 	).Scan(&user.ID, &user.Email, &user.Password, &roleStr, &user.EmailVerified, &user.FailedLoginAttempts, &user.LockedUntil, &user.DisplayName, &user.AvatarURL, &user.CreatedAt, &user.UpdatedAt)
@@ -158,16 +156,14 @@ func (b *PostgresStorageBackend) LoadUserByID(ctx context.Context, id string) (*
 	return &user, nil
 }
 
-// LoadUsersByIDs resolves multiple users in a single query, avoiding the N+1
-// pattern when decorating lists with owner info. Duplicate IDs are de-duplicated.
+// LoadUsersByIDs resolves multiple users in one query (avoids N+1); duplicate IDs are de-duplicated.
 func (b *PostgresStorageBackend) LoadUsersByIDs(ctx context.Context, ids []string) (map[string]*interfaces.User, error) {
 	out := make(map[string]*interfaces.User, len(ids))
 	if len(ids) == 0 {
 		return out, nil
 	}
-	// De-duplicate and query with `= ANY($1)` (pgx encodes the []string as a
-	// Postgres array — same pattern as postgres_dashboard.go). This avoids the
-	// hand-built placeholder list and its latent >65535-parameter cap.
+	// De-duplicate and query with `= ANY($1)` — no hand-built placeholder list and its
+	// latent >65535-parameter cap.
 	seen := make(map[string]bool, len(ids))
 	unique := make([]string, 0, len(ids))
 	for _, id := range ids {
@@ -180,7 +176,7 @@ func (b *PostgresStorageBackend) LoadUsersByIDs(ctx context.Context, ids []strin
 	if len(unique) == 0 {
 		return out, nil
 	}
-	rows, err := b.db.QueryContext(ctx,
+	rows, err := b.query(ctx).QueryContext(ctx,
 		`SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users WHERE id = ANY($1)`,
 		unique)
 	if err != nil {
@@ -202,7 +198,7 @@ func (b *PostgresStorageBackend) LoadUsersByIDs(ctx context.Context, ids []strin
 
 func (b *PostgresStorageBackend) CountUsers(ctx context.Context) (int, error) {
 	var count int
-	err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count)
+	err := b.query(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count users: %w", err)
 	}
@@ -213,13 +209,9 @@ func (b *PostgresStorageBackend) ListUsers(ctx context.Context, limit, offset in
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	// `id` as a final tiebreaker: this is offset-paginated by the admin user
-	// list, and created_at ties whenever two accounts are created in the same
-	// microsecond (a seeded install, a bulk import, concurrent signups). SQL
-	// orders tied rows arbitrarily, so without this the same walk can order a
-	// tied group differently per page and drop or repeat users across the
-	// boundary.
-	rows, err := b.db.QueryContext(ctx, `SELECT `+listedUserColumns+` FROM users ORDER BY created_at DESC, id ASC LIMIT $1 OFFSET $2`, limit, offset)
+	// `id` as a final tiebreaker: this is offset-paginated, created_at ties in the same microsecond, and
+	// SQL orders tied rows arbitrarily — without it the walk could drop or repeat users across a page boundary.
+	rows, err := b.query(ctx).QueryContext(ctx, `SELECT `+listedUserColumns+` FROM users ORDER BY created_at DESC, id ASC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -237,7 +229,7 @@ func (b *PostgresStorageBackend) ListUsers(ctx context.Context, limit, offset in
 }
 
 func (b *PostgresStorageBackend) ListAdmins(ctx context.Context) ([]*interfaces.User, error) {
-	rows, err := b.db.QueryContext(ctx, `SELECT `+listedUserColumns+` FROM users WHERE role = 'admin'`)
+	rows, err := b.query(ctx).QueryContext(ctx, `SELECT `+listedUserColumns+` FROM users WHERE role = 'admin'`)
 	if err != nil {
 		return nil, fmt.Errorf("list admins: %w", err)
 	}
@@ -254,9 +246,8 @@ func (b *PostgresStorageBackend) ListAdmins(ctx context.Context) ([]*interfaces.
 	return users, rows.Err()
 }
 
-// listedUserColumns is the projection every list-style user read shares
-// (display name and avatar included — the admin table shows them);
-// scanListedUser reads one row of it.
+// listedUserColumns is the projection every list-style user read shares (display name and avatar included —
+// the admin table shows them); scanListedUser reads one row of it.
 const listedUserColumns = `id, email, role, email_verified, failed_login_attempts, locked_until, display_name, avatar_url, created_at, updated_at`
 
 func scanListedUser(rows *sql.Rows) (*interfaces.User, error) {
@@ -274,9 +265,7 @@ func scanListedUser(rows *sql.Rows) (*interfaces.User, error) {
 const validRolesSQL = `('admin', 'member', 'viewer', 'guest')`
 
 // QueryUsers backs the admin user list: one filtered, ordered page plus the
-// number of users the filters match. Both statements run on the request's
-// RLS executor (users has no policies, but this keeps an admin request on one
-// pooled connection).
+// number of matching users, both on the request's RLS executor.
 func (b *PostgresStorageBackend) QueryUsers(ctx context.Context, q interfaces.UserQuery) ([]*interfaces.User, int, error) {
 	// A cap clamps DOWN to the maximum (see ListAuditEvents).
 	const (
@@ -368,9 +357,8 @@ func (b *PostgresStorageBackend) LoadUserStats(ctx context.Context) (*interfaces
 	return &s, nil
 }
 
-// UpdateUserRole reports an unknown id as ErrNotFound, as the filesystem
-// backend does, instead of a silent no-op the admin endpoint answered with
-// 200 (and audited).
+// UpdateUserRole reports an unknown id as ErrNotFound (as the filesystem backend does) instead of a
+// silent no-op the admin endpoint answered with 200.
 func (b *PostgresStorageBackend) UpdateUserRole(ctx context.Context, id string, role auth.Role) error {
 	res, err := b.db.ExecContext(ctx, `UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, string(role), id)
 	if err != nil {
@@ -413,10 +401,8 @@ func (b *PostgresStorageBackend) UpdateUserProfile(ctx context.Context, id strin
 // ---- Refresh-token rotation store ----
 // These back the auth refresh-token rotation/revocation flow in cloud mode.
 
-// StoreRefreshToken records an issued refresh token by its jti. Expired-row
-// cleanup is NOT done here — the background retention job's PurgeExpiredData
-// runs the same indexed DELETE; doing it inline added a round trip to every
-// login/refresh and churned dead tuples under login bursts.
+// StoreRefreshToken records an issued refresh token by its jti. Expired-row cleanup is NOT done here — the
+// retention job's PurgeExpiredData runs the same indexed DELETE; inline it added a round trip to every login/refresh.
 func (b *PostgresStorageBackend) StoreRefreshToken(ctx context.Context, jti, userID string, expiresAt time.Time, userAgent, ip string) error {
 	if _, err := b.db.ExecContext(ctx,
 		`INSERT INTO refresh_tokens (jti, user_id, expires_at, user_agent, ip) VALUES ($1, $2, $3, $4, $5)
@@ -432,7 +418,7 @@ func (b *PostgresStorageBackend) StoreRefreshToken(ctx context.Context, jti, use
 // not expired.
 func (b *PostgresStorageBackend) IsRefreshTokenValid(ctx context.Context, jti string) (bool, error) {
 	var ok bool
-	err := b.db.QueryRowContext(ctx,
+	err := b.query(ctx).QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM refresh_tokens
 		 WHERE jti = $1 AND NOT revoked AND expires_at > NOW())`,
 		jti,
@@ -443,9 +429,9 @@ func (b *PostgresStorageBackend) IsRefreshTokenValid(ctx context.Context, jti st
 	return ok, nil
 }
 
-// RevokeRefreshToken revokes a single refresh token by jti (used on rotation).
-// Returns ErrTokenAlreadyRevoked if the token was already revoked, so callers
-// can detect a concurrent rotation race (two requests with the same jti).
+// RevokeRefreshToken revokes a single refresh token by jti (used on
+// rotation). ErrTokenAlreadyRevoked lets callers detect a concurrent
+// rotation race.
 func (b *PostgresStorageBackend) RevokeRefreshToken(ctx context.Context, jti string) error {
 	res, err := b.db.ExecContext(ctx,
 		`UPDATE refresh_tokens SET revoked = TRUE WHERE jti = $1 AND NOT revoked`, jti,
@@ -463,10 +449,9 @@ func (b *PostgresStorageBackend) RevokeRefreshToken(ctx context.Context, jti str
 	return nil
 }
 
-// VerifyAndRevokeRefreshToken atomically verifies and revokes a refresh token
-// in a single atomic operation. Returns the claims if successful, or
-// ErrTokenAlreadyRevoked if the token was already revoked/invalid.
-// This eliminates the race window between VerifyRefresh and RevokeRefreshToken.
+// VerifyAndRevokeRefreshToken atomically verifies and revokes a refresh
+// token, eliminating the race window between VerifyRefresh and
+// RevokeRefreshToken. ErrTokenAlreadyRevoked if already revoked/invalid.
 func (b *PostgresStorageBackend) VerifyAndRevokeRefreshToken(ctx context.Context, jti string) (*interfaces.RefreshTokenInfo, error) {
 	var info interfaces.RefreshTokenInfo
 	err := b.db.QueryRowContext(ctx, `
@@ -500,7 +485,7 @@ func (b *PostgresStorageBackend) RevokeUserRefreshTokens(ctx context.Context, us
 // ListUserRefreshTokens returns every active (non-revoked, non-expired)
 // refresh token for a user, surfaced to the user as "active sessions".
 func (b *PostgresStorageBackend) ListUserRefreshTokens(ctx context.Context, userID string) ([]interfaces.RefreshTokenInfo, error) {
-	rows, err := b.db.QueryContext(ctx,
+	rows, err := b.query(ctx).QueryContext(ctx,
 		`SELECT jti, created_at, expires_at, user_agent, ip FROM refresh_tokens
 		 WHERE user_id = $1 AND NOT revoked AND expires_at > NOW()
 		 ORDER BY created_at DESC`,
@@ -522,9 +507,9 @@ func (b *PostgresStorageBackend) ListUserRefreshTokens(ctx context.Context, user
 	return sessions, rows.Err()
 }
 
-// RevokeRefreshTokenForUser revokes a single refresh token by jti, but only if
-// it belongs to userID — this lets a user revoke their own sessions without
-// being able to revoke another user's by guessing a jti.
+// RevokeRefreshTokenForUser revokes a single refresh token by jti, but only
+// if it belongs to userID — a user can revoke their own sessions without
+// being able to revoke another's by guessing a jti.
 func (b *PostgresStorageBackend) RevokeRefreshTokenForUser(ctx context.Context, jti, userID string) error {
 	res, err := b.db.ExecContext(ctx,
 		`UPDATE refresh_tokens SET revoked = TRUE WHERE jti = $1 AND user_id = $2 AND NOT revoked`,
@@ -562,16 +547,10 @@ func (b *PostgresStorageBackend) SaveAuditEvent(ctx context.Context, event *inte
 	return nil
 }
 
-// SaveAuditEvents inserts a batch of audit events in a single round-trip. The
-// async audit worker uses this to multiply throughput under load (the
-// per-event SaveAuditEvent path otherwise becomes the bottleneck that drops
-// events when the 256-buffer fills). A single bad row failing the whole batch
-// is handled by the caller falling back to per-event writes. The 9 placeholder
-// args per row stay well under Postgres' 65535-parameter cap for any realistic
-// batch size.
-// auditInsertCols is the number of columns (and bind params per row) in the
-// audit_events INSERT. Postgres caps a single statement at 65535 bind
-// parameters, so batches must stay under 65535/auditInsertCols ≈ 7281 rows.
+// SaveAuditEvents inserts a batch of audit events in a single round-trip — the async audit worker's
+// throughput path (a single bad row failing the whole batch is handled by the caller falling back to
+// per-event writes). auditInsertCols is the number of columns (and bind params per row) in the audit_events
+// INSERT: Postgres caps a single statement at 65535 bind parameters, so batches must stay under 65535/9 ≈ 7281 rows.
 const auditInsertCols = 9
 
 // auditInsertBatchRows bounds one INSERT well under the 65535-param ceiling
@@ -592,9 +571,8 @@ func chunkAuditEvents(events []*interfaces.AuditEvent, size int) [][]*interfaces
 	return out
 }
 
-// buildAuditInsert renders a multi-row INSERT for a single batch. Callers must
-// keep len(batch) <= auditInsertBatchRows so the bind-parameter count stays
-// under the Postgres 65535 limit.
+// buildAuditInsert renders a multi-row INSERT for one batch (callers must
+// keep len(batch) <= auditInsertBatchRows).
 func buildAuditInsert(batch []*interfaces.AuditEvent) (string, []any) {
 	var sb strings.Builder
 	args := make([]any, 0, len(batch)*auditInsertCols)
@@ -620,9 +598,8 @@ func (b *PostgresStorageBackend) SaveAuditEvents(ctx context.Context, events []*
 	if len(events) == 0 {
 		return nil
 	}
-	// A single INSERT is capped at 65535 bind parameters by the Postgres wire
-	// protocol (~7281 rows at 9 params each). Chunk larger batches and run every
-	// chunk in one transaction so the whole write stays all-or-nothing.
+	// Chunk larger batches and run every chunk in one transaction so the
+	// whole write stays all-or-nothing.
 	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("save audit events (%d): begin tx: %w", len(events), err)
@@ -646,18 +623,120 @@ func (b *PostgresStorageBackend) SaveAuditEvents(ctx context.Context, events []*
 	return nil
 }
 
+// ListAuditEvents page bounds. maxAuditLimit is package-level so the data-subject export
+// (exportAuditEvents) pages by exactly the clamp.
+const (
+	defaultAuditLimit = 100
+	maxAuditLimit     = 500
+)
+
 func (b *PostgresStorageBackend) ListAuditEvents(ctx context.Context, filter interfaces.AuditFilter) ([]*interfaces.AuditEvent, error) {
-	// A cap clamps DOWN to the maximum; it does not fall back to the default.
-	//
-	// This read `if limit <= 0 || limit > 500 { limit = 100 }`, so asking for
-	// MORE than the maximum silently returned five times FEWER than the maximum.
-	// The GDPR data-subject export (postgres_retention.go) asks for 1000 and was
-	// therefore shipping exactly 100 audit events, with no error and no
-	// truncation marker — a compliance export quietly omitting records.
-	const (
-		defaultAuditLimit = 100
-		maxAuditLimit     = 500
-	)
+	return b.listAuditEvents(ctx, filter, nil)
+}
+
+// auditCursor is a keyset position in the audit log's order (created_at
+// DESC, id ASC): the last row a walk has seen.
+type auditCursor struct {
+	createdAt time.Time
+	id        string
+}
+
+// auditEventColumns is the audit_events select list every variant of the
+// list statement reads, in the order scanAuditEvents expects.
+const auditEventColumns = "id, user_id, email, action, resource_type, resource_id, ip, meta, created_at"
+
+// auditEventOrder orders the audit log newest first, with `id` (the primary key) as the final tiebreaker:
+// events logged in the same microsecond tie on created_at and SQL orders tied rows arbitrarily, so paging could
+// drop or repeat records — for a security audit trail "I paged through the log and it wasn't there" must be sound.
+const auditEventOrder = "ORDER BY created_at DESC, id ASC"
+
+// listAuditEventsSQL builds the ListAuditEvents statement for filter, with its page bounds already clamped.
+// The ORDER BY is auditEventOrder in every shape; the LIMIT/OFFSET page is served from index-ordered walks:
+// UserID alone reads audit_events_user_created_idx; Action alone reads audit_events_action_created_idx (v28).
+// UserID with IncludeSubject: pre-auth events (sign-in, lockout, registration, SSO) carry no actor — their
+// subject is the user in resource_type/resource_id — so the two populations are read as two arms of a UNION ALL,
+// each from its own index in the list's order, cut to the first LIMIT+OFFSET rows, then merged and paged (the
+// single-OR shape this replaces was a BitmapOr plus a Sort of the user's whole history for every page);
+// `user_id <> $1` on the subject arm keeps an event whose actor IS its subject in the actor arm only.
+// after, when set, replaces OFFSET paging with a keyset continuation — rows strictly after
+// (after.createdAt, after.id) — which the data-subject export uses to walk a user's whole history: every page
+// costs one index descent instead of re-reading every earlier page. KNOWN LIMITATION of the OFFSET shape (the
+// admin log): events written WHILE an operator pages shift later rows down and the boundary skips one per new
+// event; fixing that needs a keyset cursor in the AuditFilter contract, deliberately out of scope.
+func listAuditEventsSQL(filter interfaces.AuditFilter, limit, offset int, after *auditCursor) (string, []any) {
+	args := []any{}
+	// Predicates every arm carries, after the arm's own key.
+	common := []string{}
+	n := 1
+	userArg := 0
+	if filter.UserID != "" {
+		args = append(args, filter.UserID)
+		userArg = n
+		n++
+	}
+	if filter.Action != "" {
+		common = append(common, fmt.Sprintf("action = $%d", n))
+		args = append(args, filter.Action)
+		n++
+	}
+	if filter.Since != nil {
+		common = append(common, fmt.Sprintf("created_at >= $%d", n))
+		args = append(args, filter.Since.UTC())
+		n++
+	}
+	if after != nil {
+		common = append(common, fmt.Sprintf("created_at <= $%d AND (created_at < $%d OR id > $%d)", n, n, n+1))
+		args = append(args, after.createdAt.UTC(), after.id)
+		n += 2
+		offset = 0
+	}
+	where := func(key ...string) string {
+		preds := append(key, common...)
+		if len(preds) == 0 {
+			return ""
+		}
+		return " WHERE " + strings.Join(preds, " AND ")
+	}
+	page := func(limitArg int) string {
+		if after != nil {
+			return fmt.Sprintf(" %s LIMIT $%d", auditEventOrder, limitArg)
+		}
+		return fmt.Sprintf(" %s LIMIT $%d OFFSET $%d", auditEventOrder, limitArg, limitArg+1)
+	}
+
+	// #nosec G202 -- only generated "$N" placeholders and whitelisted column
+	// names are concatenated; all values are parameterized args.
+	var q string
+	switch {
+	case userArg != 0 && filter.IncludeSubject:
+		// Each arm keeps the first LIMIT+OFFSET rows of its own ordered walk:
+		// any row of the final page is within that prefix of its arm.
+		armLimit := n
+		args = append(args, limit+offset)
+		n++
+		q = "SELECT " + auditEventColumns + " FROM (" +
+			"(SELECT " + auditEventColumns + " FROM audit_events" + where(fmt.Sprintf("user_id = $%d", userArg)) + " " + auditEventOrder + fmt.Sprintf(" LIMIT $%d)", armLimit) +
+			" UNION ALL " +
+			"(SELECT " + auditEventColumns + " FROM audit_events" + where(fmt.Sprintf("resource_type = 'user' AND resource_id = $%d AND user_id <> $%d", userArg, userArg)) + " " + auditEventOrder + fmt.Sprintf(" LIMIT $%d)", armLimit) +
+			") u" + page(n)
+	case userArg != 0:
+		q = "SELECT " + auditEventColumns + " FROM audit_events" + where(fmt.Sprintf("user_id = $%d", userArg)) + page(n)
+	default:
+		q = "SELECT " + auditEventColumns + " FROM audit_events" + where() + page(n)
+	}
+	args = append(args, limit)
+	if after == nil {
+		args = append(args, offset)
+	}
+	return q, args
+}
+
+// listAuditEvents is ListAuditEvents with an optional keyset continuation
+// (see listAuditEventsSQL).
+func (b *PostgresStorageBackend) listAuditEvents(ctx context.Context, filter interfaces.AuditFilter, after *auditCursor) ([]*interfaces.AuditEvent, error) {
+	// A cap clamps DOWN to the maximum; it does not fall back to the default. (The old form read
+	// `if limit <= 0 || limit > 500 { limit = 100 }`, so asking for MORE than the maximum silently
+	// returned five times FEWER — the GDPR export asked for 1000 and shipped exactly 100, no error.)
 	limit := filter.Limit
 	switch {
 	case limit <= 0:
@@ -670,56 +749,8 @@ func (b *PostgresStorageBackend) ListAuditEvents(ctx context.Context, filter int
 		offset = 0
 	}
 
-	args := []any{}
-	where := []string{}
-	i := 1
-	if filter.UserID != "" {
-		if filter.IncludeSubject {
-			// Pre-auth events (sign-in, failed sign-in, lockout, registration,
-			// SSO) carry no actor: their subject is the user in resource_type /
-			// resource_id, so a plain user_id match would miss them.
-			where = append(where, fmt.Sprintf("(user_id = $%d OR (resource_type = 'user' AND resource_id = $%d))", i, i))
-		} else {
-			where = append(where, fmt.Sprintf("user_id = $%d", i))
-		}
-		args = append(args, filter.UserID)
-		i++
-	}
-	if filter.Action != "" {
-		where = append(where, fmt.Sprintf("action = $%d", i))
-		args = append(args, filter.Action)
-		i++
-	}
-	if filter.Since != nil {
-		where = append(where, fmt.Sprintf("created_at >= $%d", i))
-		args = append(args, filter.Since.UTC())
-		i++
-	}
-
-	q := `SELECT id, user_id, email, action, resource_type, resource_id, ip, meta, created_at FROM audit_events`
-	if len(where) > 0 {
-		q += " WHERE " + strings.Join(where, " AND ")
-	}
-	// `id` as a final tiebreaker — audit_events.id is the primary key. Events
-	// logged in the same microsecond (concurrent requests, or one request
-	// emitting several) otherwise tie on created_at, and SQL orders tied rows
-	// arbitrarily, so paging the audit log could drop or repeat records. For a
-	// security audit trail "I paged through the log and it wasn't there" has to
-	// be a sound conclusion.
-	//
-	// KNOWN LIMITATION, not fixed by the tiebreaker: audit_events is
-	// append-heavy and this orders newest-first, so events written WHILE an
-	// operator pages shift every later row down and the page boundary skips
-	// one per new event. Fixing that needs keyset pagination
-	// (WHERE (created_at, id) < ($last, $lastID)) or an upper time bound
-	// pinned when paging starts — both change the AuditFilter contract and the
-	// admin UI, so they are deliberately out of scope here. Use the Since
-	// filter to narrow a window when completeness matters.
-	// #nosec G202 -- only generated "$N" placeholders are concatenated; all values are parameterized args.
-	q += fmt.Sprintf(" ORDER BY created_at DESC, id ASC LIMIT $%d OFFSET $%d", i, i+1)
-	args = append(args, limit, offset)
-
-	rows, err := b.db.QueryContext(ctx, q, args...)
+	q, args := listAuditEventsSQL(filter, limit, offset, after)
+	rows, err := b.query(ctx).QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list audit events: %w", err)
 	}
@@ -763,20 +794,19 @@ func (b *PostgresStorageBackend) SaveUsageMetric(ctx context.Context, metric *in
 	return nil
 }
 
-// GetDailyUsage returns the total estimated AI spend (in dollars) accrued so far
-// in the current calendar day. When orgID is non-empty it sums the org's usage,
-// otherwise it sums the user's. Used to enforce the per-account/org daily budget.
+// GetDailyUsage returns the total estimated AI spend so far in the current calendar day (the org's when
+// orgID is non-empty, else the user's) — used to enforce the daily budget.
 func (b *PostgresStorageBackend) GetDailyUsage(ctx context.Context, userID, orgID string) (float64, error) {
 	var (
 		total float64
 		err   error
 	)
 	if orgID != "" {
-		err = b.db.QueryRowContext(ctx,
+		err = b.query(ctx).QueryRowContext(ctx,
 			`SELECT COALESCE(SUM(estimated_cost), 0) FROM usage_metrics
 			 WHERE org_id = $1 AND created_at >= date_trunc('day', now())`, orgID).Scan(&total)
 	} else {
-		err = b.db.QueryRowContext(ctx,
+		err = b.query(ctx).QueryRowContext(ctx,
 			`SELECT COALESCE(SUM(estimated_cost), 0) FROM usage_metrics
 			 WHERE user_id = $1 AND created_at >= date_trunc('day', now())`, userID).Scan(&total)
 	}

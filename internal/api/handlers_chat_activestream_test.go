@@ -16,7 +16,7 @@ import (
 )
 
 // blockingStreamProvider streams a preamble and then blocks until released,
-// so the stream stays live (F-21's activeStreamId window).
+// so the stream stays live for the activeStreamId assertions.
 type blockingStreamProvider struct {
 	*testutil.FakeProvider
 	release   chan struct{}
@@ -35,7 +35,7 @@ func (p *blockingStreamProvider) Stream(ctx context.Context, _ ai.Request, onChu
 	return nil
 }
 
-// getConversationBody is the /api/chat/get response shape (F-21).
+// getConversationBody is the /api/chat/get response shape.
 type getConversationBody struct {
 	Messages       []json.RawMessage `json:"messages"`
 	ActiveStreamID string            `json:"activeStreamId"`
@@ -62,15 +62,15 @@ func pollConversation(t *testing.T, rt *Router, auth, convID string, ok func(get
 	}
 }
 
-// TestHandleGetConversation_ReportsActiveStream (F-21): while a stream for
-// the (flow, conversation) is live — once its question is stored, which the
-// worker does right after prepareTurn (review #4 B1) — GET conversation
-// carries its id as activeStreamId so a reloaded client can re-attach, next
-// to a history that holds the question; a conversation with no stream
-// reports none. Once the stream finished and its answer is stored the id is
-// gone (B2 reports it until then). The retention-window eviction is covered
-// at the service level (TestActiveStreamFor) rather than by sleeping out the
-// two-minute retention here.
+// TestHandleGetConversation_ReportsActiveStream: while a stream for the
+// (flow, conversation) is live — once its question is stored, which the
+// worker does right after prepareTurn — GET conversation carries its id as
+// activeStreamId so a reloaded client can re-attach, next to a history that
+// holds the question; a conversation with no stream reports none. Once the
+// stream finished and its answer is stored the id is gone. The
+// retention-window eviction is covered at the service level
+// (TestActiveStreamFor) rather than by sleeping out the two-minute retention
+// here.
 func TestHandleGetConversation_ReportsActiveStream(t *testing.T) {
 	// The router's settings store reads the OS config dir: point it at a temp
 	// dir so "Save conversation history" has its default (on) — the stream
@@ -141,7 +141,7 @@ func TestHandleGetConversation_ReportsActiveStream(t *testing.T) {
 	// Let the stream finish: once its reply is stored with the history the
 	// finished stream is no longer reported (a resume would duplicate it).
 	// markDone lands before the cleanup stores the answer, so poll rather
-	// than read once (review #4 B10).
+	// than read once.
 	p.closeOnce.Do(func() { close(p.release) })
 	body = pollConversation(t, rt, auth, convID, func(b getConversationBody) bool { return b.ActiveStreamID == "" })
 	if len(body.Messages) != 2 || !strings.Contains(string(body.Messages[1]), "partial") {

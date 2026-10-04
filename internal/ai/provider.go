@@ -23,20 +23,14 @@ type Provider interface {
 	ContextLimit() int
 	PricePerMillionTokens() Pricing
 	Embed(ctx context.Context, text []string) ([][]float32, error)
-	// SupportsTools reports whether the provider's Chat path can serialize tool
-	// definitions and return tool calls. The chat service only runs the agentic
-	// tool loop against providers that return true.
+	// SupportsTools reports whether the provider's Chat path can serialize tool definitions and return tool
+	// calls. The chat service only runs the agentic tool loop against providers that return true.
 	SupportsTools() bool
 }
 
-// TokenCounter is the optional exact-token-count capability a provider may
-// expose next to the Provider interface: CountTokens asks the provider's own
-// tokenizer (Anthropic's free count_tokens endpoint) how many prompt tokens
-// Request will consume, so near-window prompts can be re-checked before the
-// estimate's error band lets an oversized request through (the estimate stays
-// the fast path; callers fall back to it silently when the count errors).
-// Declared by ClaudeProvider and forwarded by the audited wrapper, so the
-// factory-returned chain still satisfies a type assertion on it.
+// TokenCounter is the optional exact-token-count capability a provider may expose next to Provider:
+// CountTokens asks the provider's own tokenizer so near-window prompts can be re-checked before the
+// estimate's error band lets an oversized request through (callers fall back to the estimate on error).
 type TokenCounter interface {
 	CountTokens(ctx context.Context, req Request) (int, error)
 }
@@ -49,21 +43,15 @@ type ModelInfo struct {
 	ID           string `json:"id"`
 	DisplayName  string `json:"displayName"`
 	ContextLimit int    `json:"contextLimit"`
-	// MaxOutputTokens is the model's maximum completion length, which is far
-	// smaller than ContextLimit (the input window). Zero means unknown — callers
-	// that clamp MaxTokens against it should leave the value untouched in that
-	// case. Used by the service to keep a caller's MaxTokens under the provider's
-	// real output ceiling so the request doesn't 400.
+	// MaxOutputTokens is the model's maximum completion length, far smaller than ContextLimit (the input
+	// window). Zero means unknown — callers clamping MaxTokens against it should leave the value untouched then.
 	MaxOutputTokens int     `json:"maxOutputTokens,omitempty"`
 	Pricing         Pricing `json:"pricing"`
-	// ServedModel is the underlying model that actually answers requests sent
-	// to this entry when the entry's ID is only an alias for it — an Azure AI
-	// Foundry deployment name, a model-router deployment. Empty for catalogue
-	// models, whose ID is the model.
+	// ServedModel is the underlying model that answers when this entry's ID is only an alias for it — a Foundry
+	// deployment name, a model-router deployment. Empty for catalogue models, whose ID is the model.
 	ServedModel string `json:"servedModel,omitempty"`
-	// Embedding marks an embedding deployment (Azure AI Foundry): kept in
-	// Models() so embedding usage is priced and sized, never offered as a
-	// chat model or chosen as the chat default.
+	// Embedding marks an embedding deployment (Azure AI Foundry): kept in Models() so embedding usage is
+	// priced and sized, never offered as a chat model or chosen as the chat default.
 	Embedding bool `json:"embedding,omitempty"`
 }
 
@@ -78,49 +66,33 @@ type Request struct {
 	SystemPrompt string    `json:"systemPrompt,omitempty"`
 	Temperature  float64   `json:"temperature,omitempty"`
 	MaxTokens    int       `json:"maxTokens,omitempty"`
-	// TemperatureSet marks Temperature as explicitly chosen by the caller, so
-	// a provider sends it even when it is 0 (deterministic sampling). False
-	// keeps the legacy rule: a zero Temperature means "provider default" and
-	// is omitted from the wire request.
+	// TemperatureSet marks Temperature as explicitly chosen by the caller, so a provider sends it even when
+	// it is 0. False keeps the legacy rule: a zero Temperature means "provider default" and is omitted.
 	TemperatureSet bool `json:"-"`
-	// ReasoningEffort is the per-user choice of reasoning depth for reasoning
-	// deployments: "low", "medium" or "high" (chat completions reasoning_effort,
-	// Claude output_config.effort). Empty means the provider default.
+	// ReasoningEffort is the per-user choice of reasoning depth for reasoning deployments: "low", "medium" or
+	// "high" (chat completions reasoning_effort, Claude output_config.effort). Empty means the provider default.
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	// Tools, when non-empty and the provider SupportsTools, are offered to the
-	// model so it can request a tool call instead of (or before) a text answer.
+	// Tools, when non-empty and the provider SupportsTools, are offered to the model so it can request a tool
+	// call instead of (or before) a text answer.
 	Tools []ToolDefinition `json:"tools,omitempty"`
-	// OrgID is request metadata (not sent to any provider API) used by the
-	// audited wrapper to attribute usage/cost to an organization, enabling
-	// org-wide daily budgets. Empty for personal/non-org flows.
+	// OrgID is request metadata (not sent to any provider API) used by the audited wrapper to attribute
+	// usage/cost to an organization, enabling org-wide daily budgets. Empty for personal/non-org flows.
 	OrgID string `json:"-"`
 }
 
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
-	// ToolCalls is set on an assistant message that requested tool calls; it is
-	// echoed back in the next turn's history so the provider can correlate the
-	// following tool results.
+	// ToolCalls is set on an assistant message that requested tool calls; it is echoed back in the next turn's
+	// history so the provider can correlate the following tool results.
 	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
-	// ToolCallID is set on a Role=="tool" message carrying a tool result; it
-	// references the ToolCall.ID this result answers.
+	// ToolCallID is set on a Role=="tool" message carrying a tool result; it references the ToolCall.ID this result answers.
 	ToolCallID string `json:"toolCallId,omitempty"`
-	// ProviderItems is the provider's own record of an assistant turn,
-	// opaque to everything but the provider that produced it: Claude's
-	// ordered content blocks (thinking and redacted_thinking with their
-	// signatures, text, tool_use) or a Responses API run's ordered output
-	// items (encrypted reasoning, hosted tool calls, function calls). It is
-	// set only by the chat service's tool loop, on the assistant turn it
-	// appends, and only for the provider (ProviderItemsFrom) that answered;
-	// the provider replays it verbatim instead of rebuilding the turn from
-	// Content/ToolCalls, which is how thinking and reasoning survive a tool
-	// step. Never persisted, never sent to the client, and stripped from the
-	// whole history as soon as the loop rewrites earlier messages
-	// (truncation, tool fallback): replaying it after an edit is rejected.
+	// ProviderItems is the provider's own record of an assistant turn, opaque to everything but the provider
+	// that produced it (ProviderItemsFrom). Set only by the chat service's tool loop and replayed verbatim by
+	// the provider that answered — how thinking survives a tool step. Never persisted or sent to the client.
 	ProviderItems json.RawMessage `json:"-"`
-	// ProviderItemsFrom is the provider ID that produced ProviderItems; a
-	// provider ignores items another provider wrote.
+	// ProviderItemsFrom is the provider ID that produced ProviderItems; a provider ignores items another provider wrote.
 	ProviderItemsFrom string `json:"-"`
 }
 
@@ -128,30 +100,19 @@ type Response struct {
 	Content   string `json:"content"`
 	TokensIn  int    `json:"tokensIn"`
 	TokensOut int    `json:"tokensOut"`
-	// CacheReadTokens and CacheWriteTokens are the prompt-cache slice of the
-	// input (Claude's cache_read_input_tokens / cache_creation_input_tokens):
-	// a breakdown INCLUDED in TokensIn, never added to it. TokensIn stays the
-	// total everywhere (context view, in-flight cost, the client meter); the
-	// audited wrapper prices this slice at the provider's cached rates
-	// (Claude reads 0.025-0.1x by family, 5-minute writes 1.25x) instead of
-	// the full input rate, which overstated cached turns against the daily
-	// budget. Zero when the provider reports no cache breakdown.
+	// CacheReadTokens and CacheWriteTokens are the prompt-cache slice of the input (Claude's cached-input
+	// fields): a breakdown INCLUDED in TokensIn, priced at the cached rates. Zero when none is reported.
 	CacheReadTokens  int    `json:"cacheReadTokens,omitempty"`
 	CacheWriteTokens int    `json:"cacheWriteTokens,omitempty"`
 	FinishReason     string `json:"finishReason"`
-	// ToolCalls is non-empty when the model requested tool execution instead of
-	// returning a final answer; the chat service runs them and continues the loop.
+	// ToolCalls is non-empty when the model requested tool execution instead of returning a final answer; the
+	// chat service runs them and continues the loop.
 	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
-	// ServedModel is the model name the provider reported in its response
-	// (OpenAI-compatible APIs echo the concrete version, e.g.
-	// "gpt-4o-2024-11-20"; an Azure model-router deployment reports the model
-	// it routed to). Used to price usage when the request model is a
-	// deployment alias the catalogue cannot know. Empty when not reported.
+	// ServedModel is the model name the provider reported (OpenAI-compatible APIs echo the concrete version,
+	// e.g. "gpt-4o-2024-11-20"); used to price usage when the request model is an alias the catalogue cannot know.
 	ServedModel string `json:"servedModel,omitempty"`
-	// Reasoning is inline model reasoning split off the answer — a leading
-	// <think>…</think> block (DeepSeek-R1 and other open reasoning models on
-	// OpenAI-compatible chat completions). Not part of Content: never shown,
-	// stored or re-sent as history.
+	// Reasoning is inline model reasoning split off the answer — a leading <think>…</think> block (open
+	// reasoning models on OpenAI-compatible chat completions). Not part of Content: never shown or re-sent.
 	Reasoning string `json:"reasoning,omitempty"`
 	// ProviderItems is the provider's ordered record of this assistant turn
 	// for verbatim replay within a tool loop (see Message.ProviderItems).
@@ -173,71 +134,51 @@ type ToolCall struct {
 	Input json.RawMessage `json:"input"`
 }
 
-// Chunk is one streamed event. A chunk with no field set is a keepalive: the
-// provider is still working (reasoning, assembling a tool call) but has
-// nothing to deliver — consumers only use it to reset their idle timers.
+// Chunk is one streamed event. A chunk with no field set is a keepalive: the provider is still working
+// (reasoning, assembling a tool call) but has nothing to deliver — consumers only use it to reset their idle timers.
 type Chunk struct {
 	Text string `json:"text"`
-	// Reasoning is inline model reasoning split off the answer (see
-	// Response.Reasoning). It is not answer text: the chat service never
-	// displays, stores or re-sends it; the audited wrapper counts it toward
-	// the output-token estimate of a stream that ends without usage.
+	// Reasoning is inline model reasoning split off the answer (Response.Reasoning). It is not answer text:
+	// never displayed, stored or re-sent; the audited wrapper counts it toward the output-token estimate.
 	Reasoning string `json:"reasoning,omitempty"`
 	TokensIn  int    `json:"tokensIn,omitempty"`
 	TokensOut int    `json:"tokensOut,omitempty"`
-	// CacheReadTokens / CacheWriteTokens mirror Response's cached-input
-	// breakdown on the usage-carrying chunks (Claude's message_start and the
-	// Done chunk; the chat-completions parser fills the read half from
-	// prompt_tokens_details.cached_tokens): a slice INCLUDED in TokensIn,
-	// priced by the audited wrapper at the cached rates. See Response.
+	// CacheReadTokens / CacheWriteTokens mirror Response's cached-input breakdown on the usage-carrying
+	// chunks: a slice INCLUDED in TokensIn, priced at the cached rates.
 	CacheReadTokens  int   `json:"cacheReadTokens,omitempty"`
 	CacheWriteTokens int   `json:"cacheWriteTokens,omitempty"`
 	Done             bool  `json:"done"`
 	Error            error `json:"error,omitempty"`
-	// ToolCalls is populated on the terminal (Done) chunk when the model
-	// requested tool execution mid-stream instead of finishing with text. Empty
-	// for a normal text completion. The agentic tool loop reads it to decide
-	// whether to run tools and continue, or finalize the answer.
+	// ToolCalls is populated on the Done chunk when the model requested tool execution mid-stream instead of
+	// finishing with text. The agentic tool loop reads it to decide whether to run tools and continue.
 	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
 	// FinishReason mirrors the provider stop reason on the Done chunk (optional).
 	FinishReason string `json:"finishReason,omitempty"`
 	// ServedModel mirrors Response.ServedModel on the Done chunk (optional).
 	ServedModel string `json:"servedModel,omitempty"`
-	// ToolEvent reports a tool the PROVIDER ran server-side (an Azure AI
-	// Foundry agent's web search, file search, MCP or code-interpreter call):
-	// one chunk when the step starts (Done=false) and one when it ends
-	// (Done=true). Nothing for the chat service to execute — it forwards the
-	// step to the client's tool trail so hosted work is visible.
+	// ToolEvent reports a tool the PROVIDER ran server-side (a hosted agent's web search, MCP or code-interpreter
+	// call): one chunk at start (Done=false), one at end. Nothing for the chat service to execute.
 	ToolEvent *ToolEvent `json:"toolEvent,omitempty"`
-	// Notice is a provider status line for the chat trail (see Notice). It
-	// carries no content: RetryingProvider does not count it as delivered.
+	// Notice is a provider status line for the chat trail (see Notice). It carries no content: RetryingProvider
+	// does not count it as delivered.
 	Notice *Notice `json:"notice,omitempty"`
-	// ServerStep marks work the provider started server-side (a hosted
-	// agent step without a trail label) that a replay of the request would
-	// repeat: RetryingProvider treats the stream as delivered; every other
-	// consumer ignores it (it carries no text).
+	// ServerStep marks server-side work a replay of the request would repeat: RetryingProvider treats the
+	// stream as delivered; every other consumer ignores it (it carries no text).
 	ServerStep bool `json:"-"`
-	// LocalKeepalive marks an empty keepalive the provider synthesised while it
-	// waited for a non-streaming answer (streamViaChat), not one the upstream
-	// sent: it keeps the idle watchdog fed like any empty chunk, but proves
-	// nothing about the request, so the audited wrapper does not take it as
-	// evidence of a billable call.
+	// LocalKeepalive marks a keepalive the provider synthesised while waiting for a non-streaming answer
+	// (streamViaChat), not one the upstream sent: it feeds the idle watchdog but proves nothing about the request.
 	LocalKeepalive bool `json:"-"`
-	// SilentStep marks the start (+1) / end (-1) of a provider phase that streams
-	// nothing while it runs but is not a hosted tool step (a Responses reasoning
-	// item with summaries off): the chat service holds the hosted-step idle limit
-	// while one is open. Carries no text; RetryingProvider and the audited
-	// wrapper ignore it.
+	// SilentStep marks the start (+1) / end (-1) of a provider phase that streams nothing while it runs but is
+	// not a hosted tool step (a Responses reasoning item with summaries off); the chat service holds the
+	// hosted-step idle limit while one is open.
 	SilentStep int8 `json:"-"`
-	// ProviderItems mirrors Response.ProviderItems on the Done chunk: the
-	// provider's ordered record of the turn for verbatim replay within a
-	// tool loop (see Message.ProviderItems).
+	// ProviderItems mirrors Response.ProviderItems on the Done chunk: the provider's ordered record of the
+	// turn for verbatim replay within a tool loop (see Message.ProviderItems).
 	ProviderItems json.RawMessage `json:"-"`
 }
 
-// Notice is a provider status line for the chat trail (e.g. "reasoning_off"):
-// informational only — not a hosted tool step, not delivered content, so the
-// retry wrapper and the idle watchdog's hosted-step accounting ignore it.
+// Notice is a provider status line for the chat trail (e.g. "reasoning_off"): informational only — not a
+// hosted tool step, not delivered content, so the retry wrapper and the idle watchdog's hosted-step accounting ignore it.
 type Notice struct {
 	Name  string
 	Label string
@@ -265,32 +206,18 @@ var (
 	ErrProviderDown        = errors.New("provider is currently unavailable")
 	ErrInsufficientBalance = errors.New("insufficient balance")
 	ErrCircuitOpen         = errors.New("provider circuit open: too many recent failures")
-	// ErrToolsUnsupported marks a 400 rejection because the selected MODEL
-	// lacks function/tool support even though the provider family does
-	// (SupportsTools is provider-wide — e.g. GitHub Models serves many models
-	// without tool support behind one OpenAI-compatible endpoint). The chat
-	// tool loop catches it and degrades gracefully to a no-tools answer
-	// instead of failing the turn.
+	// ErrToolsUnsupported marks a 400 because the selected MODEL lacks tool support though the provider family
+	// does not (SupportsTools is provider-wide); the chat tool loop degrades to a no-tools answer.
 	ErrToolsUnsupported = errors.New("model does not support tools")
-	// ErrContentFiltered marks a request or response the provider's content
-	// filter blocked (Azure OpenAI / Foundry: an HTTP 400 with code
-	// "content_filter" for a blocked prompt, finish_reason "content_filter" for
-	// a blocked completion). Deterministic on the input, so it is never retried
-	// and never trips the circuit breaker; the chat service explains it.
+	// ErrContentFiltered marks a request or response the provider's content filter blocked (a 400 with code
+	// "content_filter", or finish_reason "content_filter"). Deterministic: never retried, never trips the breaker.
 	ErrContentFiltered = errors.New("blocked by the provider's content filter")
-	// ErrProviderConfigInvalid marks a provider whose stored configuration
-	// document (Azure AI Foundry's endpoint + credential JSON) failed to parse
-	// or validate. Surfaced instead of a network error so the user is told to
-	// re-save the provider settings rather than to check connectivity.
+	// ErrProviderConfigInvalid marks a provider whose stored configuration document failed to parse or
+	// validate. Surfaced instead of a network error so the user is told to re-save the provider settings.
 	ErrProviderConfigInvalid = errors.New("provider configuration is invalid")
-	// ErrProviderPermissionDenied marks credentials the provider ACCEPTED but
-	// whose identity lacks the role for the operation — Azure AI Foundry
-	// answers HTTP 401 with error.code "PermissionDenied" when a service
-	// principal has no data-plane role (Foundry User) on the resource. The
-	// concrete error (permissionDeniedError) also matches ErrApiKeyInvalid, so
-	// retry and circuit-breaker behaviour is that of any auth failure, and it
-	// keeps the provider's message, which names the principal and the missing
-	// data action.
+	// ErrProviderPermissionDenied marks credentials the provider ACCEPTED but whose identity lacks the role for
+	// the operation (Foundry's 401 PermissionDenied for a principal without a data-plane role); the concrete
+	// error also matches ErrApiKeyInvalid, so retry/breaker treat it as any auth failure.
 	ErrProviderPermissionDenied = errors.New("permission denied")
 )
 
@@ -304,23 +231,16 @@ func (e *permissionDeniedError) Unwrap() []error {
 	return []error{ErrProviderPermissionDenied, ErrApiKeyInvalid}
 }
 
-// detectContextLimitError checks whether a provider 400 response is a
-// context-length-exceeded error and returns ErrContextLimit if so. Providers
-// use different message wording, so we match on common substrings (case-
-// insensitive). When the message states the window ("This model's maximum
-// context length is 16384 tokens" — OpenAI, Azure OpenAI / Foundry, vLLM; Anthropic's
-// "prompt is too long: 250000 tokens > 200000 maximum" and "input length and
-// `max_tokens` exceed context limit: 180000 + 32000 > 200000"), the error is
-// a *ContextLimitError carrying it, which still satisfies
-// errors.Is(err, ErrContextLimit). Returns nil when the response is not a
-// context-limit error.
+// detectContextLimitError matches a provider 400 for a context-length rejection (providers word it
+// differently; common substrings, case-insensitively). When the message states the window ("maximum context
+// length is 16384 tokens", "prompt is too long: 250000 > 200000 maximum"), the error is a *ContextLimitError
+// carrying it, which still satisfies errors.Is(err, ErrContextLimit).
 func detectContextLimitError(statusCode int, message string) error {
 	if statusCode != 400 || message == "" {
 		return nil
 	}
 	lower := strings.ToLower(message)
-	// Gemini's wording ("The input token count (N) exceeds the maximum number
-	// of tokens allowed (M).") matches none of the OpenAI/Claude phrasings.
+	// Gemini's wording ("The input token count (N) exceeds the maximum number of tokens allowed (M).") matches none of the OpenAI/Claude phrasings.
 	for _, hint := range []string{"context length", "context window", "context limit", "too long", "maximum context", "token limit", "prompt is too long", "exceeds the maximum number of tokens"} {
 		if strings.Contains(lower, hint) {
 			for _, re := range contextWindowRes {
@@ -336,20 +256,16 @@ func detectContextLimitError(statusCode int, message string) error {
 	return nil
 }
 
-// contextWindowRes extract the window a context-length rejection states:
-// OpenAI-compatible "maximum context length is N", Anthropic's "prompt is
-// too long: N tokens > L maximum" and "exceed context limit: N + M > L".
+// contextWindowRes extract the window a context-length rejection states: OpenAI-compatible "maximum context
+// length is N", Anthropic's "prompt is too long: N tokens > L maximum" and "exceed context limit: N + M > L".
 var contextWindowRes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)maximum context length is (\d+)`),
 	regexp.MustCompile(`(?i)prompt is too long:\s*\d+\s*tokens?\s*>\s*(\d+)\s*maximum`),
 	regexp.MustCompile(`(?i)context limit:\s*\d+\s*\+\s*\d+\s*>\s*(\d+)`),
 }
 
-// ContextLimitError is a context-length rejection whose message stated the
-// model's real window. It unwraps to ErrContextLimit so every errors.Is
-// check keeps working; the audited wrapper remembers Limit for alias
-// providers' deployments (recordContextWindow) so the next request is sized
-// to it instead of the listing's default window.
+// ContextLimitError is a context-length rejection whose message stated the real window; it unwraps to
+// ErrContextLimit, and the audited wrapper remembers Limit so the next request is sized to it.
 type ContextLimitError struct {
 	Limit int
 }
@@ -357,20 +273,9 @@ type ContextLimitError struct {
 func (e *ContextLimitError) Error() string { return ErrContextLimit.Error() }
 func (e *ContextLimitError) Unwrap() error { return ErrContextLimit }
 
-// detectToolsUnsupportedError checks whether a provider 400 response is a
-// "this model can't use tools/function calling" rejection and returns
-// ErrToolsUnsupported if so. Matching is deliberately two-sided — the message
-// must BOTH mention tools/function-calling AND say they're unavailable — so an
-// ordinary error that merely contains the word "tool" (e.g. "tool result too
-// long") never matches. Returns nil for anything else.
-//
-// vLLM-served models (open models on Azure AI Foundry and GitHub Models whose
-// server runs without a tool-call parser — Phi-4-multimodal, some Llama
-// variants) reject a tools request with `"auto" tool choice requires
-// --enable-auto-tool-choice and --tool-call-parser to be set`; Azure passes
-// vLLM's error object through as the text of error.message. That wording is
-// only emitted when the server cannot parse tool calls at all, so it counts as
-// "unavailable" too.
+// detectToolsUnsupportedError matches a 400 saying the MODEL can't use tools/function calling, returning
+// ErrToolsUnsupported. Matching is two-sided — tools AND unavailable — so an ordinary error containing "tool"
+// never matches; vLLM's "--enable-auto-tool-choice" wording counts as unavailable too.
 func detectToolsUnsupportedError(statusCode int, message string) error {
 	if statusCode != 400 || message == "" {
 		return nil
@@ -388,10 +293,8 @@ func detectToolsUnsupportedError(statusCode int, message string) error {
 	return nil
 }
 
-// RateLimitError is a rate-limit (HTTP 429) error that carries the server's
-// Retry-After hint. It unwraps to ErrRateLimited so existing errors.Is checks
-// (isRetryable, the circuit breaker) keep working, while the retry backoff can
-// type-assert it to wait at least RetryAfter before the next attempt.
+// RateLimitError is a rate-limit (HTTP 429) error that carries the server's Retry-After hint. It unwraps to
+// ErrRateLimited so existing errors.Is checks keep working, while the retry backoff can wait at least RetryAfter.
 type RateLimitError struct {
 	RetryAfter time.Duration
 }
@@ -399,9 +302,8 @@ type RateLimitError struct {
 func (e *RateLimitError) Error() string { return ErrRateLimited.Error() }
 func (e *RateLimitError) Unwrap() error { return ErrRateLimited }
 
-// rateLimitErr builds a *RateLimitError from a 429 response, parsing the
-// Retry-After header (delta-seconds or an HTTP-date). A missing/invalid header
-// yields a zero RetryAfter, so the caller falls back to its default backoff.
+// rateLimitErr builds a *RateLimitError from a 429 response, parsing the Retry-After header (delta-seconds or
+// an HTTP-date); a missing/invalid header yields a zero RetryAfter, so the caller falls back to its default backoff.
 func rateLimitErr(resp *http.Response) error {
 	return &RateLimitError{RetryAfter: parseRetryAfter(resp)}
 }
@@ -410,8 +312,7 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 	if resp == nil {
 		return 0
 	}
-	// Azure OpenAI / Foundry send the precise hint in milliseconds
-	// (retry-after-ms) next to a coarse whole-second Retry-After; prefer it.
+	// Azure OpenAI / Foundry send the precise hint in milliseconds (retry-after-ms) next to a coarse whole-second Retry-After; prefer it.
 	if ms := resp.Header.Get("retry-after-ms"); ms != "" {
 		if n, err := strconv.Atoi(ms); err == nil && n > 0 {
 			return time.Duration(n) * time.Millisecond
@@ -444,9 +345,8 @@ func retryAfterFrom(err error) time.Duration {
 	return 0
 }
 
-// MetadataProvider exposes read-only provider information without API credentials.
-// Returned by GetMetadataProvider — it intentionally omits Chat and Stream to
-// prevent callers from accidentally issuing real API calls with an empty key.
+// MetadataProvider exposes read-only provider information without API credentials; it intentionally omits
+// Chat and Stream so callers cannot accidentally issue real API calls with an empty key.
 type MetadataProvider interface {
 	ID() string
 	Name() string
@@ -456,9 +356,8 @@ type MetadataProvider interface {
 	ContextLimit() int
 	PricePerMillionTokens() Pricing
 	EstimateTokens(text string) int
-	// SupportsTools reports whether the provider family can run the agentic
-	// tool loop (native function calling or the marker-based fallback). Used
-	// by the provider listing so the UI can gate the Tools toggle.
+	// SupportsTools reports whether the provider family can run the agentic tool loop. Used by the provider
+	// listing so the UI can gate the Tools toggle.
 	SupportsTools() bool
 }
 
@@ -469,9 +368,8 @@ func orDefault(val, def int) int {
 	return val
 }
 
-// ModelMaxOutputTokens returns the maximum completion length for a specific
-// model, or 0 (unknown) when the model is absent from the catalog or its
-// MaxOutputTokens is unset. Callers treat 0 as "don't clamp".
+// ModelMaxOutputTokens returns the maximum completion length for a specific model, or 0 (unknown) when the
+// model is absent from the catalog or its MaxOutputTokens is unset. Callers treat 0 as "don't clamp".
 func ModelMaxOutputTokens(ctx context.Context, p Provider, model string) int {
 	models, err := p.Models(ctx)
 	if err != nil {
@@ -485,12 +383,8 @@ func ModelMaxOutputTokens(ctx context.Context, p Provider, model string) int {
 	return 0
 }
 
-// ContextLimitFor returns the effective context window for a specific model:
-// the model's catalog entry when it advertises one (per-model windows vary —
-// e.g. Claude Opus/Sonnet 4.6 are 1M while the provider-wide default is 200k),
-// otherwise the provider-wide limit. Callers that pass ContextLimit()
-// directly under-use large-window models — history is truncated against the
-// smaller default and the paid-for window is never filled.
+// ContextLimitFor returns the model's own context window when it advertises one (per-model windows vary —
+// Claude Opus/Sonnet 4.6 are 1M against a 200k provider default), else the provider-wide limit.
 func ContextLimitFor(ctx context.Context, p Provider, modelID string) int {
 	if modelID == "" {
 		return p.ContextLimit()

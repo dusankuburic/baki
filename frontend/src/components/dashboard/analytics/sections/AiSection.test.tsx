@@ -66,7 +66,7 @@ describe('AiSection model breakdown', () => {
     const t = i18n.getFixedT('en', 'dashboard')
     expect(modelLabel(t, {model: 'gpt-5'})).toBe('gpt-5')
     expect(modelLabel(t, {model: 'gpt-4o', servedModel: 'gpt-4o'})).toBe('gpt-4o')
-    // F-31: internal routing prefixes render as the picker labels them.
+    // Internal routing prefixes render as the picker labels them.
     expect(modelLabel(t, {model: 'agent:support-bot', servedModel: 'gpt-4o-2024-11-20'})).toBe(
       'Agent · support-bot · gpt-4o-2024-11-20',
     )

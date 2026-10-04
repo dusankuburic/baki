@@ -31,22 +31,16 @@ func NewSettingsStore() (*SettingsStore, error) {
 }
 
 // NewInMemorySettingsStore creates a SettingsStore that never touches the
-// filesystem. Cloud mode uses it: deployment settings there live in Postgres
-// (app_settings, see SystemService.GetSettings), so the on-disk file was a
-// per-container copy of the defaults that nothing read back and nothing shared
-// between replicas — while still requiring a writable $HOME inside an image
-// whose whole point is that it has no writable state.
-//
-// Behaviour is identical to what the file-backed store actually did in a
-// container: every cold start created the file fresh from
-// models.DefaultSettings() anyway.
+// filesystem. Cloud mode uses it: deployment settings live in Postgres, so the
+// on-disk file was a per-container copy of defaults nothing read back — while
+// requiring a writable $HOME in an image with none.
 func NewInMemorySettingsStore() *SettingsStore {
 	return &SettingsStore{current: models.DefaultSettings()}
 }
 
-// NewSettingsStoreAt creates a SettingsStore backed by the given file path.
-// An empty path yields a memory-only store (see NewInMemorySettingsStore).
-// It is intended for use in tests and non-standard deployment scenarios.
+// NewSettingsStoreAt creates a SettingsStore backed by the given file path; an
+// empty path yields a memory-only store. Intended for tests and non-standard
+// deployments.
 func NewSettingsStoreAt(path string) (*SettingsStore, error) {
 	if path == "" {
 		return NewInMemorySettingsStore(), nil
@@ -61,18 +55,17 @@ func NewSettingsStoreAt(path string) (*SettingsStore, error) {
 	return s, nil
 }
 
-// Get returns a defensive copy of the current settings. The copy is produced by
-// an explicit field/map clone (see AppSettings.Clone) rather than a JSON
-// round-trip, since Get is called on hot paths (every parse, every analyze).
+// Get returns a defensive copy of the current settings — an explicit field/map clone (AppSettings.Clone),
+// not a JSON round-trip, since Get runs on hot paths (every parse, every analyze).
 func (s *SettingsStore) Get() *models.AppSettings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.current.Clone()
 }
 
-// Update replaces the stored settings. The context is accepted to satisfy
-// service.SettingsProvider and is unused here: this store writes to a local
-// file, with no transaction to join and no remote call to cancel.
+// Update replaces the stored settings. The context satisfies
+// service.SettingsProvider only — a local file write has no transaction to
+// join and no remote call to cancel.
 func (s *SettingsStore) Update(_ context.Context, updated models.AppSettings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -102,11 +95,9 @@ func (s *SettingsStore) load() error {
 
 	var loaded models.AppSettings
 	if err := json.Unmarshal(data, &loaded); err != nil {
-		// The settings file is unparseable — most likely a partial write from
-		// a crash, or a manual edit gone wrong. Quarantine it (so the operator
-		// can inspect or restore) and fall back to defaults. Logging at error
-		// level so the recovery is visible in ops dashboards; previously this
-		// was completely silent.
+		// The settings file is unparseable (partial write or bad manual edit):
+		// quarantine it, fall back to defaults, and log at error so the
+		// recovery is visible in ops dashboards.
 		backup := s.path + ".corrupt-" + time.Now().Format("20060102T150405")
 		if renameErr := os.Rename(s.path, backup); renameErr != nil {
 			logger.Error("settings: failed to quarantine corrupt file",
@@ -127,14 +118,10 @@ func (s *SettingsStore) load() error {
 	return nil
 }
 
-// persistLocked writes the current settings durably: a unique temp file in
-// the target's directory (chmod 0600), then an atomic rename over the target.
-// The temp name must be unique per write (os.CreateTemp, O_EXCL): a shared
-// fixed "<path>.tmp" let two concurrent Updates interleave their O_TRUNC
-// writes on one temp file and publish a mixed or truncated body via the
-// rename — the exact defect the filesystem backend's atomicWrite fixed (see
-// its comment on ".baki-tmp-*"). Every failure path removes the temp so
-// nothing accumulates next to the settings file.
+// persistLocked writes the current settings durably: a unique temp file in the
+// target's directory (chmod 0600), then an atomic rename. The temp name must be
+// unique per write — a shared fixed "<path>.tmp" let two concurrent Updates
+// interleave O_TRUNC writes and publish a mixed body. Failures remove the temp.
 func (s *SettingsStore) persistLocked() error {
 	if s.path == "" {
 		return nil // memory-only store
@@ -169,11 +156,8 @@ func (s *SettingsStore) persistLocked() error {
 		return err
 	}
 	if err := os.Rename(tmpName, s.path); err != nil {
-		// Atomic-write failure: the temp file exists but the rename failed
-		// (e.g. cross-device link, antivirus interference, target locked).
-		// Surface this loudly — caller will return the error, but a log
-		// helps post-mortem because settings persistence may be invisible
-		// to UI flows.
+		// Atomic-write failure (cross-device link, antivirus interference, target locked): log it —
+		// settings persistence may be invisible to UI flows.
 		logger.Error("settings: atomic rename failed",
 			"tmp", tmpName, "target", s.path, "error", err)
 		cleanup()

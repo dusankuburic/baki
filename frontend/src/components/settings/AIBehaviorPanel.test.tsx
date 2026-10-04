@@ -129,7 +129,7 @@ describe('AIBehaviorPanel embedding model for Azure AI Foundry', () => {
   })
 })
 
-describe('AIBehaviorPanel max tokens reasoning-floor hint (F-38)', () => {
+describe('AIBehaviorPanel max tokens reasoning-floor hint', () => {
   it('shows the reasoning-floor hint under Max Tokens', () => {
     render(<AIBehaviorPanel />)
     expect(screen.getByText(/always sent at least 16[.,]384 tokens/)).toBeInTheDocument()
@@ -137,7 +137,7 @@ describe('AIBehaviorPanel max tokens reasoning-floor hint (F-38)', () => {
   })
 })
 
-describe('AIBehaviorPanel reasoning effort (F-19)', () => {
+describe('AIBehaviorPanel reasoning effort', () => {
   it('renders the always-visible select and stores the choice per provider', () => {
     render(<AIBehaviorPanel />)
     const select = screen.getByLabelText('Reasoning Effort')

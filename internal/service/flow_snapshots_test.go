@@ -96,7 +96,7 @@ func TestSnapshots_FixCaptureAndRestore(t *testing.T) {
 func TestSnapshots_RingBounded(t *testing.T) {
 	svc, doc := newDesktopFlowSvc(t)
 	for i := 0; i < maxSnapshotsPerFlow+5; i++ {
-		svc.snapshotDesktopFile(doc, doc.FilePath, "iter")
+		svc.pushSnapshot(doc, svc.snapshotDesktopFile(doc, doc.FilePath, "iter"))
 	}
 	snaps := svc.ListSourceSnapshots(doc)
 	if len(snaps) != maxSnapshotsPerFlow {
@@ -113,7 +113,7 @@ func containsOnDisk(t *testing.T, path, needle string) bool {
 	return strings.Contains(string(data), needle)
 }
 
-// B1.1: the rings map is LRU-bounded — a long-lived instance editing many
+// The rings map is LRU-bounded — a long-lived instance editing many
 // flows used to retain up to maxSnapshotsPerFlow full source copies per flow
 // forever.
 func TestSnapshotStore_LRUBounded(t *testing.T) {

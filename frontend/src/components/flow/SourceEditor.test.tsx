@@ -124,3 +124,64 @@ describe('SourceEditor', () => {
     expect(save.disabled).toBe(disabled)
   })
 })
+
+describe('SourceEditor line gutter', () => {
+  beforeEach(() => {
+    getSource.mockReset()
+    flowState.document = {id: 'flow-1'}
+  })
+
+  // The line-number <div>s inside the gutter (its two spacers carry no text).
+  const gutterNumbers = () => Array.from(screen.getByTestId('line-gutter').children).filter(el => el.textContent !== '')
+
+  // One node per line meant 30k nodes for a real PAD export, all of them
+  // re-rendered whenever a line was added. jsdom lays nothing out, so the
+  // viewport falls back to 800 px / 20 px lines = 40 lines, plus the buffer.
+  it('renders only the viewport (plus buffer) of a 30k-line source', async () => {
+    const lines = Array.from({length: 30_000}, (_, i) => `SET Var${i} TO ${i}`)
+    getSource.mockResolvedValue({source: lines.join('\n')})
+    render(<SourceEditor onClose={() => {}} />)
+
+    await screen.findByRole('textbox')
+    const numbers = gutterNumbers()
+    expect(numbers.length).toBeGreaterThanOrEqual(40)
+    expect(numbers.length).toBeLessThanOrEqual(100)
+    expect(numbers[0].textContent).toBe('1')
+    expect(screen.queryByText('30000')).toBeNull()
+    // The spacers keep the gutter's scroll height equal to 30k lines.
+    const gutter = screen.getByTestId('line-gutter')
+    const bottomSpacer = gutter.lastElementChild as HTMLElement
+    expect(bottomSpacer.style.height).toBe(`${(30_000 - numbers.length) * 20}px`)
+  })
+
+  it('follows the textarea scroll position', async () => {
+    const lines = Array.from({length: 30_000}, (_, i) => `SET Var${i} TO ${i}`)
+    getSource.mockResolvedValue({source: lines.join('\n')})
+    render(<SourceEditor onClose={() => {}} />)
+
+    const box = (await screen.findByRole('textbox')) as HTMLTextAreaElement
+    Object.defineProperty(box, 'scrollTop', {value: 20 * 10_000, writable: true, configurable: true})
+    fireEvent.scroll(box)
+
+    expect(screen.getByText('10001')).toBeInTheDocument()
+    expect(screen.queryByText('1')).toBeNull()
+    expect(screen.getByTestId('line-gutter').scrollTop).toBe(20 * 10_000)
+  })
+
+  it('keeps the line count exact as lines are inserted and removed', async () => {
+    getSource.mockResolvedValue({source: 'a\nb\nc'})
+    render(<SourceEditor onClose={() => {}} />)
+
+    const box = (await screen.findByRole('textbox')) as HTMLTextAreaElement
+    expect(gutterNumbers().map(el => el.textContent)).toEqual(['1', '2', '3'])
+
+    fireEvent.change(box, {target: {value: 'a\nb\nX\nc'}})
+    expect(gutterNumbers().map(el => el.textContent)).toEqual(['1', '2', '3', '4'])
+
+    fireEvent.change(box, {target: {value: 'a'}})
+    expect(gutterNumbers().map(el => el.textContent)).toEqual(['1'])
+
+    fireEvent.click(screen.getByText('Revert'))
+    expect(gutterNumbers().map(el => el.textContent)).toEqual(['1', '2', '3'])
+  })
+})

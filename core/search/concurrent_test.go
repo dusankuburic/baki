@@ -44,9 +44,9 @@ func TestSearchIndex_ConcurrentSearchAndRebuild(t *testing.T) {
 					// the way SearchFlow re-reads s.searchIndex.
 					snap = NewSearchIndex(doc.ID, doc)
 				}
-				_ = snap.Search(models.SearchQuery{Text: "excel"})
-				_ = snap.Search(models.SearchQuery{Text: "click", Fuzzy: true})
-				_ = snap.Search(models.SearchQuery{Text: "loop"})
+				_ = snap.Search(doc, models.SearchQuery{Text: "excel"})
+				_ = snap.Search(doc, models.SearchQuery{Text: "click", Fuzzy: true})
+				_ = snap.Search(doc, models.SearchQuery{Text: "loop"})
 			}
 		}(r)
 	}

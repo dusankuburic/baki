@@ -7,17 +7,14 @@ import (
 	"pad-core/models"
 )
 
-// TestSettingsRoundTrip guards against the storage-layer and domain settings
-// structs drifting apart. settingsToModel/settingsFromModel bridge them via a
-// JSON round-trip,
-// so any field present on one struct but missing (or mis-tagged) on the other
-// would be silently dropped. Converting a fully-populated DefaultSettings down
-// to the storage struct and back must reproduce it exactly.
-//
-// We compare JSON serializations rather than reflect.DeepEqual: RuleConfig.Options
-// is map[string]interface{}, and a JSON round-trip legitimately normalizes its
-// numeric values (int 6 -> float64 6). Comparing marshaled output ignores that
-// representational detail while still catching any actually-dropped field.
+// TestSettingsRoundTrip guards against the storage-layer and domain settings structs
+// drifting apart: settingsToModel/settingsFromModel bridge them via a JSON round-trip, so
+// a field present on one struct but missing (or mis-tagged) on the other would be
+// silently dropped; converting fully-populated DefaultSettings down and back must
+// reproduce it exactly. JSON serializations are compared rather than reflect.DeepEqual —
+// RuleConfig.Options is map[string]interface{} and a round-trip legitimately normalizes
+// its numerics (int 6 -> float64 6); marshaled output ignores that while still catching
+// any actually-dropped field.
 func TestSettingsRoundTrip(t *testing.T) {
 	original := models.DefaultSettings()
 

@@ -18,10 +18,9 @@ import (
 // The org credential's lender is whoever supplied its secret: another
 // admin's edit that keeps the stored secret (a deployment name) changes the
 // last writer only. When the lender stops being an admin the credential is
-// disabled anyway — it used to survive because the delete matched the last
-// writer — and the GET names the lender, not the editor. The carrying
-// editor's own departure no longer deletes the lender's credential (F-32):
-// an edit that borrowed the secret is not a loan.
+// disabled, and the GET names the lender, not the editor. The carrying
+// editor's own departure keeps the lender's credential: an edit that
+// borrowed the secret is not a loan.
 func TestOrgAzureFoundryConfig_LenderTracking(t *testing.T) {
 	configureAzureForTests(t)
 	orgKeys := testutil.NewFakeOrgSecretStore()
@@ -58,7 +57,7 @@ func TestOrgAzureFoundryConfig_LenderTracking(t *testing.T) {
 		t.Fatal("the departed lender's secret is still stored")
 	}
 
-	// The carrying editor's departure keeps the lender's credential (F-32),
+	// The carrying editor's departure keeps the lender's credential,
 	// and account erasure finds a credential by its lender — org-2 and
 	// org-3 alike, both lent by admin-a.
 	at2, _ := svc.SaveOrgAzureFoundryConfig("org-2", "admin-a", "", withSecret)

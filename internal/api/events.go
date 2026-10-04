@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"pad-analyzer/internal/api/middleware"
@@ -24,53 +25,56 @@ type Event struct {
 }
 
 // sseHeartbeatInterval is how often HandleEvents writes an SSE comment frame
-// on an otherwise-quiet connection. Without it, a half-dead socket (laptop
-// suspend/resume, sidecar restart) is indistinguishable from a healthy idle
-// one on both ends: the client's read blocks forever and the server never
-// touches the socket. The client's read-inactivity watchdog is ~2× this
-// interval, so keep the two in sync.
+// on a quiet connection; the client's watchdog is ~2x this — keep in sync.
 const sseHeartbeatInterval = 20 * time.Second
 
-// sseWriteTimeout bounds each individual write (frame or heartbeat ping) on
-// the SSE stream. The server deliberately sets no global WriteTimeout — that
-// would kill healthy idle connections — so without a per-write deadline a
-// client that stops reading while holding the connection open (suspended
-// laptop, zero TCP window) blocks w.Write forever: the write never errors, so
-// not even the heartbeat notices, the handler goroutine is pinned outside its
-// select (revoke/expiry/shutdown cannot run), and its 512-slot buffer stays
-// full. With the deadline, a stuck write fails within this timeout and the
-// normal write-error cleanup path tears the connection down.
+// sseWriteTimeout bounds each individual write (no global WriteTimeout — it would kill healthy
+// idle connections): a stuck write fails and the cleanup path tears the connection down.
 const sseWriteTimeout = 30 * time.Second
 
-// maxFrameBytes bounds one encoded SSE frame. Each client's channel buffers
-// up to 512 frames, so an unbounded frame size lets one large event (a
-// document-carrying event, a chat chunk quoting a pasted file) pin frame-size
-// × 512 bytes per slow connection. 256 KiB leaves ordinary events (chat
-// chunks, progress ticks, summaries) untouched and only caps pathological
-// ones; oversized document-carrying events are swapped for their lightweight
-// form rather than dropped outright.
+// maxFrameBytes bounds one encoded SSE frame: each client buffers up to 512 frames, so unbounded
+// frames could pin frame-size x 512 bytes per slow connection. Oversized document events swap to their lightweight form.
 const maxFrameBytes = 256 << 10
+
+// maxClientBufferBytes bounds the encoded frame bytes one client's channel may hold queued: the
+// 512 slots bound COUNT only — a stalled client could otherwise pin 128 MiB. Exceeding it is a drop.
+const maxClientBufferBytes = 8 << 20
 
 // EventManager manages Server-Sent Events (SSE) clients and implements
 // service.EventNotifier to allow internal services to emit events to the frontend.
 type EventManager struct {
-	clients      map[chan []byte]string // pre-encoded SSE frame channel → userID ("" in local mode)
-	clientsMu    sync.Mutex
+	clients map[chan []byte]string // pre-encoded SSE frame channel → userID ("" in local mode)
+	// clientsMu guards clients, byUser, indexed and sseConnCount: connect/disconnect take the write
+	// lock, deliver and HasSubscriber the read lock, so one user's chat chunks never wait on another's
+	// fan-out. A dropped frame's log write must stay outside it (see deliver).
+	clientsMu sync.RWMutex
+	// bufBytes tracks each client's queued frame bytes for the per-client byte budget: deliver
+	// charges it on offer, the SSE write loop refunds as frames reach the socket.
+	bufBytes sync.Map
+	// byUser indexes clients by userID so a user-targeted event (chat chunks at ~60/s per stream)
+	// touches only that user's channels. clients stays the source of truth — see syncIndexLocked
+	// for why the two can diverge.
+	byUser       map[string]map[chan []byte]struct{}
+	indexed      int
 	sseConnCount map[string]int // per-client SSE connection counter (keyed by clientKey)
 	shutdownCh   <-chan struct{}
-	// allowOrigin/clientKey/isRevoked are injected by the Router. Concurrency
-	// invariant: the Set* writers are called ONLY from NewRouter, which
-	// completes before http.Serve (so there's a happens-before edge over the
-	// reads from handler goroutines). They are plain fields rather than
-	// atomic.Pointer because no post-startup setter exists; if one is ever
-	// added (e.g. hot-reloading the CORS allowlist), these MUST become
-	// atomic.Pointer[func] to avoid a data race flagged by -race.
+	// allowOrigin/clientKey/isRevoked are written ONLY from NewRouter, which completes before
+	// http.Serve (a happens-before edge over handler reads); a post-startup setter would need atomics.
 	allowOrigin func(string) bool          // injected by Router; nil = deny all cross-origin
 	clientKey   func(*http.Request) string // injected by Router; nil = fall back to remote IP
 	isRevoked   func(string) bool          // injected by Router; nil = skip blacklist re-check
 
 	heartbeatInterval time.Duration // test override; 0 ⇒ sseHeartbeatInterval
+
+	// droppedFrames counts frames offerFrame could not enqueue (buffer full); dropWarnedAt is when
+	// the last "buffer full" warning was written, rate-limited so a stalled client doesn't log per event.
+	droppedFrames atomic.Int64
+	dropWarnedAt  atomic.Int64
 }
+
+// dropWarnInterval is the minimum gap between two "send buffer full" warnings; the drops in
+// between are counted and their total reported in the next line.
+const dropWarnInterval = 10 * time.Second
 
 // heartbeatTick returns the SSE heartbeat interval, honouring the test
 // override so heartbeat tests don't sleep for real 20s ticks.
@@ -84,6 +88,7 @@ func (m *EventManager) heartbeatTick() time.Duration {
 func NewEventManager(shutdownCh chan struct{}) *EventManager {
 	return &EventManager{
 		clients:      make(map[chan []byte]string),
+		byUser:       make(map[string]map[chan []byte]struct{}),
 		sseConnCount: make(map[string]int),
 		shutdownCh:   shutdownCh,
 	}
@@ -95,79 +100,122 @@ func (m *EventManager) SetOriginChecker(fn func(string) bool) {
 	m.allowOrigin = fn
 }
 
-// SetClientKeyFunc injects the router's connection-limit key function. In JWT
-// mode the Router keys per authenticated user; otherwise it keys per
-// proxy-aware client IP. This prevents all clients behind a reverse proxy from
-// collapsing onto a single IP bucket (which would let one user exhaust the
-// shared connection cap for everyone).
+// SetClientKeyFunc injects the router's connection-limit key function: per authenticated user in
+// JWT mode, else per proxy-aware client IP — proxied clients don't collapse onto one shared bucket.
 func (m *EventManager) SetClientKeyFunc(fn func(*http.Request) string) {
 	m.clientKey = fn
 }
 
-// SetRevocationChecker injects the auth manager's blacklist check so the SSE
-// event loop can periodically verify the access token hasn't been blacklisted
-// (logout / explicit revoke) after the initial middleware upgrade. Note:
-// password change and refresh-replay revoke only refresh tokens, not access
-// tokens; those sessions end when the access token expires, which the SSE loop
-// enforces directly via the token's expiry (independent of this check).
+// SetRevocationChecker injects the auth manager's blacklist check so the SSE loop can periodically
+// re-verify the access token (logout / explicit revoke). Password change and refresh-replay revoke
+// only refresh tokens; those sessions end at access-token expiry, enforced directly by the loop.
 func (m *EventManager) SetRevocationChecker(fn func(string) bool) {
 	m.isRevoked = fn
 }
 
-// Emit satisfies the service.EventNotifier interface. It broadcasts to ALL
-// connected SSE clients — use only for events that are truly global or in
-// local mode where only one client exists.
+// Emit satisfies the service.EventNotifier interface: broadcasts to ALL connected SSE clients —
+// use only for events that are truly global or in local mode where only one client exists.
 func (m *EventManager) Emit(name string, data any) {
 	m.deliver(Event{Name: name, Data: data})
 }
 
-// EmitTo satisfies the service.EventNotifier interface. It delivers the event
-// only to SSE clients associated with userID. In local mode (userID="")
-// this behaves identically to Emit. Use EmitTo for any user-scoped event
-// (chat, analysis, settings, flow load) to prevent cross-tenant data leaks.
+// EmitTo satisfies the service.EventNotifier interface: delivers only to userID's clients (identically
+// to Emit when userID is ""). Use it for any user-scoped event to prevent cross-tenant leaks.
 func (m *EventManager) EmitTo(userID, name string, data any) {
 	m.deliver(Event{Name: name, Data: data, TargetUser: userID})
 }
 
-// HasSubscriber satisfies the service.EventNotifier interface. It reports whether
-// EmitTo(userID, …) would currently reach at least one connected SSE client;
-// a "" userID matches any client, mirroring deliver's local-mode broadcast
-// semantics. Services use it to detect abandoned work — e.g. a chat stream
-// whose tab closed without sending /cancel.
+// HasSubscriber satisfies the service.EventNotifier interface: whether EmitTo(userID, …) would reach
+// a connected client ("" matches any). Services use it to detect abandoned work — e.g. a chat stream
+// whose tab closed without /cancel.
 func (m *EventManager) HasSubscriber(userID string) bool {
-	m.clientsMu.Lock()
-	defer m.clientsMu.Unlock()
-	for _, clientUser := range m.clients {
-		if userID == "" || clientUser == userID {
-			return true
-		}
+	if userID == "" {
+		m.clientsMu.RLock()
+		defer m.clientsMu.RUnlock()
+		return len(m.clients) > 0
 	}
-	return false
+	m.rlockIndexed()
+	defer m.clientsMu.RUnlock()
+	return len(m.byUser[userID]) > 0
 }
 
-// Event delivery priority. The SSE channel is shared by every event class,
-// and chat streams sit behind the same 512-slot buffer as analysis progress —
-// which arrives in bursts of hundreds during a large analysis. A burst used to
-// push the buffer to capacity and silently drop whatever came next, including
-// chat chunks; the client noticed via the done-event's chunk count and
-// recovered with a full-buffer resume, i.e. the whole answer re-rendered and
-// reflowed at the end of the stream.
-//
-// Shedding is by class, at enqueue time: once the buffer crosses the
-// high-water mark, droppable events are discarded to keep headroom for the
-// ones that cannot be reconstructed from a later message.
-//
-// sheddableNum/sheddableDen express the high-water mark as a fraction of the
-// buffer: droppable events are shed once it is more than two-thirds full,
-// leaving the last third as headroom for chat.
+// rlockIndexed takes the read lock with byUser guaranteed to cover clients; the index only falls
+// behind when a test seeds m.clients directly, and that case upgrades to the write lock.
+func (m *EventManager) rlockIndexed() {
+	m.clientsMu.RLock()
+	if m.indexed == len(m.clients) {
+		return
+	}
+	m.clientsMu.RUnlock()
+	m.clientsMu.Lock()
+	m.syncIndexLocked()
+	m.clientsMu.Unlock()
+	m.clientsMu.RLock()
+}
+
+// addClientLocked registers ch for userID in clients and the per-user index.
+// Caller holds clientsMu.
+func (m *EventManager) addClientLocked(ch chan []byte, userID string) {
+	m.syncIndexLocked()
+	m.bufBytes.Store(ch, new(atomic.Int64))
+	m.clients[ch] = userID
+	set := m.byUser[userID]
+	if set == nil {
+		set = make(map[chan []byte]struct{})
+		m.byUser[userID] = set
+	}
+	set[ch] = struct{}{}
+	m.indexed++
+}
+
+// removeClientLocked unregisters ch, dropping its user's index entry once it
+// is empty so departed users do not accumulate. Caller holds clientsMu.
+func (m *EventManager) removeClientLocked(ch chan []byte) {
+	m.syncIndexLocked()
+	userID, ok := m.clients[ch]
+	if !ok {
+		return
+	}
+	delete(m.clients, ch)
+	m.bufBytes.Delete(ch)
+	if set := m.byUser[userID]; set != nil {
+		delete(set, ch)
+		if len(set) == 0 {
+			delete(m.byUser, userID)
+		}
+	}
+	m.indexed--
+}
+
+// syncIndexLocked rebuilds byUser when it no longer covers clients: production paths keep them in
+// step, but package tests seed m.clients directly, and a stale index would silently withhold events.
+func (m *EventManager) syncIndexLocked() {
+	if m.indexed == len(m.clients) {
+		return
+	}
+	clear(m.byUser)
+	for ch, userID := range m.clients {
+		set := m.byUser[userID]
+		if set == nil {
+			set = make(map[chan []byte]struct{})
+			m.byUser[userID] = set
+		}
+		set[ch] = struct{}{}
+	}
+	m.indexed = len(m.clients)
+}
+
+// Event delivery priority: every event class shares the 512-slot buffer, and analysis progress
+// arrives in bursts of hundreds — a burst used to push the buffer full and silently drop chat chunks
+// queued behind it. Past the high-water mark (sheddableNum/sheddableDen, two-thirds full) droppable
+// events are discarded to keep headroom for what a later message cannot reconstruct.
 const (
 	sheddableNum = 2
 	sheddableDen = 3
 )
 
-// sheddable reports whether an event may be dropped early to protect the
-// buffer. Progress ticks are pure UI polish and each is superseded by the
-// next; a completion or a chat frame is not recoverable this way.
+// sheddable reports whether an event may be dropped early to protect the buffer: progress ticks
+// are UI polish superseded by the next; a completion or chat frame is not recoverable this way.
 func sheddable(name string) bool {
 	switch name {
 	case "analysis:progress":
@@ -178,9 +226,8 @@ func sheddable(name string) bool {
 }
 
 func (m *EventManager) deliver(ev Event) {
-	// Encode the SSE frame ONCE for all recipients: encoding per connected
-	// client would multiply encode cost (and its allocations) by the number of
-	// live SSE tabs for every chat chunk / progress event.
+	// Encode the SSE frame ONCE for all recipients: per-client encoding would
+	// multiply the cost (and allocations) by the number of live SSE tabs.
 	frame, ok := encodeEventFrame(ev)
 	if !ok {
 		return
@@ -188,23 +235,76 @@ func (m *EventManager) deliver(ev Event) {
 
 	droppable := sheddable(ev.Name)
 
-	m.clientsMu.Lock()
-	defer m.clientsMu.Unlock()
-	for ch, clientUser := range m.clients {
-		// Filter by target user when one is specified.
-		if ev.TargetUser != "" && clientUser != ev.TargetUser {
-			continue
+	// Only the map walk runs under the READ lock (a channel send is safe from any number of readers).
+	// Drops are counted here and logged after the release — the synchronous log write would stall
+	// every delivery and connect if run inside the lock.
+	dropped := 0
+	if ev.TargetUser == "" {
+		// Broadcast: every client, whatever its user (local mode's clients all
+		// have userID "" and rely on this).
+		m.clientsMu.RLock()
+		for ch := range m.clients {
+			if !m.offerFrame(ch, frame, droppable) {
+				dropped++
+			}
 		}
-		// Shed low-priority events before the buffer is exhausted so a
-		// progress burst cannot starve a chat chunk queued right behind it.
-		if droppable && len(ch)*sheddableDen > cap(ch)*sheddableNum {
-			continue
+		m.clientsMu.RUnlock()
+	} else {
+		// Targeted: only the target user's own channels.
+		m.rlockIndexed()
+		for ch := range m.byUser[ev.TargetUser] {
+			if !m.offerFrame(ch, frame, droppable) {
+				dropped++
+			}
 		}
-		select {
-		case ch <- frame:
-		default:
-			logger.Warn("SSE client dropped event: send buffer full", "event", ev.Name)
+		m.clientsMu.RUnlock()
+	}
+	if dropped > 0 {
+		m.noteDropped(ev.Name, dropped)
+	}
+}
+
+// noteDropped counts n frames that found a client's buffer full and warns at most once per
+// dropWarnInterval, with the total since the last warning. Lock-free: called outside clientsMu.
+func (m *EventManager) noteDropped(name string, n int) {
+	total := m.droppedFrames.Add(int64(n))
+	now := time.Now().UnixNano()
+	last := m.dropWarnedAt.Load()
+	if now-last < int64(dropWarnInterval) {
+		return
+	}
+	if !m.dropWarnedAt.CompareAndSwap(last, now) {
+		return // a concurrent delivery just warned
+	}
+	logger.Warn("SSE client dropped event: send buffer full", "event", name, "droppedTotal", total)
+}
+
+// offerFrame enqueues frame on one client's channel without blocking; false means dropped — by
+// slots or by the per-client byte budget (a shed droppable frame is not a drop: a later frame supersedes it).
+func (m *EventManager) offerFrame(ch chan []byte, frame []byte, droppable bool) bool {
+	// Shed low-priority events before the buffer is exhausted so a progress
+	// burst cannot starve a chat chunk queued right behind it.
+	if droppable && len(ch)*sheddableDen > cap(ch)*sheddableNum {
+		return true
+	}
+	// The byte budget is charged before the send and refunded on failure, so a racing offer can
+	// transiently overcount (conservative) but never undercount.
+	var queued *atomic.Int64
+	if v, ok := m.bufBytes.Load(ch); ok {
+		queued = v.(*atomic.Int64)
+		if queued.Add(int64(len(frame))) > maxClientBufferBytes {
+			queued.Add(-int64(len(frame)))
+			return false
 		}
+	}
+	select {
+	case ch <- frame:
+		return true
+	default:
+		if queued != nil {
+			queued.Add(-int64(len(frame)))
+		}
+		return false
 	}
 }
 
@@ -220,11 +320,8 @@ func marshalFrame(ev Event) []byte {
 	return append(frame, '\n', '\n')
 }
 
-// encodeEventFrame marshals ev and enforces the maxFrameBytes bound. An
-// oversized frame is not enqueued: document-carrying events are replaced by
-// their lightweight form (which consumers can refetch over HTTP), anything
-// else is dropped — a missing notification is recoverable, an unbounded
-// frame pinned per stalled connection is not.
+// encodeEventFrame marshals ev and enforces the maxFrameBytes bound: an oversized document-carrying
+// event is replaced by its lightweight form (consumers refetch over HTTP), anything else is dropped.
 func encodeEventFrame(ev Event) ([]byte, bool) {
 	frame := marshalFrame(ev)
 	if frame == nil {
@@ -248,10 +345,8 @@ func encodeEventFrame(ev Event) ([]byte, bool) {
 	return nil, false
 }
 
-// lightweightEvent returns a bounded-size replacement for an oversized
-// document-carrying event. Emission sites normally send the summary directly;
-// this is the backstop for a site that regresses to emitting the full
-// document. TargetUser is preserved so user scoping survives the swap.
+// lightweightEvent returns a bounded-size replacement for an oversized document-carrying event —
+// the backstop for an emission site that regresses to sending the full document.
 func lightweightEvent(ev Event) (Event, bool) {
 	if ev.Name != "flow:loaded" {
 		return Event{}, false
@@ -282,10 +377,8 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Per-write deadline machinery (see sseWriteTimeout). The controller is
-	// created once; if the underlying writer cannot honor deadlines (a wrapped
-	// ResponseWriter without Unwrap), that is logged exactly once and writes
-	// proceed undelayed rather than tearing down every connection.
+	// Per-write deadline machinery (see sseWriteTimeout). If the underlying writer cannot honor
+	// deadlines, that is logged once and writes proceed undelayed rather than tearing down connections.
 	rc := http.NewResponseController(w)
 	deadlineOK := true
 	armWriteDeadline := func() {
@@ -298,25 +391,15 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Key the connection cap per authenticated user (JWT mode) or per
-	// proxy-aware client IP, via the Router-injected clientKey. Falling back to
-	// the bare remote IP only when no key func is wired keeps tests and any
-	// uninitialised path working.
+	// Key the connection cap per authenticated user (JWT mode) or per proxy-aware client IP, via the
+	// Router-injected clientKey. The key is "user:<id>" in JWT mode — strip the prefix so userID
+	// matches what services pass to EmitTo; in local mode the key is the bare IP (userID "", broadcast).
 	key := middleware.ClientIP(r, nil)
-	if m.clientKey != nil {
-		key = m.clientKey(r)
-	}
-
-	// Extract the authenticated user ID for per-user event filtering.
-	// sseClientKey returns "user:<id>" (prefixed for connection-limit bucketing);
-	// strip the prefix so the stored value matches the bare userID that services
-	// pass to EmitTo via auth.ClaimsFromContext. In local mode (no JWT), the key
-	// is the bare IP and userID stays "" — all events broadcast to everyone.
 	userID := ""
 	if m.clientKey != nil {
-		rawKey := m.clientKey(r)
-		if strings.HasPrefix(rawKey, "user:") {
-			userID = rawKey[5:]
+		key = m.clientKey(r)
+		if strings.HasPrefix(key, "user:") {
+			userID = key[5:]
 		}
 	}
 
@@ -327,16 +410,15 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.sseConnCount[key]++
-	// Big enough to absorb bursts (e.g. analysis progress storms) without
-	// letting a slow client pin megabytes of buffered events; Emit drops
-	// events for a client whose buffer is full.
+	// Big enough to absorb bursts; a client that stops reading is bounded by both the 512-slot cap
+	// and the per-client byte budget — Emit drops at either bound.
 	ch := make(chan []byte, 512)
-	m.clients[ch] = userID
+	m.addClientLocked(ch, userID)
 	m.clientsMu.Unlock()
 
 	defer func() {
 		m.clientsMu.Lock()
-		delete(m.clients, ch)
+		m.removeClientLocked(ch)
 		m.sseConnCount[key]--
 		if m.sseConnCount[key] <= 0 {
 			delete(m.sseConnCount, key)
@@ -348,29 +430,24 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	// No-op for the Tauri localhost sidecar, but nginx-style reverse proxies
-	// buffer responses by default, which would deliver the whole stream at
-	// once instead of incrementally in web deployments.
+	// No-op for the Tauri localhost sidecar, but nginx-style reverse proxies buffer responses by
+	// default, which would deliver the whole stream at once instead of incrementally.
 	w.Header().Set("X-Accel-Buffering", "no")
-	// Respect the configured CORS allowlist instead of wildcarding.
-	// Vary: Origin is set unconditionally so a caching proxy can't serve a
-	// no-ACAO SSE variant to a later allowed-origin request.
+	// Respect the configured CORS allowlist instead of wildcarding. Vary: Origin is set
+	// unconditionally so a caching proxy can't serve a no-ACAO SSE variant to a later request.
 	w.Header().Set("Vary", "Origin")
 	if origin := r.Header.Get("Origin"); origin != "" && m.allowOrigin != nil && m.allowOrigin(origin) {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 	}
-	// Write the status explicitly before flushing. Without this, the first
-	// fmt.Fprintf in the event loop triggers an implicit WriteHeader via the
-	// otelhttp RespWriterWrapper, and the subsequent Flush triggers it again
-	// ("superfluous response.WriteHeader call" warning).
+	// Write the status explicitly before flushing: the first Fprintf would trigger an implicit
+	// WriteHeader via the otelhttp wrapper and the Flush would trigger it again (superfluous warning).
 	armWriteDeadline()
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
 	metrics.SSEClientStart()
 
-	// Extract the token JTI and expiry for periodic re-validation. In local
-	// mode (no JWT) there is no token, so both checks are skipped.
+	// Token JTI and expiry for periodic re-validation; empty in local mode.
 	jti := ""
 	var tokenExp time.Time
 	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
@@ -382,15 +459,20 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Heartbeat: keep an otherwise-quiet connection observably alive so the
-	// client's read-inactivity watchdog can tell "no events" from "dead
-	// socket", and so a write failure here ends the handler instead of the
-	// connection lingering until the next real event.
+	// queuedBytes refunds the byte budget as frames reach the socket
+	// (offerFrame charges it on enqueue).
+	var queuedBytes *atomic.Int64
+	if v, ok := m.bufBytes.Load(ch); ok {
+		queuedBytes = v.(*atomic.Int64)
+	}
+
+	// Heartbeat: keep a quiet connection observably alive so the client's watchdog can tell "no
+	// events" from "dead socket", and a write failure here ends the handler.
 	heartbeat := time.NewTicker(m.heartbeatTick())
 	defer heartbeat.Stop()
 
-	// Drop the stream once the access token is blacklisted (logout / explicit
-	// revoke). Checked on a slow ticker because it hits the shared blacklist store.
+	// Drop the stream once the access token is blacklisted. Checked on a slow
+	// ticker because it hits the shared blacklist store.
 	var revokeC <-chan time.Time
 	if m.isRevoked != nil && jti != "" {
 		revokeTicker := time.NewTicker(2 * time.Minute)
@@ -398,11 +480,8 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		revokeC = revokeTicker.C
 	}
 
-	// Drop the stream when the access token reaches its expiry, capping a live
-	// connection at the access-token TTL rather than letting it outlive the
-	// token indefinitely. The frontend reconnects with a freshly-refreshed
-	// token (ensureFreshToken), so this won't loop. No DB cost, so fire
-	// precisely at expiry instead of polling.
+	// Drop the stream at access-token expiry. The frontend reconnects with a freshly-refreshed
+	// token (ensureFreshToken); no DB cost, so fire precisely at expiry instead of polling.
 	var expiryC <-chan time.Time
 	if !tokenExp.IsZero() {
 		expiryTimer := time.NewTimer(time.Until(tokenExp))
@@ -433,14 +512,14 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 		case frame := <-ch:
-			// Frame arrives pre-encoded by deliver (one encode per event, not
-			// one per client).
+			// Frame arrives pre-encoded by deliver (one encode per event).
+			if queuedBytes != nil {
+				queuedBytes.Add(-int64(len(frame)))
+			}
 			armWriteDeadline()
 			if _, err := w.Write(frame); err != nil {
-				// Dead or stalled socket (a deadline-bound write to a client
-				// that stopped reading fails here within sseWriteTimeout):
-				// return so the goroutine, its channel and its queued frames
-				// are released instead of lingering.
+				// Dead or stalled socket: return so the goroutine, its
+				// channel and its queued frames are released.
 				return
 			}
 			flusher.Flush()

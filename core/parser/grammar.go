@@ -13,15 +13,13 @@ var (
 	reIfStart      = regexp.MustCompile(`^(?i)(IF\s+.+|If\.\w+|Text\.If\b|Variables\.If\b|Display\.If\b)`)
 	reElse         = regexp.MustCompile(`^(?i)(ELSE|Else\b|Text\.Else\b|Variables\.Else\b|Display\.Else\b)\s*$`)
 	// reElseIf matches the else-if rung of an IF chain. It must be tested before
-	// both reIfStart (anchored on a leading IF, so it never matches) and reElse
-	// (anchored with \s*$, so it never matches either) -- which is why, before
-	// this pattern existed, `ELSE IF x THEN` matched NOTHING and fell through to
-	// the UNKNOWN branch: no block, a warning-only diagnostic, and every action
-	// in the else-if branch silently re-parented into the THEN branch.
+	// both reIfStart and reElse (neither anchor can match it) — before this
+	// pattern existed, `ELSE IF x THEN` matched NOTHING, fell through to UNKNOWN,
+	// and every action in the else-if branch silently re-parented into the THEN
+	// branch.
 	reElseIf       = regexp.MustCompile(`^(?i)ELSE\s+IF\s+.+`)
 	reOnErrorStart = regexp.MustCompile(`^(?i)ON\s+(BLOCK\s+)?ERROR\b`)
-	// reOnErrorInline matches "ON ERROR REPEAT N TIMES WAIT M" with optional trailing params
-	// (e.g. RetryType: RetryType.Exponential MinInterval: 2 MaxInterval: 360).
+	// reOnErrorInline matches "ON ERROR REPEAT N TIMES WAIT M" with optional trailing params.
 	// Must be checked before reOnErrorStart so extended forms don't create spurious blocks.
 	reOnErrorInline = regexp.MustCompile(`^(?i)ON\s+ERROR\s+REPEAT\s+\d+\s+TIMES\s+WAIT`)
 	// reOnErrorInlineParams captures the retry count, wait interval, and optional extended params.
@@ -50,29 +48,16 @@ var (
 	reStringLiteral = regexp.MustCompile(`\$?'''[\s\S]*?'''|'[^']*'|"[^"]*"`)
 	// Finds potential variable identifiers.
 	reIdentifier = regexp.MustCompile(`[A-Za-z_]\w*`)
-	// Keywords to ignore when extracting variables from expressions —
-	// matched by isExpressionKeyword (a switch, kept in sync with this list
-	// for documentation).
-	// LOOP FOREACH Item IN List — captures the iteration variable name (group 1)
-	// and the collection reference (group 2 = full form, group 3 = bare name).
-	// The collection may appear as a bare name ("List") or percent-wrapped ("%List%").
+	// LOOP FOREACH Item IN List — group 1 is the iteration variable, group 3
+	// the collection (bare name or %percent-wrapped%).
 	reLoopForEach = regexp.MustCompile(`(?i)^LOOP\s+FOREACH\s+(\w+)\s+IN\s+(%?(\w+)%?)`)
-	// LOOP LoopIndex FROM x TO y [STEP z] — captures:
-	//   group 1: counter variable name (e.g. "LoopIndex")
-	//   group 2: FROM value (e.g. "0" or "%StartVal%")
-	//   group 3: TO value   (e.g. "10" or "%EndVal%")
-	//   group 4: STEP value (optional, e.g. "2" or "%Step%")
-	// The value pattern (-?%?[\w.]+%?) covers plain numbers, negative numbers,
-	// and percent-wrapped variable references.
-	// reLoopWhile matches the conditional loop form. Together with reLoopForEach
-	// and reLoopRange it gives every loop a KIND, which is what lets
-	// infinite-loop-risk distinguish a loop that CAN run forever from one that
-	// terminates by construction.
+	// LOOP LoopIndex FROM x TO y [STEP z] — groups: counter name, FROM, TO,
+	// optional STEP. With reLoopForEach and reLoopWhile it gives every loop a
+	// KIND, which lets infinite-loop-risk distinguish a loop that CAN run
+	// forever from one bounded by construction.
 	reLoopWhile = regexp.MustCompile(`(?i)^LOOP\s+WHILE\b`)
-	// reLoopRangeAnon is the counted form WITHOUT a named counter
-	// (`LOOP FROM 2 TO %FreeRow% - 1 STEP 1`). reLoopRange requires a counter
-	// name because it exists to EXTRACT that variable; this one exists only to
-	// recognise the shape, which is bounded either way.
+	// reLoopRangeAnon is the counted form WITHOUT a named counter (`LOOP FROM
+	// 2 TO %FreeRow% - 1`): exists only to recognise the shape, bounded either way.
 	reLoopRangeAnon = regexp.MustCompile(`(?i)^LOOP\s+FROM\s+`)
 	reLoopRange     = regexp.MustCompile(`(?i)^LOOP\s+(\w+)\s+FROM\s+(-?%?[\w.]+%?)\s+TO\s+(-?%?[\w.]+%?)(?:\s+STEP\s+(-?%?[\w.]+%?))?`)
 	// **REGION / **ENDREGION — alternative inline region syntax used in some PAD exports.
@@ -84,13 +69,20 @@ var (
 	reExitLoop = regexp.MustCompile(`(?i)^EXIT\s+LOOP$`)
 )
 
-// isExpressionKeyword reports whether an identifier is one of the expression
-// keywords (AND/OR/NOT/TRUE/FALSE/NULL/BLANK), case-insensitively — a
-// 7-case switch, an order of magnitude cheaper than the regex engine call it
-// replaced (invoked per identifier inside every %expr%).
+// isExpressionKeyword reports AND/OR/NOT/TRUE/FALSE/NULL/BLANK,
+// case-insensitively — a 7-case switch, an order of magnitude cheaper than
+// the regex engine call it replaced (invoked per identifier inside %expr%).
 func isExpressionKeyword(vname string) bool {
-	switch strings.ToUpper(vname) {
-	case "AND", "OR", "NOT", "TRUE", "FALSE", "NULL", "BLANK":
+	// EqualFold per case: ToUpper allocated a fresh string for every
+	// mixed-case identifier inside every %expr%.
+	switch {
+	case strings.EqualFold(vname, "AND"),
+		strings.EqualFold(vname, "OR"),
+		strings.EqualFold(vname, "NOT"),
+		strings.EqualFold(vname, "TRUE"),
+		strings.EqualFold(vname, "FALSE"),
+		strings.EqualFold(vname, "NULL"),
+		strings.EqualFold(vname, "BLANK"):
 		return true
 	}
 	return false
@@ -103,13 +95,17 @@ func hasPrefixFold(s, prefix string) bool {
 }
 
 // maskStrings blanks out string-literal content so downstream %var% regexes
-// only match outside literals. Byte-wise on purpose: the delimiters (' " $)
-// are ASCII, and UTF-8 continuation bytes (≥0x80) can never collide with
-// them, so byte comparisons are exact and allocation-free — the previous
-// rune-slice version allocated a fresh string per rune-window comparison.
-// The masked text is only used for regex MATCHING (positions never map back
-// to the original), so replacing each literal with a single space is fine.
+// only match outside literals. Byte-wise on purpose: the delimiters are ASCII
+// and UTF-8 continuation bytes can never collide with them, so byte
+// comparisons are exact and allocation-free. The masked text is only used for
+// regex MATCHING (positions never map back), so one space per literal is fine.
 func maskStrings(s string) string {
+	// No literal can start without a quote byte: a %expr% without one
+	// returns unchanged — maskStrings runs twice per block and most
+	// expressions hold no literals.
+	if !strings.ContainsAny(s, "'\"") {
+		return s
+	}
 	out := make([]byte, 0, len(s))
 	i, n := 0, len(s)
 	for i < n {

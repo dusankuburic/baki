@@ -13,10 +13,8 @@ func computeIndent(line string) int {
 		case '\t':
 			n += 4
 		default:
-			// Stop at the first non-whitespace byte: indentation is leading
-			// whitespace only, and any non-ASCII byte is non-whitespace by
-			// definition. (Must return, not break — a switch `break` would
-			// only exit the switch and keep counting interior whitespace.)
+			// Indentation is leading whitespace only; must return, not break —
+			// a switch `break` would keep counting interior whitespace.
 			return n
 		}
 	}
@@ -39,11 +37,10 @@ func Tokenize(text string) []Token {
 	tripleStartLine := 0
 	var tripleRaw strings.Builder
 
-	// Zero-copy line iteration: each raw line is a substring sharing text's
-	// backing array, replacing bufio.Scanner's per-line copy (Scanner.Text()
-	// allocates a fresh string per line) and the 64 KB scanner buffer. The
-	// tokenizer never mutates its output substrings and callers treat the
-	// returned tokens as read-only for the parse's lifetime.
+	// Line iteration without bufio.Scanner (no 64 KB line limit). Each line
+	// IS copied once, below: token substrings end up in values that outlive
+	// the document (metadata, snippets, cache entries), so sharing text's
+	// backing array would pin the ENTIRE uploaded source.
 	lineNum := 1
 	for rest := text; rest != ""; lineNum++ {
 		var raw string
@@ -57,19 +54,16 @@ func Tokenize(text string) []Token {
 			raw = raw[3:]
 		}
 
-		// PAD exports carry CRLF; the tokenizer's canonical line break is \n
-		// (goldens, serializer and analyzer all assume it). Single lines are
-		// TrimRight'd below, but the multi-line accumulators (block comments,
-		// triple-quoted literals) append `raw` verbatim, so strip the CR here
-		// or it leaks into the middle of the accumulated value.
-		raw = strings.TrimSuffix(raw, "\r")
+		// PAD exports carry CRLF; the tokenizer's canonical line break is \n.
+		// The multi-line accumulators append `raw` verbatim, so strip the CR
+		// here or it leaks into the accumulated value; then detach the line.
+		raw = strings.Clone(strings.TrimSuffix(raw, "\r"))
 
 		trimmed := strings.TrimRight(raw, " \t\r")
 		indent := computeIndent(trimmed)
 		content := strings.TrimLeft(trimmed, " \t")
-		// Column of the first non-indent byte, 1-based. indent counts a tab
-		// as 4 columns (computeIndent's convention), which matches how PAD
-		// exports visually lay out the line.
+		// Column of the first non-indent byte, 1-based (indent counts a tab
+		// as 4 columns, matching how PAD exports visually lay out the line).
 		column := indent + 1
 
 		if inBlockComment {
@@ -104,9 +98,8 @@ func Tokenize(text string) []Token {
 				indent2 := computeIndent(trimmed2)
 				content2 := strings.TrimLeft(trimmed2, " \t")
 				tok := classifyLine(tripleStartLine, indent2, indent2+1, combined, content2)
-				// The token spans from tripleStartLine through this closing
-				// line; record the physical end so block fixers append/wrap/
-				// remove past the literal rather than inside it.
+				// Record the physical end so block fixers append/wrap/remove
+				// past the literal rather than inside it.
 				tok.EndLine = lineNum
 				tokens = append(tokens, tok)
 			}
@@ -124,10 +117,8 @@ func Tokenize(text string) []Token {
 			continue
 		}
 
-		// Single-line block comment: /#...#/ entirely on one line. The patterns
-		// are literal prefix/suffix tests (^/#, #/$) — HasPrefix/HasSuffix avoids
-		// regex-NFA setup per line, and the start test is computed once for both
-		// branches below.
+		// Single-line block comment: /#...#/ entirely on one line. Literal
+		// prefix/suffix tests avoid regex-NFA setup per line.
 		blockStart := strings.HasPrefix(content, "/#")
 		blockEnd := strings.HasSuffix(content, "#/")
 		if blockStart && blockEnd {
@@ -156,11 +147,9 @@ func Tokenize(text string) []Token {
 		tok := classifyLine(lineNum, indent, column, raw, content)
 
 		// Triple-quoted string literals ($'''...''') only appear inside ACTION
-		// lines. Running this check on every line type silently swallowed the
-		// rest of the file when a comment/region/GOTO line happened to contain
-		// an odd number of ''' — the just-classified token was discarded and
-		// every subsequent line was absorbed until another odd-''' line closed
-		// the span. Restrict the multi-line mode to ACTION tokens.
+		// lines: running this check on every line type silently swallowed the
+		// rest of the file when a comment/region/GOTO line carried an odd
+		// number of triple-quote markers.
 		if tok.Kind == TokAction && countTripleQuotes(raw)%2 == 1 {
 			inTripleQuote = true
 			tripleStartLine = lineNum
@@ -172,15 +161,9 @@ func Tokenize(text string) []Token {
 		tokens = append(tokens, tok)
 	}
 
-	// EOF with a multi-line span still open. Both branches above consume every
-	// remaining line into a builder and emit nothing until the closing marker
-	// arrives; before this flush, a marker that never arrived meant the builder
-	// was simply dropped at return. A flow whose first line opened a /# that was
-	// never closed by #/ therefore tokenized to nothing, parsed to zero blocks
-	// AND zero parse errors, and was reported clean -- one line at the top of an
-	// uploaded flow hid the whole file from every rule. Flush the consumed text
-	// so it still reaches the tree, and record the cause at error severity so
-	// the verdict is "malformed", never "clean".
+	// EOF with a multi-line span still open: a marker that never arrived used to drop the builder at return,
+	// so a flow whose first line opened an unclosed /# tokenized to nothing and reported CLEAN. Flush the
+	// consumed text and record the cause at error severity — the verdict is "malformed", never "clean".
 	if inBlockComment {
 		fullText := commentRaw.String()
 		tokens = append(tokens, Token{
@@ -212,11 +195,9 @@ func Tokenize(text string) []Token {
 	return tokens
 }
 
-// unterminatedToken builds the diagnostic half of an EOF flush. It carries
-// RawType "UNTERMINATED" so recordMalformedLine reports it at error severity
-// with this specific cause, rather than as the generic warning-level "malformed
-// line" -- the distinction matters because CountParseErrors, and so the CI gate
-// and the fix loop's regression guard, count only error-severity problems.
+// unterminatedToken builds the diagnostic half of an EOF flush. RawType
+// "UNTERMINATED" makes recordMalformedLine report it at error severity —
+// what CountParseErrors (the CI gate, the fix loop's guard) counts.
 func unterminatedToken(line, indent int, msg string) Token {
 	return Token{
 		Kind:    TokError,
@@ -241,16 +222,9 @@ func countTripleQuotes(line string) int {
 	return count
 }
 
-// classifyLine dispatches a single logical PAD line to a Token by trying each
-// syntax category in turn — the FIRST category whose pattern matches wins, so
-// this order must not change. Each classify* helper is an independent,
-// self-contained "does this line look like X?" check (no shared mutable state
-// between them), which is what makes this decomposition safe: it is pure code
-// movement, not a behavior change. A line matching nothing falls through to
-// the generic dotted-action classifier, then finally UNKNOWN.
-// classifiers is the ordered dispatch chain classifyLine walks. FIRST match
-// wins, so this order must not change. Package-level (not per-call) so the
-// function-value slice isn't rebuilt on every line.
+// classifiers is the ordered dispatch chain classifyLine walks; FIRST match
+// wins, so this order must not change. Package-level so the function-value
+// slice isn't rebuilt on every line.
 var classifiers = [...]func(tokenBase) (Token, bool){
 	classifyComment,
 	classifyRegion,
@@ -269,8 +243,8 @@ func classifyLine(lineNum, indent, column int, raw, content string) Token {
 
 	for _, classify := range classifiers {
 		if tok, ok := classify(base); ok {
-			// Column is stamped centrally (classifiers don't set it): the
-			// 1-based column of the line's first non-indent byte.
+			// Column is stamped centrally (classifiers don't set it): the 1-based
+			// column of the first non-indent byte.
 			tok.Column = base.column
 			return tok
 		}
@@ -287,9 +261,8 @@ func classifyLine(lineNum, indent, column int, raw, content string) Token {
 	}
 }
 
-// tokenBase holds the fields every classify* helper needs, so each one reads
-// as "given this line, is it an X?" without repeating the same four-argument
-// list classifyLine itself takes.
+// tokenBase holds the fields every classify* helper needs, so each reads as
+// "given this line, is it an X?" without repeating classifyLine's arguments.
 type tokenBase struct {
 	lineNum, indent, column int
 	raw, content            string
@@ -300,11 +273,10 @@ type tokenBase struct {
 // Tokenize already consumed).
 func classifyComment(b tokenBase) (Token, bool) {
 	content := b.content
-	// Region directives (#Region/#EndRegion AND the spaced "# Region"/
-	// "# EndRegion" variants) are structural, not comments — defer to
-	// classifyRegion. Without this, reComment's "#\s+.*" alternative steals the
-	// spaced forms (which it matches) and the subflow boundary is misclassified
-	// as a comment, corrupting the block tree with spurious unclosed-block errors.
+	// Region directives (#Region/#EndRegion AND the spaced "# Region" forms)
+	// are structural, not comments — defer to classifyRegion, or reComment's
+	// alternative steals the spaced forms and the subflow boundary is
+	// misclassified, corrupting the block tree.
 	if reRegionStart.MatchString(content) || reRegionEnd.MatchString(content) {
 		return Token{}, false
 	}
@@ -579,9 +551,8 @@ func classifyCondition(b tokenBase) (Token, bool) {
 	}
 
 	if reElseIf.MatchString(content) {
-		// Carry the condition text in Name, with the trailing THEN stripped the
-		// same way the IF branch above strips it, so the branch condition
-		// reaches newBlock's extractVariables instead of being discarded.
+		// Carry the condition text in Name (trailing THEN stripped like the
+		// IF branch) so it reaches newBlock's extractVariables.
 		name := content
 		if len(name) >= 5 && strings.EqualFold(name[len(name)-5:], " THEN") {
 			name = strings.TrimSpace(name[:len(name)-5])
@@ -789,10 +760,8 @@ func extractActionName(moduleAction, params string) string {
 	return moduleAction
 }
 
-// splitCamelCase inserts spaces at camel-case transitions (getText →
-// "Get Text", HTTPServer → "HTTP Server"). Byte-wise: action names are ASCII
-// CamelCase, and a single pass into a pre-grown builder replaces the
-// rune-slice + append-growth + conversion (3 allocations).
+// splitCamelCase inserts spaces at camel-case transitions (getText → "Get
+// Text", HTTPServer → "HTTP Server"); byte-wise pass into a pre-grown builder.
 func splitCamelCase(s string) string {
 	var b strings.Builder
 	b.Grow(len(s) + 4)

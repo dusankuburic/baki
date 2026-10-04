@@ -15,55 +15,34 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 )
 
-// Resource and model tests (Part 9, "Testing a resource or a model"). They
-// never have side effects and cost almost nothing:
-//   - a resource test is an authenticated probe with no model call — it works
-//     on a resource with no models, and costs nothing;
-//   - a chat or Claude model test is one chat capped at 16 output tokens, an
-//     embedding model test one Embed of "ping": one tiny billed request;
-//   - an agent test is a read-only lookup of the agent — it is never run (a
-//     run is billed and may call the agent's hosted tools).
+// Resource and model tests (Part 9). They never have side effects: a resource test is an authenticated probe
+// with no model call; a chat/Claude model test is one chat capped at 16 output tokens; an embedding test one
+// Embed of "ping"; an agent test a read-only lookup (a run is billed and may call hosted tools).
 //
-// Both run on an isolated provider with a THROWAWAY Entra ID token source,
-// saved credentials or not: an unsaved (draft) credential must never enter —
-// or be served a token from — the process-wide source registry, and a fresh
-// sign-in tells a saved credential's truth too (an expired secret keeps
-// working while a cached token lives). Nothing is written to the process
-// caches the chat path reads about a user's resource (the project listing
-// cache, the agent kinds, the served-model memo, the learned windows), no
-// usage row is recorded (no audited wrapper), and every request — the
-// sign-in included — goes through the Azure client, so the egress dial guard
-// applies. The one memo a model test can teach is the one any call to the
-// deployment would: the request parameters its model refuses (learnedRepairs,
-// keyed by endpoint and deployment, no secret).
+// Both run on an isolated provider with a THROWAWAY Entra ID token source, saved credentials or not: an
+// unsaved (draft) credential must never enter — or be served a token from — the process-wide registry, and a
+// fresh sign-in tells a saved credential's truth too. Nothing is written to the chat path's caches, no usage
+// row is recorded, and every request — the sign-in included — goes through the Azure client (egress guard).
+// The one memo a model test can teach is the request parameters its model refuses (learnedRepairs).
 
 var (
-	// ErrAzureEndpointNotFound marks a resource endpoint that answered 404 on
-	// its own v1 model route (GET /openai/v1/models): not a resource root — a
-	// project or deployment URL, a gateway path — so no deployment on it
-	// could answer either.
+	// ErrAzureEndpointNotFound marks a resource endpoint that answered 404 on its own v1 model route: not a
+	// resource root — a project/deployment URL, a gateway path.
 	ErrAzureEndpointNotFound = errors.New("azure ai foundry: the endpoint was not found")
-	// ErrAzureProjectNotFound marks a project endpoint that answered 404: a
-	// wrong project name, or a classic hub-based project without the v1
-	// routes.
+	// ErrAzureProjectNotFound marks a project endpoint that answered 404: a wrong project name, or a classic
+	// hub-based project without the v1 routes.
 	ErrAzureProjectNotFound = errors.New("azure ai foundry: the project was not found")
 	// ErrAzureAgentNotFound marks an agent lookup the project answered with
 	// 404: no agent of that name.
 	ErrAzureAgentNotFound = errors.New("azure ai foundry: the agent was not found")
-	// ErrAzureAgentNotRunnable marks an agent that exists but cannot chat in
-	// baki: a hosted, external or voice agent (not runnable by
-	// agent_reference), a disabled one, or one whose latest version is not
-	// active.
+	// ErrAzureAgentNotRunnable marks an agent that exists but cannot chat in baki: a hosted/external/voice
+	// agent, a disabled one, or one whose latest version is not active.
 	ErrAzureAgentNotRunnable = errors.New("azure ai foundry: the agent cannot chat in baki")
 )
 
-// AzureProjectRefusalError is the project data plane refusing a request of
-// discovery or of a test: 401 (the Entra ID principal is not authorized on
-// the project, a fresh token refused too), 403 (a missing role, the project's
-// network rules) — both ErrProviderPermissionDenied and ErrApiKeyInvalid, as
-// a resource's permission denial is — or 404 (ErrAzureProjectNotFound, or
-// ErrAzureAgentNotFound for an agent lookup). Message is one line for the
-// user.
+// AzureProjectRefusalError is the project data plane refusing a request of discovery or of a test: 401/403
+// (both ErrProviderPermissionDenied and ErrApiKeyInvalid) or 404 (ErrAzureProjectNotFound, or
+// ErrAzureAgentNotFound for an agent lookup).
 type AzureProjectRefusalError struct {
 	Status  int
 	Message string
@@ -82,10 +61,8 @@ func (e *AzureProjectRefusalError) Unwrap() []error {
 	return []error{ErrProviderPermissionDenied, ErrApiKeyInvalid}
 }
 
-// classifyProjectFailure turns a project route's definitive 401, 403 or 404
-// (azureProjectStatusError anywhere in err's chain) into an
-// *AzureProjectRefusalError; agent names the agent a lookup asked for ("" for
-// the project listings). Anything else is returned as is.
+// classifyProjectFailure turns a project route's definitive 401, 403 or 404 (azureProjectStatusError in
+// err's chain) into an *AzureProjectRefusalError; agent names the agent a lookup asked for. Else err as is.
 func classifyProjectFailure(err error, agent string) error {
 	var se *azureProjectStatusError
 	if !errors.As(err, &se) {
@@ -116,10 +93,8 @@ func classifyProjectFailure(err error, agent string) error {
 // project probe; or the one model call). A variable so tests can shorten it.
 var azureProbeTimeout = 30 * time.Second
 
-// azureProbeBodyMax caps what the resource probe reads of an answer: a 200's
-// body (the resource's model catalogue, which the probe does not need) is
-// drained only this far before the connection is dropped, an error body only
-// this far for its explanation.
+// azureProbeBodyMax caps what the resource probe reads of an answer: a 200's body (the model catalogue) is
+// drained only this far; an error body only this far for its explanation.
 const azureProbeBodyMax = 64 << 10
 
 // The model test's request: one short prompt, at most azureProbeMaxTokens of
@@ -129,12 +104,9 @@ const (
 	azureProbeMaxTokens = 16
 )
 
-// throwawayEntraSources builds a private Entra ID token source per provider
-// (see entraSourceFactory): never inserted into, or served from, the
-// process-wide registries, and gone with the provider. The credential is
-// built exactly as the shared one is — the same public-cloud authority and
-// the same Azure client (entraCredentialOptions), so the sign-in passes the
-// egress guard like every other Azure hop.
+// throwawayEntraSources builds a private Entra ID token source per provider (entraSourceFactory): never in,
+// or served from, the process-wide registries, gone with the provider. The credential is built exactly as the
+// shared one is (same authority, same Azure client), so the sign-in passes the egress guard.
 var throwawayEntraSources = entraSourceFactory{secret: newThrowawayEntraSource, cli: newThrowawayEntraCLISource}
 
 func newThrowawayEntraSource(tenantID, clientID, clientSecret string) (*entraTokenSource, error) {
@@ -170,45 +142,22 @@ func newAzureProbeProvider(raw string, models []AzureRegisteredModel, embeddingD
 	return p
 }
 
-// ProbeAzureFoundryResource tests one resource's credential document —
-// saved, or a draft with the stored secret already carried over by the
-// caller — without calling a model: it signs in (Entra ID or Azure CLI: a
-// token first), then GETs {endpoint}/openai/v1/models as an authentication
-// probe (the body is discarded), then, with a project endpoint and Entra ID,
-// reads the first page of the project's deployments. nil means the resource
-// is reachable with this credential. The errors:
-//   - ErrProviderConfigInvalid (with the *AzureConfigError) — the document
-//     does not validate (no request is made);
-//   - the sign-in's own failure (ErrEntraCredentialsRejected,
-//     ErrEntraTokenUnavailable);
-//   - 401: ErrApiKeyInvalid for an API key; ErrEntraTokenRejected (after one
-//     retry with a fresh token) for Entra ID; ErrProviderPermissionDenied
-//     with Azure's explanation for a PermissionDenied code;
-//   - 403: ErrProviderPermissionDenied with Azure's explanation (network
-//     rules, a missing role);
-//   - 404: ErrAzureEndpointNotFound;
-//   - 429: a *RateLimitError (the resource answered, throttled);
-//   - the project: *AzureProjectRefusalError (401, 403, 404), else the
-//     listing's failure;
-//   - a connection failure as is (egress.DescribeFailure names it).
+// ProbeAzureFoundryResource tests one resource's credential document — saved, or a draft whose stored secret
+// the caller carried over — without calling a model: sign in, GET {endpoint}/openai/v1/models as an
+// authentication probe (body discarded), then, with a project endpoint and Entra ID, the first page of the
+// project's deployments. nil means reachable. Errors: ErrProviderConfigInvalid (no request made), the
+// sign-in's own failure, 401/403 permission denials with Azure's explanation (after one fresh-token retry),
+// 404 ErrAzureEndpointNotFound, 429 *RateLimitError, *AzureProjectRefusalError or the listing's failure from
+// the project, a connection failure as is.
 func ProbeAzureFoundryResource(ctx context.Context, raw string) error {
 	return newAzureProbeProvider(raw, nil, "").probeResource(ctx)
 }
 
-// ProbeAzureFoundryModel tests one model of a resource: raw is the resource's
-// credential document (saved or draft, as for ProbeAzureFoundryResource), m
-// the model — a saved entry, or a draft {Kind, Deployment}. A chat or Claude
-// model answers one "ping" capped at 16 output tokens (a reply cut at that
-// cap — a reasoning model thinking — passes: the call succeeded); an
-// embedding model embeds "ping"; an agent is looked up with one GET
-// ({project}/agents/{name}), never run: it must exist
-// (ErrAzureAgentNotFound) and be runnable in baki (ErrAzureAgentNotRunnable),
-// and it needs a project endpoint and Entra ID (ErrProviderConfigInvalid). An
-// invalid m is an *AzureConfigError (INVALID_KIND, INVALID_DEPLOYMENT). The
-// model's own errors come back as the chat path classifies them
-// (ErrApiKeyInvalid, ErrProviderPermissionDenied, a rate limit, a 404
-// "DeploymentNotFound" answer, …). No usage row is recorded and no memo
-// learns from the call.
+// ProbeAzureFoundryModel tests one model of a resource (raw = the document, m = a saved entry or a draft
+// {Kind, Deployment}): a chat/Claude model answers one "ping" capped at 16 output tokens (a reply cut at the
+// cap — a reasoning model thinking — passes: the call succeeded); an embedding model embeds "ping"; an agent
+// is looked up with one GET, never run — it must exist and be runnable. An invalid m is an *AzureConfigError;
+// no usage row is recorded and no memo learns.
 func ProbeAzureFoundryModel(ctx context.Context, raw string, m AzureRegisteredModel) error {
 	m.Kind, m.Deployment = strings.TrimSpace(m.Kind), strings.TrimSpace(m.Deployment)
 	check := m
@@ -230,8 +179,7 @@ func (p *AzureFoundryProvider) probeResource(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, azureProbeTimeout)
 	defer cancel()
-	// A sign-in Entra ID refuses is the answer — before any request to the
-	// resource (authorize would fetch the same token; asking first keeps the
+	// A sign-in Entra ID refuses is the answer — before any request to the resource (asking first keeps the
 	// refusal from reading as the resource's).
 	if p.tokens != nil {
 		if _, err := p.entraToken(ctx); err != nil {
@@ -247,11 +195,8 @@ func (p *AzureFoundryProvider) probeResource(ctx context.Context) error {
 	return p.probeProjectRoute(ctx)
 }
 
-// probeModelsRoute GETs {endpoint}/openai/v1/models — the resource's model
-// catalogue, which needs an authenticated caller — and classifies the answer
-// as a chat request's (handleChatError: the Entra ID token rejection, the
-// permission denial, the rate limit), except that a 404 says the endpoint is
-// not a resource root. The body is never used.
+// probeModelsRoute GETs {endpoint}/openai/v1/models — the catalogue, which needs an authenticated caller —
+// and classifies the answer as a chat request (handleChatError), except a 404: not a resource root.
 func (p *AzureFoundryProvider) probeModelsRoute(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.Endpoint+"/openai/v1/models", nil)
 	if err != nil {
@@ -281,9 +226,8 @@ func (p *AzureFoundryProvider) probeModelsRoute(ctx context.Context) error {
 	return p.handleChatError(resp, body)
 }
 
-// probeProjectRoute reads the first page of the project's deployments — one
-// GET, with projectGET's single fresh-token retry on a 401 — to prove the
-// project endpoint and the principal's role on it.
+// probeProjectRoute reads the first page of the project's deployments — one GET, with projectGET's single
+// fresh-token retry on a 401 — to prove the project endpoint and the principal's role on it.
 func (p *AzureFoundryProvider) probeProjectRoute(ctx context.Context) error {
 	if _, err := p.projectGET(ctx, p.cfg.ProjectEndpoint+"/deployments?api-version="+azureProjectAPIVersion); err != nil {
 		return classifyProjectFailure(err, "")
@@ -321,10 +265,8 @@ func (p *AzureFoundryProvider) probeModel(ctx context.Context, m AzureRegistered
 	return azureCfgErr(AzureCfgErrInvalidKind, "unknown model kind %q", m.Kind)
 }
 
-// probeAgent looks the agent up — GET {project}/agents/{name}, read-only —
-// and checks it can chat in baki as the listing would (runsViaAgentReference,
-// usable). It never POSTs: running an agent is billed and may call its hosted
-// tools.
+// probeAgent looks the agent up (GET {project}/agents/{name}, read-only) and checks it can chat in baki as
+// the listing would. It never POSTs: running an agent is billed and may call its hosted tools.
 func (p *AzureFoundryProvider) probeAgent(ctx context.Context, name string) error {
 	if err := p.agentConfigError(); err != nil {
 		return err

@@ -16,17 +16,12 @@ import (
 	"pad-analyzer/internal/egress"
 )
 
-// azureSeam is an in-process Azure for the registry tests. Installed as the
-// Azure client's transport (AzureFoundryOptions.Transport, tests only) with
-// the .unit-test.invalid domain allow-listed (RFC 6761: it never resolves),
-// it answers every request the client sends: resource and project hosts
-// under that domain through handler, and Microsoft Entra ID's sign-in at
-// login.microsoftonline.com through a fake authority. Every other destination
-// is refused, so nothing leaves the process even if a code path bypassed the
-// Azure client. No listener: each request is served through an
-// httptest.ResponseRecorder, so the exported entry points — host validation,
-// the throwaway or shared token sources, the guarded client — run exactly as
-// in production.
+// azureSeam is an in-process Azure for the registry tests: installed as the Azure client's transport
+// (AzureFoundryOptions.Transport, tests only) with the .unit-test.invalid domain allow-listed (RFC 6761: it never
+// resolves), it answers resource/project hosts through handler and Entra ID's sign-in through a fake authority; every
+// other destination is refused, so nothing leaves the process even if a code path bypassed the Azure client. No
+// listener — each request runs through an httptest.ResponseRecorder, so host validation, the throwaway or shared
+// token sources and the guarded client run exactly as in production.
 type azureSeam struct {
 	mu      sync.Mutex
 	reqs    []azureSeamRequest

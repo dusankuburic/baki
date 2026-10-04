@@ -26,11 +26,9 @@ func TestAccountDelete_RequiresMatchingConfirmation(t *testing.T) {
 	rt, _ := newAccountTestRouter(t, "u1", "alice@example.com")
 	bearer := jwtBearer(t, rt, "u1", "alice@example.com")
 
-	// Missing confirmEmail → 400.
 	rr := doRequestWithAuth(t, rt, http.MethodDelete, "/api/auth/account", bearer, map[string]string{})
 	checkStatus(t, rr, http.StatusBadRequest)
 
-	// Wrong confirmEmail → 400.
 	rr = doRequestWithAuth(t, rt, http.MethodDelete, "/api/auth/account", bearer, map[string]string{"confirmEmail": "other@example.com"})
 	checkStatus(t, rr, http.StatusBadRequest)
 }
@@ -43,7 +41,6 @@ func TestAccountDelete_ErasesAndRevokesToken(t *testing.T) {
 	rr := doRequestWithAuth(t, rt, http.MethodDelete, "/api/auth/account", bearer, map[string]string{"confirmEmail": "  ALICE@example.com "})
 	checkStatus(t, rr, http.StatusOK)
 
-	// The user was erased.
 	if len(backend.DeletedUsers) != 1 || backend.DeletedUsers[0] != "u1" {
 		t.Errorf("expected user u1 erased, got %v", backend.DeletedUsers)
 	}

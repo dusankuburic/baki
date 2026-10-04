@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"pad-analyzer/internal/service"
@@ -26,6 +27,7 @@ var (
 	idPattern       = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 	rulePattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	categoryPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9 _-]{0,31}$`)
+	severityPattern = regexp.MustCompile(`^(error|warning|info)$`)
 	presetDays      = map[string]int{"7d": 7, "30d": 30, "90d": 90}
 )
 
@@ -59,6 +61,37 @@ func parseList(raw, name string, pattern *regexp.Regexp, max int) ([]string, err
 	return out, nil
 }
 
+// tzLocCache memoizes time.LoadLocation by zone name. The stdlib keeps no
+// cache of its own: every call re-opens and re-parses the zoneinfo file, and
+// parseAnalyticsQuery pays that per analytics request for the handful of zone
+// names its users repeat indefinitely. Successes only — an unknown name keeps
+// returning its error on every request instead of being pinned as a value.
+// The key set is naturally bounded: tzPattern has already rejected anything
+// that is not a plausible zone name, and only names the installed tz database
+// actually resolves get stored, so the map holds at most one entry per zone
+// the deployment's users share. The mutex guards the map (LoadLocation itself
+// is safe to call concurrently) and only first-time zone names pay the parse
+// under it.
+var tzLocCache = struct {
+	sync.Mutex
+	locs map[string]*time.Location
+}{locs: map[string]*time.Location{}}
+
+// loadLocationCached is time.LoadLocation through tzLocCache.
+func loadLocationCached(name string) (*time.Location, error) {
+	tzLocCache.Lock()
+	defer tzLocCache.Unlock()
+	if loc, ok := tzLocCache.locs[name]; ok {
+		return loc, nil
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, err
+	}
+	tzLocCache.locs[name] = loc
+	return loc, nil
+}
+
 func parseAnalyticsQuery(q url.Values, now time.Time) (service.AnalyticsQuery, error) {
 	var out service.AnalyticsQuery
 
@@ -69,7 +102,7 @@ func parseAnalyticsQuery(q url.Values, now time.Time) (service.AnalyticsQuery, e
 	if !tzPattern.MatchString(tz) {
 		return out, invalid("tz must be an IANA time zone name")
 	}
-	loc, err := time.LoadLocation(tz)
+	loc, err := loadLocationCached(tz)
 	if err != nil {
 		return out, invalid("tz is not a known time zone")
 	}
@@ -140,7 +173,7 @@ func parseAnalyticsQuery(q url.Values, now time.Time) (service.AnalyticsQuery, e
 	if out.Flows, err = parseList(q.Get("flows"), "flows", idPattern, maxAnalyticsListLen); err != nil {
 		return out, err
 	}
-	if out.Severity, err = parseList(q.Get("severity"), "severity", regexp.MustCompile(`^(error|warning|info)$`), 3); err != nil {
+	if out.Severity, err = parseList(q.Get("severity"), "severity", severityPattern, 3); err != nil {
 		return out, err
 	}
 	if out.Category, err = parseList(q.Get("category"), "category", categoryPattern, maxAnalyticsCatLen); err != nil {

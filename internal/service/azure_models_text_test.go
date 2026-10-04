@@ -7,12 +7,11 @@ import (
 	"pad-analyzer/internal/ai"
 )
 
-// S5: registry text shows every character it holds. Beyond control and
-// format characters, the other default-ignorable code points (the Hangul
-// fillers, U+034F), variation selectors, U+2800 (a blank braille cell),
-// private-use and unassigned code points are refused — they render as
-// nothing, or differently everywhere, so "Admin" plus one of them could pass
-// for "Admin" — and a name (or a non-empty description) needs at least one
+// S5: registry text shows every character it holds. Beyond control and format
+// characters, the other default-ignorable code points (Hangul fillers, U+034F), variation
+// selectors, U+2800 (a blank braille cell), private-use and unassigned code points are
+// refused — they render as nothing, or differently everywhere, so "Admin" plus one of
+// them could pass for "Admin" — and a name (or non-empty description) needs at least one
 // visible letter, number, punctuation mark or symbol.
 func TestAzureModels_TextRefusesInvisibleCharacters(t *testing.T) {
 	refused := []string{

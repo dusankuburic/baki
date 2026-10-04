@@ -11,29 +11,24 @@ import (
 	"pad-core/models"
 )
 
-// SARIF (Static Analysis Results Interchange Format) 2.1.0 export. The output
-// is consumable by GitHub code scanning, Azure DevOps, and other security
-// dashboards. Only the subset of the schema we populate is modeled here; the
-// signature mirrors ReportToMarkdown/ReportToPDF so callers can pick a format
-// uniformly.
+// SARIF (Static Analysis Results Interchange Format) 2.1.0 export, consumable
+// by GitHub code scanning, Azure DevOps and other security dashboards. Only
+// the populated schema subset is modeled here.
 
 const (
 	sarifSchema  = "https://json.schemastore.org/sarif-2.1.0.json"
 	sarifVersion = "2.1.0"
 	sarifTool    = "PAD Analyzer"
 	// sarifAutomationID is run.automationDetails.id: the stable category a
-	// consumer files every PAD upload under (GitHub code scanning uses it to
-	// separate this tool's alerts from other analyses on the same commit; the
-	// Action passes the same value as its upload `category`).
+	// consumer files every PAD upload under (GitHub code scanning's `category`).
 	sarifAutomationID = "pad-analysis"
 	// sarifSourceRootID is the conventional uriBaseId for "the repository
 	// checkout" — GitHub resolves relative artifact URIs against it.
 	sarifSourceRootID = "%SRCROOT%"
 )
 
-// RuleHelpURL is the documentation page every rule descriptor's helpUri points
-// at (the project has no per-rule pages; `bakicli rules <id>` prints the full
-// description). Overridable like ToolVersion for forks/mirrors.
+// RuleHelpURL is every rule descriptor's helpUri (no per-rule pages;
+// `bakicli rules <id>` prints the full description).
 var RuleHelpURL = "https://github.com/dusankuburic/baki#features"
 
 type sarifLog struct {
@@ -71,14 +66,12 @@ type sarifDriver struct {
 	Rules          []sarifReportingDescriptor `json:"rules"`
 }
 
-// ToolVersion is the analyzer version surfaced in SARIF tool.driver.version
-// for result reproducibility/triage. Defaults to a constant; main.go can
-// override it at startup (SetToolVersion) to reflect the build version.
+// ToolVersion is surfaced in SARIF tool.driver.version for reproducibility;
+// main.go can override it at startup (SetToolVersion) with the build version.
 var ToolVersion = "0.1.0"
 
-// SetToolVersion sets the version emitted in SARIF tool.driver.version. Called
-// once at startup from main so SARIF consumers (GitHub Code Scanning, Azure
-// DevOps) can correlate results to a specific analyzer build.
+// SetToolVersion sets the SARIF tool.driver.version so consumers can
+// correlate results to a specific analyzer build.
 func SetToolVersion(v string) {
 	if v != "" {
 		ToolVersion = v
@@ -217,10 +210,9 @@ func ReportToSARIFWithOptions(report *models.AnalysisReport, doc *models.FlowDoc
 		}
 		run.OriginalURIBaseIDs = map[string]sarifArtifactLocation{sarifSourceRootID: {URI: uri}}
 	}
-	// executionSuccessful is the SARIF field consumers read for "did this run
-	// pass"; a failed policy gate is reported there so a dashboard does not
-	// show a green run whose gate actually failed. The verdict details ride
-	// in run.properties.policy.
+	// executionSuccessful is the field consumers read for "did this run pass";
+	// a failed policy gate is reported there so a dashboard never shows a green
+	// run whose gate failed. Verdict details ride in run.properties.policy.
 	inv := sarifInvocation{ExecutionSuccessful: true}
 	if opts.Policy != nil {
 		inv.ExecutionSuccessful = opts.Policy.Passed
@@ -248,10 +240,9 @@ func withIndexes(doc *models.FlowDocument) *models.FlowDocument {
 	return doc
 }
 
-// ruleCatalog indexes the built-in rules by ID so descriptors can carry the
-// rule's own name/description (stable across findings) rather than the first
-// finding's instance-specific title. Custom rules are absent and fall back to
-// the finding's text.
+// ruleCatalog indexes built-in rules by ID so descriptors carry the rule's
+// own stable name/description rather than the first finding's instance
+// title. Custom rules fall back to the finding's text.
 func ruleCatalog() map[string]analyzer.Rule {
 	all := analyzer.AllRules()
 	m := make(map[string]analyzer.Rule, len(all))
@@ -262,9 +253,8 @@ func ruleCatalog() map[string]analyzer.Rule {
 }
 
 // policyProperties is the compact verdict embedded as run.properties.policy:
-// the PolicyResult counts plus the fingerprints of the violating findings (the
-// same padFindingId/v1 values as the results) instead of the full findings,
-// which are already present as results.
+// PolicyResult counts plus the violating findings' fingerprints (same
+// padFindingId/v1 values as the results) instead of the full findings.
 func policyProperties(res *models.PolicyResult) map[string]any {
 	fps := make([]string, 0, len(res.Violations))
 	for _, v := range res.Violations {
@@ -435,11 +425,9 @@ func artifactURI(f models.Finding, doc *models.FlowDocument) string {
 			return sf.SourceFile
 		}
 	}
-	// Deliberately NOT falling back to the subflow ID: that is a parser-minted
-	// UUID, regenerated on every parse, so it produced a filename that matched
-	// nothing in the repo and differed run to run. A fixed, obviously-synthetic
-	// name is better than a plausible-looking wrong one — it at least groups
-	// consistently and is greppable when someone asks why the alert has no file.
+	// Deliberately NOT the subflow ID: a parser-minted UUID regenerated every
+	// parse produced a filename matching nothing and differing run to run. A
+	// fixed, obviously-synthetic name groups consistently and is greppable.
 	if doc != nil && doc.FilePath != "" {
 		return filepath.Base(doc.FilePath)
 	}
@@ -456,12 +444,10 @@ func blockLine(f models.Finding, doc *models.FlowDocument) int {
 	return 0
 }
 
-// fingerprint is a stable per-finding identity (not array position) so SARIF
-// consumers can track a result across re-analysis runs even as other findings
-// come and go. It hashes the content-stable Fingerprint (rule + subflow/name/
-// line/subject) so a result tracks across desktop re-imports and CLI re-runs —
-// hashing the legacy Key (RuleID:BlockID) would mint a fresh id every re-parse.
-// Falls back to Key() if Fingerprint is unset (older reports).
+// fingerprint is a stable per-finding identity (not array position): hashes
+// the content-stable Fingerprint so a result tracks across desktop re-imports
+// and CLI re-runs — hashing the legacy Key (RuleID:BlockID) would mint a
+// fresh id every re-parse. Falls back to Key() for older reports.
 func fingerprint(f models.Finding) string {
 	k := f.Fingerprint
 	if k == "" {

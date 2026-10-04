@@ -285,6 +285,106 @@ describe('flattenTreeRows', () => {
   })
 })
 
+// ---- scale: wide trees and collapsed subtrees ----
+
+describe('flatteners at scale', () => {
+  // `push(...childRows)` spread every child row onto the call stack and threw
+  // a RangeError past ~150k direct children.
+  const WIDE = 300_000
+  const wideChildren = () => {
+    const out: Block[] = new Array(WIDE)
+    for (let i = 0; i < WIDE; i++) out[i] = makeBlock(`c${i}`)
+    return out
+  }
+
+  it('flattenBlocks handles 300k direct children of an expanded container', () => {
+    const loop = makeBlock('loop1', 'LOOP', wideChildren())
+    const result = flattenBlocks([loop], new Set())
+    expect(result).toHaveLength(WIDE + 1)
+    expect(result[WIDE].block.id).toBe(`c${WIDE - 1}`)
+    expect(result[WIDE].depth).toBe(1)
+  })
+
+  it('flattenTreeRows handles a subflow of 300k blocks', () => {
+    const doc = makeDoc(makeSubflow('sf1', wideChildren()))
+    const rows = flattenTreeRows(doc, {
+      expandedSubflowIds: new Set(['sf1']),
+      expandedBlockIds: new Set(),
+      visibleTypes: allTypes,
+    })
+    expect(rows).toHaveLength(WIDE + 1)
+    expect(rows[WIDE].id).toBe(`c${WIDE - 1}`)
+  })
+
+  it('flattenTreeRows handles 300k children of an expanded block under a search', () => {
+    const loop = makeBlock('loop1', 'LOOP', wideChildren())
+    const doc = makeDoc(makeSubflow('sf1', [loop]))
+    const rows = flattenTreeRows(doc, {
+      expandedSubflowIds: new Set(['sf1']),
+      expandedBlockIds: new Set(['loop1']),
+      visibleTypes: allTypes,
+      searchQuery: 'block',
+    })
+    expect(rows).toHaveLength(WIDE + 2)
+  })
+
+  // Counts how often the walk looks at a block: `type` is the first property
+  // the row walk reads for every block it visits.
+  function observedBlock(id: string): {block: Block; visits: () => number} {
+    const block = makeBlock(id)
+    let visits = 0
+    Object.defineProperty(block, 'type', {
+      get() {
+        visits++
+        return 'ACTION'
+      },
+      enumerable: true,
+    })
+    return {block, visits: () => visits}
+  }
+
+  it('flattenTreeRows does not walk a collapsed subtree when there is no search', () => {
+    const inner = observedBlock('inner')
+    const loop = makeBlock('loop1', 'LOOP', [makeBlock('mid', 'LOOP', [inner.block])])
+    const doc = makeDoc(makeSubflow('sf1', [loop]))
+    const rows = flattenTreeRows(doc, {
+      expandedSubflowIds: new Set(['sf1']),
+      expandedBlockIds: new Set(), // loop1 collapsed
+      visibleTypes: allTypes,
+    })
+    expect(rows.map(r => r.id)).toEqual(['sf1', 'loop1'])
+    expect(rows[1].hasChildren).toBe(true)
+    expect(inner.visits()).toBe(0)
+  })
+
+  it('flattenTreeRows still walks a collapsed subtree under a search (a match reveals its ancestors)', () => {
+    const inner = observedBlock('inner')
+    inner.block.name = 'Needle'
+    const loop = makeBlock('loop1', 'LOOP', [makeBlock('mid', 'LOOP', [inner.block])])
+    const doc = makeDoc(makeSubflow('sf1', [loop]))
+    const rows = flattenTreeRows(doc, {
+      expandedSubflowIds: new Set(),
+      expandedBlockIds: new Set(),
+      visibleTypes: allTypes,
+      searchQuery: 'needle',
+    })
+    expect(rows.map(r => r.id)).toEqual(['sf1', 'loop1', 'mid', 'inner'])
+    expect(inner.visits()).toBeGreaterThan(0)
+  })
+
+  it('flattenTreeRows skips the block walk of a collapsed subflow when there is no search', () => {
+    const top = observedBlock('top')
+    const doc = makeDoc(makeSubflow('sf1', [top.block]))
+    const rows = flattenTreeRows(doc, {
+      expandedSubflowIds: new Set(),
+      expandedBlockIds: new Set(),
+      visibleTypes: allTypes,
+    })
+    expect(rows.map(r => r.id)).toEqual(['sf1'])
+    expect(top.visits()).toBe(0)
+  })
+})
+
 // ---- buildBlockLookup ----
 
 describe('buildBlockLookup', () => {

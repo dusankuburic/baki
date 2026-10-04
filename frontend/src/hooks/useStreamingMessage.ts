@@ -44,10 +44,10 @@ export interface StreamHandler {
   onDone: (tokensOut: number, tokensIn: number, streamId: string, meta?: DoneMeta) => void
   // `code` is the failure's machine-readable class (AI_BUDGET_EXCEEDED, …)
   // when the backend sent one — see internal/service/chat_errors.go.
-  // `usage` carries what a BILLED failure reports (F-15: token counts that
+  // `usage` carries what a BILLED failure reports (token counts that
   // must reach the meter, plus the served model / rates as done-meta) and
   // `shared` when the failure came from the organisation's shared
-  // credential (F-42). Undefined for a plain unbilled error.
+  // credential. Undefined for a plain unbilled error.
   onError: (error: string, streamId: string, code?: string, usage?: ErrorUsage) => void
   onToolStatus?: (label: string, streamId: string) => void
   // One finished tool execution (transparency trail record).
@@ -169,7 +169,7 @@ export function useStreamingMessage(handler: StreamHandler) {
       opts?: {
         finish?: {tokensOut: number; tokensIn: number; meta?: DoneMeta}
         mode?: 'delta' | 'full'
-        // F-21: called when the stream turns out to be gone (403/404 —
+        // Called when the stream turns out to be gone (403/404 —
         // retention expired) and no done-verification `finish` applies; the
         // reload-reattach path drops its slot and refetches the history.
         onGone?: () => void
@@ -351,12 +351,16 @@ export function useStreamingMessage(handler: StreamHandler) {
         if (chatEventStreamId(event.data) !== streamId) return
         const parsed = parseChatEvent(event.data)
         if (!parsed) return
+        // Any non-terminal event proves the stream is alive: reset the stall
+        // probe (a chunk counts separately too).
+        if (parsed.kind !== 'done' && parsed.kind !== 'error') {
+          sub.probeMisses = 0
+          armStall(streamId)
+        }
 
         switch (parsed.kind) {
           case 'chunk':
             sub.received++
-            sub.probeMisses = 0
-            armStall(streamId)
             handlerRef.current.onChunk(parsed.content, streamId)
             break
           case 'done': {
@@ -386,27 +390,17 @@ export function useStreamingMessage(handler: StreamHandler) {
             // The server is alive but silent (awaiting a fix decision, running
             // a slow tool or re-analysis, a model thinking before its first
             // token). Not a chunk — it must not count toward `received`.
-            sub.probeMisses = 0
-            armStall(streamId)
             break
           case 'tool':
-            sub.probeMisses = 0
-            armStall(streamId)
             handlerRef.current.onToolStatus?.(parsed.label, streamId)
             break
           case 'tool-result':
-            sub.probeMisses = 0
-            armStall(streamId)
             handlerRef.current.onToolResult?.(parsed, streamId)
             break
           case 'fix-proposal':
-            sub.probeMisses = 0
-            armStall(streamId)
             handlerRef.current.onFixProposal?.(parsed, streamId)
             break
           case 'fix-decision':
-            sub.probeMisses = 0
-            armStall(streamId)
             handlerRef.current.onFixDecision?.(parsed.proposalId, parsed.status, parsed.message, streamId, parsed.items)
             break
         }
@@ -504,7 +498,7 @@ export function useStreamingMessage(handler: StreamHandler) {
     }
   }, [])
 
-  // resumeInto is exposed for the engine's reload-reattach path (F-21);
+  // resumeInto is exposed for the engine's reload-reattach path;
   // everything else consumes it through reconnects and probes.
   return {registerStream, cancel, teardownStream, resumeInto}
 }

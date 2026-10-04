@@ -9,21 +9,14 @@ import (
 
 type FindingGroup = models.FindingGroup
 
-// subjectKeys are the metadata keys that identify WHAT a finding concerns (the
-// variable/property/resource it points at), as opposed to descriptive keys
-// (pattern, self-assignment, …). Used to distinguish two findings on the same
-// block+title that are genuinely about different things (so dedup keeps both)
-// and to find related findings that share a subject across blocks.
-//
-// This is the same key list findingContentKey (engine.go) uses to build a
-// finding's content key — aliased to subjectMetaKeys, the single source of
-// truth, rather than a second literal that could silently drift out of sync.
+// subjectKeys are the metadata keys identifying WHAT a finding concerns
+// (variable/property/resource) vs descriptive keys, distinguishing same
+// block+title findings about different things; aliased to subjectMetaKeys
+// (engine.go), the single source of truth.
 var subjectKeys = subjectMetaKeys
 
-// findingSubjects returns the subject identifiers a finding is about. A single
-// rule writes at most one of these, but collecting all keeps the helper robust
-// to future rules that set several. Empty subjects → a finding about the block
-// as a whole (no specific variable/property/resource).
+// findingSubjects returns the subject identifiers a finding is about; empty
+// means a finding about the block as a whole.
 func findingSubjects(f models.Finding) []string {
 	if f.Metadata == nil {
 		return nil
@@ -37,36 +30,61 @@ func findingSubjects(f models.Finding) []string {
 	return subjects
 }
 
-// findingDiscriminator distinguishes findings that share a block and title but
-// concern different subjects — e.g. two uninitialized variables in the same
-// block. Without it, (BlockID, Title) dedup silently drops all but the first.
+// findingDiscriminator distinguishes findings sharing a block and title but
+// concerning different subjects — without it (BlockID, Title) dedup drops all
+// but the first.
 func findingDiscriminator(f models.Finding) string {
 	return strings.Join(findingSubjects(f), "\x00")
 }
 
 func DeduplicateFindings(findings []models.Finding) ([]models.Finding, []FindingGroup) {
+	return keptFindings(findings, dedupKeep(findings)), buildFindingGroups(findings)
+}
+
+// dedupKeep reports, per finding, whether DeduplicateFindings keeps it: first
+// per (block, title, subject) key, later ones folded in. Split out so the
+// engine can stamp IDs/fingerprints before filtering.
+func dedupKeep(findings []models.Finding) []bool {
 	type key struct {
 		blockID string
 		title   string
 		subject string
 	}
-	seen := make(map[key]int)
-	deduped := make([]models.Finding, 0, len(findings))
-	groups := make(map[string][]models.Finding)
-
-	// Index-based iteration: Finding is a large struct (~200 B); the value
-	// copy per element on `for _, f := range` doubled the pass's memory
-	// traffic on finding-dense reports.
+	seen := make(map[key]struct{}, len(findings))
+	keep := make([]bool, len(findings))
+	// Index-based: Finding is ~200 B, so the value copy on `for _, f := range`
+	// doubled the pass's memory traffic on finding-dense reports.
 	for i := range findings {
 		f := &findings[i]
 		k := key{blockID: f.BlockID, title: f.Title, subject: findingDiscriminator(*f)}
-		groups[f.BlockID] = append(groups[f.BlockID], *f)
-
 		if _, exists := seen[k]; exists {
 			continue
 		}
-		seen[k] = len(deduped)
-		deduped = append(deduped, *f)
+		seen[k] = struct{}{}
+		keep[i] = true
+	}
+	return keep
+}
+
+// keptFindings returns the findings dedupKeep marked, in order (never nil).
+func keptFindings(findings []models.Finding, keep []bool) []models.Finding {
+	deduped := make([]models.Finding, 0, len(findings))
+	for i := range findings {
+		if keep[i] {
+			deduped = append(deduped, findings[i])
+		}
+	}
+	return deduped
+}
+
+// buildFindingGroups clusters ALL findings (duplicates included) per block;
+// Primary is the block's first finding, DuplicateCount counts same-title,
+// same-subject findings folded into an earlier one.
+func buildFindingGroups(findings []models.Finding) []FindingGroup {
+	groups := make(map[string][]models.Finding)
+	for i := range findings {
+		f := &findings[i]
+		groups[f.BlockID] = append(groups[f.BlockID], *f)
 	}
 
 	var resultGroups []FindingGroup
@@ -90,16 +108,12 @@ func DeduplicateFindings(findings []models.Finding) ([]models.Finding, []Finding
 		})
 	}
 
-	if deduped == nil {
-		deduped = []models.Finding{}
-	}
 	if resultGroups == nil {
 		resultGroups = []FindingGroup{}
 	}
 
-	// Map iteration order is non-deterministic; sort groups by BlockID (then
-	// primary finding title) so report.Groups is stable across runs — required
-	// for deterministic SARIF/JSON output and reproducible tests.
+	// Map iteration is non-deterministic; sort by BlockID (then primary title)
+	// for stable dedup-endpoint output and reproducible tests.
 	slices.SortFunc(resultGroups, func(a, b FindingGroup) int {
 		if c := strings.Compare(a.BlockID, b.BlockID); c != 0 {
 			return c
@@ -114,15 +128,13 @@ func DeduplicateFindings(findings []models.Finding) ([]models.Finding, []Finding
 		return strings.Compare(at, bt)
 	})
 
-	return deduped, resultGroups
+	return resultGroups
 }
 
 // FindRelatedFindings returns findings on OTHER blocks that share a subject
-// (variable/property/resource) with any finding on blockID — e.g. a
-// resource-leak's variable used by an uninitialized-variable finding elsewhere.
-// Previously this read Metadata["variables"] ([]string), which no rule writes;
-// every rule writes the singular keys (variable/property/resource), so it
-// returned empty for every real flow.
+// (variable/property/resource) with any finding on blockID. (Previously read
+// Metadata["variables"], which no rule writes, so it returned empty for every
+// real flow; the singular keys are the real ones.)
 func FindRelatedFindings(findings []models.Finding, blockID string) []models.Finding {
 	blockSubjects := make(map[string]bool)
 	for _, f := range findings {

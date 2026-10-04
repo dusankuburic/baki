@@ -1,6 +1,6 @@
 package api
 
-// F-50: the local models provider (Foundry Local / Ollama / LM Studio) as a
+// The local models provider (Foundry Local / Ollama / LM Studio) as a
 // product feature — configuration routes, keys/save rejection, the cloud
 // policy gate (on reads too), the context window and the provider listing.
 
@@ -210,7 +210,7 @@ func TestLocalConfigRoutes_SaveGetAndDelete(t *testing.T) {
 	}
 }
 
-// B3: under the cloud policy the read is refused like a save (400
+// Under the cloud policy the read is refused like a save (400
 // LOCAL_MODELS_UNAVAILABLE, the same message), stored document or not — the
 // settings UI drops the section on it instead of offering an unusable form.
 func TestLocalConfigGet_RefusedUnderCloudPolicy(t *testing.T) {
@@ -234,7 +234,7 @@ func TestLocalConfigGet_RefusedUnderCloudPolicy(t *testing.T) {
 	}
 }
 
-// B11: the save's audit row names the server host and the configured window
+// The save's audit row names the server host and the configured window
 // (a token count), nothing else.
 func TestLocalConfigSave_AuditMeta(t *testing.T) {
 	setLocalModelsPolicy(t, egress.AllowLoopback)

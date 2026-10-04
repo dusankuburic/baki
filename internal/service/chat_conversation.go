@@ -20,14 +20,8 @@ import (
 	"pad-core/models"
 )
 
-// ClampModelLabel is a client-sent ChatMessage.ModelLabel as a conversation
-// save (/api/chat/save) stores it: NFC-normalised; control, bidi and
-// zero-width characters (Unicode Cc and Cf) dropped; whitespace runs — tabs
-// and newlines included — collapsed to one space and trimmed; at most 64
-// characters, a registry display name's limit. The label is only the name
-// shown next to an answer, so it is clamped rather than refused (a refusal
-// would fail the whole save); what the clamp removes is what lets a label
-// impersonate another model's name.
+// ClampModelLabel clamps a client-sent ModelLabel for storage: NFC, control/bidi/zero-width runes dropped,
+// whitespace collapsed, 64 chars max — clamped (a refusal fails the save); it removes what impersonates another model.
 func ClampModelLabel(label string) string {
 	if label == "" {
 		return ""
@@ -45,31 +39,23 @@ func ClampModelLabel(label string) string {
 	return strings.TrimSpace(truncateRunes(label, storageif.AzureNameMaxLen))
 }
 
-// reconstructHistory loads the stored conversation for the request's
-// conversation key so a client that omitted Messages (the efficient path — it
-// sends only the new userMessage) still gets full LLM context. The key matches
-// the client's save key (see ChatRequest.ConversationKey). Returns nil when
-// doc is nil.
+// reconstructHistory loads the stored conversation for the request's key so a
+// client that sent only the new userMessage still gets full LLM context.
 func (s *ChatService) reconstructHistory(ctx context.Context, doc *models.FlowDocument, req models.ChatRequest) ([]models.ChatMessage, error) {
 	if doc == nil {
 		return nil, nil
 	}
-	loaded, err := s.GetConversation(ctx, doc, req.ConversationKey())
+	loaded, err := s.GetConversation(ctx, doc.ID, req.ConversationKey())
 	if err != nil {
-		// The error is RETURNED, not swallowed. A caller that persists after
-		// reconstructing must be able to tell "this conversation is empty" from
-		// "I could not read this conversation" — SaveConversation is a full
-		// replace, so writing on the second is data loss. See
-		// reconstructAndPersistUserTurn.
+		// The error is RETURNED, not swallowed: SaveConversation is a full
+		// replace, so persisting on an unreadable conversation is data loss.
 		return nil, err
 	}
 	return loaded, nil
 }
 
-// clientMessageID returns the client-supplied id for a persisted turn when it
-// is a UUID (see ChatRequest.UserMessageID/AssistantMessageID), otherwise a
-// fresh server-minted one. Sharing the client's id is what lets a client that
-// reloads the conversation mid-turn dedupe the server's copy by id.
+// clientMessageID returns the client-supplied id when it is a canonical UUID,
+// else a fresh one — sharing the id lets a mid-turn reload dedupe the copy.
 func clientMessageID(id string) string {
 	// Canonical 8-4-4-4-12 form only: uuid.Parse also accepts braced, urn: and
 	// 32-hex spellings, which the client's own id comparison would not match.
@@ -81,27 +67,24 @@ func clientMessageID(id string) string {
 	return uuid.NewString()
 }
 
-// useBackendConversations reports whether conversations should persist through
-// the storage backend (cloud mode: Postgres, durable + cross-replica + RLS)
-// rather than the local on-disk file store (desktop, single persistent instance).
-// Explicit allow-list on ModeCloud: an unset/zero mode (or any future mode) must
-// fall back to the local file store, never silently route chat history to Postgres.
+// useBackendConversations reports whether conversations persist through the backend (cloud: durable,
+// cross-replica, RLS) rather than local files — allow-listed on ModeCloud; any other mode falls back, never Postgres.
 func (s *ChatService) useBackendConversations() bool {
 	return s.mode == config.ModeCloud && s.backend != nil
 }
 
-func (s *ChatService) GetConversation(ctx context.Context, doc *models.FlowDocument, provider string) ([]models.ChatMessage, error) {
-	if doc == nil {
+func (s *ChatService) GetConversation(ctx context.Context, flowID, provider string) ([]models.ChatMessage, error) {
+	if flowID == "" {
 		return nil, fmt.Errorf("no flow loaded")
 	}
 	if s.useBackendConversations() {
-		stored, err := s.backend.LoadConversation(ctx, doc.ID, provider)
+		stored, err := s.backend.LoadConversation(ctx, flowID, provider)
 		if err != nil {
 			return nil, err
 		}
 		return toModelMessages(stored), nil
 	}
-	path, err := convFilePath(s.configDir, provider, doc.ID)
+	path, err := convFilePath(s.configDir, provider, flowID)
 	if err != nil {
 		return nil, err
 	}
@@ -120,32 +103,24 @@ func (s *ChatService) GetConversation(ctx context.Context, doc *models.FlowDocum
 	return conv.Messages, nil
 }
 
-func (s *ChatService) SaveConversation(ctx context.Context, doc *models.FlowDocument, provider string, messages []models.ChatMessage) error {
-	_, err := s.saveConversation(ctx, doc, provider, messages)
+func (s *ChatService) SaveConversation(ctx context.Context, flowID, provider string, messages []models.ChatMessage) error {
+	_, err := s.saveConversation(ctx, flowID, provider, messages)
 	return err
 }
 
-// saveConversation is SaveConversation reporting whether the list was stored:
-// false with a nil error when the caller turned "Save conversation history"
-// off (the save is accepted and dropped).
-func (s *ChatService) saveConversation(ctx context.Context, doc *models.FlowDocument, provider string, messages []models.ChatMessage) (stored bool, err error) {
-	if doc == nil {
+// saveConversation is SaveConversation reporting whether the list was stored
+// (false/nil = "Save conversation history" off: accepted and dropped).
+func (s *ChatService) saveConversation(ctx context.Context, flowID, provider string, messages []models.ChatMessage) (stored bool, err error) {
+	if flowID == "" {
 		return false, fmt.Errorf("no flow loaded")
 	}
-	// "Save conversation history" off: accept and drop. The toggle used to have
-	// no reader, so turns were stored regardless of it. The client stops
-	// calling this and sends history with each turn instead; the check here
-	// also covers the server's own start-of-stream persist and older clients.
+	// "Save conversation history" off: accept and drop (covers the server's
+	// own start-of-stream persist and older clients that kept calling).
 	if !s.conversationHistoryEnabled(ctx) {
 		return false, nil
 	}
-	// An assistant message with blank content and no tool calls or fix
-	// proposals is dropped before storing (F-10), mirroring
-	// persistAssistantTurn's own blank rule: an empty 'stop' answer saved as
-	// an empty assistant message used to brick the thread on Claude, whose
-	// Messages API rejects {"role":"assistant","content":""} on every later
-	// turn. Tool-bearing and fix-bearing turns stay (their content is not the
-	// answer).
+	// Drop a blank assistant message: an empty 'stop' answer used to brick the
+	// thread on Claude (Messages API rejects {"role":"assistant","content":""}).
 	filtered := make([]models.ChatMessage, 0, len(messages))
 	for _, m := range messages {
 		if m.Role == "assistant" && strings.TrimSpace(m.Content) == "" &&
@@ -157,13 +132,13 @@ func (s *ChatService) saveConversation(ctx context.Context, doc *models.FlowDocu
 	trimmed := evictConvMessages(filtered)
 
 	if s.useBackendConversations() {
-		if err := s.backend.SaveConversation(ctx, doc.ID, provider, toStorageMessages(trimmed)); err != nil {
+		if err := s.backend.SaveConversation(ctx, flowID, provider, toStorageMessages(trimmed)); err != nil {
 			return false, err
 		}
 		return true, nil
 	}
 
-	path, err := convFilePath(s.configDir, provider, doc.ID)
+	path, err := convFilePath(s.configDir, provider, flowID)
 	if err != nil {
 		return false, err
 	}
@@ -174,7 +149,7 @@ func (s *ChatService) saveConversation(ctx context.Context, doc *models.FlowDocu
 
 	conv := models.ConversationFile{
 		Version:   1,
-		FlowKey:   doc.ID,
+		FlowKey:   flowID,
 		Scope:     provider,
 		UpdatedAt: time.Now(),
 		Messages:  trimmed,
@@ -193,14 +168,14 @@ func (s *ChatService) saveConversation(ctx context.Context, doc *models.FlowDocu
 	return true, nil
 }
 
-func (s *ChatService) ClearConversation(ctx context.Context, doc *models.FlowDocument, provider string) error {
-	if doc == nil {
+func (s *ChatService) ClearConversation(ctx context.Context, flowID, provider string) error {
+	if flowID == "" {
 		return fmt.Errorf("no flow loaded")
 	}
 	if s.useBackendConversations() {
-		return s.backend.DeleteConversation(ctx, doc.ID, provider)
+		return s.backend.DeleteConversation(ctx, flowID, provider)
 	}
-	path, err := convFilePath(s.configDir, provider, doc.ID)
+	path, err := convFilePath(s.configDir, provider, flowID)
 	if err != nil {
 		return err
 	}
@@ -210,33 +185,12 @@ func (s *ChatService) ClearConversation(ctx context.Context, doc *models.FlowDoc
 	return nil
 }
 
-// persistAnswerTimeout bounds the detached end-of-stream write of the answer
-// (persistAssistantTurn). The write runs under the conversation's stripe mutex
-// after the stream's own context is gone: unbounded, a stalled store parked
-// every finishing stream there for good, holding the stripe every new stream
-// on that conversation needs (mu.Lock is not ctx-aware) and, before the
-// cleanup reordering in StreamChatMessage, its activeStreams slot. A variable
-// so tests can shorten it.
+// persistAnswerTimeout bounds the detached end-of-stream write: unbounded, a
+// stalled store parked every finishing stream on the stripe mutex. Test variable.
 var persistAnswerTimeout = 15 * time.Second
 
-// persistAssistantTurn appends the finished answer to the stored conversation.
-//
-// The question is persisted when the stream starts (persistInitialUserTurn) but
-// the answer was left to the client's save-on-done call, so a browser tab closed
-// mid-answer — or any caller that simply does not call /api/chat/save — left the
-// conversation holding a question with nothing beside it. Only runs on the
-// server-reconstructed path: a client that sent its own Messages owns
-// persistence, and SaveConversation still honours the history preference.
-//
-// Best-effort and idempotent in effect: the client's own save replaces the whole
-// list with the same content. Bounded by persistAnswerTimeout: a store that
-// hangs turns into a logged warning, never a held stripe.
-//
-// model and modelLabel are what the answer is stored with (turnModel's
-// requested id and label): the id the client asked for — an Azure AI Foundry
-// registry entry's "m/<entryId>", never the deployment it resolved to — and
-// the entry's display name at send time, so history keeps naming the model
-// after it is renamed or removed.
+// persistAssistantTurn appends the finished answer server-side (a closed tab used to leave a stored
+// question with no answer); best-effort, idempotent, bounded by persistAnswerTimeout. model/modelLabel persist the requested id and send-time label.
 func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.FlowDocument, req models.ChatRequest, ctl *streamCtl, model, modelLabel string) {
 	if doc == nil || ctl == nil {
 		return
@@ -246,8 +200,15 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 	done, errMsg := ctl.done, ctl.errMsg
 	tokensIn, tokensOut := ctl.tokensIn, ctl.tokensOut
 	served, inRate, outRate := ctl.servedModel, ctl.inputCostPerM, ctl.outputCostPerM
+	events := ctl.snapshotEvents()
 	ctl.mu.Unlock()
-	if !done || errMsg != "" || strings.TrimSpace(answer) == "" {
+	if !done || errMsg != "" {
+		return
+	}
+	// The tool trail and fix records come from the stream's journal, as the
+	// client pins them; a blank answer still stores when tools ran or a fix was proposed.
+	toolCalls, fixes := journalTurnRecord(events)
+	if strings.TrimSpace(answer) == "" && len(toolCalls) == 0 && len(fixes) == 0 {
 		return
 	}
 
@@ -257,32 +218,27 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistAnswerTimeout)
 	defer cancel()
 	// Same critical section as reconstruct + persist-user-turn: the next turn
-	// on this conversation may already be reading the history this replaces,
-	// and SaveConversation is a full-file replace.
+	// may be reading the history this full-file replace overwrites.
 	mu := s.convMutexFor(doc.ID, convKey)
 	mu.Lock()
 	defer mu.Unlock()
-	history, err := s.GetConversation(writeCtx, doc, convKey)
+	history, err := s.GetConversation(writeCtx, doc.ID, convKey)
 	if err != nil {
 		logger.Warn("chat: could not load conversation to store the answer", "error", err)
 		return
 	}
 	answerID := clientMessageID(req.AssistantMessageID)
-	// Already stored: a retry, or the client got there first. Matching by id
-	// anywhere in the history also covers the client's own interrupted partial
-	// for this turn (the user pressed Stop just as the stream finished) even
-	// once its next question has landed — appending the full answer then would
-	// show the reply twice, out of order.
+	// Already stored: a retry, or the client got there first; an id match
+	// anywhere also covers its interrupted partial (else the reply shows twice).
 	if slices.ContainsFunc(history, func(m models.ChatMessage) bool { return m.ID == answerID }) {
 		return
 	}
 	if n := len(history); n > 0 && history[n-1].Role == "assistant" && history[n-1].Content == answer {
 		return
 	}
-	// Usage, served model and billed rates as the client saves them on
-	// done, so a reload after a disconnected turn keeps the tag and prices
-	// the turn at what it cost.
-	history = append(history, models.ChatMessage{
+	// Usage, served model and billed rates as the client saved them on done,
+	// so a reload keeps the tag and prices the turn at what it cost.
+	msg := models.ChatMessage{
 		ID:             answerID,
 		Role:           "assistant",
 		Content:        answer,
@@ -295,8 +251,156 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 		ServedModel:    served,
 		InputCostPerM:  inRate,
 		OutputCostPerM: outRate,
-	})
-	if err := s.SaveConversation(writeCtx, doc, convKey, history); err != nil {
+		FinishReason:   "stop",
+		ToolCalls:      toolCalls,
+		FixProposals:   fixes,
+	}
+	// Right after its own question when stored under the client's id (a queued
+	// follow-up's question can land in between) — else at the end.
+	at := len(history)
+	if id := req.UserMessageID; id != "" && clientMessageID(id) == id {
+		if i := slices.IndexFunc(history, func(m models.ChatMessage) bool { return m.ID == id && m.Role == "user" }); i >= 0 {
+			at = i + 1
+		}
+	}
+	history = slices.Insert(history, at, msg)
+	if err := s.SaveConversation(writeCtx, doc.ID, convKey, history); err != nil {
 		logger.Warn("chat: failed to store the finished answer", "error", err)
 	}
+}
+
+// Card and item statuses the stored fix records may carry — the client's own
+// vocabulary (chatStore), to which fix_decision statuses are clamped.
+var (
+	fixCardStatuses = map[string]bool{"applying": true, "applied": true, "applied-unresolved": true, "declined": true, "timeout": true, "error": true}
+	fixItemStatuses = map[string]bool{"applied": true, "applied-unresolved": true, "error": true, "already-resolved": true}
+)
+
+// journalTurnRecord derives the turn's tool trail and fix records from the
+// journal (tool_result → ToolCallRecords; proposals resolve by decision events).
+func journalTurnRecord(events []journalEvent) (calls []models.ToolCallRecord, fixes []models.FixProposalSnapshot) {
+	byID := make(map[string]int)
+	for _, ev := range events {
+		switch ev.Type {
+		case "tool_result":
+			calls = append(calls, models.ToolCallRecord{
+				Name:       journalString(ev.Data["name"]),
+				Label:      journalString(ev.Data["label"]),
+				Ok:         ev.Data["ok"] == true,
+				DurationMs: journalInt(ev.Data["durationMs"]),
+				Summary:    journalString(ev.Data["summary"]),
+			})
+		case "fix_proposal":
+			id := journalString(ev.Data["proposalId"])
+			if _, dup := byID[id]; id == "" || dup {
+				continue
+			}
+			var items []models.FixItemSnapshot
+			for _, raw := range journalItems(ev.Data["items"]) {
+				items = append(items, models.FixItemSnapshot{
+					RuleID:     journalString(raw["ruleId"]),
+					FixType:    journalString(raw["fixType"]),
+					BlockLabel: journalString(raw["blockLabel"]),
+					Line:       int(journalInt(raw["line"])),
+					Summary:    journalString(raw["summary"]),
+					Status:     "pending",
+				})
+			}
+			if len(items) == 0 { // a single fix: flat fields, one item
+				items = []models.FixItemSnapshot{{
+					RuleID:     journalString(ev.Data["ruleId"]),
+					FixType:    journalString(ev.Data["fixType"]),
+					BlockLabel: journalString(ev.Data["blockLabel"]),
+					Line:       int(journalInt(ev.Data["line"])),
+					Summary:    journalString(ev.Data["summary"]),
+					Status:     "pending",
+				}}
+			}
+			byID[id] = len(fixes)
+			fixes = append(fixes, models.FixProposalSnapshot{
+				ProposalID: id,
+				RuleID:     items[0].RuleID,
+				FixType:    items[0].FixType,
+				BlockLabel: items[0].BlockLabel,
+				Line:       items[0].Line,
+				Summary:    items[0].Summary,
+				Status:     "pending",
+				Items:      items,
+			})
+		case "fix_decision":
+			idx, ok := byID[journalString(ev.Data["proposalId"])]
+			if !ok {
+				continue
+			}
+			snap := &fixes[idx]
+			status := journalString(ev.Data["status"])
+			if !fixCardStatuses[status] {
+				status = "error"
+			}
+			snap.Status = status
+			snap.Message = journalString(ev.Data["message"])
+			decided := journalItems(ev.Data["items"])
+			for _, raw := range decided {
+				rid := journalString(raw["ruleId"])
+				for i := range snap.Items {
+					if snap.Items[i].RuleID != rid {
+						continue
+					}
+					snap.Items[i].Status = journalString(raw["status"])
+					if !fixItemStatuses[snap.Items[i].Status] {
+						snap.Items[i].Status = "error"
+					}
+					snap.Items[i].Message = journalString(raw["message"])
+				}
+			}
+			// A single fix's decision carries no items: its one item takes the
+			// terminal outcome; "applying" is not terminal and stays pending.
+			if len(decided) == 0 && len(snap.Items) == 1 && status != "applying" {
+				item := status
+				if !fixItemStatuses[item] {
+					item = "error"
+				}
+				snap.Items[0].Status = item
+				snap.Items[0].Message = snap.Message
+			}
+		}
+	}
+	return calls, fixes
+}
+
+// journalItems reads a journal event's items list — the []map the stream
+// emits, or the []interface{} a JSON round trip leaves.
+func journalItems(v interface{}) []map[string]interface{} {
+	switch items := v.(type) {
+	case []map[string]interface{}:
+		return items
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(items))
+		for _, it := range items {
+			if m, ok := it.(map[string]interface{}); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func journalString(v interface{}) string {
+	s, _ := v.(string)
+	return s
+}
+
+// journalInt reads a journal number as the stream emits it (int / int64) or
+// as a JSON round trip leaves it (float64).
+func journalInt(v interface{}) int64 {
+	switch n := v.(type) {
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	}
+	return 0
 }

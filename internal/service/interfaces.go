@@ -8,16 +8,12 @@ import (
 	"pad-core/models"
 )
 
-// SettingsProvider abstracts read/write access to persisted app settings and
-// recent-file tracking. It is satisfied by *storage.SettingsStore on the
-// desktop and by *BackendSettingsProvider in cloud mode, and can be mocked in
-// tests without dragging in filesystem dependencies.
-//
-// Get takes no context on purpose: it is called on hot paths (every analyze,
-// every batch, every chat budget check) and the cloud implementation serves it
-// from a TTL cache rather than a database round-trip. Update does take one, so
-// that a cloud write joins the request's RLS transaction and is rolled back
-// with it if the request later fails.
+// SettingsProvider abstracts read/write access to persisted app settings and recent-file
+// tracking (desktop *storage.SettingsStore, cloud *BackendSettingsProvider, mockable in
+// tests). Get takes no context on purpose: it sits on hot paths (every analyze, batch,
+// chat budget check) and the cloud implementation serves it from a TTL cache, not a DB
+// round-trip; Update does take one, so a cloud write joins the request's RLS transaction
+// and is rolled back with it if the request later fails.
 type SettingsProvider interface {
 	Get() *models.AppSettings
 	Update(ctx context.Context, settings models.AppSettings) error
@@ -26,11 +22,10 @@ type SettingsProvider interface {
 	ClearRecentFiles() error
 }
 
-// KeyStore abstracts API-key persistence. The default implementation is the
-// OS keychain (desktop mode); cloud deployments use an encrypted, database-backed
-// store. Defining the interface here (where it's consumed) follows the Go
-// "accept interfaces, return structs" principle and removes the service layer's
-// dependency on the storage package's global-state wrappers.
+// KeyStore abstracts API-key persistence: the OS keychain on desktop, an encrypted
+// database-backed store in cloud. Defined here where it is consumed ("accept interfaces,
+// return structs"), removing the service layer's dependency on the storage package's
+// global-state wrappers.
 type KeyStore interface {
 	Save(scope, provider, key string) error
 	Get(scope, provider string) (string, error)
@@ -38,12 +33,11 @@ type KeyStore interface {
 	Delete(scope, provider string) error
 }
 
-// OrgKeyStore mirrors storage/interfaces.OrgSecretStore where it is consumed:
-// an organisation's shared provider credential (G7), written by org admins
-// and run on by members who have no credential of their own. Nil on the
-// desktop and in local mode (no organisations). The secret is write-only —
-// GetOrg builds providers and merges an edit that omits the secret; it is
-// never rendered to a client. Each row records its last writer and its
+// OrgKeyStore mirrors storage/interfaces.OrgSecretStore where it is consumed: an
+// organisation's shared provider credential (G7), written by org admins and run on by
+// members with no credential of their own; nil on the desktop and in local mode. The
+// secret is write-only — GetOrg builds providers and merges an edit that omits the
+// secret, never rendering it to a client; each row records its last writer and its
 // secret's lender (see storageif.OrgSecretStore).
 type OrgKeyStore interface {
 	SaveOrg(orgID, provider, key, updatedBy string) error

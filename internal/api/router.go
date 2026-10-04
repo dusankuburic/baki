@@ -10,12 +10,14 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
+	storageif "pad-analyzer/internal/storage/interfaces"
 	wshub "pad-analyzer/internal/websocket"
 
 	_ "pad-analyzer/docs"
@@ -51,28 +53,22 @@ type Router struct {
 	AllowedOrigins []string
 	trustedProxies []string
 	metricsToken   string
-	// pprofEnabled gates registration of /debug/pprof/* (PAD_PPROF_ENABLED,
-	// default false). Config validation guarantees metricsToken is non-empty
-	// whenever this is true.
+	// pprofEnabled gates registration of /debug/pprof/* (PAD_PPROF_ENABLED, default false).
+	// Config validation guarantees metricsToken is non-empty whenever this is true.
 	pprofEnabled bool
 	staticDir    string
 	hub          *wshub.Hub
 	flowChecker  wshub.FlowAccessChecker
 
-	// perUserLimiter caps one authenticated user's total write throughput.
-	// Constructed in BuildHandler (cloud mode only); nil in local mode, in which
-	// case perUserRateLimit is a pass-through. Set after NewRouter but before
-	// any request, so the middleware reads it at request time.
-	perUserLimiter *middleware.RateLimiter
+	// perUserLimiter caps one authenticated user's total write throughput; nil in local mode (the middleware then passes through).
+	// Installed after NewRouter through SetPerUserLimiter, so the middleware loads it per request — at chain construction it is always still nil.
+	perUserLimiter atomic.Pointer[middleware.RateLimiter]
 
 	usedTicketsMu sync.Mutex
 	usedTickets   map[string]time.Time
 
-	// indexCSPOnce/indexCSPHash cache the sha256 pin of index.html's inline
-	// theme-bootstrap script, derived lazily from the file actually served.
-	// A hardcoded hash drifted from the built index.html once and silently
-	// blocked the bootstrap on every page load (CSP violation in the console);
-	// deriving it from the artifact makes that class of drift impossible.
+	// indexCSPOnce/indexCSPHash cache the sha256 pin of index.html's inline theme-bootstrap script, derived lazily from the file actually served:
+	// a hardcoded hash drifted once and silently blocked the bootstrap on every page load — deriving makes that impossible.
 	indexCSPOnce sync.Once
 	indexCSPHash string
 
@@ -109,17 +105,12 @@ func NewRouter(
 		mux:         chi.NewRouter(),
 	}
 
-	// Release the hub's backplane subscriber on shutdown (no-op in-memory).
-	// This is a SAFETY NET: startServer's OnStop calls Router.ShutdownWebSocket
-	// → Hub.Shutdown, which already calls Hub.Close internally. But if that
-	// hook never fires (e.g. fx fails earlier in shutdown), this hook ensures
-	// the Redis backplane subscriber is still released. Hub.Close is
-	// idempotent — calling it twice is a no-op.
+	// Release the hub's backplane subscriber on shutdown. SAFETY NET for startServer's OnStop (Router.ShutdownWebSocket → Hub.Shutdown,
+	// which already closes); if that hook never fires, this still releases it. Hub.Close is idempotent.
 	lc.Append(fx.Hook{OnStop: func(context.Context) error { rt.hub.Close(); return nil }})
 
-	// Wire the WebSocket hub as a flow-change notifier so that library
-	// saves and apply-fix / save-source / suppress edits broadcast to all
-	// connected viewers (triggering useFlowChangeSync to reload content).
+	// Wire the WebSocket hub as a flow-change notifier so library saves and apply-fix /
+	// save-source / suppress edits broadcast to all connected viewers.
 	if handlers.Library != nil {
 		handlers.Library.SetFlowNotifier(rt.hub)
 	}
@@ -135,12 +126,8 @@ func NewRouter(
 	// users behind a reverse proxy onto one IP bucket.
 	rt.eventManager.SetClientKeyFunc(rt.sseClientKey)
 
-	// Wire the auth blacklist so SSE connections are periodically re-validated
-	// after the initial upgrade. This disconnects a session once its access
-	// token is blacklisted (logout / explicit revoke). Password change and
-	// refresh-replay revoke only refresh tokens, so those sessions end when the
-	// short-lived access token expires — which the SSE loop enforces directly
-	// (it also drops the connection at the access-token expiry).
+	// Wire the auth blacklist so SSE connections are periodically re-validated: a blacklisted access token (logout / revoke) disconnects the session.
+	// Refresh-only revocations end when the short-lived access token expires, which the SSE loop enforces directly.
 	if rt.security.AuthMgr != nil {
 		rt.eventManager.SetRevocationChecker(rt.security.AuthMgr.IsRevoked)
 	}
@@ -158,12 +145,16 @@ func (rt *Router) Shutdown() {
 	rt.shutdownOnce.Do(func() { close(rt.shutdownCh) })
 }
 
-// ShutdownWebSocket gracefully drains all connected WebSocket clients: each is
-// sent a CloseGoingAway control frame, the underlying conns are closed, and the
-// call waits for every client's read/write pumps to exit (or ctx to elapse).
-// Call BEFORE server.Shutdown — http.Server.Shutdown does not close hijacked
-// (WebSocket) sockets, so without this every rolling restart takes the full
-// shutdownCtx budget + drops in-flight collab state silently. Idempotent.
+// DrainBackground stops starting best-effort background notifications and waits for the ones in
+// flight, or ctx. Call AFTER server.Shutdown, once no request can start another.
+func (rt *Router) DrainBackground(ctx context.Context) error {
+	if rt.handlers.Analysis == nil {
+		return nil
+	}
+	return rt.handlers.Analysis.DrainBackground(ctx)
+}
+
+// ShutdownWebSocket gracefully drains all WebSocket clients (CloseGoingAway, conns closed, pumps waited for). Call BEFORE server.Shutdown — http.Server.Shutdown does not close hijacked sockets. Idempotent.
 func (rt *Router) ShutdownWebSocket(ctx context.Context) error {
 	return rt.hub.Shutdown(ctx)
 }
@@ -187,10 +178,8 @@ func (rt *Router) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=(), payment=(), usb=()")
 		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
-		// Sensitive JSON (auth/me, sessions, library, admin, account export)
-		// must not be retained by a shared/intermediate cache or the browser disk
-		// cache. Individual endpoints that are intentionally cacheable can
-		// override this header (Set replaces); SSE sets no-cache in events.go.
+		// Sensitive JSON (auth/me, sessions, library, admin, account export) must not be retained by a shared/intermediate or browser cache.
+		// Intentionally cacheable endpoints override (Set replaces); SSE sets no-cache itself.
 		w.Header().Set("Cache-Control", "no-store, private")
 		if rt.security.JWTEnabled {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
@@ -202,10 +191,8 @@ func (rt *Router) securityHeaders(next http.Handler) http.Handler {
 func (rt *Router) corsHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		// Vary: Origin must be set unconditionally: if it's only emitted when the
-		// origin is allowed, a CDN/proxy caching by URL can serve the no-ACAO
-		// variant to a later allowed-origin request (stripping the legitimate
-		// ACAO) or vice-versa.
+		// Vary: Origin must be set unconditionally: emitted only when the origin is allowed, a CDN/proxy caching by URL could serve the no-ACAO
+		// variant (stripping the legitimate ACAO) to a later allowed-origin request, or vice-versa.
 		w.Header().Set("Vary", "Origin")
 		if rt.isOriginAllowed(origin) && origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
@@ -220,10 +207,12 @@ func (rt *Router) corsHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// jwtAuth enforces authentication on all /api/ routes except publicRoutes.
+// jwtAuth enforces authentication on all /api/ routes except publicRoutes,
+// judged on the path chi dispatches on (routePath), not the decoded one.
 func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") || publicRoutes[r.URL.Path] {
+		p := routePath(r)
+		if !strings.HasPrefix(p, "/api/") || publicRoutes[p] {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -233,17 +222,14 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 				render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 				return
 			}
-			// Machine tokens (PATs) are verified against storage by hash; JWTs are
-			// verified locally. Both resolve to the same Claims so downstream authz
-			// is identical regardless of credential type.
+			// Machine tokens (PATs) are verified against storage by hash; JWTs locally. Both
+			// resolve to the same Claims so downstream authz is identical regardless of type.
 			var claims *auth.Claims
 			if auth.IsAPIToken(tokenStr) {
 				claims = rt.verifyAPIToken(r.Context(), tokenStr)
-				// Scope enforcement (R2-1): a scoped PAT may only touch routes
-				// its capabilities allow — checked HERE, before any handler
-				// runs, so no route can accidentally skip it. Unscoped PATs
-				// (every pre-existing token) and interactive JWTs pass through.
-				if claims != nil && claims.TokenScoped() && !auth.RouteAllowed(r.Method, r.URL.Path, claims.Scopes) {
+				// Scope enforcement: a scoped PAT may only touch routes its capabilities allow — checked HERE, before any handler runs, so no route can skip it.
+				// Unscoped PATs and interactive JWTs pass through.
+				if claims != nil && claims.TokenScoped() && !auth.RouteAllowed(r.Method, p, claims.Scopes) {
 					render.Error(w, fmt.Errorf("token is not authorized for this operation (missing scope)"), http.StatusForbidden)
 					return
 				}
@@ -256,10 +242,8 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 			}
 			r = r.WithContext(auth.WithClaims(r.Context(), claims))
 		} else {
-			// B1.8: ConstantTimeCompare("","") == 1 — an empty configured
-			// token would admit anyone. Unreachable today (the auth manager
-			// backfills a random secret), but that guarantee lives in an
-			// unrelated provider; fail closed here regardless.
+			// ConstantTimeCompare("","") == 1 — an empty configured token would admit anyone.
+			// Unreachable today (the auth manager backfills a random secret), but fail closed regardless.
 			if rt.security.Token == "" || subtle.ConstantTimeCompare([]byte(tokenStr), []byte(rt.security.Token)) != 1 {
 				render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 				return
@@ -269,34 +253,49 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 	})
 }
 
-// verifyAPIToken authenticates a machine token: hash → storage lookup → expiry
-// check → resolve the owning user (so a deleted/role-changed user is reflected
-// immediately). Returns nil on any failure, which the caller maps to 401. The
-// owner's *current* role is used, so revoking a token (delete) or demoting the
-// user takes effect at once — deliberately NOT cached: a TTL cache would
-// weaken this revocation-immediacy contract (TestAPIToken_RevokedRejected,
-// which deletes via storage directly, as retention purges also do).
+// verifyAPIToken authenticates a machine token: hash → storage lookup → expiry check → the owner's CURRENT user row (deleted/demoted reflected at once). Returns nil on failure (401).
+// Deliberately NOT cached: a TTL cache would weaken the revocation-immediacy contract (TestAPIToken_RevokedRejected deletes via storage directly, as retention purges do).
 func (rt *Router) verifyAPIToken(ctx context.Context, raw string) *auth.Claims {
 	if rt.security.Backend == nil {
 		return nil
 	}
-	tok, err := rt.security.Backend.GetAPITokenByHash(ctx, auth.HashAPIToken(raw))
-	if err != nil || tok == nil {
+	tok, user := lookupAPITokenOwner(ctx, rt.security.Backend, auth.HashAPIToken(raw))
+	if tok == nil || user == nil {
 		return nil
 	}
 	if tok.ExpiresAt != nil && time.Now().After(*tok.ExpiresAt) {
 		return nil
 	}
-	user, err := rt.security.Backend.LoadUserByID(ctx, tok.UserID)
-	if err != nil || user == nil {
-		return nil
-	}
-	// Populate a stable JTI (derived from the PAT id) and the PAT's expiry so a
-	// WebSocket ticket issued from this PAT-authenticated request embeds a real
-	// SrcJTI/SrcExp. Without this, the WS re-authz loop calls IsRevoked("") (always
-	// false) and never arms the expiry timer — a revoked/expired PAT's live socket
-	// would stay open indefinitely.
+	// Populate a stable JTI and the PAT's expiry so a WS ticket issued from this PAT-authenticated request embeds a real SrcJTI/SrcExp —
+	// else the re-authz loop never arms the expiry timer and a revoked/expired PAT's live socket would stay open indefinitely.
 	return auth.ClaimsForPAT(user.ID, user.Email, user.Role, tok.ID, tok.ExpiresAt, tok.Scopes)
+}
+
+// patBackend is what PAT authentication needs from storage.
+type patBackend interface {
+	GetAPITokenByHash(ctx context.Context, tokenHash string) (*storageif.APIToken, error)
+	LoadUserByID(ctx context.Context, id string) (*storageif.User, error)
+}
+
+// lookupAPITokenOwner resolves a PAT hash to the token and its owner's current user row, or (nil, nil). Backends that can join the two
+// (storageif.APITokenOwnerLookup — Postgres) answer in one round trip; the fallback is the token read then the user read.
+func lookupAPITokenOwner(ctx context.Context, b patBackend, tokenHash string) (*storageif.APIToken, *storageif.User) {
+	if j, ok := b.(storageif.APITokenOwnerLookup); ok {
+		tok, user, err := j.GetAPITokenWithOwnerByHash(ctx, tokenHash)
+		if err != nil || tok == nil || user == nil {
+			return nil, nil
+		}
+		return tok, user
+	}
+	tok, err := b.GetAPITokenByHash(ctx, tokenHash)
+	if err != nil || tok == nil {
+		return nil, nil
+	}
+	user, err := b.LoadUserByID(ctx, tok.UserID)
+	if err != nil || user == nil {
+		return nil, nil
+	}
+	return tok, user
 }
 
 // --- WebSocket handler ---
@@ -309,18 +308,14 @@ func (rt *Router) verifyAPIToken(ctx context.Context, raw string) *auth.Claims {
 // @Router       /ws [get]
 func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	ticket := r.URL.Query().Get("ticket")
-	// ConsumeWSTicket atomically verifies + marks the ticket as consumed via
-	// the shared blacklist (AddIfAbsent), making it truly single-use across
-	// all replicas. When no blacklist is configured (local mode), it only
-	// verifies the JWT — the local consumeTicket map handles single-use.
+	// ConsumeWSTicket atomically verifies + marks the ticket consumed via the shared blacklist (AddIfAbsent), single-use across all replicas;
+	// without a blacklist (local mode) it only verifies the JWT — the local map below handles single-use.
 	claims, err := rt.security.AuthMgr.ConsumeWSTicket(ticket)
 	if err != nil {
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
-	// Also check the local map as a fallback for local mode (where
-	// ConsumeWSTicket doesn't enforce single-use) and as defense-in-depth
-	// in cloud mode (belt-and-suspenders alongside the shared blacklist).
+	// Local map fallback for local mode and defense-in-depth in cloud (belt-and-suspenders).
 	if !rt.consumeTicket(claims.ID, claims.ExpiresAt.Time) {
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
@@ -329,12 +324,8 @@ func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if rt.security.AuthMgr != nil {
 		isRevoked = rt.security.AuthMgr.IsRevoked
 	}
-	// Pass the SOURCE access token's JTI/expiry (carried in the ticket via
-	// SrcJTI/SrcExp), NOT the ticket's own JTI: the ticket JTI is only
-	// blacklisted for ~30s at consumption, so re-checking it would never fire
-	// after that. The access-token JTI is what logout/revoke actually
-	// blacklists, so the WS re-authz goroutine can disconnect a logged-out
-	// user's live socket.
+	// Pass the SOURCE access token's JTI/expiry (SrcJTI/SrcExp), NOT the ticket's own JTI: the ticket JTI is blacklisted only ~30s at consumption.
+	// The access-token JTI is what logout/revoke blacklists, so the WS re-authz loop can disconnect the live socket.
 	accessJTI := claims.SrcJTI
 	var accessExp time.Time
 	if claims.SrcExp != nil {
@@ -347,11 +338,8 @@ func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 const maxUsedTickets = 10_000
 
-// consumeTicket records a single-use WS ticket. It is O(1) on the common path;
-// expired entries are reclaimed by a background sweep (cleanupUsedTickets) rather
-// than scanned on every call. As a safety net, if the cap is hit we do a one-off
-// expired-entry sweep before rejecting, so a backlog of expired tickets can't
-// lock out new connections.
+// consumeTicket records a single-use WS ticket, O(1) on the common path (a background sweep
+// reclaims expired entries); at the cap a one-off expired sweep runs before rejecting.
 func (rt *Router) consumeTicket(jti string, exp time.Time) bool {
 	if jti == "" {
 		return false
@@ -377,9 +365,8 @@ func (rt *Router) consumeTicket(jti string, exp time.Time) bool {
 	return true
 }
 
-// cleanupUsedTickets periodically evicts expired single-use tickets so the
-// usedTickets map doesn't accumulate stale entries between connections. Stops
-// when the server's shutdown channel is closed.
+// cleanupUsedTickets periodically evicts expired single-use tickets so the map doesn't
+// accumulate stale entries; stops when the shutdown channel closes.
 func (rt *Router) cleanupUsedTickets() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -405,9 +392,8 @@ func (rt *Router) cleanupUsedTickets() {
 	}
 }
 
-// sseClientKey returns the key used to bucket SSE connection limits. In JWT
-// mode it keys per authenticated user (so users sharing a proxy/NAT egress IP
-// are limited independently); otherwise it keys per proxy-aware client IP.
+// sseClientKey buckets SSE connection limits: per authenticated user in JWT mode (users sharing
+// a proxy/NAT egress IP are limited independently), else per proxy-aware client IP.
 func (rt *Router) sseClientKey(r *http.Request) string {
 	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
 		return "user:" + claims.UserID
@@ -425,10 +411,8 @@ func (rt *Router) isOriginAllowed(origin string) bool {
 		return true
 	}
 	for _, o := range rt.AllowedOrigins {
-		// A "*" wildcard is only honored when auth is disabled. In cloud/auth
-		// mode requests are credentialed, and reflecting an arbitrary origin
-		// alongside credentials defeats the same-origin policy, so an explicit
-		// allowlist is required.
+		// A "*" wildcard is only honored when auth is disabled: in cloud mode requests are credentialed, and reflecting an arbitrary origin alongside
+		// credentials defeats the same-origin policy — an explicit allowlist is required.
 		if o == "*" {
 			if !rt.security.JWTEnabled {
 				return true
@@ -442,12 +426,8 @@ func (rt *Router) isOriginAllowed(origin string) bool {
 	return false
 }
 
-// localhostHosts are the hostnames the desktop (local, no-JWT) build serves
-// from. The Tauri v2 webview origin is "tauri://localhost" on macOS/Linux and
-// "http://tauri.localhost" on Windows (WebView2); the Vite dev server is
-// localhost:5173. Earlier versions missed "http://tauri.localhost", so on
-// Windows every cross-origin request to the sidecar failed CORS (the preflight
-// 200'd but carried no Access-Control-Allow-Origin) and nothing loaded.
+// localhostHosts are the hostnames the desktop (local, no-JWT) build serves from: the Tauri v2 webview origin is "tauri://localhost" on
+// macOS/Linux and "http://tauri.localhost" on Windows (WebView2). Earlier versions missed the Windows form, so on Windows nothing loaded (CORS).
 var localhostHosts = map[string]bool{
 	"localhost":       true,
 	"127.0.0.1":       true,
@@ -480,9 +460,7 @@ var publicRoutes = map[string]bool{
 	"/api/auth/reset-password":      true,
 	"/api/auth/verify-email":        true,
 	"/api/auth/resend-verification": true,
-	// SSO endpoints are pre-authentication by definition: the browser hits
-	// start/callback before it has any token, and exchange carries its own
-	// single-use ticket credential.
+	// SSO endpoints are pre-authentication by definition: the browser hits start/callback before it has any token, and exchange carries its own single-use ticket credential.
 	"/api/auth/sso/info":     true,
 	"/api/auth/sso/start":    true,
 	"/api/auth/sso/callback": true,

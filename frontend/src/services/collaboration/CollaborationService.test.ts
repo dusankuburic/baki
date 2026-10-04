@@ -1,6 +1,6 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {collaborationService} from './CollaborationService'
-import type {Envelope, ConnectionStatus} from './CollaborationService'
+import type {Envelope, ConnectionStatus, PresenceSyncPayload} from './CollaborationService'
 
 // Minimal WebSocket mock
 class MockWebSocket {
@@ -125,6 +125,23 @@ describe('CollaborationService', () => {
     mockWs!.receive(env)
     expect(received).toHaveLength(1)
     expect(received[0].type).toBe('presence.join')
+  })
+
+  // presence.sync (the server's snapshot of the room, sent only to a joining
+  // connection) is part of the protocol mirror; the service passes it through
+  // untouched for presenceStore to replace its users map with.
+  it('delivers a presence.sync snapshot to subscribers as-is', async () => {
+    const received: Envelope[] = []
+    collaborationService.subscribe(e => received.push(e))
+    collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
+    await waitConnected()
+
+    const payload: PresenceSyncPayload = {
+      users: [{userId: 'u1', displayName: 'Alice', selectedBlockId: 'block-1'}, {userId: 'u2'}],
+    }
+    mockWs!.receive({type: 'presence.sync', flowId: 'flow-1', userId: 'u1', ts: new Date().toISOString(), payload})
+    expect(received).toHaveLength(1)
+    expect(received[0]).toMatchObject({type: 'presence.sync', payload})
   })
 
   it('send() writes JSON to the WebSocket when connected', async () => {

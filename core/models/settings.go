@@ -73,21 +73,17 @@ type AIPromptsConfig struct {
 type AISettings struct {
 	ActiveProvider    string `json:"activeProvider"`
 	EmbeddingProvider string `json:"embeddingProvider"`
-	// EmbeddingModel overrides the embedding model name the provider would
-	// otherwise use as its hardcoded default (e.g. OpenAI's text-embedding-3-small).
-	// Empty keeps the provider default. Lets a deployer pick a different embedding
-	// model (e.g. text-embedding-3-large, or a self-hosted model on a compatible
-	// endpoint) without code changes. The pgvector index is dimensionless so a
-	// model swap doesn't require a re-index (mismatched dims are excluded at insert).
+	// EmbeddingModel overrides the provider's default embedding model; empty
+	// keeps the default. The pgvector index is dimensionless, so a model swap
+	// needs no re-index (mismatched dims are excluded at insert).
 	EmbeddingModel          string                      `json:"embeddingModel,omitempty"`
 	Providers               map[string]AIProviderConfig `json:"providers"`
 	ShowCostEstimates       bool                        `json:"showCostEstimates"`
 	SaveConversationHistory bool                        `json:"saveConversationHistory"`
 	SystemPromptSuffix      string                      `json:"systemPromptSuffix,omitempty"`
 	DailyBudget             float64                     `json:"dailyBudget"`
-	// PerUserDailyBudget caps an individual user's AI spend within an org,
-	// preventing one user from exhausting the org's DailyBudget alone. 0 =
-	// no per-user limit (only the org-level budget applies).
+	// PerUserDailyBudget caps an individual user's AI spend within an org, so
+	// one user cannot exhaust the org's DailyBudget alone; 0 = org budget only.
 	PerUserDailyBudget float64         `json:"perUserDailyBudget,omitempty"`
 	Prompts            AIPromptsConfig `json:"prompts"`
 }
@@ -97,17 +93,16 @@ type AIProviderConfig struct {
 	DefaultModel string  `json:"defaultModel"`
 	Temperature  float64 `json:"temperature"`
 	MaxTokens    int     `json:"maxTokens"`
-	// ReasoningEffort is the per-provider reasoning-depth choice for
-	// reasoning deployments: "", "low", "medium" or "high" ("" = provider
-	// default). The chat request builder merges it onto ChatRequest next to
-	// Temperature/MaxTokens; the per-turn validation refuses other values.
+	// ReasoningEffort is the per-provider reasoning-depth choice ("", "low",
+	// "medium" or "high"; "" = provider default), merged onto ChatRequest next
+	// to Temperature/MaxTokens; per-turn validation refuses other values.
 	ReasoningEffort    string `json:"reasoningEffort,omitempty"`
 	ContextTokenBudget int    `json:"contextTokenBudget"`
 }
 
-// ParserSettings: only the size cap is read by the parser. The "Preserve
+// ParserSettings: only the size cap is read by the parser; the "Preserve
 // comments", "Treat tabs as spaces" and "Spaces per indent" controls were
-// persisted and never consulted, so they were removed rather than left inert.
+// persisted but never consulted, so they were removed rather than left inert.
 type ParserSettings struct {
 	MaxFileSizeMB int `json:"maxFileSizeMB"`
 }
@@ -123,10 +118,9 @@ type RuleConfig struct {
 	Options  map[string]interface{} `json:"options,omitempty"`
 }
 
-// Clone returns a copy safe for a caller to read (and mutate) without affecting
-// the original. It copies the reference-typed fields (slice + maps) explicitly;
-// all other fields are value types carried by the struct copy. This replaces an
-// earlier json.Marshal/Unmarshal round-trip used on hot read paths.
+// Clone returns a copy safe for a caller to read and mutate without
+// affecting the original: reference-typed fields (slice + maps) are copied
+// explicitly. Replaces a json.Marshal/Unmarshal round-trip on hot read paths.
 func (s *AppSettings) Clone() *AppSettings {
 	if s == nil {
 		return nil

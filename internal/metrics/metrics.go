@@ -1,12 +1,8 @@
-// Package metrics owns the Prometheus registry and the metric symbols
-// shared between HTTP middleware (request counters, latency histograms)
-// and lower layers (chat-stream gauges, SSE client gauges, DB pool stats).
-//
-// Putting these in a leaf package keeps the dependency graph one-way:
-// `service`, `api`, and `api/middleware` may all depend on `metrics`,
-// but nothing in `metrics` imports from elsewhere — which lets a service-
-// level counter (e.g. chat_stream_active) live alongside HTTP counters
-// in the same registry without forcing `service` to import `api`.
+// Package metrics owns the Prometheus registry and the shared metric symbols
+// (HTTP middleware counters/histograms, chat-stream and SSE gauges, DB pool
+// stats). Leaf package: service/api/middleware depend on it, it imports none
+// of them, so a service-level counter lives beside HTTP counters in one
+// registry without service importing api.
 package metrics
 
 import (
@@ -49,6 +45,23 @@ var (
 		Name: "postgres_pool_open",
 		Help: "Current total Postgres connections (in use + idle).",
 	})
+	// The three below mirror database/sql's cumulative DBStats counters as
+	// gauges set on every snapshot (the pool owns the counters; a Prometheus
+	// Counter could only be fed deltas). Monotonic for the life of the
+	// process, so rate()/increase() apply. A rising wait count is pool
+	// exhaustion; a rising closed{reason="max_idle"} is idle-cap churn.
+	postgresPoolWaitCount = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "postgres_pool_wait_count",
+		Help: "Cumulative number of Postgres connection requests that had to wait for a free pooled connection (database/sql DBStats.WaitCount).",
+	})
+	postgresPoolWaitSeconds = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "postgres_pool_wait_duration_seconds",
+		Help: "Cumulative time spent waiting for a free pooled Postgres connection (database/sql DBStats.WaitDuration).",
+	})
+	postgresPoolClosed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "postgres_pool_closed_connections",
+		Help: "Cumulative Postgres connections closed by the pool, by reason: max_idle (idle cap exceeded on return), max_idle_time (ConnMaxIdleTime), max_lifetime (ConnMaxLifetime).",
+	}, []string{"reason"})
 	rateLimitExceededTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "rate_limit_exceeded_total",
@@ -187,6 +200,13 @@ var (
 		},
 		[]string{"location"},
 	)
+	backgroundDroppedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_background_dropped_total",
+			Help: "Best-effort background tasks (analysis webhooks, finding emails) not started because their concurrency cap was reached or shutdown had begun, by task and reason.",
+		},
+		[]string{"task", "reason"},
+	)
 	usageDroppedTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_usage_dropped_total",
@@ -249,40 +269,23 @@ var (
 	)
 	// Total AI spend. GLOBAL — deliberately unlabelled.
 	//
-	// This was labelled {user_id, org_id} to answer "which tenant drives spend?".
-	// Both are raw UUIDs, so it minted one permanent Prometheus series per
-	// (user, org) pair that ever made an AI call — counters are never deleted, so
-	// a departed user's series survives the whole retention window. At a few
-	// thousand users the scrape crosses its timeout, the target flips to DOWN,
-	// and EVERY metric from the process disappears — including pad_panics_total
-	// and pad_audit_dropped_total, during exactly the incident that caused the
-	// AI traffic surge. It also published the customer roster and per-tenant
-	// spend to anyone with scrape access, which is typically a much wider group
-	// than anyone with database access.
-	//
-	// The attribution was redundant anyway: audited.go writes a UsageMetric row
-	// per call carrying UserID, OrgID, Provider, Model and EstimatedCost, so
-	// per-tenant cost is a SQL query away. A time series is the wrong store for
-	// high-cardinality attribution; the table is the right one.
+	// A {user_id, org_id} label would mint one permanent series per (user,
+	// org) pair that ever made an AI call (counters are never deleted): at a
+	// few thousand users the scrape crosses its timeout and EVERY metric from
+	// the process disappears, and it publishes the customer roster to anyone
+	// with scrape access. Per-tenant attribution lives in usage_metrics
+	// (audited.go writes UserID, OrgID and EstimatedCost per call).
 	aiUsageCostTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "pad_ai_usage_estimated_cost_total",
 			Help: "Estimated USD cost of AI usage across the deployment. Per-tenant attribution lives in the usage_metrics table (see UsageMetric), which is queryable and does not cost a time series per user.",
 		},
 	)
-	// aiRetryAttemptsTotal counts RETRIED provider attempts (the second and
-	// later tries), labelled by provider and by the condition that triggered
-	// them.
-	//
-	// Retries were entirely invisible: no counter, no log aggregate, nothing. An
-	// operator could not see a retry storm, could not explain latency inflated by
-	// backoff, and had no signal that a provider was degraded short of user
-	// complaints — while PAD_RETRY_MAX_ATTEMPTS has no upper bound.
-	//
-	// Both labels are closed sets: provider comes from the fixed providerCtors
-	// registry, and reason is one of the two retryable sentinels. Neither is
-	// caller-supplied, so this cannot become a cardinality bomb the way a model
-	// or user label would.
+	// aiRetryAttemptsTotal counts RETRIED provider attempts (second and later
+	// tries), by provider and trigger condition — otherwise a retry storm and
+	// backoff-inflated latency were invisible while PAD_RETRY_MAX_ATTEMPTS has
+	// no upper bound. Both labels are closed sets (providerCtors registry; the
+	// two retryable sentinels), so this cannot become a cardinality bomb.
 	aiRetryAttemptsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_ai_retry_attempts_total",
@@ -290,14 +293,11 @@ var (
 		},
 		[]string{"provider", "reason"},
 	)
-	// aiHostedToolStepsTotal counts the server-side tool steps a provider-hosted
-	// agent run completed (Azure AI Foundry agents: Bing grounding, code
-	// interpreter, file search, MCP, …). Azure bills these per call / session /
-	// GB-day, outside the token usage the daily budget meters, so they are
-	// invisible to the budget by design — counting them makes the gap at least
-	// visible and sizeable. The tool label is a closed set: ToolEvent is only
-	// built for the known hosted item types (hostedToolLabels in the ai
-	// package), never from caller-supplied strings.
+	// aiHostedToolStepsTotal counts the provider-hosted agent tool steps an
+	// Azure AI Foundry agent run completed (Bing grounding, code interpreter,
+	// file search, MCP, …) — Azure bills these outside the token usage the
+	// daily budget meters, so the gap becomes visible. The tool label is a
+	// closed set (hostedToolLabels in the ai package), never caller-supplied.
 	aiHostedToolStepsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_ai_hosted_tool_steps_total",
@@ -327,6 +327,9 @@ var registry = func() *prometheus.Registry {
 		postgresPoolInUse,
 		postgresPoolIdle,
 		postgresPoolOpen,
+		postgresPoolWaitCount,
+		postgresPoolWaitSeconds,
+		postgresPoolClosed,
 		rateLimitExceededTotal,
 		chatStreamActive,
 		sseClientsConnected,
@@ -351,6 +354,7 @@ var registry = func() *prometheus.Registry {
 		panicRecoveredTotal,
 		errorsReportedTotal,
 		usageDroppedTotal,
+		backgroundDroppedTotal,
 		aiPricingFallbackTotal,
 		ragFallbackCappedTotal,
 		ragDimMismatchTotal,
@@ -371,9 +375,8 @@ var registry = func() *prometheus.Registry {
 }()
 
 // Handler returns an http.Handler that serves /metrics in the Prometheus
-// exposition format. In production this should be reachable only from
-// the metrics scraper — gate at the load balancer or move to a private
-// listener if needed.
+// exposition format — reachable in production only from the metrics scraper
+// (gate at the load balancer or use a private listener if needed).
 func Handler() http.Handler {
 	return promhttp.HandlerFor(registry, promhttp.HandlerOpts{
 		EnableOpenMetrics: true,
@@ -381,17 +384,34 @@ func Handler() http.Handler {
 	})
 }
 
-// ObservePostgresPool snapshots db.Stats() into the gauge metrics. Call
-// periodically from a background goroutine in main; cheap (atomic reads
-// inside database/sql).
+// ObservePostgresPool snapshots db.Stats() into the gauge metrics; call
+// periodically from main's background goroutine (cheap: atomic reads).
 func ObservePostgresPool(db *sql.DB) {
 	if db == nil {
 		return
 	}
-	s := db.Stats()
+	observePoolStats(db.Stats())
+}
+
+// Pool-closure reasons: the complete, fixed label set of
+// postgres_pool_closed_connections. Every snapshot sets all three.
+const (
+	poolClosedMaxIdle     = "max_idle"
+	poolClosedMaxIdleTime = "max_idle_time"
+	poolClosedMaxLifetime = "max_lifetime"
+)
+
+// observePoolStats records one DBStats snapshot. Split from
+// ObservePostgresPool so it is testable without a live pool.
+func observePoolStats(s sql.DBStats) {
 	postgresPoolInUse.Set(float64(s.InUse))
 	postgresPoolIdle.Set(float64(s.Idle))
 	postgresPoolOpen.Set(float64(s.OpenConnections))
+	postgresPoolWaitCount.Set(float64(s.WaitCount))
+	postgresPoolWaitSeconds.Set(s.WaitDuration.Seconds())
+	postgresPoolClosed.WithLabelValues(poolClosedMaxIdle).Set(float64(s.MaxIdleClosed))
+	postgresPoolClosed.WithLabelValues(poolClosedMaxIdleTime).Set(float64(s.MaxIdleTimeClosed))
+	postgresPoolClosed.WithLabelValues(poolClosedMaxLifetime).Set(float64(s.MaxLifetimeClosed))
 }
 
 // RecordRateLimitExceeded bumps the rate_limit_exceeded_total counter
@@ -427,8 +447,8 @@ func RecordAITokens(provider string, input, output int) {
 	}
 }
 
-// ObserveAIRequest records the latency of an AI request (full Chat call or the
-// lifetime of a Stream).
+// ObserveAIRequest records the latency of an AI request (full Chat call or a
+// Stream's lifetime).
 func ObserveAIRequest(provider string, seconds float64) {
 	aiRequestDuration.WithLabelValues(provider).Observe(seconds)
 }
@@ -444,9 +464,8 @@ func RecordAnalysisRun() {
 	analysisRuns.Inc()
 }
 
-// RecordRulesSkipped adds n to the rules-skipped counter. n comes straight off
-// AnalysisStats.RulesSkipped (set by runAnalysisCore after safeCheck recovers a
-// panic). With no consumer the metric stayed invisible; this lets ops alert on
+// RecordRulesSkipped adds n (straight off AnalysisStats.RulesSkipped, set after
+// safeCheck recovers a panic) to the rules-skipped counter, so ops can alert on
 // "a rule is silently producing no findings for this flow".
 func RecordRulesSkipped(n int) {
 	if n > 0 {
@@ -454,13 +473,10 @@ func RecordRulesSkipped(n int) {
 	}
 }
 
-// RecordBackgroundLoopTick records a completed iteration of one of the long-
-// running background loops (scanner, retention_purge,
-// blob_cleaner, audit_pool). The recommended alert is
-//
-//	time() - pad_background_loop_last_tick_timestamp_seconds{loop="X"} > 2 * expected_interval
-//
-// which catches deadlocks/hangs that /healthz (always 200) cannot see.
+// RecordBackgroundLoopTick records a completed iteration of a long-running
+// background loop (scanner, retention_purge, …). Recommended alert:
+// time() - pad_background_loop_last_tick_timestamp_seconds{loop="X"} >
+// 2 * expected_interval — catches hangs that /healthz (always 200) cannot see.
 func RecordBackgroundLoopTick(name string) {
 	backgroundLoopTick.WithLabelValues(name).Inc()
 	backgroundLoopLastTick.WithLabelValues(name).SetToCurrentTime()
@@ -485,28 +501,26 @@ func RecordAuthOp(op string) {
 }
 
 // RecordBlobOp records the outcome and duration of an Azure Blob Storage
-// operation. op is one of "upload", "download", "delete", "list"; status is one
-// of "ok", "not_found", "throttled", "error". Surfaces blob latency, 404s
-// (potential data loss), and 429 throttling to the Prometheus/Azure Monitor
-// pipeline.
+// operation (op "upload"/"download"/"delete"/"list"; status "ok"/"not_found"/
+// "throttled"/"error") — surfaces blob latency, 404s (potential data loss)
+// and 429 throttling.
 func RecordBlobOp(op, status string, dur time.Duration) {
 	blobOps.WithLabelValues(op, status).Inc()
 	blobOpDuration.WithLabelValues(op).Observe(dur.Seconds())
 }
 
 // RecordBlobContentMissing bumps the counter for a flow whose content blob was
-// absent though its metadata recorded content — a data-loss signal ops can
-// alert on. See pad_blob_content_missing_total.
+// absent though its metadata recorded content — a data-loss signal. See
+// pad_blob_content_missing_total.
 func RecordBlobContentMissing() {
 	blobContentMissing.Inc()
 }
 
 // RecordAuditDropped bumps the audit_dropped_total counter for an event that
-// could not be persisted to the DB sink — reason "full"/"closed" when the
-// enqueue buffer can't accept it, or "write_failed" when a (retried) DB write
-// fails. Such events are diverted to the structured-log fallback sink so the
-// data isn't silently lost, and this counter lets ops alert when the DB sink
-// can't keep up.
+// could not be persisted to the DB sink — "full"/"closed" when the enqueue
+// buffer can't accept it, "write_failed" when a (retried) DB write fails. The
+// event is diverted to the structured-log fallback sink; the counter surfaces
+// when the DB sink can't keep up.
 func RecordAuditDropped(reason string) {
 	auditDroppedTotal.WithLabelValues(reason).Inc()
 }
@@ -568,9 +582,9 @@ func AuditSpilledCount() float64 {
 	return m.Counter.GetValue()
 }
 
-// RecordAIUsageCost attributes estimated AI spend (USD) to the calling user/org
-// so on-call can see per-tenant cost without querying the usage_metrics table.
-// Empty user/org is allowed (local/unauth) — it aggregates under the empty label.
+// RecordAIUsageCost adds estimated AI spend (USD) to the global cost counter;
+// empty user/org (local/unauth) aggregates under the empty label. Per-tenant
+// attribution is a usage_metrics query.
 func RecordAIUsageCost(cost float64) {
 	aiUsageCostTotal.Add(cost)
 }
@@ -599,9 +613,9 @@ func AuditSpillDepthCount() float64 {
 }
 
 // RecordPanic bumps the panics_total counter for a recovered panic at the given
-// location (e.g. "http", "scanner", "audit"). Always recorded, even when no
-// external error-aggregation sink (Sentry/App Insights) is configured, so
-// recovered panics surface in the Prometheus/alert pipeline regardless.
+// location (e.g. "http", "scanner", "audit"). Always recorded, even without an
+// external error-aggregation sink, so recovered panics surface in the
+// Prometheus/alert pipeline regardless.
 func RecordPanic(location string) {
 	panicRecoveredTotal.WithLabelValues(location).Inc()
 }
@@ -612,16 +626,15 @@ func RecordError(location string) {
 	errorsReportedTotal.WithLabelValues(location).Inc()
 }
 
-// RecordRAGFallbackCapped bumps rag_fallback_capped_total: a knowledge
-// search ran on the Go-side fallback at its sample cap, so results are
-// lossy on this deployment.
+// RecordRAGFallbackCapped bumps rag_fallback_capped_total: a knowledge search
+// ran on the Go-side fallback at its sample cap, so results are lossy here.
 func RecordRAGFallbackCapped() {
 	ragFallbackCappedTotal.Inc()
 }
 
-// RecordRAGDimMismatch bumps rag_dim_mismatch_total: a knowledge search
-// found nothing comparable while the org has chunks — the corpus is stranded
-// at a different embedding dimension than the query's.
+// RecordRAGDimMismatch bumps rag_dim_mismatch_total: a knowledge search found
+// nothing while the org has chunks — the corpus is stranded at a different
+// embedding dimension than the query's.
 func RecordRAGDimMismatch() {
 	ragDimMismatchTotal.Inc()
 }
@@ -657,19 +670,37 @@ func RecordRAGLookup(outcome string) {
 }
 
 // RecordUsageDropped bumps the usage_dropped_total counter for an AI usage
-// metric that could not be recorded (recorder saturated). Dropping bounds the
-// number of in-flight recording goroutines so a stalled DB recorder can't
-// exhaust memory under sustained AI traffic; the counter surfaces the loss so
-// ops can alert on it.
+// metric that could not be recorded (recorder saturated): dropping bounds
+// in-flight recording goroutines so a stalled DB recorder can't exhaust
+// memory; the counter surfaces the loss.
 func RecordUsageDropped(reason string) {
 	usageDroppedTotal.WithLabelValues(reason).Inc()
 }
 
-// RecordPricingFallback bumps the ai_pricing_fallback_total counter when a
-// model isn't in the pricing catalog and usage was costed from the provider's
-// default pricing instead. A sustained/growing count for a given provider
-// means the catalog has drifted behind that provider's model lineup and
-// should be updated.
+// RecordBackgroundDropped counts a best-effort background task that was not
+// started; task is the runner's code-literal name, reason "saturated" or
+// "closed" — both closed sets, never request data.
+func RecordBackgroundDropped(task, reason string) {
+	backgroundDroppedTotal.WithLabelValues(task, reason).Inc()
+}
+
+// BackgroundDroppedCount returns the current pad_background_dropped_total
+// value for a task and reason. Exposed for tests; safe for production use.
+func BackgroundDroppedCount(task, reason string) float64 {
+	m := &dto.Metric{}
+	if err := backgroundDroppedTotal.WithLabelValues(task, reason).Write(m); err != nil {
+		return 0
+	}
+	if m.Counter == nil {
+		return 0
+	}
+	return m.Counter.GetValue()
+}
+
+// RecordPricingFallback bumps ai_pricing_fallback_total when a model isn't in
+// the pricing catalog and usage was costed from the provider's default pricing
+// instead; a sustained count for a provider means the catalog has drifted
+// behind its model lineup.
 func RecordPricingFallback(provider, model string) {
 	aiPricingFallbackTotal.WithLabelValues(provider, model).Inc()
 }
@@ -688,12 +719,10 @@ func RecordAIHostedToolStep(provider, tool string) {
 	aiHostedToolStepsTotal.WithLabelValues(provider, tool).Inc()
 }
 
-// Gather returns the current metric families from the package registry.
-//
-// Exported so packages that emit metrics can assert their own instrumentation
-// end to end — through the real registry rather than a local variable, which is
-// what catches a metric that is defined but never registered, or registered but
-// never incremented.
+// Gather returns the current metric families from the package registry —
+// exported so packages can assert their own instrumentation end to end
+// through the real registry (catches a metric defined but never registered,
+// or registered but never incremented).
 func Gather() ([]*dto.MetricFamily, error) {
 	return registry.Gather()
 }

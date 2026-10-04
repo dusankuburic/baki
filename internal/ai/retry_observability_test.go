@@ -25,22 +25,11 @@ func (s *retryMetricStub) Chat(context.Context, Request) (*Response, error) {
 	return &Response{Content: "ok"}, nil
 }
 
-// TestRetryAttempts_AreObservable is the operability gate on the retry layer.
-//
-// Retries were entirely invisible — no counter, no aggregate. An operator could
-// not see a retry storm, could not explain latency inflated by backoff, and had
-// no signal that a provider was degraded short of user complaints. The retry
-// ceiling (PAD_RETRY_MAX_ATTEMPTS) has no upper bound, which makes the blind
-// spot worse: a misconfiguration multiplies every call silently.
-//
-// Note what this does NOT claim. An earlier audit described the decorator order
-// as a billing defect — "each retry costs a full prompt upstream and only the
-// last is recorded". That is not established: the loop retries ONLY on
-// ErrRateLimited (429) and ErrProviderDown (5xx), and in both cases the provider
-// rejected the request rather than processing the prompt, so there is nothing to
-// bill. Moving the audit wrapper inside the retry also would not have fixed it —
-// auditedProvider records from the RESPONSE, and a failed attempt returns none.
-// The real gap is visibility, which is what this covers.
+// TestRetryAttempts_AreObservable is the operability gate on the retry layer: retries were invisible (no counter,
+// no aggregate — an unbounded PAD_RETRY_MAX_ATTEMPTS misconfiguration multiplies every call silently). Not a billing
+// gate: the loop retries only on ErrRateLimited/ErrProviderDown, where the provider rejected the request rather than
+// processed the prompt, so a failed attempt records nothing — the earlier audit's decorator-order billing claim
+// does not apply; the real gap was visibility, which is what this covers.
 func TestRetryAttempts_AreObservable(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

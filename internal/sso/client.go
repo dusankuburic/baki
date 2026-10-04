@@ -1,8 +1,7 @@
 // Package sso implements the OIDC relying-party side of account-level single
 // sign-on: discovery, the authorization-code redirect (with PKCE), and code →
-// verified-identity exchange. It is IdP-agnostic — anything that serves a
-// spec-compliant discovery document works (Microsoft Entra ID, Google, Okta,
-// Keycloak, ...).
+// verified-identity exchange. IdP-agnostic — anything serving a spec-compliant
+// discovery document works (Entra ID, Google, Okta, Keycloak, ...).
 package sso
 
 import (
@@ -10,6 +9,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -34,10 +34,9 @@ type Identity struct {
 }
 
 // providerTTL bounds how long a cached OIDC provider is trusted without a
-// background refresh. IdPs (Entra ID, Google, Okta) routinely rotate signing
-// keys; a cached Verifier built from stale JWKS rejects every login until the
-// process restarts. 15 min is short enough to track a key rotation but long
-// enough to amortize discovery across many logins.
+// background refresh. IdPs routinely rotate signing keys; a cached Verifier
+// built from stale JWKS rejects every login until the process restarts.
+// 15 min tracks a key rotation while amortizing discovery across logins.
 const providerTTL = 15 * time.Minute
 
 // externalTimeout bounds each outbound call to the IdP (discovery, code
@@ -48,7 +47,7 @@ const externalTimeout = 15 * time.Second
 
 // Client wraps the OIDC provider for one configured IdP. Discovery is lazy:
 // the IdP is first contacted on the first login attempt, not at startup, so a
-// temporarily unreachable IdP doesn't prevent the app from booting.
+// temporarily unreachable IdP doesn't prevent booting.
 type Client struct {
 	cfg config.SSOConfig
 	// timeout overrides externalTimeout when non-zero (tests: a hung-IdP test
@@ -73,6 +72,17 @@ func (c *Client) callTimeout() time.Duration {
 	return externalTimeout
 }
 
+// idpContext attaches the bounded HTTP client that go-oidc and oauth2 read
+// from ctx (both honour the oauth2.HTTPClient key). Without it both fall back
+// to http.DefaultClient, which has no timeout — and go-oidc fetches JWKS in a
+// DETACHED goroutine on a context.WithoutCancel ctx, so a JWKS endpoint that
+// accepted and never answered pinned the fetch goroutine and its connection
+// forever. The client shares http.DefaultTransport, so one per call costs no
+// connections.
+func (c *Client) idpContext(ctx context.Context) context.Context {
+	return oidc.ClientContext(ctx, &http.Client{Timeout: c.callTimeout()})
+}
+
 // ProviderName returns the display label / identity_links provider key.
 func (c *Client) ProviderName() string {
 	if c.cfg.ProviderName != "" {
@@ -83,17 +93,13 @@ func (c *Client) ProviderName() string {
 
 // ensureProvider performs OIDC discovery (or returns a cached provider).
 //
-// The cache has a bounded TTL (providerTTL): once it elapses, the next call
-// triggers a refresh. Refresh failures fall back to the stale provider if one
-// exists (better than hard-failing every login during a transient IdP blip),
-// or surface the error if there is no prior provider to fall back to.
-//
-// On id_token verification failure the caller should call invalidateProvider
-// to force a synchronous refresh on the next attempt (handles JWKS key
-// rotation between TTL ticks).
-//
-// The mutex is NOT held during the HTTP discovery call, so concurrent SSO
-// logins don't serialize behind one stuck network round-trip.
+// The cache has a bounded TTL (providerTTL); refresh failures fall back to
+// the stale provider if one exists (better than hard-failing every login
+// during a transient IdP blip), or surface the error if there is none. On
+// id_token verification failure the caller should call invalidateProvider to
+// force a synchronous refresh on the next attempt (handles JWKS key rotation
+// between TTL ticks). The mutex is NOT held during the HTTP discovery call,
+// so concurrent SSO logins don't serialize behind one stuck round-trip.
 func (c *Client) ensureProvider(ctx context.Context) (*oidc.Provider, error) {
 	c.mu.Lock()
 	if c.provider != nil && time.Since(c.providerFetched) < providerTTL {
@@ -107,7 +113,7 @@ func (c *Client) ensureProvider(ctx context.Context) (*oidc.Provider, error) {
 	// caller's goroutine past externalTimeout.
 	discCtx, cancel := context.WithTimeout(ctx, c.callTimeout())
 	defer cancel()
-	p, err := oidc.NewProvider(discCtx, c.cfg.IssuerURL)
+	p, err := oidc.NewProvider(c.idpContext(discCtx), c.cfg.IssuerURL)
 	if err != nil {
 		// If we have a stale provider younger than ~1h, prefer it over failing
 		// the login entirely — a brief IdP blip shouldn't lock users out.
@@ -134,8 +140,8 @@ func (c *Client) ensureProvider(ctx context.Context) (*oidc.Provider, error) {
 
 // invalidateProvider clears the cached provider so the next ensureProvider call
 // re-runs discovery synchronously. Used when id_token verification fails — a
-// signature error almost always means the IdP has rotated JWKS keys and the
-// cached Verifier is rejecting tokens signed with the new key.
+// signature error almost always means the IdP rotated JWKS keys and the cached
+// Verifier is rejecting tokens signed with the new key.
 func (c *Client) invalidateProvider() {
 	c.mu.Lock()
 	c.provider = nil
@@ -173,8 +179,8 @@ func (c *Client) AuthCodeURL(ctx context.Context, state, nonce, pkceVerifier str
 //
 // Each outbound call (code exchange, ID token verification) runs under its own
 // bounded deadline so a hung IdP cannot pin the handler goroutine past
-// externalTimeout. If ID token verification fails with what looks like a stale
-// JWKS cache, the cached provider is invalidated and the caller can retry.
+// externalTimeout. If verification fails with what looks like a stale JWKS
+// cache, the cached provider is invalidated and the caller can retry.
 func (c *Client) Exchange(ctx context.Context, code, pkceVerifier, nonce string) (*Identity, error) {
 	p, err := c.ensureProvider(ctx)
 	if err != nil {
@@ -186,7 +192,7 @@ func (c *Client) Exchange(ctx context.Context, code, pkceVerifier, nonce string)
 	// longer (e.g. an fx root ctx). The deferred cancel propagates as a
 	// context.Canceled to oauth2 if the parent is cancelled mid-flight.
 	exchCtx, cancel := context.WithTimeout(ctx, c.callTimeout())
-	token, err := oc.Exchange(exchCtx, code, oauth2.VerifierOption(pkceVerifier))
+	token, err := oc.Exchange(c.idpContext(exchCtx), code, oauth2.VerifierOption(pkceVerifier))
 	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("sso: code exchange failed: %w", err)
@@ -197,7 +203,9 @@ func (c *Client) Exchange(ctx context.Context, code, pkceVerifier, nonce string)
 		return nil, errors.New("sso: token response did not include an id_token")
 	}
 
-	// Bound verification too — it fetches JWKS under the hood.
+	// Bound verification too — it fetches JWKS under the hood. verifyCtx only
+	// bounds this caller's wait; the fetch itself runs detached on the
+	// provider's client, which idpContext bounded at discovery.
 	verifyCtx, cancel := context.WithTimeout(ctx, c.callTimeout())
 	idToken, err := p.Verifier(&oidc.Config{ClientID: c.cfg.ClientID}).Verify(verifyCtx, rawIDToken)
 	cancel()

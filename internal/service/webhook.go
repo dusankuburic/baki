@@ -4,28 +4,41 @@ import (
 	"context"
 	"fmt"
 
+	"pad-analyzer/internal/lifecycle"
 	"pad-analyzer/internal/notify"
 	"pad-core/models"
 )
 
 // WebhookNotifier posts analysis summaries to chat channels (Slack/Discord/
-// Mattermost/Teams-via-Slack-connector) and the generic webhook/Teams
-// channels. It is a thin facade over notify.Dispatcher: rather than duplicating
-// the HTTP/retry/HMAC delivery logic, it translates an analysis report into a
-// notify.Event and hands it to the shared dispatcher. This consolidates the two
-// historically-separate notification paths (governance alerts from the scanner
-// and analysis-complete summaries from this handler) onto one delivery stack.
-//
-// The dispatcher is nil-safe: when no channel is configured, Enabled() is false
-// and NotifyAnalysis is a no-op.
+// Mattermost/Teams-via-Slack-connector) and the generic webhook/Teams channels — a
+// thin facade over notify.Dispatcher (no duplicated HTTP/retry/HMAC delivery logic)
+// translating an analysis report into a notify.Event. The dispatcher is nil-safe:
+// with no channel configured, Enabled() is false and NotifyAnalysis is a no-op.
 type WebhookNotifier struct {
 	dispatcher *notify.Dispatcher
+	// deliveries caps the dispatches in flight: one runs per analysis and
+	// walks every channel in turn (each bounded by the dispatcher's timeout),
+	// so a slow channel used to pile up one goroutine per analyze request.
+	deliveries *lifecycle.Bounded
 }
+
+// maxConcurrentAnalysisDispatches matches the scanner's cap on concurrent
+// governance-alert deliveries (maxConcurrentDeliveries).
+const maxConcurrentAnalysisDispatches = 32
 
 // NewWebhookNotifier wraps a notify.Dispatcher. The dispatcher is provided by
 // main.go's provideNotifier and already knows about every configured channel.
 func NewWebhookNotifier(dispatcher *notify.Dispatcher) *WebhookNotifier {
-	return &WebhookNotifier{dispatcher: dispatcher}
+	return &WebhookNotifier{
+		dispatcher: dispatcher,
+		deliveries: lifecycle.NewBounded("analysis_webhook", maxConcurrentAnalysisDispatches),
+	}
+}
+
+// Drain waits for in-flight dispatches (see lifecycle.Bounded.Drain) and
+// stops new ones.
+func (w *WebhookNotifier) Drain(ctx context.Context) error {
+	return w.deliveries.Drain(ctx)
 }
 
 func (w *WebhookNotifier) Enabled() bool { return w.dispatcher != nil && w.dispatcher.Enabled() }
@@ -67,6 +80,7 @@ func (w *WebhookNotifier) NotifyAnalysis(flowName string, report *models.Analysi
 
 	// Dispatch on a detached context — the analysis HTTP request may return (and
 	// its ctx cancel) before delivery completes. The dispatcher applies its own
-	// per-channel timeout.
-	go w.dispatcher.Dispatch(context.Background(), ev)
+	// per-channel timeout; the runner caps how many dispatches run at once
+	// (past the cap this summary is dropped and counted — it is best-effort).
+	w.deliveries.Go(func() { w.dispatcher.Dispatch(context.Background(), ev) })
 }

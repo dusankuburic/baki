@@ -11,11 +11,9 @@ import (
 func TestMaskStrings_SingleQuote(t *testing.T) {
 	input := "SET X TO 'hello world'"
 	got := maskStrings(input)
-	// The content (and quotes) inside '...' must be masked.
 	if strings.Contains(got, "hello") {
 		t.Errorf("single-quoted content should be masked; got %q", got)
 	}
-	// Non-string parts must be preserved.
 	if !strings.Contains(got, "SET X TO") {
 		t.Errorf("non-string part should survive masking; got %q", got)
 	}
@@ -69,7 +67,6 @@ func TestMaskStrings_MultipleStrings(t *testing.T) {
 	if strings.Contains(got, "foo") || strings.Contains(got, "bar") {
 		t.Errorf("both string literals should be masked; got %q", got)
 	}
-	// The structural characters A, B should still be present.
 	if !strings.HasPrefix(strings.TrimSpace(got), "A") {
 		t.Errorf("expected output to start with 'A'; got %q", got)
 	}

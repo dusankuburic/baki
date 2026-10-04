@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// TestAzureClaude_CountTokens (audit #9 F-47): the exact prompt-token count
+// TestAzureClaude_CountTokens: the exact prompt-token count
 // goes to the resource's Anthropic count_tokens route with the same
 // credential as the Messages route (both key headers in API-key mode, a
 // Bearer token in Entra mode), the deployment name as `model`, and none of
@@ -75,7 +75,7 @@ func TestAzureClaude_CountTokens(t *testing.T) {
 	}
 }
 
-// TestAzureClaude_CountTokensUnavailableMemoised (audit #9 F-47): an endpoint
+// TestAzureClaude_CountTokensUnavailableMemoised: an endpoint
 // whose count_tokens ROUTE answers 404 (the gateway's own envelope, not
 // Anthropic's) is memoised per endpoint (learnedRepairs), so later calls
 // fail fast instead of paying the round trip every turn.
@@ -107,9 +107,10 @@ func TestAzureClaude_CountTokensUnavailableMemoised(t *testing.T) {
 	}
 }
 
-// A6: Anthropic's own not_found_error is the route refusing THIS request (an
-// unknown model or deployment): the memo is per endpoint, so memoising it
-// turned exact counting off for every user of the resource for an hour.
+// Anthropic's own not_found_error is the route refusing THIS request (an
+// unknown model or deployment): the memo is per endpoint, and one request's
+// unknown model must not turn exact counting off for every user of the
+// resource.
 func TestAzureClaude_CountTokensModelNotFoundNotMemoised(t *testing.T) {
 	calls := 0
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ int, _ map[string]any) {
@@ -132,7 +133,7 @@ func TestAzureClaude_CountTokensModelNotFoundNotMemoised(t *testing.T) {
 	}
 }
 
-// A5: the audited wrapper bounds an exact count with countTokensTimeout — it
+// The audited wrapper bounds an exact count with countTokensTimeout — it
 // runs on the turn's context ahead of the model call, and a count endpoint
 // that never answers must fall back to the estimate in seconds, not hold
 // the turn for the transport's minutes-long header timeout.
@@ -173,7 +174,7 @@ func (c *countingStubProvider) CountTokens(_ context.Context, _ Request) (int, e
 	return 4242, nil
 }
 
-// TestAudited_CountTokensForwarded (audit #9 F-47): the factory's chain
+// TestAudited_CountTokensForwarded: the factory's chain
 // (breaker → retry → tracing → audited) hides the raw provider's optional
 // methods, so the audited wrapper adopts the TokenCounter capability and a
 // type assertion on the chain the chat service holds still matches — and
@@ -207,7 +208,7 @@ func TestAudited_CountTokensForwarded(t *testing.T) {
 	}
 }
 
-// TestClaudeProvider_CountTokensURL (audit #9 F-47): the count URL is the
+// TestClaudeProvider_CountTokensURL: the count URL is the
 // Messages endpoint with the trailing segment replaced — the plain provider
 // hits api.anthropic.com/v1/messages/count_tokens, a Foundry resource its
 // services.ai.azure.com host.
@@ -222,10 +223,9 @@ func TestClaudeProvider_CountTokensURL(t *testing.T) {
 	}
 }
 
-// A4: CountTokens refuses an invalid stored document like Chat/Stream/Models
-// do — in API-key mode it used to POST the key and the prompt to the host
-// Validate had refused, in Entra ID mode it dereferenced the missing token
-// source. Neither mode may make a request.
+// CountTokens refuses an invalid stored document like Chat/Stream/Models
+// do: the credential must never reach a host Validate refused, so neither
+// mode makes a request.
 func TestAzureClaude_CountTokensInvalidDocumentRefused(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ int, _ map[string]any) {
 		writeJSON(w, 200, map[string]any{"input_tokens": 1})
@@ -255,8 +255,8 @@ func TestAzureClaude_CountTokensInvalidDocumentRefused(t *testing.T) {
 	}
 }
 
-// A4: a bare deployment name the cached project listing re-lists as a
-// Claude deployment is counted on the count_tokens route (claudeRoute, as
+// A bare deployment name the cached project listing re-lists as a Claude
+// deployment is counted on the count_tokens route (claudeRoute, as
 // Chat and Stream route it), not refused as a non-Claude deployment.
 func TestAzureClaude_CountTokensRelistedDeployment(t *testing.T) {
 	srv := projectWithClaude(t)

@@ -2,13 +2,17 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,6 +50,74 @@ func TestCIWebhook_Unconfigured_Returns503(t *testing.T) {
 	rt.ServeHTTP(rr, req)
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503 when CI webhook unconfigured, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// recordingHandler is a slog.Handler that keeps every record so a test can
+// assert on levels without parsing rendered output.
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler       { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler            { return h }
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *recordingHandler) snapshot() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]slog.Record(nil), h.records...)
+}
+
+// TestCIWebhook_Unconfigured_NoErrorLogFlood: the endpoint is public, and
+// with PAD_CI_WEBHOOK_SECRET unset render.Error logged every 503 at ERROR —
+// any unauthenticated caller could flood the error log by repeating the
+// request. Every call must still get the byte-identical 503 envelope it got
+// before, with no ERROR record and a single WARN for the process.
+func TestCIWebhook_Unconfigured_NoErrorLogFlood(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	// The WARN is once per process; start from a fresh gate so the count
+	// below does not depend on which test reached the endpoint first.
+	ciWebhookUnconfiguredWarn = sync.Once{}
+
+	logs := &recordingHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(logs))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// The response the endpoint has always sent: 503, the status-derived
+	// code and the 5xx-masked message (no requestId — the test router has no
+	// access-log layer to stamp X-Request-ID).
+	const wantBody = `{"code":"SERVICE_UNAVAILABLE","message":"internal server error"}` + "\n"
+	for i := 0; i < 50; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader([]byte(`{"flowId":"x"}`)))
+		rr := httptest.NewRecorder()
+		rt.ServeHTTP(rr, req)
+		if rr.Code != http.StatusServiceUnavailable || rr.Body.String() != wantBody || rr.Header().Get("Content-Type") != "application/json" {
+			t.Fatalf("call %d: got %d %q (Content-Type %q), want 503 %q (application/json)",
+				i, rr.Code, rr.Body.String(), rr.Header().Get("Content-Type"), wantBody)
+		}
+	}
+	slog.SetDefault(prev)
+
+	var warns int
+	for _, r := range logs.snapshot() {
+		switch {
+		case r.Level >= slog.LevelError:
+			t.Errorf("ERROR record logged for the unconfigured CI webhook: %q", r.Message)
+		case r.Level == slog.LevelWarn && strings.Contains(r.Message, "PAD_CI_WEBHOOK_SECRET"):
+			warns++
+		}
+	}
+	if warns != 1 {
+		t.Errorf("misconfiguration WARN logged %d times over 50 calls, want exactly once", warns)
 	}
 }
 

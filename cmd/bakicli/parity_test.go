@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// flowWithFixture runs the built binary's analyze (JSON) on a fixture and
-// returns the decoded report — the input shape diff-reports consumes.
+// saveReport runs the built binary's analyze (JSON) on a fixture and saves
+// the report to a temp file — the input shape diff-reports consumes.
 func saveReport(t *testing.T, flow string) string {
 	t.Helper()
 	flowPath := writeTempFlow(t, flow)

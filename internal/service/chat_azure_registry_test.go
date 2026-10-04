@@ -23,16 +23,15 @@ import (
 )
 
 // Chat turns on the Azure AI Foundry model registry (Part 9): the model id
-// ("m/<entryId>", a pre-registry id for one release, "" for the server
-// default) resolves before any stream starts, and every reader of the model
-// takes the resolved provider-level id — never the request's.
+// ("m/<entryId>", a pre-registry id for one release, "" for the server default)
+// resolves before any stream starts, and every reader of the model takes the
+// resolved provider-level id — never the request's.
 
-// azChatEnv is a ChatService on the model registry: azmEnv's
-// AzureModelService (fake registry, keystores, organisation directory) with
-// org-1 (admin "admin", member "u1", viewer "viewer"), and a chat factory on
-// the same keystores that records usage rows in backend. The chat service's
-// organisation role lookup (credentialOrg) reads the same directory;
-// conversations stay in the local file store.
+// azChatEnv is a ChatService on the model registry: azmEnv's AzureModelService (fake
+// registry, keystores, organisation directory) with org-1 (admin "admin", member
+// "u1", viewer "viewer"), and a chat factory on the same keystores recording usage
+// rows in backend; the chat service's organisation role lookup (credentialOrg) reads
+// the same directory, and conversations stay in the local file store.
 type azChatEnv struct {
 	*azmEnv
 	chat    *ChatService
@@ -40,8 +39,7 @@ type azChatEnv struct {
 }
 
 // azChatBackend is the chat store: usage rows and daily usage from
-// testutil.FakeBackend, the caller's organisations from the registry env's
-// directory.
+// testutil.FakeBackend, the caller's organisations from the registry env's directory.
 type azChatBackend struct {
 	*testutil.FakeBackend
 	orgs *azmOrgDir
@@ -89,7 +87,7 @@ func (e *azChatEnv) turn(t *testing.T, scope string, doc *models.FlowDocument, r
 // lastStored is the last message of a stored conversation.
 func (e *azChatEnv) lastStored(t *testing.T, doc *models.FlowDocument, convKey string) models.ChatMessage {
 	t.Helper()
-	stored, err := e.chat.GetConversation(context.Background(), doc, convKey)
+	stored, err := e.chat.GetConversation(context.Background(), doc.ID, convKey)
 	if err != nil || len(stored) == 0 {
 		t.Fatalf("stored conversation = %+v, %v", stored, err)
 	}
@@ -131,21 +129,21 @@ func (e *azChatEnv) scriptProviders(p ai.Provider) func() []ai.AzureConnectionRe
 	}
 }
 
-// pricedSpy is a scripted registry provider (itemsProvider: it records every
-// request and lists only what the test gives it) priced under a non-alias id
-// at one dollar per output token, so the stream's in-flight reservation reads
-// as the tokens it reserved.
+// pricedSpy is a scripted registry provider (itemsProvider: it records every request
+// and lists only what the test gives it) priced under a non-alias id at one dollar
+// per output token, so the stream's in-flight reservation reads as the tokens it
+// reserved.
 type pricedSpy struct{ *itemsProvider }
 
 func (p *pricedSpy) PricePerMillionTokens() ai.Pricing {
 	return ai.Pricing{OutputCostPerM: 1_000_000}
 }
 
-// azChatFoundry is a fake Foundry resource the real registry provider talks
-// to (the ai.AzureFoundryOptions.Transport seam): a chat completion streams
-// "Hello from Foundry." answered by gpt-4o-2024-11-20 with usage 12/3; with a
-// status set, every request is answered with it instead (401: a rejected
-// key). It records each request's path, api-key header and JSON body.
+// azChatFoundry is a fake Foundry resource the real registry provider talks to (the
+// ai.AzureFoundryOptions.Transport seam): a chat completion streams "Hello from
+// Foundry." answered by gpt-4o-2024-11-20 with usage 12/3; with a status set, every
+// request is answered with it instead (401: a rejected key). It records each
+// request's path, api-key header and JSON body.
 type azChatFoundry struct {
 	mu     sync.Mutex
 	status int
@@ -216,11 +214,10 @@ func (f *azChatFoundry) requests() []azChatFoundryRequest {
 	return append([]azChatFoundryRequest(nil), f.reqs...)
 }
 
-// A turn on a registry entry runs on the entry's resource with the entry's
-// deployment: the wire model is the deployment, the output cap the entry's
-// (the reasoning floor of a gpt-5 deployment never goes above it), the usage
-// row names the deployment on provider azure-foundry, and the stored answer
-// keeps the "m/" id the client asked with plus the entry's display name.
+// A turn on a registry entry runs on the entry's resource with the entry's deployment
+// (the wire model is the deployment, the output cap the entry's), the usage row names
+// the deployment on provider azure-foundry, and the stored answer keeps the "m/" id
+// the client asked with plus the entry's display name.
 func TestChatAzureRegistry_TurnRunsOnTheResolvedEntry(t *testing.T) {
 	e := newAzChatEnv(t)
 	foundry := newAzChatFoundry(t)
@@ -243,8 +240,8 @@ func TestChatAzureRegistry_TurnRunsOnTheResolvedEntry(t *testing.T) {
 	if r.path != "/openai/v1/chat/completions" || r.apiKey != "personal-key" || r.body["model"] != "gpt-5-mini" {
 		t.Errorf("request = %s, api-key %q, model %v; want the entry's deployment on its resource", r.path, r.apiKey, r.body["model"])
 	}
-	// The request asked for 1000; a gpt-5 deployment's reasoning floor
-	// (16384) raises it, but never above the entry's 3000.
+	// The request asked for 1000; the gpt-5 reasoning floor raises it, never above
+	// the entry's 3000.
 	if got := r.body["max_completion_tokens"]; got != float64(3000) {
 		t.Errorf("max_completion_tokens = %v, want the entry's max output 3000", got)
 	}
@@ -262,18 +259,17 @@ func TestChatAzureRegistry_TurnRunsOnTheResolvedEntry(t *testing.T) {
 	}
 }
 
-// Every reader of the model takes the resolved id: the reservation, the
-// generation params, the stream request's Model, the window its history is
-// trimmed to — none of them the request's "m/<entryId>", which the request
-// (passed by value) still carries.
+// Every reader of the model takes the resolved id: the reservation, the generation
+// params, the stream request's Model, the window its history is trimmed to — none of
+// them the request's "m/<entryId>", which the request (passed by value) still carries.
 func TestChatAzureRegistry_EveryReaderTakesTheResolvedID(t *testing.T) {
 	ctx := context.Background()
 	e := newAzChatEnv(t)
 	c := e.mustConn(t, azmUser, "res", azmKeyConfig("k"))
 	m := e.mustModel(t, azmUser, AzureModelInput{ConnectionID: c.ID, Kind: "chat", Deployment: "gpt-5-mini",
 		DisplayName: "Docs writer", MaxOutputTokens: 3000, ContextWindow: 20000})
-	// The listing sizes the resolved id only; the provider-wide window is
-	// huge, so a lookup by the wrong id would neither cap nor trim.
+	// The listing sizes the resolved id only; the provider-wide window is huge, so a
+	// lookup by the wrong id would neither cap nor trim.
 	spy := &pricedSpy{&itemsProvider{id: "registry-spy", limit: 1 << 20,
 		models: []ai.ModelInfo{{ID: "gpt-5-mini", ContextLimit: 20000, MaxOutputTokens: 3000}}}}
 	built := e.scriptProviders(spy)
@@ -293,8 +289,8 @@ func TestChatAzureRegistry_EveryReaderTakesTheResolvedID(t *testing.T) {
 	if ts.model != want {
 		t.Errorf("turn model = %+v, want %+v", ts.model, want)
 	}
-	// Reserved: the gpt-5 floor capped at the entry's 3000 (by the request's
-	// own id it would have been the request's 1000).
+	// Reserved: the gpt-5 floor capped at the entry's 3000 (the request's own id
+	// would give 1000).
 	if got, wantCost := ctl.inflight(), inFlightCost(spy.PricePerMillionTokens(), 0, 3000); got != wantCost {
 		t.Errorf("reservation = %v, want %v (3000 tokens)", got, wantCost)
 	}
@@ -334,9 +330,8 @@ func TestChatAzureRegistry_EveryReaderTakesTheResolvedID(t *testing.T) {
 	}
 }
 
-// An agent entry always runs through the tool loop — its "m/" id says
-// nothing about the kind, the resolution does — even when the thread's tools
-// toggle is off.
+// An agent entry always runs through the tool loop — its "m/" id says nothing about
+// the kind, the resolution does — even when the thread's tools toggle is off.
 func TestChatAzureRegistry_AgentEntryAlwaysRunsTheToolLoop(t *testing.T) {
 	e := newAzChatEnv(t)
 	c := e.mustConn(t, azmUser, "project", azmEntraConfig("s"))
@@ -358,9 +353,8 @@ func TestChatAzureRegistry_AgentEntryAlwaysRunsTheToolLoop(t *testing.T) {
 	}
 }
 
-// A model the caller cannot use is the create request's own answer —
-// ErrModelNotAvailable before any stream exists or any provider is built —
-// and the preview's.
+// A model the caller cannot use is the create request's own answer — ErrModelNotAvailable
+// before any stream exists or any provider is built — and the preview's.
 func TestChatAzureRegistry_ModelNotAvailableBeforeAnyStream(t *testing.T) {
 	ctx := context.Background()
 	e := newAzChatEnv(t)
@@ -408,10 +402,9 @@ func TestChatAzureRegistry_ModelNotAvailableBeforeAnyStream(t *testing.T) {
 	}
 }
 
-// A registry the chat path cannot read is never a fallback to another model
-// or credential, and its raw error never reaches the client: the turn fails
-// with the generic setup error (PROVIDER_UNAVAILABLE), the preview with the
-// same error.
+// A registry the chat path cannot read is never a fallback to another model or
+// credential, and its raw error never reaches the client: the turn and the preview
+// both fail with the generic setup error (PROVIDER_UNAVAILABLE).
 func TestChatAzureRegistry_RegistryFailureIsTheGenericSetupError(t *testing.T) {
 	ctx := context.Background()
 	e := newAzChatEnv(t)
@@ -438,10 +431,9 @@ func TestChatAzureRegistry_RegistryFailureIsTheGenericSetupError(t *testing.T) {
 	}
 }
 
-// An organisation's entry runs on the organisation's credential — never the
-// member's own, even for the same deployment name — bills the flow's org,
-// and its credential failures are the org admin's to fix: the shared flag
-// and the "ask your admin" copy.
+// An organisation's entry runs on the organisation's credential — never the member's
+// own, even for the same deployment name — bills the flow's org, and its credential
+// failures are the org admin's to fix: the shared flag and the "ask your admin" copy.
 func TestChatAzureRegistry_OrgEntryRunsOnTheOrgCredential(t *testing.T) {
 	e := newAzChatEnv(t)
 	foundry := newAzChatFoundry(t)
@@ -474,8 +466,8 @@ func TestChatAzureRegistry_OrgEntryRunsOnTheOrgCredential(t *testing.T) {
 		t.Errorf("rejected org key = %+v, want PROVIDER_AUTH with the shared flag and the admin copy", snap)
 	}
 
-	// The organisation's credential is gone (its lender was demoted): no
-	// fallback to the member's own key for the same deployment.
+	// The organisation's credential is gone (its lender was demoted): no fallback to
+	// the member's own key for the same deployment.
 	foundry.setStatus(0)
 	if err := e.orgKeys.DeleteOrg("org-1", ai.AzureConnectionKey(oc.ID)); err != nil {
 		t.Fatal(err)
@@ -507,9 +499,9 @@ func TestChatAzureRegistry_PersonalResourceWithoutCredentials(t *testing.T) {
 	}
 }
 
-// model "" is the server default — the entry the legacy chat deployment
-// became — stored with that entry's "m/" id; a raw pre-registry id still
-// resolves through its alias for one release and is stored as sent.
+// model "" is the server default — the entry the legacy chat deployment became —
+// stored with that entry's "m/" id; a raw pre-registry id still resolves through its
+// alias for one release and is stored as sent.
 func TestChatAzureRegistry_ServerDefaultAndLegacyIDs(t *testing.T) {
 	e := newAzChatEnv(t)
 	foundry := newAzChatFoundry(t)
@@ -544,9 +536,8 @@ func TestChatAzureRegistry_ServerDefaultAndLegacyIDs(t *testing.T) {
 	}
 }
 
-// The preview resolves exactly as the turn does: the window is the resolved
-// entry's (its context-window override, through the audited listing), and
-// nothing reaches Azure.
+// The preview resolves exactly as the turn does: the window is the resolved entry's
+// (its context-window override, through the audited listing), and nothing reaches Azure.
 func TestChatAzureRegistry_PreviewUsesTheEntrysWindow(t *testing.T) {
 	ctx := context.Background()
 	e := newAzChatEnv(t)
@@ -588,9 +579,9 @@ func TestChatAzureRegistry_OtherProvidersNeverReadTheRegistry(t *testing.T) {
 	}
 }
 
-// The reasoning floor never raises max tokens above the model's output
-// ceiling — a registry entry's "Max output tokens" included — and a request
-// that left max tokens unset is capped by that override too.
+// The reasoning floor never raises max tokens above the model's output ceiling — a
+// registry entry's "Max output tokens" included — and a request that left max tokens
+// unset is capped by that override too.
 func TestReasoningFloor_NeverAboveTheOutputCeiling(t *testing.T) {
 	for _, tc := range []struct {
 		model              string

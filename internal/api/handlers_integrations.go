@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"pad-analyzer/internal/api/render"
@@ -19,32 +20,28 @@ import (
 	"pad-core/models"
 )
 
-// ciWebhookMaxSkew is the freshness window for an inbound CI webhook. A request
-// whose X-Baki-Timestamp is older (or further in the future) than this is
-// rejected, so a captured request can't be replayed after the window elapses.
+// ciWebhookMaxSkew is the freshness window for an inbound CI webhook: a request whose
+// X-Baki-Timestamp is older (or more future) than this is rejected, so a captured request can't
+// be replayed after the window elapses.
 const ciWebhookMaxSkew = 5 * time.Minute
 
-// maxCIWebhookBodyBytes bounds the CI webhook body. The payload is a tiny
-// JSON ({flowId, failOn, format}), but verifySignature reads the WHOLE body
-// (HMAC over the raw bytes) before any of it is parsed — without a cap an
-// unauthenticated caller could feed gigabytes straight into memory.
+// maxCIWebhookBodyBytes bounds the CI webhook body: verifySignature reads the WHOLE body (HMAC over
+// the raw bytes) before any of it is parsed — without a cap an unauthenticated caller could feed
+// gigabytes straight into memory.
 const maxCIWebhookBodyBytes = 1 << 20
 
-// CIWebhookSecret is the HMAC key an admin configures (PAD_CI_WEBHOOK_SECRET).
-// The AnalysisHandler holds it so the inbound CI endpoint can verify request
-// authenticity without going through jwtAuth (the endpoint is in publicRoutes).
+// ciWebhookUnconfiguredWarn gates the one WARN a process logs when the CI webhook is called without
+// PAD_CI_WEBHOOK_SECRET: the operator learns of it once, repeated calls cost nothing in the log.
+var ciWebhookUnconfiguredWarn sync.Once
+
+// CIWebhookSecret is the HMAC key an admin configures (PAD_CI_WEBHOOK_SECRET); the AnalysisHandler
+// holds it so the inbound CI endpoint can verify authenticity without going through jwtAuth.
 type CIWebhookSecret string
 
-// verifySignature is the inbound mirror of notify's outbound X-Baki-Signature
-// signing: recompute HMAC-SHA256 over the raw body and compare in constant time.
-// It consumes the request body and restores it for the downstream handler.
-//
-// Replay protection: when the sender includes X-Baki-Timestamp (unix seconds),
-// it is validated against a ±ciWebhookMaxSkew window AND folded into the signed
-// payload (as "<ts>." prefix) so a forged timestamp invalidates the signature.
-// Senders that omit the header are accepted for backward compatibility (logged
-// as deprecated on a successful match) — the header will become mandatory in a
-// future release.
+// verifySignature is the inbound mirror of notify's outbound X-Baki-Signature signing: recompute
+// HMAC-SHA256 over the raw body and compare in constant time; it consumes the body and restores it.
+// Replay protection: X-Baki-Timestamp is validated against ±ciWebhookMaxSkew AND folded into the
+// signed payload (as "<ts>." prefix), so a forged timestamp invalidates the signature.
 func verifySignature(r *http.Request, secret string) (bool, error) {
 	if secret == "" {
 		return false, fmt.Errorf("CI webhook secret not configured")
@@ -79,10 +76,8 @@ func verifySignature(r *http.Request, secret string) (bool, error) {
 	return hmac.Equal([]byte(sent), []byte(expected)), nil
 }
 
-// ciWebhookRequest is the body a CI runner POSTs. FlowID identifies a stored
-// flow to analyze; FailOn (optional, mirrors bakicli) sets the severity at which
-// the response reports passed=false, letting a pipeline gate without parsing the
-// report.
+// ciWebhookRequest is the body a CI runner POSTs: FlowID identifies a stored flow; FailOn (mirrors
+// bakicli) sets the severity at which the response reports passed=false, so a pipeline can gate.
 type ciWebhookRequest struct {
 	FlowID string `json:"flowId"`
 	FailOn string `json:"failOn,omitempty"` // "error" (default) | "warning" | "info" | "none"
@@ -103,11 +98,10 @@ type ciWebhookResponse struct {
 	Findings []models.Finding `json:"findings,omitempty"`
 }
 
-// handleCIWebhook analyzes a stored flow on demand from a CI runner. Auth is a
-// pre-shared HMAC key (X-Baki-Signature), NOT a user session — the endpoint is
-// in publicRoutes so jwtAuth skips it, and this handler does its own signature
-// check. The flow is loaded without per-user authz (like the public share
-// viewer), so the runner only needs the flow ID + the secret.
+// handleCIWebhook analyzes a stored flow on demand from a CI runner. Auth is a pre-shared HMAC key
+// (X-Baki-Signature), NOT a user session — the endpoint is in publicRoutes so jwtAuth skips it, and
+// this handler does its own signature check. The flow is loaded without per-user authz (like the
+// public share viewer): the runner needs only the flow ID + the secret.
 // @Summary      CI webhook
 // @Description  Token-authenticated CI integration endpoint.
 // @Tags         analysis
@@ -120,7 +114,13 @@ type ciWebhookResponse struct {
 // @Router       /api/integrations/ci [post]
 func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request) {
 	if h.ciSecret == "" {
-		render.Error(w, fmt.Errorf("CI webhook not configured: set PAD_CI_WEBHOOK_SECRET"), http.StatusServiceUnavailable)
+		// The endpoint is public, so render.Error's per-request ERROR log for
+		// this 503 let any unauthenticated caller flood the error log. Same
+		// status and body; the misconfiguration is reported once per process.
+		ciWebhookUnconfiguredWarn.Do(func() {
+			logger.Warn("CI webhook called but not configured; POST /api/integrations/ci answers 503 until PAD_CI_WEBHOOK_SECRET is set")
+		})
+		render.ErrorUnlogged(w, fmt.Errorf("CI webhook not configured: set PAD_CI_WEBHOOK_SECRET"), http.StatusServiceUnavailable)
 		return
 	}
 	// verifySignature reads the entire body for the HMAC; bound it before the
@@ -141,10 +141,9 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 		render.Error(w, fmt.Errorf("invalid or missing X-Baki-Signature"), http.StatusUnauthorized)
 		return
 	}
-	// B1.9: the header is now MANDATORY. A legacy-signed body (which loads
-	// any flow by ID and returns full findings) could be replayed forever
-	// without a timestamp; the deprecation window has run its course. An env
-	// escape hatch exists for senders that genuinely cannot upgrade yet.
+	// The header is MANDATORY: a legacy-signed body (which loads any flow by ID and returns full
+	// findings) could be replayed forever without a timestamp. An env escape hatch exists for
+	// senders that genuinely cannot upgrade yet.
 	if r.Header.Get("X-Baki-Timestamp") == "" {
 		if os.Getenv("PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP") == "1" {
 			logger.Warn("CI webhook accepted WITHOUT X-Baki-Timestamp (PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP=1; replay-vulnerable) — update the sender")
@@ -175,7 +174,7 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 	// not as a user. This mirrors handleViewShared's resolve path.
 	doc, err := h.flowSvc.DocProvider().ResolveDoc(r.Context(), req.FlowID)
 	if err != nil {
-		// B1.8: 4xx bodies pass through unmasked — a wrapped driver error
+		// 4xx bodies pass through unmasked — a wrapped driver error
 		// (SQL state, blob details) must not reach an HMAC-authenticated but
 		// external caller. Static message; detail stays server-side.
 		logger.Warn("ci webhook: flow resolve failed", "flowId", req.FlowID, "err", err)

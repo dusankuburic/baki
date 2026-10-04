@@ -10,21 +10,10 @@ const (
 	SeverityInfo    Severity = "info"
 )
 
-// Valid reports whether s is one of the three severities the product actually
-// handles.
-//
-// Every consumer switches or ranks over exactly these values and silently drops
-// anything else: the Markdown, HTML and PDF exporters iterate a fixed
-// severityOrder so an off-list bucket is never rendered; JUnit emits a
-// <failure> only for error/warning, so an off-list finding is a PASSING
-// testcase; SARIF's level mapping defaults to "warning"; and bakicli's
-// shouldFail ranks an unknown severity 0, which is below every threshold. A
-// custom rule declaring severity "critical" therefore vanished from every
-// human-readable report, turned CI green, and reported Health Score 100/100.
-//
-// Severity is a plain string type so it can round-trip through JSON configs,
-// which means the type system cannot enforce this — validate at the boundary
-// where a string becomes a Severity.
+// Valid reports whether s is one of the three severities every consumer
+// switches or ranks over; anything else is silently dropped (a custom
+// "critical" once vanished and turned CI green). Severity round-trips JSON as
+// a plain string, so validate at the boundary.
 func (s Severity) Valid() bool {
 	switch s {
 	case SeverityError, SeverityWarning, SeverityInfo:
@@ -38,12 +27,9 @@ func ValidSeverities() []Severity {
 	return []Severity{SeverityError, SeverityWarning, SeverityInfo}
 }
 
-// Confidence expresses how sure a rule is about a given finding — separating
-// "we're sure" (regex secret match, an open without a close) from "maybe"
-// (Shannon-entropy guess, name-heuristic uninitialized variable). Findings sort
-// by severity × confidence so a triager hits the sure-fire issues first, and a
-// low-confidence finding can carry a "maybe" affordance in the UI. Defaults to
-// Medium when a rule doesn't say.
+// Confidence expresses how sure a rule is about a finding — "we're sure"
+// (regex secret match) vs "maybe" (entropy guess, heuristic). Findings sort by
+// severity × confidence. Defaults to Medium.
 type Confidence string
 
 const (
@@ -54,17 +40,14 @@ const (
 
 type Finding struct {
 	ID string `json:"id"`
-	// Fingerprint is a stable, content-derived identity for the finding (see
-	// ContentKey in the analyzer). Unlike ID — a per-run sequential index
-	// ("F-001") that shifts when other findings come or go — Fingerprint
-	// survives re-analysis AND re-imports/re-parses, so triage state,
-	// suppressions, baselines, and SARIF can be pinned to it.
+	// Fingerprint is a stable, content-derived identity (analyzer.ContentKey):
+	// unlike ID, it survives re-analysis AND re-imports/re-parses, so triage
+	// state, suppressions, baselines and SARIF pin to it.
 	Fingerprint string   `json:"fingerprint,omitempty"`
 	RuleID      string   `json:"ruleId"`
 	Severity    Severity `json:"severity"`
-	// Confidence is the rule's certainty about this finding (high/medium/low).
-	// Stamped by the engine (per-rule default, overridable by the rule). Drives
-	// severity×confidence triage ordering.
+	// Confidence is the rule's certainty (engine-stamped default, overridable);
+	// drives severity×confidence triage ordering.
 	Confidence  Confidence `json:"confidence,omitempty"`
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
@@ -72,32 +55,17 @@ type Finding struct {
 	SubflowID   string     `json:"subflowId"`
 	Suggestion  string     `json:"suggestion,omitempty"`
 	AutoFixHint string     `json:"autoFixHint,omitempty"`
-	// AutoFix names a deterministic fix the user can apply in one click from the
-	// findings UI (desktop: edits the source file, re-parses, re-analyzes).
-	// Empty means no automatic fix is available (only the AutoFixHint prose or
-	// "Fix with AI"). Current values: "wrap-error-handler" (resolves
-	// unhandled-error / file-op-no-error-handler), "suppress" (pad-ignore).
+	// AutoFix names a deterministic one-click fix from the findings UI (edits
+	// source, re-parses, re-analyzes); empty means only the hint or "Fix with AI".
 	AutoFix  string                 `json:"autoFix,omitempty"`
 	Category string                 `json:"category,omitempty"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// Key returns the in-run identity of a finding: the rule that raised it plus the
-// block it points at. Block IDs are flow-unique GUIDs, so RuleID:BlockID
-// uniquely identifies "this rule firing on this block" WITHIN one parsed run.
-//
-// For cross-run identity (diff, baseline, triage, SARIF), use Fingerprint
-// instead — it is content-derived (rule + subflow/name/line/subject) and
-// survives re-imports and CLI re-runs, whereas Key() changes every re-parse.
-//
-// Stability note: block IDs are assigned by the parser (uuid.NewString) at parse
-// time, so a Key is stable only across re-analyses of the *same parsed
-// document* (the cloud server stores the parsed doc and re-analyzes it in
-// place) but NOT across independent re-parses of the source text. Fingerprint
-// covers the cross-parse case.
-// Pointer receiver: Finding is ~200 bytes; every call site holds an
-// addressable value (slice element or variable), so the value copy per call
-// was pure overhead on hot paths (triage keys, fix-loop signatures, diff).
+// Key returns the in-run identity RuleID:BlockID — stable across re-analyses
+// of the same parsed document, NOT across re-parses (block IDs are
+// parser-minted UUIDs); use Fingerprint cross-run. Pointer receiver: Finding
+// is ~200 bytes.
 func (f *Finding) Key() string {
 	return f.RuleID + ":" + f.BlockID
 }
@@ -107,17 +75,12 @@ type AnalysisReport struct {
 	FlowName    string    `json:"flowName,omitempty"`
 	GeneratedAt time.Time `json:"generatedAt"`
 	Findings    []Finding `json:"findings"`
-	// Groups are the per-block finding clusters produced by DeduplicateFindings
-	// (run in the default analysis path). Each group's Primary is the
-	// representative finding; DuplicateCount is how many same-block, same-subject
-	// duplicates were folded into it. Drives the UI's "N similar" affordance.
-	Groups       []FindingGroup `json:"groups,omitempty"`
-	Stats        AnalysisStats  `json:"stats"`
-	// ContentHash carries the FlowHash of the analyzed document, set by the
-	// analysis-cache path at the same moment it computes the cache key, so
-	// history recording reuses it instead of walking the document a second
-	// time. Not serialized: stored/cached reports already live under this
-	// hash elsewhere.
+	// Per-block finding groups are deliberately NOT a field: they would repeat
+	// each finding plus a Primary copy nobody reads; the dedup view computes
+	// its own (analyzer.DeduplicateFindings).
+	Stats AnalysisStats `json:"stats"`
+	// ContentHash carries the analyzed document's FlowHash (set by the
+	// cache-key path so history reuses it); not serialized.
 	ContentHash  string        `json:"-"`
 	DurationMs   int           `json:"durationMs"`
 	Metrics      *FlowMetrics  `json:"metrics,omitempty"`
@@ -130,13 +93,11 @@ type AnalysisStats struct {
 	Info           int `json:"info"`
 	BlocksAnalyzed int `json:"blocksAnalyzed"`
 	RulesRun       int `json:"rulesRun"`
-	// RulesSkipped counts (block, rule) evaluations that were aborted via
-	// safeCheck's panic recovery — one buggy rule or malformed block can't
-	// crash the run, but operators need to see that findings may be missing.
+	// RulesSkipped counts (block, rule) evaluations aborted via safeCheck's
+	// panic recovery — one buggy rule can't crash the run, but findings may be missing.
 	RulesSkipped int `json:"rulesSkipped"`
-	// Suppressed counts findings hidden by inline `# pad-ignore` directives in
-	// the flow source (see analyzer suppression). They are excluded from
-	// Errors/Warnings/Info and from the findings list.
+	// Suppressed counts findings hidden by inline `# pad-ignore` directives;
+	// excluded from Errors/Warnings/Info and from the findings list.
 	Suppressed int `json:"suppressed"`
 }
 
@@ -181,24 +142,19 @@ type Rule struct {
 	DefaultSeverity Severity `json:"defaultSeverity"`
 	Category        string   `json:"category"`
 	Enabled         bool     `json:"enabled"`
-	// Confidence is the rule's built-in default certainty (high/medium/low),
-	// surfaced at the catalog level so the UI can show which results to trust
-	// without running an analysis. A rule may still raise/lower it per finding.
+	// Confidence is the built-in default certainty, surfaced at catalog level
+	// so the UI can show which results to trust; still overridable per finding.
 	Confidence Confidence `json:"confidence"`
 	// AutoFix is the deterministic fixType (e.g. "set-timeout") a user can
-	// apply in one click, or "" when the rule has no auto-fixer. Lets the
-	// dashboard compute "auto-fixable rule" counts.
+	// apply in one click, or "" when the rule has no auto-fixer.
 	AutoFix string `json:"autoFix,omitempty"`
 	// Options are the rule's numeric thresholds (maxDepth, minRepeats,
-	// maxBlocks) as currently configured — the deployment override when one
-	// exists, else the built-in default — so a settings UI can render inputs
-	// for exactly the keys the rule honours. Absent for rules without any.
+	// maxBlocks) — deployment override when one exists, else built-in default.
 	Options map[string]interface{} `json:"options,omitempty"`
 }
 
-// RuleSummary is the catalog-level rollup the dashboard consumes for its
-// "auto-fixable rules" and "confidence distribution" KPIs. It folds the full
-// rule catalog into counts so the client doesn't have to iterate every rule.
+// RuleSummary is the catalog-level rollup for the dashboard's "auto-fixable
+// rules" and "confidence distribution" KPIs, folding the catalog into counts.
 type RuleSummary struct {
 	TotalRules       int            `json:"totalRules"`
 	AutoFixableRules int            `json:"autoFixableRules"`
@@ -279,12 +235,10 @@ type AnalysisDiff struct {
 	HasPrevious bool `json:"hasPrevious"`
 }
 
-// BaselineDrift reports the findings in a report that are NOT in a flow's
-// accepted baseline — i.e. findings introduced since the baseline was taken.
-// It is the basis for ratcheting/gating: CI and dashboards can fail or alert on
-// New (and especially NewErrors) while ignoring already-accepted findings.
-// When HasBaseline is false (no baseline recorded), every finding is "new" by
-// construction, mirroring AnalysisDiff's "no prior run ⇒ everything added".
+// BaselineDrift reports findings NOT in a flow's accepted baseline — the
+// ratcheting/gating basis: CI and dashboards fail or alert on New (especially
+// NewErrors) while ignoring accepted findings. Without a baseline every
+// finding is "new".
 type BaselineDrift struct {
 	FlowID      string    `json:"flowId"`
 	HasBaseline bool      `json:"hasBaseline"`
@@ -294,7 +248,7 @@ type BaselineDrift struct {
 	NewInfo     int       `json:"newInfo"`
 }
 
-// PortfolioEntry is one flow in the org-wide governance portfolio: its latest
+// PortfolioEntry is one flow in the org-wide governance portfolio: latest
 // persisted health and finding counts, used to rank flows by risk.
 type PortfolioEntry struct {
 	FlowID      string     `json:"flowId"`
@@ -313,13 +267,9 @@ type PortfolioEntry struct {
 // health-first, with rollup totals. Unanalyzed flows sort last (no health yet).
 type Portfolio struct {
 	Entries []PortfolioEntry `json:"entries"`
-	// TotalFlows is every flow the caller can access under the requested
-	// scope. RankedFlows is how many of them this response actually ranked:
-	// ranking is in-memory and capped, and the rollups below (AnalyzedFlows,
-	// AvgHealth, Errors, Warnings, Info) cover exactly the ranked flows.
-	// Truncated is true when the cap was hit, so the rollups describe a
-	// subset — the totals used to be reported from the capped list, which
-	// read as the whole fleet.
+	// TotalFlows is every flow under the requested scope; RankedFlows is how
+	// many this response actually ranked (in-memory, capped) — the rollups
+	// below cover exactly the ranked flows; Truncated marks the cap.
 	TotalFlows    int  `json:"totalFlows"`
 	RankedFlows   int  `json:"rankedFlows"`
 	Truncated     bool `json:"truncated"`

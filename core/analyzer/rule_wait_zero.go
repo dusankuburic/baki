@@ -50,7 +50,6 @@ func isWaitZero(raw string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] >= '0' && s[i] <= '9' {
 			rest := s[i:]
-			// Check if all remaining non-space chars are '0', '.', or ')'
 			for _, c := range rest {
 				if c == ' ' || c == '\t' {
 					break

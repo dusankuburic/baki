@@ -34,12 +34,8 @@ const (
 	circuitHalfOpen
 )
 
-// breakerState is the circuit state for one upstream provider. It is shared,
-// process-wide and keyed by provider ID (see breakerStateFor) so the breaker
-// persists across requests even though ProviderFactory.For rebuilds the whole
-// decorator chain — and therefore a fresh CircuitBreakerProvider — on every
-// call. Without this, the per-instance state reset each request and the breaker
-// could never accumulate enough failures to open.
+// breakerState is the circuit state for one upstream provider, shared process-wide (breakerStateFor) so the
+// breaker persists across the chain rebuilds ProviderFactory.For makes on every call.
 type breakerState struct {
 	mu          sync.Mutex
 	state       circuitState
@@ -52,25 +48,16 @@ var (
 	breakerRegistryMu sync.Mutex
 )
 
-// breakerRegistryMax bounds the registry. Keys are provider × model, plus the
-// resource for providers with per-user endpoints (breakerScoper), so a
-// multi-tenant deployment's key set grows with its users' Azure resources;
-// past the bound, cold entries are dropped and the oldest are evicted (see
-// breakerStateFor).
+// breakerRegistryMax bounds the registry: keys are provider × model plus the resource for per-user endpoints
+// (breakerScoper); past the bound, cold entries are dropped and the oldest evicted.
 const breakerRegistryMax = 4096
 
-// breakerStaleFailure is how long a CLOSED circuit's last failure still
-// protects it from pruning: several open-cooldowns, so a circuit that tripped
-// recently keeps its history, while a key that failed once long ago becomes
-// reclaimable. Failures only reset on a same-key success, so without this the
-// registry could never shrink below the set of keys that EVER failed.
+// breakerStaleFailure is how long a CLOSED circuit's last failure still protects it from pruning (failures
+// only reset on a same-key success, so without this the registry could never shrink).
 const breakerStaleFailure = 4 * cbOpenDuration
 
-// breakerStateFor returns the shared circuit state for a registry key,
-// creating it on first use. State is per upstream (not per user): a provider
-// that is down is down for everyone — where "upstream" is the provider ID
-// plus, for providers whose endpoint belongs to the user, that endpoint
-// (breakerScoper).
+// breakerStateFor returns the shared circuit state for a registry key, creating it on first use. State is per
+// upstream, not per user: a provider that is down is down for everyone.
 func breakerStateFor(key string) *breakerState {
 	breakerRegistryMu.Lock()
 	defer breakerRegistryMu.Unlock()
@@ -78,9 +65,8 @@ func breakerStateFor(key string) *breakerState {
 	if !ok {
 		if len(breakerRegistry) >= breakerRegistryMax {
 			pruneHealthyBreakersLocked()
-			// Pruning only drops cold entries; a registry full of recently
-			// failed keys stays full. Evict down to max-1 so the insert below
-			// cannot push past the cap.
+			// Pruning only drops cold entries; a registry full of recently failed keys stays full. Evict down
+			// to max-1 so the insert below cannot push past the cap.
 			evictBreakersToLocked(breakerRegistryMax - 1)
 		}
 		s = &breakerState{}
@@ -89,12 +75,8 @@ func breakerStateFor(key string) *breakerState {
 	return s
 }
 
-// pruneHealthyBreakersLocked drops every closed circuit whose failure history
-// has gone cold: entries without failures (forgetting one loses nothing — it
-// starts from the same zero state) and entries whose last failure is older
-// than breakerStaleFailure. Open and half-open circuits are always kept, and a
-// dropped state still referenced by an in-flight call just records into an
-// orphan. Caller holds breakerRegistryMu.
+// pruneHealthyBreakersLocked drops every closed circuit whose failure history has gone cold; open and
+// half-open circuits are kept, and a dropped state an in-flight call still references just records into an orphan.
 func pruneHealthyBreakersLocked() {
 	cutoff := time.Now().Add(-breakerStaleFailure)
 	for k, st := range breakerRegistry {
@@ -107,13 +89,8 @@ func pruneHealthyBreakersLocked() {
 	}
 }
 
-// evictBreakersToLocked evicts entries until the registry holds at most want:
-// closed entries with the OLDEST lastFailure first (a never-failed entry's
-// zero time counts as oldest), and only when no closed entry is left — every
-// survivor open or half-open — the oldest entry regardless of state. The cap
-// is a memory bound on a key domain the caller population drives (per-user
-// endpoints, per-model keys), and losing one circuit's history costs at most
-// re-learning a few failures. Caller holds breakerRegistryMu.
+// evictBreakersToLocked evicts entries until the registry holds at most want: closed entries with the OLDEST
+// lastFailure first, and only when no closed entry is left the oldest regardless of state.
 func evictBreakersToLocked(want int) {
 	for len(breakerRegistry) > want {
 		oldestKey, oldestAnyKey := "", ""
@@ -143,12 +120,9 @@ func evictBreakersToLocked(want int) {
 	}
 }
 
-// breakerScoper is implemented by providers whose upstream is per user — an
-// endpoint the user configured (Azure AI Foundry resources). Its scope joins
-// the provider ID in the registry key: a 5xx from one tenant's resource says
-// nothing about another tenant's resource that happens to use the same
-// deployment name, so it must not open that tenant's circuit. The scope must
-// not contain secrets; it never reaches metrics or logs.
+// breakerScoper is implemented by providers whose upstream is per user (an endpoint the user configured —
+// Azure AI Foundry resources): its scope joins the provider ID in the registry key, since a 5xx from one
+// tenant's resource says nothing about another's. The scope holds no secret and never reaches logs.
 type breakerScoper interface {
 	breakerScope() string
 }
@@ -160,13 +134,8 @@ func breakerScopeOf(p Provider) string {
 	return ""
 }
 
-// breakerKey scopes circuit state. Model-level: provider families mix
-// per-model health (a deprecated model ID 500-ing while its siblings are
-// fine — common on GitHub Models), and a provider-wide key meant five
-// consecutive failures on ONE bad model blocked every model and every user
-// for the cooldown. Empty model (Embed, model-less requests) falls back to
-// the provider-wide key. Registry growth is bounded by distinct models in
-// use, which the caller population bounds naturally.
+// breakerKey scopes circuit state per model: provider families mix per-model health (a deprecated model ID
+// 500-ing while its siblings are fine), and a provider-wide key meant one bad model blocked every user.
 func breakerKey(providerID, model string) string {
 	if model == "" {
 		return providerID
@@ -182,20 +151,10 @@ func resetBreakerRegistry() {
 	breakerRegistry = map[string]*breakerState{}
 }
 
-// CircuitBreakerProvider wraps a Provider and opens the circuit after
-// cbFailureThreshold consecutive retryable failures. While open, calls fail
-// immediately with ErrCircuitOpen (which is not retryable) to avoid hammering
-// a known-down provider. After cbOpenDuration the circuit enters half-open and
-// allows one probe — success closes it, another failure reopens it.
-//
-// Only retryable errors (ErrRateLimited, ErrProviderDown, transport-level
-// network failures — see isTransportError) count toward the threshold;
-// permanent errors like ErrApiKeyInvalid do not trip the circuit.
-//
-// The mutable state lives in a shared *breakerState (keyed by provider ID and,
-// for providers with per-user endpoints, the endpoint — see breakerScoper), so
-// every CircuitBreakerProvider for the same upstream — across users and across
-// per-request chain rebuilds — observes the same circuit.
+// CircuitBreakerProvider opens the circuit after failureThreshold consecutive retryable failures; while open,
+// calls fail immediately with ErrCircuitOpen. After openDuration one probe is allowed — success closes, a
+// failure reopens. Permanent errors (auth, config) never trip it. State lives in a shared *breakerState
+// (provider ID + model + endpoint scope), so every provider for the same upstream observes the same circuit.
 type CircuitBreakerProvider struct {
 	Provider
 	providerID string
@@ -206,9 +165,8 @@ type CircuitBreakerProvider struct {
 	openDuration     time.Duration
 }
 
-// stateFor resolves the shared circuit for this call's scope. Chat/Stream key
-// by the request's model (see breakerKey); anything without a model uses the
-// provider-wide key — per resource for a scoped provider.
+// stateFor resolves the shared circuit for this call's scope. Chat/Stream key by the request's model
+// (breakerKey); anything without a model uses the provider-wide key — per resource for a scoped provider.
 func (cb *CircuitBreakerProvider) stateFor(model string) *breakerState {
 	id := cb.providerID
 	if cb.scope != "" {
@@ -259,14 +217,8 @@ func (cb *CircuitBreakerProvider) Embed(ctx context.Context, text []string) ([][
 	return res, err
 }
 
-// recordPanic resolves the circuit when the wrapped provider panics. Without it,
-// a panic skips the record() call in each method, so a half-open PROBE is never
-// resolved — check() then rejects every subsequent caller to that provider
-// forever (wedged until process restart). It records a failure (reopening a
-// half-open probe / counting toward the threshold) and re-panics so the original
-// crash still propagates to the caller's recover for logging. On the normal
-// (no-panic) path recover() returns nil and this is a no-op — the explicit
-// record() above already ran, so there is no double-record.
+// recordPanic resolves the circuit when the wrapped provider panics — without it a half-open PROBE is never
+// resolved and check() rejects every caller forever. On the normal path recover() returns nil (no double-record).
 func (cb *CircuitBreakerProvider) recordPanicSt(st *breakerState) {
 	if r := recover(); r != nil {
 		cb.recordSt(st, ErrProviderDown)
@@ -274,20 +226,9 @@ func (cb *CircuitBreakerProvider) recordPanicSt(st *breakerState) {
 	}
 }
 
-// Stream counts mid-stream failures too: the SSE parsers surface an upstream
-// error event as a Chunk{Error} and then return nil, which would otherwise be
-// recorded as a success — a provider that always streams an error event could
-// never trip the breaker. record() still filters by isRetryable, so permanent
-// or caller-cancelled errors don't open the circuit.
-//
-// A half-open probe is resolved on the first non-error chunk (Azure's first
-// event is a keepalive), not when the stream returns: the upstream has
-// accepted the request and is answering, and every other caller of that
-// resource was rejected with ErrCircuitOpen for the whole probe stream —
-// tens of seconds to minutes after the provider had recovered. Once
-// answered, the stream's outcome is recorded against a closed circuit: a
-// later provider-side failure counts as one, a user stop or a content-filter
-// stop says nothing.
+// Stream counts mid-stream failures too: the SSE parsers surface an upstream error as Chunk{Error} and then
+// return nil, which would otherwise be a recorded success. A half-open probe is resolved on the first
+// non-error chunk (the upstream has accepted the request; every other caller was rejected for the whole probe).
 func (cb *CircuitBreakerProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	st := cb.stateFor(req.Model)
 	if err := cb.checkSt(st); err != nil {
@@ -313,9 +254,8 @@ func (cb *CircuitBreakerProvider) Stream(ctx context.Context, req Request, onChu
 	return err
 }
 
-// resolveProbeSt closes a half-open circuit as soon as its probe is answered
-// (see Stream); a no-op in any other state, so an ordinary stream's first
-// chunk never resets the failure count a closed circuit is accumulating.
+// resolveProbeSt closes a half-open circuit as soon as its probe is answered (see Stream); a no-op in any
+// other state, so an ordinary stream's first chunk never resets the failure count a closed circuit accumulates.
 func (cb *CircuitBreakerProvider) resolveProbeSt(st *breakerState) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -326,13 +266,10 @@ func (cb *CircuitBreakerProvider) resolveProbeSt(st *breakerState) {
 	st.failures = 0
 }
 
-// probeSaysNothing reports a half-open probe outcome that belongs to the
-// caller rather than to the upstream: its credentials, its configuration,
-// its request (filtered, too long, tools the model lacks) or its own
-// cancellation. Keying Azure circuits by resource only (breakerScope) means
-// anyone who saves a config with a victim's endpoint and a garbage key could
-// otherwise race each probe window and keep the victim's circuit open with
-// 401s; the same applies to every provider's shared circuits.
+// probeSaysNothing reports a half-open probe outcome that belongs to the caller rather than the upstream
+// (credentials, configuration, request, cancellation). Keying Azure circuits by resource only, anyone who
+// saves a victim's endpoint with a garbage key could otherwise race each probe window and keep the victim's
+// circuit open with 401s.
 func probeSaysNothing(err error) bool {
 	return errors.Is(err, ErrApiKeyInvalid) || errors.Is(err, ErrProviderConfigInvalid) ||
 		errors.Is(err, ErrKeyNotConfigured) || errors.Is(err, ErrContentFiltered) ||
@@ -340,9 +277,8 @@ func probeSaysNothing(err error) bool {
 		errors.Is(err, context.Canceled)
 }
 
-// check returns ErrCircuitOpen when the circuit is open and the cooldown has
-// not elapsed yet. In half-open state only ONE probe is allowed through;
-// subsequent callers are rejected until the probe completes via record().
+// check returns ErrCircuitOpen when the circuit is open and the cooldown has not elapsed yet. In half-open
+// state only ONE probe is allowed through; subsequent callers are rejected until the probe completes.
 func (cb *CircuitBreakerProvider) checkSt(st *breakerState) error {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -371,18 +307,12 @@ func (cb *CircuitBreakerProvider) recordSt(st *breakerState, err error) {
 		st.failures = 0
 		return
 	}
-	// A failed half-open probe must always resolve the probe — otherwise the
-	// circuit stays half-open and checkSt() rejects every caller forever.
-	// Reopen and restart the cooldown regardless of whether the error is
-	// "retryable": a timeout/cancel means the provider is still unhealthy, and
-	// a permanent error is surfaced to the next admitted probe after the
-	// cooldown rather than wedging the breaker until process restart.
+	// A failed half-open probe must always resolve the probe, or the circuit stays half-open and rejects
+	// every caller forever: reopen and restart the cooldown regardless of retryability.
 	if st.state == circuitHalfOpen {
 		if probeSaysNothing(err) {
-			// The probe's failure is the caller's own and says nothing about
-			// the upstream: release the probe without restarting the
-			// cooldown (lastFailure is left as it was, so the next checkSt
-			// sees it elapsed and admits the next caller as the probe).
+			// The probe's failure is the caller's own and says nothing about the upstream: release the probe
+			// without restarting the cooldown, so the next checkSt admits the next caller as the probe.
 			cb.transitionLocked(st, circuitOpen)
 			return
 		}
@@ -390,17 +320,13 @@ func (cb *CircuitBreakerProvider) recordSt(st *breakerState, err error) {
 		cb.transitionLocked(st, circuitOpen)
 		return
 	}
-	// Closed circuit: only transient provider conditions count toward tripping.
-	// Permanent errors (bad key, invalid request, user cancellation) must not
+	// Closed circuit: only transient provider conditions count toward tripping; permanent errors must not
 	// open the circuit for everyone.
 	if !isRetryable(err) {
 		return
 	}
-	// Rate-limit (429) is per-API-key, not "provider down for everyone." In
-	// multi-tenant deployments each tenant has their own key, so one noisy
-	// tenant's 429s must not trip the shared breaker and block healthy tenants.
-	// The retry layer still backs off on 429 (isRetryable returns true); we just
-	// don't count it toward the circuit-open threshold.
+	// Rate-limit (429) is per-API-key, not "provider down for everyone": in multi-tenant deployments one
+	// noisy tenant's 429s must not trip the shared breaker; the retry layer still backs off on them.
 	if errors.Is(err, ErrRateLimited) {
 		return
 	}

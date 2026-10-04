@@ -25,7 +25,7 @@ func (f *failingChunkStore) SaveKnowledgeChunks(ctx context.Context, userID stri
 
 func docCount(t *testing.T, store *testutil.FakeBackend, orgID string) int {
 	t.Helper()
-	docs, err := store.ListKnowledgeDocuments(context.Background(), orgID, 0)
+	docs, err := store.ListKnowledgeDocuments(context.Background(), orgID, 0, 0)
 	if err != nil {
 		t.Fatalf("ListKnowledgeDocuments: %v", err)
 	}

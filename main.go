@@ -55,25 +55,21 @@ var (
 )
 
 func main() {
-	// The parser mints one UUID per block and the apply-fix loop re-parses per
-	// fix; batched randomness (still crypto-seeded) avoids a crypto/rand
-	// syscall per block on large flows.
+	// The parser mints one UUID per block and the apply-fix loop re-parses
+	// per fix; batched randomness (still crypto-seeded) avoids a syscall per block.
 	uuid.EnableRandPool()
 
-	// `baki-backend healthcheck` is an in-image liveness/readiness probe for
-	// non-ACA deployments (docker-compose, bare `docker run`). It GETs the
-	// server's own /readyz and exits 0 on 200, 1 otherwise. The prod target
-	// (ACA) uses platform httpGet probes instead, so the Dockerfile ships no
-	// HEALTHCHECK directive; this subcommand lets opt-in callers (compose) probe
-	// without a shell/wget — which the distroless image doesn't have.
+	// `baki-backend healthcheck` GETs the server's own /readyz (exit 0 on 200)
+	// so non-ACA deployments (compose, bare docker run) can probe without a
+	// shell/wget — which the distroless image doesn't have. ACA uses platform
+	// httpGet probes instead.
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		os.Exit(runHealthcheck())
 	}
 
 	fx.New(
-		// fx.Run() handles both SIGINT and SIGTERM. The default StopTimeout is
-		// 15s; raise to 25s so we stay under Azure Container Apps' 30s pod
-		// grace period while giving in-flight requests time to drain.
+		// fx.Run() handles SIGINT and SIGTERM. StopTimeout raised from 15s to
+		// 25s: under ACA's 30s pod grace period, in-flight requests get to drain.
 		fx.StopTimeout(25*time.Second),
 		fx.Provide(
 			func() context.Context { return context.Background() },
@@ -105,9 +101,7 @@ func main() {
 }
 
 // loadConfig returns an error instead of exiting on a fatal misconfiguration,
-// so fx handles the "can't start" case through its normal provider-error path
-// (clean, testable, no lifecycle hooks left half-run) rather than the process
-// exiting mid-construction.
+// so fx handles "can't start" through its provider-error path.
 func loadConfig() (*config.Config, error) {
 	var cfg *config.Config
 
@@ -139,16 +133,9 @@ func provideShutdownCh() chan struct{} {
 	return make(chan struct{})
 }
 
-// provideNotifier builds the governance alert dispatcher from config. With no
-// channels configured it is a harmless no-op (Dispatcher.Enabled() == false).
-// A non-HTTPS alert URL is a configuration error (governance payloads carry
-// internal flow details and must not be sent in plaintext) — fail startup so
-// the operator fixes the URL rather than silently leaking alerts.
 // egressPolicy is the deployment's single answer to "may an outbound
-// notification reach this server's own machine or private network".
-//
-// Cloud is multi-tenant: an org's channel URL is untrusted input (any
-// authenticated user can create an org and administer it), so loopback and
+// notification reach this server's own machine or private network". Cloud is
+// multi-tenant — an org's channel URL is untrusted input, so loopback and
 // private targets are refused. Local/desktop is the single user's own machine,
 // where a webhook pointing at localhost is exactly what they meant.
 func egressPolicy(cfg *config.Config) notify.TargetPolicy {
@@ -159,10 +146,8 @@ func egressPolicy(cfg *config.Config) notify.TargetPolicy {
 }
 
 func provideNotifier(cfg *config.Config, mailer *mail.Service) (*notify.Dispatcher, error) {
-	// Backward compatibility: the legacy PAD_WEBHOOK_URL (read directly by the
-	// old service.WebhookNotifier) sent Slack-format payloads. Map it onto the
-	// new Slack channel when PAD_NOTIFY_SLACK_URL isn't set, so existing
-	// deployments keep posting to Slack without a config change.
+	// Backward compatibility: the legacy PAD_WEBHOOK_URL sent Slack-format
+	// payloads; map it onto the Slack channel when PAD_NOTIFY_SLACK_URL isn't set.
 	slackURL := cfg.Governance.NotifySlackURL
 	slackSecret := cfg.Governance.NotifySlackSecret
 	if slackURL == "" {
@@ -170,8 +155,8 @@ func provideNotifier(cfg *config.Config, mailer *mail.Service) (*notify.Dispatch
 		slackSecret = os.Getenv("PAD_WEBHOOK_SECRET")
 	}
 	// The email channel only fires when both a real SMTP sender and a recipient
-	// are configured. mailer is always non-nil (log-only fallback), so gate on
-	// its Enabled() + the recipient address.
+	// are configured; mailer is always non-nil (log-only fallback), so gate on
+	// Enabled() + the recipient address.
 	var emailSender notify.EmailSender
 	if mailer != nil && cfg.Governance.NotifyEmailTo != "" {
 		emailSender = mailSvcAdapter{svc: mailer}
@@ -196,9 +181,8 @@ func provideNotifier(cfg *config.Config, mailer *mail.Service) (*notify.Dispatch
 	return d, nil
 }
 
-// mailSvcAdapter bridges *mail.Service to notify.EmailSender. It hides the
-// concrete mail type from the notify package and honours Enabled() (the log-only
-// mailer reports disabled, so the channel is skipped without SMTP).
+// mailSvcAdapter bridges *mail.Service to notify.EmailSender, hiding the concrete
+// type and honouring Enabled() (the log-only mailer reports disabled).
 type mailSvcAdapter struct{ svc *mail.Service }
 
 func (a mailSvcAdapter) Enabled() bool { return a.svc != nil && a.svc.Enabled() }
@@ -208,24 +192,36 @@ func (a mailSvcAdapter) SendAlert(ctx context.Context, to, subject, plainBody, h
 }
 
 // provideScanner wires the periodic flow scanner. A zero/invalid interval or a
-// missing backend leaves it disabled, so it is opt-in and cloud-only. The
-// env-level notifier is optional: alerts are always recorded in-app and routed
-// to each org's own channels; PAD_NOTIFY_* only adds a deployment-wide sink.
-func provideScanner(cfg *config.Config, backend storageif.StorageBackend, analysisSvc *service.AnalysisService, notifier *notify.Dispatcher, eventMgr *api.EventManager) *scanner.Scanner {
+// missing backend leaves it disabled (opt-in, cloud-only). The env-level
+// notifier is optional: alerts always record in-app and route to each org's own
+// channels; PAD_NOTIFY_* only adds a deployment-wide sink.
+func provideScanner(cfg *config.Config, backend storageif.StorageBackend, analysisSvc *service.AnalysisService, notifier *notify.Dispatcher, eventMgr *api.EventManager, ruleProfiles *service.RuleProfileResolver) *scanner.Scanner {
 	var analyze scanner.AnalyzeFunc
 	if analysisSvc != nil {
-		analyze = analysisSvc.AnalyzeFlow
+		// Background, not AnalyzeFlow: the sweep's context carries no user, so
+		// AnalyzeFlow's progress events went to EmitTo("") — a cross-tenant
+		// broadcast of every scanned flow's progress.
+		analyze = analysisSvc.AnalyzeFlowBackground
 	}
 	s := scanner.New(backend, analyze, notifier, scanInterval(cfg.Governance.ScanInterval), egressPolicy(cfg))
 	// Real-time SSE push: a newly-detected alert pings connected clients who
-	// can see the flow so the bell updates instantly. EventManager is always
-	// non-nil in the fx graph; safe even in local mode (no scanner runs there).
+	// can see the flow. EventManager is always non-nil in the fx graph; safe
+	// even in local mode.
 	s.SetEventNotifier(eventMgr)
+	// Lets a sweep skip flows whose scan inputs are unchanged. The digest is
+	// of the profile the AnalysisService itself analyzes with, so a rule
+	// change is seen as a changed input.
+	if ruleProfiles != nil {
+		s.SetRuleSetDigest(func(ctx context.Context, orgID string) string {
+			p := ruleProfiles.Resolve(ctx, orgID)
+			return scanner.DigestRuleSet(p.Settings, p.Rules)
+		})
+	}
 	return s
 }
 
-// scanInterval parses the configured scan interval; an empty or invalid value
-// disables scanning (returns 0) rather than failing startup.
+// scanInterval parses the configured scan interval; empty/invalid disables
+// scanning (returns 0) rather than failing startup.
 func scanInterval(s string) time.Duration {
 	if s == "" {
 		return 0
@@ -238,8 +234,8 @@ func scanInterval(s string) time.Duration {
 	return d
 }
 
-// initScanner starts the scanner on app start and stops it on shutdown. Start is
-// a no-op when scanning is disabled.
+// initScanner starts the scanner on app start and stops it on shutdown; Start
+// is a no-op when scanning is disabled.
 func initScanner(lc fx.Lifecycle, s *scanner.Scanner) {
 	lc.Append(fx.Hook{
 		OnStart: func(context.Context) error { s.Start(); return nil },
@@ -247,12 +243,11 @@ func initScanner(lc fx.Lifecycle, s *scanner.Scanner) {
 	})
 }
 
-// provideMigrationRunner wires the optional local→cloud data migration runner.
-// The migrator needs BOTH a source filesystem backend (PAD_DATA_DIR pointing
-// at a legacy filesystem-backed server's data directory) and the active cloud
-// (Postgres) destination.
-// With either absent the runner is disabled — nil — and the admin endpoint
-// reports 503. Cloud mode only: local mode has no destination backend.
+// provideMigrationRunner wires the optional local→cloud data migration runner:
+// it needs BOTH a source filesystem backend (PAD_DATA_DIR at a legacy
+// filesystem-backed server's data directory) and the active cloud (Postgres)
+// destination. With either absent the runner is nil and the admin endpoint
+// reports 503. Cloud mode only.
 func provideMigrationRunner(cfg *config.Config, dst storageif.StorageBackend) *api.MigrationRunner {
 	if dst == nil || cfg.Mode != config.ModeCloud || cfg.Storage.DataDir == "" {
 		return api.NewMigrationRunner(nil)
@@ -265,19 +260,16 @@ func provideMigrationRunner(cfg *config.Config, dst storageif.StorageBackend) *a
 	m := migration.New(src, dst).
 		WithConversationsDir(filepath.Join(cfg.Storage.DataDir, "conversations"))
 	runner := api.NewMigrationRunner(m)
-	// Cross-replica single-run guard: the Postgres backend exposes an advisory
-	// lock; without it two pods could both pass the in-process guard and run
-	// the same migration concurrently.
+	// Cross-replica single-run guard: without the Postgres advisory lock two
+	// pods could both pass the in-process guard and run the same migration.
 	if locker, ok := dst.(api.GlobalLocker); ok {
 		runner = runner.WithLocker(locker)
 	}
 	return runner
 }
 
-// provideScanNowFunc wires the admin "scan now" action to the scanner. The
-// scanner is always constructed, but a manual trigger is only meaningful in
-// cloud mode (governance is a cloud feature); in local mode it returns nil so
-// the admin endpoint reports 503.
+// provideScanNowFunc wires the admin "scan now" action to the scanner; only
+// meaningful in cloud mode — in local mode it returns nil so the endpoint 503s.
 func provideScanNowFunc(s *scanner.Scanner, cfg *config.Config) api.ScanNowFunc {
 	if s == nil || cfg.Mode != config.ModeCloud {
 		return nil
@@ -300,45 +292,22 @@ func parseGovernanceDuration(env, val string) time.Duration {
 }
 
 // initRetentionPurge periodically purges expired tokens/invites and aged-out
-// audit rows (GDPR data-minimisation). Disabled when no interval is set or there
-// is no backend. An immediate sweep runs on start so a freshly-started instance
-// clears stale rows right away.
+// audit rows (GDPR data-minimisation); disabled with no interval or backend.
+// An immediate sweep runs on start so a fresh instance clears stale rows.
 func initRetentionPurge(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) {
 	interval := parseGovernanceDuration("PAD_RETENTION_PURGE_INTERVAL", cfg.Governance.RetentionPurgeInterval)
 	// Cloud only: the filesystem backend's purge is a no-op, and with the
-	// interval now defaulting on, desktop would otherwise log a "purge
-	// complete" line of zeros every day.
+	// interval defaulting on, desktop would log a "purge complete" line of
+	// zeros every day.
 	if interval <= 0 || backend == nil || cfg.Mode != config.ModeCloud {
 		return
 	}
-	// lifecycle.TickerLoop, like the scanner: its Stop cancels
-	// the in-flight sweep AND waits (up to 5s) for it to return. The old loop
-	// just closed a channel, so storage's OnStop — which runs after this one —
-	// could close the pool under a sweep still deleting; the sweep survived
-	// (recover + retry next tick) but every shutdown logged a spurious failure.
+	// lifecycle.TickerLoop, like the scanner: its Stop cancels the in-flight
+	// sweep AND waits (up to 5s) for it, so storage's OnStop — which runs after
+	// this one — cannot close the pool under a sweep still deleting.
 	var loop lifecycle.TickerLoop
-	sweep := func(ctx context.Context) {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Error("retention purge panicked", "err", r)
-			}
-		}()
-		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		res, err := backend.PurgeExpiredData(ctx, cfg.Governance.AuditRetentionDays)
-		if err != nil {
-			logger.Warn("retention purge failed", "err", err)
-			return
-		}
-		logger.Info("retention purge complete",
-			"refresh_tokens", res.RefreshTokens, "api_tokens", res.APITokens,
-			"user_tokens", res.UserTokens, "org_invites", res.OrgInvites,
-			"audit_events", res.AuditEvents,
-			"flow_analysis_history", res.FlowAnalysisHistory,
-			"usage_metrics", res.UsageMetrics, "token_blacklist", res.TokenBlacklist,
-			"share_tokens", res.ShareTokens, "gov_alerts", res.GovAlerts)
-		padmetrics.RecordBackgroundLoopTick("retention_purge")
-	}
+	days := cfg.Governance.AuditRetentionDays
+	sweep := func(ctx context.Context) { runRetentionSweep(ctx, backend, days) }
 	lc.Append(fx.Hook{
 		OnStart: func(context.Context) error {
 			loop.Start(interval, true, sweep, func(r any) {
@@ -350,7 +319,66 @@ func initRetentionPurge(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 	})
 }
 
-func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) (*auth.Manager, error) {
+// retentionLockKey namespaces the retention sweep's advisory lock: every replica
+// must use the same key, and it must differ from the scanner's ("bakiscan") and
+// the migration runner's ("bakimigr").
+const retentionLockKey int64 = 0x62616b697265746e // "bakiretn"
+
+// retentionSweepTimeout bounds one whole sweep; each batched statement is
+// still cut off by statement_timeout — this is only the ceiling on the sum.
+const retentionSweepTimeout = 10 * time.Minute
+
+// runRetentionSweep performs one retention purge. One sweep at a time ACROSS
+// replicas (Postgres advisory lock; without it N replicas raced the same
+// DELETEs; a backend without one sweeps as before). Recovers its own panics so
+// a bad sweep is retried next tick, not the end of the loop.
+func runRetentionSweep(ctx context.Context, backend storageif.StorageBackend, auditRetentionDays int) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("retention purge panicked", "err", r)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(ctx, retentionSweepTimeout)
+	defer cancel()
+	if locker, ok := backend.(api.GlobalLocker); ok {
+		release, acquired, err := locker.TryGlobalLock(ctx, retentionLockKey)
+		switch {
+		case err != nil:
+			logger.Warn("retention purge: advisory lock unavailable; sweeping without it", "err", err)
+		case !acquired:
+			logger.Debug("retention purge already running on another replica; skipping this tick")
+			return
+		default:
+			defer release()
+		}
+	}
+	res, err := backend.PurgeExpiredData(ctx, auditRetentionDays)
+	if err != nil && res == nil {
+		logger.Warn("retention purge failed", "err", err)
+		return
+	}
+	if err != nil {
+		// Partial: the purge continues past a table whose batches failed
+		// (timed out) and reports what the other tables removed; the next
+		// tick resumes. Log the counts, not just the failure.
+		logger.Warn("retention purge incomplete", "err", err,
+			"audit_events", res.AuditEvents, "flow_analysis_history", res.FlowAnalysisHistory,
+			"usage_metrics", res.UsageMetrics, "token_blacklist", res.TokenBlacklist,
+			"gov_alerts", res.GovAlerts)
+		padmetrics.RecordBackgroundLoopTick("retention_purge")
+		return
+	}
+	logger.Info("retention purge complete",
+		"refresh_tokens", res.RefreshTokens, "api_tokens", res.APITokens,
+		"user_tokens", res.UserTokens, "org_invites", res.OrgInvites,
+		"audit_events", res.AuditEvents,
+		"flow_analysis_history", res.FlowAnalysisHistory,
+		"usage_metrics", res.UsageMetrics, "token_blacklist", res.TokenBlacklist,
+		"share_tokens", res.ShareTokens, "gov_alerts", res.GovAlerts)
+	padmetrics.RecordBackgroundLoopTick("retention_purge")
+}
+
+func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend, redisClient *redis.Client) (*auth.Manager, error) {
 	token := cfg.Auth.Secret
 	if token == "" {
 		if cfg.Mode == config.ModeCloud && cfg.Auth.Enabled {
@@ -363,11 +391,31 @@ func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 	var blacklist auth.BlacklistStore
 	if cfg.Auth.Enabled {
 		if sqlBackend, ok := backend.(storagedb.SQLProvider); ok && sqlBackend != nil {
-			pgBl := storagedb.NewPostgresBlacklist(sqlBackend.DB())
-			blacklist = pgBl
+			// The Postgres table stays the shared source of truth; the cache
+			// answers the per-request revocation check from a local copy
+			// instead of a SELECT each. With the Redis backplane a revocation
+			// fans out to the other replicas at once; the periodic reload is
+			// the safety net. Until the first load, and whenever the
+			// subscription is down, misses go to the table.
+			opts := auth.CachedBlacklistOptions{}
+			if redisClient != nil {
+				ps := redisx.NewPubSub(redisClient)
+				opts.Publisher, opts.Subscriber = ps, ps
+			}
+			cached := auth.NewCachedBlacklist(storagedb.NewPostgresBlacklist(sqlBackend.DB()), opts)
+			blacklist = cached
+			// Lifetime context for the cache's loops (fx's OnStart ctx only
+			// bounds the start); OnStop cancels it then stops the cache, which
+			// stops the Postgres store's own cleanup loop too.
+			loopCtx, cancelLoops := context.WithCancel(context.Background())
 			lc.Append(fx.Hook{
-				OnStop: func(ctx context.Context) error {
-					pgBl.Stop()
+				OnStart: func(context.Context) error {
+					cached.Start(loopCtx)
+					return nil
+				},
+				OnStop: func(context.Context) error {
+					cancelLoops()
+					cached.Stop()
 					return nil
 				},
 			})
@@ -404,8 +452,7 @@ func initLogger(cfg *config.Config) {
 		_ = logger.Init(configDir, false)
 	}
 	// Forward recovered background-goroutine panics to the error-reporting
-	// funnel so they surface in the exception metrics / sink alongside HTTP
-	// panics, not only in the log.
+	// funnel so they surface in the exception metrics / sink, not only the log.
 	logger.SetPanicHook(func(operation string, r any, stack []byte) {
 		errreport.CapturePanic(context.Background(), operation, r, stack, errreport.Attrs{"operation": operation})
 	})
@@ -421,8 +468,8 @@ func initTelemetry(lc fx.Lifecycle, cfg *config.Config) {
 			} else {
 				shutdown = otelShutdown
 				// Forward captured panics/errors to the OTLP pipeline as
-				// exception events (App Insights, etc.). Only when an exporter
-				// is configured — otherwise errreport stays metrics-only.
+				// exception events — only when an exporter is configured,
+				// else errreport stays metrics-only.
 				if telemetry.TracingEnabled(cfg.Runtime.OTLPEndpoint) {
 					errreport.Register(telemetry.NewOTelSink())
 					logger.Info("errreport: OpenTelemetry exception sink registered")
@@ -444,6 +491,11 @@ type StorageResult struct {
 	Backend storageif.StorageBackend
 }
 
+// vectorIndexBuildTimeout bounds the background HNSW build of the knowledge
+// index (EnsureVectorIndex); a corpus that takes longer is left for the next
+// boot to finish (the invalid leftover is dropped).
+const vectorIndexBuildTimeout = 2 * time.Hour
+
 func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, error) {
 	if cfg.Storage.Backend != config.StorageDatabase {
 		return StorageResult{Backend: nil}, nil
@@ -453,7 +505,7 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, 
 	dbCfg := storagedb.DefaultConfig(cfg.Storage.DatabaseURL)
 	// Resolve the TLS requirement: explicit PAD_DB_REQUIRE_SSL wins; otherwise
 	// cloud mode requires TLS by default (credentials over plaintext is a
-	// security bug), local mode leaves it optional for bundled/dev Postgres.
+	// security bug), local leaves it optional for bundled/dev Postgres.
 	switch strings.ToLower(cfg.Storage.DBRequireSSL) {
 	case "true", "1", "yes":
 		dbCfg.RequireSSL = true
@@ -490,17 +542,17 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, 
 		dbCfg.StatementTimeout = d
 	}
 
-	// Apply Azure Blob Storage config if available. Blob storage is enabled when a
-	// container is set together with an auth source: an account name (Managed
-	// Identity) or a connection string (emulator / non-MI).
+	// Apply Azure Blob Storage config: enabled when a container is set
+	// together with an auth source — an account name (Managed Identity) or a
+	// connection string (emulator / non-MI).
 	if cfg.Storage.AzureStorageContainer != "" &&
 		(cfg.Storage.AzureStorageAccount != "" || cfg.Storage.AzureBlobConnectionString != "") {
 		dbCfg.AzureStorageAccount = cfg.Storage.AzureStorageAccount
 		dbCfg.AzureStorageContainer = cfg.Storage.AzureStorageContainer
 		dbCfg.AzureBlobConnectionString = cfg.Storage.AzureBlobConnectionString
 	}
-	// Knowledge-base embedding dimension. Gates which chunks are pgvector-
-	// searchable (default 1536 applied in the storage layer when 0).
+	// Knowledge-base embedding dimension; gates which chunks are
+	// pgvector-searchable (default 1536 applied in the storage layer when 0).
 	dbCfg.EmbeddingDim = cfg.Storage.EmbeddingDim
 
 	pgBackend, err := storagedb.New(context.Background(), dbCfg)
@@ -509,6 +561,12 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, 
 	}
 
 	poolStop := make(chan struct{})
+	// The knowledge HNSW index is built in the background after boot (CREATE
+	// INDEX CONCURRENTLY cannot run inside the migration transaction, and a
+	// large corpus takes minutes): detached from the start hook's context,
+	// bounded by its own timeout, cancelled on stop. An interrupted build
+	// leaves an invalid index the next boot drops and redoes.
+	indexCtx, cancelIndexBuild := context.WithTimeout(context.Background(), vectorIndexBuildTimeout)
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			go func() {
@@ -523,9 +581,16 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, 
 					}
 				}
 			}()
+			go func() {
+				defer cancelIndexBuild()
+				if err := pgBackend.EnsureVectorIndex(indexCtx, pgBackend.EmbeddingDim()); err != nil {
+					logger.Warn("knowledge vector index build did not finish", "error", err)
+				}
+			}()
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
+			cancelIndexBuild()
 			close(poolStop)
 			return pgBackend.Close()
 		},
@@ -537,15 +602,10 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, 
 // provideKeyStore builds the provider-API-key secret store: an encrypted,
 // database-backed keystore in cloud+database mode (preferring a dedicated
 // PAD_ENCRYPTION_KEY over PAD_AUTH_SECRET so rotating the JWT secret doesn't
-// brick stored provider keys), falling back to the OS-keychain default
-// everywhere else — including cloud+database mode with no encryption key
-// configured, matching the historical behavior.
-//
-// This is a plain fx provider (not an Invoke that mutates a package-level
-// global) so cloud-mode secret storage no longer depends on fx *invoke*
-// ordering: every consumer gets the same DAG-resolved value regardless of
-// when it's first needed, and a construction failure surfaces as a normal fx
-// provider error instead of an inline os.Exit.
+// brick stored provider keys), falling back to the OS-keyring default
+// everywhere else. A plain fx provider (not an Invoke mutating a global), so
+// consumers get the same DAG-resolved value and failures surface as provider
+// errors.
 func provideKeyStore(cfg *config.Config, backend storageif.StorageBackend) (service.KeyStore, error) {
 	if cfg.Storage.Backend != config.StorageDatabase || backend == nil {
 		return storage.NewKeyringSecretStore(), nil
@@ -574,8 +634,8 @@ func provideKeyStore(cfg *config.Config, backend storageif.StorageBackend) (serv
 }
 
 func initAuditPool(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) {
-	// Enable the on-disk spill queue unless explicitly disabled. Lets a burst
-	// that overflows the in-memory pool be replayed instead of diverted to logs.
+	// Enable the on-disk spill queue unless explicitly disabled: a burst that
+	// overflows the in-memory pool is replayed instead of diverted to logs.
 	if cfg.Governance.AuditSpillDir != "off" {
 		if err := api.SetAuditSpillConfig(cfg.Governance.AuditSpillDir, 0); err != nil {
 			slog.Warn("audit spill queue disabled (using log fallback only)", "error", err)
@@ -590,14 +650,10 @@ func initAuditPool(lc fx.Lifecycle, cfg *config.Config, backend storageif.Storag
 	})
 }
 
-// startServer builds the full request-handling middleware stack (via
-// api.BuildHandler — see internal/api/middleware_chain.go for the complete,
-// resolved layer order), binds a listener, and registers the fx lifecycle
-// hooks that start/stop the HTTP server.
-//
-// Returns an error rather than calling os.Exit so fx can surface boot failures
-// through its normal error path (which flushes deferred log/telemetry and lets
-// tests assert against boot failures without killing the test process).
+// startServer builds the full middleware stack (api.BuildHandler — see
+// internal/api/middleware_chain.go for the layer order), binds a listener, and
+// registers the fx lifecycle hooks that start/stop the HTTP server. Returns an
+// error rather than calling os.Exit so fx surfaces boot failures.
 func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSvc *service.ChatService, redisClient *redis.Client) error {
 	handler, rateLimiters := api.BuildHandler(router, cfg, redisClient)
 
@@ -613,8 +669,8 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 	} else {
 		// Local mode binds loopback only. The port is normally 0 (ephemeral,
 		// reported to the Tauri shell via the CONFIG line below), but an
-		// explicitly configured port (PAD_PORT / config file) is honoured so
-		// browser-based local development can use a stable address.
+		// explicitly configured port (PAD_PORT / config file) is honoured for
+		// browser-based local development.
 		listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.Server.Port))
 		if err != nil {
 			return fmt.Errorf("listen: %w", err)
@@ -624,7 +680,7 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 		tokenPath, err := writeSessionSecret(cfg.Auth.Secret)
 		if err != nil {
 			// Writing the secret to a 0600 file is how the Tauri shell receives
-			// it without the signing key landing in stdout/logs. If that fails
+			// it without the signing key landing in stdout/logs; if that fails
 			// we cannot safely hand off the credential, so fail closed.
 			return fmt.Errorf("persist session secret: %w", err)
 		}
@@ -641,18 +697,15 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 		// ReadHeaderTimeout guards against Slowloris (headers dribbled slowly).
 		ReadHeaderTimeout: 5 * time.Second,
 		// ReadTimeout covers the full request body read. Long-lived streaming
-		// connections (SSE, WebSocket) use http.Hijack / http.Flusher and are
-		// not affected by this deadline; only normal JSON endpoints benefit.
+		// connections (SSE, WebSocket) use Hijack / Flusher and are unaffected;
+		// only normal JSON endpoints benefit.
 		ReadTimeout: 30 * time.Second,
-		// WriteTimeout is deliberately 0 (unlimited) because SSE and chat-stream
-		// responses are long-lived. SSE writes carry their own 30s deadline via
-		// http.ResponseController.SetWriteDeadline in the events handler
-		// (internal/api/events.go); WebSocket writes set per-message deadlines
-		// on the hijacked connection. Non-streaming routes have NO per-handler
-		// write deadline — nothing sets one — so a stuck handler+write is
-		// bounded in practice only by handler execution (ReadTimeout caps body
-		// reads, queries carry their own timeouts) and by server.Shutdown's
-		// drain budget on stop, not by the server config here.
+		// WriteTimeout is deliberately 0 (unlimited) because SSE and
+		// chat-stream responses are long-lived. SSE writes carry their own 30s
+		// deadline (http.ResponseController, internal/api/events.go); WebSocket
+		// writes set per-message deadlines on the hijacked connection.
+		// Non-streaming routes are bounded by handler execution and Shutdown's
+		// drain budget, not by this config.
 		WriteTimeout: 0,
 		IdleTimeout:  120 * time.Second,
 		// MaxHeaderBytes caps total request header size to guard against
@@ -698,74 +751,57 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			// Gracefully drain WebSocket clients FIRST. http.Server.Shutdown
 			// does not close hijacked (WebSocket) sockets, so without this
 			// every rolling restart with even one live WS client takes the
-			// full shutdownCtx budget and drops in-flight collab state
-			// silently. Budget: 3s — enough for clients to receive the Close
-			// frame + pumps to exit; the remainder of shutdownCtx goes to
-			// server.Shutdown for non-WS requests.
+			// full shutdownCtx budget and drops in-flight collab state.
+			// Budget 3s for the Close frame + pumps; the rest goes to non-WS.
 			wsCtx, wsCancel := context.WithTimeout(ctx, 3*time.Second)
 			if err := router.ShutdownWebSocket(wsCtx); err != nil {
 				logger.Warn("websocket shutdown exceeded budget or was cancelled", "error", err)
 			}
 			wsCancel()
 			// fx.StopTimeout (25s) bounds EVERY OnStop hook together, and this
-			// hook runs first (hooks stop in reverse start order). Worst-case
-			// stack after this hook: 3s WS + 8s HTTP here, then the background
-			// loops (scanner ≤5s loop drain + ≤5s delivery drain, retention
-			// ≤5s), the audit flush (5s), telemetry (5s), and finally the
-			// constructor-phase pool close. At a 12s HTTP drain this hook alone
-			// could eat 15s, so audit(5)+telemetry(5) = 25s left ZERO headroom
-			// for the pool close — a maximally slow drain plus any loop drain
-			// pushed the pool close past StopTimeout into a mid-flush cut.
-			// 3s + 8s here leaves 14s for everything else, which covers the
-			// full audit+telemetry flushes (10s) plus the pool close even when
-			// one background loop drains its whole 5s budget. The absolute
-			// pathological stack (every budget consumed in full ≈ 36s) still
-			// exceeds ACA's 30s grace; no StopTimeout fits it under 30s, so
-			// the platform SIGKILL remains the backstop for that scenario —
-			// what this budget buys is that the ordinary slow-drain case
-			// completes cleanly. A request still in flight after 8s is cut
-			// off; that beats losing the audit tail and the clean pool close.
+			// hook runs first (reverse start order). 3s WS + 8s HTTP here
+			// leaves 14s for everything else (background loops ≤5s each, audit
+			// 5s, telemetry 5s, pool close), which covers the ordinary
+			// slow-drain case; the absolute pathological stack still exceeds
+			// ACA's 30s grace, so the platform SIGKILL remains the backstop. A
+			// request still in flight after 8s is cut off — that beats losing
+			// the audit tail and the clean pool close.
 			shutdownCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
-			return server.Shutdown(shutdownCtx)
+			err := server.Shutdown(shutdownCtx)
+			// Best-effort notifications (analysis webhooks, finding emails)
+			// started by the requests that just finished get the rest of the
+			// same 8s budget; any still running after it are abandoned.
+			if derr := router.DrainBackground(shutdownCtx); derr != nil {
+				logger.Warn("background notifications still running at shutdown", "error", derr)
+			}
+			return err
 		},
 	})
 
 	return nil
 }
 
-// writeSessionSecret persists the auto-generated JWT signing secret to a 0600
-// file under the app config dir and returns its path. The Tauri shell reads the
-// secret back from this path instead of receiving it on the backend's stdout —
-// emitting the signing key on stdout meant anyone with access to the backend
-// process's stdout (container logs, systemd journal, the parent shell's
-// scrollback, or the Tauri app's own stdout mirror log) could forge arbitrary
-// JWTs. Writing to a permission-restricted file confines the secret to the
-// filesystem ACL instead of the process's log streams.
-//
-// Used only in local/desktop mode (cloud mode requires an explicit
-// PAD_AUTH_SECRET and never reaches the stdout CONFIG handshake).
 // warnIfMetricsExposed logs at boot when /metrics is reachable from the public
-// internet.
-//
-// MetricsGuard's private-IP allowlist reads r.RemoteAddr, which behind a
-// TLS-terminating reverse proxy (PAD_BEHIND_PROXY=true — the posture the
-// Dockerfile and infra/main.bicep ship) is the proxy's own private address for
-// every request, including ones originating on the public internet. The
-// allowlist therefore passes unconditionally, leaving PAD_METRICS_TOKEN as the
-// only real gate.
-//
-// This warns rather than refusing: /metrics carries operational data, not
-// secrets, and an in-cluster Prometheus scraper reaching the pod directly is
-// indistinguishable by RemoteAddr from proxied public traffic — so failing
-// closed here would break legitimate scraping. /debug/pprof/* is a different
-// story and DOES fail closed; see config.validateProfilingConfig.
+// internet. Behind a TLS-terminating reverse proxy (PAD_BEHIND_PROXY=true)
+// RemoteAddr is the proxy's own private address for every request, so
+// MetricsGuard's private-IP allowlist passes unconditionally, leaving
+// PAD_METRICS_TOKEN as the only real gate. Warns rather than refusing: an
+// in-cluster Prometheus scraper is indistinguishable by RemoteAddr from
+// proxied public traffic, and /metrics carries operational data, not secrets.
+// /debug/pprof/* is a different story and DOES fail closed; see
+// config.validateProfilingConfig.
 func warnIfMetricsExposed(cfg *config.Config) {
 	if cfg.Server.BehindProxy && strings.TrimSpace(cfg.Server.MetricsToken) == "" {
 		logger.Warn("/metrics is reachable through the reverse proxy: PAD_BEHIND_PROXY=true makes the private-IP allowlist pass for every request (RemoteAddr is the proxy). Set PAD_METRICS_TOKEN, and block /metrics at the ingress/NSG.")
 	}
 }
 
+// writeSessionSecret persists the auto-generated JWT signing secret to a 0600
+// file under the app config dir and returns its path. The Tauri shell reads
+// the secret back from this path instead of the backend's stdout — emitting
+// the signing key on stdout meant anyone with access to the process's logs
+// could forge arbitrary JWTs. Local/desktop mode only.
 func writeSessionSecret(secret string) (string, error) {
 	configDir, err := storage.ConfigDir()
 	if err != nil {
@@ -802,9 +838,9 @@ func writeSessionSecret(secret string) (string, error) {
 }
 
 // runHealthcheck implements the `baki-backend healthcheck` subcommand: GET the
-// server's own /readyz and return 0 on 200, 1 otherwise. Used by docker-compose
-// (and bare-docker operators) because the distroless image has no shell/wget.
-// Bounded by a short timeout so a hung server is reported unhealthy, not hung.
+// server's own /readyz, 0 on 200, 1 otherwise. Used by docker-compose and
+// bare-docker operators because the distroless image has no shell/wget.
+// Bounded by a short timeout so a hung server is reported unhealthy.
 func runHealthcheck() int {
 	port := os.Getenv("PAD_PORT")
 	if port == "" {
@@ -814,8 +850,6 @@ func runHealthcheck() int {
 	// #nosec G704 -- not attacker-controlled: a fixed loopback host and a
 	// constant path, with only the port coming from this process's own
 	// PAD_PORT. This is the container healthcheck probing its own server.
-	// (The annotation previously said G114 — the rule for a server without
-	// timeouts — so it suppressed nothing here.)
 	resp, err := client.Get("http://localhost:" + port + "/readyz")
 	if err != nil {
 		return 1

@@ -31,7 +31,7 @@ func (b *PostgresStorageBackend) SaveIdentityLink(ctx context.Context, link *int
 // LoadIdentityLink looks up the local user mapped to an external identity.
 // Returns interfaces.ErrNotFound when the identity has never been linked.
 func (b *PostgresStorageBackend) LoadIdentityLink(ctx context.Context, provider, subject string) (*interfaces.IdentityLink, error) {
-	row := b.db.QueryRowContext(ctx, `
+	row := b.query(ctx).QueryRowContext(ctx, `
 		SELECT provider, subject, user_id, email, created_at
 		FROM identity_links WHERE provider = $1 AND subject = $2`,
 		provider, subject,
@@ -47,9 +47,11 @@ func (b *PostgresStorageBackend) LoadIdentityLink(ctx context.Context, provider,
 }
 
 // ListIdentityLinks returns every IdP identity linked to a local user, for the
-// "Linked identities" card in account settings.
+// "Linked identities" card in account settings. Reads use the request's
+// executor (identity_links has no RLS policy) so an authenticated request does
+// not take a second pooled connection; see the note atop postgres_users.go.
 func (b *PostgresStorageBackend) ListIdentityLinks(ctx context.Context, userID string) ([]*interfaces.IdentityLink, error) {
-	rows, err := b.db.QueryContext(ctx, `
+	rows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT provider, subject, user_id, email, created_at
 		FROM identity_links WHERE user_id = $1 ORDER BY created_at ASC`, userID)
 	if err != nil {

@@ -64,7 +64,7 @@ func stringRepeat(s string, n int) string {
 }
 
 // countTokenProvider stubs ai.TokenCounter for truncateForContextWindow's
-// exact re-check (F-47): its estimator prices one token per byte by default
+// exact re-check: its estimator prices one token per byte by default
 // (so the byte ceiling and the estimate agree — the len/4 fake would leave a
 // 4x margin no 30% undercount can cross; bytesPerToken > 1 prices like cl100k
 // on English text instead), and CountTokens answers a fixed multiple of the
@@ -93,7 +93,7 @@ func (p *countTokenProvider) CountTokens(_ context.Context, req ai.Request) (int
 	return int(float64(n) * p.multiple), nil
 }
 
-// TestTruncateForContextWindow_ExactCountNearTheWindow (F-47): a prompt whose
+// TestTruncateForContextWindow_ExactCountNearTheWindow: a prompt whose
 // estimate the window admits with less than 30% to spare is re-checked with
 // the provider's own tokenizer; a count that says over (the ~30% Claude 4.7+/
 // Fable/Mythos undercount) triggers the drop loop against costs scaled to the
@@ -108,7 +108,7 @@ func TestTruncateForContextWindow_ExactCountNearTheWindow(t *testing.T) {
 		}}
 	}
 	// estimate = 80012 tokens; +4000 reserve = 84012 — inside the window
-	// (100000) but above 80% of it, so the exact re-check decides.
+	// (100000) but above 70% of it, so the exact re-check decides.
 	const ctxLimit = 100000
 
 	t.Run("a 1.3x count trims what the estimate admitted", func(t *testing.T) {
@@ -153,7 +153,7 @@ func TestTruncateForContextWindow_ExactCountNearTheWindow(t *testing.T) {
 	t.Run("below the band no count call is made", func(t *testing.T) {
 		p := &countTokenProvider{multiple: 1.3}
 		req := mkReq()
-		// 84012 estimate+reserve against a 200000 window: under 80%, so even a
+		// 84012 estimate+reserve against a 200000 window: under 70%, so even a
 		// 30% undercount still fits — no count call.
 		if _, err := truncateForContextWindow(context.Background(), p, req, 200000, 2); err != nil {
 			t.Fatal(err)
@@ -167,12 +167,12 @@ func TestTruncateForContextWindow_ExactCountNearTheWindow(t *testing.T) {
 	})
 }
 
-// TestTruncateForContextWindow_ExactCountAfterAnEstimateTrim (review #4 B4):
-// the exact re-check also runs once the ESTIMATE had to trim, and scales the
-// system prompt and tool schemas with the messages. Before, a 1M Claude
-// 4.7+/5.x/Fable/Mythos thread long enough to need trimming was trimmed by
-// the ~30%-undercounting estimate alone and refused as CONTEXT_LIMIT on every
-// turn, and a count that did run scaled the history but not the fixed part.
+// TestTruncateForContextWindow_ExactCountAfterAnEstimateTrim: the exact
+// re-check also runs once the ESTIMATE had to trim, and scales the system
+// prompt and tool schemas with the messages. Without it, a 1M Claude
+// 4.7+/5.x/Fable/Mythos thread long enough to need trimming is trimmed by
+// the ~30%-undercounting estimate alone and refused as CONTEXT_LIMIT on
+// every turn.
 func TestTruncateForContextWindow_ExactCountAfterAnEstimateTrim(t *testing.T) {
 	const ctxLimit = 100000
 

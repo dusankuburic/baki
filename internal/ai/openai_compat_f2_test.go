@@ -229,7 +229,7 @@ func TestAzureFoundry_APIKeyModeSendsOnlyAPIKeyHeader(t *testing.T) {
 	}
 }
 
-// Item 15: the learned reasoning_effort repairs are not pre-applied to a
+// The learned reasoning_effort repairs are not pre-applied to a
 // model-router deployment (the next routed model may reject "none", or take
 // the effort the last one refused) — neither the tools "none" marker nor the
 // generic drop.
@@ -306,7 +306,7 @@ func TestOpenAICompat_TemperatureSet(t *testing.T) {
 	}
 }
 
-// F-07: the non-streaming fallback runs on the Azure transport, whose
+// The non-streaming fallback runs on the Azure transport, whose
 // ResponseHeaderTimeout is raised so a slow-header reasoning answer survives.
 // Scaled down: a raw transport with the shared client's short floor aborts a
 // 300 ms-header answer; azureTransport's raised floor carries it.
@@ -339,7 +339,7 @@ func TestAzureTransport_HeaderTimeoutOutlivesASlowNonStreamingAnswer(t *testing.
 	}
 }
 
-// F-07: while the non-streaming fallback waits, streamViaChat emits empty
+// While the non-streaming fallback waits, streamViaChat emits empty
 // keepalive chunks so the chat service's idle watchdog does not cancel a long
 // silent reasoning turn.
 func TestOpenAICompat_StreamFallbackEmitsKeepalivesWhileWaiting(t *testing.T) {
@@ -387,7 +387,7 @@ func TestOpenAICompat_StreamFallbackEmitsKeepalivesWhileWaiting(t *testing.T) {
 	}
 }
 
-// A11: the non-streaming fallback replays the cached-input slice on the Done
+// The non-streaming fallback replays the cached-input slice on the Done
 // chunk and on a content-filter error chunk — it used to drop it, so the
 // audited wrapper priced every cached token at the full input rate.
 func TestOpenAICompat_StreamFallbackCarriesCachedTokens(t *testing.T) {
@@ -427,7 +427,7 @@ func TestOpenAICompat_StreamFallbackCarriesCachedTokens(t *testing.T) {
 	}
 }
 
-// A11: the fallback's keepalives are synthesised while the request waits —
+// The fallback's keepalives are synthesised while the request waits —
 // no evidence the provider billed anything. A non-streaming request failing
 // after them (like a stream's HTTP error) records no usage; it used to be
 // billed an input-token estimate once the wait passed one keepalive period.

@@ -11,29 +11,21 @@ import (
 	"pad-analyzer/internal/egress"
 )
 
-// Discovery (Part 9): what a SAVED resource's Foundry project offers — its
-// deployments, each mapped to a registry kind, and its agents — for AI
-// Accounts to suggest as models to add. The picker never shows a discovered
-// model the user did not add; discovery only proposes. It needs the project
-// data plane (a project endpoint and Microsoft Entra ID or Azure CLI
-// sign-in), and it runs on an ISOLATED provider: nothing it learns reaches
-// the process caches the chat path reads (the project listing cache, the
-// remembered agent kinds, the served-model memo, the learned windows) — a
-// suggestion is not a registered model.
+// Discovery (Part 9): what a SAVED resource's Foundry project offers — deployments mapped to registry kinds,
+// and agents — for AI Accounts to suggest as models to add; discovery only proposes, the picker never shows a
+// model the user did not add. Needs the project data plane (project endpoint + Entra ID/CLI) and runs on an
+// ISOLATED provider: nothing it learns reaches the chat path's caches — a suggestion is not a registered model.
 
-// ErrAzureDiscoveryUnavailable marks a resource that cannot list its project:
-// it has no project endpoint, or it signs in with an API key (the project
-// routes reject keys). The API answers it as DISCOVERY_UNAVAILABLE; its
-// message says which, and what to do.
+// ErrAzureDiscoveryUnavailable marks a resource that cannot list its project: no project endpoint, or it signs
+// in with an API key (the project routes reject keys). Its message says which, and what to do.
 var ErrAzureDiscoveryUnavailable = errors.New("azure ai foundry: project discovery is unavailable for this resource")
 
 // azureDiscoveryTimeout bounds one discovery — the token, then both project
 // listings, every page. A variable so tests can shorten it.
 var azureDiscoveryTimeout = 30 * time.Second
 
-// AzureDiscovery is what one resource's project offers. A listing that
-// failed while the other succeeded is a warning, not an error; so is a
-// listing a cap cut short, and agents skipped because baki cannot run them.
+// AzureDiscovery is what one resource's project offers: a listing that failed while the other succeeded is a
+// warning, not an error — so is a listing a cap cut short, and agents baki cannot run.
 type AzureDiscovery struct {
 	Deployments []AzureDiscoveredDeployment `json:"deployments"`
 	Agents      []AzureDiscoveredAgent      `json:"agents"`
@@ -44,9 +36,8 @@ type AzureDiscovery struct {
 type AzureDiscoveredDeployment struct {
 	// Name is the deployment name (the entry's deployment).
 	Name string `json:"name"`
-	// Kind is the registry kind it maps to: AzureModelKindChat,
-	// AzureModelKindClaude (published by Anthropic, or a "claude…" model) or
-	// AzureModelKindEmbedding (its capabilities or model name say so).
+	// Kind is the registry kind it maps to: chat, claude (published by Anthropic, or a "claude…" model) or
+	// embedding (its capabilities or model name say so).
 	Kind string `json:"kind"`
 	// Model is the model the deployment serves ("" when the listing does not
 	// say).
@@ -82,23 +73,11 @@ type AzureDiscoveredAgent struct {
 	ModelID      string `json:"modelId,omitempty"`
 }
 
-// DiscoverAzureFoundryProject lists what a saved resource's project offers:
-// raw is the resource's credential document, registered its registry entries
-// (marked AlreadyAdded). The project's deployments and agents are listed
-// concurrently; one failing while the other succeeds becomes a warning. The
-// errors:
-//   - ErrAzureDiscoveryUnavailable — no project endpoint, or an API key;
-//   - ErrProviderConfigInvalid (with the *AzureConfigError) — the document
-//     does not validate;
-//   - the Entra ID sign-in's own failure (ErrEntraCredentialsRejected,
-//     ErrEntraTokenUnavailable) — no project request is made without a token;
-//   - *AzureProjectRefusalError — both listings refused: 401 or 403
-//     (ErrProviderPermissionDenied: the principal has no role on the project,
-//     or its network rules refuse the caller) or 404 (ErrAzureProjectNotFound);
-//   - anything else both listings failed with (a rate limit, a network
-//     failure, a 5xx), as is.
-//
-// It never writes the process caches: the provider is isolated.
+// DiscoverAzureFoundryProject lists what a saved resource's project offers (registered entries marked
+// AlreadyAdded); the deployments and agents listings run concurrently, one failing while the other succeeds
+// becomes a warning. Errors: ErrAzureDiscoveryUnavailable, ErrProviderConfigInvalid, the sign-in's own
+// failure, *AzureProjectRefusalError when both listings are refused, else what both failed with. Never
+// writes the process caches.
 func DiscoverAzureFoundryProject(ctx context.Context, raw string, registered []AzureRegisteredModel) (AzureDiscovery, error) {
 	cfg, err := ParseAzureFoundryConfig(raw)
 	if err == nil {
@@ -115,9 +94,7 @@ func DiscoverAzureFoundryProject(ctx context.Context, raw string, registered []A
 		return AzureDiscovery{}, azureDiscoveryUnavailable(cfg)
 	}
 	// A saved credential: the process-wide token source serves it, as it
-	// serves the chat path (the Entra ID source registry is not a listing
-	// cache; the resource and model tests of UNSAVED credentials use a
-	// throwaway one instead).
+	// serves the chat path (unsaved credentials get a throwaway one).
 	p := newAzureFoundryProvider(cfg, nil, azureHTTPClient())
 	p.isolated = true
 	return p.discoverProject(ctx, registered)
@@ -142,8 +119,8 @@ func (p *AzureFoundryProvider) discoverProject(ctx context.Context, registered [
 	}
 	ctx, cancel := context.WithTimeout(ctx, azureDiscoveryTimeout)
 	defer cancel()
-	// The token first: a sign-in Entra ID refuses is the answer, and asking
-	// for it again from both listings would only repeat the refusal.
+	// The token first: a sign-in Entra ID refuses is the answer, and both listings asking again would only
+	// repeat the refusal.
 	if _, err := p.entraToken(ctx); err != nil {
 		return AzureDiscovery{}, err
 	}
@@ -264,11 +241,9 @@ func catalogWindow(model, deployment string) int {
 	return 0
 }
 
-// registeredEntry finds the registry entry a discovered name is already
-// added as: an agent entry for an agent, any other entry for a deployment
-// (a deployment registered under another kind than discovery would suggest
-// is still added), compared case-insensitively as the registry's unique index
-// does.
+// registeredEntry finds the registry entry a discovered name is already added as: an agent entry for an
+// agent, any other for a deployment (a deployment registered under another kind than discovery would
+// suggest is still added), compared case-insensitively as the registry's index.
 func registeredEntry(registered []AzureRegisteredModel, agent bool, name string) (AzureRegisteredModel, bool) {
 	for _, e := range registered {
 		if (e.Kind == AzureModelKindAgent) != agent {
@@ -290,10 +265,9 @@ func registeredModelID(e AzureRegisteredModel) string {
 	return RegistryModelID(e.EntryID)
 }
 
-// describeProjectFailure is the one-line reason a project listing failed, for
-// a warning: a refusal's own explanation, fixed copy for a connection failure
-// (whose raw text names resolved addresses and the operator's proxy) and a
-// timeout, else the error's first line.
+// describeProjectFailure is the one-line reason a project listing failed, for a warning: a refusal's own
+// explanation, fixed copy for a connection failure (whose raw text names resolved addresses and the proxy)
+// and a timeout, else the error's first line.
 func describeProjectFailure(err error) string {
 	var refusal *AzureProjectRefusalError
 	switch classified := classifyProjectFailure(err, ""); {

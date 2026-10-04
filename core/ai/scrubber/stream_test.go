@@ -60,22 +60,15 @@ func TestStreamScrubber_MatchesScrubTextForAnyChunking(t *testing.T) {
 	}
 }
 
-// TestSecretPatternRepresentationsStayInSync is a structural guard, not an
-// example-based one: the "anyChunking" test above only proves the SAMPLES it
-// already knows about stream-scrub correctly, so a NEW secretRegexes pattern
-// added without a matching viablePrefixRegexes entry (and a representative
-// sample here) would pass CI silently — the exact "streaming under-masks a
-// secret type that ScrubText catches" failure mode this package's streaming
-// design exists to prevent.
-//
-// secretRegexes (scrubber.go) and viablePrefixRegexes (stream.go) are meant to
-// correspond 1:1 in the same order: each full-match pattern has exactly one
-// "is this buffer tail still a viable prefix of that pattern" counterpart. If
-// this test fails after adding a pattern to secretRegexes, add its
-// viable-prefix counterpart to viablePrefixRegexes (same index) AND a
-// representative sample to TestStreamScrubber_MatchesScrubTextForAnyChunking
-// above — a count match alone doesn't prove the new pair actually agrees on
-// what a viable prefix looks like, only the chunking test does that.
+// TestSecretPatternRepresentationsStayInSync is a structural guard: the
+// example-based "anyChunking" test only proves the samples it knows about,
+// so a NEW secretRegexes pattern without a matching viablePrefixRegexes
+// entry would pass CI silently — the streaming under-mask failure mode this
+// package exists to prevent. The two lists must correspond 1:1 in the same
+// order. If this fails after adding a pattern, add its viable-prefix
+// counterpart (same index) AND a representative sample to the chunking test
+// above — a count match alone doesn't prove the new pair agrees on what a
+// viable prefix looks like.
 func TestSecretPatternRepresentationsStayInSync(t *testing.T) {
 	if len(secretRegexes) != len(viablePrefixRegexes) {
 		t.Fatalf("secretRegexes has %d pattern(s) but viablePrefixRegexes has %d — "+
@@ -172,16 +165,12 @@ func TestStreamScrubber_HoldCapReleases(t *testing.T) {
 
 // TestStreamScrubber_MatchedHoldReleasesProse: the connection-string
 // pattern's value runs to end of line and its terminal byte class accepts
-// spaces, so a single "Password = " in an explanation used to hold the entire
-// rest of the paragraph — up to streamMaxHold — before anything reached the
-// screen.
-//
-// Note what this does and does not change. ScrubText itself redacts to end of
-// line, so the prose caught inside the released buffer is masked either way;
-// that is whole-text behaviour, not a streaming artifact. What the tighter
-// budget fixes is LATENCY and BLAST RADIUS: the hold ends after
-// streamMatchedHold bytes instead of streamMaxHold, and everything after the
-// release point streams normally instead of piling up behind the mask.
+// spaces, so a single "Password = " in an explanation used to hold the
+// entire rest of the paragraph before anything reached the screen.
+// ScrubText itself redacts to end of line, so the prose caught inside the
+// released buffer is masked either way; what the tighter budget fixes is
+// LATENCY and BLAST RADIUS — the hold ends after streamMatchedHold bytes,
+// and everything after the release point streams normally.
 func TestStreamScrubber_MatchedHoldReleasesProse(t *testing.T) {
 	s := NewStreamScrubber()
 	var out strings.Builder

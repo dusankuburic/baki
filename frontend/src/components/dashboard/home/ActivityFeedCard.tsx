@@ -1,5 +1,5 @@
 import {useTranslation} from 'react-i18next'
-import {ChartCard} from '@/components/charts'
+import {ChartCard} from '@/components/charts/ChartCard'
 import {relativeTimeText, absoluteTime} from '@/lib/time'
 import {DetailsAction} from './DetailsAction'
 import {actionIcon, actionLabel} from './activity'

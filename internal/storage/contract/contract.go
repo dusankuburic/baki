@@ -1,18 +1,8 @@
-// Package contract provides a shared test suite that both StorageBackend
-// implementations (filesystem and database/postgres) run against, so the two
-// can't quietly drift apart on return-shape semantics like
-//
-//   - "not found" → nil vs interfaces.ErrNotFound
-//   - "empty list" → nil slice vs non-nil empty slice
-//
-// The historical motivation: `LoadConversation` returned a non-nil empty
-// slice on the filesystem backend and a `nil` slice on Postgres, so frontend
-// nil-checks branched differently per deployment.
-//
-// This package is not a `_test` package: each storage-backend test file
-// imports it and calls RunSuite from a Test* function. That way the same
-// scenarios run in CI under both backends (Postgres is opt-in via
-// DATABASE_URL).
+// Package contract provides a shared test suite that both StorageBackend implementations (filesystem
+// and database/postgres) run against, so the two can't quietly drift apart on return-shape semantics
+// ("not found" → nil vs interfaces.ErrNotFound; "empty list" → nil vs non-nil empty slice — historically
+// LoadConversation branched frontend nil-checks per deployment). Not a `_test` package: each backend's
+// test file imports it and calls RunSuite (Postgres opt-in via DATABASE_URL).
 package contract
 
 import (
@@ -39,11 +29,8 @@ func findFlow(flows []*interfaces.FlowDocument, id string) *interfaces.FlowDocum
 	return nil
 }
 
-// RunSuite executes the cross-backend contract scenarios against b. The
-// suite seeds uuid-prefixed fixtures, so it is safe to re-run against a
-// backend with existing state (e.g. a long-lived Postgres DB used across
-// test sessions). The "first user becomes admin" scenario is skipped if
-// the backend already has users.
+// RunSuite executes the cross-backend contract scenarios against b. The suite seeds uuid-prefixed
+// fixtures, so it is safe to re-run against a backend with existing state.
 func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 	t.Helper()
 	ctx := context.Background()
@@ -116,10 +103,9 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Skip("backend has existing users; cannot exercise first-admin promotion")
 		}
 
-		// The bootstrap-admin rule is opt-in via context (set by the registration
-		// path). Without the flag the first user must NOT be promoted — this is
-		// the SSO-JIT path, which must not let whoever reaches SSO first claim
-		// admin on a fresh deployment.
+		// The bootstrap-admin rule is opt-in via context (the registration path) and gated on an
+		// empty table — without the flag the first user must NOT be promoted (SSO-JIT must not let
+		// whoever reaches SSO first claim admin).
 		noBootstrap := &interfaces.User{
 			ID:       "contract-user-0-" + runID,
 			Email:    "contract-0-" + runID + "@example.com",
@@ -132,9 +118,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("first user without bootstrap flag: expected non-admin, got admin (SSO-path must not auto-promote)")
 		}
 
-		// With the flag (registration path) but a NON-empty table, the rule
-		// correctly does NOT fire either — confirms gating on BOTH flag AND
-		// empty-table.
 		flagged := &interfaces.User{
 			ID:       "contract-user-1-" + runID,
 			Email:    "contract-1-" + runID + "@example.com",
@@ -221,9 +204,7 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 
 	t.Run("SaveUserSettings_then_LoadUserSettings_round_trips", func(t *testing.T) {
 		userID := "contract-usettings-" + runID
-		// Seed the user first: Postgres enforces user_settings.user_id → users(id)
-		// via a foreign key. (The filesystem backend has no such constraint, but
-		// seeding keeps the test valid on both backends.)
+		// Seed the user first: Postgres enforces the user_settings FK (seeding keeps the test valid on both backends).
 		if err := b.CreateUser(ctx, &interfaces.User{
 			ID: userID, Email: "usettings-" + runID + "@example.com", Password: "h",
 		}); err != nil {
@@ -467,6 +448,7 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			ID:       "contract-flow-hdr-" + runID,
 			Name:     "Header Flow",
 			Content:  json.RawMessage(`{"big":"` + strings.Repeat("y", 1000) + `"}`),
+			Source:   strings.Repeat("Variables.SetVariable Variable: x Value: 1\n", 20),
 			Metadata: interfaces.FlowMetadata{BlockCount: 5, SubflowCount: 1},
 			OwnerID:  owner,
 		}
@@ -481,6 +463,9 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		if len(hdr.Content) != 0 {
 			t.Errorf("LoadFlowHeader: expected nil content, got %d bytes", len(hdr.Content))
 		}
+		if hdr.Source != "" {
+			t.Errorf("LoadFlowHeader: expected empty source, got %d bytes", len(hdr.Source))
+		}
 		if hdr.OwnerID != owner {
 			t.Errorf("LoadFlowHeader: OwnerID=%q want %q", hdr.OwnerID, owner)
 		}
@@ -488,7 +473,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("LoadFlowHeader: metadata lost, BlockCount=%d want 5", hdr.Metadata.BlockCount)
 		}
 
-		// LoadFlow (with content) must still return the full payload.
 		full, err := b.LoadFlow(ctx, flow.ID)
 		if err != nil {
 			t.Fatalf("LoadFlow: %v", err)
@@ -496,19 +480,53 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		if len(full.Content) == 0 {
 			t.Errorf("LoadFlow: expected content present, got empty")
 		}
+		if full.Source != flow.Source {
+			t.Errorf("LoadFlow: source not round-tripped (%d bytes, want %d)", len(full.Source), len(flow.Source))
+		}
 
 		if _, err := b.LoadFlowHeader(ctx, "no-such-flow-"+runID); !errors.Is(err, interfaces.ErrNotFound) {
 			t.Errorf("LoadFlowHeader(missing): expected ErrNotFound, got %v", err)
 		}
 	})
 
+	t.Run("ListFlows_AfterID_keyset_pages_by_id", func(t *testing.T) {
+		// ScopeFlowIDs walks a scope with ORDER BY id + AfterID instead of
+		// OFFSET; both backends must return exactly the ids after the cursor.
+		owner := "contract-keyset-owner-" + runID
+		ids := []string{"contract-ks-a-" + runID, "contract-ks-b-" + runID, "contract-ks-c-" + runID}
+		for _, id := range ids {
+			if err := b.SaveFlow(ctx, &interfaces.FlowDocument{ID: id, Name: id, OwnerID: owner}); err != nil {
+				t.Fatalf("SaveFlow %s: %v", id, err)
+			}
+		}
+		page, err := b.ListFlows(ctx, interfaces.FlowFilter{
+			UserID: owner, SortBy: interfaces.FlowSortIDAsc, AfterID: ids[0], Limit: 10, MetadataOnly: true,
+		})
+		if err != nil {
+			t.Fatalf("ListFlows(AfterID): %v", err)
+		}
+		var got []string
+		for _, f := range page {
+			if f.OwnerID == owner {
+				got = append(got, f.ID)
+			}
+		}
+		if len(got) != 2 || got[0] != ids[1] || got[1] != ids[2] {
+			t.Errorf("ListFlows(AfterID=%s) = %v, want %v", ids[0], got, ids[1:])
+		}
+		n, err := b.CountFlows(ctx, interfaces.FlowFilter{UserID: owner, AfterID: ids[1]})
+		if err != nil {
+			t.Fatalf("CountFlows(AfterID): %v", err)
+		}
+		if n != 1 {
+			t.Errorf("CountFlows(AfterID=%s) = %d, want 1", ids[1], n)
+		}
+	})
+
 	t.Run("ListFlows_unscoped_matches_nothing_AllFlows_enumerates", func(t *testing.T) {
-		// Both real backends must agree: an unscoped filter (no UserID, no
-		// OrganizationID, no AllFlows) is a defense-in-depth no-match, while
-		// AllFlows enumerates every flow regardless of owner. The migrator
-		// depends on the latter; the former stops a forgotten scope from
-		// dumping the whole table. Assertions are written to be robust against
-		// a shared/long-lived Postgres DB (no exact-count checks under AllFlows).
+		// Both real backends must agree: an unscoped filter is a defense-in-depth no-match, while
+		// AllFlows enumerates every flow (the migrator depends on that). Assertions are robust against
+		// a shared/long-lived Postgres DB: exact counts only under the unscoped guard, presence-only under AllFlows.
 		owner := "contract-allflows-owner-" + runID
 		flow := &interfaces.FlowDocument{
 			ID:      "contract-flow-allflows-" + runID,
@@ -542,9 +560,8 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 	})
 
 	t.Run("SaveFlow_stale_version_returns_ErrVersionConflict", func(t *testing.T) {
-		// OCC is strict on both backends: an update whose Version does not match
-		// the current stored version fails — there is no "0 skips the check"
-		// escape hatch. Callers that update must load the current version first.
+		// OCC is strict on both backends: an update whose Version does not match the current stored
+		// version fails — there is no "0 skips the check" escape hatch; updaters must load first.
 		owner := "contract-occ-owner-" + runID
 		flow := &interfaces.FlowDocument{
 			ID:      "contract-flow-occ-" + runID,
@@ -555,7 +572,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		if err := b.SaveFlow(ctx, flow); err != nil {
 			t.Fatalf("SaveFlow create: %v", err)
 		}
-		// Save again with the backend-assigned version: must succeed and bump.
 		flow.Content = json.RawMessage(`{"k":2}`)
 		if err := b.SaveFlow(ctx, flow); err != nil {
 			t.Fatalf("SaveFlow update (current version): %v", err)
@@ -630,7 +646,7 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("upsert: expected status=resolved, got %q", got[0].Status)
 		}
 
-		// Delete is idempotent: a second delete of a missing key is not an error.
+		// Delete is idempotent.
 		if err := b.DeleteFindingStatus(ctx, flowID, st.FindingKey); err != nil {
 			t.Fatalf("DeleteFindingStatus: %v", err)
 		}
@@ -658,7 +674,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Fatalf("CreateAPIToken: %v", err)
 		}
 
-		// Lookup by hash is the auth path.
 		got, err := b.GetAPITokenByHash(ctx, hash)
 		if err != nil {
 			t.Fatalf("GetAPITokenByHash: %v", err)
@@ -667,7 +682,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("token round-trip mismatch: %+v", got)
 		}
 
-		// Unknown hash ⇒ ErrNotFound (so a bad token is rejected, not matched).
 		if _, err := b.GetAPITokenByHash(ctx, "no-such-hash-"+runID); !errors.Is(err, interfaces.ErrNotFound) {
 			t.Errorf("missing token hash: expected ErrNotFound, got %v", err)
 		}
@@ -680,7 +694,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Fatalf("expected the owner's single token, got %+v", list)
 		}
 
-		// A different user cannot delete it (scoped delete is a no-op).
 		if err := b.DeleteAPIToken(ctx, "someone-else-"+runID, tok.ID); err != nil {
 			t.Fatalf("DeleteAPIToken (wrong owner): %v", err)
 		}
@@ -688,7 +701,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Error("token must survive a delete attempt by a non-owner")
 		}
 
-		// Owner delete removes it; revoked ⇒ no longer found (auth rejects it).
 		if err := b.DeleteAPIToken(ctx, owner, tok.ID); err != nil {
 			t.Fatalf("DeleteAPIToken: %v", err)
 		}
@@ -730,7 +742,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("expected CreatedAt to be set by the backend")
 		}
 
-		// Replace (one baseline per flow): a second set overwrites, not appends.
 		if err := b.SetFlowBaseline(ctx, &interfaces.FlowBaseline{FlowID: flowID, Keys: []string{"r3:b3"}, CreatedBy: owner}); err != nil {
 			t.Fatalf("SetFlowBaseline replace: %v", err)
 		}
@@ -746,7 +757,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		if bl != nil {
 			t.Errorf("expected nil baseline after clear, got %+v", bl)
 		}
-		// Clear is idempotent.
 		if err := b.ClearFlowBaseline(ctx, flowID); err != nil {
 			t.Errorf("ClearFlowBaseline (idempotent): %v", err)
 		}
@@ -763,13 +773,9 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Fatalf("SaveFlow: %v", err)
 		}
 
-		// The alert inbox is a GLOBAL list — GovernanceAlertFilter has no
-		// FlowID field — so this subtest must not assume it owns the table.
-		// Every other subtest scopes its rows by runID; this one instead
-		// filters the returned list to its own flow and measures the unread
-		// badge as a DELTA from a baseline. Without that, re-running the
-		// suite against a persistent database (the documented local podman
-		// harness) failed on rows left by the previous run.
+		// The alert inbox is a GLOBAL list — GovernanceAlertFilter has no FlowID field — so this subtest
+		// filters the returned list to its own flow and measures the unread badge as a DELTA from a
+		// baseline, so re-running the suite against a persistent database does not fail on old rows.
 		mine := func(alerts []*interfaces.GovernanceAlert) []*interfaces.GovernanceAlert {
 			out := make([]*interfaces.GovernanceAlert, 0, len(alerts))
 			for _, a := range alerts {
@@ -827,7 +833,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		if len(mine(got)) != 2 {
 			t.Fatalf("expected 2 alerts, got %d", len(mine(got)))
 		}
-		// Newest-first: a2 (health, later timestamp) before a1 (drift).
 		if mine(got)[0].ID != a2.ID {
 			t.Errorf("expected newest-first (a2), got %q first", mine(got)[0].ID)
 		}
@@ -836,11 +841,9 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("expected %d unread, got %d", baseUnread+2, n)
 		}
 
-		// Mark one read → unread drops to 1.
 		if err := b.MarkGovernanceAlertRead(ctx, "", a1.ID); err != nil {
 			t.Fatalf("MarkGovernanceAlertRead: %v", err)
 		}
-		// Idempotent.
 		if err := b.MarkGovernanceAlertRead(ctx, "", a1.ID); err != nil {
 			t.Errorf("MarkGovernanceAlertRead (idempotent): %v", err)
 		}
@@ -849,8 +852,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("expected %d unread after read, got %d", baseUnread+1, n)
 		}
 
-		// Dismiss a2 → it's hidden from the default list, unread drops back to
-		// the baseline.
 		if err := b.DismissGovernanceAlert(ctx, "", a2.ID); err != nil {
 			t.Fatalf("DismissGovernanceAlert: %v", err)
 		}
@@ -858,7 +859,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		if len(mine(got)) != 1 || mine(got)[0].ID != a1.ID {
 			t.Errorf("expected only the non-dismissed a1, got %+v", mine(got))
 		}
-		// includeDismissed surfaces it again.
 		got, _ = b.ListGovernanceAlerts(ctx, interfaces.GovernanceAlertFilter{IncludeDismissed: true})
 		if len(mine(got)) != 2 {
 			t.Errorf("expected 2 alerts including dismissed, got %d", len(mine(got)))
@@ -868,7 +868,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("expected %d unread after dismiss, got %d", baseUnread, n)
 		}
 
-		// Clear removes dismissed alerts permanently.
 		if err := b.ClearGovernanceAlerts(ctx, ""); err != nil {
 			t.Fatalf("ClearGovernanceAlerts: %v", err)
 		}
@@ -877,7 +876,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("expected only a1 after clear, got %+v", mine(got))
 		}
 
-		// Mark-all-read clears remaining unread badge.
 		if err := b.MarkAllGovernanceAlertsRead(ctx, ""); err != nil {
 			t.Fatalf("MarkAllGovernanceAlertsRead: %v", err)
 		}
@@ -887,22 +885,11 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 	})
 
-	// A LIMIT/OFFSET walk of the whole table must visit every flow exactly
-	// once. The storage migrator (migration.Migrator.migrateFlows) and the
-	// governance scanner (scanner.ScanOnce) both enumerate that way, and in the
-	// migrator a skipped row is silent data loss — the run reports the flows it
-	// saw and no errors.
-	//
-	// The flows are seeded with a SHARED UpdatedAt on purpose. Ordering between
-	// rows that compare equal is not guaranteed by SQL, and the filesystem
-	// backend built its slice from a map range fed into a non-stable sort, so
-	// each page was ordered independently of the last and rows shifted across
-	// the page boundary. Ties are ordinary: any bulk write shares a timestamp,
-	// and the filesystem backend never stamps UpdatedAt itself, so flows saved
-	// without one all carry the zero time.
-	//
-	// The assertion counts only this run's flows, so it holds on the persistent
-	// podman database where earlier runs left rows behind.
+	// A LIMIT/OFFSET walk of the whole table must visit every flow exactly once — the storage migrator
+	// and the governance scanner both enumerate that way, and in the migrator a skipped row is silent data
+	// loss. Flows are seeded with a SHARED UpdatedAt on purpose: ties are ordinary (the FS backend never
+	// stamps UpdatedAt itself) and its slice came from a map range into a non-stable sort, so tied rows
+	// once shifted across page boundaries. Assertions count only this run's flows (persistent DB safe).
 	t.Run("ListFlows_paginated_walk_visits_every_flow_once", func(t *testing.T) {
 		const seeded, pageSize = 25, 10
 		owner := "contract-page-owner-" + runID
@@ -970,14 +957,10 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 	})
 
-	// A full-table walk must survive a concurrent save. The governance scanner
-	// sweeps while users edit, and the migrator can run against a live source,
-	// so this is the normal case rather than a race to be hand-waved.
-	//
-	// FlowSortIDAsc exists for exactly this: the default updated_at DESC is a
-	// MUTABLE sort key, so a flow saved mid-walk jumps to the front of the
-	// ordering and pushes the row on the next page boundary out of the walk. A
-	// unique tiebreaker does not help — the row genuinely moved.
+	// A full-table walk must survive a concurrent save — the governance scanner sweeps while users edit,
+	// and the migrator can run against a live source. FlowSortIDAsc exists for exactly this: the default
+	// updated_at DESC is a MUTABLE sort key, so a flow saved mid-walk jumps to the front and pushes the row
+	// on the next page boundary out of the walk (a unique tiebreaker does not help — the row genuinely moved).
 	t.Run("ListFlows_paginated_walk_survives_a_concurrent_save", func(t *testing.T) {
 		const seeded, pageSize = 24, 8
 		owner := "contract-cwalk-owner-" + runID
@@ -1026,9 +1009,8 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			}
 			offset += len(page)
 
-			// After the first page, a user saves one of the flows the walk has
-			// ALREADY passed. Under a mutable ordering that re-sorts it to the
-			// front and shifts everything still to come.
+			// After the first page, a user saves one of the flows the walk has ALREADY passed —
+			// under a mutable ordering that re-sorts it to the front and shifts everything still to come.
 			if !bumped {
 				bumped = true
 				existing, err := b.LoadFlow(ctx, ids[0])
@@ -1063,25 +1045,17 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 	})
 
-	// Per-org custom rules must be isolated by org at the SQL layer, not only by
-	// RLS: RLS is bypassed entirely whenever the app connects as a
-	// superuser/BYPASSRLS role, and this suite runs without an RLS transaction
-	// on purpose so the explicit predicates are what is under test (B8's
-	// lesson — a test that runs under RLS proves nothing about the application
-	// layer).
-	//
-	// The (org_id, rule_id) pair is the uniqueness contract: two orgs may both
-	// define "house-style" and they are DIFFERENT rules.
+	// Per-org custom rules must be isolated by org at the SQL layer, not only by RLS: this suite runs
+	// without an RLS transaction on purpose so the explicit predicates are what is under test (B8's
+	// lesson). The (org_id, rule_id) pair is the uniqueness contract: two orgs may both define
+	// "house-style" and they are DIFFERENT rules.
 	t.Run("OrgCustomRules_isolated_per_org", func(t *testing.T) {
 		orgA := "contract-rules-orgA-" + runID
 		orgB := "contract-rules-orgB-" + runID
 		const sharedRuleID = "house-style"
 
-		// Postgres stores config as JSONB and hands it back re-serialized —
-		// whitespace and key order are NOT preserved. Assert on parsed fields,
-		// never on raw substrings, or the test passes on the filesystem backend
-		// and fails on the real one for a reason that has nothing to do with
-		// the contract.
+		// Postgres stores config as JSONB and hands it back re-serialized — assert on parsed fields,
+		// never on raw substrings.
 		field := func(t *testing.T, raw json.RawMessage, key string) string {
 			t.Helper()
 			var m map[string]any
@@ -1158,11 +1132,9 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("re-save did not replace the config (severity=%q, want error): %s", got, after[0].Config)
 		}
 
-		// The B8.2 shape: an admin of one org submits ANOTHER org's surrogate
-		// id. Whether the backend errors or no-ops does not matter; what must
-		// never happen is the other org's row changing. Conflicting on the
-		// surrogate id instead of (org_id, rule_id) is precisely how
-		// org_channels let one tenant retarget another's row.
+		// The B8.2 shape: an admin of one org submits ANOTHER org's surrogate id — whether the backend
+		// errors or no-ops does not matter; the other org's row must never change (conflicting on the
+		// surrogate id instead of (org_id, rule_id) is precisely how org_channels let one tenant retarget another's row).
 		hijack := &interfaces.OrgCustomRule{
 			ID:      ruleA.ID, // orgA's surrogate id
 			OrgID:   orgB,     // ...submitted by orgB
@@ -1197,15 +1169,10 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 	})
 
-	// SaveOrgChannel is keyed on a client-supplied id while the HTTP layer
-	// authorizes against the org in the URL, so "id wins" would let an admin of
-	// one org overwrite another org's channel — replacing its webhook url and
-	// secret while the row keeps its original owner. The upsert must be scoped
-	// to the owning org, and the rejection must be VISIBLE (ErrNotFound), not a
-	// silent no-op that a caller reads as success.
-	//
-	// Backends without org support (filesystem/desktop) report that and are
-	// skipped rather than asserted against.
+	// SaveOrgChannel is keyed on a client-supplied id while the HTTP layer authorizes against the org in
+	// the URL, so "id wins" would let an admin of one org overwrite another org's channel — replacing its
+	// webhook url and secret while the row keeps its owner. The upsert must be org-scoped and the rejection
+	// VISIBLE (ErrNotFound), not a silent no-op. Backends without org support report that and are skipped.
 	t.Run("SaveOrgChannel_cannot_retarget_another_orgs_channel", func(t *testing.T) {
 		victimOrg := "contract-org-victim-" + runID
 		attackerOrg := "contract-org-attacker-" + runID
@@ -1260,8 +1227,7 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("attacker org gained %d channel(s) from a rejected save", len(attackerList))
 		}
 
-		// A same-org update of the same id is still allowed — the fix must not
-		// break the legitimate edit path it shares.
+		// A same-org update of the same id is still allowed — the fix must not break the legitimate edit path.
 		victim.URL = "https://victim.example.com/hook-v2"
 		if err := b.SaveOrgChannel(ctx, victim); err != nil {
 			t.Fatalf("same-org update of an existing channel should succeed: %v", err)

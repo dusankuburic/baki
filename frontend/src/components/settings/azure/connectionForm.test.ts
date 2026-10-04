@@ -77,7 +77,7 @@ describe('field validators (moved from AzureFoundrySection)', () => {
     expect(tenantErrorKey(`${'a'.repeat(250)}.com`)).toBe('providers.azureTenantInvalid')
   })
 
-  it('carries a secret only across the same hosts (F-34)', () => {
+  it('carries a secret only across the same hosts', () => {
     const prev = {
       endpoint: 'https://contoso.openai.azure.com',
       projectEndpoint: 'https://proj.services.ai.azure.com/api/projects/p',

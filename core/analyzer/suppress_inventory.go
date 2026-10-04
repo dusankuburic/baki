@@ -12,11 +12,10 @@ import (
 )
 
 // suppressInvCache memoizes inventories by the same content identity the
-// analysis cache uses (analyzer version + flow hash + settings/rules digests).
-// The inventory is a pure function of that identity, so entries never go
-// stale — the cache just saves re-running the ENTIRE rule set (a second full
-// analysis) on every governance view. Bounded like the sibling caches; the
-// shared slice is handed to callers read-only (handlers JSON-marshal it).
+// analysis cache uses — the inventory is a pure function of that identity,
+// so entries never go stale; the cache saves re-running the ENTIRE rule set
+// on every governance view. Bounded like the sibling caches; the shared
+// slice is handed to callers read-only.
 var suppressInvCache, _ = cache.NewLRUCache(64) // size > 0 ⇒ error impossible
 var suppressInvSF singleflight.Group
 
@@ -24,7 +23,7 @@ var suppressInvSF singleflight.Group
 // cache above, with singleflight collapsing concurrent cold builds (same
 // shape as CachedAnalysisCtx).
 func SuppressionInventoryCached(flow *models.FlowDocument, rules []Rule, settings *models.AppSettings) []SuppressionEntry {
-	if flow == nil {
+	if flow == nil || !hasPadIgnoreDirective(flow) {
 		return nil
 	}
 	key := "inv:" + analyzerVersion + ":" + FlowHash(flow) + ":" + settingsDigest(settings) + ":" + ruleSetDigest(rules)
@@ -42,11 +41,10 @@ func SuppressionInventoryCached(flow *models.FlowDocument, rules []Rule, setting
 	return v.([]SuppressionEntry)
 }
 
-// SuppressionEntry is one inline `# pad-ignore` directive in the flow source,
-// located and audited: Stale marks a directive whose rule no longer fires on
-// its target block (the finding it silenced was fixed, the block changed, or
-// the rule was renamed) — the directive now masks NOTHING but stays in the
-// file silently suppressing any FUTURE finding of that rule on that block.
+// SuppressionEntry is one inline `# pad-ignore` directive, located and
+// audited: Stale marks a directive whose rule no longer fires on its target
+// block (finding fixed, block changed, rule renamed) — it now masks NOTHING
+// but stays in the file silently suppressing any FUTURE finding there.
 type SuppressionEntry struct {
 	Line       int    `json:"line"`
 	Rule       string `json:"rule"` // "*" = all rules
@@ -57,16 +55,16 @@ type SuppressionEntry struct {
 	Reason     string `json:"reason,omitempty"`
 }
 
-// SuppressionInventory locates every pad-ignore directive in the parsed flow
-// and audits staleness against the UNSUPPRESSED findings (rules as they would
-// fire without any suppression). The governance concern: suppressions are
-// write-only today — nothing lists them or flags the ones masking nothing.
-//
-// A directive in a subflow header (its leading comment lines) has two targets —
-// the next concrete block AND the block-less / header-anchored findings the
-// header scope covers (see inlineSuppressions) — and is live if either fires.
+// SuppressionInventory locates every pad-ignore directive and audits
+// staleness against the UNSUPPRESSED findings — the governance concern being
+// that suppressions are otherwise write-only. A directive in a subflow
+// header has two targets (the next concrete block AND the block-less
+// findings the header scope covers) and is live if either fires.
 func SuppressionInventory(flow *models.FlowDocument, rules []Rule, settings *models.AppSettings) []SuppressionEntry {
-	if flow == nil {
+	// No directive, no entries: the full single-threaded rule pass below
+	// costs more than a cold parallel analysis and returns nothing on a
+	// directive-free flow (the common case), so the cheap pre-check skips it.
+	if flow == nil || !hasPadIgnoreDirective(flow) {
 		return nil
 	}
 	// Unsuppressed findings: dispatch every rule over the SAME context the
@@ -249,6 +247,35 @@ func SuppressionInventory(flow *models.FlowDocument, rules []Rule, settings *mod
 		return entries[a].Rule < entries[b].Rule
 	})
 	return entries
+}
+
+// hasPadIgnoreDirective reports whether the inventory walk would visit at
+// least one `pad-ignore` comment: it mirrors that walk's reach exactly
+// (every sibling group, descending into non-comment children only), so nil
+// when false is the same result as running the full inventory.
+func hasPadIgnoreDirective(flow *models.FlowDocument) bool {
+	var scan func(blocks []models.Block) bool
+	scan = func(blocks []models.Block) bool {
+		for i := range blocks {
+			b := &blocks[i]
+			if b.Type == models.BlockTypeComment {
+				if _, _, ok := parsePadIgnore(b.Name); ok {
+					return true
+				}
+				continue
+			}
+			if len(b.Children) > 0 && scan(b.Children) {
+				return true
+			}
+		}
+		return false
+	}
+	for i := range flow.Subflows {
+		if scan(flow.Subflows[i].Blocks) {
+			return true
+		}
+	}
+	return false
 }
 
 // nextConcreteSibling returns the first non-comment block after index i (the

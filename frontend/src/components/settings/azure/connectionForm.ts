@@ -73,7 +73,7 @@ export function azureHost(raw: string): string {
 // the endpoint host unchanged, and a project endpoint only on the previous
 // project's or the endpoint's host. A blank or unparseable endpoint never
 // carries. Used so the placeholder never promises a secret the save would
-// refuse to carry (F-34).
+// refuse to carry.
 export function secretHostsKept(
   prev: {endpoint: string; projectEndpoint?: string},
   next: {endpoint: string; projectEndpoint?: string},

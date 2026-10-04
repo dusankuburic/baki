@@ -127,7 +127,7 @@ func TestParseResponsesSSE_TextToolsAndHostedSteps(t *testing.T) {
 	if done.TokensIn != 42 || done.TokensOut != 7 || done.ServedModel != "gpt-4o-2024-11-20" || done.FinishReason != "tool_calls" {
 		t.Errorf("done = %+v", done)
 	}
-	// F-05: the cached slice is a breakdown INCLUDED in TokensIn, surfaced
+	// The cached slice is a breakdown INCLUDED in TokensIn, surfaced
 	// for the meter (42 input of which 30 were cache reads).
 	if done.CacheReadTokens != 30 {
 		t.Errorf("done.CacheReadTokens = %d, want 30", done.CacheReadTokens)
@@ -196,7 +196,7 @@ func TestParseResponsesSSE_Terminals(t *testing.T) {
 // the chat service's idle watchdog or the run is cancelled mid-thought.
 func TestParseResponsesSSE_ReasoningKeepalives(t *testing.T) {
 	// The reasoning item brackets the phase (Chunk.SilentStep on its added and
-	// done events, F-08); the summary events inside it are keepalives.
+	// done events); the summary events inside it are keepalives.
 	body := sseEvents(
 		`{"type":"response.output_item.added","output_index":0,"item":{"id":"rs_1","type":"reasoning","encrypted_content":"enc"}}`,
 		`{"type":"response.reasoning_summary_part.added","item_id":"rs_1","output_index":0,"summary_index":0}`,
@@ -394,9 +394,7 @@ func TestAzureFoundry_AgentStoreRejectionFailsTurn(t *testing.T) {
 // TestAzureFoundry_AgentStoreRejectionAfterRepairsStillFailsTurn: the store
 // guard sits ABOVE the repair bookkeeping, so a store rejection still fails
 // the turn with the deliberate config error when other parameters were
-// repaired first, instead of the raw 400 prose. (The Responses wire body
-// carries one repairable parameter — max_output_tokens; temperature is no
-// longer sent — so this exercises every repair the request can make.)
+// repaired first, instead of the raw 400 prose.
 func TestAzureFoundry_AgentStoreRejectionAfterRepairsStillFailsTurn(t *testing.T) {
 	srv := newAzureTestServer(t, func(w http.ResponseWriter, r *http.Request, n int, body map[string]any) {
 		reject := func(param string) {

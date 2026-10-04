@@ -1,8 +1,7 @@
 // Package mail provides transactional email delivery (password reset, email
-// verification, org invites). It exposes a small Mailer interface with two
-// implementations: an SMTP sender for production and a log-only fallback used
-// whenever SMTP is not configured, so deployments without email still function
-// (the would-be link is written to the server log).
+// verification, org invites): a small Mailer interface with an SMTP sender for
+// production and a log-only fallback used whenever SMTP is not configured, so
+// deployments without email still function.
 package mail
 
 import (
@@ -33,8 +32,9 @@ type Mailer interface {
 // New returns an SMTP mailer when email is configured, otherwise a log-only
 // mailer. AppBaseURL is carried separately by callers that build links. mode
 // controls whether the log-only fallback may write the message body (which
-// carries one-time reset/verification tokens): allowed for local/dev recovery,
-// but NEVER in cloud mode, where log/telemetry readers could harvest the tokens.
+// carries one-time reset/verification tokens): allowed for local/dev
+// recovery, NEVER in cloud mode, where log/telemetry readers could harvest
+// the tokens.
 func New(cfg config.EmailConfig, mode config.DeploymentMode) Mailer {
 	if cfg.Enabled() {
 		return &smtpMailer{cfg: cfg}
@@ -44,17 +44,17 @@ func New(cfg config.EmailConfig, mode config.DeploymentMode) Mailer {
 		logger.Warn("email not configured (PAD_SMTP_HOST/PAD_EMAIL_FROM unset); using log-only mailer — password reset / verification links will be written to the server log")
 	} else {
 		// Cloud mode with no SMTP is a misconfiguration: recovery/verification
-		// emails silently go nowhere. Warn loudly, but do NOT log the token-
-		// bearing body (that would be a credential leak into the logs).
+		// emails silently go nowhere. Warn loudly, but do NOT log the
+		// token-bearing body (a credential leak into the logs).
 		logger.Warn("email not configured in cloud mode (PAD_SMTP_HOST/PAD_EMAIL_FROM unset); password reset / verification emails will NOT be delivered and links are NOT logged — configure SMTP")
 	}
 	return &logMailer{logBody: logBody}
 }
 
 // logMailer is the fallback when SMTP is unconfigured. In local/dev mode it
-// records the full message (including the link) so the flow stays usable without
-// an SMTP relay; in cloud mode it logs only the recipient + subject, never the
-// token-bearing body.
+// records the full message (including the link) so the flow stays usable
+// without an SMTP relay; in cloud mode it logs only recipient + subject,
+// never the token-bearing body.
 type logMailer struct{ logBody bool }
 
 func (l *logMailer) Enabled() bool { return false }
@@ -87,9 +87,9 @@ func (m *smtpMailer) Send(ctx context.Context, to, subject, textBody, htmlBody s
 	// Port 465 expects implicit TLS from the first byte; every other port must
 	// use STARTTLS. STARTTLS is MANDATORY here (not opportunistic): the message
 	// body routinely carries one-time password-reset tokens, so we refuse to
-	// transmit it in plaintext even if the relay offers no encryption. The
-	// standard smtp.SendMail only upgrades when the server advertises STARTTLS,
-	// silently falling back to cleartext otherwise — that path is now closed.
+	// transmit it in plaintext even if the relay offers no encryption (the
+	// standard smtp.SendMail silently falls back to cleartext — that path is
+	// closed).
 	if portOf(m.cfg) == 465 {
 		return m.sendImplicitTLS(ctx, addr, auth, to, msg)
 	}
@@ -97,8 +97,8 @@ func (m *smtpMailer) Send(ctx context.Context, to, subject, textBody, htmlBody s
 }
 
 // smtpOpTimeout bounds the entire SMTP exchange (AUTH + MAIL + RCPT + DATA +
-// Quit) after the connection is established. Without this a stalled relay can
-// hang the calling request goroutine until the OS TCP timeout (minutes).
+// Quit) after the connection is established; without it a stalled relay can
+// hang the calling goroutine until the OS TCP timeout (minutes).
 const smtpOpTimeout = 30 * time.Second
 
 // deliver runs the AUTH + MAIL FROM + RCPT TO + DATA sequence on an already
@@ -163,9 +163,9 @@ func (m *smtpMailer) sendImplicitTLS(ctx context.Context, addr string, auth smtp
 }
 
 // sendSTARTTLS connects in plaintext, requires the server to advertise STARTTLS
-// (returning an error and sending nothing if it does not), upgrades to TLS, and
-// only then transmits the message. Failing closed keeps password-reset tokens
-// out of cleartext when a relay doesn't offer encryption.
+// (erroring and sending nothing if it does not), upgrades to TLS, and only
+// then transmits — failing closed keeps password-reset tokens out of
+// cleartext when a relay offers no encryption.
 func (m *smtpMailer) sendSTARTTLS(ctx context.Context, addr string, auth smtp.Auth, to string, msg []byte) error {
 	d := net.Dialer{Timeout: 10 * time.Second}
 	conn, err := d.DialContext(ctx, "tcp", addr)
@@ -174,9 +174,9 @@ func (m *smtpMailer) sendSTARTTLS(ctx context.Context, addr string, auth smtp.Au
 	}
 	// Bound the pre-TLS SMTP exchange (server greeting, EHLO, STARTTLS
 	// handshake). The smtp library doesn't accept a context, so without a
-	// deadline a relay that accepts TCP but then stalls on EHLO/STARTTLS would
-	// hang the caller until the OS TCP timeout (minutes) — under password-reset
-	// / invite traffic that exhausts goroutines. Mirrors sendImplicitTLS.
+	// deadline a relay that accepts TCP but stalls on EHLO/STARTTLS would hang
+	// the caller until the OS TCP timeout (minutes) — under password-reset /
+	// invite traffic that exhausts goroutines. Mirrors sendImplicitTLS.
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	c, err := smtp.NewClient(conn, m.cfg.SMTPHost)
 	if err != nil {
@@ -185,9 +185,9 @@ func (m *smtpMailer) sendSTARTTLS(ctx context.Context, addr string, auth smtp.Au
 	}
 	defer func() { _ = c.Close() }()
 
-	// STARTTLS-mandatory: if the server can't encrypt the channel we refuse to
-	// proceed rather than fall back to cleartext (which would expose the reset
-	// link in the message body).
+	// STARTTLS-mandatory: if the server can't encrypt the channel we refuse
+	// rather than fall back to cleartext (which would expose the reset link
+	// in the message body).
 	if ok, _ := c.Extension("STARTTLS"); !ok {
 		_ = c.Quit()
 		return fmt.Errorf("mail: smtp server %s does not advertise STARTTLS; refusing to send in plaintext", addr)

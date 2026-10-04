@@ -8,8 +8,7 @@ import (
 	"pad-analyzer/internal/storage/filesystem"
 )
 
-// createOrg creates an org via the API and returns its ID.
-// The owner is always the router's local user ("local" in test routers).
+// createOrg: the owner is always the router's local user ("local" in test routers).
 func createOrg(t *testing.T, rt *Router, name string) string {
 	t.Helper()
 	rr := doRequest(t, rt, http.MethodPost, "/api/orgs", map[string]any{
@@ -85,7 +84,6 @@ func TestHandleOrgDelete_OK(t *testing.T) {
 	rr := doRequest(t, rt, http.MethodDelete, "/api/orgs/"+orgID, nil)
 	checkStatus(t, rr, http.StatusOK)
 
-	// The org list should now be empty.
 	rr = doRequest(t, rt, http.MethodGet, "/api/orgs", nil)
 	var orgs []any
 	decodeJSON(t, rr, &orgs)

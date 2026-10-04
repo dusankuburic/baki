@@ -7,11 +7,11 @@ import (
 	"pad-core/models"
 )
 
-// HardcodedUICoordinatesRule flags UI-automation actions that click/interact at
-// hardcoded screen coordinates (literal X/Y), the single most fragile pattern in
-// RPA flows: a resolution change, UI theme update, or layout tweak makes the
-// click miss its target silently. Preferring element selectors (id/name/text)
-// over coordinates is the table-stakes reliability fix.
+// HardcodedUICoordinatesRule flags UI-automation actions that click/interact
+// at hardcoded screen coordinates (literal X/Y) — the single most fragile
+// pattern in RPA: a resolution or layout change makes the click miss its
+// target silently. Preferring element selectors (id/name/text) is the
+// table-stakes reliability fix.
 type HardcodedUICoordinatesRule struct{}
 
 func (r *HardcodedUICoordinatesRule) ID() string   { return "hardcoded-ui-coordinates" }
@@ -30,8 +30,8 @@ var uiActionPrefixes = []string{
 }
 
 // coordinateProp matches a coordinate-ish property key (case-insensitive),
-// e.g. X, Y, CoordinateX, Left, Top, ClickX, OffsetX. A literal numeric value
-// (no %var%) for such a key is the smell.
+// e.g. X, Y, CoordinateX, Left, Top, OffsetX; a literal numeric value (no
+// %var%) for such a key is the smell.
 var coordinateProp = regexp.MustCompile(`(?i)^(x|y|left|top|clickx|clicky|offsetx|offsety|coordinatex|coordinatey|screenx|screeny)$`)
 
 func (r *HardcodedUICoordinatesRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {

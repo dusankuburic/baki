@@ -14,25 +14,15 @@ const uploadFlowText = "#Region \"Main\"\n" +
 	"HTTPClient.InvokeUrl Method: GET Url: $'''https://api.example.com/x'''\n" +
 	"#EndRegion\n"
 
-// TestLoadFlowFiles_CacheIsScopedToTheCaller is the regression gate for a
-// cross-tenant write.
-//
-// LoadFlowFiles cached the parsed document in a process-global LRU keyed ONLY
-// by sha256(sorted filenames ‖ contents). Identical bytes therefore collided
-// across unrelated users, and the cached document carries its ID — the first
-// uploader's flow ID. The second uploader's SaveUploadedFlow then upserted
-// against that ID, whose row belongs to someone else: it bumped the victim's
-// OCC version and overwrote their name/source on every upload, while the second
-// uploader got HTTP 200 and no row of their own. The victim's own edits then
-// failed with 409 forever.
-//
-// Byte-identical uploads are ordinary, not contrived: a shared vendor template
-// or the same PAD export circulating in a team produces them.
-//
-// The code comment at the cache-hit branch already stated the precondition —
-// "LoadFlowFiles is a desktop-only code path ... If this ever becomes reachable
-// from a JWT/cloud handler, switch to EmitTo with the user's ID to prevent
-// cross-tenant data leaks." POST /api/flow/upload is exactly that handler.
+// TestLoadFlowFiles_CacheIsScopedToTheCaller is the regression gate for a cross-tenant
+// write: LoadFlowFiles cached parsed docs in a process-global LRU keyed only by
+// sha256(sorted filenames ‖ contents), so byte-identical uploads (a shared vendor
+// template, the same PAD export circulating in a team) collided across users — the
+// cached doc carries its ID, and the second uploader's SaveUploadedFlow upserted against
+// the first's row (bumping the victim's OCC version, overwriting their name/source on
+// every upload; the victim's own edits then failed 409 forever). The cache-hit comment
+// already said "LoadFlowFiles is a desktop-only code path"; POST /api/flow/upload is
+// exactly that JWT/cloud handler.
 func TestLoadFlowFiles_CacheIsScopedToTheCaller(t *testing.T) {
 	astCache, _ := cache.NewLRUCache(100)
 	svc := NewFlowService(&testutil.CountingNotifier{}, nil, NewLocalDocumentProvider(), nil, nil, astCache)

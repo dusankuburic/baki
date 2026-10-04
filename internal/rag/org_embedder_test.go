@@ -111,7 +111,7 @@ func TestEmbedder_PinnedProviderOrgFirst_DefaultStaysPersonal(t *testing.T) {
 	}
 }
 
-// F-33: the org's shared Azure credential without an embedding deployment
+// The org's shared Azure credential without an embedding deployment
 // refuses instead of falling back to the member's personal key — a member's
 // key must not seed the org corpus, and the error names the org admin's fix.
 func TestEmbedder_OrgCredentialWithoutEmbeddingDeployment_RefusesFallback(t *testing.T) {

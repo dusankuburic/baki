@@ -11,15 +11,11 @@ import (
 
 const testToken = "test-secret-token"
 
-// newTestRouter creates a Router with a fresh App and a fixed token.
-// The App is not fully initialised (Init is not called), so only routes that
-// don't reach the app layer can be tested here. Handler-level tests live in
-// handlers_test.go and require a fully initialised App.
+// newTestRouter creates a Router with a fresh App and a fixed token; the App is not fully
+// initialised, so only routes that don't reach the app layer can be tested here.
 func newLocalTestRouter() *Router {
 	return newTestRouter(nil, false)
 }
-
-// --- Auth middleware ---
 
 func TestRouter_MissingAuth_Returns401(t *testing.T) {
 	rt := newLocalTestRouter()
@@ -49,10 +45,8 @@ func TestRouter_WrongToken_Returns401(t *testing.T) {
 func TestRouter_TokenInQuery_RejectedOnNonSSEPath(t *testing.T) {
 	rt := newLocalTestRouter()
 
-	// Non-SSE path: token in query must be rejected (401) so access JWTs don't
-	// leak into proxy/browser logs. The Authorization header is the only
-	// accepted channel outside /api/events (whose acceptance is covered by the
-	// auth package's ExtractToken/Middleware unit tests).
+	// Non-SSE path: token in query must be rejected (401) so access JWTs don't leak into
+	// proxy/browser logs; the Authorization header is the only accepted channel outside /api/events.
 	req := httptest.NewRequest(http.MethodGet, "/api/system/info?token="+testToken, nil)
 	rr := httptest.NewRecorder()
 	rt.ServeHTTP(rr, req)
@@ -69,8 +63,6 @@ func TestRouter_TokenInQuery_RejectedOnNonSSEPath(t *testing.T) {
 		t.Error("non-SSE path: same token via header should be accepted")
 	}
 }
-
-// --- CORS ---
 
 func TestRouter_OPTIONS_Returns200WithCORSHeaders(t *testing.T) {
 	// Router with an explicit allowlist — the listed origin must be echoed back.
@@ -110,8 +102,6 @@ func TestRouter_OPTIONS_UnknownOrigin_NoACO(t *testing.T) {
 	}
 }
 
-// --- 404 routing ---
-
 func TestRouter_UnknownPath_Returns404(t *testing.T) {
 	rt := newLocalTestRouter()
 
@@ -124,8 +114,6 @@ func TestRouter_UnknownPath_Returns404(t *testing.T) {
 		t.Errorf("expected 404, got %d", rr.Code)
 	}
 }
-
-// --- SSE endpoint ---
 
 func TestRouter_EventsEndpoint_SetsSSEHeaders(t *testing.T) {
 	rt := newLocalTestRouter()
@@ -157,18 +145,15 @@ func TestRouter_EventsEndpoint_SetsSSEHeaders(t *testing.T) {
 	}
 }
 
-// --- Emit ---
-
 func TestRouter_Emit_DoesNotPanicWithNoClients(t *testing.T) {
 	rt := newLocalTestRouter()
 	// Should be a no-op when no SSE clients are connected
 	rt.eventManager.Emit("test-event", map[string]string{"key": "value"})
 }
 
-// TestIsLocalhostOrigin_TauriWebviewOrigins guards the desktop CORS allowlist.
-// The Windows Tauri v2 webview origin is http://tauri.localhost; missing it
-// meant the production desktop build's requests to the sidecar all failed CORS
-// (preflight 200 but no Access-Control-Allow-Origin) and nothing loaded.
+// TestIsLocalhostOrigin_TauriWebviewOrigins guards the desktop CORS allowlist: the Windows Tauri v2
+// webview origin is http://tauri.localhost; missing it meant the desktop build's requests to the
+// sidecar all failed CORS and nothing loaded.
 func TestIsLocalhostOrigin_TauriWebviewOrigins(t *testing.T) {
 	allowed := []string{
 		"http://tauri.localhost",  // Tauri v2 webview on Windows (WebView2)

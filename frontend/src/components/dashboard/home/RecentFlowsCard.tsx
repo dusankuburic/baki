@@ -1,7 +1,7 @@
 import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import {FileText, ArrowRight} from 'lucide-react'
-import {ChartCard} from '@/components/charts'
+import {ChartCard} from '@/components/charts/ChartCard'
 import {healthTier} from '@/lib/scoring'
 import {relativeTimeText, absoluteTime} from '@/lib/time'
 import {useUIStore} from '@/stores/uiStore'

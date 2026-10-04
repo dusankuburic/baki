@@ -11,11 +11,10 @@ import (
 func RunBatchAnalysis(docs []*models.FlowDocument, rules []Rule, settings *models.AppSettings) *models.BatchAnalysis {
 	start := time.Now()
 
-	// Each doc's analysis is CPU-bound and independent; a bounded worker pool
-	// parallelizes them (previously strictly sequential — a folder scan used
-	// one core). Results land in a pre-sized slice by index so the output
-	// order is identical to the sequential version. DefaultCache is
-	// mutex-guarded, so concurrent CachedAnalysis calls are safe.
+	// Each doc's analysis is CPU-bound and independent; a bounded pool
+	// parallelizes them, landing results by index so output order matches the
+	// sequential version (DefaultCache is mutex-guarded, so concurrent
+	// CachedAnalysis calls are safe).
 	workers := runtime.NumCPU()
 	if workers > 8 {
 		workers = 8 // bound: huge hosts add scheduling overhead, not throughput, for parse-sized work
@@ -94,8 +93,7 @@ func RunBatchAnalysis(docs []*models.FlowDocument, rules []Rule, settings *model
 
 // diffKey is the cross-run match key for a finding: the content-stable
 // Fingerprint when set (the engine always sets it), falling back to the legacy
-// RuleID:BlockID Key for findings that predate content-derived fingerprints
-// (hand-built test fixtures, older persisted reports).
+// RuleID:BlockID Key (hand-built test fixtures, older persisted reports).
 func diffKey(f models.Finding) string {
 	if f.Fingerprint != "" {
 		return f.Fingerprint
@@ -149,13 +147,9 @@ func DiffReports(old, new *models.AnalysisReport) *models.AnalysisDiff {
 }
 
 // ComputeDrift returns the findings in report whose stable Key (RuleID:BlockID)
-// is not present in baselineKeys — the "new since baseline" set used for
-// ratcheting and drift alerts.
-//
-// A nil baselineKeys means no baseline has been recorded: every finding is then
-// reported as new and HasBaseline is false, so callers can distinguish "new
-// because nothing is accepted yet" from "genuinely new since an accepted
-// baseline". A non-nil (even empty) slice means a baseline exists.
+// is not present in baselineKeys — the "new since baseline" set for ratcheting
+// and drift alerts. A nil baselineKeys means no baseline exists (HasBaseline
+// false); non-nil, even empty, means one does.
 func ComputeDrift(flowID string, report *models.AnalysisReport, baselineKeys []string) *models.BaselineDrift {
 	drift := &models.BaselineDrift{
 		FlowID:      flowID,
@@ -172,10 +166,9 @@ func ComputeDrift(flowID string, report *models.AnalysisReport, baselineKeys []s
 	}
 
 	for _, f := range report.Findings {
-		// Match on the content-stable Fingerprint (new baselines) and ALSO the
-		// legacy Key() (baselines recorded before fingerprints became
-		// content-derived), so an existing baseline doesn't suddenly flag every
-		// finding as new after the migration.
+		// Match on the content-stable Fingerprint (new baselines) AND the legacy
+		// Key() (baselines recorded before fingerprints), so an existing baseline
+		// doesn't suddenly flag every finding as new after the migration.
 		if base[f.Fingerprint] || base[f.Key()] {
 			continue
 		}

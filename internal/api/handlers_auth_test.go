@@ -19,9 +19,7 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// TestRegister_DisabledSignUp_Returns403 verifies the PAD_FEATURE_DISABLE_SIGNUP
-// flag blocks self-registration with a clear 403 while existing users still log
-// in normally. The flag is flipped on the test router's SecurityConfig directly.
+// TestRegister_DisabledSignUp_Returns403 verifies the PAD_FEATURE_DISABLE_SIGNUP flag blocks self-registration with a clear 403 while existing users still log in normally.
 func TestRegister_DisabledSignUp_Returns403(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	rt.security.Features.DisableSignUp = true
@@ -35,9 +33,7 @@ func TestRegister_DisabledSignUp_Returns403(t *testing.T) {
 	}
 }
 
-// TestRegister_EnabledByDefault_Returns200 verifies registration works when the
-// flag is off (the default) — a regression guard against accidentally inverting
-// the gate.
+// TestRegister_EnabledByDefault_Returns200Or409 verifies registration works when the flag is off (the default) — a regression guard against accidentally inverting the gate.
 func TestRegister_EnabledByDefault_Returns200Or409(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	// Default: DisableSignUp == false.
@@ -85,10 +81,8 @@ func login(t *testing.T, rt *Router, email, password string) map[string]any {
 		if rrReg.Code != http.StatusOK && rrReg.Code != http.StatusConflict {
 			t.Fatalf("failed to register test user: %v - body: %s", rrReg.Code, rrReg.Body.String())
 		}
-		// Login requires a verified email (M9). Test users are verified
-		// immediately after registration so this helper exercises the normal
-		// verified-user login path; tests that specifically want an unverified
-		// account register without calling this helper.
+		// Login requires a verified email (M9). Test users are verified immediately after registration so this helper exercises the normal verified-user
+		// login path; tests that specifically want an unverified account register without calling this helper.
 		if rt.security.Backend != nil {
 			if u, err := rt.security.Backend.LoadUserByEmail(context.Background(), email); err == nil && u != nil {
 				_ = rt.security.Backend.SetUserEmailVerified(context.Background(), u.ID)
@@ -131,9 +125,8 @@ func TestHandleAuthRegister_DuplicateReturns409(t *testing.T) {
 	checkStatus(t, second, http.StatusConflict)
 }
 
-// createUserErrBackend wraps a real backend and forces CreateUser to return a
-// generic (non-ErrEmailExists) error, so we can prove the Register handler
-// maps unknown backend failures to 500 instead of 409.
+// createUserErrBackend wraps a real backend and forces CreateUser to return a generic (non-ErrEmailExists) error, so we can prove the Register handler maps
+// unknown backend failures to 500 instead of 409.
 type createUserErrBackend struct {
 	interfaces.StorageBackend
 	err error
@@ -143,11 +136,8 @@ func (b *createUserErrBackend) CreateUser(_ context.Context, _ *interfaces.User)
 	return b.err
 }
 
-// TestHandleAuthRegister_GenericBackendErrorReturns500 guards the regression
-// where every Register error was hard-coded to 409, masking DB outages as
-// "email already in use". The render layer's auto-map keeps ErrEmailExists→409
-// (covered by TestHandleAuthRegister_DuplicateReturns409 above) while any
-// unrecognized error must surface as 500.
+// TestHandleAuthRegister_GenericBackendErrorReturns500 guards the regression where every Register error was hard-coded to 409, masking DB outages as
+// "email already in use". The render layer's auto-map keeps ErrEmailExists→409 (covered by TestHandleAuthRegister_DuplicateReturns409); any unrecognized error must surface as 500.
 func TestHandleAuthRegister_GenericBackendErrorReturns500(t *testing.T) {
 	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
 	wrapped := &createUserErrBackend{StorageBackend: fs, err: errors.New("connection refused")}
@@ -249,10 +239,8 @@ func TestHandleAuthLogin_EmptyFieldsGetDefaults(t *testing.T) {
 func TestHandleAuthLogin_BadBodyReturns400(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/login", "", nil)
-	// nil body → empty body → decode error → 400
-	// Actually empty body should decode as EOF → 400
-	// But login is a public route so no auth check is needed
-	_ = rr // we just verify no panic; login with no body returns 400
+	// nil body → empty body → decode error → 400; login is a public route, so no auth check applies — we just verify no panic.
+	_ = rr
 	if rr.Code == http.StatusUnauthorized {
 		t.Error("login should not require auth")
 	}
@@ -283,10 +271,9 @@ func TestHandleAuthRefresh_InvalidToken_Returns401(t *testing.T) {
 	checkStatus(t, rr, http.StatusUnauthorized)
 }
 
-// TestHandleAuthRefresh_NilTokenStoreInJWTMode_FailsClosed verifies that when
-// JWT is enabled but no refresh-token store is wired (a misconfiguration — e.g.
-// a backend that doesn't implement RefreshTokenStore), refresh is rejected
-// rather than silently skipping replay/rotation protection. A stolen refresh
+// TestHandleAuthRefresh_NilTokenStoreInJWTMode_FailsClosed: with JWT enabled but no refresh-token store
+// wired, refresh is rejected rather than silently skipping replay/rotation protection — a stolen token
+// must not be replayable indefinitely.
 // token must NOT be replayable indefinitely in that state.
 func TestHandleAuthRefresh_NilTokenStoreInJWTMode_FailsClosed(t *testing.T) {
 	rt := newJWTTestRouter(t)

@@ -6,7 +6,7 @@ import {useUIStore} from '@/stores/uiStore'
 import {useProviderSetup} from './hooks/useProviderSetup'
 import {useAIChat} from './hooks/useAIChat'
 import {logger} from '@/lib/logger'
-import {buildBlockLookup} from '@/lib/tree'
+import {useSelectedBlock} from './hooks/useSelectedBlock'
 import {findModel, modelNameOf, storableModelLabel} from '@/lib/modelIds'
 import {isRegistryEntry} from '@/lib/modelGroups'
 import {purposeLabel, purposeLabelKey, type PurposeLabelOf} from '@/lib/modelPurpose'
@@ -21,7 +21,7 @@ import {
   ChatThreadBar,
   FixProposalCard,
 } from '.'
-import {useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense} from 'react'
+import {useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense, type ComponentProps} from 'react'
 import {AlertTriangle, RefreshCw} from 'lucide-react'
 import {useKeyboard} from '@/hooks/useKeyboard'
 import {useConfirm, useToast, Spinner} from '@/components/shared'
@@ -56,16 +56,12 @@ const EMPTY_MODELS: ModelDetail[] = []
 export default function AITab() {
   const {t} = useTranslation('chat')
   const {t: tc} = useTranslation('common')
-  const _selectedBlockId = useFlowStore(s => s.selectedBlockId)
-  const _document = useFlowStore(s => s.document)
-  const _analysisReport = useAnalysisStore(s => (_document ? s.reports.get(_document.id) : undefined))
-  // O(1) block-id → meta index built once per document (see FindingsTab);
-  // a per-selection tree walk would be O(blocks) on every canvas click.
-  const _blockLookup = useMemo(() => (_document ? buildBlockLookup(_document) : null), [_document])
-  const selectedBlock = useMemo(
-    () => (_blockLookup && _selectedBlockId ? (_blockLookup.get(_selectedBlockId) ?? null) : null),
-    [_blockLookup, _selectedBlockId],
-  )
+  // The canvas selection is NOT subscribed here: the controls that show the
+  // selected block (SelectionContextBar, SelectionPromptTemplates below)
+  // follow it on their own, so block navigation in the editor leaves this
+  // panel — and the memoised message list — alone. The suggested prompts only
+  // care whether a block is selected at all.
+  const hasSelectedBlock = useFlowStore(s => s.selectedBlockId != null)
   const chatTextSize = useSettingsStore(s => s.settings.appearance.chatTextSize)
   const updateAppearance = useSettingsStore(s => s.updateAppearance)
   const chatPanel = useChatPanel()
@@ -163,7 +159,6 @@ export default function AITab() {
 
   const {
     doc,
-    selectedBlockId,
     readOnly,
     activeThreadId,
     activeThread,
@@ -359,15 +354,16 @@ export default function AITab() {
 
   const contextBlockId = activeThread?.contextBlockId ?? null
 
+  const analysisReport = useAnalysisStore(s => (doc ? s.reports.get(doc.id) : undefined))
   const hasFindings = useMemo(() => {
-    if (!contextBlockId || !_analysisReport) return false
-    return _analysisReport.findings.some(f => f.blockId === contextBlockId)
-  }, [contextBlockId, _analysisReport])
+    if (!contextBlockId || !analysisReport) return false
+    return analysisReport.findings.some(f => f.blockId === contextBlockId)
+  }, [contextBlockId, analysisReport])
 
   useEffect(() => {
     let active = true
     chatApi
-      .getSuggestedPrompts(!!selectedBlockId, hasFindings)
+      .getSuggestedPrompts(hasSelectedBlock, hasFindings)
       .then((ps: string[] | null) => {
         if (active) setSuggestedPrompts(ps || [])
       })
@@ -377,7 +373,7 @@ export default function AITab() {
     return () => {
       active = false
     }
-  }, [selectedBlockId, hasFindings])
+  }, [hasSelectedBlock, hasFindings])
 
   // Search no longer FILTERS the conversation — it indexes it. Matches keep
   // their surrounding turns, and the search bar steps through them.
@@ -433,6 +429,28 @@ export default function AITab() {
   const toggleTools = useCallback(
     () => setThreadUseTools(!(activeThread?.useTools ?? false)),
     [setThreadUseTools, activeThread],
+  )
+
+  // Stable across renders that change none of its inputs, so the memoised
+  // list (ChatMessageList) skips them — a fresh arrow here re-rendered every
+  // visible bubble on each canvas selection and thinking-state flip.
+  const renderMessage = useCallback(
+    (i: number, m: ChatMessage) => (
+      <MessageBubble
+        message={m}
+        modelLabel={listedModelName(m)}
+        isLastAssistant={m.id === lastAssistantId}
+        onRegenerate={m.id === lastAssistantId ? handleResend : undefined}
+        // Retry resends the LAST exchange, so only the last reply may offer
+        // it: on an older error bubble it deleted the latest answer and
+        // resent the wrong question.
+        onRetry={m.finishReason === 'error' && m.id === lastAssistantId ? handleResend : undefined}
+        resendDisabledReason={sendBlockedReason}
+        highlight={searchQuery || undefined}
+        isActiveMatch={i === activeMatchIndex}
+      />
+    ),
+    [listedModelName, lastAssistantId, handleResend, sendBlockedReason, searchQuery, activeMatchIndex],
   )
 
   const streamFooter = useMemo(
@@ -608,12 +626,9 @@ export default function AITab() {
           )}
 
           {activeThread && (doc || contextBlockId) && (
-            <ChatContextBar
+            <SelectionContextBar
               contextBlockId={contextBlockId}
-              blockName={selectedBlock?.name}
-              blockType={selectedBlock?.rawType}
               onClearBlock={clearBlockScope}
-              selectedBlockId={selectedBlockId}
               onFocusBlock={setThreadContextBlock}
               files={sourceFiles}
               selectedFiles={selectedSourceFiles}
@@ -680,11 +695,10 @@ export default function AITab() {
                       onSelect={onSelectPrompt}
                       disabledReason={sendBlockedReason}
                     />
-                    <PromptTemplates
+                    <SelectionPromptTemplates
                       onSelect={onSelectPrompt}
                       hasBlock={!!contextBlockId}
                       flowName={doc?.name}
-                      blockName={selectedBlock?.name}
                       disabledReason={sendBlockedReason}
                     />
                   </div>
@@ -695,21 +709,7 @@ export default function AITab() {
                 <ChatMessageList
                   key={activeThread.id}
                   messages={activeThreadMessages}
-                  renderMessage={(i, m) => (
-                    <MessageBubble
-                      message={m}
-                      modelLabel={listedModelName(m)}
-                      isLastAssistant={m.id === lastAssistantId}
-                      onRegenerate={m.id === lastAssistantId ? handleResend : undefined}
-                      // Retry resends the LAST exchange, so only the last
-                      // reply may offer it: on an older error bubble it
-                      // deleted the latest answer and resent the wrong question.
-                      onRetry={m.finishReason === 'error' && m.id === lastAssistantId ? handleResend : undefined}
-                      resendDisabledReason={sendBlockedReason}
-                      highlight={searchQuery || undefined}
-                      isActiveMatch={i === activeMatchIndex}
-                    />
-                  )}
+                  renderMessage={renderMessage}
                   footer={streamFooter}
                   isStreaming={isCurrentThreadStreaming}
                   scrollTo={scrollTo}
@@ -769,4 +769,28 @@ export default function AITab() {
       {main}
     </>
   )
+}
+
+// The two controls that name the selected block subscribe to the canvas
+// selection themselves (useSelectedBlock), so a selection change re-renders
+// only them, not the panel above.
+type ContextBarProps = ComponentProps<typeof ChatContextBar>
+
+function SelectionContextBar(props: Omit<ContextBarProps, 'blockName' | 'blockType' | 'selectedBlockId'>) {
+  const {selectedBlockId, selectedBlock} = useSelectedBlock()
+  return (
+    <ChatContextBar
+      {...props}
+      blockName={selectedBlock?.name}
+      blockType={selectedBlock?.rawType}
+      selectedBlockId={selectedBlockId}
+    />
+  )
+}
+
+type PromptTemplatesProps = ComponentProps<typeof PromptTemplates>
+
+function SelectionPromptTemplates(props: Omit<PromptTemplatesProps, 'blockName'>) {
+  const {selectedBlock} = useSelectedBlock()
+  return <PromptTemplates {...props} blockName={selectedBlock?.name} />
 }

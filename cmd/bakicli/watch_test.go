@@ -13,12 +13,10 @@ func TestMtimesChanged(t *testing.T) {
 	if mtimesChanged(a, b) {
 		t.Error("identical maps should not be 'changed'")
 	}
-	// Different mtime on one file → changed.
 	b["f1"] = time.Unix(1000, 0)
 	if !mtimesChanged(a, b) {
 		t.Error("a changed mtime must be detected")
 	}
-	// Different file set → changed.
 	c := map[string]time.Time{"f1": {}, "f3": {}}
 	if !mtimesChanged(a, c) {
 		t.Error("a changed file set must be detected")
@@ -44,7 +42,6 @@ func TestSnapshotMt_DetectsMissingAndChanged(t *testing.T) {
 		t.Error("missing file should snapshot to zero time")
 	}
 
-	// Bump mtime into the future; snapshot must reflect the new value.
 	future := mt1.Add(2 * time.Second)
 	if err := os.Chtimes(f1, future, future); err != nil {
 		t.Fatal(err)

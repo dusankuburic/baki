@@ -7,74 +7,46 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
-	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/ai/scrubber"
 	"pad-core/cache"
 	"pad-core/logger"
 	"pad-core/models"
 )
 
-// maxChatContextCache bounds the cached scrubbed-context entries. Each entry
-// holds a scrubbed (redacted) flow clone plus the built system/context text;
-// the cost is dominated by the deep clone + per-block scrub walk + token
-// estimation in BuildContext, none of which change across consecutive turns in
-// the same thread. A small per-scope bound covers a few concurrent threads.
+// maxChatContextCache bounds the cached per-turn context entries (one per scope/flow/generation/block/prompt/provider/model/report/sources combination).
 const maxChatContextCache = 32
 
-// maxChatCtxGen bounds the per-flow generation-counter cache (see chatCtxGen).
-// Larger than maxChatContextCache: counters are a few bytes each (vs. a whole
-// scrubbed document+context), so keeping more of them further reduces the
-// already-negligible chance that a generation number gets reused while a
-// stale chatCtxCache entry keyed with that same number is still resident.
+// maxScrubbedDocCache bounds the scrubbed clones the entries share, keyed by (scope, flow, generation) — one per flow.
+const maxScrubbedDocCache = 4
+
+// maxCachedScrubbedBlocks is the largest clone the doc cache holds; a bigger flow is re-scrubbed per turn.
+const maxCachedScrubbedBlocks = 40_000
+
+// maxChatCtxGen bounds the per-flow generation-counter cache — larger than maxChatContextCache (counters are bytes).
 const maxChatCtxGen = 256
 
-// ragGuidelinesDeadline caps how long the streaming chat path waits for RAG
-// knowledge-base guidelines before first token. RAG issues a synchronous
-// embedding API call + vector query; on a slow embedding provider this would
-// otherwise gate the whole turn. On timeout the turn proceeds without
-// guidelines (skip-on-timeout) rather than stalling the user.
+// ragGuidelinesDeadline caps the streaming path's wait for RAG guidelines; on timeout the turn proceeds without.
 const ragGuidelinesDeadline = 800 * time.Millisecond
 
-// ragGuidelinesTokenCap bounds the guidelines block appended to the system
-// prompt: the assembly emits up to 5 retrieved chunks (~1.5k tokens) and a
-// verbose knowledge base could crowd the prompt's own budget. Truncation cuts
-// from the tail (whole guidelines first, then per-chunk), keeping the header
-// and the highest-ranked chunks intact.
+// ragGuidelinesTokenCap bounds the guidelines block (tail-truncated, keeping the header and top chunks).
 const ragGuidelinesTokenCap = 1200
 
-// contextReserve is the number of tokens kept free for the prompt/context when
-// clamping a caller-supplied MaxTokens against the model's context window.
-// On a small window it is scaled down (outputBackstop, truncationReserve).
+// contextReserve is the tokens kept free for the prompt/context when clamping MaxTokens; scaled down on a small window.
 const contextReserve = 4000
 
-// outputBackstop is the most max tokens normalizeChatParams lets a request ask
-// of a ctxLimit-token window whatever the model's output ceiling: the window
-// less contextReserve kept for the prompt — at most half the window, so a
-// small one keeps room for an answer. A flat contextReserve took all of a
-// small window: an Azure AI Foundry registry entry's window override (the
-// form allows 1024 tokens and up) or a local server's 2k–8k context was
-// capped at 0 (the provider's own default then went out) or a few dozen
-// tokens, and the truncation refused every turn. From 8000 tokens up it is
-// ctxLimit-contextReserve, as it always was.
+// outputBackstop is the most max tokens a request may ask of a ctxLimit window: window less min(contextReserve, half the window).
 func outputBackstop(ctxLimit int) int {
 	return ctxLimit - min(contextReserve, ctxLimit/2)
 }
 
-// truncationReserve is the room truncateForContextWindow keeps free beside
-// the prompt of a request whose completion cap is maxTokens: the larger of
-// the cap itself (providers reject prompt + max_tokens > window) and
-// contextReserve, the estimate's margin — a quarter of the window when that
-// is less. An unset cap reserves contextReserve on every window: the provider
-// then sends its own default (maxOutputTokens: 4096 on most), which has to
-// fit beside the prompt too; turnGenerationParams sets the cap explicitly on
-// a window that small (outputBackstop below the default). From 16000 tokens
-// up it is max(contextReserve, maxTokens), as it always was.
+// truncationReserve is the room truncateForContextWindow keeps free beside the prompt.
 func truncationReserve(ctxLimit, maxTokens int) int {
 	if maxTokens <= 0 {
 		return contextReserve
@@ -82,26 +54,10 @@ func truncationReserve(ctxLimit, maxTokens int) int {
 	return max(min(contextReserve, ctxLimit/4), maxTokens)
 }
 
-// exactCountBandPercent is the share of the window (in percent) above which
-// truncateForContextWindow has a prompt's ESTIMATE (plus the reserve)
-// re-checked by the provider's own tokenizer (F-47). The cl100k estimate
-// undercounts Claude 4.7+/Fable/Mythos prompts by ~30 %, so an estimate at
-// 70 % of the window can already be over it by the exact count, and one
-// below cannot — which keeps the count call (a network round trip) off every
-// mid-size turn.
+// exactCountBandPercent: above this share of the window, the estimate (+ reserve) is re-checked by the provider's tokenizer.
 const exactCountBandPercent = 70
 
-// normalizeChatParams clamps caller-supplied generation params into safe ranges
-// so an out-of-range value can't reach the provider (some reject Temperature
-// outside [0,2] or a MaxTokens above the model's limits with a 400). It is pure
-// so it can be unit-tested independently of provider wiring.
-//
-// maxTokens is an *output* cap, so it must be bounded by the model's output
-// ceiling (maxOutput) — not the input context window. We still keep the older
-// window guard (outputBackstop: ctxLimit-contextReserve, at most half a small
-// window) as a backstop for models whose output ceiling is unknown
-// (maxOutput == 0). A value of 0 for either limit means "unknown" and that
-// particular clamp is skipped.
+// normalizeChatParams clamps generation params; maxTokens bounded by maxOutput, with outputBackstop when the ceiling is unknown.
 func normalizeChatParams(temperature float64, maxTokens, ctxLimit, maxOutput int) (float64, int) {
 	if temperature < 0 {
 		temperature = 0
@@ -115,9 +71,7 @@ func normalizeChatParams(temperature float64, maxTokens, ctxLimit, maxOutput int
 	if maxOutput > 0 && maxTokens > maxOutput {
 		maxTokens = maxOutput
 	}
-	// Backstop: never let MaxTokens approach the input window (only meaningful
-	// when the output ceiling is unknown, but harmless otherwise). Positive
-	// for every positive window.
+	// Backstop: never let MaxTokens approach the input window when the ceiling is unknown.
 	if ctxLimit > 0 {
 		if cap := outputBackstop(ctxLimit); maxTokens > cap {
 			maxTokens = cap
@@ -126,23 +80,38 @@ func normalizeChatParams(temperature float64, maxTokens, ctxLimit, maxOutput int
 	return temperature, maxTokens
 }
 
-// newChatContextCache builds the bounded LRU for scrubbed-context memoisation.
-// size > 0 ⇒ the constructor error is impossible, so it is swallowed.
-func newChatContextCache() cache.Cache {
-	c, _ := cache.NewLRUCache(maxChatContextCache)
-	return c
+// chatContextCache is the two-level memo: per-turn text entries plus the scrubbed clones they point into.
+type chatContextCache struct {
+	texts cache.Cache
+	docs  cache.Cache
 }
 
-// newChatCtxGenCache builds the bounded LRU for the per-flow generation
-// counters. size > 0 ⇒ the constructor error is impossible, so it is swallowed.
+func (c *chatContextCache) Get(ctx context.Context, key string) (any, bool) {
+	return c.texts.Get(ctx, key)
+}
+
+func (c *chatContextCache) Set(ctx context.Context, key string, value any, ttl time.Duration) {
+	c.texts.Set(ctx, key, value, ttl)
+}
+
+func (c *chatContextCache) Delete(ctx context.Context, key string) {
+	c.texts.Delete(ctx, key)
+}
+
+// newChatContextCache builds the bounded LRUs; size > 0 ⇒ constructor errors are impossible.
+func newChatContextCache() cache.Cache {
+	texts, _ := cache.NewLRUCache(maxChatContextCache)
+	docs, _ := cache.NewLRUCache(maxScrubbedDocCache)
+	return &chatContextCache{texts: texts, docs: docs}
+}
+
+// newChatCtxGenCache builds the bounded LRU for the per-flow generation counters.
 func newChatCtxGenCache() cache.Cache {
 	c, _ := cache.NewLRUCache(maxChatCtxGen)
 	return c
 }
 
-// chatCtxGenCache lazily initializes chatCtxGen on first use, so a ChatService
-// built as a bare struct literal (common in tests) still gets a working bounded
-// cache instead of a nil interface.
+// chatCtxGenCache lazily initializes chatCtxGen, so a bare struct literal (tests) still works.
 func (s *ChatService) chatCtxGenCache() cache.Cache {
 	s.chatCtxGenOnce.Do(func() {
 		if s.chatCtxGen == nil {
@@ -152,18 +121,14 @@ func (s *ChatService) chatCtxGenCache() cache.Cache {
 	return s.chatCtxGen
 }
 
-// InvalidateChatContext drops any cached scrubbed context for a flow. Call on
-// in-place content updates (mirrors FlowService.InvalidateSearchIndex). It
-// bumps a per-flow generation counter rather than enumerating keys; stale
-// entries become unreachable (different key) and age out via the LRU bound.
+// InvalidateChatContext drops cached scrubbed context for a flow by bumping a per-flow generation counter.
 func (s *ChatService) InvalidateChatContext(flowID string) {
 	if s.chatCtxCache == nil {
 		return
 	}
 	genCache := s.chatCtxGenCache()
 	ctx := context.Background()
-	// Serialize the read-modify-write so two concurrent invalidations can't
-	// both read gen=N and both write N+1 (losing an increment → stale context).
+	// Serialize the read-modify-write so two concurrent invalidations can't both write N+1 (stale context).
 	s.chatCtxGenMu.Lock()
 	defer s.chatCtxGenMu.Unlock()
 	gen := uint64(0)
@@ -173,47 +138,31 @@ func (s *ChatService) InvalidateChatContext(flowID string) {
 	genCache.Set(ctx, flowID, gen+1, 0)
 }
 
-// chatContextKey builds the cache key for a turn's scrubbed context. It mixes
-// every input to the turn-invariant core of buildScrubbedContext: the owning
-// scope (authz isolation), the flow's edit-generation, the selected block /
-// system-prompt suffix, the provider+model (token math differs), and a cheap
-// fingerprint of the analysis report (regenerated → GeneratedAt moves).
-func (s *ChatService) chatContextKey(scope, flowID string, req models.ChatRequest, providerID, model string, report *models.AnalysisReport, sourceFP string) string {
-	gen := uint64(0)
+// chatCtxGeneration is the flow's current edit generation: 0 until first bumped.
+func (s *ChatService) chatCtxGeneration(flowID string) uint64 {
 	if v, ok := s.chatCtxGenCache().Get(context.Background(), flowID); ok {
-		gen = v.(uint64)
+		return v.(uint64)
 	}
+	return 0
+}
+
+// chatContextKeyAt is chatContextKey for a generation the caller already read.
+func (s *ChatService) chatContextKeyAt(scope, flowID string, gen uint64, req models.ChatRequest, providerID, model string, report *models.AnalysisReport, sourceFP string) string {
 	reportFP := ""
 	if report != nil {
 		reportFP = fmt.Sprintf("%d-%d", report.GeneratedAt.UnixNano(), len(report.Findings))
 	}
-	// sourceFP (selected source files + their size/mtime, precomputed where
-	// the doc's directory is known) keys a selection AND any on-disk change to
-	// it — see sourceFilesFingerprint.
-	// ExcludeContext changes what computeContextCore produces (it gates both the
-	// SelectedBlock and RawSourceFiles context injection), so it MUST be in the
-	// key — otherwise a free-form turn caches a source/block-less contextText
-	// that a later context-bearing turn (same key) would reuse.
+	// sourceFP keys a source selection AND any on-disk change to it; ExcludeContext MUST be in the key.
 	exclude := fmt.Sprintf("%t", req.ExcludeContext)
-	// req.SystemPrompt holds the MERGED suffix (settings + request, see
-	// cachedContextCore), which is what reaches the prompt — so editing the
-	// custom-instructions setting cannot serve a context built under the old
-	// instructions.
+	// req.SystemPrompt holds the MERGED suffix (settings + request), so editing the setting cannot serve a stale context.
 	return strings.Join([]string{
 		scope, flowID, fmt.Sprintf("%d", gen),
 		req.ContextBlockID, req.SystemPrompt, providerID, model, reportFP, sourceFP, exclude,
 	}, "|")
 }
 
-// sourceFilesFingerprint reduces the selected-source-files list to a stable
-// cache-key fragment (sorted names joined by ";"). Contents aren't hashed — a
-// flow reload bumps the per-flow generation in the key, covering on-disk edits.
-// sourceFilesFingerprint reduces the selection to a stable cache key. Names
-// alone under-keyed it: a secondary source file edited ON DISK (without a
-// main-flow reload bumping the generation counter) re-served the cached raw
-// copy until the flow itself changed — so the fingerprint now folds in each
-// file's size+mtime. Stat failures degrade to the name alone (the file is
-// unreadable anyway, so computeContextCore's read will skip it).
+// sourceFilesFingerprint reduces the selected-files list to a stable key fragment:
+// name folded with size+mtime (names alone under-keyed it). Stat failure degrades to the name.
 func sourceFilesFingerprint(dir string, files []string) string {
 	if len(files) == 0 {
 		return ""
@@ -222,8 +171,7 @@ func sourceFilesFingerprint(dir string, files []string) string {
 	copy(cp, files)
 	sort.Strings(cp)
 	for i, name := range cp {
-		// Names are RELATIVE to the flow's directory (ReadSourceFiles joins
-		// them there); stat against the same base or every lookup misses.
+		// Names are RELATIVE to the flow's directory (ReadSourceFiles joins them there); stat against the same base.
 		if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
 			cp[i] = fmt.Sprintf("%s:%d:%d", name, info.Size(), info.ModTime().UnixNano())
 		}
@@ -231,46 +179,67 @@ func sourceFilesFingerprint(dir string, files []string) string {
 	return strings.Join(cp, ";")
 }
 
-// chatContextValue is the cached payload: the redacted flow clone plus the
-// pre-RAG system prompt and context text. RAG depends on the per-turn user
-// message and is appended after the cache lookup (see buildScrubbedContext).
-// The scrubbed document is treated as read-only by all downstream consumers
-// (BuildContext, the tool loop), so sharing one clone across turns is safe.
+// contextScrub is the scrub applied to a cached context's system prompt and context text (tests count it).
+var contextScrub = scrubber.ScrubText
+
+// scrubDocument is the redacting deep clone of the flow (tests count it).
+var scrubDocument = scrubber.ScrubDocument
+
+// scrubSourceText is the AST scrub of a selected source file (tests measure what it is handed).
+var scrubSourceText = scrubber.ScrubSourceText
+
+// chatContextValue is what a turn gets: the redacted clone (read-only downstream, safe to share) plus the pre-scrubbed texts.
 type chatContextValue struct {
 	scrubbedDoc *models.FlowDocument
 	sysPrompt   string
 	contextText string
 }
 
-// buildScrubbedContext scrubs the document, builds the system prompt and
-// context text, looks up the turn's RAG knowledge-base guidelines, and scrubs
-// all three strings. It also returns the scrubbed document so the caller can
-// hand it to the tool loop. Shared with PreviewContext so the two
-// context-preparation paths cannot drift apart. The guidelines are returned
-// separately: they belong to the final user message (buildMessages), not the
-// system prompt, which must stay byte-stable across turns for the providers'
-// automatic prompt caching (PERF-8).
-//
-// This is the SYNCHRONOUS path (RAG blocks). The streaming worker instead uses
-// cachedContextCore + a concurrent, deadline-bounded ragGuidelines call so a
-// slow embedding provider cannot gate first token (C-3).
+// chatContextEntry is the cached texts only — a strong pointer here let 32 entries pin 32 clones.
+type chatContextEntry struct {
+	sysPrompt   string
+	contextText string
+}
+
+// scrubbedDocKey keys the doc cache: scope, flow and edit generation.
+func scrubbedDocKey(scope, flowID string, gen uint64) string {
+	return scope + "|" + flowID + "|" + strconv.FormatUint(gen, 10)
+}
+
+// scrubbedDocFor returns the flow's scrubbed clone for gen, cached when within maxCachedScrubbedBlocks.
+func (s *ChatService) scrubbedDocFor(ctx context.Context, scope string, doc *models.FlowDocument, gen uint64) *models.FlowDocument {
+	cc, twoLevel := s.chatCtxCache.(*chatContextCache)
+	key := scrubbedDocKey(scope, doc.ID, gen)
+	if twoLevel {
+		if v, ok := cc.docs.Get(ctx, key); ok {
+			return v.(*models.FlowDocument)
+		}
+	}
+	sd := scrubOrSelf(doc)
+	if twoLevel && len(sd.BlocksByID) <= maxCachedScrubbedBlocks {
+		cc.docs.Set(ctx, key, sd, 0)
+	}
+	return sd
+}
+
+// scrubOrSelf folds scrubDocument's failure into the unscrubbed document (per-string ScrubText still redacts output).
+func scrubOrSelf(doc *models.FlowDocument) *models.FlowDocument {
+	sd, err := scrubDocument(doc)
+	if err != nil {
+		logger.Error("Failed to scrub document", "error", err)
+		return doc
+	}
+	return sd
+}
+
+// buildScrubbedContext is the SYNCHRONOUS path (shared with PreviewContext); guidelines belong to the user message, never the byte-stable system prompt.
 func (s *ChatService) buildScrubbedContext(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (scrubbedDoc *models.FlowDocument, sysPrompt, contextText, guidelines string) {
 	cv := s.cachedContextCore(ctx, scope, provider, doc, report, req)
 	guidelines = s.ragGuidelines(ctx, scope, doc, req.UserMessage)
-	return cv.scrubbedDoc, scrubber.ScrubText(cv.sysPrompt), scrubber.ScrubText(cv.contextText), scrubber.ScrubText(guidelines)
+	return cv.scrubbedDoc, cv.sysPrompt, cv.contextText, scrubber.ScrubText(guidelines)
 }
 
-// ragGuidelines returns the RAG knowledge-base guidelines for a turn, or "" if
-// the knowledge service is unset, the flow has no org, or the search fails. The
-// caller controls the deadline via the passed context (the streaming worker
-// uses a short timeout so a slow embedding provider skips guidelines for the
-// turn instead of stalling first token).
-//
-// S2: org-scoped knowledge requires org MEMBERSHIP. A user can hold access to
-// an org-owned flow through collaboration without being an org member (the
-// flows policy allows it) — the knowledge REST API would refuse them
-// (requireMember), but this chat path is RLS-exempt, so the gate is explicit
-// here. Fails closed: no membership proof, no guidelines.
+// ragGuidelines returns the turn's KB guidelines or "": this RLS-exempt path gates org knowledge on MEMBERSHIP, fail closed.
 func (s *ChatService) ragGuidelines(ctx context.Context, scope string, doc *models.FlowDocument, userMessage string) string {
 	if s.knowledge == nil || doc == nil || doc.OrganizationID == "" {
 		return ""
@@ -299,43 +268,19 @@ func (s *ChatService) ragGuidelines(ctx context.Context, scope string, doc *mode
 	return guidelines
 }
 
-// isOrgMember reports whether userID is a member of orgID, per the backend's
-// org store. scope is the caller's identity ("" in local mode, where orgs
-// don't exist — and an org-owned flow can't be open — so the empty case fails
-// closed without a store round-trip). A store error also fails closed: a
-// missing membership proof must never widen knowledge access.
-//
-// The lookup is a local narrow interface (not part of chatStore) so the
-// chat-store surface stays minimal: both real backends satisfy it, and any
-// test stub without it simply fails closed.
+// isOrgMember reports org membership; "" and store errors fail closed — a missing proof must never widen knowledge access.
 func (s *ChatService) isOrgMember(ctx context.Context, orgID, userID string) bool {
-	if s.backend == nil || orgID == "" || userID == "" {
-		return false
-	}
-	orgs, ok := s.backend.(interface {
-		ListOrgsForUser(ctx context.Context, userID string) ([]*interfaces.Organisation, error)
-	})
-	if !ok {
-		return false
-	}
-	list, err := orgs.ListOrgsForUser(ctx, userID)
+	_, ok, err := s.orgRoleCached(ctx, orgID, userID)
 	if err != nil {
 		logger.Warn("rag guidelines: org membership lookup failed; skipping guidelines", "error", err)
 		return false
 	}
-	for _, o := range list {
-		if o != nil && o.ID == orgID {
-			return true
-		}
-	}
-	return false
+	return ok
 }
 
-// orgRole returns userID's role in orgID per the backend's org store (the
-// same narrow lookup as isOrgMember, whose rows carry the members); ok is
-// false outside the org, in local mode, and on a store error (fail closed).
+// orgRole returns userID's role in orgID; ok is false outside the org, in local mode and on a store error.
 func (s *ChatService) orgRole(ctx context.Context, orgID, userID string) (role auth.Role, ok bool) {
-	role, ok, err := s.lookupOrgRole(ctx, orgID, userID)
+	role, ok, err := s.orgRoleCached(ctx, orgID, userID)
 	if err != nil {
 		logger.Warn("chat: org role lookup failed; not using the org's shared credential", "error", err)
 		return "", false
@@ -343,42 +288,7 @@ func (s *ChatService) orgRole(ctx context.Context, orgID, userID string) (role a
 	return role, ok
 }
 
-// lookupOrgRole is orgRole with a failed store read reported as err instead
-// of folded into "not a member": ok is false outside the org, in local mode
-// and on a backend without the org store.
-func (s *ChatService) lookupOrgRole(ctx context.Context, orgID, userID string) (role auth.Role, ok bool, err error) {
-	if s.backend == nil || orgID == "" || userID == "" {
-		return "", false, nil
-	}
-	orgs, isLister := s.backend.(interface {
-		ListOrgsForUser(ctx context.Context, userID string) ([]*interfaces.Organisation, error)
-	})
-	if !isLister {
-		return "", false, nil
-	}
-	list, err := orgs.ListOrgsForUser(ctx, userID)
-	if err != nil {
-		return "", false, err
-	}
-	for _, o := range list {
-		if o == nil || o.ID != orgID {
-			continue
-		}
-		for _, m := range o.Members {
-			if m.UserID == userID {
-				return m.Role, true, nil
-			}
-		}
-	}
-	return "", false, nil
-}
-
-// credentialOrg is the organisation whose shared credential (G7) the caller
-// may fall back to on a flow owned by orgID: orgID itself when the caller is
-// one of its admins or members (service.OrgRoleUsesSharedCredential), else
-// "" — their own credential only. Flow access alone is not enough: a
-// collaborator granted one flow, a removed member who still owns org flows,
-// a viewer or a guest must not spend what an admin lent the members.
+// credentialOrg is the org whose shared credential the caller may fall back to: admin/member only.
 func (s *ChatService) credentialOrg(ctx context.Context, orgID, scope string) string {
 	if orgID == "" {
 		return ""
@@ -389,18 +299,12 @@ func (s *ChatService) credentialOrg(ctx context.Context, orgID, scope string) st
 	return ""
 }
 
-// registryCredentialOrg is credentialOrg for the Azure AI Foundry model
-// registry's resolution (resolveAzureModel), where failing closed to "" is
-// not neutral: the organisation's entries are then never consulted, and one
-// of them reads as removed (ErrModelNotAvailable — the client marks the
-// model "Removed" and may re-pin the thread). A store failure is therefore
-// returned, never folded into "not a member"; a caller who is not one of the
-// org's admins or members is still "", nil.
+// registryCredentialOrg is credentialOrg for registry resolution, where a store error is returned, not folded into "".
 func (s *ChatService) registryCredentialOrg(ctx context.Context, orgID, scope string) (string, error) {
 	if orgID == "" {
 		return "", nil
 	}
-	role, ok, err := s.lookupOrgRole(ctx, orgID, scope)
+	role, ok, err := s.orgRoleCached(ctx, orgID, scope)
 	if err != nil {
 		return "", fmt.Errorf("look up the caller's role in the flow's organisation: %w", err)
 	}
@@ -410,41 +314,40 @@ func (s *ChatService) registryCredentialOrg(ctx context.Context, orgID, scope st
 	return "", nil
 }
 
-// cachedContextCore returns the memoised scrub+BuildContext result, computing
-// and storing it on a miss. The cache is bypassed when there is no document
-// (nothing to key on) or when the cache is unset (e.g. a test-built service).
+// cachedContextCore returns the memoised scrub+BuildContext result; bypassed with no document or no cache.
 func (s *ChatService) cachedContextCore(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) chatContextValue {
-	// Resolve the caller's custom instructions once, here where the request
-	// context (and so the caller) is known; the key and the computation below
-	// both read the merged value from req.SystemPrompt.
+	// Resolve the caller's custom instructions once, here where the caller is known.
 	req.SystemPrompt = s.systemPromptSuffix(ctx, req)
 	if s.chatCtxCache == nil || doc == nil {
 		return s.computeContextCore(provider, doc, report, req)
 	}
-	key := s.chatContextKey(scope, doc.ID, req, provider.ID(), req.Model, report,
+	// One generation read for both keys: the entry and the clone it points into must agree.
+	gen := s.chatCtxGeneration(doc.ID)
+	key := s.chatContextKeyAt(scope, doc.ID, gen, req, provider.ID(), req.Model, report,
 		sourceFilesFingerprint(filepath.Dir(doc.FilePath), req.SelectedSourceFiles))
 	if v, ok := s.chatCtxCache.Get(ctx, key); ok {
-		return v.(chatContextValue)
+		// The texts are memoised; the clone comes from the doc cache, never the entry.
+		e := v.(chatContextEntry)
+		return chatContextValue{scrubbedDoc: s.scrubbedDocFor(ctx, scope, doc, gen), sysPrompt: e.sysPrompt, contextText: e.contextText}
 	}
-	cv := s.computeContextCore(provider, doc, report, req)
-	s.chatCtxCache.Set(ctx, key, cv, 0)
+	sd := s.scrubbedDocFor(ctx, scope, doc, gen)
+	cv := s.computeContextCoreWith(provider, doc, sd, report, req)
+	s.chatCtxCache.Set(ctx, key, chatContextEntry{sysPrompt: cv.sysPrompt, contextText: cv.contextText}, 0)
 	return cv
 }
 
-// computeContextCore is the uncached scrub+BuildContext path — the expensive
-// per-block work that is identical across consecutive turns in a thread.
+// computeContextCore is the uncached scrub+BuildContext path — expensive per-block work identical across turns.
 func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) chatContextValue {
-	scrubbedDoc, err := scrubber.ScrubDocument(doc)
-	if err != nil {
-		// Fall back to the unscrubbed doc rather than failing the request; the
-		// per-string ScrubText calls below still redact obvious secrets in output.
-		logger.Error("Failed to scrub document", "error", err)
-		scrubbedDoc = doc
+	var scrubbedDoc *models.FlowDocument
+	if doc != nil {
+		scrubbedDoc = scrubOrSelf(doc)
 	}
+	return s.computeContextCoreWith(provider, doc, scrubbedDoc, report, req)
+}
 
-	// Read the per-provider context token budget from settings instead of
-	// hardcoding 4000. Falls back to 4000 if unset/zero (the default in
-	// DefaultSettings matches, so this is backward-compatible).
+// computeContextCoreWith is computeContextCore for a clone already scrubbed (shared via the doc cache).
+func (s *ChatService) computeContextCoreWith(provider ai.Provider, doc, scrubbedDoc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) chatContextValue {
+	// Per-provider context token budget from settings, falling back to 4000 (matches DefaultSettings).
 	tokenBudget := 4000
 	if s.settings != nil {
 		if appSettings := s.settings.Get(); appSettings != nil {
@@ -463,60 +366,28 @@ func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowD
 	if report != nil {
 		ctxReq.Findings = report.Findings
 	}
-	// Context injection (selected block + source files) is gated on
-	// !ExcludeContext. Note: ContextBlockID is ALSO the conversation-history
-	// key (see reconstructHistory), so it is always present on the request even
-	// for a free-form turn — only the context INJECTION is skipped here.
+	// Injection is gated on !ExcludeContext; ContextBlockID is ALSO the history key, so it stays present.
 	if !req.ExcludeContext && req.ContextBlockID != "" && scrubbedDoc != nil && scrubbedDoc.BlocksByID != nil {
 		ctxReq.SelectedBlock = scrubbedDoc.BlocksByID[req.ContextBlockID]
 		ctxReq.SelectedSubflow = scrubbedDoc.BlockSubflow[req.ContextBlockID]
 	}
-	// C-10: honour the client's selected source files. Previously the field was
-	// collected and sent but never wired in, so the picker did nothing. Read the
-	// file contents here (desktop/local mode only — cloud flows have no on-disk
-	// sources); the result is cached at the chatContextCore layer keyed on the
-	// selection fingerprint, so this disk I/O happens once per selection per
-	// flow generation, not per turn. ExcludeContext skips the sources along with
-	// the rest of context.
-	//
-	// doc.FilePath != "" confines reads to the opened flow's directory and rules
-	// out cloud mode (where FilePath is empty and dir would resolve to ".",
-	// letting a hand-crafted request read arbitrary server files).
-	//
-	// S1: each file is AST-scrubbed with ScrubSourceText before injection. The
-	// trailing ScrubText over the assembled context is regex-only and PAD's
-	// `SET Password TO $'''secret'''` / `Text: $'''secret'''` syntax matches no
-	// key=value pattern — raw disk bytes used to reach the model verbatim,
-	// bypassing the property-name masking the document path gets.
+	// Selected source files (desktop only). AST-scrubbed — the regex pass misses PAD password syntax — and byte-bounded.
 	if !req.ExcludeContext && len(req.SelectedSourceFiles) > 0 && s.flowCache != nil && doc != nil && doc.FilePath != "" {
 		if sources, sErr := s.flowCache.ReadSourceFiles(doc, req.SelectedSourceFiles); sErr == nil && len(sources) > 0 {
 			for name, content := range sources {
-				sources[name] = scrubber.ScrubSourceText(content)
+				sources[name] = scrubSourceText(ai.BoundSourceText(content, tokenBudget))
 			}
 			ctxReq.RawSourceFiles = sources
 		}
 	}
 
 	sysPrompt, contextText := ai.BuildContext(ctxReq)
-	return chatContextValue{scrubbedDoc: scrubbedDoc, sysPrompt: sysPrompt, contextText: contextText}
+	// Scrubbed here, once per cache entry: every reusing turn used to scrub both texts again.
+	return chatContextValue{scrubbedDoc: scrubbedDoc, sysPrompt: contextScrub(sysPrompt), contextText: contextScrub(contextText)}
 }
 
-// buildMessages assembles the provider message list: prior history (scrubbed)
-// followed by a single user turn. Flow context is merged INTO that user turn
-// rather than appended as a separate user message — two consecutive user-role
-// messages are rejected by many providers (400). ExcludeContext or empty
-// context skips the merge.
-//
-// History comes from the client or a saved conversation, so only the "user"
-// and "assistant" roles are passed on (historyRole); any other — "system",
-// "developer", "tool", anything unknown — is dropped. A client-supplied
-// system or developer message would otherwise reach OpenAI-compatible and
-// Claude models with operator authority over the app's own system prompt.
-// A history message whose scrubbed content is whitespace-only is dropped too
-// (F-10): an empty 'stop' answer persisted as an empty assistant message used
-// to be forwarded as {"role":"assistant","content":""}, which the Claude
-// Messages API rejects on every later turn of the thread.
-func buildMessages(req models.ChatRequest, contextText, guidelines string) []ai.Message {
+// buildScopedMessages assembles scrubbed history plus ONE user turn; only user/assistant roles pass.
+func buildScopedMessages(scope string, req models.ChatRequest, contextText, guidelines string) []ai.Message {
 	messages := make([]ai.Message, 0, len(req.Messages)+1)
 	for i, m := range req.Messages {
 		role, ok := historyRole(m.Role)
@@ -524,18 +395,17 @@ func buildMessages(req models.ChatRequest, contextText, guidelines string) []ai.
 			logger.Debug("chat: dropping a history message with a role history may not carry", "role", oneLineRole(m.Role), "index", i)
 			continue
 		}
-		content := scrubber.ScrubText(m.Content)
+		// Memoised (historyScrubs): the same stored messages come back every turn.
+		content := historyScrubs.scrubText(scope, m.Content)
 		if strings.TrimSpace(content) == "" {
 			logger.Debug("chat: dropping an empty history message", "role", role, "index", i)
 			continue
 		}
 		messages = append(messages, ai.Message{Role: role, Content: content})
 	}
-	userContent := scrubber.ScrubText(req.UserMessage)
-	// The per-turn RAG guidelines ride in the user turn (included regardless
-	// of ExcludeContext, as they always were) so the system prompt and the
-	// history prefix stay byte-identical across turns — the providers'
-	// automatic prompt cache covers everything before this message (PERF-8).
+	// Through the memo too: this question is the next turn's history.
+	userContent := historyScrubs.scrubText(scope, req.UserMessage)
+	// The RAG guidelines ride in the user turn so the prompt cache covers the byte-identical prefix.
 	if guidelines != "" {
 		userContent = guidelines + "\n\n" + userContent
 	}
@@ -545,9 +415,7 @@ func buildMessages(req models.ChatRequest, contextText, guidelines string) []ai.
 	return append(messages, ai.Message{Role: "user", Content: userContent})
 }
 
-// historyRole canonicalises a history message's role: "user" and
-// "assistant" (any case, surrounding space trimmed) pass; every other role
-// is refused.
+// historyRole canonicalises a history role: "user"/"assistant" (any case, trimmed) pass; others are refused.
 func historyRole(role string) (string, bool) {
 	switch r := strings.ToLower(strings.TrimSpace(role)); r {
 	case "user", "assistant":
@@ -571,20 +439,7 @@ func oneLineRole(role string) string {
 	return role
 }
 
-// promptTokenCeiling is a tokenizer-free upper bound on the prompt's token
-// count: every estimator in use (the cl100k BPE, or the rune heuristic, whose
-// CJK runes are three bytes each) yields at most one token per byte, so a
-// prompt whose byte count fits the window fits in tokens too and the tiktoken
-// pass — ~100 ms and ~50 MB of garbage per 400 KB, run again on every tool
-// iteration — can be skipped. The per-message and per-tool framing matches
-// truncateForContextWindow's own estimate.
-//
-// A message carrying a provider replay record (ProviderItems: encrypted
-// reasoning, hosted tool outputs) is re-sent verbatim, so the bound takes the
-// MAXIMUM of its content/ToolCalls bytes and the record's bytes — additive,
-// never substitutive (F-28). Base64 encrypted reasoning over-counts its true
-// context cost, which is the safe direction; the byte-bound invariant
-// (ceiling >= real tokens) must hold for the fast path to stay sound.
+// promptTokenCeiling is a tokenizer-free upper bound (estimators yield ≤ 1 token per byte).
 func promptTokenCeiling(req *ai.Request) int {
 	n := len(req.SystemPrompt)
 	for _, td := range req.Tools {
@@ -600,48 +455,43 @@ func promptTokenCeiling(req *ai.Request) int {
 	return n
 }
 
-// truncateForContextWindow estimates the total prompt tokens and, if the prompt
-// exceeds the model's context window, drops turns until it fits. If the prompt
-// still exceeds the limit after truncation (system prompt + the current turn
-// alone are too large), returns ErrContextLimit so the caller surfaces a clean
-// "conversation too long" message instead of a raw provider 400. Mutates
-// req.Messages in place.
-//
-// pin is the index of the CURRENT turn — the user message the caller built
-// for this request (history + merged flow context + question), which is never
-// dropped; an out-of-range pin means the last message. The returned int is
-// the pin's index in the truncated list, so a tool loop that appends its
-// exchanges after the turn can pass it back on the next iteration.
-//
-// Drop order: the oldest history turns before the pin first (the kept prefix
-// always starts with a user role, so no provider sees two consecutive user
-// turns), then the oldest exchange after the pin — an assistant message and
-// the results that answered it, as one unit, so a tool_result is never
-// separated from its tool_use (a 400). The previous form pinned messages[0]
-// instead: on the server-reconstructed path that is the thread's FIRST stored
-// question, and once the history between it and the current turn was gone
-// the "junction repair" deleted the current turn itself — the provider
-// re-answered the thread's first question, or received tool results for a
-// question it could no longer see.
-//
-// The reserve is the request's own completion cap when it exceeds the default
-// (providers reject prompt + max_tokens > window) — the default scaled down
-// on a small window (truncationReserve) — and the prompt is checked in bytes
-// first (promptTokenCeiling) so the common case never tokenises.
-//
-// A provider with its own tokenizer (ai.TokenCounter — Anthropic's free
-// count_tokens endpoint) re-checks whatever the estimate would send once that
-// estimate plus the reserve is above exactCountBandPercent of the window —
-// whether the estimate admitted the whole history or already dropped some of
-// it: the cl100k-based estimate undercounts Claude 4.7+/Fable/Mythos prompts
-// by ~30%, and near-window prompts (and trims sized by the estimate) were
-// sent only to be refused by the provider, every turn (F-47). A count that
-// says over scales the estimate's costs — the system prompt and tool schemas
-// included — to the count and drops again; a second count verifies the trim.
-// At most two count calls per truncation; any error falls back silently to
-// the estimate's verdict — the endpoint is optional, and truncation must
-// never fail a turn the estimate says fits.
+// truncateForContextWindow drops oldest turns until the prompt fits the window; the current turn (pin) is never dropped.
 func truncateForContextWindow(ctx context.Context, provider ai.Provider, req *ai.Request, ctxLimit int, pin int) (int, error) {
+	return truncateForContextWindowMemo(ctx, provider, req, ctxLimit, pin, nil)
+}
+
+// tokenMemo remembers EstimateTokens results across one turn's tool-loop iterations; nil consults tokenCounts.
+type tokenMemo struct {
+	m map[string]int
+}
+
+func newTokenMemo() *tokenMemo { return &tokenMemo{m: make(map[string]int)} }
+
+// estimate is provider.EstimateTokens(text), memoised.
+func (t *tokenMemo) estimate(provider ai.Provider, text string) int {
+	if t == nil {
+		return tokenCounts.estimate(provider, text)
+	}
+	if n, ok := t.m[text]; ok {
+		return n
+	}
+	n := tokenCounts.estimate(provider, text)
+	t.m[text] = n
+	return n
+}
+
+// estimateBytes is estimate for a byte slice; a hit converts without a copy.
+func (t *tokenMemo) estimateBytes(provider ai.Provider, b []byte) int {
+	if t != nil {
+		if n, ok := t.m[string(b)]; ok {
+			return n
+		}
+	}
+	return t.estimate(provider, string(b))
+}
+
+// truncateForContextWindowMemo is truncateForContextWindow with memoised estimates (nil: none).
+func truncateForContextWindowMemo(ctx context.Context, provider ai.Provider, req *ai.Request, ctxLimit int, pin int, memo *tokenMemo) (int, error) {
 	if ctxLimit <= 0 || len(req.Messages) == 0 {
 		return pin, nil // unknown limit — can't enforce; nothing to truncate
 	}
@@ -649,20 +499,13 @@ func truncateForContextWindow(ctx context.Context, provider ai.Provider, req *ai
 	if pin < 0 || pin >= len(msgs) {
 		pin = len(msgs) - 1 // the current turn is the last message the caller built
 	}
-	// One reserve for the byte bound, the estimate and the count below, so
-	// the fast paths stay exactly as sound as the drop loop.
+	// One reserve for byte bound, estimate and count — the fast paths stay as sound as the drop loop.
 	reserve := truncationReserve(ctxLimit, req.MaxTokens)
 	ceiling := promptTokenCeiling(req)
 	if ceiling+reserve <= (ctxLimit*4)/5 {
 		return pin, nil // fits in bytes with 20% margin, so it fits in tokens — no tiktoken pass, no count call
 	}
-	// Past the byte bound. While the bytes still fit the window (80–100% of
-	// it) every estimator yields at most one token per byte, so the ESTIMATE
-	// fits too and the drop loop below would be a no-op — only the provider's
-	// own tokenizer can overrule, and a provider without one keeps the fast
-	// path's verdict without a single estimate call (PERF-7). With one, the
-	// estimate — not the bytes, ~4× the tokens — decides whether the count is
-	// worth a round trip (nearWindow).
+	// Past the byte bound but within the window, every estimator yields ≤ 1 token per byte — only the provider's tokenizer overrules.
 	_, canCount := provider.(ai.TokenCounter)
 	if ceiling+reserve <= ctxLimit && !canCount {
 		return pin, nil
@@ -671,32 +514,20 @@ func truncateForContextWindow(ctx context.Context, provider ai.Provider, req *ai
 		return canCount && (estimate+reserve)*100 > ctxLimit*exactCountBandPercent
 	}
 
-	// Fixed component (system prompt + tool schemas) — constant across the
-	// drop loop, precomputed once (B1.4).
-	fixed := provider.EstimateTokens(req.SystemPrompt)
+	// Fixed component (system prompt + tool schemas) — constant across the drop loop.
+	fixed := memo.estimate(provider, req.SystemPrompt)
 	for _, td := range req.Tools {
-		fixed += provider.EstimateTokens(string(td.InputSchema)) + 8
+		fixed += memo.estimateBytes(provider, td.InputSchema) + 8
 	}
-	// Per-message costs + SUFFIX SUMS: suffix[i] = tokens of messages[i:].
-	// The old loop re-estimated every remaining message per drop — O(n²)
-	// token scanning in the per-turn hot path on long histories.
-	//
-	// A message carrying a provider replay record (ProviderItems) is re-sent
-	// verbatim, so it is bounded by the MAXIMUM of its content/ToolCalls
-	// estimate and the record's estimate — additive, never substitutive
-	// (F-28): a recorded Claude turn's text already lives in the record, but
-	// skipping the content side would double-discount Responses turns whose
-	// real context IS the record. Base64 encrypted reasoning over-counts,
-	// which is the safe direction.
+	// Per-message costs + suffix sums (the old loop was O(n²)); a replay record is bounded by the MAX of content and record estimate.
 	msgCost := func(m ai.Message) int {
-		// Per-message framing (~4 tokens) + each assistant tool_use's
-		// argument JSON verbatim (R4b undercount fix).
-		c := provider.EstimateTokens(m.Content) + 4
+		// Per-message framing (~4 tokens) + each tool_use's argument JSON verbatim.
+		c := memo.estimate(provider, m.Content) + 4
 		for _, tc := range m.ToolCalls {
-			c += provider.EstimateTokens(string(tc.Input))
+			c += memo.estimateBytes(provider, tc.Input)
 		}
 		if len(m.ProviderItems) > 0 {
-			c = max(c, provider.EstimateTokens(string(m.ProviderItems)))
+			c = max(c, memo.estimateBytes(provider, m.ProviderItems))
 		}
 		return c
 	}
@@ -705,13 +536,11 @@ func truncateForContextWindow(ctx context.Context, provider ai.Provider, req *ai
 		suffix[i] = suffix[i+1] + msgCost(msgs[i])
 	}
 	curCost := suffix[pin] - suffix[pin+1]
-	// keptEstimate is the unscaled estimate of the request that keeps history
-	// from b and post-turn exchanges from a.
+	// keptEstimate is the unscaled estimate of the request that keeps history from b and post-turn exchanges from a.
 	keptEstimate := func(b, a int) int {
 		return fixed + (suffix[b] - suffix[pin]) + curCost + suffix[a]
 	}
-	// keep sets req.Messages to that kept set. Nothing dropped leaves the
-	// caller's own slice in place (sameMessages compares identity).
+	// keep sets req.Messages to that kept set; nothing dropped leaves the caller's slice in place (identity-compared).
 	keep := func(b, a int) {
 		if b == 0 && a == pin+1 {
 			req.Messages = msgs
@@ -723,10 +552,7 @@ func truncateForContextWindow(ctx context.Context, provider ai.Provider, req *ai
 		kept = append(kept, msgs[a:]...)
 		req.Messages = kept
 	}
-	// drop runs the drop loop against the estimate's costs multiplied by
-	// scale (<= 1 keeps them as they are) — the per-message suffix sums AND
-	// the fixed part, rounded up so a scaled estimate never under-counts.
-	// b: first kept history index; a: first kept post-turn exchange index.
+	// drop runs the drop loop against the estimate's costs × scale (rounded up so it never under-counts).
 	drop := func(scale float64) (b, a int, ok bool) {
 		s, f := suffix, fixed
 		if scale > 1 {
@@ -761,22 +587,14 @@ func truncateForContextWindow(ctx context.Context, provider ai.Provider, req *ai
 	}
 	keep(b, a)
 	if est := keptEstimate(b, a); est > 0 && nearWindow(est) {
-		// Whatever the estimate would send — the whole history or its own
-		// trim — is inside the estimate's error band: the provider's
-		// tokenizer gets the last word before the prompt ships (F-47). Over
-		// → scale the costs to the count (the ~30% Claude undercount,
-		// whatever the true factor is) and drop against them.
+		// The estimate is inside its error band: the provider's tokenizer gets the last word (over → scale and drop again).
 		if n, has := countPromptTokens(ctx, provider, req); has && n+reserve > ctxLimit {
 			scale := float64(n) / float64(est)
 			if b, a, ok = drop(scale); !ok {
 				return pin, ai.ErrContextLimit
 			}
 			keep(b, a)
-			// Verify the trimmed request once more (the second and last count
-			// call): the scaled costs keep the estimate's shape, not the
-			// tokenizer's truth. Still over → tighten the scale to what the
-			// count says about the KEPT set and drop again, without further
-			// counting.
+			// Verify once more; still over → tighten the scale to the kept set and drop again, without further counting.
 			if n, has := countPromptTokens(ctx, provider, req); has && n+reserve > ctxLimit {
 				if est := keptEstimate(b, a); est > 0 {
 					if b2, a2, ok2 := drop(max(scale, float64(n)/float64(est))); ok2 && (b2 != b || a2 != a) {
@@ -790,12 +608,7 @@ func truncateForContextWindow(ctx context.Context, provider ai.Provider, req *ai
 	return pin - b, nil
 }
 
-// countPromptTokens asks the provider's own tokenizer (ai.TokenCounter, when
-// the provider exposes one) how many prompt tokens req consumes. ok is false
-// for providers without the capability, on any error, and for a non-positive
-// count: the caller falls back silently to its estimate (count_tokens is a
-// free but optional endpoint, and a counting problem must never fail a turn
-// the estimate says fits).
+// countPromptTokens asks the provider's tokenizer; a counting problem must never fail a turn.
 func countPromptTokens(ctx context.Context, provider ai.Provider, req *ai.Request) (tokens int, ok bool) {
 	counter, canCount := provider.(ai.TokenCounter)
 	if !canCount {
@@ -808,27 +621,12 @@ func countPromptTokens(ctx context.Context, provider ai.Provider, req *ai.Reques
 	return n, true
 }
 
-// PreviewContext returns what would be sent to the provider for a turn (system
-// prompt, context text, user message, and an estimated/limit token pair) without
-// actually issuing a chat call, so the UI can show the caller what's in-scope.
-// The estimate covers the system prompt + context + user message only — history
-// and tool schemas are added by the real turn. ContextLimit is the MODEL's
-// window (ai.ContextLimitFor: the listing entry, so a 1M-window deployment no
-// longer shows the provider-wide 128000 placeholder, and a learned narrower
-// window after a rejection shrinks it), matching what the turn truncates
-// against (F-29); the reserve is deliberately NOT folded in — the UI labels
-// the value as the model's window.
-//
-// Azure AI Foundry on the model registry resolves the model id exactly as the
-// turn does (resolveAzureModel): a model the caller can no longer use is
-// ErrModelNotAvailable (400 MODEL_NOT_AVAILABLE), and the window is the
-// resolved entry's on its own resource.
+// PreviewContext returns what would be sent for a turn without a chat call.
 func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (res *models.ContextPreview, err error) {
 	defer logger.Guard("App.PreviewContext", &err)
+	ctx = withTurnMemo(ctx) // one org-role and settings read, as a turn makes
 
-	// Same resolution as prepareTurn: an org flow may run on the org's
-	// shared credential (G7) for its admins and members, and the preview
-	// must accept exactly what the turn would.
+	// Same resolution as prepareTurn: the preview must accept exactly what the turn would.
 	orgID := ""
 	if doc != nil {
 		orgID = doc.OrganizationID
@@ -861,14 +659,7 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 	}, nil
 }
 
-// systemPromptSuffix merges the caller's "custom instructions" setting
-// (Settings → AI Behavior) with any per-request override. The setting used to
-// be persisted and never read — the only consumer was the per-request field,
-// which the frontend never populated — so the control was inert. Merging here,
-// server-side, keeps it tamper-proof: a client cannot drop the configured
-// instructions by omitting the field. The setting comes from
-// callerPreferences, so in cloud mode it is the user's own, not the server's
-// settings file.
+// systemPromptSuffix merges the caller's custom-instructions setting with the per-request override (server-side, tamper-proof).
 func (s *ChatService) systemPromptSuffix(ctx context.Context, req models.ChatRequest) string {
 	var configured string
 	if app := s.callerPreferences(ctx); app != nil {

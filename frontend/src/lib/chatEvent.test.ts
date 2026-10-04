@@ -287,7 +287,7 @@ describe('parseChatEvent failure codes and keepalives', () => {
     expect(parseChatEvent({streamId: 's1', type: 'heartbeat', data: {}})).toEqual({kind: 'heartbeat'})
   })
 
-  // F-15: a BILLED failure carries its usage — the exact fields a done
+  // A BILLED failure carries its usage — the exact fields a done
   // carries (minus chunks), so the meter can count it.
   it('carries the usage of a billed error event', () => {
     expect(
@@ -314,7 +314,7 @@ describe('parseChatEvent failure codes and keepalives', () => {
     })
   })
 
-  it('keeps an unbilled error event free of usage keys (F-15)', () => {
+  it('keeps an unbilled error event free of usage keys', () => {
     const parsed = parseChatEvent({
       streamId: 's1',
       type: 'error',
@@ -323,7 +323,7 @@ describe('parseChatEvent failure codes and keepalives', () => {
     expect(parsed).toEqual({kind: 'error', message: 'x', code: 'PROVIDER_AUTH'})
   })
 
-  // F-42: the shared-credential flag rides the error event.
+  // The shared-credential flag rides the error event.
   it('keeps the shared flag of a shared-credential error event', () => {
     expect(
       parseChatEvent({

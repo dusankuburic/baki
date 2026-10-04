@@ -20,34 +20,7 @@ import (
 )
 
 // ---- The Azure AI Foundry model registry (Part 9) ----
-//
-// A user — and, in cloud mode, an organisation — keeps up to ten Azure AI
-// Foundry RESOURCES ("connections" in code and API, "resources" in the UI:
-// Foundry has a "Connections" concept of its own), each with its own endpoint
-// and credential document, and up to fifty registered MODELS across them:
-// chat and Claude deployments, project agents and embedding deployments, each
-// with a display name, a purpose and a description. The registry metadata
-// lives in the AzureRegistryStore (Postgres with auth on, else the desktop's
-// azure-models.json); every resource's credential stays in the KeyStore — the
-// default resource's (the legacy single document) under "azure-foundry",
-// every other one's under "azure-foundry/<id>" (ai.AzureConnectionKey).
-//
-// Two stores, no transaction spanning them, so the write order is fixed
-// (see createConnection / deleteConnection): a create or rotation validates,
-// pre-checks the limit, saves the keystore, THEN takes the owner lock,
-// re-checks and writes the registry — an orphaned secret (swept later) is
-// possible, a registry row without its secret is not; a delete removes the
-// row in the (request) transaction and the secret only after the commit
-// (storagedb.RegisterPostCommit). Nothing outbound — and no keystore call —
-// runs while the owner lock is held. The desktop has neither transaction nor
-// a listable keyring, so a resource is created pending, its keyring entry
-// saved, then finalised; a pending row an earlier process left behind is
-// rolled back on the next listing.
-//
-// Status is computed when read, never stored: a resource is ready,
-// needs_credentials, unreadable or invalid_config; a model inherits its
-// resource's status or is unsupported (an agent on a resource without
-// Entra ID and a project endpoint).
+// Up to ten resources/fifty models per owner; metadata in AzureRegistryStore, secrets in the KeyStore — no transaction spans both: secret first, secret deleted last.
 
 // Registry status values (views, the picker's ModelDetail.Status).
 const (
@@ -58,11 +31,7 @@ const (
 	AzureStatusUnsupported      = "unsupported"
 )
 
-// Registry client codes (Part 9 "Error codes"), next to the credential
-// document's *ai.AzureConfigError codes (INVALID_ENDPOINT, HOST_NOT_ALLOWED,
-// INVALID_AUTH, MISSING_SECRET, INVALID_DEPLOYMENT, …) and the registry
-// validation codes ai owns (ai.AzureCfgErrInvalidKind,
-// ai.AzureCfgErrInvalidContextWindow, ai.AzureCfgErrInvalidMaxOutput).
+// Registry client codes (Part 9 "Error codes"), next to *ai.AzureConfigError's and ai's validation codes.
 const (
 	AzureCodeConnectionNotFound       = "CONNECTION_NOT_FOUND"
 	AzureCodeModelNotFound            = "MODEL_NOT_FOUND"
@@ -82,26 +51,16 @@ const (
 	AzureCodeDiscoveryUnavailable     = "DISCOVERY_UNAVAILABLE"
 	AzureCodeModelNotAvailable        = "MODEL_NOT_AVAILABLE"
 	AzureCodeSecretStorageUnavailable = "SECRET_STORAGE_UNAVAILABLE"
-	// AzureCodeRegistryReadOnly: the desktop list file was written by a
-	// newer app version (registryState read_only) — writes are refused.
+	// AzureCodeRegistryReadOnly: the desktop list file was written by a newer app version (registryState read_only) — writes are refused.
 	AzureCodeRegistryReadOnly        = "REGISTRY_READ_ONLY"
 	AzureCodeOrgKeystoreUnavailable  = "ORG_KEYSTORE_UNAVAILABLE"
 	AzureCodeOrgCredentialUnreadable = "ORG_CREDENTIAL_UNREADABLE" // #nosec G101 -- an error code, not a credential
 )
 
-// ErrModelNotAvailable is ResolveChat's answer for a model id the caller
-// cannot use: an unknown or malformed id, another owner's entry, an
-// embedding model, an entry of an organisation whose shared models the caller
-// no longer may use, or a raw (pre-registry) id no alias or legacy document
-// resolves. One answer for all of them, so the id space is no existence
-// oracle. The chat handlers map it to 400 MODEL_NOT_AVAILABLE; a registry or
-// keystore failure is never this error (and never a fallback).
+// ErrModelNotAvailable is ResolveChat's one answer for any unusable model id, so the id space is no existence oracle.
 var ErrModelNotAvailable = errors.New("the selected Azure AI Foundry model is not available — it was removed, or you can no longer use it; choose another model")
 
-// AzureRegistryError is a refusal of the registry with its client code: the
-// HTTP status it maps to, the code, one line of copy and optional details
-// (limit, modelCount, existingModelId, field). Err is the cause (a storage
-// sentinel, an *ai.AzureConfigError), matched through errors.Is / As.
+// AzureRegistryError is a registry refusal with its client code; Err is the cause (errors.Is/As).
 type AzureRegistryError struct {
 	Status  int
 	Code    string
@@ -118,23 +77,7 @@ func azureRegErr(status int, code, message string, cause error, details map[stri
 	return &AzureRegistryError{Status: status, Code: code, Message: message, Err: cause, Details: details}
 }
 
-// AzureRegistryHTTPError maps an error of the registry's methods (and of the
-// single-document routes that act on resource "default") to its HTTP answer:
-// the status, the client code and the details of the error envelope. ok is
-// false for anything else — an internal failure the handler renders as 500
-// with generic copy. Every code of Part 9's table is covered:
-//
-//	404 CONNECTION_NOT_FOUND, MODEL_NOT_FOUND, ORG_KEYSTORE_UNAVAILABLE
-//	409 CONNECTION_IN_USE {modelCount}, DUPLICATE_MODEL {existingModelId},
-//	    DUPLICATE_CONNECTION_NAME, TOO_MANY_CONNECTIONS {limit},
-//	    TOO_MANY_MODELS {limit}, CONFLICT, REINDEX_REQUIRED, REGISTRY_READ_ONLY
-//	400 every *ai.AzureConfigError code (INVALID_AUTH and MISSING_SECRET with
-//	    {field}), INVALID_KIND, INVALID_PURPOSE, INVALID_DESCRIPTION,
-//	    INVALID_DISPLAY_NAME, INVALID_CONTEXT_WINDOW, INVALID_MAX_OUTPUT,
-//	    INVALID_CONNECTION_NAME, INVALID_DESIGNATION, KIND_REQUIRES_PROJECT,
-//	    DISCOVERY_UNAVAILABLE, MODEL_NOT_AVAILABLE
-//	500 ORG_CREDENTIAL_UNREADABLE
-//	503 SECRET_STORAGE_UNAVAILABLE
+// AzureRegistryHTTPError maps a registry error to (status, client code, details); ok=false renders 500. Statuses follow Part 9's table.
 func AzureRegistryHTTPError(err error) (status int, code string, details map[string]any, ok bool) {
 	if err == nil {
 		return 0, "", nil, false
@@ -183,18 +126,13 @@ func AzureRegistryHTTPError(err error) (status int, code string, details map[str
 
 // ---- Dependencies ----
 
-// AzureOrgDirectory is the part of the organisation store the registry
-// reads: which organisations a user belongs to, with each member's role (the
-// "Shared with you" section, the knowledge base's corpus check), and one
-// organisation's name.
+// AzureOrgDirectory is the org store the registry reads: a user's orgs with roles, and one org's name.
 type AzureOrgDirectory interface {
 	ListOrgsForUser(ctx context.Context, userID string) ([]*storageif.Organisation, error)
 	LoadOrg(ctx context.Context, id string) (*storageif.Organisation, error)
 }
 
-// AzureCorpusCounter counts an organisation's knowledge-base chunks: a
-// change to the corpus's embedding model on a non-empty corpus needs a
-// re-index (REINDEX_REQUIRED).
+// AzureCorpusCounter counts an org's KB chunks (an embedding-model change on a non-empty corpus needs REINDEX_REQUIRED).
 type AzureCorpusCounter interface {
 	CountKnowledgeChunks(ctx context.Context, orgID string) (total, vectorIndexed int, err error)
 }
@@ -204,47 +142,33 @@ type AzureUserDirectory interface {
 	LoadUserByID(ctx context.Context, id string) (*storageif.User, error)
 }
 
-// AzureSettingsLoader reads a user's own settings (cloud): the legacy import
-// reads the saved "Default for new chats" from them.
+// AzureSettingsLoader reads a user's own settings (cloud) for the legacy import's saved default.
 type AzureSettingsLoader interface {
 	LoadUserSettings(ctx context.Context, userID string) (*storageif.AppSettings, error)
 }
 
-// AzureModelServiceDeps is what NewAzureModelService needs. Registry and
-// Secrets are required; the rest are optional (nil disables what needs them).
+// AzureModelServiceDeps is what NewAzureModelService needs: Registry and Secrets required, the rest optional (nil disables what needs them).
 type AzureModelServiceDeps struct {
 	Registry storageif.AzureRegistryStore
 	Secrets  KeyStore
-	// OrgKeys holds organisations' shared credentials (cloud); nil disables
-	// organisation registries (ErrOrgKeyStoreUnavailable).
+	// OrgKeys holds organisations' shared credentials (cloud); nil disables org registries (ErrOrgKeyStoreUnavailable).
 	OrgKeys OrgKeyStore
-	// Factory builds the providers the picker sizes its models with and the
-	// knowledge base embeds with; nil = no provider-derived windows.
+	// Factory builds the providers the picker sizes models with and the KB embeds with; nil = no provider-derived windows.
 	Factory *ai.ProviderFactory
-	// Settings is the desktop settings store: the legacy import reads the
-	// saved default model from it when the registry is the desktop's.
+	// Settings is the desktop settings store the legacy import reads the saved default from.
 	Settings SettingsProvider
-	// UserSettings reads a user's own settings (cloud; usually the storage
-	// backend). Used with PerUserOwners.
+	// UserSettings reads a user's own settings (cloud); used with PerUserOwners.
 	UserSettings AzureSettingsLoader
 	Orgs         AzureOrgDirectory
 	Corpus       AzureCorpusCounter
 	Users        AzureUserDirectory
-	// PerUserOwners: the registry keeps one registry per user and one per
-	// organisation (Postgres with auth on). False for the desktop's single
-	// personal registry (owner ""), which also rules out organisations.
+	// PerUserOwners: one registry per user and per org; false for the desktop's single personal registry (owner "").
 	PerUserOwners bool
-	// KnowledgeEmbeddingEnabled: the knowledge base embeds with Azure AI
-	// Foundry here (cloud with PAD_EMBEDDING_PROVIDER=azure-foundry), so the
-	// "Use for knowledge base" designation is offered.
+	// KnowledgeEmbeddingEnabled: the KB embeds with Azure AI Foundry here, so the designation is offered.
 	KnowledgeEmbeddingEnabled bool
 }
 
-// AzureModelService is the Azure AI Foundry model registry: resources and
-// models (CRUD, designations, validation, status), the legacy import and the
-// single-document adapters, the chat runtime's resolution and picker
-// listing, the knowledge base's embedder, tests and discovery, and the
-// credential lifecycle (see the file comment).
+// AzureModelService is the Azure AI Foundry model registry: resources and models (CRUD, designations, validation, status), the legacy import, the chat runtime.
 type AzureModelService struct {
 	registry                  storageif.AzureRegistryStore
 	secrets                   KeyStore
@@ -262,15 +186,11 @@ type AzureModelService struct {
 	now func() time.Time
 
 	memoMu sync.Mutex
-	// importedMemo remembers owners whose import marker was seen (60 s,
-	// recorded only after the commit that made it durable).
+	// importedMemo remembers owners whose import marker was seen (60 s, recorded only after the commit that made it durable).
 	importedMemo map[storageif.AzureOwner]time.Time
 	// sweptMemo rate-limits the orphan sweep (hourly per owner).
 	sweptMemo map[storageif.AzureOwner]time.Time
-	// deferredMemo remembers owners whose legacy import is waiting for a
-	// free resource slot or name (errLegacyImportDeferred): retried at most
-	// once per azureImportMemoTTL — a resource removed clears it, so a slot
-	// freed is used at the next read.
+	// deferredMemo remembers owners whose legacy import waits for a free slot or name; retried at most once per TTL.
 	deferredMemo map[storageif.AzureOwner]time.Time
 
 	// refresher refreshes stale project listings in the background.
@@ -307,14 +227,10 @@ func NewAzureModelService(deps AzureModelServiceDeps) *AzureModelService {
 	}
 }
 
-// KnowledgeEmbeddingEnabled reports whether the knowledge base embeds with
-// Azure AI Foundry here (the "Use for knowledge base" designation is
-// offered).
+// KnowledgeEmbeddingEnabled reports whether the KB embeds with Azure AI Foundry here (the "Use for knowledge base" designation is offered).
 func (s *AzureModelService) KnowledgeEmbeddingEnabled() bool { return s.knowledgeEmbeddingEnabled }
 
-// OrgRegistriesAvailable reports whether organisations can hold registries
-// in this deployment: a per-user registry store (Postgres, auth on) and the
-// encrypted org keystore.
+// OrgRegistriesAvailable reports whether organisations can hold registries here: a per-user registry store plus the encrypted org keystore.
 func (s *AzureModelService) OrgRegistriesAvailable() bool {
 	return s != nil && s.orgKeys != nil && s.perUserOwners
 }
@@ -323,22 +239,16 @@ func (s *AzureModelService) OrgRegistriesAvailable() bool {
 
 // AzureScope addresses one registry for one caller.
 type AzureScope struct {
-	// Scope is the caller's key scope: their user id with authentication on,
-	// "" on the desktop. It also names the caller (the acting admin of an
-	// organisation's write, the member whose shared entries are listed).
+	// Scope is the caller's key scope (user id with auth on, "" on the desktop); names the acting admin / listed member.
 	Scope string
-	// OrgID selects the organisation's curated registry; "" is the caller's
-	// own. The caller's role in it is the handler's check (reads: admin or
-	// member; writes, tests, discovery: admin).
+	// OrgID selects the organisation's curated registry; "" is the caller's own. Role checks are the handler's.
 	OrgID string
 }
 
 // IsOrg reports whether the scope addresses an organisation's registry.
 func (as AzureScope) IsOrg() bool { return as.OrgID != "" }
 
-// userOwner is the registry of the caller with key scope scope: their own
-// with per-user registries, else the single personal registry of the
-// desktop's file store.
+// userOwner is the caller's own registry: per-user with per-user stores, else the desktop's single one.
 func (s *AzureModelService) userOwner(scope string) storageif.AzureOwner {
 	if s.perUserOwners {
 		return storageif.AzureUserOwner(scope)
@@ -346,8 +256,7 @@ func (s *AzureModelService) userOwner(scope string) storageif.AzureOwner {
 	return storageif.AzureUserOwner("")
 }
 
-// ownerFor is the registry as addresses: ErrOrgKeyStoreUnavailable for an
-// organisation where organisations hold none.
+// ownerFor is the registry as addresses: ErrOrgKeyStoreUnavailable for an org where orgs hold none.
 func (s *AzureModelService) ownerFor(as AzureScope) (storageif.AzureOwner, error) {
 	if !as.IsOrg() {
 		return s.userOwner(as.Scope), nil
@@ -363,9 +272,7 @@ func (s *AzureModelService) ownerFor(as AzureScope) (storageif.AzureOwner, error
 // credentialKey is the KeyStore key of resource connID.
 func credentialKey(connID string) string { return ai.AzureConnectionKey(connID) }
 
-// readCredential reads the stored document of one resource of owner: "" when
-// there is none. scope is the caller's key scope (personal documents live
-// under it, whatever the registry's owner id).
+// readCredential reads one resource's stored document of owner: "" when none; personal documents live under scope.
 func (s *AzureModelService) readCredential(owner storageif.AzureOwner, scope, connID string) (string, error) {
 	var (
 		raw string
@@ -385,8 +292,7 @@ func (s *AzureModelService) readCredential(owner storageif.AzureOwner, scope, co
 	return raw, err
 }
 
-// azureCredential is one resource's stored credential as the registry sees
-// it: the document (when it parses) and the status it gives the resource.
+// azureCredential is one resource's stored credential: the document (when it parses) and the status it gives the resource.
 type azureCredential struct {
 	raw    string
 	cfg    ai.AzureFoundryConfig
@@ -407,9 +313,7 @@ const (
 	azureReasonAgentUnsupported = "Agents need Microsoft Entra ID (or Azure CLI) sign-in and a project endpoint on their resource."
 )
 
-// credentialState reads and classifies resource connID's credential. The
-// error is a keystore failure other than "none" and "cannot be decrypted"
-// (those are statuses).
+// credentialState reads and classifies connID's credential; "none"/"cannot decrypt" are statuses, not errors.
 func (s *AzureModelService) credentialState(owner storageif.AzureOwner, scope, connID string) (azureCredential, error) {
 	raw, err := s.readCredential(owner, scope, connID)
 	switch {
@@ -427,11 +331,7 @@ func (s *AzureModelService) credentialState(owner storageif.AzureOwner, scope, c
 	return classifyCredential(owner.IsOrg(), connID, raw), nil
 }
 
-// classifyCredential gives a stored document its status: unreadable when it
-// does not parse, needs_credentials without a secret, invalid_config when it
-// no longer passes validation (an operator narrowed the allowed hosts, a
-// cloud deployment refuses Azure CLI sign-in, an organisation's resource
-// signs in with the Azure CLI), else ready.
+// classifyCredential gives a stored document its status: unreadable, needs_credentials, invalid_config (an org resource on the Azure CLI), else ready.
 func classifyCredential(org bool, connID, raw string) azureCredential {
 	cfg, err := ai.ParseAzureFoundryConfig(raw)
 	if err != nil || !cfg.Configured() {
@@ -466,8 +366,7 @@ type AzureLastTestView struct {
 	At        string `json:"at"`
 }
 
-// AzureConnectionConfigView is a resource's public settings: never a secret,
-// never deployment fields.
+// AzureConnectionConfigView is a resource's public settings: never a secret, never deployment fields.
 type AzureConnectionConfigView struct {
 	Endpoint        string `json:"endpoint"`
 	AuthMode        string `json:"authMode"`
@@ -482,8 +381,7 @@ type AzureConnectionView struct {
 	ID string `json:"id"`
 	// Name is the resource's display name (1–64 characters).
 	Name string `json:"name"`
-	// Shared marks an organisation's resource: always in org scope, and on
-	// the "Shared with you" entries of user scope (read-only there).
+	// Shared marks an organisation's resource: org scope always, user scope read-only ("Shared with you").
 	Shared  bool   `json:"shared"`
 	OrgID   string `json:"orgId,omitempty"`
 	OrgName string `json:"orgName,omitempty"`
@@ -492,22 +390,18 @@ type AzureConnectionView struct {
 	Config       AzureConnectionConfigView `json:"config"`
 	Status       string                    `json:"status"`
 	StatusReason string                    `json:"statusReason,omitempty"`
-	// CanDiscover and SupportsAgents: Entra ID (or the Azure CLI) with a
-	// project endpoint — deployments and agents can be discovered, agents run.
+	// CanDiscover and SupportsAgents: Entra ID (or the Azure CLI) with a project endpoint.
 	CanDiscover    bool `json:"canDiscover"`
 	SupportsAgents bool `json:"supportsAgents"`
-	// SuggestDiscovery shows the "Found in your project" prompt: discoverable
-	// and not dismissed (never on a read-only shared entry).
+	// SuggestDiscovery shows the "Found in your project" prompt when discoverable and not dismissed.
 	SuggestDiscovery bool               `json:"suggestDiscovery"`
 	ModelCount       int                `json:"modelCount"`
 	LastTest         *AzureLastTestView `json:"lastTest"`
 	// UpdatedAt is the registry row's compare-and-swap token (RFC 3339).
 	UpdatedAt string `json:"updatedAt"`
-	// CredentialUpdatedAt (org scope) is the stored credential's
-	// compare-and-swap token, sent back with a credential change.
+	// CredentialUpdatedAt (org scope) is the stored credential's compare-and-swap token.
 	CredentialUpdatedAt string `json:"credentialUpdatedAt,omitempty"`
-	// SharedBy names who lent a shared resource's credential (display name,
-	// else email); SharedByID is that admin's user id.
+	// SharedBy names who lent a shared resource's credential (display name, else email); SharedByID is that admin's id.
 	SharedBy   string `json:"sharedBy,omitempty"`
 	SharedByID string `json:"-"`
 }
@@ -521,17 +415,13 @@ type AzureModelView struct {
 	Kind           string `json:"kind"`
 	// Deployment is the deployment name, or the agent's name.
 	Deployment string `json:"deployment"`
-	// Target is what the server routes to: "<deployment>",
-	// "claude:<deployment>" or "agent:<name>" (an embedding deployment's
-	// name for an embedding model).
+	// Target is what the server routes to: "<deployment>", "claude:<deployment>" or "agent:<name>".
 	Target        string `json:"target"`
 	DisplayName   string `json:"displayName"`
 	Purpose       string `json:"purpose"`
 	PurposeCustom string `json:"purposeCustom,omitempty"`
 	Description   string `json:"description,omitempty"`
-	// ContextWindow and MaxOutputTokens are the user's overrides (absent
-	// when unset); ReportedContextWindow is the window the server knows from
-	// the catalogue, the served model or a learned limit.
+	// ContextWindow/MaxOutputTokens are the user's overrides; ReportedContextWindow is the server-known window.
 	ContextWindow         int                `json:"contextWindow,omitempty"`
 	ReportedContextWindow int                `json:"reportedContextWindow,omitempty"`
 	MaxOutputTokens       int                `json:"maxOutputTokens,omitempty"`
@@ -555,27 +445,21 @@ type AzureRegistryLimits struct {
 // AzureConnectionsListing is GET /connections.
 type AzureConnectionsListing struct {
 	Connections []AzureConnectionView `json:"connections"`
-	// RegistryState is ok, read_only (a newer app wrote the desktop list
-	// file) or recovered (a corrupt one was set aside, a copy kept).
+	// RegistryState is ok, read_only (a newer app wrote the desktop list file) or recovered (a corrupt one set aside, copy kept).
 	RegistryState string `json:"registryState"`
-	// RecoveredCopyPath is where that copy was kept (recovered only). Only
-	// the desktop list file is ever recovered, and its API is the local
-	// user's own, so the path is theirs to see.
+	// RecoveredCopyPath is where the recovered desktop list file's copy was kept (recovered only).
 	RecoveredCopyPath         string              `json:"recoveredCopyPath,omitempty"`
 	Limits                    AzureRegistryLimits `json:"limits"`
 	KnowledgeEmbeddingEnabled bool                `json:"knowledgeEmbeddingEnabled"`
 }
 
-// AzureModelsListing is GET /models. ServerDefault (user scope) is the
-// server default's "m/<id>" — what a new chat starts on when the user saved
-// no default of their own; empty when there is none, and in org scope.
+// AzureModelsListing is GET /models; ServerDefault (user scope) is what a new chat starts on.
 type AzureModelsListing struct {
 	Models        []AzureModelView `json:"models"`
 	ServerDefault string           `json:"serverDefault,omitempty"`
 }
 
-// AzureConnectionEnvelope is the body of POST, PUT and GET
-// /connections/{id}: {connection}.
+// AzureConnectionEnvelope is the body of POST/PUT/GET /connections/{id}: {connection}.
 type AzureConnectionEnvelope struct {
 	Connection AzureConnectionView `json:"connection"`
 }
@@ -592,8 +476,7 @@ type AzureConnectionDeleteResult struct {
 	ClearedKnowledgeEmbedding bool   `json:"clearedKnowledgeEmbedding"`
 }
 
-// azureStamp renders a registry timestamp (microseconds, UTC) as the view's
-// RFC 3339 string — the compare-and-swap token a PUT sends back.
+// azureStamp renders a registry timestamp as the view's RFC 3339 compare-and-swap token.
 func azureStamp(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -627,8 +510,7 @@ type azureOrgInfo struct {
 	name string
 }
 
-// connectionView builds a resource's view. org is set for an
-// organisation's resource; readOnly marks one listed in user scope.
+// connectionView builds a resource's view; readOnly marks one listed in user scope.
 func connectionView(rec storageif.AzureConnectionRecord, cred azureCredential, modelCount int, org *azureOrgInfo, readOnly bool) AzureConnectionView {
 	v := AzureConnectionView{
 		ID:           rec.ID,
@@ -659,8 +541,7 @@ func connectionView(rec storageif.AzureConnectionRecord, cred azureCredential, m
 	return v
 }
 
-// modelTarget is a record's routed id (its deployment name for an
-// embedding model).
+// modelTarget is a record's routed id.
 func modelTarget(m storageif.AzureModelRecord) string {
 	if t, ok := ai.AzureModelTarget(m.Kind, m.Deployment); ok {
 		return t
@@ -668,8 +549,7 @@ func modelTarget(m storageif.AzureModelRecord) string {
 	return m.Deployment
 }
 
-// modelStatus is a model's status on its resource: the resource's, or
-// unsupported for an agent on a resource that cannot run one.
+// modelStatus is a model's status on its resource, or unsupported for an agent without project access.
 func modelStatus(m storageif.AzureModelRecord, cred azureCredential) (string, string) {
 	if !cred.ready() {
 		return cred.status, cred.reason
@@ -712,8 +592,7 @@ func modelView(m storageif.AzureModelRecord, connName string, cred azureCredenti
 
 // ---- Sort order (no sort_order column) ----
 
-// azurePurposeRank is a preset's place in the fixed purpose order; custom
-// purposes come after the presets (then A–Z by their text).
+// azurePurposeRank is a preset's place in the fixed order; custom purposes come after (A–Z).
 func azurePurposeRank(purpose string) int {
 	for i, p := range storageif.AzurePurposePresets {
 		if p == purpose {
@@ -723,9 +602,7 @@ func azurePurposeRank(purpose string) int {
 	return len(storageif.AzurePurposePresets)
 }
 
-// azureEntryLess orders entries for display: purpose rank (custom purposes
-// A–Z after the presets), then personal before shared, then display name
-// (case-insensitively), then id.
+// azureEntryLess orders entries: purpose rank, personal before shared, then name, then id.
 func azureEntryLess(purposeA, customA string, sharedA bool, nameA, idA, purposeB, customB string, sharedB bool, nameB, idB string) bool {
 	if ra, rb := azurePurposeRank(purposeA), azurePurposeRank(purposeB); ra != rb {
 		return ra < rb
@@ -751,8 +628,7 @@ func sortModelViews(v []AzureModelView) {
 
 // ---- Registry reads ----
 
-// azureOwnerState is one owner's registry as the views need it: its live
-// (non-pending) resources and models, and each resource's credential.
+// azureOwnerState is one owner's live (non-pending) registry with each resource's credential.
 type azureOwnerState struct {
 	owner  storageif.AzureOwner
 	scope  string
@@ -760,8 +636,7 @@ type azureOwnerState struct {
 	conns  []storageif.AzureConnectionRecord
 	models []storageif.AzureModelRecord
 	creds  map[string]azureCredential
-	// importPending: the owner's legacy document is not in the registry yet
-	// (ensureLegacyImported), so conns and models are not the whole story.
+	// importPending: the owner's legacy document is not in the registry yet.
 	importPending bool
 }
 
@@ -800,9 +675,7 @@ func registeredEntries(models []storageif.AzureModelRecord, connID string) []ai.
 	return out
 }
 
-// loadOwner reads owner's live registry — pending resources (a create still
-// in flight, or one an earlier process left behind) and their models are
-// left out — and, with creds, each resource's credential.
+// loadOwner reads owner's live registry (pending rows left out) and, with creds, each resource's credential.
 func (s *AzureModelService) loadOwner(ctx context.Context, owner storageif.AzureOwner, scope string, org *azureOrgInfo, creds bool) (*azureOwnerState, error) {
 	conns, err := s.registry.ListConnections(ctx, owner)
 	if err != nil {
@@ -838,9 +711,7 @@ func (s *AzureModelService) loadOwner(ctx context.Context, owner storageif.Azure
 	return st, nil
 }
 
-// sharedOrgs lists the organisations whose shared registries the caller
-// sees in user scope: every organisation where they are an admin or a member
-// (viewers and guests run on no shared credential and see none).
+// sharedOrgs lists the orgs whose shared registries the caller sees in user scope.
 func (s *AzureModelService) sharedOrgs(ctx context.Context, scope string) ([]azureOrgInfo, error) {
 	if !s.OrgRegistriesAvailable() || s.orgs == nil || scope == "" {
 		return nil, nil
@@ -862,8 +733,7 @@ func (s *AzureModelService) sharedOrgs(ctx context.Context, scope string) ([]azu
 	return out, nil
 }
 
-// azureMemberRole reports whether userID is an admin or member of o (the
-// roles that run on the organisation's shared credentials).
+// azureMemberRole reports whether userID has a role that runs on the org's shared credentials.
 func azureMemberRole(o *storageif.Organisation, userID string) bool {
 	for _, m := range o.Members {
 		if m.UserID == userID {
@@ -884,8 +754,7 @@ func (s *AzureModelService) orgInfo(ctx context.Context, orgID string) *azureOrg
 	return info
 }
 
-// userLabel renders a user id as members see it: the display name, else
-// the email, else the id.
+// userLabel renders a user id as members see it: display name, else email, else id.
 func (s *AzureModelService) userLabel(ctx context.Context, userID string) string {
 	if userID == "" || s.users == nil {
 		return userID
@@ -903,8 +772,7 @@ func (s *AzureModelService) userLabel(ctx context.Context, userID string) string
 	return userID
 }
 
-// orgCredentialMeta fills a shared resource's lender and (for org scope) its
-// credential's compare-and-swap token.
+// orgCredentialMeta fills a shared resource's lender and credential CAS token.
 func (s *AzureModelService) orgCredentialMeta(ctx context.Context, v *AzureConnectionView, orgID string, withToken bool) {
 	if s.orgKeys == nil {
 		return
@@ -943,12 +811,7 @@ func (s *AzureModelService) connectionViews(ctx context.Context, st *azureOwnerS
 
 // ---- Resources ----
 
-// ListConnections is GET /connections: the scope's resources (user scope:
-// the caller's own, then the shared resources of every organisation where
-// they are an admin or member, read-only; org scope: that organisation's),
-// the registry's state, the limits and whether the knowledge-base
-// designation is offered. Network-free. Runs the legacy import, the desktop's
-// pending-row rollback and (hourly) the orphan sweep for the owner.
+// ListConnections is GET /connections: the scope's resources (user scope adds shared org ones read-only), state, limits, KB flag. Network-free.
 func (s *AzureModelService) ListConnections(ctx context.Context, as AzureScope) (out AzureConnectionsListing, err error) {
 	defer logger.Guard("AzureModels.ListConnections", &err)
 	owner, err := s.ownerFor(as)
@@ -988,8 +851,7 @@ func (s *AzureModelService) ListConnections(ctx context.Context, as AzureScope) 
 	return out, nil
 }
 
-// sharedStates loads the shared registries user scope lists (see
-// sharedOrgs), each imported first.
+// sharedStates loads the shared registries user scope lists, each imported first.
 func (s *AzureModelService) sharedStates(ctx context.Context, scope string) ([]*azureOwnerState, error) {
 	orgs, err := s.sharedOrgs(ctx, scope)
 	if err != nil {
@@ -1010,13 +872,7 @@ func (s *AzureModelService) sharedStates(ctx context.Context, scope string) ([]*
 	return out, nil
 }
 
-// prepareOwner runs what every registry read path runs first: the legacy
-// import, and on the desktop the rollback of pending rows an earlier
-// process left behind. It reports whether owner's legacy import is still
-// PENDING (see ensureLegacyImported): the read paths that answer for the
-// legacy document — the server default, raw ids, the member-first alias
-// rule, the knowledge base's embedder — must not answer as if it were not
-// there.
+// prepareOwner runs the legacy import and pending-row rollback; reports whether the import is still PENDING.
 func (s *AzureModelService) prepareOwner(ctx context.Context, owner storageif.AzureOwner, scope string) (importPending bool) {
 	importPending = !s.ensureLegacyImported(ctx, owner, scope)
 	s.rollbackStalePending(ctx, owner, scope)
@@ -1080,10 +936,7 @@ func (s *AzureModelService) liveConnection(ctx context.Context, owner storageif.
 	return rec, nil
 }
 
-// AzureConnectionConfigInput is a resource's settings as a client sends
-// them: the endpoint, the credential (a missing secret keeps the stored one
-// where the carry rules allow) and the optional project endpoint. It has no
-// deployment fields: a resource's models are registry entries.
+// AzureConnectionConfigInput is a resource's client-sent settings; a missing secret carries the stored one.
 type AzureConnectionConfigInput struct {
 	Endpoint        string              `json:"endpoint"`
 	Auth            ai.AzureFoundryAuth `json:"auth"`
@@ -1099,8 +952,7 @@ func (in AzureConnectionConfigInput) document() ai.AzureFoundryConfig {
 
 // AzureConnectionInput is POST /connections.
 type AzureConnectionInput struct {
-	// Name is the resource's display name; "" takes the endpoint host's
-	// first label.
+	// Name is the resource's display name; "" takes the endpoint host's first label.
 	Name   string                     `json:"name"`
 	Config AzureConnectionConfigInput `json:"config"`
 }
@@ -1109,38 +961,25 @@ type AzureConnectionInput struct {
 type AzureConnectionPatch struct {
 	Name   *string                     `json:"name,omitempty"`
 	Config *AzureConnectionConfigInput `json:"config,omitempty"`
-	// UpdatedAt is the resource's updatedAt as last read: a stale value is
-	// 409 CONFLICT (compare-and-swap on the registry row).
+	// UpdatedAt is the resource's last-read updatedAt: a stale value is 409 CONFLICT.
 	UpdatedAt string `json:"updatedAt,omitempty"`
-	// CredentialUpdatedAt (org scope) is the credentialUpdatedAt last read,
-	// sent with a credential change: the compare-and-swap on the org's
-	// stored credential.
+	// CredentialUpdatedAt (org scope): the CAS on the org's stored credential.
 	CredentialUpdatedAt string `json:"credentialUpdatedAt,omitempty"`
-	// DismissDiscovery hides (true) or brings back (false) the "Found in
-	// your project" prompt.
+	// DismissDiscovery hides (true) or brings back (false) the "Found in your project" prompt.
 	DismissDiscovery *bool `json:"dismissDiscovery,omitempty"`
-	// Force confirms a re-index: the endpoint change of a resource holding
-	// the knowledge-base model of a non-empty corpus (else 409
-	// REINDEX_REQUIRED).
+	// Force confirms the re-index an endpoint change of the KB model's resource needs (else 409 REINDEX_REQUIRED).
 	Force bool `json:"force,omitempty"`
 }
 
 // AzureDeleteOptions are DELETE /connections/{id}'s flags.
 type AzureDeleteOptions struct {
-	// Cascade deletes the resource's models too (else a resource with models
-	// is 409 CONNECTION_IN_USE).
+	// Cascade deletes the resource's models too (else 409 CONNECTION_IN_USE).
 	Cascade bool
-	// Force confirms the re-index a deletion of the knowledge-base model
-	// needs on a non-empty corpus (else 409 REINDEX_REQUIRED).
+	// Force confirms the re-index deleting the KB model needs on a non-empty corpus (else 409 REINDEX_REQUIRED).
 	Force bool
 }
 
-// validateConnectionDocument validates a resource's document for a save or
-// a draft test: an organisation's resource never signs in with the Azure
-// CLI (a shared credential runs on every member's machine); no chat
-// deployment is required; deployment fields are refused except on the
-// default resource. An INVALID_AUTH or MISSING_SECRET refusal names its
-// field (details.field).
+// validateConnectionDocument validates a document for a save/draft test; an org resource never uses the Azure CLI.
 func validateConnectionDocument(cfg ai.AzureFoundryConfig, connID string, org bool) error {
 	if org && cfg.Auth.Mode == ai.AzureAuthModeEntraCLI {
 		return azureRegErr(http.StatusBadRequest, ai.AzureCfgErrInvalidAuth,
@@ -1151,10 +990,7 @@ func validateConnectionDocument(cfg ai.AzureFoundryConfig, connID string, org bo
 	return withAuthField(cfg, ai.ValidateAzureConnection(cfg, connID != ai.AzureDefaultConnectionID))
 }
 
-// withAuthField wraps an INVALID_AUTH or MISSING_SECRET refusal of cfg with
-// the auth field it is about ({field: mode | key | tenantId | clientId |
-// clientSecret}), so a client routes it to that field without reading the
-// message. Anything else is returned as is.
+// withAuthField wraps an INVALID_AUTH/MISSING_SECRET refusal with the auth field it is about.
 func withAuthField(cfg ai.AzureFoundryConfig, err error) error {
 	var ce *ai.AzureConfigError
 	if err == nil || !errors.As(err, &ce) || (ce.Code != ai.AzureCfgErrInvalidAuth && ce.Code != ai.AzureCfgErrMissingSecret) {
@@ -1163,9 +999,7 @@ func withAuthField(cfg ai.AzureFoundryConfig, err error) error {
 	return azureRegErr(http.StatusBadRequest, ce.Code, ce.Message, err, map[string]any{"field": azureAuthField(cfg, ce)})
 }
 
-// azureAuthField finds the auth field ce is about. ai's validation reports
-// the first failing field, so a field is the culprit when substituting a
-// valid value for it changes the refusal.
+// azureAuthField finds the auth field ce is about: the culprit is the field whose valid substitution changes the refusal.
 func azureAuthField(cfg ai.AzureFoundryConfig, ce *ai.AzureConfigError) string {
 	const validGUID = "00000000-0000-0000-0000-000000000000"
 	switch cfg.Auth.Mode {
@@ -1205,8 +1039,7 @@ func azureAuthField(cfg ai.AzureFoundryConfig, ce *ai.AzureConfigError) string {
 	return "clientSecret"
 }
 
-// connectionNameFromHost is a resource's default name: its endpoint host's
-// first label ("my-res" for https://my-res.openai.azure.com).
+// connectionNameFromHost is a resource's default name: the endpoint host's first label.
 func connectionNameFromHost(endpoint string) string {
 	u, err := url.Parse(endpoint)
 	if err != nil {
@@ -1226,8 +1059,7 @@ func validateConnectionName(name string) (string, error) {
 	return clean, nil
 }
 
-// newAzureRegistryID returns a random resource or model id: ten characters
-// of [a-z0-9] (never "default").
+// newAzureRegistryID returns a random resource or model id: ten characters of [a-z0-9] (never "default").
 func newAzureRegistryID() (string, error) {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 	out := make([]byte, 0, 10)
@@ -1249,10 +1081,7 @@ func newAzureRegistryID() (string, error) {
 	return string(out), nil
 }
 
-// saveCredential stores a resource's document: the caller's own KeyStore
-// entry, or the organisation's (compare-and-swap on expected, the stored
-// credential's stamp — zero for a credential that must not exist yet;
-// secretCarried keeps the stored secret's lender). Returns the org stamp.
+// saveCredential stores a resource's document: the caller's own entry, or the org's CAS on expected (zero = must not exist).
 func (s *AzureModelService) saveCredential(owner storageif.AzureOwner, scope, connID, raw, actor string, secretCarried bool, expected time.Time) (time.Time, error) {
 	key := credentialKey(connID)
 	if !owner.IsOrg() {
@@ -1268,8 +1097,7 @@ func (s *AzureModelService) saveCredential(owner storageif.AzureOwner, scope, co
 	return at, nil
 }
 
-// deleteCredential removes a resource's stored document (a missing one is
-// no error).
+// deleteCredential removes a resource's stored document (a missing one is no error).
 func (s *AzureModelService) deleteCredential(owner storageif.AzureOwner, scope, connID string) error {
 	key := credentialKey(connID)
 	var err error
@@ -1284,11 +1112,7 @@ func (s *AzureModelService) deleteCredential(owner storageif.AzureOwner, scope, 
 	return err
 }
 
-// CreateConnection is POST /connections: validate, pre-check the limit and
-// the name, save the credential, then — under the owner lock — re-check the
-// limit and write the registry row. On the desktop (no transaction, no
-// listable keyring) the row is written pending first, the keyring entry
-// saved, then the row finalised. Never creates the "default" resource.
+// CreateConnection is POST /connections: validate, pre-check, save the credential, then the locked registry write.
 func (s *AzureModelService) CreateConnection(ctx context.Context, as AzureScope, in AzureConnectionInput) (out AzureConnectionView, err error) {
 	defer logger.Guard("AzureModels.CreateConnection", &err)
 	owner, err := s.ownerFor(as)
@@ -1338,9 +1162,7 @@ func (s *AzureModelService) CreateConnection(ctx context.Context, as AzureScope,
 	return s.viewConnection(ctx, owner, as, id)
 }
 
-// createConnectionTx is the transactional create (Postgres, the fake): the
-// credential first, then the row under the lock. A failed row write removes
-// the credential it orphaned (best effort — the sweep is the backstop).
+// createConnectionTx is the transactional create (credential first, then the row); a failed row write removes the orphaned credential.
 func (s *AzureModelService) createConnectionTx(ctx context.Context, owner storageif.AzureOwner, scope string, rec storageif.AzureConnectionRecord, raw string) error {
 	if _, err := s.saveCredential(owner, scope, rec.ID, raw, scope, false, time.Time{}); err != nil {
 		return err
@@ -1365,8 +1187,7 @@ func (s *AzureModelService) createConnectionTx(ctx context.Context, owner storag
 	return nil
 }
 
-// createConnectionPending is the desktop's create: pending row, keyring
-// entry, finalised row. A keyring failure removes the pending row.
+// createConnectionPending is the desktop's create: pending row, keyring entry, finalised row; a keyring failure removes the pending row.
 func (s *AzureModelService) createConnectionPending(ctx context.Context, owner storageif.AzureOwner, scope string, rec storageif.AzureConnectionRecord, raw string) error {
 	rec.Pending = true
 	err := s.registry.WithOwnerLock(ctx, owner, func(lctx context.Context) error {
@@ -1392,8 +1213,7 @@ func (s *AzureModelService) createConnectionPending(ctx context.Context, owner s
 	return s.registry.FinalizeConnection(ctx, owner, rec.ID)
 }
 
-// checkConnectionName refuses a name another resource (other than skipID)
-// has, case-insensitively.
+// checkConnectionName refuses a name another resource (other than skipID) has, case-insensitively.
 func checkConnectionName(conns []storageif.AzureConnectionRecord, skipID, name string) error {
 	for _, c := range conns {
 		if c.ID != skipID && strings.EqualFold(c.Name, name) {
@@ -1404,8 +1224,7 @@ func checkConnectionName(conns []storageif.AzureConnectionRecord, skipID, name s
 	return nil
 }
 
-// connectionInUse refuses the delete of a resource that still has n models
-// without cascade.
+// connectionInUse refuses deleting a resource that still has n models without cascade.
 func connectionInUse(n int) error {
 	return azureRegErr(http.StatusConflict, AzureCodeConnectionInUse,
 		fmt.Sprintf("the resource still has %d model(s) — remove them too, or remove them first", n), nil, map[string]any{"modelCount": n})
@@ -1439,25 +1258,7 @@ func mapConnectionWriteErr(err error) error {
 	return err
 }
 
-// UpdateConnection is PUT /connections/{id}: rename it (compare-and-swap on
-// updatedAt), change its credential — the omitted secret carried by the host
-// rules, the default resource's legacy deployment fields carried unchanged,
-// an organisation's credential saved compare-and-swap on
-// credentialUpdatedAt — and/or dismiss its discovery prompt. An endpoint
-// change of the resource that holds the knowledge-base model on a non-empty
-// corpus is 409 REINDEX_REQUIRED unless Force.
-//
-// Two stores, one change: every check the registry write can fail on runs
-// BEFORE the credential is saved — the row's compare-and-swap token, the
-// name under the registry store's own uniqueness rule (Postgres lower(),
-// which Go's case folding cannot stand in for), the credential's own token
-// — then the credential is saved and the row written (rename or touch, and
-// the dismissal) in one locked write. Should that write still fail (a race,
-// a store failure), or anything after the save, the previous credential goes
-// back (an organisation's with its writer, lender and stamp) and the error
-// is returned — the request changed nothing; when it cannot go back the
-// error is an AzureCredentialChangedError, which the handler audits. On
-// success the replaced credential's process state is released.
+// UpdateConnection (PUT /connections/{id}) renames (CAS), rotates the credential and dismisses discovery; failures restore.
 func (s *AzureModelService) UpdateConnection(ctx context.Context, as AzureScope, id string, in AzureConnectionPatch) (out AzureConnectionView, err error) {
 	defer logger.Guard("AzureModels.UpdateConnection", &err)
 	owner, err := s.ownerFor(as)
@@ -1500,8 +1301,7 @@ func (s *AzureModelService) UpdateConnection(ctx context.Context, as AzureScope,
 			return AzureConnectionView{}, err
 		}
 	}
-	// From here on the new credential is stored: a failure puts the
-	// previous one back.
+	// From here on the new credential is stored: a failure puts the previous one back.
 	failed := func(cause error) (AzureConnectionView, error) {
 		if rot == nil {
 			return AzureConnectionView{}, cause
@@ -1526,8 +1326,7 @@ func (s *AzureModelService) UpdateConnection(ctx context.Context, as AzureScope,
 			return failed(mapConnectionWriteErr(err))
 		}
 	}
-	// Inside a request the row commits with the answer: an error here rolls
-	// it back, so the credential must go back with it.
+	// Inside a request the row commits with the answer: an error rolls it back, so the credential goes back with it.
 	v, err := s.viewConnection(ctx, owner, as, id)
 	if err != nil {
 		return failed(err)
@@ -1538,11 +1337,7 @@ func (s *AzureModelService) UpdateConnection(ctx context.Context, as AzureScope,
 	return v, nil
 }
 
-// checkNameFree refuses (DUPLICATE_CONNECTION_NAME) a name another resource
-// of owner (other than skipID) has: among conns case-insensitively as Go
-// folds case (the copy names the resource), and under the registry store's
-// own uniqueness rule, which decides what its write will refuse — asked
-// before a credential is saved, so a name the store refuses writes nothing.
+// checkNameFree refuses a name another resource of owner has — asked before a credential is saved.
 func (s *AzureModelService) checkNameFree(ctx context.Context, owner storageif.AzureOwner, conns []storageif.AzureConnectionRecord, skipID, name string) error {
 	if err := checkConnectionName(conns, skipID, name); err != nil {
 		return err
@@ -1558,9 +1353,7 @@ func (s *AzureModelService) checkNameFree(ctx context.Context, owner storageif.A
 	return nil
 }
 
-// azureRotation is a validated credential change of one resource
-// (UpdateConnection's config): the document to save, the one it replaces
-// and the snapshot that puts it back.
+// azureRotation is a validated credential change: the document to save, the one it replaces, the snapshot that puts it back.
 type azureRotation struct {
 	cfg      ai.AzureFoundryConfig
 	raw      string
@@ -1574,10 +1367,7 @@ type azureRotation struct {
 	savedAt time.Time
 }
 
-// prepareRotation validates a resource's new document (see UpdateConnection)
-// and snapshots the stored one — nothing is written. An organisation's
-// credential that changed since the admin's read (another admin saved, or
-// the lender left) is ErrOrgCredentialConflict here already.
+// prepareRotation validates the new document and snapshots the stored one — nothing written.
 func (s *AzureModelService) prepareRotation(ctx context.Context, owner storageif.AzureOwner, as AzureScope, id string, in AzureConnectionConfigInput, credentialUpdatedAt string, force bool) (*azureRotation, error) {
 	cfg := in.document()
 	credExpected, err := parseOrgKeyStamp(credentialUpdatedAt)
@@ -1588,8 +1378,7 @@ func (s *AzureModelService) prepareRotation(ctx context.Context, owner storageif
 		return nil, validateConnectionDocument(cfg, id, true)
 	}
 	if owner.IsOrg() && credExpected.IsZero() && cfg.HasSecret() {
-		// A repair of an unreadable stored credential (see
-		// SaveOrgAzureFoundryConfig): its own stamp is the token.
+		// A repair of an unreadable stored credential: its own stamp is the token.
 		stamp, repair, rerr := unreadableOrgStamp(s.orgKeys, owner.ID, credentialKey(id))
 		if rerr != nil {
 			return nil, rerr
@@ -1608,8 +1397,7 @@ func (s *AzureModelService) prepareRotation(ctx context.Context, owner storageif
 		return nil, err
 	}
 	if hadPrev && id == ai.AzureDefaultConnectionID {
-		// The legacy document keeps its deployment fields, unchanged, for a
-		// binary rolled back to the single-document release.
+		// The legacy document keeps its deployment fields for a binary rolled back to the single-document release.
 		cfg.ChatDeployment, cfg.EmbeddingDeployment = prev.ChatDeployment, prev.EmbeddingDeployment
 		cfg.Deployments, cfg.ClaudeDeployments = prev.Deployments, prev.ClaudeDeployments
 	}
@@ -1637,8 +1425,7 @@ func (s *AzureModelService) prepareRotation(ctx context.Context, owner storageif
 	return &azureRotation{cfg: cfg, raw: raw, prev: prev, hadPrev: hadPrev, supplied: supplied, expected: credExpected, snap: snap}, nil
 }
 
-// save stores the rotation's document (an organisation's compare-and-swap
-// on its token; a carried secret keeps its lender).
+// save stores the rotation's document (an org's CAS; a carried secret keeps its lender).
 func (r *azureRotation) save(s *AzureModelService, owner storageif.AzureOwner, scope, id string) error {
 	at, err := s.saveCredential(owner, scope, id, r.raw, scope, !r.supplied, r.expected)
 	if err != nil {
@@ -1648,8 +1435,7 @@ func (r *azureRotation) save(s *AzureModelService, owner storageif.AzureOwner, s
 	return nil
 }
 
-// release drops what the process kept for the replaced credential once the
-// change went through, and the new resource's cached listing.
+// release drops what the process kept for the replaced credential once the change went through.
 func (r *azureRotation) release() {
 	ai.InvalidateAzureFoundryModels(r.cfg)
 	if r.hadPrev && r.prev.Fingerprint() != r.cfg.Fingerprint() {
@@ -1657,20 +1443,14 @@ func (r *azureRotation) release() {
 	}
 }
 
-// forgetSaved drops what the process may have kept for the new credential
-// while it was stored, once the previous one is back.
+// forgetSaved drops what the process kept for the new credential once the previous one is back.
 func (r *azureRotation) forgetSaved() {
 	if !r.hadPrev || r.prev.Fingerprint() != r.cfg.Fingerprint() {
 		ai.ForgetAzureFoundryCredential(r.cfg)
 	}
 }
 
-// DeleteConnection is DELETE /connections/{id}: the row and — with Cascade
-// — its models go in the (request) transaction; the credential only after
-// the commit, and the process state kept for it with it. A resource with
-// models is 409 CONNECTION_IN_USE without Cascade; one holding the
-// knowledge-base model of a non-empty corpus is 409 REINDEX_REQUIRED
-// without Force.
+// DeleteConnection is DELETE /connections/{id}: row (+models with Cascade) in the transaction, credential only after commit.
 func (s *AzureModelService) DeleteConnection(ctx context.Context, as AzureScope, id string, opts AzureDeleteOptions) (out AzureConnectionDeleteResult, err error) {
 	defer logger.Guard("AzureModels.DeleteConnection", &err)
 	owner, err := s.ownerFor(as)
@@ -1706,14 +1486,11 @@ func (s *AzureModelService) deleteConnection(ctx context.Context, owner storagei
 		}
 	}
 	prev, hadPrev := storedAzureConfig(func() (string, error) { return s.readCredential(owner, scope, id) })
-	// The credential as it is now: the delete after the commit takes only
-	// this one — a credential saved again meanwhile (a single-document save
-	// of resource "default", a racing rotation) is not this delete's.
+	// The post-commit delete takes only this credential — one saved again meanwhile is not this delete's.
 	stamp, stamped := s.credentialStamp(owner, scope, id)
 	var deleted []storageif.AzureModelRecord
 	err = s.registry.WithOwnerLock(ctx, owner, func(lctx context.Context) error {
-		// Re-checked under the lock: a model added, or the knowledge-base
-		// designation moved onto this resource, since the checks above.
+		// Re-checked under the lock: a model added, or the KB designation moved here, since the checks above.
 		models, err := s.registry.ListModels(lctx, owner)
 		if err != nil {
 			return err
@@ -1738,10 +1515,7 @@ func (s *AzureModelService) deleteConnection(ctx context.Context, owner storagei
 	if err != nil {
 		return AzureConnectionDeleteResult{}, mapConnectionWriteErr(err)
 	}
-	// After the commit — the request's when there is one (a rollback then
-	// keeps the secret with its surviving row), else the owner lock's own,
-	// which has committed by now: a rolled-back delete never strands a row
-	// without its secret.
+	// After the commit: a rolled-back delete never strands a row without its secret.
 	storagedb.RegisterPostCommit(ctx, func() {
 		if _, err := s.deleteCredentialIfUnchanged(owner, scope, id, stamp, stamped); err != nil {
 			logger.Warn("azure registry: deleting a removed resource's credential failed (the orphan sweep retries)", "owner", owner.String(), "resource", id, "error", err)
@@ -1761,10 +1535,7 @@ func (s *AzureModelService) deleteConnection(ctx context.Context, owner storagei
 
 // ---- Status of a user's resources (single-document call sites) ----
 
-// HasPersonalResources reports whether the caller has at least one Azure AI
-// Foundry resource of their own (the provider listing's "configured", the
-// /api/keys/has answer): after the legacy import, or — while the import
-// could not run — the legacy document itself.
+// HasPersonalResources reports whether the caller has a resource of their own: post-import, or the legacy document itself.
 func (s *AzureModelService) HasPersonalResources(ctx context.Context, scope string) (bool, error) {
 	owner := s.userOwner(scope)
 	s.prepareOwner(ctx, owner, scope)
@@ -1780,9 +1551,7 @@ func (s *AzureModelService) HasPersonalResources(ctx context.Context, scope stri
 	return s.secrets.Has(scope, ai.AzureFoundryProviderID)
 }
 
-// OrgHasResources reports whether the organisation holds at least one
-// resource (its shared entries exist for its admins and members) — or a
-// legacy document whose import is still pending, which will be one.
+// OrgHasResources reports whether the organisation holds a resource (or a legacy document whose import will be one).
 func (s *AzureModelService) OrgHasResources(ctx context.Context, orgID string) (bool, error) {
 	if !s.OrgRegistriesAvailable() || orgID == "" {
 		return false, nil

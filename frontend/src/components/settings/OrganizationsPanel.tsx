@@ -118,7 +118,7 @@ export default function OrganizationsPanel() {
   // hides for every org (it is a deployment property, not an org's).
   const [orgAzureUnavailable, setOrgAzureUnavailable] = useState(false)
   const markOrgAzureUnavailable = useCallback(() => setOrgAzureUnavailable(true), [])
-  // F-48: removing or demoting the lender of an org resource's credential
+  // Removing or demoting the lender of an org resource's credential
   // disables it server-side. The note says what disappeared and who
   // re-enters it — in that org only — and the registry is marked stale, so
   // the block (and the members' "Shared with you") fetch it again and show
@@ -195,7 +195,7 @@ export default function OrganizationsPanel() {
   const handleInvite = async () => {
     const email = inviteEmail.trim()
     if (!selected || !email) return
-    // Client-side format gate (U4.3): a typo'd address used to burn a
+    // Client-side format gate: a typo'd address used to burn a
     // round-trip and surface a raw server error.
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       setInviteError(t('orgs.inviteInvalidEmail'))

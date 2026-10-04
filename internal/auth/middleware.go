@@ -64,11 +64,10 @@ func Middleware(mgr *Manager, next http.Handler) http.Handler {
 // ExtractToken pulls the bearer token from the Authorization header. As a
 // narrow exception, it also reads ?token= from the query string, but ONLY for
 // the /api/events SSE endpoint: browsers cannot set headers on EventSource
-// requests, so the access token has to ride in the URL there. Accepting ?token=
-// on every /api/ route would leak 15-minute access JWTs into proxy/WAF/browser
-// logs and Referer headers; restricting it to the SSE path confines that
-// exposure to the one endpoint that needs it. Returns the raw token string
-// (without the "Bearer " prefix).
+// requests, so the access token must ride in the URL there. Accepting ?token=
+// on every route would leak access JWTs into proxy/WAF/browser logs and
+// Referer headers; restricting it to the SSE path confines the exposure.
+// Returns the raw token string (without the "Bearer " prefix).
 //
 // The auth scheme is case-insensitive per RFC 7235 §2.1, so "bearer <jwt>",
 // "BEARER <jwt>", etc. are all accepted (some client libraries emit lowercase).
@@ -82,7 +81,13 @@ func ExtractToken(r *http.Request) string {
 			return strings.TrimSpace(h[idx+1:])
 		}
 	}
-	if r.URL.Path == sseTokenPath {
+	// Only a request without a RawPath can reach the SSE route: chi routes on
+	// RawPath, verbatim, whenever it is set, and a RawPath is never the static
+	// /api/events spelling. Its Path can still read /api/events once the
+	// Router has cleaned it — /api/library/..%2Fevents does, while chi runs
+	// /api/library/{id} — and deciding on that let the query token
+	// authenticate every route that ends in a parameter.
+	if r.URL.RawPath == "" && r.URL.Path == sseTokenPath {
 		return r.URL.Query().Get("token")
 	}
 	return ""

@@ -24,6 +24,28 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
+// resolveFlowID verifies access like requireFlowPerm and additionally returns
+// the flow ID the request operates on: the request's own flowId in cloud
+// mode, the currently loaded document's ID in local mode (where the client's
+// flowId is advisory). Header-only — the conversation endpoints need nothing
+// from the document but its ID, so they skip the blob download, unmarshal and
+// index rebuild that resolving the whole document would cost on every call.
+func resolveFlowID(w http.ResponseWriter, r *http.Request, flowSvc *service.FlowService, security *SecurityConfig, flowID, minPerm string) (string, bool) {
+	if !security.JWTEnabled {
+		doc := flowSvc.DocProvider().CurrentDoc()
+		if doc == nil {
+			render.Error(w, fmt.Errorf("no flow loaded"), http.StatusBadRequest)
+			return "", false
+		}
+		return doc.ID, true
+	}
+	if err := flowSvc.CheckFlowPermission(r.Context(), flowID, security.CallerID(r), minPerm); err != nil {
+		render.Error(w, err, 0)
+		return "", false
+	}
+	return flowID, true
+}
+
 // decodeOptional decodes the request body into v when one is present; an
 // empty/absent body is not an error (all-zero request). Used by endpoints that
 // accept optional JSON payloads (triage filters, toggle flags).

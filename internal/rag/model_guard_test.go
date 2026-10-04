@@ -33,7 +33,7 @@ func (f *fixedEmbedder) Embed(_ context.Context, text []string) ([][]float32, er
 // seedCorpus stores one document of org-1 with chunks whose stored embedding
 // is vec — a corpus some earlier model indexed.
 func seedCorpus(store *testutil.FakeBackend, vec []float32, contents ...string) {
-	_ = store.SaveKnowledgeDocument(context.Background(), &interfaces.KnowledgeDocument{ID: "doc-1", OrgID: "org-1", Filename: "policy.md"})
+	_ = store.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "doc-1", OrgID: "org-1", Filename: "policy.md"})
 	chunks := make([]interfaces.KnowledgeChunk, len(contents))
 	for i, c := range contents {
 		chunks[i] = interfaces.KnowledgeChunk{ID: "chunk-" + string(rune('a'+i)), DocID: "doc-1", Content: c, Embedding: append([]float32(nil), vec...)}
@@ -72,9 +72,9 @@ func guardService(store *testutil.FakeBackend, emb ai.Provider) *KnowledgeServic
 }
 
 // TestReindexOrg_ModelChangedRefusedUnlessForced pins #35: a re-index by an
-// admin whose embedding model differs from the corpus's (same width, so the
-// width guards cannot see it) is refused and leaves the store untouched;
-// force rewrites every chunk with the caller's model.
+// admin whose model differs from the corpus's (same width, invisible to the
+// width guards) is refused and leaves the store untouched; force rewrites
+// every chunk with the caller's model.
 func TestReindexOrg_ModelChangedRefusedUnlessForced(t *testing.T) {
 	store := &testutil.FakeBackend{}
 	seedCorpus(store, []float32{1, 0}, "alpha rule", "beta rule", "gamma rule", "delta rule")
@@ -128,8 +128,8 @@ func TestReindexOrg_SameModelPasses(t *testing.T) {
 }
 
 // TestReindexOrg_WidthChangePassesWithoutForce: a corpus stranded at another
-// width — nothing of it in the vector index at the deployment's width — is
-// the recovery case the re-index button exists for, so no force is needed.
+// width (nothing of it in the vector index) is the recovery case the re-index
+// button exists for — no force needed.
 func TestReindexOrg_WidthChangePassesWithoutForce(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 3} // the width-2 corpus is stranded
 	seedCorpus(store, []float32{1, 0}, "alpha rule", "beta rule")
@@ -147,8 +147,7 @@ func TestReindexOrg_WidthChangePassesWithoutForce(t *testing.T) {
 
 // TestAddDocument_ModelChangedRefused pins #34/#35 on upload: a document
 // embedded with another model would be unfindable for everyone on the
-// corpus's model, so the upload is refused before the document is embedded
-// and nothing is written.
+// corpus's model — refused before embedding, nothing written.
 func TestAddDocument_ModelChangedRefused(t *testing.T) {
 	store := &testutil.FakeBackend{}
 	seedCorpus(store, []float32{1, 0}, "alpha rule", "beta rule")
@@ -178,16 +177,14 @@ func TestAddDocument_ModelChangedRefused(t *testing.T) {
 }
 
 // TestCheckCorpusModel_WorstSameWidthPairDecides (the inverse of the former
-// best-of rule): a partially re-indexed or mixed corpus is refused as soon
-// as ONE comparable sample disagrees — passing on the one matching sample
-// let a mixed corpus accept uploads from both models and never be repaired.
-// Zero vectors are ignored (undefined similarity), so a sample of only
-// zero vectors is corpusEmpty, and a sample with no same-width pair is
-// corpusOtherWidth.
+// best-of rule): a mixed corpus is refused as soon as ONE comparable sample
+// disagrees — passing on the one match let both models keep uploading and the
+// mix never repair. Zero vectors are ignored; a sample with no same-width
+// pair is corpusOtherWidth.
 func TestCheckCorpusModel_WorstSameWidthPairDecides(t *testing.T) {
 	store := &testutil.FakeBackend{}
 	for _, d := range []string{"d1", "d2", "d3"} {
-		_ = store.SaveKnowledgeDocument(context.Background(), &interfaces.KnowledgeDocument{ID: d, OrgID: "org-1"})
+		_ = store.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: d, OrgID: "org-1"})
 	}
 	// One chunk per document so every one of them is sampled.
 	_ = store.SaveKnowledgeChunks(context.Background(), "", []interfaces.KnowledgeChunk{
@@ -202,7 +199,7 @@ func TestCheckCorpusModel_WorstSameWidthPairDecides(t *testing.T) {
 	}
 
 	zeros := &testutil.FakeBackend{}
-	_ = zeros.SaveKnowledgeDocument(context.Background(), &interfaces.KnowledgeDocument{ID: "d", OrgID: "org-1"})
+	_ = zeros.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "d", OrgID: "org-1"})
 	_ = zeros.SaveKnowledgeChunks(context.Background(), "", []interfaces.KnowledgeChunk{
 		{ID: "a", DocID: "d", Content: "one", Embedding: []float32{0, 0}},
 	})
@@ -227,8 +224,8 @@ func TestCheckCorpusModel_WorstSameWidthPairDecides(t *testing.T) {
 func TestCheckCorpusModel_MixedCorpusRefusesBothModels(t *testing.T) {
 	newMixed := func() *testutil.FakeBackend {
 		store := &testutil.FakeBackend{}
-		_ = store.SaveKnowledgeDocument(context.Background(), &interfaces.KnowledgeDocument{ID: "doc-a", OrgID: "org-1", Filename: "a.md"})
-		_ = store.SaveKnowledgeDocument(context.Background(), &interfaces.KnowledgeDocument{ID: "doc-b", OrgID: "org-1", Filename: "b.md"})
+		_ = store.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "doc-a", OrgID: "org-1", Filename: "a.md"})
+		_ = store.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "doc-b", OrgID: "org-1", Filename: "b.md"})
 		_ = store.SaveKnowledgeChunks(context.Background(), "", []interfaces.KnowledgeChunk{
 			{ID: "a1", DocID: "doc-a", Content: "alpha", Embedding: []float32{1, 0}},
 			{ID: "a2", DocID: "doc-a", Content: "alpha two", Embedding: []float32{1, 0}},
@@ -335,7 +332,7 @@ func TestAddDocument_ReplacingOnlyDocumentSkipsGuard(t *testing.T) {
 	if err := svc.AddDocument(context.Background(), "scope", "org-1", "policy.md", "the rewritten policy"); err != nil {
 		t.Fatalf("replacing the only document: %v", err)
 	}
-	docs, _ := store.ListKnowledgeDocuments(context.Background(), "org-1", 0)
+	docs, _ := store.ListKnowledgeDocuments(context.Background(), "org-1", 0, 0)
 	if len(docs) != 1 || docs[0].Filename != "policy.md" || docs[0].ID == "doc-1" {
 		t.Errorf("docs after the replace = %+v, want exactly the new policy.md", docs)
 	}
@@ -351,7 +348,7 @@ func TestAddDocument_ReplacingOnlyDocumentSkipsGuard(t *testing.T) {
 	// Another document survives the replace: the guard protects it.
 	two := &testutil.FakeBackend{}
 	seedCorpus(two, []float32{1, 0}, "alpha rule")
-	_ = two.SaveKnowledgeDocument(context.Background(), &interfaces.KnowledgeDocument{ID: "doc-2", OrgID: "org-1", Filename: "other.md"})
+	_ = two.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "doc-2", OrgID: "org-1", Filename: "other.md"})
 	_ = two.SaveKnowledgeChunks(context.Background(), "", []interfaces.KnowledgeChunk{{ID: "chunk-o", DocID: "doc-2", Content: "other rule", Embedding: []float32{1, 0}}})
 	before := storedEmbeddings(two)
 	err := guardService(two, &fixedEmbedder{vec: []float32{0, 1}}).AddDocument(context.Background(), "scope", "org-1", "policy.md", "the rewritten policy")

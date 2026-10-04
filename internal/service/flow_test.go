@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"pad-core/cache"
 	"pad-core/models"
@@ -79,10 +82,6 @@ func TestFlowService_FindBlockByID_unknown(t *testing.T) {
 
 func TestFlowService_FindSubflowForBlock_found(t *testing.T) {
 	svc, doc := makeTestDoc(t, simpleFlow)
-	// Fatal, not Skip: simpleFlow is a fixture in this file, not an
-	// environment dependency. If it ever stops yielding blocks the parser has
-	// regressed — skipping would retire this test silently at exactly the
-	// moment it matters.
 	if len(doc.Subflows) == 0 || len(doc.Subflows[0].Blocks) == 0 {
 		t.Fatal("fixture parsed to zero blocks — parser regression, or simpleFlow changed")
 	}
@@ -162,5 +161,55 @@ func TestFlowService_SearchIndexCacheIsBounded(t *testing.T) {
 	}
 	if _, ok := svc.idxCache.Get(ctx, "c"); !ok {
 		t.Error("expected newly-added c to be present")
+	}
+}
+
+// countingIndexCache wraps a Cache and counts writes, to assert that a burst
+// of concurrent cold searches builds the index once.
+type countingIndexCache struct {
+	cache.Cache
+	sets atomic.Int32
+}
+
+func (c *countingIndexCache) Set(ctx context.Context, key string, value any, ttl time.Duration) {
+	c.sets.Add(1)
+	c.Cache.Set(ctx, key, value, ttl)
+}
+
+func (c *countingIndexCache) SetWithCost(ctx context.Context, key string, value any, cost int64, ttl time.Duration) {
+	c.sets.Add(1)
+	if sized, ok := c.Cache.(cache.SizedCache); ok {
+		sized.SetWithCost(ctx, key, value, cost, ttl)
+		return
+	}
+	c.Cache.Set(ctx, key, value, ttl)
+}
+
+// Concurrent cold searches for one flow must share a single index build
+// (idxFlights): each build tokenizes the whole flow, and N racers would also
+// overwrite each other's cache entry.
+func TestFlowService_SearchIndex_ConcurrentMissBuildsOnce(t *testing.T) {
+	svc, doc := makeTestDoc(t, simpleFlow)
+	lru, err := cache.NewLRUCache(maxSearchIndexCache)
+	if err != nil {
+		t.Fatalf("NewLRUCache: %v", err)
+	}
+	cc := &countingIndexCache{Cache: lru}
+	svc.idxCache = cc
+
+	const racers = 24
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if r := svc.searchDoc(doc, models.SearchQuery{}, true); r == nil {
+				t.Error("searchDoc returned nil results")
+			}
+		}()
+	}
+	wg.Wait()
+	if got := cc.sets.Load(); got != 1 {
+		t.Errorf("index cached %d times for %d concurrent cold searches, want 1", got, racers)
 	}
 }

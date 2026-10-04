@@ -13,24 +13,14 @@ import (
 	"pad-core/logger"
 )
 
-// Credential lifecycle across the Azure key family. A user's (or an
-// organisation's) Azure credentials are a key FAMILY — "azure-foundry" (the
-// default resource) and "azure-foundry/<id>" (every other one) — and
-// everything that used to release the one document releases the whole
-// family: a lender's disable, an organisation's deletion, an account's
-// erasure. What the process keeps for a credential (its Entra ID token
-// source, its cached listings) goes with it (ai.ForgetAzureFoundryCredential,
-// once per key). Registry rows stay where a credential is disabled — their
-// resources read needs_credentials — and cascade where their owner goes.
-//
-// Two stores, no transaction between them, leave one kind of debris: a
-// credential without a registry row (a create whose row write failed after
-// the keystore save, a commit that failed after the answer). The orphan
-// sweep removes it, at most hourly per owner and only past a grace period
-// that covers every create still in flight. The desktop keyring cannot be
-// listed; its two-step create rolls back instead (rollbackStalePending).
+// Credential lifecycle across the Azure key family ("azure-foundry" and
+// "azure-foundry/<id>"): releasing one document releases the whole family and the
+// process state with it (Entra ID token source, cached listings) on a lender's
+// disable, an org's deletion or an account's erasure; registry rows stay on disable
+// and cascade with their owner. The orphan sweep removes a credential left without
+// a registry row (two stores, no transaction); the unlistable desktop keyring rolls
+// its two-step create back instead (rollbackStalePending).
 
-// azureKeyFamily is the Azure resources' KeyStore key family.
 const azureKeyFamily = ai.AzureFoundryProviderID
 
 // Sweep and rollback tuning.
@@ -40,9 +30,8 @@ const (
 	// azureOrphanGrace protects a credential younger than this from the
 	// sweep: an in-flight create saved it and has not written its row yet.
 	azureOrphanGrace = time.Hour
-	// azurePendingGrace protects a pending row younger than this from the
-	// desktop rollback: another process sharing the directory (a standalone
-	// backend next to the app) may still be finishing it.
+	// azurePendingGrace protects a pending row younger than this from the desktop
+	// rollback: another process sharing the directory may still be finishing it.
 	azurePendingGrace = 15 * time.Minute
 )
 
@@ -59,11 +48,10 @@ func forgetAzureDocument(raw string) {
 
 // ---- Lender disable ----
 
-// disableOrgAzureFamily deletes, in one statement, every Azure credential of
-// orgID whose secret userID lent (secret_set_by; updated_by for a row no
-// save has stamped since v24) and releases each one's process state.
-// Returns the keys removed. A store without key families (none in
-// production) removes the default resource's key alone, as before.
+// disableOrgAzureFamily deletes, in one statement, every Azure credential of orgID
+// whose secret userID lent (secret_set_by; updated_by for a row no save has stamped
+// since v24), releasing each one's process state, and returns the keys removed. A
+// store without key families (none in production) removes the default key alone.
 func disableOrgAzureFamily(orgKeys OrgKeyStore, orgID, userID string) ([]string, error) {
 	if fam, ok := orgKeys.(storageif.OrgSecretFamilyStore); ok {
 		deleted, err := fam.DeleteOrgKeyFamilyIfSavedBy(orgID, azureKeyFamily, userID)
@@ -109,9 +97,8 @@ func orgsWithAzureFamilySavedBy(orgKeys OrgKeyStore, userID string) ([]storageif
 
 // ---- Organisation deletion and account erasure ----
 
-// orgAzureDocuments reads every Azure credential of orgID (while the rows
-// still exist) for their release: the family, or the default resource's
-// key alone on a store without families.
+// orgAzureDocuments reads every Azure credential of orgID (while the rows still
+// exist) for release: the family, or the default resource's key without families.
 func orgAzureDocuments(orgKeys OrgKeyStore, orgID string) []string {
 	keys := []string{azureKeyFamily}
 	if fam, ok := orgKeys.(storageif.OrgSecretFamilyStore); ok {
@@ -134,10 +121,9 @@ func orgAzureDocuments(orgKeys OrgKeyStore, orgID string) []string {
 	return docs
 }
 
-// userAzureDocuments reads every Azure credential of the user with key
-// scope scope (while they still exist): the family when the keystore lists
-// it, else the default resource's key plus the keys of the registry's
-// resources.
+// userAzureDocuments reads every Azure credential of the user with key scope scope
+// (while they still exist): the family when listed, else the default key plus the
+// registry's resources.
 func userAzureDocuments(secrets KeyStore, scope string, registryIDs []string) []string {
 	keys := []string{azureKeyFamily}
 	if lister, ok := secrets.(storageif.SecretFamilyLister); ok {
@@ -203,16 +189,12 @@ func (s *AzureModelService) sweepDue(owner storageif.AzureOwner) bool {
 	return true
 }
 
-// sweepOrphans removes owner's Azure credentials that have no registry row
-// and were last saved more than azureOrphanGrace ago (at most hourly per
-// owner, on the owner's listing). Only once the legacy import ran — until
-// then the legacy document has no row by design — and only keys naming a
-// generated resource id: the bare legacy key ("azure-foundry", resource
-// "default") is never swept — it is the credential a binary rolled back to
-// the single-document release runs on, and only an explicit delete removes
-// it. Each delete is conditional on the stamp the listing saw, so a key
-// saved again since is kept. The keyring, which cannot be listed, is never
-// swept.
+// sweepOrphans removes owner's Azure credentials with no registry row, last saved
+// more than azureOrphanGrace ago (at most hourly per owner, on the owner's listing),
+// only once the legacy import ran and only for generated resource ids — the bare
+// legacy key ("azure-foundry", resource "default") is never swept: a rolled-back
+// binary runs on it. Deletes are conditional on the listing's stamp; the unlistable
+// keyring is never swept.
 func (s *AzureModelService) sweepOrphans(ctx context.Context, st *azureOwnerState) {
 	owner := st.owner
 	var list func() ([]storageif.SecretFamilyEntry, error)
@@ -284,11 +266,10 @@ func (s *AzureModelService) sweepOrphans(ctx context.Context, st *azureOwnerStat
 	}
 }
 
-// credentialStamp reads the stamp of resource connID's stored credential —
-// the time its row was last saved — for a delete decided now and run later
-// (deleteCredentialIfUnchanged): known is false when the keystore cannot
-// delete conditionally (the desktop keyring) or the read failed; a zero
-// stamp with known true means there is no credential.
+// credentialStamp reads the stamp of resource connID's stored credential — the time
+// its row was last saved — for a delete decided now and run later; known is false
+// when the keystore cannot delete conditionally (the desktop keyring) or the read
+// failed, and a zero stamp with known true means there is no credential.
 func (s *AzureModelService) credentialStamp(owner storageif.AzureOwner, scope, connID string) (stamp time.Time, known bool) {
 	key := credentialKey(connID)
 	if owner.IsOrg() {
@@ -320,12 +301,10 @@ func (s *AzureModelService) credentialStamp(owner storageif.AzureOwner, scope, c
 	return time.Time{}, true
 }
 
-// deleteCredentialIfUnchanged deletes resource connID's credential as
-// credentialStamp saw it: only while its row still carries stamp — one saved
-// again since (a single-document save of resource "default", a rotation
-// racing the delete) is kept — nothing when there was none, and
-// unconditionally when the stamp is not known (the keyring: one local user,
-// no racing writer). deleted reports whether a credential went.
+// deleteCredentialIfUnchanged deletes resource connID's credential as credentialStamp
+// saw it: only while its row still carries stamp (a save racing the delete is kept),
+// nothing when there was none, unconditionally when the stamp is not known (the
+// keyring: one local user, no racing writer). deleted reports whether a credential went.
 func (s *AzureModelService) deleteCredentialIfUnchanged(owner storageif.AzureOwner, scope, connID string, stamp time.Time, known bool) (deleted bool, err error) {
 	if !known {
 		return true, s.deleteCredential(owner, scope, connID)
@@ -346,14 +325,12 @@ func (s *AzureModelService) deleteCredentialIfUnchanged(owner storageif.AzureOwn
 
 // ---- Desktop pending rows ----
 
-// rollbackStalePending rolls back the pending rows an earlier process left
-// (a create that never finished): its keyring entry, when the save got that
-// far, then the row. A row stays while it is this process's (a create in
-// flight) or younger than azurePendingGrace (another process sharing the
-// directory may be finishing it) — and every row stays while the registry is
-// read-only (a newer app version wrote the file): the row could not be
-// removed, and deleting its keyring entry first would leave a row the newer
-// app may still finish without its secret.
+// rollbackStalePending rolls back the pending rows an earlier process left (a create
+// that never finished): its keyring entry, when the save got that far, then the row.
+// A row stays while it is this process's or younger than azurePendingGrace (another
+// process sharing the directory may still be finishing it); every row stays while
+// the registry is read-only (a newer app version wrote it) — deleting the keyring
+// entry first would leave a row the newer app may still finish without its secret.
 func (s *AzureModelService) rollbackStalePending(ctx context.Context, owner storageif.AzureOwner, scope string) {
 	if !s.registry.PendingWrites() {
 		return
@@ -389,12 +366,11 @@ func (s *AzureModelService) rollbackStalePending(ctx context.Context, owner stor
 
 // ---- GDPR export ----
 
-// ExportConnectionConfigs is the data-subject export's source of userID's
-// resources' public configuration (storageif.AzureExportConfigFunc): the
-// endpoint, the auth mode, the tenant and client ids and the project
-// endpoint of each credential — never a secret. A credential that cannot be
-// decrypted or parsed is marked Unreadable; a missing one is left out; any
-// other keystore failure fails the export (it is complete or nothing).
+// ExportConnectionConfigs is the data-subject export's source of userID's resources'
+// public configuration (storageif.AzureExportConfigFunc) — endpoint, auth mode,
+// tenant and client ids, project endpoint, never a secret; undecryptable or
+// unparseable credentials are marked Unreadable, missing ones left out, any other
+// keystore failure fails the whole export (complete or nothing).
 func (s *AzureModelService) ExportConnectionConfigs(_ context.Context, userID string, connectionIDs []string) (map[string]storageif.AzureConnectionPublicConfig, error) {
 	out := make(map[string]storageif.AzureConnectionPublicConfig, len(connectionIDs))
 	for _, id := range connectionIDs {
@@ -428,16 +404,14 @@ func (s *AzureModelService) ExportConnectionConfigs(_ context.Context, userID st
 
 // ---- ProviderService lifecycle (family-wide) ----
 
-// DisableOrgAzureCredentialsSavedBy disables every Azure AI Foundry
-// credential of orgID that userID lent — called when that admin is demoted,
-// removed from the organisation or deletes their account: every key of the
-// family whose secret they supplied is deleted in one statement (a newer
-// save by another admin with their own secret is kept, an edit that carried
-// the secret does not make its editor a lender), each credential's process
-// state is released and the organisation's cached listings dropped. The
-// registry rows stay: their resources read needs_credentials until an admin
-// enters the credentials again. Returns the keys disabled — one
-// keys.save {op:"disable"} audit row each; none without an org store.
+// DisableOrgAzureCredentialsSavedBy disables every Azure AI Foundry credential of
+// orgID that userID lent (on that admin's demotion, removal or account erasure):
+// every key whose secret they supplied is deleted in one statement — a newer save by
+// another admin with their own secret is kept, and an edit that carried the secret
+// does not make its editor a lender — releasing each credential's process state and
+// dropping the org's cached listings. Registry rows stay, reading needs_credentials
+// until re-entered. Returns the keys disabled, one keys.save {op:"disable"} audit
+// row each; none without an org store.
 func (s *ProviderService) DisableOrgAzureCredentialsSavedBy(orgID, userID string) (keys []string, err error) {
 	defer logger.Guard("App.DisableOrgAzureCredentialsSavedBy", &err)
 	if s.orgKeys == nil || orgID == "" || userID == "" {
@@ -453,11 +427,10 @@ func (s *ProviderService) DisableOrgAzureCredentialsSavedBy(orgID, userID string
 	return keys, nil
 }
 
-// DisableOrgAzureCredentialsLentBy is DisableOrgAzureCredentialsSavedBy for
-// every organisation userID lent an Azure credential to (account erasure:
-// the membership rows go with the account, the credential rows do not).
-// Returns the (org, key) pairs disabled; an organisation that fails is
-// logged and skipped so the others are still disabled.
+// DisableOrgAzureCredentialsLentBy is DisableOrgAzureCredentialsSavedBy for every
+// organisation userID lent an Azure credential to (account erasure: the membership
+// rows go with the account, the credential rows do not); an organisation that fails
+// is logged and skipped so the others are still disabled.
 func (s *ProviderService) DisableOrgAzureCredentialsLentBy(userID string) (refs []storageif.OrgKeyRef, err error) {
 	defer logger.Guard("App.DisableOrgAzureCredentialsLentBy", &err)
 	if s.orgKeys == nil || userID == "" {

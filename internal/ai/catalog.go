@@ -5,32 +5,19 @@ import (
 	"strings"
 )
 
-// modelCatalog is the single source of truth for the models each provider
-// serves, with their pricing and limits. This is the data that drifts as vendors
-// ship new models and change prices; centralizing it here keeps it in one
-// auditable place, separate from the stable per-provider request/SSE code, so a
-// model refresh is a one-file edit. TestProviderCatalogConsistency validates that
-// each provider's DefaultModel/FreeModel resolve against these entries.
+// modelCatalog is the single source of truth for the models each provider serves, with pricing and limits —
+// the data that drifts as vendors ship models and change prices, centralized in one auditable place.
+// TestProviderCatalogConsistency validates each provider's DefaultModel/FreeModel against these entries.
 var modelCatalog = map[string][]ModelInfo{
-	// Claude: the Claude API models that Microsoft Foundry also sells (its
-	// "API model IDs and deployments" table). Base input/output USD per 1M
-	// tokens, context window and synchronous max output as published on
-	// platform.claude.com (about-claude/pricing and each models/<id>/overview
-	// page), checked 2026-09-28. The prices bill the direct Claude provider
-	// only; a Foundry Claude deployment borrows these rows for its window and
-	// output cap and is unpriced like every Azure AI Foundry call
-	// (catalogEntryFor zeroes the price). Claude Opus 4.1 ($15/$75) is retired
-	// except on Bedrock and Google Cloud — neither the Claude API nor Foundry
-	// serves it — so it is not listed.
+	// Claude: prices and limits as published on platform.claude.com, checked 2026-09-28. The prices bill the
+	// direct Claude provider only; a Foundry Claude deployment borrows these rows for its window/cap, unpriced.
 	"claude": {
 		{ID: "claude-fable-5-1", DisplayName: "Claude Fable 5.1", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
 		{ID: "claude-fable-5", DisplayName: "Claude Fable 5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
 		{ID: "claude-mythos-5-1", DisplayName: "Claude Mythos 5.1", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
 		{ID: "claude-mythos-5", DisplayName: "Claude Mythos 5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
-		// claude-mythos-preview: Foundry lists it (1M context / 128K output,
-		// Entra-only gated research preview) but Anthropic publishes no price
-		// row of its own — the Mythos 5/5.1 rate is assumed (the "long
-		// context pricing" note includes the 1M window at standard pricing).
+		// claude-mythos-preview: Foundry lists it but Anthropic publishes no
+		// price row of its own — the Mythos 5/5.1 rate is assumed.
 		{ID: "claude-mythos-preview", DisplayName: "Claude Mythos Preview", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
 		{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 4.0, OutputCostPerM: 20.0}},
 		{ID: "claude-opus-5", DisplayName: "Claude Opus 5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},
@@ -59,20 +46,16 @@ var modelCatalog = map[string][]ModelInfo{
 		{ID: "grok-2", DisplayName: "Grok 2", ContextLimit: 131072, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 10.0}},
 	},
 	"glm": {
-		// glm-5.3 and glm-5.2 verified against the z.ai coding endpoint
-		// 2026-09-23; the -turbo/-air/-flash variants of either do not exist
-		// there (1211 Unknown Model). The 4.7 family was dropped from this
-		// deployment's catalog on request — glm-4.7-flashx is additionally
-		// not entitled on GLM Coding Plan keys (1113 resource-package error).
+		// glm-5.3 and glm-5.2 verified against the z.ai coding endpoint 2026-09-23; the -turbo/-air/-flash
+		// variants of either do not exist there (1211 Unknown Model).
 		{ID: "glm-5.3", DisplayName: "GLM-5.3", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4}},
 		{ID: "glm-5.2", DisplayName: "GLM-5.2", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4}},
 		{ID: "glm-5.1", DisplayName: "GLM-5.1", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4}},
 		{ID: "glm-5", DisplayName: "GLM-5", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 1.0, OutputCostPerM: 3.2}},
 		{ID: "glm-5-turbo", DisplayName: "GLM-5 Turbo", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 0.8, OutputCostPerM: 2.4}},
 	},
-	// GitHub Models' free tier enforces an 8 192-token request limit for most
-	// models regardless of native context window; the limits cap the context
-	// budget so the API never returns a 413.
+	// GitHub Models' free tier enforces an 8 192-token request limit regardless of native window; the
+	// limits cap the context budget so the API never returns a 413.
 	"github-models": {
 		{ID: "gpt-4o", DisplayName: "GPT-4o", ContextLimit: 8192, Pricing: Pricing{InputCostPerM: 2.5, OutputCostPerM: 10.0}},
 		{ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", ContextLimit: 8192, Pricing: Pricing{InputCostPerM: 0.15, OutputCostPerM: 0.6}},
@@ -87,24 +70,12 @@ var modelCatalog = map[string][]ModelInfo{
 		{ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", ContextLimit: 128000, Pricing: Pricing{InputCostPerM: 0, OutputCostPerM: 0}},
 		{ID: "claude-3.5-sonnet", DisplayName: "Claude 3.5 Sonnet", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 0, OutputCostPerM: 0}},
 	},
-	// Azure AI Foundry serves whatever the user DEPLOYED, under a name the
-	// user chose, so this list is not what the provider offers — it is the
-	// reference table the served-model name (response "model") is sized
-	// against: the models' INPUT caps and output caps. ContextLimit is what
-	// the chat service truncates the prompt against, so where Azure documents
-	// separate input and output limits (gpt-5 family: 272k in + 128k out =
-	// 400k) the input figure goes here, never the total window. The
-	// unconfigured (metadata) provider also advertises it so the UI has
-	// something to show before the first deployment listing.
-	//
-	// Pricing: none. Azure AI Foundry is deliberately unpriced — the Azure
-	// portal is the source of truth for cost — so the rows carry no price and
-	// catalogEntryFor zeroes the Claude rows an Azure deployment borrows.
-	// Only the context window and output cap of each model are kept (from
-	// Microsoft's "models sold directly by Azure" page, checked 2026-09-29).
-	// gpt-5.4, gpt-5.4-pro, gpt-5.5, gpt-5.6 and gpt-6 accept up to 922,000
-	// input tokens but bill input beyond 272,000 at a higher long-context
-	// tier; ContextLimit is that 272,000 figure, as for gpt-5 itself.
+	// Azure AI Foundry serves whatever the user DEPLOYED under a chosen name, so this list is the reference
+	// table the served-model name is sized against. ContextLimit is what the prompt is truncated against:
+	// where Azure documents separate input and output limits (gpt-5 family: 272k in + 128k out) the INPUT
+	// figure goes here, never the total window. No pricing — the Azure portal is the source of truth. Windows
+	// from Microsoft's "models sold directly by Azure" page, checked 2026-09-29; gpt-5.4+ and gpt-6 accept up
+	// to 922,000 input tokens but bill beyond 272,000 at a higher long-context tier, so 272,000 it is.
 	"azure-foundry": {
 		{ID: "gpt-4.1", DisplayName: "GPT-4.1", ContextLimit: 1047576, MaxOutputTokens: 32768},
 		{ID: "gpt-4.1-mini", DisplayName: "GPT-4.1 Mini", ContextLimit: 1047576, MaxOutputTokens: 32768},
@@ -143,10 +114,8 @@ var modelCatalog = map[string][]ModelInfo{
 		{ID: "o3", DisplayName: "o3", ContextLimit: 200000, MaxOutputTokens: 100000},
 		{ID: "o3-mini", DisplayName: "o3-mini", ContextLimit: 200000, MaxOutputTokens: 100000},
 		{ID: "o3-pro", DisplayName: "o3 Pro", ContextLimit: 200000, MaxOutputTokens: 100000},
-		// o3-deep-research is sold via Foundry Agent Service only (per the
-		// models-sold page note); the pricing page copy documents its 200K
-		// context window. Microsoft publishes no output cap, so none is
-		// enforced (0 = unknown).
+		// o3-deep-research is sold via Foundry Agent Service only; Microsoft
+		// publishes no output cap, so none is enforced (0 = unknown).
 		{ID: "o3-deep-research", DisplayName: "o3 Deep Research", ContextLimit: 200000},
 		{ID: "o4-mini", DisplayName: "o4-mini", ContextLimit: 200000, MaxOutputTokens: 100000},
 		{ID: "o1", DisplayName: "o1", ContextLimit: 200000, MaxOutputTokens: 100000},
@@ -155,14 +124,12 @@ var modelCatalog = map[string][]ModelInfo{
 		{ID: "gpt-oss-120b", DisplayName: "gpt-oss 120B", ContextLimit: 131072, MaxOutputTokens: 32768},
 		// gpt-oss-20b is served via managed compute / Foundry Local only.
 		{ID: "gpt-oss-20b", DisplayName: "gpt-oss 20B", ContextLimit: 131072, MaxOutputTokens: 131072},
-		// model-router: the model it routes to is what the response reports;
-		// the entry keeps the conservative 128K window (any call may be
-		// routed to a smaller-window model).
+		// model-router: the routed-to model is what the response reports; the
+		// entry keeps the conservative 128K window.
 		{ID: "model-router", DisplayName: "Model router", ContextLimit: 128000},
 		{ID: "MAI-Thinking-1", DisplayName: "MAI-Thinking-1", ContextLimit: 256000, MaxOutputTokens: 64000},
 		// DeepSeek-V3-0324/V3.1/R1-0528 are retired but kept for legacy
-		// deployments. The -0731 preview's dated ID would otherwise
-		// version-match the GA Flash row, so it carries its own entry.
+		// deployments. The -0731 preview's dated ID gets its own entry.
 		{ID: "DeepSeek-V3-0324", DisplayName: "DeepSeek V3", ContextLimit: 131072, MaxOutputTokens: 32768},
 		{ID: "DeepSeek-V3.1", DisplayName: "DeepSeek V3.1", ContextLimit: 131072, MaxOutputTokens: 32768},
 		{ID: "DeepSeek-R1-0528", DisplayName: "DeepSeek R1", ContextLimit: 131072, MaxOutputTokens: 32768},
@@ -175,10 +142,8 @@ var modelCatalog = map[string][]ModelInfo{
 		// grok-3/-3-mini are retired but kept for legacy deployments.
 		{ID: "grok-3", DisplayName: "Grok 3", ContextLimit: 131072, MaxOutputTokens: 32768},
 		{ID: "grok-3-mini", DisplayName: "Grok 3 Mini", ContextLimit: 131072, MaxOutputTokens: 32768},
-		// Grok windows/outputs per Microsoft's model list; grok-4.6's 200k
-		// window is shared with its 128k output, so its entry stores the 72k
-		// input share. grok-4-20-reasoning/-non-reasoning (preview) stay
-		// uncatalogued.
+		// Grok windows/outputs per Microsoft's model list; grok-4.6's 200k window is shared with its 128k
+		// output, so the entry stores the 72k input share.
 		{ID: "grok-4", DisplayName: "Grok 4", ContextLimit: 262000, MaxOutputTokens: 8192},
 		{ID: "grok-4.1-fast-reasoning", DisplayName: "Grok 4.1 Fast Reasoning", ContextLimit: 128000, MaxOutputTokens: 128000},
 		{ID: "grok-4.1-fast-non-reasoning", DisplayName: "Grok 4.1 Fast", ContextLimit: 128000, MaxOutputTokens: 128000},
@@ -192,12 +157,9 @@ var modelCatalog = map[string][]ModelInfo{
 	},
 }
 
-// cacheReadMultiplier is the fraction of the base input rate a cached-input
-// (prompt-cache read) token is billed at, for the model a call named or was
-// served by. Anthropic publishes per-family rates: 0.025x on Fable 5.1 and
-// Mythos 5.1, 0.05x on Opus 5.5, 0.1x on every other Claude model. Every
-// other provider keeps the full input rate (1.0). Azure AI Foundry is
-// unpriced, so its multiplier never matters.
+// cacheReadMultiplier is the fraction of the base input rate a cached-input token is billed at for the model
+// a call named or was served by. Anthropic publishes per-family rates (0.025x on Fable/Mythos 5.1, 0.05x on
+// Opus 5.5, 0.1x on every other Claude); everyone else keeps the full input rate.
 func cacheReadMultiplier(providerID, modelID, servedModel string) float64 {
 	claudeRoute := providerID == "claude" || IsClaudeModel(modelID) || isClaudeModelName(servedModel)
 	if !claudeRoute {
@@ -223,10 +185,8 @@ func cacheReadMultiplier(providerID, modelID, servedModel string) float64 {
 // for a 1h TTL, which baki never sends).
 const cacheWriteMultiplier = 1.25
 
-// claudeInviteOnly lists catalogued Claude models offered by invitation only
-// (Project Glasswing): kept in the catalogue so a Foundry deployment of one
-// is sized, but not offered in the direct provider's picker
-// (ClaudeProvider.Models), where almost every key would be refused.
+// claudeInviteOnly lists catalogued Claude models offered by invitation only (Project Glasswing): kept so a
+// Foundry deployment of one is sized, but not offered in the direct provider's picker.
 var claudeInviteOnly = map[string]bool{
 	"claude-mythos-5-1":     true,
 	"claude-mythos-5":       true,
@@ -250,28 +210,16 @@ func normalizeServedModel(served string) string {
 	return servedModelDateSuffix.ReplaceAllString(s, "")
 }
 
-// catalogEntryFor finds the catalogue entry describing the model a provider
-// reported serving. The match is exact on the normalised name, or — for
-// names that only add a numeric/date version to a catalogued ID
-// ("gpt-4.1-2025-04-14", "deepseek-v3-0324-2", "claude-sonnet-4-6-20260301")
-// — the longest catalogued ID the name extends. Anything else (a sibling
-// model such as "gpt-5-mini" when only "gpt-5" is catalogued) is NOT matched:
-// mispricing silently would be worse than the explicit fallback.
-//
-// Azure AI Foundry's Claude deployments are sized by the Claude catalogue:
-// a "claude:<deployment>" id resolves by its deployment name there, and a
-// served model named "claude-…" (a Claude deployment's answer, or a model
-// router's route to one) that the Azure table does not list is looked up
-// there too. Every Azure AI Foundry entry comes back unpriced — this is the
-// single place that guarantees it.
+// catalogEntryFor finds the catalogue entry for the model a provider reported serving: exact on the
+// normalised name, or — for names that only add a numeric/date version to a catalogued ID ("gpt-4.1-2025-04-14")
+// — the longest catalogued ID the name extends. A sibling model ("gpt-5-mini" when only "gpt-5" is catalogued)
+// is NOT matched: silent mispricing would be worse than the explicit fallback.
+// Foundry's Claude deployments are sized by the Claude catalogue, and every Azure entry comes back unpriced.
 func catalogEntryFor(providerID, served string) (ModelInfo, bool) {
 	e, ok := catalogEntryLookup(providerID, served)
 	if ok && providerID == azureFoundryProviderID {
 		// Azure AI Foundry is deliberately unpriced: the catalogue supplies
-		// context windows and output limits only, the cost is read in the
-		// Azure portal. The Azure rows carry no price; the Claude rows it
-		// borrows keep Anthropic's direct prices for the Claude provider,
-		// which do not apply to a Foundry deployment.
+		// windows and output limits only; the cost is read in the portal.
 		e.Pricing = Pricing{}
 	}
 	return e, ok
@@ -305,9 +253,8 @@ func catalogEntryLookup(providerID, served string) (ModelInfo, bool) {
 	return ModelInfo{}, false
 }
 
-// versionOnlyRemainder reports whether what follows a catalogued ID is only a
-// version marker (digits and dashes: "2025-04-14", "0324", "2"), never a
-// model-family suffix like "mini".
+// versionOnlyRemainder reports whether what follows a catalogued ID is only a version marker (digits and
+// dashes: "2025-04-14", "0324"), never a model-family suffix like "mini".
 func versionOnlyRemainder(rest string) bool {
 	if rest == "" {
 		return false

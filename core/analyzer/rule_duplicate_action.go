@@ -36,17 +36,16 @@ func (r *DuplicateActionRule) Check(block *models.Block, ctx *RuleContext) []mod
 
 	sig := ctx.blockSig(block)
 
-	// The finding is emitted only on the FIRST block of a run. If the previous
-	// sibling shares our signature, we're mid-run — return in O(1) rather than
-	// rescanning the entire run for every member (was O(run²) overall, the
-	// dominant cost in profiling once MD5 was memoized).
+	// The finding is emitted only on the FIRST block of a run; if the previous
+	// sibling shares our signature we're mid-run — return in O(1) rather than
+	// rescanning the run per member (was O(run²) overall, the dominant cost
+	// once MD5 was memoized).
 	if myIdx > 0 && ctx.blockSig(siblings[myIdx-1]) == sig {
 		return nil
 	}
 
-	// Count the forward run length from this run-start block. The backward scan
-	// the previous implementation did was always zero here (we're the start),
-	// so it is removed; repeatCount is identical.
+	// Count the forward run length from this run-start block (the old backward
+	// scan was always zero here).
 	matching := 1
 	for i := myIdx + 1; i < len(siblings); i++ {
 		if ctx.blockSig(siblings[i]) == sig {
@@ -93,6 +92,4 @@ func blockSignature(b *models.Block) string {
 	return hex.EncodeToString(h[:])
 }
 
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
 func init() { registerRule(&DuplicateActionRule{}) }

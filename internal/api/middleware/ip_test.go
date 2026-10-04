@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 )
 
@@ -95,5 +96,75 @@ func TestClientIP_NoHostPort(t *testing.T) {
 	req.RemoteAddr = "203.0.113.5"
 	if ip := ClientIP(req, nil); ip != "203.0.113.5" {
 		t.Errorf("expected 203.0.113.5, got %s", ip)
+	}
+}
+
+// resetProxySetCache gives each cache test a cold cache: the memo is package
+// state shared with every other test in the package (the ClientIP tests above
+// warm it through the same path).
+func resetProxySetCache(t *testing.T) {
+	t.Helper()
+	proxySetCache.Lock()
+	proxySetCache.sets = make(map[string]proxySet)
+	proxySetCache.Unlock()
+}
+
+// TestCachedProxySet_ParsesOncePerConfiguration: ClientIP gets the raw config
+// slice per call, so the cache must key on the slice's CONTENTS — two distinct
+// slices with the same entries share one parsed set (one parse), and the
+// returned sets literally share their backing arrays.
+func TestCachedProxySet_ParsesOncePerConfiguration(t *testing.T) {
+	resetProxySetCache(t)
+	a := cachedProxySet([]string{"10.0.0.0/8", "192.168.0.1"})
+	b := cachedProxySet([]string{"10.0.0.0/8", "192.168.0.1"}) // same entries, distinct slice
+	if len(a.cidrs) != 1 || len(b.cidrs) != 1 || len(a.ips) != 1 || len(b.ips) != 1 {
+		t.Fatalf("parsed %d CIDRs / %d IPs and %d / %d, want 1/1 each", len(a.cidrs), len(a.ips), len(b.cidrs), len(b.ips))
+	}
+	if &a.ips[0] != &b.ips[0] || &a.cidrs[0] != &b.cidrs[0] {
+		t.Error("equal configurations must share one cached set instead of re-parsing per call")
+	}
+	proxySetCache.Lock()
+	entries := len(proxySetCache.sets)
+	proxySetCache.Unlock()
+	if entries != 1 {
+		t.Errorf("cache entries = %d, want 1 (keyed by contents, not by slice)", entries)
+	}
+}
+
+// TestCachedProxySet_EmptyListSkipsCache: nil/empty has nothing to parse, so
+// it must not occupy cache entries — the map round trip would cost more than
+// the loop it skips — yet still behave as "trust nobody".
+func TestCachedProxySet_EmptyListSkipsCache(t *testing.T) {
+	resetProxySetCache(t)
+	if s := cachedProxySet(nil); !s.empty() {
+		t.Error("nil trusted proxies must parse to an empty set")
+	}
+	if s := cachedProxySet([]string{}); !s.empty() {
+		t.Error("empty trusted proxies must parse to an empty set")
+	}
+	proxySetCache.Lock()
+	entries := len(proxySetCache.sets)
+	proxySetCache.Unlock()
+	if entries != 0 {
+		t.Errorf("cache entries = %d, want 0 for empty inputs", entries)
+	}
+}
+
+// TestCachedProxySet_Bounded: the cache must never grow with caller-supplied
+// inputs. Past the cap a configuration still parses (correctly), it just is
+// not stored.
+func TestCachedProxySet_Bounded(t *testing.T) {
+	resetProxySetCache(t)
+	for i := 0; i < maxProxySetCacheEntries+3; i++ {
+		s := cachedProxySet([]string{"10.0.0." + strconv.Itoa(i) + "/32"})
+		if len(s.cidrs) != 1 {
+			t.Fatalf("entry %d: parsed %d CIDRs, want 1 (overflow entries must still parse)", i, len(s.cidrs))
+		}
+	}
+	proxySetCache.Lock()
+	entries := len(proxySetCache.sets)
+	proxySetCache.Unlock()
+	if entries != maxProxySetCacheEntries {
+		t.Errorf("cache entries = %d, want the cap %d", entries, maxProxySetCacheEntries)
 	}
 }

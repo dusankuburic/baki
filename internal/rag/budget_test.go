@@ -65,7 +65,7 @@ type azureEmbedder struct{ *fixedEmbedder }
 
 func (azureEmbedder) ID() string { return azureFoundryProviderID }
 
-// Review #4 B6: an upload or a re-index that embeds with Azure AI Foundry is
+// An upload or a re-index that embeds with Azure AI Foundry is
 // never refused by the daily budget — baki neither prices nor counts Azure
 // usage, so a budget other, priced providers spent must not stop it — while
 // the same runs on a priced embedder still are.

@@ -10,9 +10,8 @@ import (
 )
 
 // Analytics reads for GET /api/dashboard/analytics. The route runs outside the
-// per-request RLS transaction (six concurrent reads on the pool), so every
-// statement scopes itself explicitly: flow tables by the id set the service
-// already authorised, usage and audit rows by the caller's user id / org ids.
+// per-request RLS transaction, so every statement scopes itself explicitly:
+// flow tables by the authorised id set, usage/audit rows by caller id / org ids.
 
 // parseIntMap decodes a jsonb object of counts; a malformed value counts as empty.
 func parseIntMap(raw string) map[string]int {
@@ -65,11 +64,40 @@ func (b *PostgresStorageBackend) LoadAnalysisSnapshots(ctx context.Context, flow
 	return out, nil
 }
 
-// LoadAnalysisHistory returns, for every flow in scope, its latest analysis
-// before the window (the baseline the trend carries forward from) and its
-// latest analysis on each caller-local day inside the window, with how many
-// analyses ran that day. Days are bucketed in w.TZ so "yesterday" means the
-// reader's yesterday, not the server's.
+// analysisHistoryBaselineSQL is the baseline read of LoadAnalysisHistory: the
+// latest run before the window per scoped flow — one keyed LIMIT 1 descent of
+// flow_analysis_history_flow_idx per flow, replacing a DISTINCT ON form that
+// read and sorted every pre-window row. $1 = scoped flow ids, $2 = window start.
+const analysisHistoryBaselineSQL = `
+		SELECT h.flow_id, h.health_score, h.errors, h.warnings, h.info,
+		       h.auto_fixable_count, h.total_findings, COALESCE(h.by_rule, '{}'::jsonb)::text, h.analyzed_at
+		FROM unnest($1::text[]) AS ids(flow_id)
+		CROSS JOIN LATERAL (
+			SELECT fh.flow_id, fh.health_score, fh.errors, fh.warnings, fh.info,
+			       fh.auto_fixable_count, fh.total_findings, fh.by_rule, fh.analyzed_at
+			FROM flow_analysis_history fh
+			WHERE fh.flow_id = ids.flow_id AND fh.analyzed_at < $2
+			ORDER BY fh.analyzed_at DESC
+			LIMIT 1) h`
+
+// uniqueTextArray is textArray (a fresh []string for a text[] bind) without
+// repeats, in first-occurrence order.
+func uniqueTextArray(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+// LoadAnalysisHistory returns, per flow in scope, its latest analysis before
+// the window (the trend baseline) and its latest analysis per caller-local day
+// inside it (days bucketed in w.TZ, so "yesterday" is the reader's).
 func (b *PostgresStorageBackend) LoadAnalysisHistory(ctx context.Context, w interfaces.AnalyticsWindow) (*interfaces.AnalysisHistoryRows, error) {
 	out := &interfaces.AnalysisHistoryRows{Baseline: []interfaces.AnalysisHistoryRow{}, InWindow: []interfaces.AnalysisHistoryRow{}}
 	if len(w.FlowIDs) == 0 {
@@ -84,13 +112,7 @@ func (b *PostgresStorageBackend) LoadAnalysisHistory(ctx context.Context, w inte
 		tz = "UTC"
 	}
 
-	base, err := b.query(ctx).QueryContext(ctx, `
-		SELECT DISTINCT ON (h.flow_id)
-		       h.flow_id, h.health_score, h.errors, h.warnings, h.info,
-		       h.auto_fixable_count, h.total_findings, COALESCE(h.by_rule, '{}'::jsonb)::text, h.analyzed_at
-		FROM flow_analysis_history h
-		WHERE h.flow_id = ANY($1) AND h.analyzed_at < $2
-		ORDER BY h.flow_id, h.analyzed_at DESC`, w.FlowIDs, start)
+	base, err := b.query(ctx).QueryContext(ctx, analysisHistoryBaselineSQL, uniqueTextArray(w.FlowIDs), start)
 	if err != nil {
 		return nil, fmt.Errorf("analytics history baseline: %w", err)
 	}
@@ -211,9 +233,8 @@ func (b *PostgresStorageBackend) LoadTriageAnalytics(ctx context.Context, w inte
 }
 
 // usageScope builds the WHERE fragment for usage_metrics: "user" = the
-// caller's own calls, "org" = the scoped orgs' calls, "both" = either. Only the
-// parameters the fragment references are bound (Postgres rejects an unused
-// placeholder).
+// caller's own calls, "org" = the scoped orgs', "both" = either. Only the
+// parameters the fragment references are bound (Postgres rejects unused ones).
 func usageScope(mode, userID string, orgIDs []string) (string, []any) {
 	switch mode {
 	case "org":
@@ -288,9 +309,7 @@ func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID 
 	}
 
 	// Grouped by the model that ANSWERED (served_model, falling back to the
-	// requested model when the provider did not report one): an Azure AI
-	// Foundry deployment alias or model router routed to two models over the
-	// window is two rows, each labelled with the deployment it came through.
+	// requested model): an alias serving two models over the window is two rows.
 	mod, err := b.query(ctx).QueryContext(ctx, fmt.Sprintf(`
 		SELECT u.provider, COALESCE(u.model, ''), COALESCE(NULLIF(u.served_model, ''), u.model, ''),
 		       COALESCE(SUM(u.prompt_tokens), 0)::int,
@@ -321,8 +340,8 @@ func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID 
 }
 
 // LoadActivityAnalytics lists the caller's own events plus every event on a
-// flow in scope (so an org-scoped view shows teammates' work on shared flows),
-// with the actor resolved to a display name and flow resources to their name.
+// flow in scope, with the actor resolved to a display name and flow resources
+// to their name.
 func (b *PostgresStorageBackend) LoadActivityAnalytics(ctx context.Context, userID string, w interfaces.AnalyticsWindow, limit int) (*interfaces.ActivityRows, error) {
 	out := &interfaces.ActivityRows{Events: []interfaces.ActivityEventRow{}, ByDay: []interfaces.DateCountRow{}, ByAction: []interfaces.ActionCountRow{}}
 	if limit <= 0 {
@@ -414,8 +433,7 @@ func (b *PostgresStorageBackend) LoadActivityAnalytics(ctx context.Context, user
 
 // LoadSecurityAnalytics counts the caller's failed logins in the last day —
 // auth events are logged before there are claims, so the user is in
-// resource_id (or the typed email when the account does not exist) — and,
-// when asked, the instance-wide locked-account count.
+// resource_id or the typed email — and, when asked, instance-wide lockouts.
 func (b *PostgresStorageBackend) LoadSecurityAnalytics(ctx context.Context, userID, email string, includeLocked bool) (*interfaces.SecurityRows, error) {
 	out := &interfaces.SecurityRows{}
 	if err := b.query(ctx).QueryRowContext(ctx, `

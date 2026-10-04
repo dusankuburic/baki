@@ -21,16 +21,25 @@ const STRUCTURAL_TYPES = new Set(['END', 'ELSE', 'CASE', 'DEFAULT'])
  */
 export function flattenBlocks(blocks: Block[], expandedBlockIds: Set<string>, depth = 0): FlatBlock[] {
   const result: FlatBlock[] = []
+  appendFlatBlocks(blocks, expandedBlockIds, depth, result)
+  return result
+}
 
-  blocks.forEach((block, i) => {
+// Appends into one shared output array: `push(...childRows)` spread every
+// child row onto the call stack and threw a RangeError past ~150k direct
+// children.
+function appendFlatBlocks(blocks: Block[], expandedBlockIds: Set<string>, depth: number, out: FlatBlock[]): void {
+  const last = blocks.length - 1
+  for (let i = 0; i <= last; i++) {
+    const block = blocks[i]
     const isContainer = CONTAINER_TYPES.has(block.type)
     const collapsed = expandedBlockIds.has(block.id)
     const isStructural = STRUCTURAL_TYPES.has(block.type)
 
-    result.push({
+    out.push({
       block,
       depth: isStructural ? Math.max(0, depth - 1) : depth,
-      isLast: i === blocks.length - 1,
+      isLast: i === last,
       isContainer,
       collapsed,
     })
@@ -38,11 +47,9 @@ export function flattenBlocks(blocks: Block[], expandedBlockIds: Set<string>, de
     if (isContainer && !collapsed && block.children.length > 0) {
       // ELSE/CASE/DEFAULT don't add a nesting level for their own children
       const depthIncrease = block.type === 'ELSE' || block.type === 'CASE' || block.type === 'DEFAULT' ? 0 : 1
-      result.push(...flattenBlocks(block.children, expandedBlockIds, depth + depthIncrease))
+      appendFlatBlocks(block.children, expandedBlockIds, depth + depthIncrease, out)
     }
-  })
-
-  return result
+  }
 }
 
 // ---- TreeRow: used by FlowTree / sidebar tree view ----
@@ -69,24 +76,63 @@ export interface FlattenTreeOptions {
   matchedBlockIds?: Set<string>
 }
 
-function flattenTreeBlockRows(
+function blockRow(block: Block, depth: number, subflowId: string): TreeRow {
+  return {
+    kind: 'block',
+    id: block.id,
+    depth,
+    name: block.name,
+    blockType: block.type,
+    childCount: block.children.length,
+    hasChildren: block.children.length > 0,
+    subflowId,
+    blockData: block,
+  }
+}
+
+// Appends the rows for `blocks` (and their visible descendants) into `out`.
+// Without a search a collapsed block contributes only its own row, so its
+// subtree is not walked at all — the sidebar tree of a large flow is mostly
+// collapsed, and the walk used to visit every block of every subtree on
+// every render. With a search the subtree must be walked (a match inside
+// reveals its ancestors), but it is appended with a loop: `push(...rows)`
+// threw a RangeError past ~150k direct children.
+function appendTreeBlockRows(
   blocks: Block[],
   subflowId: string,
   depth: number,
   expandedBlockIds: Set<string>,
   visibleTypes: Set<BlockType>,
-  qLower?: string,
-  matchedBlockIds?: Set<string>,
-): TreeRow[] {
-  const rows: TreeRow[] = []
+  qLower: string | undefined,
+  matchedBlockIds: Set<string> | undefined,
+  out: TreeRow[],
+): void {
   const hasSearch = !!(qLower || matchedBlockIds?.size)
 
   for (const block of blocks) {
     if (!visibleTypes.has(block.type)) continue
 
+    if (!hasSearch) {
+      out.push(blockRow(block, depth, subflowId))
+      if (expandedBlockIds.has(block.id) && block.children.length > 0) {
+        appendTreeBlockRows(
+          block.children,
+          subflowId,
+          depth + 1,
+          expandedBlockIds,
+          visibleTypes,
+          qLower,
+          matchedBlockIds,
+          out,
+        )
+      }
+      continue
+    }
+
     const nameMatch = !qLower || block.name.toLowerCase().includes(qLower)
     const isMatched = matchedBlockIds?.has(block.id)
-    const childRows = flattenTreeBlockRows(
+    const childRows: TreeRow[] = []
+    appendTreeBlockRows(
       block.children,
       subflowId,
       depth + 1,
@@ -94,28 +140,18 @@ function flattenTreeBlockRows(
       visibleTypes,
       qLower,
       matchedBlockIds,
+      childRows,
     )
-    const hasMatchingChildren = hasSearch && childRows.length > 0
+    const hasMatchingChildren = childRows.length > 0
 
-    if (hasSearch && !nameMatch && !isMatched && !hasMatchingChildren) continue
+    if (!nameMatch && !isMatched && !hasMatchingChildren) continue
 
-    rows.push({
-      kind: 'block',
-      id: block.id,
-      depth,
-      name: block.name,
-      blockType: block.type,
-      childCount: block.children.length,
-      hasChildren: block.children.length > 0,
-      subflowId,
-      blockData: block,
-    })
+    out.push(blockRow(block, depth, subflowId))
 
-    if (expandedBlockIds.has(block.id) || (hasSearch && hasMatchingChildren)) {
-      rows.push(...childRows)
+    if (expandedBlockIds.has(block.id) || hasMatchingChildren) {
+      for (const row of childRows) out.push(row)
     }
   }
-  return rows
 }
 
 /**
@@ -129,24 +165,7 @@ export function flattenTreeRows(doc: FlowDocument, options: FlattenTreeOptions):
   const hasSearch = !!(qLower || matchedBlockIds?.size)
 
   for (const subflow of doc.subflows) {
-    const sfMatch = !qLower || subflow.name.toLowerCase().includes(qLower)
-
-    const blockRows = flattenTreeBlockRows(
-      subflow.blocks,
-      subflow.id,
-      1,
-      expandedBlockIds,
-      visibleTypes,
-      qLower,
-      matchedBlockIds,
-    )
-
-    if (hasSearch) {
-      const hasMatchingChildren = blockRows.length > 0
-      if (!sfMatch && !hasMatchingChildren) continue
-    }
-
-    rows.push({
+    const subflowRow: TreeRow = {
       kind: 'subflow',
       id: subflow.id,
       depth: 0,
@@ -155,10 +174,43 @@ export function flattenTreeRows(doc: FlowDocument, options: FlattenTreeOptions):
       hasChildren: subflow.blocks.length > 0,
       subflowId: subflow.id,
       subflowData: subflow,
-    })
+    }
 
-    if (expandedSubflowIds.has(subflow.id) || (hasSearch && blockRows.length > 0)) {
-      rows.push(...blockRows)
+    if (!hasSearch) {
+      rows.push(subflowRow)
+      if (expandedSubflowIds.has(subflow.id)) {
+        appendTreeBlockRows(
+          subflow.blocks,
+          subflow.id,
+          1,
+          expandedBlockIds,
+          visibleTypes,
+          qLower,
+          matchedBlockIds,
+          rows,
+        )
+      }
+      continue
+    }
+
+    const sfMatch = !qLower || subflow.name.toLowerCase().includes(qLower)
+    const blockRows: TreeRow[] = []
+    appendTreeBlockRows(
+      subflow.blocks,
+      subflow.id,
+      1,
+      expandedBlockIds,
+      visibleTypes,
+      qLower,
+      matchedBlockIds,
+      blockRows,
+    )
+    const hasMatchingChildren = blockRows.length > 0
+    if (!sfMatch && !hasMatchingChildren) continue
+
+    rows.push(subflowRow)
+    if (expandedSubflowIds.has(subflow.id) || hasMatchingChildren) {
+      for (const row of blockRows) rows.push(row)
     }
   }
   return rows

@@ -257,6 +257,83 @@ describe('api/client', () => {
     })
   })
 
+  // The micro-cache clones every cached body on write and on every hit. For a
+  // multi-megabyte document that clone cost more than the parse (413 ms and
+  // +44 MB for 21 MB of JSON), so bodies above GET_CACHE_MAX_BODY_CHARS are
+  // neither cached nor cloned; small bodies keep the dedup + TTL behaviour.
+  describe('GET micro-cache size gate', () => {
+    // Fresh Response per call — a Response body can be consumed only once.
+    function mockFetchSequence(bodies: unknown[]) {
+      let call = 0
+      return vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        const body = bodies[Math.min(call++, bodies.length - 1)]
+        return new Response(JSON.stringify(body), {status: 200, headers: {'Content-Type': 'application/json'}})
+      })
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    })
+
+    it('a body above the gate is neither cached nor cloned, so the next GET sees the server again', async () => {
+      const clone = vi.fn((v: unknown) => JSON.parse(JSON.stringify(v)))
+      vi.stubGlobal('structuredClone', clone)
+      const {request, GET_CACHE_MAX_BODY_CHARS, requestCacheSize} = await getClient()
+      const big = {rev: 1, blocks: 'x'.repeat(1024 * 1024)} // ~1 MB of JSON
+      const fetchSpy = mockFetchSequence([big, {...big, rev: 2}])
+
+      const first = await request<{rev: number}>('/api/library/f1/content', {method: 'GET'})
+      const second = await request<{rev: number}>('/api/library/f1/content', {method: 'GET'})
+
+      expect(first.rev).toBe(1)
+      expect(second.rev).toBe(2) // the changed body, not a 5 s-old copy
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+      expect(clone).not.toHaveBeenCalled()
+      expect(requestCacheSize()).toBe(0)
+      expect(big.blocks.length).toBeGreaterThan(GET_CACHE_MAX_BODY_CHARS)
+    })
+
+    it('a small body is still served from the cache (one fetch, cloned per consumer)', async () => {
+      const clone = vi.fn((v: unknown) => JSON.parse(JSON.stringify(v)))
+      vi.stubGlobal('structuredClone', clone)
+      const {request, requestCacheSize} = await getClient()
+      const fetchSpy = mockFetchSequence([{rev: 1}, {rev: 2}])
+
+      const first = await request<{rev: number}>('/api/small', {method: 'GET'})
+      const second = await request<{rev: number}>('/api/small', {method: 'GET'})
+
+      expect(first.rev).toBe(1)
+      expect(second.rev).toBe(1)
+      expect(second).not.toBe(first)
+      expect(fetchSpy).toHaveBeenCalledOnce()
+      expect(clone).toHaveBeenCalled()
+      expect(requestCacheSize()).toBe(1)
+    })
+
+    it('an expired entry is evicted when it is read, not only when another GET writes', async () => {
+      vi.useFakeTimers()
+      const {request, requestCacheSize} = await getClient()
+      let call = 0
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        call++
+        if (call === 1) return new Response(JSON.stringify({rev: 1}), {status: 200})
+        // 404 (non-transient): the re-read fails, so nothing writes the cache
+        // afterwards — the only way the expired entry goes is the read itself.
+        return new Response(JSON.stringify({message: 'gone'}), {status: 404})
+      })
+
+      await request('/api/expiring', {method: 'GET'})
+      expect(requestCacheSize()).toBe(1)
+      vi.advanceTimersByTime(6_000) // past the 5 s TTL
+      expect(requestCacheSize()).toBe(1) // still referenced until something touches it
+
+      await expect(request('/api/expiring', {method: 'GET'})).rejects.toThrow('gone')
+      expect(call).toBe(2)
+      expect(requestCacheSize()).toBe(0)
+    })
+  })
+
   describe('requestValidated()', () => {
     it('returns the parsed body when it matches the schema', async () => {
       mockFetch({token: 'abc'})

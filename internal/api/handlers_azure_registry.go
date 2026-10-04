@@ -18,48 +18,22 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// --- The Azure AI Foundry model registry (Part 9) ---
+// --- The Azure AI Foundry model registry ---
 //
-// A caller's own Azure AI Foundry resources ("connections" in the API,
-// "resources" in the UI) and models live under /api/providers/azure-foundry;
-// an organisation's curated ones under /api/orgs/{id}/providers/azure-foundry
-// — the same sub-paths, bodies and answers. The personal routes serve any
-// authenticated caller on their own key scope. On the org routes the role is
-// checked here (the service trusts the scope it is given): reads need an admin
-// or a member (the roles that run on the organisation's shared credentials),
-// writes, tests and discovery an admin (org_access.go). Without the encrypted
-// org keystore the org routes answer 404 ORG_KEYSTORE_UNAVAILABLE, before any
-// membership check; without a wired registry (production always wires one)
-// every route answers 503 AZURE_REGISTRY_UNAVAILABLE.
-//
-// Bodies decode strictly — exactly one JSON object with known fields only,
-// capped (64 KiB for resources and tests, 16 KiB for models) — as the
-// single-document routes do: a misspelled field fails instead of vanishing.
-// Errors keep the {code, message, details?} envelope, with the registry's
-// codes (service.AzureRegistryHTTPError). Every successful write is audited
-// (azure.*); an organisation's test is audited as providers.test.
-//
-// The outbound routes — POST …/test and POST …/connections/{id}/discover —
-// ride the chat and the analysis rate-limit buckets and run outside the
-// request's RLS transaction (azureOutboundRoute); the rest stays inside it.
+// Personal and org routes share sub-paths and bodies; org reads need an admin or member, writes/tests/discovery an admin (org_access.go);
+// no org keystore is 404 ORG_KEYSTORE_UNAVAILABLE, no registry 503. Strict bodies, writes audited; test/discovery run outside the RLS transaction on the chat/analysis buckets.
 
-// Body caps of the registry routes: a resource's settings (or a test's draft)
-// are a small document with room for a long Entra ID secret; a model is a
-// handful of short fields.
+// Body caps of the registry routes: a resource's settings (or a test's
+// draft) leave room for a long Entra ID secret; a model is short fields.
 const (
 	azureRegistryBodyLimit = 64 << 10
 	azureModelBodyLimit    = 16 << 10
 )
 
-// azureCodeRegistryUnavailable answers every registry route of a process that
-// wired no registry (ProviderService.AzureModels is nil).
 const azureCodeRegistryUnavailable = "AZURE_REGISTRY_UNAVAILABLE"
 
 var errAzureRegistryUnavailable = errors.New("the Azure AI Foundry model registry is not available in this deployment")
 
-// azureRegistryCall is one request's access to the registry: the service and
-// the scope — the caller's own registry, or an organisation's after its role
-// check — plus where its audit rows go.
 type azureRegistryCall struct {
 	svc     *service.AzureModelService
 	scope   service.AzureScope
@@ -67,7 +41,6 @@ type azureRegistryCall struct {
 	proxies []string
 }
 
-// azureModelsOf is the registry p serves (nil when p is, or wired none).
 func azureModelsOf(p *service.ProviderService) *service.AzureModelService {
 	if p == nil {
 		return nil
@@ -79,8 +52,6 @@ func renderAzureRegistryUnavailable(w http.ResponseWriter) {
 	render.ErrorWithCode(w, errAzureRegistryUnavailable, http.StatusServiceUnavailable, azureCodeRegistryUnavailable)
 }
 
-// azureRegistry resolves a personal route's registry call: the caller's own
-// registry on their key scope.
 func (h *ProviderHandler) azureRegistry(w http.ResponseWriter, r *http.Request) (azureRegistryCall, bool) {
 	svc := azureModelsOf(h.providerSvc)
 	if svc == nil {
@@ -95,9 +66,6 @@ func (h *ProviderHandler) azureRegistry(w http.ResponseWriter, r *http.Request) 
 	}, true
 }
 
-// orgAzureRegistry resolves an org route's registry call: the registry wired,
-// organisation registries available in this deployment (else 404
-// ORG_KEYSTORE_UNAVAILABLE, whoever asks), then the caller's role (access).
 func (h *OrgHandler) orgAzureRegistry(w http.ResponseWriter, r *http.Request, access orgAccess) (azureRegistryCall, bool) {
 	svc := azureModelsOf(h.providers)
 	if svc == nil {
@@ -122,7 +90,6 @@ func (h *OrgHandler) orgAzureRegistry(w http.ResponseWriter, r *http.Request, ac
 
 // --- Bodies and errors ---
 
-// readAzureRegistryBody reads a request body of at most limit bytes.
 func readAzureRegistryBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	var tooBig *http.MaxBytesError
@@ -132,8 +99,6 @@ func readAzureRegistryBody(w http.ResponseWriter, r *http.Request, limit int64) 
 	return data, err
 }
 
-// decodeAzureRegistryJSON decodes data into v strictly: exactly one JSON
-// object with known fields only (see decodeAzureConfigBody).
 func decodeAzureRegistryJSON(data []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -149,8 +114,6 @@ func decodeAzureRegistryJSON(data []byte, v any) error {
 	return nil
 }
 
-// decodeAzureRegistryBody reads and strictly decodes a body of at most limit
-// bytes into v; on failure it answers 400 and returns false.
 func decodeAzureRegistryBody(w http.ResponseWriter, r *http.Request, limit int64, v any) bool {
 	data, err := readAzureRegistryBody(w, r, limit)
 	if err == nil {
@@ -163,10 +126,8 @@ func decodeAzureRegistryBody(w http.ResponseWriter, r *http.Request, limit int64
 	return true
 }
 
-// renderAzureBodyError answers a body that does not decode: 400
-// INVALID_CONFIG, the code of every Azure AI Foundry body refusal — except a
-// context window or output cap that is not a whole number, which carries its
-// field's code so a form routes it to that field.
+// renderAzureBodyError answers 400 INVALID_CONFIG — except a non-numeric contextWindow or
+// maxOutputTokens, which carries its field's code so a form routes it to that field.
 func renderAzureBodyError(w http.ResponseWriter, err error) {
 	code := ai.AzureCfgErrInvalidConfig
 	var typeErr *json.UnmarshalTypeError
@@ -181,10 +142,6 @@ func renderAzureBodyError(w http.ResponseWriter, err error) {
 	render.ErrorWithCode(w, fmt.Errorf("invalid request: %w", err), http.StatusBadRequest, code)
 }
 
-// renderAzureRegistryError answers an error of the registry (or of the
-// single-document routes acting on its resource "default"): its client status,
-// code and details — INVALID_AUTH and MISSING_SECRET name their field — and
-// anything else as a 500 with generic copy.
 func renderAzureRegistryError(w http.ResponseWriter, err error) {
 	if status, code, details, ok := service.AzureRegistryHTTPError(err); ok {
 		render.ErrorWithCodeAndDetails(w, err, status, code, details)
@@ -193,8 +150,6 @@ func renderAzureRegistryError(w http.ResponseWriter, err error) {
 	render.Error(w, err, http.StatusInternalServerError)
 }
 
-// azureQueryFlag reads an optional boolean query flag (?cascade=true); a value
-// strconv.ParseBool refuses is answered 400 (ok false).
 func azureQueryFlag(w http.ResponseWriter, r *http.Request, name string) (value, ok bool) {
 	raw := r.URL.Query().Get(name)
 	if raw == "" {
@@ -210,11 +165,7 @@ func azureQueryFlag(w http.ResponseWriter, r *http.Request, name string) (value,
 
 // --- Audit ---
 
-// audit writes one registry audit row: on the organisation in org scope
-// (resource type "org", its id — like every org credential row), else on the
-// resource or model itself. The meta names ids, the operation, a model's kind
-// and deployment, a resource's auth mode and counts — never a secret, a
-// description or any other credential setting.
+// audit writes one registry row: on the org in org scope, else the resource itself; meta never carries a secret.
 func (c azureRegistryCall) audit(r *http.Request, action, resourceType, resourceID string, meta map[string]string) {
 	if c.scope.IsOrg() {
 		resourceType, resourceID = "org", c.scope.OrgID
@@ -222,7 +173,6 @@ func (c azureRegistryCall) audit(r *http.Request, action, resourceType, resource
 	logAudit(r.Context(), c.backend, r, c.proxies, action, resourceType, resourceID, meta)
 }
 
-// modelAuditMeta is a saved model's audit meta.
 func modelAuditMeta(op string, v service.AzureModelView) map[string]string {
 	return map[string]string{
 		"op":                   op,
@@ -235,9 +185,6 @@ func modelAuditMeta(op string, v service.AzureModelView) map[string]string {
 	}
 }
 
-// azureTestAuditMeta is an organisation test's audit meta (providers.test):
-// what was tested — a saved resource or model by id, a draft by its auth mode
-// and its model's kind and deployment — and the outcome.
 func azureTestAuditMeta(in service.AzureTestInput, res service.AzureTestResult) map[string]string {
 	meta := map[string]string{"provider": ai.AzureFoundryProviderID, "ok": strconv.FormatBool(res.OK)}
 	if id := strings.TrimSpace(in.ConnectionID); id != "" {
@@ -306,9 +253,7 @@ func (c azureRegistryCall) updateConnection(w http.ResponseWriter, r *http.Reque
 	v, err := c.svc.UpdateConnection(r.Context(), c.scope, chi.URLParam(r, "connectionId"), in)
 	if err != nil {
 		if id, changed := service.AzureCredentialChanged(err); changed {
-			// The update failed after the resource's new credential (for an
-			// organisation, with its new lender) went in, and the previous
-			// one could not be put back: that change stands and is audited.
+			// The new credential went in and could not be rolled back: that change stands and is audited.
 			meta := map[string]string{"op": "update", "connectionId": id, "credentialChanged": "true", "outcome": "failed_after_credential_change"}
 			if in.Config != nil {
 				draft := ai.AzureFoundryConfig{Auth: in.Config.Auth}
@@ -440,8 +385,7 @@ func (c azureRegistryCall) deleteModel(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, statusResponse{Status: "ok"})
 }
 
-// test runs one test (see service.AzureModelService.Test): 200 with the
-// outcome, whatever it is; an organisation's is audited (providers.test).
+// test runs one test: 200 with the outcome, whatever it is; an organisation's is audited (providers.test).
 func (c azureRegistryCall) test(w http.ResponseWriter, r *http.Request, in service.AzureTestInput) {
 	res, err := c.svc.Test(r.Context(), c.scope, in)
 	if err != nil {
@@ -664,9 +608,8 @@ func (h *ProviderHandler) handleAzureTest(w http.ResponseWriter, r *http.Request
 
 // --- Organisation routes: /api/orgs/{id}/providers/azure-foundry/… ---
 //
-// The organisation's curated registry, shared with its admins and members. The
-// test route (POST …/test) is handleOrgAzureFoundryTest, which also serves the
-// deprecated body-less org credential test.
+// The org's curated registry. POST …/test is handleOrgAzureFoundryTest,
+// which also serves the deprecated body-less org credential test.
 
 // @Summary      List the organisation's Azure AI Foundry resources
 // @Description  The organisation's resources (all marked shared), as GET /api/providers/azure-foundry/connections lists a caller's own — plus, for each, sharedBy (who lent its credential) and credentialUpdatedAt (the compare-and-swap token of a credential change). Org admins and members; 403 for viewers, guests and non-members.

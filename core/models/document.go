@@ -16,14 +16,12 @@ type FlowDocument struct {
 	Name string `json:"name"`
 	// StableID is a load-survival identity for docs with no on-disk path
 	// (uploads, raw analysis input): the parser mints a fresh ID per parse, so
-	// session analytics would otherwise count each re-parse of the same input
-	// as a new flow. Set by parser.ParseFiles from the sorted file names;
-	// in-process only (never serialized or persisted).
+	// session analytics would otherwise count each re-parse as a new flow.
+	// Set by parser.ParseFiles from the sorted file names; in-process only.
 	StableID string `json:"-"`
 	FilePath string `json:"filePath"`
-	// Source is the raw PAD source text for cloud-mode apply-fix/preview-fix
-	// (which patch line-based source). Desktop uses FilePath; cloud uses Source.
-	// Populated by GetAuthorized from the stored flow; empty when not applicable.
+	// Source is the raw PAD source for cloud-mode apply/preview-fix (which
+	// patch line-based source); desktop uses FilePath, cloud uses Source.
 	Source         string         `json:"source,omitempty"`
 	OwnerID        string         `json:"ownerId,omitempty"`
 	OrganizationID string         `json:"orgId,omitempty"`
@@ -40,11 +38,9 @@ type FlowDocument struct {
 }
 
 // RebuildIndexes repopulates the transient lookup maps (BlocksByID,
-// BlockSubflow, SubflowsByID) by walking Subflows and their (possibly nested)
-// blocks. These maps are not serialized (json:"-"), so this MUST be called
-// after deserializing a FlowDocument from stored JSON before the document is
-// used for analysis/lineage/graph. It mirrors the indexing the parser performs
-// at parse time.
+// BlockSubflow, SubflowsByID). They are not serialized (json:"-"), so this
+// MUST be called after deserializing before analysis/lineage/graph use — it
+// mirrors the parser's parse-time indexing.
 func (d *FlowDocument) RebuildIndexes() {
 	d.BlocksByID = make(map[string]*Block)
 	d.BlockSubflow = make(map[string]*Subflow)

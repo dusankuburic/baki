@@ -268,7 +268,6 @@ func TestForEmbedding_AppliesOverride(t *testing.T) {
 	srv, got := embedTestServer(t, "custom-embed-model")
 	defer srv.Close()
 
-	// Point the OpenAI base URL at the test server for this test.
 	orig := openAIBaseURL
 	openAIBaseURL = srv.URL + "/chat/completions"
 	defer func() { openAIBaseURL = orig }()

@@ -145,16 +145,26 @@ func (s *OrgService) SetRole(ctx context.Context, orgID, userID string, role aut
 
 // IsMember reports whether userID is a member of orgID.
 func (s *OrgService) IsMember(ctx context.Context, orgID, userID string) bool {
-	org, err := s.store.LoadOrg(ctx, orgID)
-	if err != nil {
-		return false
-	}
-	_, m := findMember(org, userID)
-	return m != nil
+	_, err := s.MemberRole(ctx, orgID, userID)
+	return err == nil
 }
 
-// MemberRole returns the role of userID in orgID.
+// MemberRole returns the role of userID in orgID: the organisation's load
+// error when it does not exist, ErrMemberNotFound when userID is not in it.
+// This backs every flow-authz org check (and IsMember/IsAdmin), so when the
+// store offers a point lookup (interfaces.OrgMembershipReader — the Postgres
+// backend) it answers from one indexed row instead of loading the roster.
 func (s *OrgService) MemberRole(ctx context.Context, orgID, userID string) (auth.Role, error) {
+	if r, ok := s.store.(interfaces.OrgMembershipReader); ok {
+		role, member, err := r.OrgMemberRole(ctx, orgID, userID)
+		if err != nil {
+			return "", err
+		}
+		if !member {
+			return "", ErrMemberNotFound
+		}
+		return role, nil
+	}
 	org, err := s.store.LoadOrg(ctx, orgID)
 	if err != nil {
 		return "", err
@@ -164,6 +174,23 @@ func (s *OrgService) MemberRole(ctx context.Context, orgID, userID string) (auth
 		return "", ErrMemberNotFound
 	}
 	return m.Role, nil
+}
+
+// GetAsMember loads the organisation and verifies that userID is a member
+// (any role), returning the organisation on success: one roster load serves
+// both the membership check and the organisation the caller then renders.
+// The load error when it does not exist, ErrMemberNotFound when not in it.
+// The member-only routes (api requireMember) used to answer the same
+// question with two loads: IsMember, then Get.
+func (s *OrgService) GetAsMember(ctx context.Context, orgID, userID string) (*interfaces.Organisation, error) {
+	org, err := s.store.LoadOrg(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if _, m := findMember(org, userID); m == nil {
+		return nil, ErrMemberNotFound
+	}
+	return org, nil
 }
 
 // ListMembers returns all members of the given organisation.
@@ -177,7 +204,9 @@ func (s *OrgService) ListMembers(ctx context.Context, orgID string) ([]interface
 
 // GetAndCheckAdmin loads the organisation and verifies that userID is an admin member.
 // Returns the organisation on success, or an error if the org doesn't exist or the
-// user is not an admin.
+// user is not an admin. It still loads the roster: several callers render the org
+// with its members, so a point lookup first would only add a round trip on the
+// common success path.
 func (s *OrgService) GetAndCheckAdmin(ctx context.Context, orgID, userID string) (*interfaces.Organisation, error) {
 	org, err := s.store.LoadOrg(ctx, orgID)
 	if err != nil {
@@ -192,12 +221,8 @@ func (s *OrgService) GetAndCheckAdmin(ctx context.Context, orgID, userID string)
 
 // IsAdmin reports whether userID is an administrator of orgID.
 func (s *OrgService) IsAdmin(ctx context.Context, orgID, userID string) bool {
-	org, err := s.store.LoadOrg(ctx, orgID)
-	if err != nil {
-		return false
-	}
-	_, m := findMember(org, userID)
-	return m != nil && m.Role == auth.RoleAdmin
+	role, err := s.MemberRole(ctx, orgID, userID)
+	return err == nil && role == auth.RoleAdmin
 }
 
 // Delete removes an organisation entirely.
@@ -240,9 +265,9 @@ func adminCount(org *interfaces.Organisation) int {
 
 // CreateInvite creates a pending invite for email to join orgID with role,
 // recorded as having been sent by invitedBy. It returns the stored invite
-// record plus the raw invite token — the token is only ever available here;
-// only its SHA-256 hash is persisted, so it must be delivered to the invitee
-// out-of-band (e.g. embedded in an emailed accept link).
+// record plus the raw invite token — only ever available here; only its
+// SHA-256 hash is persisted, so it must be delivered to the invitee
+// out-of-band (e.g. an emailed accept link).
 func (s *OrgService) CreateInvite(ctx context.Context, orgID, email string, role auth.Role, invitedBy string, ttl time.Duration) (*interfaces.OrgInvite, string, error) {
 	if !role.IsValid() {
 		return nil, "", fmt.Errorf("collaboration: invalid role %q", role)
@@ -301,10 +326,9 @@ func (s *OrgService) RevokeInvite(ctx context.Context, orgID, inviteID string) e
 
 // AcceptInvite validates the given raw invite token and, if valid and not
 // expired or already used, adds userID as a member of the invite's
-// organisation with the role specified in the invite. The caller's email
-// must match the invite email to prevent token sharing attacks, AND the email
-// must be verified (H12: without this check, an attacker who created a shadow
-// local-mode account with `victim@example.com` — without ever verifying it —
+// organisation with the invite's role. The caller's email must match the
+// invite email (prevents token sharing) AND be verified (H12: without this,
+// an attacker holding an unverified shadow account for `victim@example.com`
 // could accept invites destined to the victim).
 func (s *OrgService) AcceptInvite(ctx context.Context, token, userID, userEmail string, emailVerified bool) (*interfaces.Organisation, error) {
 	if token == "" {
@@ -323,11 +347,11 @@ func (s *OrgService) AcceptInvite(ctx context.Context, token, userID, userEmail 
 	if time.Now().UTC().After(invite.ExpiresAt) {
 		return nil, ErrInviteExpired
 	}
-	// Require the caller to have a verified email claim and match the invite
-	// email. The userEmail != "" guard used to silently SKIP the check when the
-	// caller's JWT had no email — which meant anyone who obtained the invite
-	// token (leaked via referrer, copy-paste, a mail-system backup) could accept
-	// it and become a member with the invite's role (potentially admin). Reject
+	// Require the caller to have a verified email claim matching the invite
+	// email. The userEmail != "" guard used to silently SKIP the check when
+	// the caller's JWT had no email — anyone who obtained the invite token
+	// (leaked via referrer, copy-paste, a mail-system backup) could accept it
+	// and become a member with the invite's role (potentially admin). Reject
 	// when the caller has no email rather than falling through.
 	if userEmail == "" {
 		return nil, ErrInviteNotFound

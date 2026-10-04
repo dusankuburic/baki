@@ -29,17 +29,14 @@ import (
 	"pad-analyzer/internal/testutil"
 )
 
-// The Azure AI Foundry model registry's HTTP API (handlers_azure_registry.go):
-// the routes through the production router, the org role matrix, strict
-// bodies, the error envelope, audit rows, and the one /test route — against a
-// fake Foundry — plus the rate-limit and RLS classification of the outbound
-// routes.
+// The Azure AI Foundry model registry's HTTP API: the routes through the production router, the
+// org role matrix, strict bodies, the error envelope, audit rows, /test and the outbound routes'
+// rate-limit/RLS classification — against a fake Foundry.
 
 // --- Harness ---
 
-// azRegHostSuffix is the allow-listed domain of the fake Azure AI Foundry
-// resources (RFC 6761 .invalid: it never resolves, so nothing escapes even if
-// the redirect broke).
+// azRegHostSuffix is the allow-listed domain of the fake Foundry (RFC 6761
+// .invalid: it never resolves, so nothing escapes even if the redirect broke).
 const azRegHostSuffix = ".unit-test.invalid"
 
 // azRegAADHost is the Entra ID authority the sign-ins go to.
@@ -54,12 +51,9 @@ const (
 // azRegBase is the caller's own registry.
 const azRegBase = "/api/providers/azure-foundry"
 
-// azRegEnv is the production router (JWT auth, the /api/v1 alias, the real
-// route table) with the Azure AI Foundry model registry wired as DI wires it
-// in cloud mode — one registry per user and per organisation, on fakes — and
-// the organisation "Acme": u-admin (its admin), u-member, u-viewer and
-// u-guest; u-stranger belongs to no organisation. Every Azure request goes to
-// the fake Foundry (foundry) or is refused: no test reaches the network.
+// azRegEnv is the production router (JWT auth, /api/v1 alias, the real route table) with the
+// registry wired as DI wires it in cloud mode, and the organisation "Acme" (u-admin, u-member,
+// u-viewer, u-guest; u-stranger belongs to none). Every Azure request goes to the fake Foundry.
 type azRegEnv struct {
 	t        *testing.T
 	rt       *Router
@@ -94,8 +88,7 @@ func newAzRegEnv(t *testing.T) *azRegEnv {
 	e.sys = service.NewSystemService(storage.NewInMemorySettingsStore(), e.secrets, &mockNotifier{}, fs, config.ModeCloud)
 	e.sys.OnApiKeyChanged(e.svc.InvalidateModels)
 	e.wire(nil)
-	// The handlers read their services per request: hand them the wired
-	// ones (the routes were registered on these handler values).
+	// The handlers read their services per request: hand them the wired ones.
 	e.rt.handlers.Provider.providerSvc = e.svc
 	e.rt.handlers.Org.providers = e.svc
 	e.rt.handlers.Sys.sysSvc = e.sys
@@ -106,9 +99,8 @@ func newAzRegEnv(t *testing.T) *azRegEnv {
 	return e
 }
 
-// wire (re)builds the registry service on the env's registry rows — adjust
-// changes its dependencies — and wires it into the provider and system
-// services, as DI does.
+// wire (re)builds the registry service on the env's registry rows and wires it into the provider
+// and system services, as DI does; adjust changes its dependencies.
 func (e *azRegEnv) wire(adjust func(*testAzureModelsDeps)) {
 	d := testAzureModelsDeps{
 		Registry: e.registry, Secrets: e.secrets, OrgKeys: e.orgKeys, Factory: e.factory,
@@ -279,13 +271,9 @@ type azRegCall struct {
 
 func (c azRegCall) String() string { return c.Method + " " + c.Host + c.Path }
 
-// azRegFoundry is a fake Azure AI Foundry — every *.unit-test.invalid
-// resource, its project /api/projects/proj1 (deployments gpt-4.1 and
-// text-emb, the prompt agent "helper") and the Entra ID authority — reached
-// through the ai package's test seam (ai.AzureFoundryOptions.Transport),
-// which refuses every other destination (a real Azure host included). It
-// records every request, so a test proves which calls a test or a discovery
-// made, and which it never made.
+// azRegFoundry is a fake Azure AI Foundry — every *.unit-test.invalid resource, its project and
+// the Entra ID authority — reached through the ai package's test seam, which refuses every other
+// destination. It records every request, so a test proves which calls were made and which never were.
 type azRegFoundry struct {
 	srv   *httptest.Server
 	mu    sync.Mutex
@@ -314,9 +302,8 @@ func newAzRegFoundry(t *testing.T) *azRegFoundry {
 	return f
 }
 
-// azRegTransport sends https://<x>.unit-test.invalid and the Entra ID
-// authority to the fake's listener (the original host in the Host header)
-// and refuses every other destination.
+// azRegTransport sends https://<x>.unit-test.invalid and the Entra ID authority to the fake's
+// listener (original host kept in the Host header) and refuses every other destination.
 type azRegTransport struct {
 	target string
 	base   *http.Transport
@@ -479,10 +466,8 @@ func TestAzureRegistryRoutes_Registered(t *testing.T) {
 	}
 }
 
-// Without a wired registry every registry route answers 503
-// AZURE_REGISTRY_UNAVAILABLE; without organisation registries (no org
-// keystore) the org routes answer 404 ORG_KEYSTORE_UNAVAILABLE to everyone,
-// before any membership check, while the personal routes keep working.
+// Without a wired registry every registry route answers 503 AZURE_REGISTRY_UNAVAILABLE; without org
+// registries the org routes answer 404 ORG_KEYSTORE_UNAVAILABLE to everyone, before any membership check.
 func TestAzureRegistry_Unavailable(t *testing.T) {
 	t.Run("no registry", func(t *testing.T) {
 		e := newAzRegEnv(t)
@@ -508,10 +493,8 @@ func TestAzureRegistry_Unavailable(t *testing.T) {
 
 // --- The caller's own registry ---
 
-// The personal CRUD round trip through the real router (and its /api/v1
-// alias): the envelopes of Part 9's table, the credential under
-// azure-foundry/<id>, compare-and-swap, CONNECTION_IN_USE, cascade — and an
-// audit row for every write, without a secret or a description.
+// The personal CRUD round trip through the real router (and its /api/v1 alias): envelopes, the stored
+// credential, compare-and-swap, CONNECTION_IN_USE, cascade — and an audit row for every write, no secret.
 func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 	e := newAzRegEnv(t)
 	ch := captureAudit(t)
@@ -526,8 +509,6 @@ func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 		t.Errorf("empty listing = %+v", listing)
 	}
 
-	// Create: 201 {connection}, named after the endpoint host, never echoing
-	// the secret.
 	rr = e.do(user, http.MethodPost, azRegBase+"/connections", apiKeyResource("", "contoso-prod.openai.azure.com", "sk-secret-1"))
 	checkStatus(t, rr, http.StatusCreated)
 	if strings.Contains(rr.Body.String(), "sk-secret-1") {
@@ -546,12 +527,10 @@ func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureConnectionSave)), "azure_connection", conn.ID,
 		map[string]string{"op": "create", "connectionId": conn.ID, "authMode": "api_key"})
 
-	// Read it back: {connection}.
 	if got := e.connection(user, azRegBase, conn.ID); got.ID != conn.ID || got.Name != "contoso-prod" {
 		t.Errorf("GET /connections/%s = %+v", conn.ID, got)
 	}
 
-	// Rename it, compare-and-swap on updatedAt: a stale token is 409 CONFLICT.
 	rr = e.do(user, http.MethodPut, azRegBase+"/connections/"+conn.ID, map[string]any{"name": "Contoso", "updatedAt": conn.UpdatedAt})
 	checkStatus(t, rr, http.StatusOK)
 	var renamed service.AzureConnectionEnvelope
@@ -564,7 +543,6 @@ func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 	azRegWantError(t, e.do(user, http.MethodPut, azRegBase+"/connections/"+conn.ID, map[string]any{"name": "Other", "updatedAt": conn.UpdatedAt}),
 		http.StatusConflict, "CONFLICT")
 
-	// A model: 201 {model}.
 	model := e.createModel(user, azRegBase, map[string]any{
 		"connectionId": conn.ID, "kind": "chat", "deployment": "gpt-4.1", "displayName": "Docs writer",
 		"purpose": "documentation", "description": "Writes flow docs (private note)", "contextWindow": 32768, "maxOutputTokens": 4096,
@@ -579,7 +557,6 @@ func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 		"isDefault": "false", "isKnowledgeEmbedding": "false",
 	})
 
-	// GET /models: {models, serverDefault}; GET /models/{id}: {model}.
 	rr = e.do(user, http.MethodGet, azRegBase+"/models", nil)
 	checkStatus(t, rr, http.StatusOK)
 	var models service.AzureModelsListing
@@ -595,13 +572,11 @@ func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 		t.Errorf("GET /models/%s = %+v", model.ID, one.Model)
 	}
 
-	// The resource holds a model: 409 CONNECTION_IN_USE {modelCount}.
 	env := azRegWantError(t, e.do(user, http.MethodDelete, azRegBase+"/connections/"+conn.ID, nil), http.StatusConflict, "CONNECTION_IN_USE")
 	if env.Details["modelCount"] != float64(1) {
 		t.Errorf("CONNECTION_IN_USE details = %v, want modelCount 1", env.Details)
 	}
 
-	// DELETE /models/{id}: {status}.
 	rr = e.do(user, http.MethodDelete, azRegBase+"/models/"+model.ID, nil)
 	checkStatus(t, rr, http.StatusOK)
 	if got := azureDecode(t, rr); got["status"] != "ok" {
@@ -610,8 +585,6 @@ func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureModelDelete)), "azure_model", model.ID,
 		map[string]string{"op": "delete", "modelId": model.ID})
 
-	// DELETE /connections/{id}?cascade=true: {status, deletedModels,
-	// clearedKnowledgeEmbedding}; the credential goes with it.
 	e.createModel(user, azRegBase, map[string]any{"connectionId": conn.ID, "kind": "claude", "deployment": "claude-sonnet"})
 	_ = awaitAudit(t, ch, isAzRegAudit(AuditActionAzureModelSave))
 	rr = e.do(user, http.MethodDelete, azRegBase+"/connections/"+conn.ID+"?cascade=true", nil)
@@ -629,9 +602,8 @@ func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 	azRegWantError(t, e.do(user, http.MethodGet, azRegBase+"/connections/"+conn.ID, nil), http.StatusNotFound, "CONNECTION_NOT_FOUND")
 }
 
-// Bodies decode strictly — unknown fields, trailing data, the size caps —
-// with INVALID_CONFIG, a number of the wrong type names its field's code,
-// and nothing a refused body asked for happens.
+// Bodies decode strictly (unknown fields, trailing data, the size caps) with INVALID_CONFIG; a
+// wrong-typed number names its field's code; nothing a refused body asked for happens.
 func TestAzureRegistry_StrictDecode(t *testing.T) {
 	e := newAzRegEnv(t)
 	const user = "u-stranger"
@@ -695,8 +667,7 @@ func TestAzureRegistry_StrictDecode(t *testing.T) {
 	}
 }
 
-// PUT /models/{id} tells an absent override (kept) from null (cleared) and
-// from a value — the decoder's OptionalInt — and "" clears the description.
+// PUT /models/{id} tells an absent override (kept) from null (cleared) and from a value; "" clears the description.
 func TestAzureRegistry_ModelPatchAbsentVersusNull(t *testing.T) {
 	e := newAzRegEnv(t)
 	const user = "u-stranger"
@@ -748,8 +719,7 @@ func TestAzureRegistry_ModelPatchAbsentVersusNull(t *testing.T) {
 		http.StatusConflict, "CONFLICT")
 }
 
-// The registry's refusals keep the {code, message, details?} envelope with
-// their status and details — the codes and fields the modals route.
+// The registry's refusals keep the {code, message, details?} envelope — the codes and fields the modals route.
 func TestAzureRegistry_ErrorCodes(t *testing.T) {
 	e := newAzRegEnv(t)
 	const user = "u-stranger"
@@ -836,8 +806,7 @@ func TestAzureRegistry_ErrorCodes(t *testing.T) {
 	})
 }
 
-// registryState reports the desktop list file's state (ok, read_only,
-// recovered with the copy's path).
+// registryState reports the desktop list file's state (ok, read_only, recovered with the copy's path).
 func TestAzureRegistry_RegistryState(t *testing.T) {
 	e := newAzRegEnv(t)
 	listing := func() service.AzureConnectionsListing {
@@ -860,9 +829,7 @@ func TestAzureRegistry_RegistryState(t *testing.T) {
 	}
 }
 
-// The knowledge-base designation: offered where the knowledge base embeds
-// with Azure; on a non-empty corpus a change is 409 REINDEX_REQUIRED until
-// force confirms it (update, delete, cascade).
+// The knowledge-base designation: on a non-empty corpus a change is 409 REINDEX_REQUIRED until force confirms it.
 func TestAzureRegistry_KnowledgeBaseReindex(t *testing.T) {
 	e := newAzRegEnv(t)
 	e.wire(func(d *testAzureModelsDeps) {
@@ -900,10 +867,8 @@ func TestAzureRegistry_KnowledgeBaseReindex(t *testing.T) {
 
 // --- Organisations ---
 
-// The org role matrix: reads need an admin or a member, writes, tests and
-// discovery an admin; viewers, guests and non-members get 403 — the org
-// config routes' shape — and a refused write changes nothing. The personal
-// routes serve every authenticated caller.
+// The org role matrix: reads need an admin or a member, writes/tests/discovery an admin; viewers,
+// guests and non-members get 403 — and a refused write changes nothing.
 func TestAzureRegistry_OrgRoleMatrix(t *testing.T) {
 	e := newAzRegEnv(t)
 	base := e.orgBase()
@@ -962,16 +927,13 @@ func TestAzureRegistry_OrgRoleMatrix(t *testing.T) {
 	checkStatus(t, e.do("u-admin", http.MethodDelete, base+"/models/"+model.ID, nil), http.StatusOK)
 	checkStatus(t, e.do("u-admin", http.MethodDelete, base+"/connections/"+conn.ID, nil), http.StatusOK)
 
-	// Everyone has a registry of their own.
 	for _, caller := range []string{"u-admin", "u-member", "u-viewer", "u-guest", "u-stranger"} {
 		checkStatus(t, e.do(caller, http.MethodGet, azRegBase+"/connections", nil), http.StatusOK)
 	}
 }
 
-// In user scope the listings carry the shared entries of every organisation
-// where the caller is an admin or member (read-only, shared, with orgId and
-// orgName); a viewer, a guest and an outsider see none of them. In org scope
-// the routes answer that organisation's alone.
+// In user scope the listings carry the shared entries of every org where the caller is an admin or
+// member (read-only, with orgId/orgName); viewers, guests and outsiders see none.
 func TestAzureRegistry_SharedWithYou(t *testing.T) {
 	e := newAzRegEnv(t)
 	orgConn := e.createConnection("u-admin", e.orgBase(), apiKeyResource("shared", "shared-res.openai.azure.com", "org-key"))
@@ -1008,15 +970,12 @@ func TestAzureRegistry_SharedWithYou(t *testing.T) {
 			t.Errorf("%s: shared model listed = %v, want %v (%+v)", caller, sawShared, wantShared, models.Models)
 		}
 	}
-	// The member's own resource, first, next to the shared one.
 	rr := e.do("u-member", http.MethodGet, azRegBase+"/connections", nil)
 	var conns service.AzureConnectionsListing
 	azRegDecode(t, rr, &conns)
 	if len(conns.Connections) != 2 || conns.Connections[0].ID != own.ID || conns.Connections[0].Shared {
 		t.Errorf("member's listing = %+v, want their own resource then the shared one", conns.Connections)
 	}
-	// Org scope: that organisation's resources only, all shared, with the
-	// credential's compare-and-swap token.
 	rr = e.do("u-member", http.MethodGet, e.orgBase()+"/connections", nil)
 	azRegDecode(t, rr, &conns)
 	if len(conns.Connections) != 1 || !conns.Connections[0].Shared || conns.Connections[0].CredentialUpdatedAt == "" || conns.Connections[0].SharedBy != "u-admin" {
@@ -1026,10 +985,8 @@ func TestAzureRegistry_SharedWithYou(t *testing.T) {
 	azRegWantError(t, e.do("u-member", http.MethodPut, azRegBase+"/connections/"+orgConn.ID, map[string]any{"name": "mine now"}), http.StatusNotFound, "CONNECTION_NOT_FOUND")
 }
 
-// Every organisation write is audited on the organisation, with the ids in
-// the meta and no secret; a demoted lender's resource credential is
-// disabled per key (the reply flags it) and the resource then reads
-// needs_credentials.
+// Every org write is audited on the organisation, with the ids in the meta and no secret; a demoted
+// lender's resource credential is disabled per key and the resource then reads needs_credentials.
 func TestAzureRegistry_OrgWritesAuditedAndLenderDisable(t *testing.T) {
 	e := newAzRegEnv(t)
 	addOrgMember(t, e.rt, e.orgID, "u-admin2", auth.RoleAdmin)
@@ -1047,9 +1004,8 @@ func TestAzureRegistry_OrgWritesAuditedAndLenderDisable(t *testing.T) {
 	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureConnectionSave)), "org", e.orgID,
 		map[string]string{"op": "update", "connectionId": conn.ID, "dismissDiscovery": "true"})
 
-	// The lender is demoted: their resource's credential goes (one keys.save
-	// disable row naming the key), the reply says so, the resource and its
-	// model read needs_credentials — the registry rows stay.
+	// The lender is demoted: their resource's credential goes (one keys.save disable row naming the key),
+	// the reply says so, and the resource and its model then read needs_credentials.
 	rr = e.do("u-admin", http.MethodPut, "/api/orgs/"+e.orgID+"/members/u-admin2/role", map[string]string{"role": "member"})
 	checkStatus(t, rr, http.StatusOK)
 	if !decodeMutationFlag(t, rr) {
@@ -1067,7 +1023,6 @@ func TestAzureRegistry_OrgWritesAuditedAndLenderDisable(t *testing.T) {
 		t.Errorf("the disabled resource = %+v, want needs_credentials with its model", got)
 	}
 
-	// Removing the model and the resource is audited too.
 	checkStatus(t, e.do("u-admin", http.MethodDelete, base+"/models/"+model.ID, nil), http.StatusOK)
 	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureModelDelete)), "org", e.orgID, map[string]string{"op": "delete", "modelId": model.ID})
 	checkStatus(t, e.do("u-admin", http.MethodDelete, base+"/connections/"+conn.ID, nil), http.StatusOK)
@@ -1077,11 +1032,9 @@ func TestAzureRegistry_OrgWritesAuditedAndLenderDisable(t *testing.T) {
 
 // --- The /test route and discovery (a fake Azure AI Foundry) ---
 
-// The one /test route across saved and draft resources and models: a
-// resource test never calls a model, a model test makes exactly one call, an
-// agent test only looks the agent up (one GET, never a run); every outcome is
-// a 200, saved targets record their last test, drafts nothing; a 4xx only
-// for an invalid request.
+// The one /test route across saved and draft resources and models: a resource test never calls a
+// model, a model test makes exactly one call, an agent test only looks the agent up (never a run);
+// every outcome is a 200, saved targets record their last test, drafts nothing.
 func TestAzureRegistry_TestRoute(t *testing.T) {
 	e := newAzRegEnv(t)
 	f := e.foundry
@@ -1276,10 +1229,8 @@ func TestAzureRegistry_TestRoute(t *testing.T) {
 	})
 }
 
-// An organisation's test runs on the organisation's credential and is
-// audited (providers.test); the deprecated body-less org test probes the
-// organisation's resource "default" — no chat call — and answers the legacy
-// shape.
+// An organisation's test runs on the organisation's credential and is audited (providers.test); the
+// deprecated body-less org test probes resource "default" — no chat call — and answers the legacy shape.
 func TestAzureRegistry_OrgTest(t *testing.T) {
 	e := newAzRegEnv(t)
 	f := e.foundry
@@ -1310,8 +1261,7 @@ func TestAzureRegistry_OrgTest(t *testing.T) {
 		t.Errorf("the audit row carries the draft's endpoint: %v", ev.Meta)
 	}
 
-	// The deprecated body-less test: the organisation's resource "default"
-	// (the single-document configuration), probed as a resource.
+	// The deprecated body-less test: resource "default" probed as a resource.
 	checkStatus(t, e.do("u-admin", http.MethodPost, e.orgBase()+"/config", map[string]any{
 		"endpoint": "https://" + legacyHost, "auth": map[string]any{"mode": "api_key", "key": "legacy-key"}, "chatDeployment": "org-chat",
 	}), http.StatusOK)
@@ -1338,9 +1288,8 @@ func TestAzureRegistry_OrgTest(t *testing.T) {
 	}
 }
 
-// Discovery lists a saved Entra ID resource's project — deployments with
-// their kind, the runnable agents — marking what the resource already
-// registers; an API-key resource cannot (400 DISCOVERY_UNAVAILABLE, no call).
+// Discovery lists a saved Entra ID resource's project — deployments with their kind, the runnable
+// agents — marking what the resource already registers; an API-key resource cannot (no call).
 func TestAzureRegistry_Discover(t *testing.T) {
 	e := newAzRegEnv(t)
 	f := e.foundry
@@ -1386,10 +1335,8 @@ func TestAzureRegistry_Discover(t *testing.T) {
 
 // --- The deprecated key routes on the registry ---
 
-// /api/keys/has answers "any resource of the caller's own"; /api/keys/delete
-// removes resource "default" (the single-document configuration) with its
-// models and credential, leaving the other resources; /api/providers/test
-// probes resource "default" as a resource (no chat call).
+// /api/keys/has answers "any resource of the caller's own"; /api/keys/delete removes resource
+// "default" with its models and credential, leaving the other resources; /api/providers/test probes it.
 func TestAzureRegistry_DeprecatedKeyRoutes(t *testing.T) {
 	e := newAzRegEnv(t)
 	f := e.foundry
@@ -1411,7 +1358,6 @@ func TestAzureRegistry_DeprecatedKeyRoutes(t *testing.T) {
 		t.Error("has = false with a resource of the caller's own")
 	}
 
-	// The deprecated save makes resource "default" with its model.
 	checkStatus(t, e.do(user, http.MethodPost, azRegBase+"/config", map[string]any{
 		"endpoint": "https://" + legacyHost, "auth": map[string]any{"mode": "api_key", "key": "legacy-key"}, "chatDeployment": "legacy-chat",
 	}), http.StatusOK)
@@ -1419,7 +1365,6 @@ func TestAzureRegistry_DeprecatedKeyRoutes(t *testing.T) {
 		t.Errorf("resource default = %+v", def)
 	}
 
-	// /api/providers/test: resource "default", probed — no chat call.
 	f.reset()
 	rr := e.do(user, http.MethodPost, "/api/providers/test", map[string]string{"provider": "azure-foundry"})
 	checkStatus(t, rr, http.StatusOK)
@@ -1430,7 +1375,6 @@ func TestAzureRegistry_DeprecatedKeyRoutes(t *testing.T) {
 		t.Errorf("calls = %v, want one resource probe", calls)
 	}
 
-	// /api/keys/delete: resource "default" with its models and credential.
 	checkStatus(t, e.do(user, http.MethodPost, "/api/keys/delete", map[string]string{"provider": "azure-foundry"}), http.StatusOK)
 	azRegWantError(t, e.do(user, http.MethodGet, azRegBase+"/connections/default", nil), http.StatusNotFound, "CONNECTION_NOT_FOUND")
 	if stored, _ := e.secrets.Has(user, "azure-foundry"); stored {
@@ -1452,12 +1396,10 @@ func TestAzureRegistry_DeprecatedKeyRoutes(t *testing.T) {
 
 // --- Rate-limit buckets and the RLS exemption ---
 
-// The outbound registry routes — /test (the chat bucket) and
-// /connections/{id}/discover (the analysis bucket), the caller's own and an
-// organisation's — are classified whatever spelling reaches the router (the
-// /api/v1 alias, dot segments, doubled slashes) and run outside the request
-// RLS transaction; the registry's CRUD routes stay on the general bucket and
-// inside it.
+// The outbound registry routes — /test (the chat bucket) and /connections/{id}/discover (the
+// analysis bucket), the caller's own and an organisation's — are classified whatever spelling
+// reaches the router (the /api/v1 alias, dot segments, doubled slashes) and run outside the RLS
+// transaction; the registry's CRUD routes stay on the general bucket and inside it.
 func TestAzureOutboundRoute_Classification(t *testing.T) {
 	outbound := []struct {
 		path, group string
@@ -1478,7 +1420,7 @@ func TestAzureOutboundRoute_Classification(t *testing.T) {
 		{"/api/orgs/o1/./providers/azure-foundry/connections/default/discover", rlGroupAnalysis},
 	}
 	for _, c := range outbound {
-		if g := rateLimitGroup(http.MethodPost, c.path); g != c.group {
+		if g := rateLimitGroup(http.MethodPost, &url.URL{Path: c.path}); g != c.group {
 			t.Errorf("rateLimitGroup(POST %s) = %q, want %q", c.path, g, c.group)
 		}
 		// The RLS middleware runs on the canonical path (the router has
@@ -1506,7 +1448,7 @@ func TestAzureOutboundRoute_Classification(t *testing.T) {
 		{http.MethodPost, "/api/providers/azure-foundryX/test"},
 	}
 	for _, c := range notOutbound {
-		if g := rateLimitGroup(c.method, c.path); g != rlGroupGeneral {
+		if g := rateLimitGroup(c.method, &url.URL{Path: c.path}); g != rlGroupGeneral {
 			t.Errorf("rateLimitGroup(%s %s) = %q, want general", c.method, c.path, g)
 		}
 		if p := canonicalRequestPath(c.path); rlsExemptPath(p) {
@@ -1529,11 +1471,9 @@ func (azRegRestoreFailingOrgKeys) RestoreOrgIfUnchanged(string, string, time.Tim
 	return false, errors.New("org keystore: connection reset")
 }
 
-// A PUT whose registry write fails after the resource's new credential was
-// saved: when the previous credential goes back nothing changed and nothing
-// is audited; when it cannot go back, the change stands — the new secret and
-// its new lender — and is audited, marked as a failed request, while the
-// answer is still the registry's refusal (review S1).
+// A PUT whose registry write fails after the resource's new credential was saved: when the previous
+// credential goes back nothing changed and nothing is audited; when it cannot, the change stands —
+// the new secret and its new lender — and is audited, marked as a failed request.
 func TestAzureRegistry_FailedUpdateThatKeptTheNewCredentialIsAudited(t *testing.T) {
 	e := newAzRegEnv(t)
 	ch := captureAudit(t)
@@ -1574,9 +1514,8 @@ func (azRegDeleteFailingSecrets) Delete(string, string) error {
 	return errors.New("keystore: connection refused")
 }
 
-// The single-document saves: a save whose entry sync fails after the
-// document was stored, when the previous state cannot be put back, is
-// audited (keys.save, marked failed) — the new document is in effect.
+// The single-document saves: a save whose entry sync fails after the document was stored, when the
+// previous state cannot be put back, is audited (keys.save, marked failed) — the new document is in effect.
 func TestAzureRegistry_FailedLegacySaveThatKeptTheNewDocumentIsAudited(t *testing.T) {
 	e := newAzRegEnv(t)
 	ch := captureAudit(t)

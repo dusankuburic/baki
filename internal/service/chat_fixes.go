@@ -16,13 +16,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// fixDecisionTimeout bounds the apply_fix approval wait. Mirrors
-// ai.FixDecisionTimeout (kept as a var so tests can shorten it via
-// ChatService.fixDecisionWait).
+// fixDecisionTimeout bounds the apply_fix approval wait; a var so tests can shorten it (fixDecisionWait).
 var fixDecisionTimeout = ai.FixDecisionTimeout
 
-// decisionWait resolves the effective approval-wait duration (test override
-// aware).
+// decisionWait resolves the effective approval-wait duration (test override aware).
 func (s *ChatService) decisionWait() time.Duration {
 	if s.fixDecisionWait > 0 {
 		return s.fixDecisionWait
@@ -30,48 +27,34 @@ func (s *ChatService) decisionWait() time.Duration {
 	return fixDecisionTimeout
 }
 
-// fixDecisionKeepalive is how often the approval wait touches the stream's
-// activity clock. Without it the idle watchdog (90s, counting only provider
-// chunks + explicit touches) could cancel a healthy stream while the user is
-// still reading the proposal.
+// fixDecisionKeepalive is how often the approval wait touches the activity clock: without it the idle watchdog
+// (counting only provider chunks + explicit touches) could cancel a healthy stream while the user reads.
 const fixDecisionKeepalive = 15 * time.Second
 
-// ErrNoPendingFix is returned by ResolveFixDecision when the proposal ID is
-// unknown, already decided, or belongs to a different stream. Exported so the
-// HTTP layer can map it to a distinct status.
+// ErrNoPendingFix is returned by ResolveFixDecision for an unknown, already-decided or other-stream proposal ID.
 var ErrNoPendingFix = errors.New("no pending fix proposal for this stream")
 
-// fixDecisionState is one registered approval prompt. decided is buffered so
-// ResolveFixDecision never blocks and the FIRST decision wins (later sends
-// find it full and are dropped).
+// fixDecisionState is one registered approval prompt; decided is buffered so ResolveFixDecision never blocks and
+// the FIRST decision wins.
 type fixDecisionState struct {
 	streamID string
 	decided  chan fixDecision
 }
 
 // fixDecision is one user verdict, delivered whole on the channel.
-//
-// excludedBatchIdx carries per-item OPT-OUTS for a batch approval (U4.1):
-// indices into the card's item list the user deselected. It used to live on
-// fixDecisionState, written before the send and read after the receive, on the
-// theory that the channel supplied the happens-before edge. It does — but only
-// for the caller whose send SUCCEEDS. Every caller wrote the field, including
-// the ones whose send lands in the `default:` arm and is dropped, so a
-// double-clicked Approve or a client retry raced the consumer on an
-// unsynchronised slice header (proven under -race). Carrying the payload in the
-// message means only the winning decision is ever published, and there is no
-// shared mutable state left to race on.
+// excludedBatchIdx carries per-item OPT-OUTS for a batch approval (U4.1): indices into the card's item list the
+// user deselected. It lives in the message, not on fixDecisionState: a dropped send (a double-clicked Approve or
+// retry) still wrote the shared field, racing the consumer on an unsynchronised slice header (proven under
+// -race); carrying the payload means only the winning decision is ever published.
 type fixDecision struct {
 	approved         bool
 	excludedBatchIdx []int
 }
 
-// chatFixApplier implements ai.ToolFixApplier for one chat stream: it emits
-// the fix_proposal SSE event to the stream's owner, waits for their decision
-// (via ChatService.ResolveFixDecision), and on approval applies the fix to the
-// REAL flow through FlowService.ApplyFix (the patch is re-computed server-side
-// against the unscrubbed source — the scrubbed doc only ever produced the
-// preview), re-analyzes, and reports whether the finding actually resolved.
+// chatFixApplier implements ai.ToolFixApplier for one chat stream: emits the fix_proposal SSE event, waits for
+// the decision, and on approval applies the fix to the REAL flow through FlowService.ApplyFix (the patch is
+// re-computed server-side on the unscrubbed source — the scrubbed doc only ever produced the preview),
+// re-analyzes, and reports whether the finding resolved.
 type chatFixApplier struct {
 	svc      *ChatService
 	scope    string
@@ -79,16 +62,14 @@ type chatFixApplier struct {
 	streamID string
 	emit     func(eventType string, data map[string]interface{})
 	touch    func()
-	// onDocReplaced, when set, is invoked with the fresh post-fix document so
-	// the owning tool loop can swap its working copy mid-stream (A1) — the
-	// re-parse mints new block IDs, and follow-up tools on the stale snapshot
-	// would mis-answer or fail.
+	// onDocReplaced, when set, is invoked with the fresh post-fix document so the owning tool loop can swap its
+	// working copy mid-stream (A1) — the re-parse mints new block IDs, and follow-up tools on the stale snapshot
+	// would mis-answer.
 	onDocReplaced func(fresh *models.FlowDocument)
 }
 
-// newFixApplier builds the per-stream applier. Returns nil when the service
-// can't apply fixes (no flow service wired — bare-struct tests), leaving
-// tctx.Fixes nil and apply_fix to report "not available".
+// newFixApplier builds the per-stream applier; nil when the service can't apply fixes (no flow service wired),
+// leaving tctx.Fixes nil and apply_fix to report "not available".
 func (s *ChatService) newFixApplier(scope string, doc *models.FlowDocument, streamID string, emit func(string, map[string]interface{}), touch func(), onDocReplaced func(*models.FlowDocument)) ai.ToolFixApplier {
 	if s.flowCache == nil || emit == nil {
 		return nil
@@ -96,10 +77,8 @@ func (s *ChatService) newFixApplier(scope string, doc *models.FlowDocument, stre
 	return &chatFixApplier{svc: s, scope: scope, doc: doc, streamID: streamID, emit: emit, touch: touch, onDocReplaced: onDocReplaced}
 }
 
-// ApplyFixWithApproval implements ai.ToolFixApplier. The returned string is
-// always model-readable on the nil-error paths (approved/applied,
-// applied-unverified, declined, timed out); an error means the stream context
-// died (cancelled/timed out) and the loop's own failure handling takes over.
+// ApplyFixWithApproval implements ai.ToolFixApplier: the returned string is always model-readable on nil-error
+// paths; an error means the stream context died and the loop's failure handling takes over.
 func (a *chatFixApplier) ApplyFixWithApproval(ctx context.Context, prop ai.FixProposal) (string, error) {
 	if a.touch != nil {
 		a.touch()
@@ -113,8 +92,7 @@ func (a *chatFixApplier) ApplyFixWithApproval(ctx context.Context, prop ai.FixPr
 		"ruleId":     prop.RuleID,
 		"fixType":    prop.FixType,
 		"blockId":    prop.BlockID,
-		// Block names are never masked by ScrubDocument (only Properties) —
-		// scrub the client-facing label as defense in depth.
+		// Block names are never masked by ScrubDocument (only Properties) — scrub the label as defense in depth.
 		"blockLabel": scrubber.ScrubText(prop.BlockLabel),
 		"line":       prop.Line,
 		"summary":    prop.Summary,
@@ -154,10 +132,9 @@ wait:
 	}
 
 	a.emitFixDecision(prop.ProposalID, "applying", "")
-	// Keepalive through the apply+verify window (L4): no provider chunks flow
-	// while it runs — a >90s re-analysis on a large flow would otherwise trip
-	// the idle watchdog even though fixApplyToolTimeout allows 120s. Closed via
-	// defer: a panic in the apply path must not strand the goroutine.
+	// Keepalive through the apply+verify window (L4): no provider chunks flow then — a >90s re-analysis would
+	// otherwise trip the idle watchdog even though fixApplyToolTimeout allows 120s. Closed via defer so a panic
+	// in the apply path cannot strand the goroutine.
 	applyDone := a.beginApplyKeepalive(ctx)
 	defer close(applyDone)
 	outcome, updated, err := a.svc.applyApprovedFix(ctx, a.scope, a.doc, prop)
@@ -165,9 +142,8 @@ wait:
 		a.emitFixDecision(prop.ProposalID, "error", err.Error())
 		return "", err
 	}
-	// A1: hand the fresh post-fix document to the owning loop BEFORE the
-	// decision event, so any tool call the model makes next iteration runs
-	// against the fixed flow (new block IDs included).
+	// A1: hand the fresh post-fix document to the owning loop BEFORE the decision event, so the model's next
+	// tool call runs against the fixed flow (new block IDs included).
 	if updated != nil && a.onDocReplaced != nil {
 		a.onDocReplaced(updated)
 	}
@@ -184,18 +160,10 @@ func (a *chatFixApplier) emitFixDecision(proposalID, status, message string) {
 	a.emit("fix_decision", data)
 }
 
-// beginApplyKeepalive starts the apply-window keepalive: a ticker goroutine
-// touching the stream's activity clock while an approved apply + re-analysis
-// runs (no provider chunks flow then — see ApplyFixWithApproval). It returns
-// the channel that ends the window; the caller MUST close it via defer
-// immediately, so a PANIC in the apply path — caught downstream by the stream
-// worker's recover — still ends the window. The window used to be closed by a
-// plain statement after the apply call, so the panic unwound past it and
-// stranded the ticker goroutine forever: it kept touching the dead stream
-// control every fixDecisionKeepalive and pinned the whole closure graph,
-// answer buffer included. The goroutine also watches ctx, so a hung apply
-// cannot outlive the stream context; the ticker itself is stopped by the
-// goroutine's own defer on every exit arm.
+// beginApplyKeepalive starts the apply-window keepalive: a ticker goroutine touching the activity clock while
+// an apply + re-analysis runs. The caller MUST close the returned channel via defer immediately, so a PANIC in
+// the apply path still ends the window (a plain close-after-the-call unwound past it and stranded the ticker
+// goroutine forever). The goroutine also watches ctx, so a hung apply cannot outlive the stream.
 func (a *chatFixApplier) beginApplyKeepalive(ctx context.Context) chan struct{} {
 	applyDone := make(chan struct{})
 	if a.touch == nil {
@@ -218,9 +186,8 @@ func (a *chatFixApplier) beginApplyKeepalive(ctx context.Context) chan struct{} 
 	return applyDone
 }
 
-// ApplyFixesWithApproval implements the batch half of ai.ToolFixApplier: ONE
-// approval prompt carrying every preview, one decision, then a sequential
-// apply with per-item verification. See applyApprovedFixes for the loop.
+// ApplyFixesWithApproval implements the batch half of ai.ToolFixApplier: ONE approval prompt, one decision, then
+// a sequential apply with per-item verification (see applyApprovedFixes).
 func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.FixProposal) (string, error) {
 	if len(props) == 0 {
 		return "error: empty batch", nil
@@ -287,8 +254,7 @@ wait:
 		return "the user DECLINED the batch — nothing was changed. Do not re-propose the same batch unless asked; explain the changes instead.", nil
 	}
 
-	// Per-item opt-out (U4.1): apply only the items the user left checked.
-	// Indices are positions in the emitted item list (== props order).
+	// Per-item opt-out (U4.1): apply only the items the user left checked (indices == props order).
 	if len(excluded) > 0 {
 		skip := make(map[int]bool, len(excluded))
 		for _, i := range excluded {
@@ -312,9 +278,7 @@ wait:
 	}
 
 	a.emitFixDecision(batchID, "applying", "")
-	// Keepalive through the whole multi-apply window (N applies + re-analyses
-	// emit no provider chunks — see ApplyFixWithApproval). Closed via defer:
-	// a panic in the apply path must not strand the goroutine.
+	// Keepalive through the whole multi-apply window (see ApplyFixWithApproval); closed via defer.
 	applyDone := a.beginApplyKeepalive(ctx)
 	defer close(applyDone)
 	outcome, updated, err := a.svc.applyApprovedFixes(ctx, a.scope, a.doc, props)
@@ -368,9 +332,7 @@ func (o chatFixOutcome) ModelSummary() string {
 	}
 }
 
-// applyFixFunc is the FlowService-backed mutation hook. A field (rather than a
-// direct call) so service tests can substitute it, mirroring the
-// watchdogInterval/idleTimeout test overrides.
+// applyFixFunc is the FlowService-backed mutation hook — a field so tests can substitute it.
 type applyFixFunc func(ctx context.Context, doc *models.FlowDocument, blockID, fixType, ruleID, variable, property string) (*models.FlowDocument, error)
 
 func (s *ChatService) applyFixHook() applyFixFunc {
@@ -378,35 +340,25 @@ func (s *ChatService) applyFixHook() applyFixFunc {
 		return s.applyFixFunc
 	}
 	return func(ctx context.Context, doc *models.FlowDocument, blockID, fixType, ruleID, variable, property string) (*models.FlowDocument, error) {
-		// unsafe=false: a chat approval is a one-line card with no diff, which
-		// is exactly the unattended approval the behaviour-changing fixers are
-		// gated against (see analyzer.IsBehaviourChangingFix). Those fixes
-		// report the opt-in error here and stay available from the finding
-		// card, where the preview diff is shown before the unsafe apply.
+		// unsafe=false: a chat approval is a one-line card with no diff — exactly the unattended approval the
+		// behaviour-changing fixers are gated against. Those report the opt-in error here and stay available from
+		// the finding card, where the preview diff is shown first.
 		return s.flowCache.ApplyFix(ctx, doc, blockID, fixType, ruleID, variable, property, false)
 	}
 }
 
-// applyApprovedFix applies an approved proposal against the REAL flow and
-// verifies it: re-resolves a fresh document with EDITOR permission (the chat
-// stream itself only required viewer), runs the fix (patch recomputed
-// server-side on the unscrubbed source), invalidates the cached chat context
-// for the changed flow, and re-analyzes to check whether the finding (by its
-// re-parse-stable fingerprint) actually disappeared. The updated document is
-// returned alongside the outcome so the caller can refresh its working copy
-// (A1); it is nil exactly when the apply/analysis paths could not produce one.
+// applyApprovedFix applies an approved proposal against the REAL flow and verifies it: re-resolves a fresh
+// document with EDITOR permission (the stream itself only required viewer), runs the fix (patch recomputed on
+// the unscrubbed source), invalidates the cached chat context, and re-analyzes to check whether the finding (by
+// its re-parse-stable fingerprint) disappeared. The updated document is returned for the caller's refresh (A1).
 //
-// The whole apply+verify window is keepalive-touched: no provider chunks flow
-// while it runs, so without touches the idle watchdog (>90s on a large flow's
-// re-analysis) would cancel a healthy stream even though fixApplyToolTimeout
-// allows 120s.
+// The apply+verify window is keepalive-touched: without touches the idle watchdog would cancel a healthy stream
+// during a >90s re-analysis even though fixApplyToolTimeout allows 120s.
 func (s *ChatService) applyApprovedFix(ctx context.Context, scope string, snapshot *models.FlowDocument, prop ai.FixProposal) (chatFixOutcome, *models.FlowDocument, error) {
 	if snapshot == nil {
 		return chatFixOutcome{Status: "error", Detail: "no flow loaded"}, nil, fmt.Errorf("no flow loaded")
 	}
-	// Fresh doc + editor check at apply time: the stream was authorized as
-	// viewer, and the snapshot may be stale mid-conversation. In local mode
-	// GetAuthorized resolves the current doc without authz.
+	// Fresh doc + editor check at apply time: the stream was authorized as viewer and the snapshot may be stale.
 	doc, err := s.GetAuthorizedFlow(ctx, snapshot.ID, scope, "editor")
 	if err != nil {
 		return chatFixOutcome{Status: "error", Detail: "not allowed to edit this flow: " + err.Error()}, nil, err
@@ -418,8 +370,7 @@ func (s *ChatService) applyApprovedFix(ctx context.Context, scope string, snapsh
 		return chatFixOutcome{Status: "error", Detail: err.Error()}, nil, err
 	}
 
-	// The flow changed under the chat's cached (scrubbed) context — drop it so
-	// the next turn rebuilds against the fixed source.
+	// The flow changed under the chat's cached (scrubbed) context — drop it for the fixed source.
 	s.InvalidateChatContext(doc.ID)
 
 	if updated == nil || s.analysisCache == nil {
@@ -436,10 +387,8 @@ func (s *ChatService) applyApprovedFix(ctx context.Context, scope string, snapsh
 		}, updated, nil
 	}
 
-	// Verify by fingerprint: the re-parse mints fresh block IDs, so BlockID
-	// comparisons would always "resolve". Fingerprints are content-stable
-	// across re-parses by design. An empty fingerprint (older report) falls
-	// back to counting rule findings on the re-parsed block set.
+	// Verify by fingerprint: the re-parse mints fresh block IDs, so BlockID comparisons would always "resolve".
+	// An empty fingerprint (older report) falls back to rule+block matching.
 	stillPresent := false
 	for i := range report.Findings {
 		f := &report.Findings[i]
@@ -465,10 +414,8 @@ func (s *ChatService) applyApprovedFix(ctx context.Context, scope string, snapsh
 	logger.Info("chat-driven fix applied", "flow", doc.ID, "rule", prop.RuleID, "fix", prop.FixType)
 	detail := fmt.Sprintf("the finding no longer appears after re-analysis (flow now has %d findings)", len(report.Findings))
 	if updated != nil {
-		// The apply re-parses the source, minting fresh block IDs: every block
-		// ID the model saw earlier (including the one in this proposal) is now
-		// stale. Say so explicitly — otherwise the model's next apply_fix
-		// targets a dead ID and fails with an opaque "block not found".
+		// The apply re-parsed the source, minting fresh block IDs: every ID the model saw is stale, so say so
+		// explicitly — otherwise its next apply_fix targets a dead ID.
 		detail += ". The flow was re-parsed: ALL block IDs have changed — call list_findings again before referencing any block"
 	}
 	return chatFixOutcome{
@@ -477,8 +424,7 @@ func (s *ChatService) applyApprovedFix(ctx context.Context, scope string, snapsh
 	}, updated, nil
 }
 
-// ResolveFixDecision delivers the user's approve/decline for a pending
-// proposal. First decision wins; the stream must own the proposal.
+// ResolveFixDecision delivers the user's approve/decline; first decision wins, and the stream must own it.
 func (s *ChatService) ResolveFixDecision(streamID, proposalID string, approved bool, excludedBatchIdx []int) error {
 	v, ok := s.pendingFixDecisions.Load(proposalID)
 	if !ok {
@@ -499,12 +445,10 @@ func (s *ChatService) ResolveFixDecision(streamID, proposalID string, approved b
 	return nil
 }
 
-// fixContentKey re-associates a batch target across sequential applies. A
-// patch shifts line numbers and the re-parse mints fresh block IDs + (line-
-// bearing) fingerprints, so neither survives; the block's identity content
-// does. Ambiguity note: truly identical sibling blocks share a key — items
-// consume matches in order, which may swap siblings, but identical siblings
-// get identical fixes.
+// fixContentKey re-associates a batch target across sequential applies: a patch shifts line numbers and the
+// re-parse mints fresh block IDs + fingerprints, so neither survives; the block's identity content does.
+// Truly identical sibling blocks share a key — items consume matches in order, which may swap siblings, but
+// identical siblings get identical fixes.
 type fixContentKey struct {
 	RuleID, Subflow, RawType, Name, Subject string
 }
@@ -535,9 +479,8 @@ type batchItemOutcome struct {
 	Message string
 }
 
-// batchOutcome aggregates a batch: overall Status is "applied" when every item
-// resolved cleanly, "applied-unresolved" when some did not (partial success,
-// mixed errors), "error" when nothing applied at all.
+// batchOutcome aggregates a batch: "applied" when every item resolved cleanly, "applied-unresolved" when some
+// did not, "error" when nothing applied.
 type batchOutcome struct {
 	Status string
 	Detail string
@@ -560,12 +503,9 @@ func (o batchOutcome) ModelSummary() string {
 	return b.String()
 }
 
-// applyApprovedFixes applies an approved batch against the REAL flow, one fix
-// at a time: each apply re-parses (new block IDs), so the next target is
-// re-associated on the fresh analysis by content key before its patch is
-// computed. Per-item failures don't abort the batch. The final analysis
-// verifies every item. The final document is returned for the loop's doc
-// refresh (A1); nil when nothing could be applied at all.
+// applyApprovedFixes applies an approved batch against the REAL flow one fix at a time: each apply re-parses
+// (new block IDs), so the next target is re-associated on the fresh analysis by content key. Per-item failures
+// don't abort the batch; the final analysis verifies every item. The final document is returned for A1.
 func (s *ChatService) applyApprovedFixes(ctx context.Context, scope string, snapshot *models.FlowDocument, props []ai.FixProposal) (batchOutcome, *models.FlowDocument, error) {
 	out := batchOutcome{Status: "error", Items: make([]batchItemOutcome, 0, len(props))}
 	if snapshot == nil {
@@ -587,12 +527,9 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, scope string, snap
 	pend := make([]pending, len(props))
 	appliedFlags := make([]bool, len(props))
 
-	// Associate every target with the CURRENT doc's analysis: exact BlockID
-	// first; the props were built from this flow's content moments ago, so a
-	// miss means a concurrent edit — the content key still gives a chance.
-	// A nil analysis cache (bare-struct wiring, analysis not available) must
-	// bail gracefully like the single-fix path does — calling through it
-	// panics inside the apply window.
+	// Associate every target with the CURRENT doc's analysis: exact BlockID first; a miss means a concurrent
+	// edit — the content key still gives a chance. A nil analysis cache must bail gracefully (a call through it
+	// panics inside the apply window).
 	if s.analysisCache == nil {
 		out.Detail = "analysis not available — could not prepare the batch"
 		return out, nil, nil
@@ -616,8 +553,7 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, scope string, snap
 		}
 	}
 
-	// findFinding locates the not-yet-consumed finding matching key, preferring
-	// an exact BlockID+Rule hit. consumed is by finding index.
+	// findFinding locates the not-yet-consumed finding matching key, preferring an exact BlockID+Rule hit.
 	findFinding := func(report *models.AnalysisReport, d *models.FlowDocument, key fixContentKey, prop ai.FixProposal, consumed map[int]bool) *models.Finding {
 		for j := range report.Findings {
 			if consumed[j] {
@@ -643,11 +579,9 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, scope string, snap
 	}
 
 	var anyApplied, anyUnresolvedOrErr bool
-	// B1.11: analysis is only re-run when the doc CHANGED since the last one
-	// (a failed/skipped item leaves the doc — and the report — current), and
-	// the last mid-loop analysis doubles as the verification report when
-	// nothing applied after it. A 20-item batch with k failures used to run
-	// k+1 redundant full 41-rule walks on an unchanged document.
+	// B1.11: analysis is only re-run when the doc CHANGED since the last one, and the last mid-loop analysis
+	// doubles as the verification report when nothing applied after it — a 20-item batch with k failures used to
+	// run k+1 redundant full 41-rule walks.
 	var curReport *models.AnalysisReport
 	for i := range pend {
 		if curReport == nil {
@@ -661,8 +595,8 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, scope string, snap
 		}
 		report := curReport
 		consumed := map[int]bool{}
-		// Mark findings consumed by EARLIER items of this same analysis pass
-		// so identical-sibling association stays one-to-one.
+		// Mark findings consumed by EARLIER items of this same analysis pass, so identical-sibling association
+		// stays one-to-one.
 		for k := 0; k < i; k++ {
 			for j := range report.Findings {
 				f := &report.Findings[j]
@@ -674,9 +608,7 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, scope string, snap
 		}
 		f := findFinding(report, doc, pend[i].key, pend[i].prop, consumed)
 		if f == nil {
-			// Gone before we touched it: either an earlier fix in this batch
-			// cascaded it away or the user's concurrent edit removed it —
-			// from the outcome view, the finding no longer exists.
+			// Gone before we touched it: an earlier fix cascaded it away, or a concurrent edit removed it.
 			out.Items = append(out.Items, batchItemOutcome{RuleID: pend[i].prop.RuleID, Status: "already-resolved", Message: "the finding no longer appears on the flow"})
 			continue
 		}
@@ -691,23 +623,18 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, scope string, snap
 			continue
 		}
 		doc = updated
-		// The applied fix re-parsed the doc: the report (and its block IDs)
-		// are stale — force re-analysis for the next association.
+		// The applied fix re-parsed the doc: the report (and its block IDs) are stale — force re-analysis.
 		curReport = nil
 		appliedFlags[i] = true
 		anyApplied = true
 		metrics.RecordFlowOp("chat_apply_fix")
-		// Placeholder keeps out.Items index-aligned with pend (every
-		// iteration appends exactly one); the verification pass fills it.
+		// Placeholder keeps out.Items index-aligned with pend; the verification pass fills it.
 		out.Items = append(out.Items, batchItemOutcome{RuleID: pend[i].prop.RuleID})
 	}
 
-	// Final verification: an applied item whose finding (by content key) still
-	// exists on the end-state flow did not actually resolve.
+	// Final verification: an applied item whose finding (by content key) still exists did not actually resolve.
 	if anyApplied {
-		// B1.11: when the LAST mid-loop analysis already reflects the final
-		// doc (no apply after it), reuse it — only re-run when a trailing
-		// apply staled it.
+		// B1.11: reuse the last mid-loop analysis when no apply staled it.
 		fin := curReport
 		if fin == nil {
 			var ferr error

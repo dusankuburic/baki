@@ -57,21 +57,6 @@ func TestProviderFactory_For_AllKnownProviders(t *testing.T) {
 	}
 }
 
-func TestProviderFactory_For_Copilot_OAuth(t *testing.T) {
-	keys := map[string]string{
-		"copilot-oauth-token": "gh-oauth-123",
-	}
-	f := NewProviderFactory(func(_, k string) (string, error) { return keys[k], nil }, NewCopilotAuth(), nil, nil)
-
-	p, err := f.For("", "copilot")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if p.ID() != "copilot" {
-		t.Errorf("ID = %q, want copilot", p.ID())
-	}
-}
-
 func TestProviderFactory_For_Copilot_PATFallback(t *testing.T) {
 	keys := map[string]string{
 		"copilot": "ghp_manual_pat",

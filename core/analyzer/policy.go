@@ -21,15 +21,12 @@ func policySeverityRank(s models.Severity) int {
 	}
 }
 
-// EvaluatePolicy gates an analysis report against a policy: it considers only the
-// findings from the policy's enabled rules (applying any per-rule severity
-// override), counts them, and flags as violations those whose effective severity
-// meets or exceeds the policy's GateSeverity. A policy with no (or an unknown)
-// GateSeverity is report-only and always passes.
-//
-// It evaluates an already-computed report rather than re-running analysis, so a
-// flow can be analyzed once and gated against many policies. It is a pure
-// function — no I/O — and safe on a nil report.
+// EvaluatePolicy gates a report against a policy: it counts only findings from
+// the policy's enabled rules (with any per-rule severity override) and flags as
+// violations those whose effective severity meets GateSeverity or exceeds a
+// per-rule count budget. A policy with no (or unknown) GateSeverity is
+// report-only and always passes. It evaluates an already-computed report
+// (analyze once, gate against many policies) and is safe on a nil report.
 func EvaluatePolicy(report *models.AnalysisReport, policy models.Policy) *models.PolicyResult {
 	res := &models.PolicyResult{
 		PolicyID:   policy.ID,
@@ -66,9 +63,9 @@ func EvaluatePolicy(report *models.AnalysisReport, policy models.Policy) *models
 	}
 	gate := policySeverityRank(policy.GateSeverity)
 
-	// Ordinal counters for budget accounting (stable report order):
-	// per-rule occurrences, and per-effective-severity occurrences among
-	// gate-meeting findings.
+	// Ordinal counters for budget accounting (stable report order): per-rule
+	// occurrences, and per-effective-severity occurrences among gate-meeting
+	// findings.
 	ruleOrdinal := make(map[string]int)
 	sevOrdinal := make(map[models.Severity]int)
 
@@ -100,8 +97,7 @@ func EvaluatePolicy(report *models.AnalysisReport, policy models.Policy) *models
 		violates := false
 		if budget, capped := ruleBudgets[f.RuleID]; capped {
 			// Per-rule budget: the first N occurrences are tolerated; every
-			// finding beyond violates (regardless of the severity gate — a
-			// rule cap IS its own gate).
+			// finding beyond violates (a rule cap IS its own gate).
 			ord := ruleOrdinal[f.RuleID]
 			ruleOrdinal[f.RuleID] = ord + 1
 			violates = ord >= budget

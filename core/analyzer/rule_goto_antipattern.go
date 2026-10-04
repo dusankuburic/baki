@@ -82,9 +82,9 @@ func extractGotoTarget(block *models.Block) string {
 }
 
 // buildLabelIndex maps each label name (lowercased, so lookups are
-// case-insensitive like the previous EqualFold scan) to its first LABEL block in
-// document order. Walking in document order keeps the result deterministic when
-// duplicate label names exist; the old per-GOTO map scan picked an arbitrary one.
+// case-insensitive like the previous EqualFold scan) to its first LABEL block
+// in document order — deterministic under duplicate names, where the old
+// per-GOTO map scan picked an arbitrary one.
 func buildLabelIndex(ctx *RuleContext) map[string]*models.Block {
 	idx := make(map[string]*models.Block)
 	walkBlocks(ctx.Flow, func(b *models.Block) {
@@ -95,7 +95,7 @@ func buildLabelIndex(ctx *RuleContext) map[string]*models.Block {
 			}
 			// Count per (lowercased) name in the same pass — duplicate-label
 			// reads this instead of re-scanning AllBlocks per LABEL block
-			// (which made the rule O(labels × blocks)).
+			// (was O(labels × blocks)).
 			ctx.LabelNameCount[key]++
 		}
 	})
@@ -165,6 +165,4 @@ func isScopeContainer(b *models.Block) bool {
 	return false
 }
 
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
 func init() { registerRule(&GotoAntipatternRule{}) }

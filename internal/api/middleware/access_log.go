@@ -18,11 +18,8 @@ import (
 // requestIDKey is the private context key for the per-request ID.
 type requestIDCtxKey struct{}
 
-// RequestIDHeader is the HTTP header used to convey the per-request ID
-// between the load balancer / reverse proxy and this service, and between
-// the service and its clients. The middleware accepts whatever the proxy
-// stamped (so trace context is preserved) and generates a new UUIDv4 only
-// when the header is absent.
+// RequestIDHeader is the HTTP header used to convey the per-request ID between the load balancer / reverse proxy and this service, and between the service
+// and its clients. The middleware accepts whatever the proxy stamped (so trace context is preserved) and generates a new UUIDv4 only when the header is absent.
 const RequestIDHeader = "X-Request-ID"
 
 // RequestIDFromContext returns the request ID stamped on ctx by the access
@@ -34,18 +31,11 @@ func RequestIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// AccessLog wraps h with request-ID propagation and a one-line structured
-// log per request. The request ID is taken from the X-Request-ID header
-// if present (so a reverse proxy / load balancer can stamp it for
-// cross-service correlation), or a fresh UUIDv4 otherwise. It is echoed
-// back in the response header so clients can quote it when reporting
-// issues.
-//
-// Logging is performed *after* the handler returns, so the line carries
-// the final status, bytes written, and total latency. SSE / WebSocket
-// upgrades that never return a normal response still get a log entry
-// when the goroutine eventually exits.
+// AccessLog wraps h with request-ID propagation and a one-line structured log per request. The ID comes from the X-Request-ID header if present (reverse-proxy correlation) or a fresh UUIDv4, and is echoed back in the response header.
+// Logging runs after the handler returns, so the line carries the final status, bytes and latency; SSE/WebSocket upgrades still get an entry when the goroutine eventually exits.
 func AccessLog(trustedProxies []string) func(http.Handler) http.Handler {
+	// Parsed once: ClientIP re-parses every CIDR per call.
+	proxies := parseProxySet(trustedProxies)
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			reqID := strings.TrimSpace(r.Header.Get(RequestIDHeader))
@@ -59,6 +49,10 @@ func AccessLog(trustedProxies []string) func(http.Handler) http.Handler {
 
 			sr := NewResponseRecorder(w)
 
+			// Log the canonical dispatch path, taken before the handler runs, as Metrics does and for the same reason: a request refused before the router (429)
+			// kept its raw spelling, and redactPath, which matches the canonical /api/invites/ only, wrote the invite credential of /api/v1/invites/{token}/accept into the log.
+			p := canonicalPath(r.URL.Path)
+
 			start := time.Now()
 			h.ServeHTTP(maybeHijackable(sr), r)
 			latency := time.Since(start)
@@ -68,21 +62,19 @@ func AccessLog(trustedProxies []string) func(http.Handler) http.Handler {
 				userID = claims.UserID
 			}
 
-			level := levelFor(r.URL.Path, sr.status)
+			level := levelFor(p, sr.status)
 			args := []any{
 				"request_id", reqID,
 				"method", r.Method,
-				"path", redactPath(r.URL.Path),
+				"path", redactPath(p),
 				"status", sr.status,
 				"bytes", sr.bytes,
 				"latency_ms", latency.Milliseconds(),
 				"user_id", userID,
-				"remote_ip", ClientIP(r, trustedProxies),
+				"remote_ip", proxies.clientIP(r),
 			}
-			// trace_id lets an operator pivot from a trace (App Insights /
-			// any OTLP backend) to this request's log lines and back. otelhttp
-			// is the outermost layer, so the span is already on the context
-			// here; without this the two telemetry streams shared no key.
+			// trace_id lets an operator pivot from a trace (App Insights / any OTLP backend) to
+			// this request's log lines and back; otelhttp is outermost, so the span is on the ctx.
 			if sc := trace.SpanContextFromContext(r.Context()); sc.HasTraceID() {
 				args = append(args, "trace_id", sc.TraceID().String())
 			}
@@ -91,13 +83,15 @@ func AccessLog(trustedProxies []string) func(http.Handler) http.Handler {
 	}
 }
 
-// levelFor picks the log level for an access-log line. Health-probe
-// chatter is demoted to debug; 4xx is warn; 5xx is error.
+// levelFor picks the log level for an access line: health-probe chatter debug; 4xx warn; 5xx error — except 501 and 503, which are warn: refusals BY DESIGN (a feature this deployment does not run, a connection cap, a declared-unavailable dependency), several reachable by any caller at will, so an ERROR line per request let anyone flood the error log and its alerting (render.ErrorUnlogged deliberately left it out; the access log must not put it back).
+// Where a 503 does stand for a real failure, the site answers through render.Error*, which logs the cause at ERROR; http_requests_total still counts it as a 5xx. 500/502/504 stay error.
 func levelFor(path string, status int) string {
 	if path == "/healthz" || path == "/readyz" || path == "/api/health" {
 		return "debug"
 	}
 	switch {
+	case status == http.StatusNotImplemented, status == http.StatusServiceUnavailable:
+		return "warn"
 	case status >= 500:
 		return "error"
 	case status >= 400:
@@ -119,17 +113,15 @@ func logAt(level, msg string, args ...any) {
 	}
 }
 
-// hijackableRecorder is ResponseRecorder + http.Hijacker. We only return it
-// when the underlying writer supports hijacking — otherwise wrapping it
-// would falsely advertise an interface the next layer expects to use.
+// hijackableRecorder is ResponseRecorder + http.Hijacker, returned only when the underlying writer
+// supports hijacking — otherwise wrapping would falsely advertise an interface the next layer uses.
 type hijackableRecorder struct {
 	*ResponseRecorder
 	http.Hijacker
 }
 
-// maybeHijackable returns sr unchanged if the underlying writer doesn't
-// support hijacking. For WebSocket upgrades on a normal listener, the
-// underlying writer is http.Hijacker; expose that to the next layer.
+// maybeHijackable returns sr unchanged if the underlying writer can't hijack; on a normal listener
+// it exposes the Hijacker to the next layer (WebSocket upgrades).
 func maybeHijackable(sr *ResponseRecorder) http.ResponseWriter {
 	if h, ok := sr.ResponseWriter.(http.Hijacker); ok {
 		return &hijackableRecorder{ResponseRecorder: sr, Hijacker: h}
@@ -137,17 +129,8 @@ func maybeHijackable(sr *ResponseRecorder) http.ResponseWriter {
 	return sr
 }
 
-// redactPath removes credentials that live in a URL PATH segment before the
-// path is written to a log line.
-//
-// Only one route embeds a secret this way: /api/invites/{token}/accept, where
-// the segment is the single-use invite credential mailed to the recipient.
-// Logs are shipped, retained, and read by more people than the mail is, so a
-// full-path access line effectively republished a live invite. Query strings
-// are already excluded from the access log (r.URL.Path, not RequestURI), which
-// is why no other route needs handling here.
-//
-// The path shape is preserved so the line stays useful for debugging.
+// redactPath removes credentials that live in a URL PATH segment before the path is logged: only /api/invites/{token}/accept embeds one — the single-use invite credential mailed to the recipient — and logs are shipped, retained, and read by more people than the mail, so a full-path line republished a live invite.
+// Query strings are already excluded (r.URL.Path, not RequestURI), so no other route needs handling. Path shape preserved for debugging.
 func redactPath(p string) string {
 	const invitePrefix = "/api/invites/"
 	if !strings.HasPrefix(p, invitePrefix) {

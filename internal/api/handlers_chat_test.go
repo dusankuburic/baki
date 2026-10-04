@@ -12,8 +12,6 @@ import (
 	"pad-analyzer/internal/service"
 )
 
-// --- Bad-body 400 tests ---
-
 func TestHandleStreamChatMessage_BadBodyReturns400(t *testing.T) {
 	rt := newTestRouter(nil, false)
 	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/chat/stream")
@@ -82,8 +80,6 @@ func TestHandleResumeStream_UnknownIDReturns404(t *testing.T) {
 	checkStatus(t, rr, http.StatusNotFound)
 }
 
-// --- fix-decision endpoint ---
-
 func TestHandleFixDecision_BadBodyReturns400(t *testing.T) {
 	rt := newTestRouter(nil, false)
 	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/chat/fix-decision")
@@ -105,15 +101,10 @@ func TestHandleFixDecision_UnknownProposalReturns404(t *testing.T) {
 	checkStatus(t, rr, http.StatusNotFound)
 }
 
-// --- conversation wire contract ---
-
-// /api/chat/get answers with an object — {messages: [...]} plus activeStreamId
-// while a turn on the conversation is still being answered (F-21) — which the
-// frontend parses (frontend/src/api/chat.ts parseConversationLoad; it still
-// accepts the bare array older servers sent). A client/server disagreement on
-// this shape once restored nothing on every reload, and the next save then
-// replaced the stored history with just the new turn. This pins the wire shape
-// end to end: save, then read it back.
+// /api/chat/get answers with an object — {messages: [...]} plus activeStreamId while a turn is
+// still being answered — which the frontend parses (it still accepts the bare array older servers
+// sent). A client/server disagreement on this shape once restored nothing on every reload, and the
+// next save then replaced the stored history with just the new turn. Pins the wire shape end to end.
 func TestChatGet_ReturnsTheSavedMessages(t *testing.T) {
 	// The test router's settings store reads the machine's real settings file
 	// (os.UserConfigDir); a developer who turned "Save conversation history"
@@ -139,7 +130,7 @@ func TestChatGet_ReturnsTheSavedMessages(t *testing.T) {
 
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/chat/get", tok, map[string]any{"flowId": "flow-a", "provider": key})
 	checkStatus(t, rr, http.StatusOK)
-	// F-21: the response is an object carrying the messages (plus
+	// The response is an object carrying the messages (plus
 	// activeStreamId when a stream for the conversation is in flight).
 	var body struct {
 		Messages []map[string]any `json:"messages"`
@@ -152,7 +143,7 @@ func TestChatGet_ReturnsTheSavedMessages(t *testing.T) {
 	}
 }
 
-// Review #4 B5: a conversation file stored with "messages": null (an older
+// A conversation file stored with "messages": null (an older
 // desktop build) answers "messages": [] — the client reads a null list as a
 // failed load.
 func TestChatGet_NullMessagesAnswerAnEmptyList(t *testing.T) {

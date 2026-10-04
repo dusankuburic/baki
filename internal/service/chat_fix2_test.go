@@ -346,7 +346,7 @@ func (c *countingEstimator) EstimateTokens(t string) int {
 	return c.FakeProvider.EstimateTokens(t)
 }
 
-// PERF-7: a prompt whose BYTE count fits the window fits in tokens (every
+// A prompt whose BYTE count fits the window fits in tokens (every
 // estimator yields at most one token per byte), so the tokenizer pass is
 // skipped entirely.
 func TestTruncateForContextWindow_SkipsTokenizerWhenBytesFit(t *testing.T) {
@@ -376,7 +376,7 @@ func TestTruncateForContextWindow_SkipsTokenizerWhenBytesFit(t *testing.T) {
 		t.Error("tokenizer must run once the byte ceiling does not prove the prompt fits")
 	}
 
-	// F-28: a replayed provider record (ProviderItems) is re-sent verbatim,
+	// A replayed provider record (ProviderItems) is re-sent verbatim,
 	// so the byte ceiling and the estimate both bound a record-bearing
 	// message by its record. A tiny-content turn carrying a ~200 KB record
 	// no longer slips under a limit sized for the content alone: the

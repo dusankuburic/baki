@@ -270,7 +270,7 @@ describe('resolveThreadModel: a thread from before per-thread memory (legacy)', 
         settings: withDefaults('claude', {claude: 'claude-custom'}),
       }),
     )
-    // Its pin stores no label: one that is only the id adds nothing (C6).
+    // Its pin stores no label: one that is only the id adds nothing.
     expect(custom).toEqual({
       provider: 'claude',
       model: 'claude-custom',

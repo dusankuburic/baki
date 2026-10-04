@@ -1,9 +1,7 @@
 // Package lifecycle holds small, generic scheduling primitives shared by the
-// app's background loops (the governance scanner, the retention purge, …).
-// Extracted because two loops had independently reimplemented the identical
-// "cancelable ticker with panic recovery" scaffolding, down to the same
-// comments explaining why Stop derives from a root context — one place to get
-// the shutdown-race handling right.
+// app's background loops (the governance scanner, the retention purge, …) —
+// one place to get the shutdown-race handling right, extracted from two
+// identical reimplementations of "cancelable ticker with panic recovery".
 package lifecycle
 
 import (
@@ -13,29 +11,24 @@ import (
 )
 
 // stopDrainBudget bounds how long Stop waits for an in-flight fn to return.
-//
-// Stop used to return the instant it signalled, so fx would proceed to close the
-// database pool while a governance sweep or an ingest pass was still querying
-// it — the tick then failed on a closed pool during every shutdown, which looks
-// like a transient error and is actually a guaranteed one. The budget is well
-// inside the app's 25s fx.StopTimeout, leaving room for the HTTP and WebSocket
-// drains that follow; a tick that outlasts it is abandoned (the root context is
-// already cancelled) rather than blocking shutdown indefinitely.
+// Without it Stop returned the instant it signalled, so fx would proceed to
+// close the database pool while a governance sweep or an ingest pass was
+// still querying it — a guaranteed failure on every shutdown that looks like
+// a transient one. Well inside the app's 25s fx.StopTimeout, leaving room
+// for the HTTP and WebSocket drains that follow; a tick that outlasts it is
+// abandoned (the root context is already cancelled).
 const stopDrainBudget = 5 * time.Second
 
 // TickerLoop runs a function on a fixed interval in a background goroutine
 // until Stop, with panic recovery so one bad tick can't crash the process.
 //
-// The context passed to fn is derived from a root context that Stop cancels,
-// so an in-flight tick can bail out promptly instead of running to completion
-// during shutdown — fn should check ctx.Err()/respect cancellation for this to
-// have effect. Per-tick timeouts (if the caller wants one) are the caller's
-// responsibility: derive a bounded context from the one TickerLoop passes in.
+// The context passed to fn derives from a root context that Stop cancels, so
+// an in-flight tick can bail out promptly during shutdown — fn should check
+// ctx.Err() for this to have effect. Per-tick timeouts (if wanted) are the
+// caller's: derive a bounded context from the one TickerLoop passes in.
 //
-// The zero value is not ready to use as-is only in that Start must be called
-// before Stop has any effect; calling Stop before Start (or on a TickerLoop
-// that never started, e.g. because the caller's own enable-check short-
-// circuited) is safe and a no-op.
+// Start must be called before Stop has any effect; Stop before Start (e.g.
+// the caller's own enable-check short-circuited) is safe and a no-op.
 type TickerLoop struct {
 	// drainBudget overrides stopDrainBudget when non-zero (tests: proving
 	// that Stop gives up on a stuck tick need not take the full 5 s). Set
@@ -43,9 +36,9 @@ type TickerLoop struct {
 	drainBudget time.Duration
 
 	// mu guards the fields below. sync.Once orders other Do calls, NOT a
-	// concurrent reader — so Stop reading rootCancel/stop while Start writes
-	// them inside startOnce.Do was a genuine data race. It is latent today
-	// because fx orders OnStart before OnStop, but nothing in this type said so.
+	// concurrent reader — Stop reading rootCancel/stop while Start writes
+	// them inside startOnce.Do was a genuine data race; latent because fx
+	// orders OnStart before OnStop, but nothing in this type said so.
 	mu         sync.Mutex
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
@@ -58,22 +51,19 @@ type TickerLoop struct {
 
 // Start launches fn on the given interval in a background goroutine. If
 // runImmediately is true, fn also runs once immediately, before the first
-// tick — the "sweep right away on startup" behaviour some loops want (and
-// others deliberately don't: waiting for the first tick avoids doing
-// duplicate work right after a restart for a caller whose interval is short
-// relative to typical process lifetime). onPanic, if non-nil, is called with
-// the recovered value if fn panics.
+// tick — the "sweep right away on startup" behaviour some loops want (others
+// deliberately don't: waiting for the first tick avoids duplicate work right
+// after a restart when the interval is short). onPanic, if non-nil, is called
+// with the recovered value if fn panics.
 //
-// A panic that escapes fn ENDS the loop — it is reported once and the goroutine
-// exits. This comment previously claimed the loop "continues to the next tick
-// rather than dying", which is the opposite of what the code does and of what
-// TestTickerLoop_PanicInFn_IsRecoveredButEndsTheLoop asserts. The backstop is
-// for an unexpected panic in the scaffolding; callers that want to survive a bad
-// ITEM recover around their own per-item work, which both of them do.
+// A panic that escapes fn ENDS the loop — reported once, then the goroutine
+// exits (TestTickerLoop_PanicInFn_IsRecoveredButEndsTheLoop). The backstop is
+// for an unexpected panic in the scaffolding; callers that want to survive a
+// bad ITEM recover around their own per-item work, which both of them do.
 //
 // Idempotent: a second Start call (any arguments) is a no-op, matching
-// sync.Once semantics — callers that gate Start behind their own "am I
-// enabled" check don't need their own idempotency guard on top.
+// sync.Once semantics — callers gating Start behind their own "am I enabled"
+// check don't need their own idempotency guard on top.
 func (l *TickerLoop) Start(interval time.Duration, runImmediately bool, fn func(ctx context.Context), onPanic func(recovered any)) {
 	l.startOnce.Do(func() {
 		l.mu.Lock()
@@ -92,12 +82,11 @@ func (l *TickerLoop) run(rootCtx context.Context, stop, done chan struct{}, inte
 	defer close(done)
 
 	// Function-scoped ON PURPOSE: a panic that escapes fn is reported once and
-	// ENDS the loop. This is a backstop for an unexpected panic, not a "keep
-	// going no matter what" supervisor — both callers already recover around
-	// their own per-item work (the ingester per flow, the scanner per sweep), so
-	// a panic reaching here means the loop's own scaffolding is broken and
-	// continuing to tick would just repeat it. Pinned by
-	// TestTickerLoop_PanicInFn_IsRecoveredButEndsTheLoop.
+	// ENDS the loop. This is a backstop, not a "keep going no matter what"
+	// supervisor — both callers already recover around their own per-item work
+	// (the ingester per flow, the scanner per sweep), so a panic reaching here
+	// means the loop's own scaffolding is broken and continuing to tick would
+	// just repeat it (TestTickerLoop_PanicInFn_IsRecoveredButEndsTheLoop).
 	defer func() {
 		if r := recover(); r != nil && onPanic != nil {
 			onPanic(r)

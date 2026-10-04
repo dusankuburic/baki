@@ -61,6 +61,19 @@ services:
       # it for this single-user stack; unset keeps the code default.
       - PAD_RATE_LIMIT_GENERAL_RPS=${PAD_RATE_LIMIT_GENERAL_RPS:-}
       - PAD_RATE_LIMIT_GENERAL_BURST=${PAD_RATE_LIMIT_GENERAL_BURST:-}
+      # /metrics is the one endpoint the image-baked PAD_BEHIND_PROXY=true
+      # leaves wide open locally: the flag (required so cloud mode accepts the
+      # TLS-less database connection below) makes the endpoint's private-IP
+      # allowlist pass for every request, so the token is the only gate. .env
+      # sets a generated one (see .env.example's PAD_METRICS_TOKEN row); never
+      # deploy this stack with a token published in the repository.
+      - PAD_METRICS_TOKEN=${PAD_METRICS_TOKEN:?PAD_METRICS_TOKEN must be set}
+      # The cache budgets in the code (analyzer report cache, search-index
+      # budget, chat scrub memos) are sized as fractions of GOMEMLIMIT=800MiB
+      # — the value docker-compose.prod.yml sets. Without it the GC paces at
+      # GOGC=100 with no ceiling, and a burst of large flows can balloon the
+      # heap toward the VM's own limit. Keep the two values in sync.
+      - GOMEMLIMIT=800MiB
     depends_on:
       db:
         condition: service_healthy
@@ -69,6 +82,14 @@ services:
     # setuid/setgid escalations.
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    # Mirrors docker-compose.prod.yml's app limits: GOMEMLIMIT above is ~80%
+    # of the memory cap, so the GC gets headroom to meet it instead of the
+    # container being OOM-killed.
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
     healthcheck:
       # The distroless image has no shell/wget, so probe via the binary's own
       # healthcheck subcommand (GETs /readyz, exits 0/1).
@@ -107,6 +128,43 @@ services:
       # (untrusted, so it needs the superuser). Read-only mount — nothing in
       # here should ever be writable by the container.
       - ./scripts/db-init:/docker-entrypoint-initdb.d:ro
+    # Postgres's compiled-in defaults assume a machine from 2005 (see
+    # docker-compose.prod.yml's db service for the full rationale). Sized for
+    # the 1G memory limit under deploy.resources below — scale them TOGETHER:
+    #   shared_buffers       ~25% of the memory limit
+    #   effective_cache_size ~75% of the memory limit
+    #   work_mem             per sort/hash per query, so (max_connections x
+    #                        work_mem x a few) must fit in what is left
+    # pg_stat_statements + log_min_duration_statement are the two
+    # observability hooks a perf investigation needs; preloading the library
+    # only allocates its shared-memory slot, the extension itself has to be
+    # CREATEd in the database — scripts/db-init/02-pg-stat-statements.sql
+    # does that on first init of an empty volume; an existing volume runs
+    # the same statement once by hand as the superuser.
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c effective_cache_size=768MB
+      -c work_mem=8MB
+      -c maintenance_work_mem=64MB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c max_wal_size=1GB
+      -c checkpoint_completion_target=0.9
+      -c wal_compression=on
+      -c jit=off
+      -c shared_preload_libraries=pg_stat_statements
+      -c pg_stat_statements.track=all
+      -c log_min_duration_statement=500
+    # Docker's default /dev/shm is 64MB; parallel workers and hash joins use
+    # it for dynamic shared memory and fail with "could not resize shared
+    # memory segment" once work_mem is raised. Not counted against `memory`.
+    shm_size: 128m
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G # the -c settings in `command` above are sized to this
     # no-new-privileges only: the entrypoint's root bootstrap (chown on the
     # data dir) still needs capabilities, so cap_drop stays off for db.
     security_opt: ["no-new-privileges:true"]

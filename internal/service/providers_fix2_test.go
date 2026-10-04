@@ -289,6 +289,39 @@ func TestPruneModelCache_DropsStaleInvalidationMarks(t *testing.T) {
 	}
 }
 
+// Invalidations prune dead marks themselves: alias providers (Azure AI
+// Foundry) never insert a cacheable listing, so in an Azure-only deployment
+// the insert-time prune never runs and a mark per key save, org credential
+// change and account deletion would accumulate for good.
+func TestInvalidate_PrunesStaleMarksWithoutAnInsert(t *testing.T) {
+	svc := newProviderServiceWithFakeSecrets(t, testutil.NewFakeSecretStore())
+	for i := 0; i < 20; i++ {
+		svc.InvalidateModels(fmt.Sprintf("u%d", i), "azure-foundry")
+		svc.InvalidateScope(fmt.Sprintf("s%d", i))
+	}
+	// Age every mark past the fence, then invalidate again with no listing
+	// inserted in between.
+	svc.modelMu.Lock()
+	for k, inv := range svc.invalidatedKeys {
+		inv.at = inv.at.Add(-invalidationFence - time.Second)
+		svc.invalidatedKeys[k] = inv
+	}
+	for k, inv := range svc.invalidatedScope {
+		inv.at = inv.at.Add(-invalidationFence - time.Second)
+		svc.invalidatedScope[k] = inv
+	}
+	svc.modelMu.Unlock()
+	svc.InvalidateModels("fresh", "azure-foundry")
+	svc.InvalidateScope("fresh-scope")
+
+	svc.modelMu.Lock()
+	keys, scopes := len(svc.invalidatedKeys), len(svc.invalidatedScope)
+	svc.modelMu.Unlock()
+	if keys != 1 || scopes != 1 {
+		t.Errorf("marks after invalidating past the fence: keys=%d scopes=%d, want 1 and 1 (the fresh ones)", keys, scopes)
+	}
+}
+
 // V-cfg-1: saving a replacement key drops the previous key's cached listing
 // (the hook SaveApiKey shares with DeleteApiKey).
 func TestSaveApiKey_InvalidatesTheProviderListing(t *testing.T) {

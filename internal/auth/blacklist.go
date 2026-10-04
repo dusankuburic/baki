@@ -56,13 +56,11 @@ func (bl *TokenBlacklist) IsRevoked(jti string) bool {
 	return time.Now().Before(expiry)
 }
 
-// AddIfAbsent atomically checks whether jti is already blacklisted and, if
-// not, inserts it under a single write lock. Returns (true, nil) if the entry
-// was freshly added, (false, nil) if it was already present. The in-memory
-// implementation cannot fail, so the error is always nil; the (bool, error)
-// signature matches the Postgres-backed implementation where a DB error must
-// be distinguishable from "already present". This eliminates the TOCTOU race
-// between a separate IsRevoked + Add sequence.
+// AddIfAbsent checks and inserts under a single write lock, eliminating the
+// TOCTOU race of a separate IsRevoked + Add sequence. The in-memory
+// implementation cannot fail; the (bool, error) signature matches the
+// Postgres-backed one, where a DB error must be distinguishable from "already
+// present".
 func (bl *TokenBlacklist) AddIfAbsent(jti string, ttl time.Duration) (bool, error) {
 	bl.mu.Lock()
 	defer bl.mu.Unlock()

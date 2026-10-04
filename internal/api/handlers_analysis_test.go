@@ -9,8 +9,6 @@ import (
 	mailer "pad-analyzer/internal/mail"
 )
 
-// --- Bad-body 400 tests ---
-
 func TestHandleGetVariableLineage_BadBodyReturns400(t *testing.T) {
 	rt := newTestRouter(nil, false)
 	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/analysis/lineage")
@@ -29,7 +27,6 @@ func TestHandleUpdateRuleConfig_BadBodyReturns400(t *testing.T) {
 	checkStatus(t, rr, http.StatusBadRequest)
 }
 
-// --- Analysis endpoints with no flow loaded ---
 // With explicit flow resolution, an uninitialized app (no current document)
 // yields a clean 400 "no flow loaded" from resolveFlow rather than a panic→500.
 

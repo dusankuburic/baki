@@ -53,19 +53,13 @@ func (f *flakyConvStore) count() int {
 	return len(f.stored)
 }
 
-// TestChatHistory_FailedLoadDoesNotWipeTheStoredConversation is the regression
-// gate for silent, permanent user data loss.
-//
-// reconstructHistory swallowed the load error, logged a WARN and returned nil.
-// reconstructAndPersistUserTurn assigned that nil straight to req.Messages, and
-// persistInitialUserTurn then wrote `req.Messages + [userMsg]` through
-// SaveConversation — which is a FULL REPLACE (`ON CONFLICT (flow_id, scope) DO
-// UPDATE SET messages`). So one transient DB error, one RLS denial, or one JSON
-// unmarshal failure permanently deleted the user's entire chat history and left
-// only the message they had just typed, behind a log line nobody reads.
-//
-// No attacker and no unusual state required — reachable by anyone with viewer
-// access to the flow, on any transient backend hiccup.
+// TestChatHistory_FailedLoadDoesNotWipeTheStoredConversation is the regression gate for
+// silent, permanent user data loss: reconstructHistory swallowed the load error and
+// returned nil, reconstructAndPersistUserTurn assigned it to req.Messages, and
+// persistInitialUserTurn wrote `req.Messages + [userMsg]` through SaveConversation — a
+// FULL REPLACE — so one transient DB error, RLS denial or JSON unmarshal failure
+// permanently deleted the user's entire chat history behind a WARN nobody reads. No
+// attacker or unusual state required: anyone with viewer access, on any backend hiccup.
 func TestChatHistory_FailedLoadDoesNotWipeTheStoredConversation(t *testing.T) {
 	store := &flakyConvStore{}
 	// Seed a real conversation.

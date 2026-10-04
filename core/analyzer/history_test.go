@@ -1,8 +1,10 @@
 package analyzer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"pad-core/models"
@@ -180,5 +182,71 @@ func TestHistoryStore_FilePathPattern(t *testing.T) {
 	path := filepath.Join(dir, "flow-42.json")
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("expected file at %s, got error: %v", path, err)
+	}
+}
+
+// TestHistoryStore_ConcurrentRecord_PerFlowLocking is the concurrency gate
+// for the per-flow keyed locking: Record's read-merge-write must stay
+// atomic PER FLOW — two writers hammering one key must not lose each
+// other's entries, the classic lost update the old store-wide mutex
+// prevented — while writers on DISTINCT keys proceed in parallel. Every
+// snapshot carries a globally unique error count, so the
+// consecutive-duplicate skip in Record can never fire and the expected
+// counts are exact; a dropped merge therefore shows up as a missing
+// snapshot. The shared key writes 2×40 = 80 entries, below the default
+// maxPerFlow of 100, so no trimming can mask a loss either.
+func TestHistoryStore_ConcurrentRecord_PerFlowLocking(t *testing.T) {
+	dir := t.TempDir()
+	store := NewHistoryStore(dir)
+
+	const distinctFlows = 8
+	const perFlow = 25
+	const sharedWriters = 2
+	const sharedRecords = 40
+
+	var wg sync.WaitGroup
+	for f := 0; f < distinctFlows; f++ {
+		wg.Add(1)
+		go func(flowIdx int) {
+			defer wg.Done()
+			flowID := fmt.Sprintf("flow-%d", flowIdx)
+			doc := &models.FlowDocument{ID: flowID}
+			for i := 0; i < perFlow; i++ {
+				store.Record(flowID, &models.AnalysisReport{
+					FlowID: flowID,
+					Stats:  models.AnalysisStats{Errors: flowIdx*1000 + i},
+				}, doc)
+			}
+		}(f)
+	}
+	// Two writers on ONE shared key: their interleaving is arbitrary,
+	// which is exactly what makes a lost update (a Record reading the file
+	// before another writer's merge lands) observable as a missing entry.
+	const sharedKey = "shared"
+	for w := 0; w < sharedWriters; w++ {
+		wg.Add(1)
+		go func(writer int) {
+			defer wg.Done()
+			doc := &models.FlowDocument{ID: sharedKey}
+			for i := 0; i < sharedRecords; i++ {
+				store.Record(sharedKey, &models.AnalysisReport{
+					FlowID: sharedKey,
+					Stats:  models.AnalysisStats{Errors: 10000 + writer*1000 + i},
+				}, doc)
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	for f := 0; f < distinctFlows; f++ {
+		flowID := fmt.Sprintf("flow-%d", f)
+		snapshots := store.Load(flowID)
+		if len(snapshots) != perFlow {
+			t.Errorf("flow %s: expected %d snapshots, got %d (a concurrent record was lost)", flowID, perFlow, len(snapshots))
+		}
+	}
+	shared := store.Load(sharedKey)
+	if len(shared) != sharedWriters*sharedRecords {
+		t.Errorf("shared key: expected %d snapshots, got %d — same-key merges are not serialized (lost update)", sharedWriters*sharedRecords, len(shared))
 	}
 }

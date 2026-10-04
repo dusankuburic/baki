@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime/pprof"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,14 @@ type fakeIdP struct {
 
 func newFakeIdP(t *testing.T, clientID string) *fakeIdP {
 	t.Helper()
+	return newFakeIdPWith(t, clientID, nil)
+}
+
+// newFakeIdPWith is newFakeIdP whose JWKS endpoint, when stallKeys is
+// non-nil, accepts the request and never answers — until the client gives up
+// (its request context ends) or stallKeys is closed.
+func newFakeIdPWith(t *testing.T, clientID string, stallKeys <-chan struct{}) *fakeIdP {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("generate rsa key: %v", err)
@@ -55,6 +64,13 @@ func newFakeIdP(t *testing.T, clientID string) *fakeIdP {
 		})
 	})
 	mux.HandleFunc("/keys", func(w http.ResponseWriter, r *http.Request) {
+		if stallKeys != nil {
+			select {
+			case <-r.Context().Done():
+			case <-stallKeys:
+			}
+			return
+		}
 		pub := key.Public().(*rsa.PublicKey)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"keys": []map[string]any{{
@@ -285,5 +301,47 @@ func TestClient_BoundedExternalCallsTimeout(t *testing.T) {
 	}
 	if elapsed > c.timeout+time.Second {
 		t.Errorf("discovery took %v, expected to be bounded by %v+slack", elapsed, c.timeout)
+	}
+}
+
+// jwksFetchesInFlight counts go-oidc's detached JWKS fetch goroutines.
+func jwksFetchesInFlight() int {
+	var buf strings.Builder
+	_ = pprof.Lookup("goroutine").WriteTo(&buf, 2)
+	return strings.Count(buf.String(), "(*RemoteKeySet).keysFromRemote.func")
+}
+
+// TestClient_StalledJWKSFetchDoesNotLeak guards the detached-fetch leak:
+// go-oidc fetches JWKS in its own goroutine on a context.WithoutCancel ctx,
+// so the verify deadline only stops Exchange WAITING. With no HTTP client on
+// the ctx it used http.DefaultClient (no timeout): a JWKS endpoint that
+// accepts and never answers pinned that goroutine forever, and every failed
+// verify (invalidateProvider) or provider refresh started another. The fetch
+// must now end within the call timeout on its own.
+func TestClient_StalledJWKSFetchDoesNotLeak(t *testing.T) {
+	stall := make(chan struct{})
+	idp := newFakeIdPWith(t, "client-1", stall)
+	// Registered after the server's Close, so it runs first: a regression
+	// would otherwise hold server.Close on the stalled handler.
+	t.Cleanup(func() { close(stall) })
+	idp.subject, idp.nonce = "subject-42", "n"
+
+	c := NewClient(idp.clientConfig())
+	c.timeout = 200 * time.Millisecond
+	before := jwksFetchesInFlight()
+
+	for i := 0; i < 2; i++ { // the second attempt re-discovers (invalidated)
+		if _, err := c.Exchange(context.Background(), "code", strings.Repeat("v", 43), "n"); err == nil {
+			t.Fatal("expected verification to fail against a stalled JWKS endpoint")
+		}
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for jwksFetchesInFlight() > before {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d detached JWKS fetch goroutine(s) still running after the call timeout",
+				jwksFetchesInFlight()-before)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

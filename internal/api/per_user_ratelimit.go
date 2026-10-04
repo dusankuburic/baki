@@ -4,22 +4,56 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"sync/atomic"
 
 	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/auth"
 )
 
-// perUserRateLimit is the chi inner-chain middleware (runs after jwtAuth, so
-// claims are on the context) that caps one user's total write throughput via
-// rt.perUserLimiter. When the limiter is nil (local mode, or cloud with the
-// limiter not yet wired) it passes through untouched — so local single-user mode
-// never self-DoSes. Reads (GET/HEAD/OPTIONS) bypass it; the per-IP limiter still
-// covers them. Run-order is documented in middleware_chain.go.
+// SetPerUserLimiter installs (or, with nil, removes) the limiter capping one
+// authenticated user's total write throughput. BuildHandler calls it in cloud
+// mode AFTER NewRouter registered the chi chain — hence the per-request read
+// below.
+func (rt *Router) SetPerUserLimiter(rl *middleware.RateLimiter) {
+	rt.perUserLimiter.Store(rl)
+}
+
+// perUserLimitHandler is one limiter together with the chain position it was
+// wrapped around, so the LimitByKey handler is built once per limiter value
+// rather than once per request.
+type perUserLimitHandler struct {
+	limiter *middleware.RateLimiter
+	handler http.Handler
+}
+
+// perUserRateLimit is the chi inner-chain middleware (after jwtAuth, claims
+// on the context) that caps one user's total write throughput. With no
+// limiter installed (local mode) it passes through — local single-user mode
+// never self-DoSes. Reads bypass it; the per-IP limiter covers them.
+//
+// The limiter is loaded on EVERY request: chi evaluates each Use middleware
+// once (inside NewRouter), and BuildHandler installs the limiter only
+// afterwards — a construction-time nil check returned next for the life of
+// the process and the throttle was a silent no-op (pinned by
+// per_user_limiter_wiring_test.go).
 func (rt *Router) perUserRateLimit(next http.Handler) http.Handler {
-	if rt.perUserLimiter == nil {
-		return next
-	}
-	return rt.perUserLimiter.LimitByKey(next, rt.perUserKey)
+	// Per chain position (closes over next, so it cannot live on the Router);
+	// rebuilt only when the installed limiter changes — two racing builds
+	// both allocate and the last store wins, harmlessly.
+	var cached atomic.Pointer[perUserLimitHandler]
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rl := rt.perUserLimiter.Load()
+		if rl == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		c := cached.Load()
+		if c == nil || c.limiter != rl {
+			c = &perUserLimitHandler{limiter: rl, handler: rl.LimitByKey(next, rt.perUserKey)}
+			cached.Store(c)
+		}
+		c.handler.ServeHTTP(w, r)
+	})
 }
 
 // perUserKey derives the per-user bucket key for a request:
@@ -37,7 +71,10 @@ func (rt *Router) perUserKey(r *http.Request) string {
 	if claims := auth.ClaimsFromContext(r.Context()); claims != nil && claims.UserID != "" {
 		return "ratelimit:peruser:" + hashRateLimitKey(claims.UserID)
 	}
-	return "ratelimit:peruser:ip:" + middleware.ClientIP(r, rt.trustedProxies)
+	// Keyed like the per-IP limiters (RateLimitAddr): an IPv6 client by its
+	// /64, or rotating through the addresses of its own /64 bought a fresh
+	// bucket per anonymous write.
+	return "ratelimit:peruser:ip:" + middleware.RateLimitAddr(middleware.ClientIP(r, rt.trustedProxies))
 }
 
 // isWriteMethod reports whether m is a state-changing verb. Per-user limiting
@@ -50,10 +87,9 @@ func isWriteMethod(m string) bool {
 	return false
 }
 
-// hashRateLimitKey SHA-256-hex-encodes a caller-supplied key segment (e.g. a
-// userID) so it cannot poison the bucket key with delimiters/control-chars or
-// grow it unboundedly in Redis. Deterministic: the same userID always maps to
-// the same bucket.
+// hashRateLimitKey SHA-256-hex-encodes a caller-supplied key segment so it
+// cannot poison the bucket key with delimiters/control-chars or grow it
+// unboundedly in Redis; deterministic per input.
 func hashRateLimitKey(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])

@@ -6,13 +6,11 @@ import (
 	"time"
 )
 
-// TestChunkCoalescer_TerminalNeverPrecedesChunk is the regression test for the
-// SSE event-reordering fix. A batched (non-first) chunk arms a ~16ms timer; the
-// timer goroutine and the worker's terminal ("done") emit then race. Before the
-// fix, flush() released the batch mutex before emitting, so the timer's chunk
-// could be delivered AFTER the worker's done — reordering the terminal event
-// ahead of the final chunk. With emitMu serializing emits, done is always
-// emitted last. Runs many rounds around the batch interval, under `go test -race`.
+// TestChunkCoalescer_TerminalNeverPrecedesChunk is the regression test for the SSE
+// event-reordering fix: a batched (non-first) chunk arms a ~16ms timer whose goroutine
+// races the worker's terminal ("done") emit. flush() used to release the batch mutex
+// before emitting, so the timer's chunk could land AFTER done; with emitMu serializing
+// emits, done is always last. Many rounds around the batch interval, under `go test -race`.
 func TestChunkCoalescer_TerminalNeverPrecedesChunk(t *testing.T) {
 	for round := 0; round < 100; round++ {
 		rec := &emitRecorder{}

@@ -1,23 +1,9 @@
 package ai
 
-// The local models provider (audit #9 F-50): a locally hosted,
-// OpenAI-compatible server — Foundry Local, Ollama, LM Studio, llama.cpp —
-// for the desktop app's offline / confidential-flow story. One generic
-// provider instead of a Foundry-Local-specific one (that REST API is
-// preview and may change without notice); every one of these servers
-// speaks the OpenAI v1 wire format.
-//
-// The stored "key" is a small JSON document (ProviderFactory.For refuses
-// empty keys, the same trick the azure-foundry provider uses): the base URL
-// and an optional context window. The chat model is picked per request from
-// the server's own listing; the provider is not embedding-capable.
-//
-// Egress: the provider is constructible only when the runtime policy is
-// egress.AllowLoopback (the desktop/local single-user app; see
-// ConfigureLocalModels), and the base URL must be a LOOPBACK http(s) URL —
-// a cloud deployment's users must not point a "credential" at the server's
-// own loopback services, and the desktop user's own machine is the only
-// place these servers run anyway.
+// The local models provider: a locally hosted, OpenAI-compatible server (Foundry Local, Ollama, LM Studio,
+// llama.cpp) for the desktop's offline/confidential story. The stored "key" is a small JSON document — base
+// URL and optional context window, azure-foundry's trick; the chat model is picked per request from the
+// server's own listing. Constructible only under egress.AllowLoopback, and the base URL must be LOOPBACK.
 
 import (
 	"context"
@@ -29,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"pad-analyzer/internal/egress"
 	"pad-core/logger"
@@ -42,12 +29,9 @@ const (
 	// localConfigMaxBytes bounds the stored document (see azureConfigMaxBytes).
 	localConfigMaxBytes = 2048
 
-	// LocalDefaultContextWindow is the context window, in tokens, assumed
-	// when the document names none. Ollama and LM Studio run a model with a
-	// 2k–8k context by default whatever the model itself supports, and a
-	// server silently drops the start of a prompt that does not fit — so
-	// history is trimmed against the window the server really runs, not the
-	// model's advertised maximum.
+	// LocalDefaultContextWindow is the context window assumed when the document names none: Ollama and LM
+	// Studio run a small context by default whatever the model supports, and a server silently drops the start
+	// of a prompt that does not fit — history is trimmed against the window the server really runs.
 	LocalDefaultContextWindow = 8192
 	// localMinContextWindow and localMaxContextWindow bound a configured
 	// window: no chat turn fits in less, and no local model runs more.
@@ -57,14 +41,11 @@ const (
 
 // LocalConfig is the stored per-user document.
 type LocalConfig struct {
-	// BaseURL is the server's root, e.g. http://127.0.0.1:11434 (Ollama),
-	// http://127.0.0.1:1234 (LM Studio), http://127.0.0.1:5272 (Foundry
-	// Local) — no path; /v1/... is appended per call.
+	// BaseURL is the server's root, e.g. http://127.0.0.1:11434 (Ollama) or
+	// http://127.0.0.1:1234 (LM Studio) — no path; /v1/... is appended per call.
 	BaseURL string `json:"baseUrl"`
-	// ContextWindow (optional) is the context length, in tokens, the server
-	// runs its models with (Ollama num_ctx, LM Studio's context length);
-	// 0 = LocalDefaultContextWindow. Non-zero values are within
-	// localMinContextWindow..localMaxContextWindow.
+	// ContextWindow (optional) is the context length the server runs its models with (Ollama num_ctx, LM
+	// Studio's context length); 0 = LocalDefaultContextWindow, non-zero within min..max.
 	ContextWindow int `json:"contextWindow,omitempty"`
 }
 
@@ -98,10 +79,8 @@ func (c LocalConfig) Encode() (string, error) {
 	return string(raw), nil
 }
 
-// ParseLocalConfig decodes the stored document. An empty string is a valid,
-// unconfigured config; unknown fields are rejected like azure-foundry's. A
-// stored context window outside the valid range reads as the default (with a
-// warning) instead of making the provider unusable.
+// ParseLocalConfig decodes the stored document ("" is valid and unconfigured; unknown fields rejected like
+// azure-foundry's). A stored context window out of range reads as the default, with a warning.
 func ParseLocalConfig(raw string) (LocalConfig, error) {
 	if strings.TrimSpace(raw) == "" {
 		return LocalConfig{}, nil
@@ -109,9 +88,7 @@ func ParseLocalConfig(raw string) (LocalConfig, error) {
 	if len(raw) > localConfigMaxBytes {
 		return LocalConfig{}, fmt.Errorf("local models configuration exceeds %d bytes", localConfigMaxBytes)
 	}
-	// The first draft of the document declared a chat and an embedding model
-	// id that no save ever wrote; the keys stay accepted (and ignored), so a
-	// document carrying them cannot fail DisallowUnknownFields.
+	// Legacy keys from an earlier draft of the document stay accepted (and ignored).
 	var doc struct {
 		LocalConfig
 		LegacyModel          json.RawMessage `json:"model,omitempty"`
@@ -134,9 +111,8 @@ func ParseLocalConfig(raw string) (LocalConfig, error) {
 
 func (c *LocalConfig) normalize() {
 	c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
-	// Servers advertise their OpenAI endpoint as ".../v1" (Ollama, LM Studio,
-	// Foundry Local); the provider appends /v1/... itself, so a pasted "/v1"
-	// root is accepted and dropped instead of failing the no-path rule.
+	// Servers advertise their endpoint as ".../v1" (Ollama, LM Studio, Foundry Local); the provider appends
+	// /v1/... itself, so a pasted "/v1" root is accepted and dropped.
 	if n := len(c.BaseURL); n >= 3 && strings.EqualFold(c.BaseURL[n-3:], "/v1") {
 		c.BaseURL = strings.TrimRight(c.BaseURL[:n-3], "/")
 	}
@@ -150,12 +126,9 @@ func (c *LocalConfig) normalize() {
 	}
 }
 
-// Validate checks the document's base URL: loopback-only http(s) (the
-// deliberate, explicit local/offline opt-in — the desktop user's own
-// machine, never a cloud server's loopback). The context window is checked
-// by NewLocalConfigForSave (its own client code) and ParseLocalConfig.
-// Deliberately separate from validateAzureEndpoint: the Azure allow-list
-// must stay https-only and Microsoft-suffixed.
+// Validate checks the document's base URL: loopback-only http(s) — the deliberate local/offline opt-in (the
+// desktop user's own machine, never a cloud server's loopback). Deliberately separate from
+// validateAzureEndpoint, whose allow-list must stay https-only and Microsoft-suffixed.
 func (c LocalConfig) Validate() error {
 	if !c.Configured() {
 		return fmt.Errorf("the local models base URL is required")
@@ -190,11 +163,8 @@ func parseStrictURL(raw string) (*url.URL, error) {
 	return url.Parse(raw)
 }
 
-// localModelsRuntime holds the operator policy (ConfigureLocalModels, DI at
-// boot). Unconfigured DISABLES the provider: the zero egress.Policy is
-// BlockInternal, so an entrypoint that never wires DI fails closed like a
-// cloud server — unlike the Azure runtime, whose unconfigured client behaves
-// like local mode. Only the desktop/local wiring's AllowLoopback enables it.
+// localModelsRuntime holds the operator policy (ConfigureLocalModels, DI at boot). Unconfigured DISABLES the
+// provider: the zero egress.Policy is BlockInternal, so a missing wiring fails closed like a cloud server.
 var localModelsRuntime struct {
 	mu     sync.RWMutex
 	egress egress.Policy
@@ -202,9 +172,8 @@ var localModelsRuntime struct {
 
 // LocalModelsOptions is the operator-level configuration.
 type LocalModelsOptions struct {
-	// Egress is the outbound policy. The provider is constructible only
-	// under egress.AllowLoopback: a cloud deployment must not let users
-	// point a "credential" at the server's own loopback services.
+	// Egress is the outbound policy: constructible only under egress.AllowLoopback — a cloud deployment must
+	// not let users point a "credential" at the server's own loopback services.
 	Egress egress.Policy
 }
 
@@ -221,15 +190,11 @@ func localModelsAllowed() bool {
 	return localModelsRuntime.egress == egress.AllowLoopback
 }
 
-// LocalModelsAvailable reports whether this process may use the local models
-// provider at all (the desktop/local egress policy; false in cloud). The
-// provider list hides the provider and the configuration routes refuse
-// reads and saves when it is false.
+// LocalModelsAvailable reports whether this process may use the local models provider (the desktop/local
+// egress policy; false in cloud — the provider is hidden and configuration routes refuse reads and saves).
 func LocalModelsAvailable() bool { return localModelsAllowed() }
 
-// CheckLocalModelsAvailable is nil where LocalModelsAvailable, else the
-// *LocalConfigError (LocalCfgErrUnavailable) both configuration routes
-// answer.
+// CheckLocalModelsAvailable is nil where LocalModelsAvailable, else the *LocalConfigError both routes answer.
 func CheckLocalModelsAvailable() error {
 	if localModelsAllowed() {
 		return nil
@@ -272,11 +237,9 @@ func (c LocalConfig) Public() LocalPublicConfig {
 	return LocalPublicConfig{Configured: c.Configured(), BaseURL: c.BaseURL, ContextWindow: c.ContextWindow}
 }
 
-// NewLocalConfigForSave builds the document a save stores from the client's
-// base URL and context window (0 = the default): normalised, and refused
-// (with a *LocalConfigError) when local models are unavailable in this
-// deployment, the URL is not a loopback http(s) server root, or the window
-// is out of range.
+// NewLocalConfigForSave builds the document a save stores: normalised, and refused (with a *LocalConfigError)
+// when local models are unavailable, the URL is not a loopback http(s) root, or the window is out of range.
+// A valid save also drops the server's cached listing — saving is how the user asks for it to be read again.
 func NewLocalConfigForSave(baseURL string, contextWindow int) (LocalConfig, error) {
 	if err := CheckLocalModelsAvailable(); err != nil {
 		return LocalConfig{}, err
@@ -291,6 +254,7 @@ func NewLocalConfigForSave(baseURL string, contextWindow int) (LocalConfig, erro
 			"the context window must be a whole number of tokens between %d and %d (leave it empty for %d)",
 			localMinContextWindow, localMaxContextWindow, LocalDefaultContextWindow)}
 	}
+	localModels.forget(cfg.BaseURL)
 	return cfg, nil
 }
 
@@ -315,8 +279,8 @@ func NewLocalProvider(raw string) *LocalProvider {
 		p.configErr = fmt.Errorf("%w: local models are available in the desktop app only — this deployment's egress policy does not allow loopback connections", ErrProviderConfigInvalid)
 	}
 	base := cfg.BaseURL + "/v1/chat/completions"
-	// No embedding model: the provider is not embedding-capable
-	// (SupportsEmbeddings), so Embed answers "not supported".
+	// No embedding model: the provider is not embedding-capable, so Embed
+	// answers "not supported".
 	p.openaiBase = openaiBase{
 		client:         localModelsClient(),
 		baseURL:        &base,
@@ -326,12 +290,9 @@ func NewLocalProvider(raw string) *LocalProvider {
 	return p
 }
 
-// localModelsClient is the local server client: the shared transport's
-// pool/proxy settings with the raised header timeout (a laptop-class model
-// can think for minutes before the first header on the non-streaming path)
-// and redirects refused, like the Azure client. Built once: the factory
-// builds a provider per request, and a transport cloned per provider meant a
-// fresh connection pool — and a fresh dial to the local server — per turn.
+// localModelsClient is the local server client: the shared transport's settings, the raised header timeout
+// (a laptop-class model can think for minutes before the first header), redirects refused — built ONCE, since
+// the factory builds a provider per request and a transport per provider meant a fresh pool per turn.
 var localModelsClient = sync.OnceValue(func() *http.Client {
 	return &http.Client{Timeout: 0, Transport: azureTransport(sharedTransportBase()), CheckRedirect: egress.NoRedirects}
 })
@@ -358,9 +319,19 @@ func (p *LocalProvider) DefaultModel() string { return "" }
 
 func (p *LocalProvider) EstimateTokens(text string) int { return EstimateTokensOpenAI(text) }
 
-// Models lists the server's chat models from GET {base}/v1/models — local
-// servers expose their own ids, so there is no catalogue fallback. Every
-// entry carries the configured context window.
+// localModels caches the local servers' chat-model listings briefly (modelListCache), keyed by base URL: the
+// factory builds a provider per request and chat consults Models() every turn — one listing round trip ahead
+// of every turn's first token. Short TTL so a pulled model shows up within seconds; a failed listing is not cached.
+var localModels = newModelListCache(localModelsCacheSize)
+
+// localModelsCacheTTL is the listing cache's lifetime (a var for tests).
+var localModelsCacheTTL = 15 * time.Second
+
+// localModelsCacheSize bounds the listing cache (one entry per server URL).
+const localModelsCacheSize = 64
+
+// Models lists the server's chat models from GET {base}/v1/models — local servers expose their own ids, no
+// catalogue fallback; every entry carries the configured context window.
 func (p *LocalProvider) Models(ctx context.Context) ([]ModelInfo, error) {
 	if p.configErr != nil {
 		return nil, p.configErr
@@ -368,17 +339,30 @@ func (p *LocalProvider) Models(ctx context.Context) ([]ModelInfo, error) {
 	if !p.cfg.Configured() {
 		return nil, nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.BaseURL+"/v1/models", nil)
+	models, err := localModels.load(ctx, p.cfg.BaseURL, localModelsCacheTTL, 0, p.fetchModels)
 	if err != nil {
 		return nil, err
 	}
+	for i := range models {
+		models[i].ContextLimit = p.ContextLimit()
+	}
+	return models, nil
+}
+
+// fetchModels is the live listing GET (uncached): the chat models, without
+// their context window (Models applies it).
+func (p *LocalProvider) fetchModels(ctx context.Context) ([]ModelInfo, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.BaseURL+"/v1/models", nil)
+	if err != nil {
+		return nil, false, err
+	}
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("local models: %w", err)
+		return nil, false, fmt.Errorf("local models: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("local models: model listing failed (status %d)", resp.StatusCode)
+		return nil, false, fmt.Errorf("local models: model listing failed (status %d)", resp.StatusCode)
 	}
 	var parsed struct {
 		Data []struct {
@@ -386,19 +370,18 @@ func (p *LocalProvider) Models(ctx context.Context) ([]ModelInfo, error) {
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSONBodyBytes)).Decode(&parsed); err != nil {
-		return nil, fmt.Errorf("parse local models listing: %w", err)
+		return nil, false, fmt.Errorf("parse local models listing: %w", err)
 	}
 	out := make([]ModelInfo, 0, len(parsed.Data))
 	for _, m := range parsed.Data {
-		// Embedding models (nomic-embed-text, mxbai-embed-large,
-		// text-embedding-*) share the listing but cannot chat: offered in the
-		// picker, or picked as the default, every turn on one fails.
+		// Embedding models (nomic-embed-text, mxbai-embed-large, text-embedding-*) share the listing but cannot
+		// chat: offered in the picker, every turn on one fails.
 		if m.ID == "" || strings.Contains(strings.ToLower(m.ID), "embed") {
 			continue
 		}
-		out = append(out, ModelInfo{ID: m.ID, DisplayName: m.ID, ContextLimit: p.ContextLimit()})
+		out = append(out, ModelInfo{ID: m.ID, DisplayName: m.ID})
 	}
-	return out, nil
+	return out, true, nil
 }
 
 func (p *LocalProvider) Chat(ctx context.Context, req Request) (*Response, error) {
@@ -423,8 +406,7 @@ func (p *LocalProvider) Embed(ctx context.Context, text []string) ([][]float32, 
 }
 
 func init() {
-	// Registered here so factory.go keeps a single registry; the desktop
-	// entrypoint (DI) decides through ConfigureLocalModels whether the
-	// provider is usable at all.
+	// Registered here so factory.go keeps a single registry; the desktop entrypoint decides through
+	// ConfigureLocalModels whether the provider is usable at all.
 	RegisterProvider(localProviderID, func(key string) Provider { return NewLocalProvider(key) })
 }

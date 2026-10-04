@@ -12,10 +12,9 @@ import (
 	"pad-core/logger"
 )
 
-// SaveFlowAnalysis upserts a flow's latest analysis summary. Called best-effort
-// after every analyze so the welcome dashboard renders persisted health/findings
-// on first load. Uses the RLS-scoped executor so the write participates in the
-// request transaction when one is active.
+// SaveFlowAnalysis upserts a flow's latest analysis summary (best-effort,
+// after every analyze) and appends the trend-history row. Uses the RLS-scoped
+// executor so the write participates in the request transaction when active.
 func (b *PostgresStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *interfaces.FlowAnalysis) error {
 	cat := fa.ByCategory
 	if cat == nil {
@@ -62,14 +61,9 @@ func (b *PostgresStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *inter
 		return fmt.Errorf("upsert flow_analysis: %w", err)
 	}
 
-	// Append to the history table for trend charts. Run this on the connection
-	// pool (autocommit) rather than b.query(ctx): when the caller is inside an
-	// RLS transaction, executing the best-effort insert on the tx executor would
-	// poison the whole transaction on failure ("current transaction is aborted,
-	// commands ignored until end of transaction block") — every subsequent
-	// statement and the eventual COMMIT would fail with an error unrelated to the
-	// analysis upsert above. The flow_analysis_history RLS policy explicitly
-	// allows this internal write via its NOT app_rls_active() clause.
+	// Append to the history table for trend charts, on the pool (autocommit):
+	// on the tx executor a failure would poison the request transaction. The
+	// history table's RLS policy allows this internal write via NOT app_rls_active().
 	if _, hErr := b.db.ExecContext(ctx, `
 		INSERT INTO flow_analysis_history (flow_id, health_score, errors, warnings, info, by_rule, by_confidence, auto_fixable_count, total_findings, analyzed_at)
 		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, COALESCE($10, NOW()))`,
@@ -81,8 +75,8 @@ func (b *PostgresStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *inter
 	return nil
 }
 
-// LoadFlowHealth returns the latest persisted analysis snapshot for a single
-// flow. Returns (nil, nil) when the flow has never been analyzed.
+// LoadFlowHealthBatch returns each listed flow's latest persisted analysis
+// snapshot; flows never analyzed are absent from the map.
 func (b *PostgresStorageBackend) LoadFlowHealthBatch(ctx context.Context, flowIDs []string) (map[string]*interfaces.HealthSnapshot, error) {
 	out := make(map[string]*interfaces.HealthSnapshot, len(flowIDs))
 	if len(flowIDs) == 0 {
@@ -121,18 +115,16 @@ func (b *PostgresStorageBackend) LoadFlowHealth(ctx context.Context, flowID stri
 	return &h, nil
 }
 
-// FlowDashboardData assembles the owner-scoped welcome-dashboard payload. The
-// reads (six as of the v3 analytics) are independent and indexed; running them
-// sequentially keeps the code simple and is well within budget for a landing
-// screen.
+// FlowDashboardData assembles the owner-scoped welcome-dashboard payload from
+// independent indexed reads, run sequentially for simplicity.
 func (b *PostgresStorageBackend) FlowDashboardData(ctx context.Context, ownerID string, days int) (*interfaces.DashboardData, error) {
 	if days <= 0 {
 		days = 14
 	}
 	out := &interfaces.DashboardData{ByCategory: map[string]int{}, Confidence: map[string]int{}}
 
-	// A. Overview counts over all of the owner's flows. SubflowCount lives in the
-	// metadata jsonb under its Go field name (FlowMetadata has no json tags).
+	// A. Overview counts over all of the owner's flows; SubflowCount lives in
+	// the metadata jsonb under its Go field name (FlowMetadata has no json tags).
 	if err := b.query(ctx).QueryRowContext(ctx, `
 		SELECT COUNT(*), COALESCE(SUM((metadata->>'SubflowCount')::int), 0)
 		FROM flows WHERE owner_id = $1`, ownerID,
@@ -140,11 +132,8 @@ func (b *PostgresStorageBackend) FlowDashboardData(ctx context.Context, ownerID 
 		return nil, fmt.Errorf("dashboard overview counts: %w", err)
 	}
 
-	// B. Health/findings scalar aggregate over the owner's analyzed flows.
-	// total_findings + auto_fixable_count back the fix-availability KPI, and the
-	// five FILTER counts are the health-score histogram (5 fixed-width buckets
-	// exposing the distribution the single AvgHealth number hides) — computed
-	// here rather than in a separate query since the scan is identical.
+	// B. Health/findings aggregate: the scalar sums back the fix-availability
+	// KPI, the five FILTER counts the health-score histogram.
 	var b0, b20, b40, b60, b80 int
 	if err := b.query(ctx).QueryRowContext(ctx, `
 		SELECT COUNT(*),
@@ -223,9 +212,9 @@ func (b *PostgresStorageBackend) FlowDashboardData(ctx context.Context, ownerID 
 		return nil, fmt.Errorf("iterate confidence: %w", err)
 	}
 
-	// D. Recent flows with their latest health score (LEFT JOIN ⇒ nil when never
-	// analyzed). One row per name: every upload mints a new flow id, so the
-	// same flow re-uploaded three times used to fill three of the five slots.
+	// D. Recent flows with latest health (LEFT JOIN ⇒ nil when never
+	// analyzed); DISTINCT ON name so one re-uploaded flow cannot fill three
+	// of the five slots.
 	recRows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT r.id, r.name, r.updated_at, r.health_score
 		FROM (
@@ -292,9 +281,8 @@ func (b *PostgresStorageBackend) FlowDashboardData(ctx context.Context, ownerID 
 	return out, nil
 }
 
-// FlowDashboardAdvanced returns the extended dashboard data: health-score
-// trend (30d), AI cost by provider, rule frequency, activity feed, flow
-// complexity scatter, and security posture. All queries are owner-scoped.
+// FlowDashboardAdvanced returns the extended dashboard data — trends, cost by
+// provider, rule frequency, activity, complexity, security posture — all owner-scoped.
 func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, ownerID string, days int) (*interfaces.DashboardAdvancedData, error) {
 	if days <= 0 {
 		days = 30
@@ -303,14 +291,9 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 		Security: interfaces.DashboardSecurity{},
 	}
 
-	// A. Health score trend: daily avg from flow_analysis_history. The
-	// lateral joins flows BY OWNER first, so the planner walks
-	// flows(owner_id) → flow_analysis_history(flow_id, analyzed_at) instead
-	// of scanning every tenant's history rows in the time window and
-	// filtering with a per-row EXISTS (cross-tenant scan that grew with
-	// tenant count). DISTINCT ON takes the latest run per flow per day —
-	// same rationale as A2 below: history is append-only, so counting every
-	// re-analysis would double-weight flows analyzed N times in a day.
+	// A. Health score trend: daily avg from flow_analysis_history. The lateral
+	// joins flows BY OWNER first so the planner walks flows(owner_id) →
+	// history(flow_id, analyzed_at) instead of scanning every tenant's rows.
 	trendRows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT TO_CHAR(d.day, 'YYYY-MM-DD'),
 		       COALESCE(ROUND(AVG(h.health_score))::int, 0),
@@ -345,9 +328,7 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 		return nil, fmt.Errorf("iterate health trend: %w", err)
 	}
 
-	// A2. Org-wide severity trend: daily error/warning/info sums from
-	// flow_analysis_history, gap-filled so days with no analysis render as 0
-	// rather than vanishing from the stacked-area chart. The lateral takes only
+	// A2. Org-wide severity trend, gap-filled like A: the lateral takes only
 	// the latest history row per flow per day — history is append-only, so a
 	// flow re-analyzed N times in a day would otherwise count N×.
 	sevRows, err := b.query(ctx).QueryContext(ctx, `
@@ -435,9 +416,8 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 		return nil, fmt.Errorf("iterate rule frequency: %w", err)
 	}
 
-	// D. Activity feed from audit_events. Only a flow resource carries a name
-	// worth showing; anything else (a settings save, the user's own record)
-	// used to fall back to the raw resource id.
+	// D. Activity feed from audit_events: only a flow resource carries a name
+	// worth showing; anything else renders empty, not the raw resource id.
 	actRows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT action,
 		       CASE WHEN resource_type = 'flow'
@@ -490,9 +470,8 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 		return nil, fmt.Errorf("iterate complexity: %w", err)
 	}
 
-	// F. Security posture. Each count is best-effort, but a failure must be
-	// reported: a query that errors leaves its field at 0, and the card used to
-	// render three zeros as "no security issues detected".
+	// F. Security posture: each count is best-effort, but a failure must be
+	// reported — three zeros used to render as "no security issues detected".
 	securityOK := true
 	// Auth events are logged before there are claims: the user is in
 	// resource_id, and user_id is empty — the old user_id predicate never hit.
@@ -530,11 +509,8 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 	}
 	out.Security.Available = securityOK
 
-	// G. Team-triage workflow: status funnel, MTTR, and stale-finding count.
-	// Best-effort (a failure leaves the section empty rather than failing the
-	// whole dashboard); sourced from finding_status, owner-scoped via the flow
-	// join. MTTR excludes rows where updated_at < created_at (pre-migration
-	// backfill artifacts) so the average reflects genuine lifecycles only.
+	// G. Team-triage workflow (funnel, MTTR, stale count), owner-scoped via
+	// the flow join; MTTR excludes updated_at < created_at backfill artifacts.
 	out.Workflow.Funnel = map[string]int{}
 	funRows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT fs.status, COUNT(*)::int

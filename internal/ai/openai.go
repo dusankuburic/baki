@@ -29,15 +29,11 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	}
 }
 
-// openAIMaxTokensParam picks the completion-cap field for the configured
-// endpoint, at construction time (tests repoint openAIBaseURL). OpenAI itself
-// gets max_completion_tokens: its reasoning models (o-series, GPT-5) reject
-// max_tokens, and every current OpenAI model accepts the successor. An
-// OPENAI_API_URL override keeps max_tokens: compatible servers (Ollama,
-// llama-cpp-python, older vLLM) read only that name and silently IGNORE the
-// successor — no 400 would ever trigger send()'s repair, and generation would
-// run uncapped. A proxy in front of real OpenAI serving a reasoning model
-// rejects max_tokens with unsupported_parameter, and send() swaps it once.
+// openAIMaxTokensParam picks the completion-cap field for the configured endpoint. OpenAI itself gets
+// max_completion_tokens (its reasoning models reject max_tokens); an OPENAI_API_URL override keeps max_tokens
+// — compatible servers (Ollama, llama-cpp-python, older vLLM) silently IGNORE the successor, so no 400 would
+// ever trigger send()'s repair and generation would run uncapped. A proxy in front of real OpenAI serving a
+// reasoning model rejects max_tokens with unsupported_parameter, and send() swaps it once.
 func openAIMaxTokensParam(baseURL string) string {
 	if baseURL == openAIDefaultURL {
 		return maxTokensParamCompletion
@@ -80,22 +76,18 @@ func (o *OpenAIProvider) Embed(ctx context.Context, text []string) ([][]float32,
 type openAIRequest struct {
 	Model     string `json:"model"`
 	MaxTokens int    `json:"max_tokens,omitempty"`
-	// MaxCompletionTokens is the successor of max_tokens: OpenAI's reasoning
-	// models (o-series, GPT-5) and Azure AI Foundry deployments of them reject
-	// max_tokens outright. openaiBase.maxTokensParam decides which of the two
-	// a provider sends; exactly one is set per request.
+	// MaxCompletionTokens is the successor of max_tokens: OpenAI's reasoning models and Azure Foundry
+	// deployments of them reject max_tokens outright. openaiBase.maxTokensParam picks which is sent.
 	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
-	// Temperature is a pointer so an explicit 0 (Request.TemperatureSet —
-	// deterministic sampling) goes out on the wire; nil omits the field
-	// (the provider's default), which a zero Temperature without
-	// TemperatureSet still means.
+	// Temperature is a pointer so an explicit 0 (Request.TemperatureSet — deterministic sampling) goes out
+	// on the wire; nil omits the field, which a zero Temperature without TemperatureSet still means.
 	Temperature   *float64        `json:"temperature,omitempty"`
 	Messages      []openAIMessage `json:"messages"`
 	Tools         []openAITool    `json:"tools,omitempty"`
 	Stream        bool            `json:"stream,omitempty"`
 	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
-	// ReasoningEffort is the user-chosen reasoning depth (low|medium|high;
-	// F-19), omitted for the provider default. The gpt-5.6 tools repair
+	// ReasoningEffort is the user-chosen reasoning depth (low|medium|high),
+	// omitted for the provider default. The gpt-5.6 tools repair
 	// replaces it with "none" in sendWith's generic map.
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
@@ -131,19 +123,15 @@ type openAIMessage struct {
 	Content    string           `json:"content"`
 	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string           `json:"tool_call_id,omitempty"`
-	// ReasoningContent is response-only: the model's reasoning that some
-	// servers return next to the answer (message.reasoning_content —
-	// DeepSeek-R1, GLM, Grok mini, Cohere on Foundry). It becomes
-	// Response.Reasoning, never Content; toOpenAIMessages never sets it, so
-	// it is omitted from requests.
+	// ReasoningContent is response-only (message.reasoning_content — DeepSeek-R1, GLM, Grok mini on
+	// Foundry): it becomes Response.Reasoning, never Content, and is omitted from requests.
 	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 type openAIResponse struct {
 	ID string `json:"id"`
-	// Model is the concrete model that served the request (a versioned name
-	// such as "gpt-4o-2024-11-20", or the routed model behind an Azure
-	// model-router deployment). Carried to Response.ServedModel for pricing.
+	// Model is the concrete model that served the request (a versioned name, or the model routed behind a
+	// router deployment); carried to Response.ServedModel for pricing.
 	Model   string `json:"model"`
 	Choices []struct {
 		Message      openAIMessage `json:"message"`
@@ -160,9 +148,8 @@ type openAIResponse struct {
 	} `json:"usage"`
 }
 
-// openAIErrorResp is the OpenAI error envelope ({"error":{…}}). Decode it
-// with decodeOpenAIError, which also reads the Azure AI Model Inference
-// layer's top-level shape into the same fields.
+// openAIErrorResp is the OpenAI error envelope ({"error":{…}}); decode with decodeOpenAIError, which also
+// reads the Azure Model Inference layer's top-level shape into the same fields.
 type openAIErrorResp struct {
 	Error struct {
 		Message string `json:"message"`

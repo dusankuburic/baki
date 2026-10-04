@@ -459,7 +459,6 @@ func TestParser_Switch(t *testing.T) {
 		t.Errorf("expected first block to be SWITCH, got %q", switchBlk.Type)
 	}
 
-	// SWITCH should have CASE and DEFAULT children
 	caseCount := 0
 	defaultCount := 0
 	for _, child := range switchBlk.Children {

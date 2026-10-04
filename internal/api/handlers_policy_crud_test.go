@@ -7,18 +7,12 @@ import (
 	"pad-analyzer/internal/auth"
 )
 
-// ---- Persistent Policy CRUD handler tests ----
-//
-// The filesystem backend does not store policies: Get→ErrNotFound, List→empty,
-// and Save/Delete now return ErrPoliciesUnsupported. They previously returned
-// nil — SUCCESS — while writing nothing, which is why the two "…Succeeds" tests
-// below used to assert a flat 200: they were reading a fabricated result off a
-// backend that cannot store a policy at all.
-//
-// These tests verify the HANDLER layer: auth, body parsing, org-membership
-// checks, and error mapping — not the storage implementation. So the member
-// cases now assert what they actually mean — authorization passed — rather than
-// that the whole request succeeded, which depends on the backend.
+// The filesystem backend does not store policies: Get→ErrNotFound, List→empty, and Save/Delete
+// return ErrPoliciesUnsupported. They previously returned nil — SUCCESS — while writing nothing,
+// which is why the two "…Succeeds" tests below used to assert a flat 200 off a backend that
+// cannot store a policy at all. These tests verify the HANDLER layer: auth, body parsing,
+// org-membership checks, and error mapping — so the member cases assert what they mean
+// (authorization passed), not whole-request success, which depends on the backend.
 
 func TestPolicySave_OrgMemberSucceeds(t *testing.T) {
 	rt := newJWTTestRouter(t)

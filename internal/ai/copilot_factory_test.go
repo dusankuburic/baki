@@ -25,7 +25,6 @@ func TestProviderFactory_For_Copilot_WithOAuthToken(t *testing.T) {
 }
 
 func TestProviderFactory_For_Copilot_OAuthTakesPriorityOverPAT(t *testing.T) {
-	// Both OAuth and PAT are configured — OAuth should win.
 	auth := NewCopilotAuth()
 	keys := map[string]string{
 		"copilot-oauth-token": "gh-oauth-tok",
@@ -50,7 +49,6 @@ func TestProviderFactory_For_Copilot_OAuthTakesPriorityOverPAT(t *testing.T) {
 }
 
 func TestProviderFactory_For_Copilot_FallbackToPAT(t *testing.T) {
-	// No OAuth token — should succeed via PAT.
 	keys := map[string]string{"copilot": "manual-pat"}
 	f := NewProviderFactory(func(_, k string) (string, error) {
 		if v, ok := keys[k]; ok {
@@ -80,9 +78,8 @@ func TestProviderFactory_For_Copilot_NeitherConfigured(t *testing.T) {
 }
 
 func TestProviderFactory_For_Copilot_EmptyOAuthTokenFallsBackToPAT(t *testing.T) {
-	// OAuth key exists but is empty string — should still fall back to PAT.
 	keys := map[string]string{
-		"copilot-oauth-token": "", // present but empty
+		"copilot-oauth-token": "",
 		"copilot":             "manual-pat",
 	}
 	f := NewProviderFactory(func(_, k string) (string, error) {
@@ -104,7 +101,6 @@ func TestProviderFactory_For_Copilot_EmptyOAuthTokenFallsBackToPAT(t *testing.T)
 func TestProviderFactory_For_Copilot_NilCopilotAuthFallsBackToPAT(t *testing.T) {
 	// OAuth token is present, but copilotAuth is nil — the OAuth path
 	// requires a non-nil CopilotAuth to construct a session-refreshing provider.
-	// The factory should gracefully fall back to PAT.
 	keys := map[string]string{
 		"copilot-oauth-token": "gh-tok",
 		"copilot":             "pat",
@@ -114,7 +110,7 @@ func TestProviderFactory_For_Copilot_NilCopilotAuthFallsBackToPAT(t *testing.T) 
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
-	}, nil, nil, nil) // nil copilotAuth
+	}, nil, nil, nil)
 
 	p, err := f.For("", "copilot")
 	if err != nil {
@@ -126,14 +122,13 @@ func TestProviderFactory_For_Copilot_NilCopilotAuthFallsBackToPAT(t *testing.T) 
 }
 
 func TestProviderFactory_For_Copilot_OnlyOAuthNoAuth_Error(t *testing.T) {
-	// OAuth token present, copilotAuth nil, no PAT → should error.
 	keys := map[string]string{"copilot-oauth-token": "gh-tok"}
 	f := NewProviderFactory(func(_, k string) (string, error) {
 		if v, ok := keys[k]; ok {
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
-	}, nil, nil, nil) // nil copilotAuth — OAuth path skipped, PAT not found
+	}, nil, nil, nil)
 
 	_, err := f.For("", "copilot")
 	if err == nil {

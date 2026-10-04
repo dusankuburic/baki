@@ -198,22 +198,6 @@ func TestDiffSubflow_OverCap_IdenticalIsUnchanged(t *testing.T) {
 	}
 }
 
-// ---- max (local) ------------------------------------------------------------
-
-func TestMax(t *testing.T) {
-	cases := []struct{ a, b, want int }{
-		{3, 5, 5},
-		{5, 3, 5},
-		{4, 4, 4},
-		{0, -1, 0},
-	}
-	for _, tc := range cases {
-		if got := max(tc.a, tc.b); got != tc.want {
-			t.Errorf("max(%d,%d) = %d, want %d", tc.a, tc.b, got, tc.want)
-		}
-	}
-}
-
 // ---- flattenBlocks ----------------------------------------------------------
 
 func TestFlattenBlocks_Flat(t *testing.T) {

@@ -27,8 +27,8 @@ type silentHostedProvider struct {
 	// output gets the hosted limit — a reasoning model thinking silently).
 	preText bool
 	// silentStep brackets the silence with ai.Chunk.SilentStep +1/-1 instead
-	// of a hosted ToolEvent: a Responses reasoning item with summaries off
-	// (F-08) — text already streamed, no hosted tool, nothing on the wire.
+	// of a hosted ToolEvent: a Responses reasoning item with summaries off —
+	// text already streamed, no hosted tool, nothing on the wire.
 	silentStep bool
 	calls      atomic.Int32
 }
@@ -183,7 +183,7 @@ func TestStream_SilenceWithoutHostedStepStillIdleCancelled(t *testing.T) {
 	}
 }
 
-// PERF-3: a provider that streams nothing before its first output — a
+// A provider that streams nothing before its first output — a
 // reasoning deployment thinking, a Responses run whose argument deltas the
 // parser does not surface — is given the hosted-step limit, not the 90 s
 // idle limit, on both stream paths.
@@ -215,13 +215,12 @@ func TestStream_SilenceBeforeFirstOutputUsesHostedLimit(t *testing.T) {
 	})
 }
 
-// TestStream_SilentReasoningStepHoldsHostedLimit (F-08): a summary-less
-// reasoning phase AFTER the first output token — a Responses reasoning item
-// with summaries off, bracketed by ai.Chunk.SilentStep — holds the
-// hosted-step idle limit like a hosted tool step, on both stream paths. The
-// 90 s watchdog used to cancel the turn mid-thinking; without the SilentStep
-// wiring this silence is judged at the normal limit (see
-// TestStream_SilenceWithoutHostedStepStillIdleCancelled).
+// TestStream_SilentReasoningStepHoldsHostedLimit: a summary-less reasoning phase AFTER
+// the first output token — a Responses reasoning item with summaries off, bracketed by
+// ai.Chunk.SilentStep — holds the hosted-step idle limit like a hosted tool step, on both
+// stream paths. The 90 s watchdog used to cancel the turn mid-thinking; without the
+// SilentStep wiring this silence is judged at the normal limit
+// (TestStream_SilenceWithoutHostedStepStillIdleCancelled).
 func TestStream_SilentReasoningStepHoldsHostedLimit(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -326,7 +325,7 @@ func TestStreamCtl_HostedStepNeverNegative(t *testing.T) {
 	if got := svc.idleLimitFor(ctl); got != 50*time.Millisecond {
 		t.Errorf("idle limit after the turn = %v, want the normal limit", got)
 	}
-	// PERF-3: awaiting the first output raises the limit the same way; the
+	// Awaiting the first output raises the limit the same way; the
 	// first text / tool-call / terminal chunk, or the turn's end, lowers it.
 	ctl.beginProviderTurn()
 	if got := svc.idleLimitFor(ctl); got != hostedStepIdleTimeout {

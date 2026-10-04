@@ -139,17 +139,17 @@ export default function Sidebar() {
   const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
   const setAnalysisProgress = useAnalysisStore(s => s.setProgress)
 
-  const analysisReports = useAnalysisStore(s => s.reports)
+  // Only THIS document's report: subscribing to the whole reports Map re-ran
+  // the count on every other flow's analysis (see FindingsTab).
+  const analysisReport = useAnalysisStore(s => (document ? s.reports.get(document.id) : undefined))
   const findingCounts = useMemo(() => {
-    if (!document) return undefined
-    const report = analysisReports.get(document.id)
-    if (!report) return undefined
+    if (!analysisReport) return undefined
     const counts = new Map<string, number>()
-    for (const f of report.findings) {
+    for (const f of analysisReport.findings) {
       counts.set(f.blockId, (counts.get(f.blockId) ?? 0) + 1)
     }
     return counts
-  }, [document, analysisReports])
+  }, [analysisReport])
 
   const handleAnalyze = useCallback(async () => {
     if (!document) return

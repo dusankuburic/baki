@@ -238,7 +238,7 @@ function ProviderAdvancedSettings({
           value={config.maxTokens}
           onCommit={v => onUpdate({maxTokens: v})}
         />
-        {/* F-38: the server silently raises this to the 16384-token
+        {/* The server silently raises this to the 16384-token
             reasoning floor on reasoning models — say so instead of letting a
             lowered cap look ignored. Deliberately no clamp: the setting is
             per provider and non-reasoning deployments keep the lower cap. */}
@@ -259,7 +259,7 @@ function ProviderAdvancedSettings({
         <p className="text-2xs text-text-tertiary mt-1">{t('behavior.contextBudgetHint')}</p>
       </div>
 
-      {/* F-19: always visible — the panel cannot know which deployments are
+      {/* Always visible — the panel cannot know which deployments are
           reasoning models (the served model is server-side knowledge), so
           the hint says who it applies to instead of a client-side regex. */}
       <div>

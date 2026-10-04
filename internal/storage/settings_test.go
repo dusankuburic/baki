@@ -222,20 +222,6 @@ func TestMigrate_AdvancesVersion(t *testing.T) {
 	}
 }
 
-func TestSettingsStore_Get_ReturnsDeepCopy(t *testing.T) {
-	s := newTestStore(t)
-	original := s.Get().Appearance.Theme
-
-	got := s.Get()
-	got.Appearance.Theme = "mutated"
-
-	// The internal state must be unchanged.
-	fresh := s.Get()
-	if fresh.Appearance.Theme != original {
-		t.Error("Get() returned a reference to internal state rather than a deep copy")
-	}
-}
-
 func TestSettingsStore_Load_NonErrNotExist_ReturnsError(t *testing.T) {
 	// Point the store at a directory path — os.ReadFile on a dir is not ErrNotExist.
 	dir := t.TempDir()

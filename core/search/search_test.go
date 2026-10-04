@@ -26,7 +26,7 @@ func BenchmarkSearchFuzzy(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = idx.Search(models.SearchQuery{Text: "actionx", Fuzzy: true, MaxResults: 10})
+		_ = idx.Search(doc, models.SearchQuery{Text: "actionx", Fuzzy: true, MaxResults: 10})
 	}
 }
 
@@ -83,16 +83,17 @@ func TestIndexBuild(t *testing.T) {
 		t.Errorf("FlowID = %q, want %q", idx.FlowID(), "test-flow")
 	}
 
-	if len(idx.blocks) != 6 {
-		t.Errorf("indexed %d blocks, want 6", len(idx.blocks))
+	if idx.BlockCount() != 6 {
+		t.Errorf("indexed %d blocks, want 6", idx.BlockCount())
 	}
 
 	if len(idx.tokens) == 0 {
 		t.Error("no tokens in index")
 	}
 
-	if idx.blockSubflow["b1"] != "sf-main" {
-		t.Errorf("blockSubflow[b1] = %q, want %q", idx.blockSubflow["b1"], "sf-main")
+	results := idx.Search(doc, models.SearchQuery{Text: "click", MaxResults: 10})
+	if len(results.Results) == 0 || results.Results[0].BlockID != "b1" || results.Results[0].SubflowID != "sf-main" {
+		t.Errorf("search for b1 = %+v, want block b1 in subflow sf-main", results.Results)
 	}
 }
 
@@ -100,7 +101,7 @@ func TestSearchExactNameMatch(t *testing.T) {
 	doc := makeTestDoc()
 	idx := NewSearchIndex(doc.ID, doc)
 
-	results := idx.Search(models.SearchQuery{Text: "Click on element", MaxResults: 10})
+	results := idx.Search(doc, models.SearchQuery{Text: "Click on element", MaxResults: 10})
 	if results.TotalCount == 0 {
 		t.Fatal("expected results for exact name match")
 	}
@@ -114,32 +115,11 @@ func TestSearchExactNameMatch(t *testing.T) {
 	}
 }
 
-func TestSearchPartialMatch(t *testing.T) {
-	doc := makeTestDoc()
-	idx := NewSearchIndex(doc.ID, doc)
-
-	results := idx.Search(models.SearchQuery{Text: "click", MaxResults: 10})
-	if results.TotalCount == 0 {
-		t.Fatal("expected results for partial match 'click'")
-	}
-
-	found := false
-	for _, r := range results.Results {
-		if r.BlockID == "b1" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("b1 (Click on element) not found for query 'click'")
-	}
-}
-
 func TestSearchPropertyMatch(t *testing.T) {
 	doc := makeTestDoc()
 	idx := NewSearchIndex(doc.ID, doc)
 
-	results := idx.Search(models.SearchQuery{Text: "submit", MaxResults: 10})
+	results := idx.Search(doc, models.SearchQuery{Text: "submit", MaxResults: 10})
 	if results.TotalCount == 0 {
 		t.Fatal("expected results for property value 'submit'")
 	}
@@ -163,7 +143,7 @@ func TestSearchVariableMatch(t *testing.T) {
 	doc := makeTestDoc()
 	idx := NewSearchIndex(doc.ID, doc)
 
-	results := idx.Search(models.SearchQuery{Text: "counter", MaxResults: 10})
+	results := idx.Search(doc, models.SearchQuery{Text: "counter", MaxResults: 10})
 	if results.TotalCount == 0 {
 		t.Fatal("expected results for variable 'counter'")
 	}
@@ -184,7 +164,7 @@ func TestSearchEmptyQuery(t *testing.T) {
 	doc := makeTestDoc()
 	idx := NewSearchIndex(doc.ID, doc)
 
-	results := idx.Search(models.SearchQuery{Text: "", MaxResults: 10})
+	results := idx.Search(doc, models.SearchQuery{Text: "", MaxResults: 10})
 	if results.TotalCount != 0 {
 		t.Errorf("empty query should return 0 results, got %d", results.TotalCount)
 	}
@@ -194,7 +174,7 @@ func TestSearchNoMatch(t *testing.T) {
 	doc := makeTestDoc()
 	idx := NewSearchIndex(doc.ID, doc)
 
-	results := idx.Search(models.SearchQuery{Text: "zzzznonexistent", MaxResults: 10})
+	results := idx.Search(doc, models.SearchQuery{Text: "zzzznonexistent", MaxResults: 10})
 	if results.TotalCount != 0 {
 		t.Errorf("nonexistent query should return 0 results, got %d", results.TotalCount)
 	}
@@ -204,7 +184,7 @@ func TestSearchFuzzyMatch(t *testing.T) {
 	doc := makeTestDoc()
 	idx := NewSearchIndex(doc.ID, doc)
 
-	results := idx.Search(models.SearchQuery{Text: "clikc", Fuzzy: true, MaxResults: 10})
+	results := idx.Search(doc, models.SearchQuery{Text: "clikc", Fuzzy: true, MaxResults: 10})
 	if results.TotalCount == 0 {
 		t.Fatal("expected fuzzy results for 'clikc'")
 	}
@@ -225,14 +205,18 @@ func TestSearchBlockTypeFilter(t *testing.T) {
 	doc := makeTestDoc()
 	idx := NewSearchIndex(doc.ID, doc)
 
-	results := idx.Search(models.SearchQuery{
+	results := idx.Search(doc, models.SearchQuery{
 		Text:       "loop",
 		BlockTypes: []models.BlockType{models.BlockTypeLoop},
 		MaxResults: 10,
 	})
 
+	lookup := blockLookup{doc: doc}
 	for _, r := range results.Results {
-		block := idx.blocks[r.BlockID]
+		block, _ := lookup.find(r.BlockID)
+		if block == nil {
+			t.Fatalf("result %q is not a block of the document", r.BlockID)
+		}
 		if block.Type != models.BlockTypeLoop {
 			t.Errorf("got block type %q, want LOOP", block.Type)
 		}
@@ -243,7 +227,7 @@ func TestSearchHighlights(t *testing.T) {
 	doc := makeTestDoc()
 	idx := NewSearchIndex(doc.ID, doc)
 
-	results := idx.Search(models.SearchQuery{Text: "click", MaxResults: 10})
+	results := idx.Search(doc, models.SearchQuery{Text: "click", MaxResults: 10})
 	if results.TotalCount == 0 {
 		t.Fatal("expected results for 'click'")
 	}
@@ -267,19 +251,9 @@ func TestSearchMaxResults(t *testing.T) {
 	doc := makeTestDoc()
 	idx := NewSearchIndex(doc.ID, doc)
 
-	results := idx.Search(models.SearchQuery{Text: "a", MaxResults: 2})
+	results := idx.Search(doc, models.SearchQuery{Text: "a", MaxResults: 2})
 	if len(results.Results) > 2 {
 		t.Errorf("got %d results, want at most 2", len(results.Results))
-	}
-}
-
-func TestSearchDuration(t *testing.T) {
-	doc := makeTestDoc()
-	idx := NewSearchIndex(doc.ID, doc)
-
-	results := idx.Search(models.SearchQuery{Text: "click", MaxResults: 10})
-	if results.DurationMs < 0 {
-		t.Errorf("DurationMs = %d, want >= 0", results.DurationMs)
 	}
 }
 
@@ -287,7 +261,7 @@ func TestSearchNestedBlock(t *testing.T) {
 	doc := makeTestDoc()
 	idx := NewSearchIndex(doc.ID, doc)
 
-	results := idx.Search(models.SearchQuery{Text: "condition", MaxResults: 10})
+	results := idx.Search(doc, models.SearchQuery{Text: "condition", MaxResults: 10})
 	found := false
 	for _, r := range results.Results {
 		if r.BlockID == "b3a" {
@@ -313,6 +287,6 @@ func BenchmarkSearch(b *testing.B) {
 	idx := NewSearchIndex(doc.ID, doc)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		idx.Search(models.SearchQuery{Text: "click element", MaxResults: 100})
+		idx.Search(doc, models.SearchQuery{Text: "click element", MaxResults: 100})
 	}
 }

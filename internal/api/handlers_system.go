@@ -33,19 +33,12 @@ var validProviders = map[string]bool{
 	"local":         true,
 }
 
-// readinessFailureThreshold is the number of consecutive failed readiness
-// probes required before the handler reports 503. This tolerates transient
-// Azure latency spikes so a single slow Ping doesn't flap the pod out of
-// rotation. State is per-instance (sufficient: a flapping replica reports its
-// own readiness independently).
+// readinessFailureThreshold is the consecutive failed readiness probes before
+// the handler reports 503, so one slow Ping doesn't flap the pod.
 const readinessFailureThreshold = 3
 
-// blobCheckCacheTTL is how long a readiness probe reuses the last SUCCESSFUL
-// blob reachability result. Each fresh check is a network call to Azure;
-// probes fire every few seconds per replica, and blob health doesn't change at
-// that granularity. Failures are never cached: the failure-streak threshold
-// exists to tolerate one transient blip, and replaying a single cached failure
-// across probes would count it readinessFailureThreshold times.
+// blobCheckCacheTTL is how long a probe reuses the last SUCCESSFUL blob reachability result (each
+// fresh check is a network call). Failures are never cached: replaying one would count it N times.
 const blobCheckCacheTTL = 15 * time.Second
 
 type SystemHandler struct {
@@ -53,19 +46,13 @@ type SystemHandler struct {
 	security *SecurityConfig
 	backend  storageif.StorageBackend // may be nil in local/filesystem mode
 
-	// redisPinger is a health-check interface onto the optional Redis backplane
-	// (rate limiter, hub presence, chat-stream resume). When non-nil, readiness
-	// gates on it too — a Redis outage silently degrades multi-replica
-	// correctness (all three subsystems fail open), so without this check the
-	// pod stays in rotation reporting "ready" while losing shared state.
+	// redisPinger pings the optional Redis backplane (rate limiter, hub presence, stream resume).
+	// When non-nil, readiness gates on it: all three subsystems fail open, so a Redis outage
+	// would silently degrade multi-replica correctness.
 	redisPinger RedisPinger
 
-	// ruleProfiles is invalidated when an org's settings change, because
-	// AppSettings.Analysis.Rules IS the org's rule profile — enable/disable and
-	// severity overrides. Without this a rule toggle would not take effect
-	// until the resolver's TTL elapsed, so an admin would toggle a rule,
-	// re-analyze, see no change, and reasonably conclude the feature is broken.
-	// Nil in local mode and in tests that don't exercise it.
+	// ruleProfiles is invalidated when an org's settings change, because AppSettings.Analysis.Rules
+	// IS the org's rule profile — without this a toggle waits out the resolver's TTL.
 	ruleProfiles *service.RuleProfileResolver
 
 	readyMu       sync.Mutex
@@ -75,9 +62,8 @@ type SystemHandler struct {
 	blobCheckedAt time.Time // zero when the last check failed (never cache failures)
 }
 
-// RedisPinger is the subset of the Redis client the readiness probe needs.
-// Implemented by *redis.Client; defined here so the handler can accept a nil
-// sentinel in single-replica mode without pulling the redis package into API.
+// RedisPinger is the subset of the Redis client the readiness probe needs;
+// defined here so a nil sentinel works without pulling redis into API.
 type RedisPinger interface {
 	Ping(ctx context.Context) error
 }
@@ -128,9 +114,6 @@ func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// handleGetOrgSettings returns org-wide settings. Reading requires org
-// membership — settings carry operational details (budgets, provider
-// configuration) that must not leak across tenants.
 // @Summary      Get org settings
 // @Description  handleGetOrgSettings returns org-wide settings. Reading requires org membership — settings carry operational details (budgets, provider configuration) that must not leak across tenants.
 // @Tags         system
@@ -151,8 +134,6 @@ func (h *SystemHandler) handleGetOrgSettings(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, settings)
 }
 
-// handleUpdateOrgSettings overwrites org-wide settings. Writing requires org
-// admin.
 // @Summary      Update org settings
 // @Description  handleUpdateOrgSettings overwrites org-wide settings. Writing requires org admin.
 // @Tags         system
@@ -171,12 +152,8 @@ func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.R
 		return
 	}
 	if h.ruleProfiles != nil {
-		// Deferred, so it runs AFTER the write lands. That ordering is the
-		// correct one: an analysis that resolves before the write caches the
-		// old profile and this clears it, while one that resolves after the
-		// write already reads the new settings. Invalidating BEFORE the write
-		// would leave the opposite race — a resolve landing in the gap would
-		// re-cache the stale profile and hold it for the full TTL.
+		// Deferred so it runs AFTER the write: invalidating before would let a
+		// resolve in the gap re-cache the stale profile.
 		defer h.ruleProfiles.Invalidate(orgID)
 	}
 	if err := h.sysSvc.UpdateOrgSettings(r.Context(), orgID, req); err != nil {
@@ -203,9 +180,8 @@ func (h *SystemHandler) handleAppInfo(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, info)
 }
 
-// handleFeatures returns the active product feature flags. Public (pre-auth) so
-// the login page can hide the register button when DisableSignUp is set without
-// needing a session first.
+// handleFeatures returns the active feature flags. Public (pre-auth) so the
+// login page can hide the register button without a session first.
 // @Summary      Feature flags
 // @Description  Which optional capabilities are enabled in this deployment.
 // @Tags         system
@@ -229,8 +205,7 @@ func (h *SystemHandler) handleFeatures(w http.ResponseWriter, r *http.Request) {
 // @Router       /api/system/log-error [post]
 func (h *SystemHandler) handleLogError(w http.ResponseWriter, r *http.Request) {
 	// The body used to ride the router's 10 MiB global cap straight into the
-	// ERROR log, so any authenticated user could write megabytes per request
-	// into the shared, retained log. 64 KiB holds any real stack trace.
+	// retained ERROR log; 64 KiB holds any real stack trace.
 	r.Body = http.MaxBytesReader(w, r.Body, maxFrontendErrorBytes)
 	var req models.FrontendError
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -272,14 +247,12 @@ func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// Azure AI Foundry stores a validated configuration document, not a bare
-	// key; accepting raw text here would let an unvalidated endpoint bypass
-	// the host allow-list. has/delete keep working for it.
+	// key; raw text here would bypass the host allow-list.
 	if req.Provider == ai.AzureFoundryProviderID {
 		render.ErrorWithCode(w, fmt.Errorf("this provider is configured through /api/providers/azure-foundry/connections"), http.StatusBadRequest, "USE_PROVIDER_CONFIG")
 		return
 	}
-	// The local models provider likewise stores a validated document (a
-	// loopback base URL), never a bare key.
+	// The local models provider likewise stores a validated document (a loopback base URL).
 	if req.Provider == ai.LocalProviderID {
 		render.ErrorWithCode(w, fmt.Errorf("this provider is configured through /api/providers/local/config"), http.StatusBadRequest, "USE_PROVIDER_CONFIG")
 		return
@@ -341,8 +314,7 @@ func (h *SystemHandler) handleDeleteApiKey(w http.ResponseWriter, r *http.Reques
 	}
 	if err := h.sysSvc.DeleteApiKey(h.security.KeyScope(r), req.Provider); err != nil {
 		if req.Provider == ai.AzureFoundryProviderID {
-			// Resource "default" with its models: the registry's refusals
-			// (REGISTRY_READ_ONLY, SECRET_STORAGE_UNAVAILABLE, …).
+			// Resource "default" with its models: the registry's refusals (REGISTRY_READ_ONLY, …).
 			renderAzureRegistryError(w, err)
 			return
 		}
@@ -362,28 +334,14 @@ func (h *SystemHandler) handleDeleteApiKey(w http.ResponseWriter, r *http.Reques
 // @Router       /api/local-config [get]
 func (h *SystemHandler) handleLocalConfig(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
-		// Cloud/JWT mode: there is no local session token. Return 200 with an
-		// explicit "cloud" marker (rather than 404) so the web client can probe
-		// this endpoint at startup without a noisy console error, then fall back
-		// to the login flow because no token is present.
+		// Cloud/JWT mode: 200 with a "cloud" marker (not 404) so the client can
+		// probe startup without a console error, then fall back to login.
 		render.JSON(w, map[string]string{"mode": "cloud"})
 		return
 	}
-	// The token is served ONLY when explicitly enabled.
-	//
-	// This route is public (no token required to call it) and, in local mode,
-	// CORS reflects any loopback Origin — so returning the token here let any
-	// page on any localhost port read it cross-origin after a short port scan,
-	// and with it reach every other /api route: load-path (arbitrary file read,
-	// deliberately unconfined for the desktop client) and the export endpoints
-	// (arbitrary file write, since they honour a caller-supplied path outside
-	// cloud mode). That also defeated the point of keeping the signing key out
-	// of stdout and in a 0600 file.
-	//
-	// The Tauri webview never calls this: it gets the token from
-	// invoke("get_backend_config"), which reads that file. Browser-based local
-	// development is the only caller that needs it, and it opts in with
-	// PAD_LOCAL_CONFIG_ENDPOINT=true.
+	// The token is served ONLY when explicitly enabled: this route is public and, in local mode,
+	// CORS reflects any loopback Origin — returning the token let any localhost page read it
+	// cross-origin. Only browser-based local dev opts in with PAD_LOCAL_CONFIG_ENDPOINT=true.
 	if !h.security.Features.LocalConfigEndpoint {
 		render.JSON(w, map[string]string{"mode": "local"})
 		return
@@ -401,9 +359,8 @@ func (h *SystemHandler) handleLocalConfig(w http.ResponseWriter, r *http.Request
 // @Success      200 {object} map[string]string "OK"
 // @Router       /healthz [get]
 func (h *SystemHandler) handleLiveness(w http.ResponseWriter, r *http.Request) {
-	// Liveness is intentionally cheap — it only proves the process is alive.
-	// Do NOT add DB checks here; a slow DB would cause the container to restart
-	// in a loop, which is worse than leaving it running and letting readiness handle it.
+	// Liveness only proves the process is alive. Do NOT add DB checks: a slow
+	// DB restarting the container in a loop is worse than leaving it to readiness.
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -416,32 +373,22 @@ func (h *SystemHandler) handleLiveness(w http.ResponseWriter, r *http.Request) {
 // @Router       /readyz [get]
 // @Router       /api/health [get]
 func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) {
-	// Readiness checks that the service can serve traffic.
-	// The orchestrator (AKS / ACA) uses this to gate traffic routing.
-	// Return 503 only after N consecutive failures so a transient Azure
-	// latency spike doesn't flap the pod out of rotation; a healthy probe
-	// resets the streak.
+	// Readiness gates traffic routing (AKS / ACA). 503 only after N consecutive failures so a
+	// transient latency spike doesn't flap the pod out of rotation; a healthy probe resets it.
 	if h.backend != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
 		checkErr := h.backend.Ping(ctx)
-		// When the backend offloads flow content to blob storage, broken blob
-		// auth/config would let the pod serve traffic while returning empty
-		// flows. Gate readiness on blob reachability too (no-op when unconfigured).
+		// When the backend offloads flow content to blob storage, broken blob auth/config would
+		// serve traffic with empty flows. Gate readiness on it (no-op when unconfigured).
 		if checkErr == nil {
 			if bc, ok := h.backend.(blobHealthChecker); ok {
 				checkErr = h.checkBlobCached(ctx, bc)
 			}
 		}
-		// H21: when the Redis backplane is configured (PAD_REDIS_URL set), gate
-		// readiness on its reachability too. The rate limiter, hub presence,
-		// and chat-stream resume ALL fail open on Redis errors, so an outage
-		// silently degrades multi-replica correctness (the effective rate-limit
-		// multiplies by replica count, cross-replica presence disappears,
-		// stream-resume returns partial buffers) without taking the pod out of
-		// rotation. Operators who explicitly opt into Redis have declared it a
-		// hard dependency — surface its loss.
+		// H21: when Redis is configured, gate readiness on it — the rate limiter, hub presence and
+		// stream resume all fail open, so an outage silently degrades multi-replica correctness.
 		if checkErr == nil && h.redisPinger != nil {
 			redisCtx, redisCancel := context.WithTimeout(r.Context(), 2*time.Second)
 			checkErr = h.redisPinger.Ping(redisCtx)
@@ -469,17 +416,13 @@ func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) 
 }
 
 // blobHealthChecker is implemented by storage backends that offload content to
-// blob storage (currently the PostgreSQL backend). Optional: backends without
-// blob storage simply don't implement it and the readiness check is skipped.
+// blob storage; backends without it skip the readiness check.
 type blobHealthChecker interface {
 	CheckBlob(ctx context.Context) error
 }
 
-// componentStatus is one subsystem's health verdict in the admin breakdown.
-// "skipped" means the component isn't configured (e.g. no Redis, no blob).
 // classifyHealthErr reduces a dependency error to a coarse, non-leaking
-// class for the admin health payload (B1.8): timeout / unavailable / refused
-// / auth / unknown.
+// class for the admin health payload (B1.8): timeout / refused / auth / ….
 func classifyHealthErr(err error) string {
 	msg := strings.ToLower(err.Error())
 	switch {
@@ -503,10 +446,8 @@ type componentStatus struct {
 	Error  string `json:"error,omitempty"` // present only when Status == "error"
 }
 
-// adminHealthResponse is the structured payload for GET /api/admin/system/health.
-// Unlike /readyz (a single 200/503 verdict for the orchestrator), this returns a
-// per-subsystem breakdown so an admin can see WHICH dependency is degraded
-// without grepping logs.
+// adminHealthResponse is the /api/admin/system/health payload: a
+// per-subsystem breakdown so an admin can see WHICH dependency is degraded.
 type adminHealthResponse struct {
 	Database componentStatus `json:"database"`
 	Blob     componentStatus `json:"blob"`
@@ -514,11 +455,8 @@ type adminHealthResponse struct {
 	Overall  string          `json:"overall"` // "ok" | "degraded" | "down"
 }
 
-// handleAdminSystemHealth returns a structured per-subsystem health breakdown.
-// Admin-only (the public /readyz is the orchestrator-facing verdict). Reuses the
-// same probes as readiness but reports each independently rather than collapsing
-// to one pass/fail, and does NOT apply the consecutive-failure smoothing — an
-// admin querying health wants the live picture, not a flap-dampened one.
+// handleAdminSystemHealth returns a per-subsystem health breakdown. Admin-only; each probe is
+// reported independently, without the consecutive-failure smoothing — the live picture.
 // @Summary      Detailed system health
 // @Description  handleAdminSystemHealth returns a structured per-subsystem health breakdown. Admin-only (the public /readyz is the orchestrator-facing verdict). Reuses the same probes as readiness but reports each independently rather than collapsing to one pass/fail, and does NOT apply the consecutive-failure smoothing — an admin querying health wants the live picture, not a flap-dampened one.
 // @Tags         admin
@@ -590,10 +528,8 @@ func (h *SystemHandler) handleAdminSystemHealth(w http.ResponseWriter, r *http.R
 	render.JSON(w, resp)
 }
 
-// checkBlobCached returns the blob reachability status, reusing a successful
-// result for blobCheckCacheTTL. Failures are returned but not cached (see
-// blobCheckCacheTTL). The mutex also collapses concurrent probes into a
-// single Azure call.
+// checkBlobCached returns the blob reachability status, reusing a successful result for
+// blobCheckCacheTTL (failures never cached; the mutex collapses concurrent probes into one).
 func (h *SystemHandler) checkBlobCached(ctx context.Context, bc blobHealthChecker) error {
 	h.blobCheckMu.Lock()
 	defer h.blobCheckMu.Unlock()

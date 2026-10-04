@@ -49,7 +49,7 @@ func TestValidate_AzureFoundryAllowedHosts(t *testing.T) {
 		{"rejects parent of a zone", []string{"*.core.windows.net"}, "blob.core.windows.net"},
 		{"rejects azure.com glob", []string{"*.azure.com"}, "cloudapp.azure.com"},
 		{"rejects apim regional glob", []string{"*.regional.azure-api.net"}, "azure-api.net"},
-		// F-27: zones where any customer runs HTTPS code (Azure ML online
+		// Zones where any customer runs HTTPS code (Azure ML online
 		// endpoints, Databricks, App Proxy, ASE, HDInsight, Spring Apps).
 		{"rejects aml online endpoint glob", []string{"*.inference.ml.azure.com"}, "inference.ml.azure.com"},
 		{"rejects regional aml glob", []string{"*.eastus.inference.ml.azure.com"}, "inference.ml.azure.com"},

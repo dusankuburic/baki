@@ -47,8 +47,6 @@ func (h *AnalysisHandler) handleEvaluatePolicy(w http.ResponseWriter, r *http.Re
 	render.JSON(w, analyzer.EvaluatePolicy(report, req.Policy))
 }
 
-// ---- Persistent policy CRUD (cloud mode only) ----
-
 func (h *AnalysisHandler) policyAvailable(w http.ResponseWriter) bool {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("policies require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
@@ -77,9 +75,8 @@ func (h *AnalysisHandler) handleSavePolicy(w http.ResponseWriter, r *http.Reques
 		render.Error(w, fmt.Errorf("policy name is required"), http.StatusBadRequest)
 		return
 	}
-	// Saving a policy is a WRITE to the org-wide CI gate (SavePolicy upserts on
-	// id+org_id), so it must require admin — a viewer/guest must not be able to
-	// rewrite or overwrite the org's governance rules.
+	// Saving a policy is a WRITE to the org-wide CI gate (SavePolicy upserts on id+org_id), so it
+	// must require admin — a viewer/guest must not rewrite the org's governance rules.
 	if !requireOrgAdmin(w, r, h.security, p.OrgID) {
 		return
 	}

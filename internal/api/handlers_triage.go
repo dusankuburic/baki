@@ -7,19 +7,15 @@ import (
 	"time"
 
 	"pad-analyzer/internal/api/render"
+	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
 	"pad-core/logger"
 )
 
-// Persistent, team-shared finding triage & baselines. These endpoints back the
-// governance workflow on top of static analysis: a finding's status/justification
-// is pinned to its stable key (models.Finding.Key) so it survives re-analysis,
-// and a baseline snapshots the accepted set of keys for ratcheting.
-//
-// Triage is inherently a multi-user/cloud feature, so it requires a storage
-// backend; in desktop/in-memory mode (backend == nil) these return 503, mirroring
-// the admin/dashboard cloud-only endpoints.
+// Persistent, team-shared finding triage & baselines. A finding's status/justification is pinned to
+// its stable key (models.Finding.Key) so it survives re-analysis; a baseline snapshots the accepted
+// set of keys for ratcheting. Requires a storage backend — in desktop mode these return 503.
 
 // validTriageStatuses is the allowed lifecycle for a finding's triage state.
 var validTriageStatuses = map[string]bool{
@@ -108,7 +104,9 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 	}
 
 	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor")
+	// Header, not the resolved document: the write needs the editor check and
+	// the flow's name (for the assignment notice), never its content.
+	flow, err := h.flowSvc.GetAuthorizedHeader(r.Context(), req.FlowID, userID, "editor")
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -116,15 +114,7 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 
 	// Fetch the prior assignee so we only notify on an actual assignment change
 	// (not on every status tweak that re-sends the same assignee).
-	priorAssignee := ""
-	if statuses, listErr := h.backend.ListFindingStatuses(r.Context(), req.FlowID); listErr == nil {
-		for _, ps := range statuses {
-			if ps.FindingKey == req.FindingKey {
-				priorAssignee = ps.AssigneeID
-				break
-			}
-		}
-	}
+	priorAssignee := h.priorAssignee(r.Context(), req.FlowID, req.FindingKey)
 
 	st := &storageif.FindingStatus{
 		FlowID:        req.FlowID,
@@ -142,54 +132,94 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFindingTriage, "flow", req.FlowID,
 		map[string]string{"findingKey": req.FindingKey, "status": req.Status})
 
-	// Best-effort assignment notification: email the new assignee when the
-	// assignment actually changed (not on every save). Detached so the response
-	// isn't delayed by SMTP; the email service is nil-safe (log-only when SMTP
-	// isn't configured).
+	// Best-effort assignment notification: email the assignee only when the assignment actually
+	// changed, detached so SMTP does not delay the response; the email service is nil-safe.
 	if req.AssigneeID != "" && req.AssigneeID != priorAssignee {
 		flowName := ""
-		if doc != nil {
-			flowName = doc.Name
+		if flow != nil {
+			flowName = flow.Name
 		}
-		// #nosec G118 -- deliberately detached: the assignment email must outlive
-		// the response, and notifyFindingAssignment builds its own bounded context
-		// (bestEffortTimeout) rather than running unbounded.
-		go h.notifyFindingAssignment(req.AssigneeID, userID, flowName, req.RuleID)
-		// In-app bell alert too (R2-5): the email only reaches users watching
-		// their inbox; the assignee's badge should light up either way.
-		// Targeted: only the assignee sees it.
-		h.recordFindingAlert(&storageif.GovernanceAlert{
-			ID:         fmt.Sprintf("%s|finding_assigned|%s|%s", req.FlowID, req.FindingKey, req.AssigneeID),
-			FlowID:     req.FlowID,
-			FlowName:   flowName,
-			Type:       "finding_assigned",
-			Title:      h.ruleDisplayName(req.RuleID),
-			Message:    fmt.Sprintf("Assigned to you by %s", h.callerDisplayName(userID)),
-			Severity:   "info",
-			TargetUser: req.AssigneeID,
+		// After the commit, and detached: run inline here the alert/email held a SECOND pooled
+		// connection while the RLS transaction pinned the first (pool exhaustion), and announced
+		// an assignment the transaction could still roll back. RegisterPostCommit defers the hook
+		// until the middleware commits; h.alerts caps how many run and is drained on shutdown.
+		actorEmail := claimsEmail(r.Context())
+		storagedb.RegisterPostCommit(r.Context(), func() {
+			fanOut := func() {
+				h.fanOutAssignment(req.FlowID, req.FindingKey, req.RuleID, flowName, req.AssigneeID, userID, actorEmail)
+			}
+			if !h.alerts.Go(fanOut) {
+				// Pool saturated or draining: the alert row must not be lost
+				// (it never could be when the hook ran it inline).
+				fanOut()
+			}
 		})
 	}
 
 	render.JSON(w, st)
 }
 
-// bestEffortTimeout bounds the detached / best-effort work hanging off a
-// triage or comment write (alert rows, display-name lookups, assignment
-// mail). These run on context.Background() rather than the request context so
-// a failure cannot poison the caller's RLS transaction — but Background never
-// cancels, so without an explicit bound a slow or hung database keeps the
-// goroutine (and its pooled connection) alive indefinitely, including through
-// shutdown drain. Several of these run SYNCHRONOUSLY in the request path, so
-// an unbounded one also extends the response past the server's request
-// timeout. Mirrors the bound already documented on notifyFindingComment.
+// fanOutAssignment is the detached work of one assignment change: resolve the assigner's display
+// name once, record the assignee's targeted in-app alert, send the assignment email from h.emails
+// (SMTP never holds the alert back). Bounded by bestEffortTimeout.
+func (h *AnalysisHandler) fanOutAssignment(flowID, findingKey, ruleID, flowName, assigneeID, assignerID, assignerEmail string) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Warn("finding-assignment fan-out panicked", "err", r)
+		}
+	}()
+	if h.backend == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
+	defer cancel()
+	assignerName := h.callerDisplayName(ctx, assignerID, assignerEmail)
+	h.recordFindingAlert(ctx, &storageif.GovernanceAlert{
+		ID:         fmt.Sprintf("%s|finding_assigned|%s|%s", flowID, findingKey, assigneeID),
+		FlowID:     flowID,
+		FlowName:   flowName,
+		Type:       "finding_assigned",
+		Title:      h.ruleDisplayName(ruleID),
+		Message:    fmt.Sprintf("Assigned to you by %s", assignerName),
+		Severity:   "info",
+		TargetUser: assigneeID,
+	})
+	h.emails.Go(func() {
+		ectx, ecancel := context.WithTimeout(context.Background(), bestEffortTimeout)
+		defer ecancel()
+		h.notifyFindingAssignment(ectx, assigneeID, assignerName, flowName, ruleID)
+	})
+}
+
+// priorAssignee returns the finding's current assignee ("" on no state or lookup error — the caller
+// then notifies, the safe direction). One primary-key row when the backend offers it, else a list.
+func (h *AnalysisHandler) priorAssignee(ctx context.Context, flowID, findingKey string) string {
+	if g, ok := h.backend.(storageif.FindingStatusGetter); ok {
+		if st, err := g.GetFindingStatus(ctx, flowID, findingKey); err == nil && st != nil {
+			return st.AssigneeID
+		}
+		return ""
+	}
+	if statuses, err := h.backend.ListFindingStatuses(ctx, flowID); err == nil {
+		for _, ps := range statuses {
+			if ps.FindingKey == findingKey {
+				return ps.AssigneeID
+			}
+		}
+	}
+	return ""
+}
+
+// bestEffortTimeout bounds the detached best-effort work hanging off a triage or comment write: it
+// runs on context.Background() so a failure cannot poison the caller's RLS transaction, but
+// Background never cancels — without a bound a slow DB keeps the goroutine (and its pooled
+// connection) alive indefinitely, including through shutdown drain.
 const bestEffortTimeout = 10 * time.Second
 
-// recordFindingAlert persists a personal (targeted) in-app alert for the
-// bell. Synchronous best-effort: a failure logs and never blocks the
-// mutation that already committed (the response follows immediately).
-// The ID embeds the (flow, type, key, target) tuple — the storage layer's
-// ON CONFLICT DO NOTHING makes retries idempotent.
-func (h *AnalysisHandler) recordFindingAlert(a *storageif.GovernanceAlert) {
+// recordFindingAlert persists a personal (targeted) in-app alert for the bell, best-effort and
+// detached after the commit. The ID embeds the (flow, type, key, target) tuple — ON CONFLICT DO
+// NOTHING makes retries idempotent.
+func (h *AnalysisHandler) recordFindingAlert(ctx context.Context, a *storageif.GovernanceAlert) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Warn("finding alert recording panicked", "err", r)
@@ -199,26 +229,26 @@ func (h *AnalysisHandler) recordFindingAlert(a *storageif.GovernanceAlert) {
 		return
 	}
 	a.CreatedAt = time.Now().UTC()
-	ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
-	defer cancel()
 	if err := h.backend.RecordGovernanceAlert(ctx, a); err != nil {
 		logger.Warn("failed to record finding alert", "type", a.Type, "err", err)
 	}
 }
 
-// callerDisplayName resolves a display name for alert copy ("you were
-// assigned by X"); falls back to "a teammate".
-func (h *AnalysisHandler) callerDisplayName(userID string) string {
-	if h.backend == nil || userID == "" {
-		return "a teammate"
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
-	defer cancel()
-	if u, err := h.backend.LoadUserByID(ctx, userID); err == nil && u != nil {
-		if u.DisplayName != "" {
-			return u.DisplayName
+// callerDisplayName resolves a display name for alert copy ("you were assigned by X"): the user's
+// display name, else their email, else the fallback (claims email, no lookup), else "a teammate".
+func (h *AnalysisHandler) callerDisplayName(ctx context.Context, userID, fallback string) string {
+	if h.backend != nil && userID != "" {
+		if u, err := h.backend.LoadUserByID(ctx, userID); err == nil && u != nil {
+			if u.DisplayName != "" {
+				return u.DisplayName
+			}
+			if u.Email != "" {
+				return u.Email
+			}
 		}
-		return u.Email
+	}
+	if fallback != "" {
+		return fallback
 	}
 	return "a teammate"
 }
@@ -236,10 +266,9 @@ func (h *AnalysisHandler) ruleDisplayName(ruleID string) string {
 	return ruleID
 }
 
-// notifyFindingAssignment emails the assignee that a finding was assigned to
-// them. Best-effort: any error (user not found, SMTP down) is logged and
-// swallowed — the triage write already succeeded and the response was sent.
-func (h *AnalysisHandler) notifyFindingAssignment(assigneeID, assignerID, flowName, ruleID string) {
+// notifyFindingAssignment emails the assignee. Best-effort: any error is logged and swallowed — the
+// triage write already succeeded. The assigner's name arrives resolved (fanOutAssignment).
+func (h *AnalysisHandler) notifyFindingAssignment(ctx context.Context, assigneeID, assignerName, flowName, ruleID string) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Warn("finding-assignment notification panicked", "err", r)
@@ -248,8 +277,6 @@ func (h *AnalysisHandler) notifyFindingAssignment(assigneeID, assignerID, flowNa
 	if h.email == nil || h.backend == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
-	defer cancel()
 	assignee, err := h.backend.LoadUserByID(ctx, assigneeID)
 	if err != nil || assignee == nil || assignee.Email == "" {
 		return
@@ -258,32 +285,16 @@ func (h *AnalysisHandler) notifyFindingAssignment(assigneeID, assignerID, flowNa
 	if assigneeName == "" {
 		assigneeName = assignee.Email
 	}
-	assignerName := "A reviewer"
-	if u, err := h.backend.LoadUserByID(ctx, assignerID); err == nil && u != nil {
-		if u.DisplayName != "" {
-			assignerName = u.DisplayName
-		} else if u.Email != "" {
-			assignerName = u.Email
-		}
-	}
 	// Use the rule's human-readable name as the finding title when available.
-	findingTitle := ruleID
-	for _, rule := range analyzer.AllRules() {
-		if rule.ID() == ruleID {
-			findingTitle = rule.Name()
-			break
-		}
-	}
+	findingTitle := h.ruleDisplayName(ruleID)
 	if err := h.email.SendFindingAssigned(ctx, assignee.Email, assigneeName, assignerName, flowName, findingTitle); err != nil {
 		logger.Warn("failed to send finding-assignment notification", "assignee", assigneeID, "error", err)
 	}
 }
 
-// handleBatchSetFindingStatus applies the same lifecycle update to many findings
-// of one flow in a single request, collapsing the N round-trips the client would
-// otherwise make (e.g. bulk-suppressing a rule's findings). Authorization is
-// checked once for the flow; all items are validated up-front so a bad item
-// rejects the whole batch before any write.
+// handleBatchSetFindingStatus applies one lifecycle update to many findings of a flow in a single
+// request. Authorization is checked once; all items are validated up-front so a bad item rejects
+// the whole batch before any write.
 // @Summary      Batch-set triage statuses for multiple findings
 // @Tags         triage
 // @Produce      json
@@ -347,10 +358,8 @@ func (h *AnalysisHandler) handleBatchSetFindingStatus(w http.ResponseWriter, r *
 			UpdatedBy:     userID,
 		})
 	}
-	// Atomic: either all items commit or none (BatchSetFindingStatus wraps the
-	// batch in a single RLS-scoped tx). Previously the per-item loop committed
-	// items 1..K-1 on a mid-batch failure at item K, leaving the audit log's
-	// "updated: N" out of sync with reality.
+	// Atomic: all items commit or none (a single RLS-scoped tx) — the old per-item loop committed
+	// 1..K-1 on a mid-batch failure, desyncing the audit's "updated: N" from reality.
 	if err := h.backend.BatchSetFindingStatus(r.Context(), req.FlowID, userID, items); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -464,9 +473,8 @@ func (h *AnalysisHandler) handleSetBaseline(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Snapshot the current findings' content-stable fingerprints as the
-	// accepted baseline (survive re-imports/re-parses, unlike the legacy
-	// RuleID:BlockID key).
+	// Snapshot the current findings' content-stable fingerprints as the accepted baseline
+	// (survive re-imports/re-parses, unlike the legacy RuleID:BlockID key).
 	seen := make(map[string]bool, len(report.Findings))
 	keys := make([]string, 0, len(report.Findings))
 	for _, f := range report.Findings {
@@ -524,9 +532,8 @@ func (h *AnalysisHandler) handleClearBaseline(w http.ResponseWriter, r *http.Req
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// handleBaselineDrift analyzes the flow and reports findings introduced since the
-// accepted baseline (the "new since baseline" ratchet). With no baseline set,
-// every finding is reported as new (HasBaseline=false).
+// handleBaselineDrift reports findings introduced since the accepted baseline (the "new since
+// baseline" ratchet). With no baseline set, every finding is reported as new (HasBaseline=false).
 // @Summary      Compare current analysis against the baseline
 // @Tags         baseline
 // @Produce      json

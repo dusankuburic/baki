@@ -16,23 +16,10 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// PostgresAzureRegistry is the AzureRegistryStore over the v25 tables
-// (user_azure_* / org_azure_*), for deployments with auth on and a database
-// backend — the only configuration where owner ids are real users and
-// organisations, so the foreign keys (and the cascades with them) hold.
-//
-// Two rules hold for every method:
-//
-//   - Every statement goes through b.query(ctx) / the request transaction,
-//     so a write inside an API request commits or rolls back with it, and
-//     every statement names its owner explicitly (WHERE user_id = $1 /
-//     org_id = $1). /api/chat/* runs without the RLS transaction, where the
-//     policies allow everything, so the predicate must hold on its own; RLS
-//     is the second layer, not the first.
-//   - Writes inside a caller's transaction run under a SAVEPOINT. A unique
-//     violation mapped to ErrAzureDuplicate* (a 409 the handler reports)
-//     would otherwise abort the whole request transaction, and the handler
-//     could not so much as look up the conflicting row afterwards.
+// PostgresAzureRegistry is the AzureRegistryStore over the v25 user_azure_*/org_azure_* tables. Every statement
+// names its owner explicitly (WHERE user_id/org_id = $1): /api/chat/* runs without the RLS transaction, so the
+// predicate must hold on its own. Caller-tx writes run under a SAVEPOINT so ErrAzureDuplicate* doesn't abort the tx.
+// ErrAzureDuplicate* does not abort the whole request transaction.
 type PostgresAzureRegistry struct {
 	b *PostgresStorageBackend
 }
@@ -51,12 +38,9 @@ func (b *PostgresStorageBackend) AzureRegistry() interfaces.AzureRegistryStore {
 }
 
 // SetAzureExportConfigSource installs the data-subject export's source for
-// each personal Azure resource's public configuration (endpoint, auth mode,
-// tenant/client ids, project endpoint). Those fields live only inside the
-// encrypted credential document, which the service decrypts and parses —
-// this package holds neither the document format nor, by design, a way to
-// read a user's credential for another purpose. Until DI installs the hook
-// (nil clears it) the export carries the registry metadata alone.
+// each personal Azure resource's public configuration: those fields live only
+// in the encrypted credential document, which this package by design cannot
+// read. A nil fn clears the hook.
 func (b *PostgresStorageBackend) SetAzureExportConfigSource(fn interfaces.AzureExportConfigFunc) {
 	if fn == nil {
 		b.azureExportConfig.Store(nil)
@@ -65,10 +49,9 @@ func (b *PostgresStorageBackend) SetAzureExportConfigSource(fn interfaces.AzureE
 	b.azureExportConfig.Store(&fn)
 }
 
-// exportAzureRegistry builds the export's registry section: userID's
-// personal resources and models. Organisation registries stay out — they
-// belong to the organisation and hold no user ids. A failure (the hook's
-// included) fails the export, which is complete or nothing.
+// exportAzureRegistry builds the export's registry section (userID's personal
+// resources and models); org registries hold no user ids, and any failure —
+// the hook's included — fails the all-or-nothing export.
 func (b *PostgresStorageBackend) exportAzureRegistry(ctx context.Context, userID string) (*interfaces.ExportedAzureRegistry, error) {
 	reg := NewPostgresAzureRegistry(b)
 	owner := interfaces.AzureUserOwner(userID)
@@ -95,10 +78,9 @@ func (b *PostgresStorageBackend) exportAzureRegistry(ctx context.Context, userID
 
 // ---- statements ----
 
-// azureStatements are one owner kind's statements. The user and org table
-// sets differ only in names (and the org's is_default column), so both are
-// generated from one template: no string is ever built from input, only
-// from the constants below.
+// azureStatements are one owner kind's statements; user and org sets differ
+// only in names, so both come from one template — no string is ever built
+// from input, only from the constants below.
 type azureStatements struct {
 	listConns, getConn, countConns, createConn, importConn, updateConn, connExists, connNameTaken,
 	dismissConn, testConn, deleteConnModels, deleteConn string
@@ -117,9 +99,8 @@ const azureModelCols = `id, connection_id, kind, deployment, display_name, purpo
 // azureNowCTE is one clock reading for both timestamps of an insert.
 const azureNowCTE = `FROM (SELECT clock_timestamp() AS t) n`
 
-// azureBumpUpdatedAt moves updated_at strictly forward, so every update
-// hands out a new compare-and-swap token — even two updates within one
-// transaction (now() would repeat) or within one microsecond.
+// azureBumpUpdatedAt moves updated_at strictly forward so every update hands
+// out a fresh CAS token — now() would repeat within one transaction or microsecond.
 const azureBumpUpdatedAt = `updated_at = GREATEST(clock_timestamp(), updated_at + interval '1 microsecond')`
 
 var azureStatementTemplate = azureStatements{
@@ -127,8 +108,7 @@ var azureStatementTemplate = azureStatements{
 	getConn:    `SELECT ` + azureConnCols + ` FROM {conns} WHERE {owner} = $1 AND id = $2`,
 	countConns: `SELECT count(*) FROM {conns} WHERE {owner} = $1`,
 	// The limit is part of the insert, so it holds even for a writer that
-	// skipped the owner lock (exactly only under the lock: two unlocked
-	// transactions can both see 9).
+	// skipped the owner lock.
 	createConn: `INSERT INTO {conns} ({owner}, id, name, created_at, updated_at)
 		SELECT $1::text, $2::text, $3::text, n.t, n.t ` + azureNowCTE + `
 		 WHERE (SELECT count(*) FROM {conns} WHERE {owner} = $1) < {max_conns}
@@ -144,9 +124,8 @@ var azureStatementTemplate = azureStatements{
 		 WHERE {owner} = $1 AND id = $2 AND ($4::timestamptz IS NULL OR updated_at = $4::timestamptz)
 		RETURNING ` + azureConnCols,
 	connExists: `SELECT EXISTS (SELECT 1 FROM {conns} WHERE {owner} = $1 AND id = $2)`,
-	// The unique index's own expression (… _connections_name_idx ON
-	// ({owner}, lower(name))): lower() under the database's collation, which
-	// Go's case folding cannot stand in for.
+	// The unique index's own expression — lower() under the database's
+	// collation, which Go's case folding cannot stand in for.
 	connNameTaken: `SELECT EXISTS (SELECT 1 FROM {conns} WHERE {owner} = $1 AND lower(name) = lower($2::text) AND id <> $3::text)`,
 	dismissConn: `UPDATE {conns}
 		   SET discovery_dismissed_at = CASE WHEN $3::boolean THEN COALESCE(discovery_dismissed_at, clock_timestamp()) END
@@ -245,11 +224,13 @@ func (r *PostgresAzureRegistry) stmts(owner interfaces.AzureOwner) (*azureStatem
 // ---- execution helpers ----
 
 // write runs fn atomically: under a SAVEPOINT inside the caller's
-// transaction (see PostgresAzureRegistry), otherwise in a transaction of its
-// own — several methods issue more than one statement.
+// transaction, otherwise in a transaction of its own.
 func (r *PostgresAzureRegistry) write(ctx context.Context, fn func(q DBTX) error) error {
-	tx, ok := ctx.Value(rlsTxKey).(*sql.Tx)
-	if !ok || tx == nil {
+	tx, ok, err := rlsTxFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return r.b.withTx(ctx, func(tx *sql.Tx) error { return fn(tx) })
 	}
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT azure_registry_write`); err != nil {
@@ -275,10 +256,8 @@ const (
 )
 
 // mapAzureRegistryErr turns a constraint violation into the store's typed
-// error, by constraint name — the unique indexes decide what a duplicate
-// is (Postgres lower() and Go's strings.ToLower can disagree), so the
-// answer must come from which index refused the row. Errors that are
-// already typed pass through; anything else is wrapped with op.
+// error by constraint name: Postgres lower() and Go's strings.ToLower can
+// disagree, so the unique indexes decide what a duplicate is.
 func mapAzureRegistryErr(op string, err error) error {
 	if err == nil {
 		return nil
@@ -427,8 +406,7 @@ func azureTestArgs(result *interfaces.AzureTestResult) ([]any, error) {
 }
 
 // azureLockKey is the owner's advisory-lock key: the 64-bit FNV-1a hash of
-// "azure-registry:user:<id>" / "azure-registry:org:<id>". A collision only
-// serialises two unrelated owners.
+// owner.LockName(); a collision only serialises two unrelated owners.
 func azureLockKey(owner interfaces.AzureOwner) int64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(owner.LockName()))
@@ -458,17 +436,17 @@ func (r *PostgresAzureRegistry) PendingWrites() bool { return false }
 func (r *PostgresAzureRegistry) BootID() string { return "" }
 
 // WithOwnerLock takes pg_advisory_xact_lock on the owner's key inside the
-// request transaction when ctx carries one (held until the request
-// commits), or else inside a transaction of its own that fn's ctx joins and
-// that commits when fn returns nil — post-commit hooks registered in fn run
-// only after that commit. Advisory locks are reentrant within a session, so
-// nesting is safe.
+// request transaction when ctx carries one, else inside a transaction of its
+// own that commits when fn returns nil (post-commit hooks run after it).
+// Advisory locks are reentrant within a session, so nesting is safe.
 func (r *PostgresAzureRegistry) WithOwnerLock(ctx context.Context, owner interfaces.AzureOwner, fn func(ctx context.Context) error) error {
 	if _, err := r.stmts(owner); err != nil {
 		return err
 	}
 	key := azureLockKey(owner)
-	if tx, ok := ctx.Value(rlsTxKey).(*sql.Tx); ok && tx != nil {
+	if tx, ok, err := rlsTxFromContext(ctx); err != nil {
+		return err
+	} else if ok {
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, key); err != nil {
 			return fmt.Errorf("azure registry: owner lock: %w", err)
 		}
@@ -536,8 +514,8 @@ func (r *PostgresAzureRegistry) GetConnection(ctx context.Context, owner interfa
 }
 
 // ConnectionNameTaken asks the unique index's own question (lower(name)
-// under the database's collation) — inside the request's transaction when
-// ctx carries one, so it sees that request's own writes.
+// under the database's collation) inside the request's transaction, so it
+// sees that request's own writes.
 func (r *PostgresAzureRegistry) ConnectionNameTaken(ctx context.Context, owner interfaces.AzureOwner, name, exceptID string) (bool, error) {
 	st, err := r.stmts(owner)
 	if err != nil {
@@ -886,9 +864,8 @@ func (r *PostgresAzureRegistry) DeleteModel(ctx context.Context, owner interface
 }
 
 // SetDesignation clears the previous holder, then marks modelID, in one
-// savepoint/transaction: a missing model or a kind the designation's CHECK
-// refuses rolls the clear back too. Two writers racing for the designation
-// meet at the partial unique index (ErrAzureDuplicateDesignation).
+// savepoint/transaction: a missing model or a refused CHECK rolls the clear
+// back too; racing writers meet at the partial unique index.
 func (r *PostgresAzureRegistry) SetDesignation(ctx context.Context, owner interfaces.AzureOwner, d interfaces.AzureDesignation, modelID string) error {
 	st, err := r.stmts(owner)
 	if err != nil {

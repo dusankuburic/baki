@@ -55,11 +55,10 @@ func TestAzureCatalog_UnpricedButKeepsLimits(t *testing.T) {
 	}
 }
 
-// TestAzureCatalog_Grok4LimitsPinnedToMicrosoftDocs (audit #9 F-01): grok-4's
-// documented limits are 262,000 input tokens and 8,192 output tokens. The old
-// 256k/32768 row made the 16384 reasoning floor push requests past the model's
-// real cap; the service re-caps at the listing's MaxOutputTokens
-// (normalizeChatParams), so the catalogue number is what protects the turn.
+// TestAzureCatalog_Grok4LimitsPinnedToMicrosoftDocs: grok-4's documented
+// limits are 262,000 input tokens and 8,192 output tokens. The service
+// re-caps at the listing's MaxOutputTokens (normalizeChatParams), so the
+// catalogue number is what protects the turn.
 func TestAzureCatalog_Grok4LimitsPinnedToMicrosoftDocs(t *testing.T) {
 	entry, ok := catalogEntryFor(azureFoundryProviderID, "grok-4")
 	if !ok || entry.ContextLimit != 262000 || entry.MaxOutputTokens != 8192 {

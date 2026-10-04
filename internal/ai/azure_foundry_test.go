@@ -441,9 +441,9 @@ func TestAzureFoundry_EntraRetryRebuildsCredential(t *testing.T) {
 // D-11: in Entra ID mode a 401/403 from the resource (either envelope,
 // including API Management's {"statusCode","message"} shape, which decodes
 // to an empty error.message) is a rejected access token carrying Azure's
-// one-line explanation — still ErrApiKeyInvalid (one fresh-token replay, no
-// retry, no breaker count), never PermissionDenied; the same body from an
-// API-key provider stays a bare invalid key.
+// one-line explanation — still ErrApiKeyInvalid (one fresh-token replay,
+// no breaker count), never PermissionDenied; from an API-key provider the
+// same body stays a bare invalid key.
 func TestAzureFoundry_EntraTokenRejectedKeepsAzureMessage(t *testing.T) {
 	const apimMsg = "Unauthorized. Access token is missing, invalid, audience is incorrect (https://cognitiveservices.azure.com), or have expired."
 	for name, body := range map[string]map[string]any{
@@ -586,7 +586,7 @@ func TestForgetAzureFoundryCredential_DropsSourceAndListing(t *testing.T) {
 	ForgetAzureFoundryCredential(AzureFoundryConfig{}) // unconfigured: no-op, no panic
 }
 
-// Finding #23: a 401 PermissionDenied — an Entra ID principal the service
+// a 401 PermissionDenied — an Entra ID principal the service
 // accepted but that lacks the data-plane role — keeps Azure's explanation, is
 // ErrProviderPermissionDenied as well as ErrApiKeyInvalid, and is not retried
 // with a fresh token (a new token cannot grant a role), for chat and streams.
@@ -666,7 +666,7 @@ func azureCatalogueServer(t *testing.T) *azureTestServer {
 	})
 }
 
-// Finding #1: GET /openai/v1/models is the catalogue, so the API-key listing
+// GET /openai/v1/models is the catalogue, so the API-key listing
 // is exactly the document's deployments — chat, additional, embedding — with
 // no request at all, each sized and priced from the catalogue when its name
 // is a catalogued model.
@@ -695,7 +695,7 @@ func TestAzureFoundry_ModelsListsConfiguredDeployments(t *testing.T) {
 	if gpt4o.Pricing != (Pricing{}) || gpt4o.ContextLimit != 128000 || gpt4o.MaxOutputTokens != 16384 || gpt4o.Embedding {
 		t.Errorf("catalogued name = %+v, want the catalogue's limits and no price (azure-foundry is unpriced)", gpt4o)
 	}
-	// Finding #32: a small-window model named after itself is sized right
+	// a small-window model named after itself is sized right
 	// before any call succeeded.
 	if phi.ContextLimit != 16384 || phi.MaxOutputTokens != 8192 {
 		t.Errorf("Phi-4 = %+v, want its 16k window up front", phi)
@@ -703,7 +703,7 @@ func TestAzureFoundry_ModelsListsConfiguredDeployments(t *testing.T) {
 	if router.ContextLimit != p.ContextLimit() || router.MaxOutputTokens != 0 {
 		t.Errorf("model-router = %+v, want the conservative default window", router)
 	}
-	// Finding #42: the embedding deployment stays listed but flagged.
+	// The embedding deployment stays listed but flagged.
 	if !emb.Embedding || emb.Pricing != (Pricing{}) || emb.ContextLimit != 8191 {
 		t.Errorf("embedding deployment = %+v, want Embedding, its window and no price", emb)
 	}

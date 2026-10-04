@@ -2,7 +2,10 @@ package middleware
 
 import (
 	"context"
+	"net"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -23,9 +26,9 @@ func newMiniRedis(t *testing.T) (*redis.Client, *miniredis.Miniredis) {
 	return client, mr
 }
 
-// TestRedisStore_SharedAcrossInstances is the core #1 guarantee: two limiter
+// TestRedisStore_SharedAcrossInstances is the core guarantee: two limiter
 // instances (one per replica) sharing one Redis client must enforce a single
-// shared bucket, so the effective limit no longer multiplies by replica count.
+// shared bucket, so the effective limit does not multiply by replica count.
 func TestRedisStore_SharedAcrossInstances(t *testing.T) {
 	client, _ := newMiniRedis(t)
 	const rate, burst = 0.0, 3.0 // no refill during the test (rate 0)
@@ -143,5 +146,137 @@ func TestRedisStore_FallbackOnRedisError(t *testing.T) {
 	}
 	if s.Allow(ctx, "ratelimit:general:x", 0, 3) {
 		t.Fatal("expected 4th request to be rejected by the fallback bucket, not fully uncapped")
+	}
+}
+
+// hangingRedis is a TCP endpoint that accepts connections and reads whatever
+// is sent but never answers — a Redis brownout as the client sees it. It
+// counts the connections it accepted.
+func hangingRedis(t *testing.T) (addr string, accepted *atomic.Int64) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	accepted = new(atomic.Int64)
+	var conns []net.Conn
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			conns = append(conns, c)
+			go func() { _, _ = c.Read(make([]byte, 4096)) }()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		<-done
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
+	return ln.Addr().String(), accepted
+}
+
+// TestRedisStore_UnresponsiveRedisFallsBackFast: with a Redis that never
+// answers, a limiter call ran under go-redis defaults (3 s read timeout, then
+// retries), so every API request of a brownout blocked for seconds before it
+// reached the in-memory fallback. One call must give up within
+// redisCallTimeout, and the breaker must keep the following calls off Redis
+// entirely, so they neither wait nor open connections. Both client kinds:
+// the shared backplane client does not apply context deadlines to socket I/O
+// (ContextTimeoutEnabled is off), one that does is called directly.
+func TestRedisStore_UnresponsiveRedisFallsBackFast(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		ctxTimeouts bool
+	}{{"default client", false}, {"ContextTimeoutEnabled", true}} {
+		t.Run(tc.name, func(t *testing.T) { testUnresponsiveRedisFallsBackFast(t, tc.ctxTimeouts) })
+	}
+}
+
+func testUnresponsiveRedisFallsBackFast(t *testing.T, ctxTimeouts bool) {
+	addr, accepted := hangingRedis(t)
+	client := redis.NewClient(&redis.Options{Addr: addr, ContextTimeoutEnabled: ctxTimeouts})
+	t.Cleanup(func() { _ = client.Close() })
+	s := newRedisStore(client)
+	defer s.Stop()
+
+	start := time.Now()
+	if !s.Allow(context.Background(), "ratelimit:general:x", 0, 25) {
+		t.Fatal("expected the fallback bucket to admit the first request")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("first call took %v against an unresponsive Redis; want about %v", d, redisCallTimeout)
+	}
+	connsAfterFirst := accepted.Load()
+
+	start = time.Now()
+	for i := 0; i < 20; i++ {
+		if !s.Allow(context.Background(), "ratelimit:general:x", 0, 25) {
+			t.Fatalf("call %d: expected the fallback bucket to admit", i+2)
+		}
+	}
+	if d := time.Since(start); d > 50*time.Millisecond {
+		t.Errorf("20 calls with the breaker open took %v; they must not wait on Redis", d)
+	}
+	time.Sleep(20 * time.Millisecond) // let any stray dial reach Accept
+	if got := accepted.Load(); got > connsAfterFirst {
+		t.Errorf("connections grew from %d to %d while the breaker was open", connsAfterFirst, got)
+	}
+}
+
+// TestRedisStore_BreakerRetriesRedisAfterCooldown: after a failure the store
+// stays on the fallback for redisBreakerCooldown even once Redis is back, then
+// returns to Redis.
+func TestRedisStore_BreakerRetriesRedisAfterCooldown(t *testing.T) {
+	client, mr := newMiniRedis(t)
+	s := newRedisStore(client)
+	defer s.Stop()
+	clock := time.Now()
+	s.now = func() time.Time { return clock }
+	ctx := context.Background()
+	const key = "ratelimit:general:breaker"
+
+	mr.SetError("LOADING Redis is loading the dataset in memory")
+	if !s.Allow(ctx, key, 1, 5) {
+		t.Fatal("expected the fallback to admit while Redis errors")
+	}
+	mr.SetError("")
+
+	clock = clock.Add(redisBreakerCooldown - time.Millisecond)
+	s.Allow(ctx, key, 1, 5)
+	if mr.Exists(key) {
+		t.Fatal("Redis was called while the breaker was open")
+	}
+
+	clock = clock.Add(2 * time.Millisecond)
+	s.Allow(ctx, key, 1, 5)
+	if !mr.Exists(key) {
+		t.Fatal("Redis was not called again after the cooldown")
+	}
+}
+
+// TestRedisStore_CancelledRequestDoesNotOpenBreaker: a call that fails because
+// the request's own context ended says nothing about Redis, so it must not
+// move every other request onto the per-replica fallback.
+func TestRedisStore_CancelledRequestDoesNotOpenBreaker(t *testing.T) {
+	client, mr := newMiniRedis(t)
+	s := newRedisStore(client)
+	defer s.Stop()
+	const key = "ratelimit:general:cancel"
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.Allow(cancelled, key, 1, 5)
+
+	s.Allow(context.Background(), key, 1, 5)
+	if !mr.Exists(key) {
+		t.Fatal("a cancelled request opened the breaker; the next request skipped Redis")
 	}
 }

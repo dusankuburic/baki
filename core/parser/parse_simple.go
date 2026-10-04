@@ -26,12 +26,8 @@ type Parser struct {
 // ParserOption configures a Parser. Options are applied left-to-right.
 type ParserOption func(*Parser)
 
-// WithProgress installs a ProgressCallback that receives percent-done updates
-// during Parse. When set, Parse emits the same checkpoint sequence
-// (10 "Tokenized" → per-token "Parsing..." → 95 "Finalizing..." → 100 "Done")
-// that ParseTextWithProgress historically emitted, so callers that want
-// progress feed a callback here instead of using the duplicated legacy path.
-// A nil callback keeps the hot path branch-free (no per-token accounting).
+// WithProgress installs a ProgressCallback receiving percent-done updates
+// during Parse; a nil callback keeps the hot path branch-free.
 func WithProgress(cb ProgressCallback) ParserOption {
 	return func(p *Parser) { p.onProgress = cb }
 }
@@ -95,13 +91,9 @@ func (p *Parser) Parse() (*models.FlowDocument, error) {
 			state.processToken(tok)
 		}
 	}
-	// Flush closable blocks still open at EOF. recordUnclosedBlocks is otherwise
-	// only called at subflow boundaries (handleSubflowStart/handleSubflowEnd),
-	// so a file that ends abruptly — open LOOP/IF/BLOCK with no END and no
-	// trailing #EndRegion in the final subflow — would have those unclosed
-	// blocks silently dropped from ParseErrors. This flush runs in BOTH the
-	// progress and non-progress paths, which is what unifies them: the legacy
-	// progress copy used to miss it.
+	// Flush closable blocks still open at EOF: without this, a file ending
+	// abruptly (open LOOP/IF/BLOCK, no END/#EndRegion) silently drops them
+	// from ParseErrors. Runs in both paths — the legacy copy missed it.
 	if state.current != nil {
 		state.recordUnclosedBlocks()
 	}
@@ -131,8 +123,26 @@ func ParseText(text, fileName string, fileSize int64) (*models.FlowDocument, err
 	return p.Parse()
 }
 
+// MemberParser parses one member file of a folder flow with ParseText's
+// signature. ParseFolderWith takes a caller's parser so the desktop
+// service can memoise per-member parses on folder reload.
+type MemberParser func(text, name string, size int64) (*models.FlowDocument, error)
+
+// ParseFolder reads and parses every .txt member of folderPath into one
+// combined document (Main first, then the rest by name). Equivalent to
+// ParseFolderWith(folderPath, ParseText).
 func ParseFolder(folderPath string) (*models.FlowDocument, error) {
+	return ParseFolderWith(folderPath, ParseText)
+}
+
+// ParseFolderWith is ParseFolder with parseMember in place of ParseText.
+// A member doc is only READ here (subflows copied by value), so a
+// memoising parser may hand out the same doc on every call.
+func ParseFolderWith(folderPath string, parseMember MemberParser) (*models.FlowDocument, error) {
 	logger.Debug("ParseFolder started", "path", folderPath)
+	if parseMember == nil {
+		parseMember = ParseText
+	}
 	entries, err := os.ReadDir(folderPath)
 	if err != nil {
 		return nil, fmt.Errorf("read folder: %w", err)
@@ -193,7 +203,7 @@ func ParseFolder(folderPath string) (*models.FlowDocument, error) {
 			Size: size,
 		})
 
-		doc, err := ParseText(text, entry.Name(), size)
+		doc, err := parseMember(text, entry.Name(), size)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", entry.Name(), err)
 		}
@@ -314,12 +324,10 @@ func ParseFiles(files map[string]string, rootName string) (*models.FlowDocument,
 		totalLines += doc.Metadata.RawLineCount
 	}
 
-	// Session analytics need an identity that survives re-parsing (each parse
-	// mints a fresh UUID). Path-backed docs use FilePath; these path-less docs
-	// (uploads, raw analysis input) key on the sorted file-name set instead, so
-	// re-uploading an edited file updates its one entry rather than adding a
-	// phantom flow. Name-based on purpose: content must NOT participate, or the
-	// identity would rotate on every edit — the exact bug this prevents.
+	// Session analytics need an identity that survives re-parsing; these
+	// path-less docs key on the sorted file-name set. Name-based on
+	// purpose: content must NOT participate or the identity rotates on
+	// every edit.
 	nameHash := sha256.New()
 	for _, name := range filenames {
 		nameHash.Write([]byte(name))

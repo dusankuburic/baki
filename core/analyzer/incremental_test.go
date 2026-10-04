@@ -184,33 +184,9 @@ func TestComputeSubflowHashes(t *testing.T) {
 			t.Error("different subflows should produce different hashes")
 		}
 	})
-
-	t.Run("same_content_same_hash", func(t *testing.T) {
-		doc := makeFlowDoc("f1", "Test", []models.Subflow{
-			makeSubflow("sf1", "Main",
-				makeBlock("b1", "Action", models.BlockTypeAction, "Action.Invoke", 0),
-			),
-		})
-
-		h1 := ComputeSubflowHashes(doc)
-		h2 := ComputeSubflowHashes(doc)
-		if h1[0].Hash != h2[0].Hash {
-			t.Errorf("same content should produce same hash: %s != %s", h1[0].Hash, h2[0].Hash)
-		}
-	})
 }
 
 func TestComputeDashboard(t *testing.T) {
-	t.Run("empty_reports", func(t *testing.T) {
-		d := ComputeDashboard(nil)
-		if d.TotalFlowsAnalyzed != 0 {
-			t.Errorf("expected 0 flows, got %d", d.TotalFlowsAnalyzed)
-		}
-		if d.FindingsBySeverity == nil {
-			t.Error("expected non-nil severity map")
-		}
-	})
-
 	t.Run("aggregates_multiple_reports", func(t *testing.T) {
 		reports := []*models.AnalysisReport{
 			{

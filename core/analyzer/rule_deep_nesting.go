@@ -32,6 +32,4 @@ func (r *DeepNestingRule) Check(block *models.Block, ctx *RuleContext) []models.
 	}}
 }
 
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
 func init() { registerRule(&DeepNestingRule{}) }

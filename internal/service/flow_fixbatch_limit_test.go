@@ -2,20 +2,14 @@ package service
 
 import "testing"
 
-// TestClampFixBatchLimit bounds a caller-supplied fix limit at both ends.
-//
-// The fix loop re-parses and re-analyses the entire document once per applied
-// fix, so its cost is O(limit x document): measured linear at 294 ms / 528 ms /
-// 1.06 s / 1.96 s / 3.75 s for limits of 25 / 50 / 100 / 200 / 400 on a 15 KB
-// flow, and ~350 ms per fix on a 1 MB one.
-//
-// limit is decoded straight from the request body by handleApplyFixBatch, and
-// only the LOW side was clamped — `if limit <= 0 { limit = 100 }`, under a
-// comment calling 100 a "safety cap". Nothing enforced it as a maximum, so
-// {"limit": 100000} against a 1 MB flow bought roughly 9.7 hours of CPU on one
-// request. The server sets no write timeout and the loop takes no context, so
-// neither a client disconnect nor a deadline stops it; for folder flows the
-// limit is applied per member file, multiplying again.
+// TestClampFixBatchLimit bounds a caller-supplied fix limit at both ends. The fix loop
+// re-parses and re-analyses the whole document once per applied fix — O(limit ×
+// document): measured 294 ms / 528 ms / 1.06 s / 1.96 s / 3.75 s at limits 25 / 50 /
+// 100 / 200 / 400 on a 15 KB flow, ~350 ms per fix on a 1 MB one. limit is decoded
+// straight from the request body and only the LOW side was clamped ("safety cap" = 100),
+// so {"limit": 100000} on a 1 MB flow bought ~9.7 hours of CPU on one request: the
+// server sets no write timeout, the loop takes no context, and folder flows apply the
+// limit per member file.
 func TestClampFixBatchLimit(t *testing.T) {
 	cases := []struct {
 		name  string

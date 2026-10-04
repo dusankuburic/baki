@@ -1,13 +1,8 @@
 // Package notify delivers governance alerts (drift, health regressions) to
-// external channels — a generic webhook and Microsoft Teams to start. It is the
-// outbound sink for the continuous-governance loop: the periodic scanner detects
-// a regression and hands an Event to a Dispatcher, which fans out to every
-// configured channel.
-//
-// Delivery is best-effort: a failing or slow channel is logged and skipped, never
-// fatal, and a panicking notifier can't take down the caller. The Dispatcher is
-// safe to call on a nil receiver and degrades to a no-op when nothing is
-// configured, so callers don't need to special-case "notifications disabled".
+// external channels: the outbound sink for the continuous-governance loop —
+// the scanner hands an Event to a Dispatcher, which fans out best-effort to
+// every configured channel (failures logged, never fatal; nil-safe no-op
+// when nothing is configured).
 package notify
 
 import (
@@ -21,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"pad-core/logger"
@@ -43,13 +39,12 @@ const (
 	EventDrift EventType = "drift"
 	// EventHealthRegression fires when a flow's health score drops vs. its prior run.
 	EventHealthRegression EventType = "health_regression"
-	// EventAnalysisComplete fires when a flow analysis run finishes. Unlike
-	// drift/regression (which compare against history), this is the raw
-	// "a flow was just analyzed" signal — useful for audit/announcement channels.
+	// EventAnalysisComplete fires when a flow analysis run finishes — the raw
+	// signal (unlike drift/regression, which compare against history), for
+	// audit/announcement channels.
 	EventAnalysisComplete EventType = "analysis_complete"
 	// EventTest is a synthetic probe for the channel "test" button (R2-3):
-	// org admins verify a newly configured channel without waiting for a
-	// real governance signal.
+	// org admins verify a newly configured channel without a real signal.
 	EventTest EventType = "test"
 )
 
@@ -67,8 +62,8 @@ func ValidChannelKind(kind string) bool {
 }
 
 // ValidateChannel checks an org channel's kind and URL (the same validation
-// BuildChannelNotifierWith applies) without building a client or a
-// transport — what a channel save needs. The host lookup honours ctx.
+// BuildChannelNotifierWith applies) without building a client or transport —
+// what a channel save needs. The host lookup honours ctx.
 func ValidateChannel(ctx context.Context, kind, rawURL string, policy TargetPolicy) error {
 	if !ValidChannelKind(kind) {
 		return fmt.Errorf("unknown channel kind %q", kind)
@@ -77,12 +72,11 @@ func ValidateChannel(ctx context.Context, kind, rawURL string, policy TargetPoli
 	return err
 }
 
-// NewChannelClient is the guarded HTTP client for org channels: one per
-// policy per process, shared by every notifier BuildChannelNotifierWith
-// builds with it, so connections pool and the transport's own idle timer
-// reaps them — a transport cloned per channel save or test kept its idle
-// TLS connection and two persistConn goroutines alive for 90 s after the
-// handler returned.
+// NewChannelClient is the guarded HTTP client for org channels: one per policy
+// per process, shared by every notifier built with it, so connections pool and
+// the transport's idle timer reaps them — a transport cloned per channel save
+// or test kept its idle TLS connection and two persistConn goroutines alive
+// for 90 s after the handler returned.
 func NewChannelClient(policy TargetPolicy) *http.Client {
 	return &http.Client{
 		Timeout:       defaultTimeout,
@@ -92,10 +86,9 @@ func NewChannelClient(policy TargetPolicy) *http.Client {
 }
 
 // BuildChannelNotifier constructs the single-channel notifier for an
-// org-configured channel (R2-3) on a client of its own. Same URL validation
-// and defaults as the deployment-global builder; a bad URL errors instead of
-// silently enabling. Request paths should prefer BuildChannelNotifierWith
-// and a shared NewChannelClient.
+// org-configured channel (R2-3) on a client of its own, with the same URL
+// validation and defaults as the deployment-global builder. Request paths
+// should prefer BuildChannelNotifierWith and a shared NewChannelClient.
 func BuildChannelNotifier(kind, rawURL, secret string, policy TargetPolicy) (AlertNotifier, error) {
 	return BuildChannelNotifierWith(context.Background(), NewChannelClient(policy), kind, rawURL, secret, policy)
 }
@@ -162,9 +155,9 @@ type AlertNotifier interface {
 	Name() string
 }
 
-// EmailSender is the minimal email capability an EmailNotifier needs. The app's
-// *mail.Service satisfies it (see SendAlert). Defined here so the notify package
-// stays decoupled from the mail package — a test can inject a fake sender.
+// EmailSender is the minimal email capability an EmailNotifier needs (*mail.Service
+// satisfies it). Defined here so notify stays decoupled from mail; a test can
+// inject a fake sender.
 type EmailSender interface {
 	SendAlert(ctx context.Context, to, subject, plainBody, htmlBody string) error
 	Enabled() bool
@@ -179,7 +172,7 @@ type Config struct {
 	WebhookSecret string // HMAC-SHA256 key for X-Baki-Signature header; empty = no signature
 	TeamsURL      string
 	// SlackURL is a Slack incoming-webhook URL. The Slack payload format is also
-	// compatible with Discord, Mattermost, and Teams (via the Slack-compatible connector).
+	// compatible with Discord, Mattermost, and Teams (Slack-compatible connector).
 	SlackURL    string
 	SlackSecret string // optional HMAC key for Slack payloads (most Slack webhooks ignore it)
 	// EmailSender + EmailTo enable an email alert channel. A nil sender disables
@@ -188,7 +181,7 @@ type Config struct {
 	EmailTo     string
 	// Jira: when all four are set, an issue is created per event on Jira Cloud.
 	// JiraURL is the base (e.g. https://acme.atlassian.net); JiraEmail + JiraToken
-	// form the Basic-auth credential (API token); JiraProject is the project key.
+	// form the Basic-auth credential; JiraProject is the project key.
 	JiraURL     string
 	JiraEmail   string
 	JiraToken   string
@@ -205,29 +198,25 @@ type Dispatcher struct {
 }
 
 // TargetPolicy decides whether a notification target may point at the machine
-// (or the private network) the server itself runs on. It is an alias of
-// egress.Policy: the guard itself lives in package egress (the single
-// definition of "an address the outside world must not make this server
-// reach") so the AI provider layer applies the very same rules to
-// user-supplied endpoints, and the alias keeps this package's API unchanged
-// for its callers (main.go, api, scanner).
+// (or the private network) the server itself runs on. An alias of egress.Policy:
+// the guard lives in package egress so the AI provider layer applies the very
+// same rules to user-supplied endpoints, and the alias keeps this package's
+// API unchanged.
 //
-// It exists because the "http://localhost for dev" escape hatch was
-// unconditional. In a multi-tenant deployment ANY authenticated user can create
-// an org and become its admin (handleOrgCreate takes no role), add a webhook
-// channel, and hit the synchronous test endpoint — whose response distinguishes
-// connection-refused from non-2xx from 2xx. That is a loopback port scanner
-// plus the ability to POST attacker-influenced JSON at internal listeners.
+// It exists because the "http://localhost for dev" escape hatch was once
+// unconditional: in a multi-tenant deployment ANY authenticated user can
+// create an org and become its admin, add a webhook channel, and hit the
+// synchronous test endpoint — a loopback port scanner plus a POST of
+// attacker-influenced JSON at internal listeners.
 type TargetPolicy = egress.Policy
 
 const (
 	// BlockInternalTargets refuses loopback, private, link-local and unspecified
 	// addresses, and refuses plaintext http:// entirely.
 	//
-	// This is the ZERO VALUE on purpose: a caller that forgets to pass a policy
-	// gets the safe one. Opting into the permissive behaviour has to be typed
-	// out, which is also why the tests that need a loopback httptest server say
-	// so explicitly.
+	// The ZERO VALUE on purpose: a caller that forgets to pass a policy gets
+	// the safe one; opting into the permissive behaviour has to be typed out
+	// (which is also why the loopback-needing tests say so explicitly).
 	BlockInternalTargets = egress.BlockInternal
 	// AllowLoopbackTargets additionally permits http:// to loopback. DESKTOP AND
 	// LOCAL MODE ONLY — there the "org" is the single user running the app, so a
@@ -235,32 +224,26 @@ const (
 	AllowLoopbackTargets = egress.AllowLoopback
 )
 
-// validateAlertURL enforces HTTPS for outbound governance alert URLs. The
+// validateAlertURL enforces HTTPS for outbound governance alert URLs: the
 // payload carries flow names and finding counts (internal details an attacker
-// couldn't otherwise enumerate); sending it over plaintext HTTP would expose
-// them on any in-path host. http://localhost / 127.0.0.1 / [::1] are permitted
-// for local development; everything else must be https://.
+// couldn't otherwise enumerate); plaintext HTTP would expose them on any
+// in-path host. http://localhost / 127.0.0.1 / [::1] are permitted for local
+// development; everything else must be https://.
 //
-// B1.9 SSRF guard: HTTPS alone still allows an org admin to point the channel
-// at cloud-internal endpoints (https://169.254.169.254/... metadata, private
+// SSRF guard: HTTPS alone still allows an org admin to point the channel at
+// cloud-internal endpoints (https://169.254.169.254/... metadata, private
 // RFC1918 services) and use the synchronous test endpoint as a reachability
-// oracle — so DNS-resolved targets on loopback / link-local / private /
-// unassigned ranges are rejected unless the host is an explicit loopback NAME
-// (the documented dev escape hatch). Literal-IP hosts skip resolution.
+// oracle — so DNS-resolved targets on internal ranges are rejected unless the
+// host is an explicit loopback NAME (the documented dev escape hatch).
 //
 // This is only the validation-time half: the dial-time half, which closes the
-// DNS-rebinding window between validation and request, is
-// egress.GuardedTransport on every client built here, and egress.NoRedirects
-// keeps a policy-passing endpoint from steering the signed payload somewhere
-// that never passed validation.
-//
-// The dial-time guard judges the address actually connected to, which only
-// works when this process dials the target itself. Behind an HTTP(S)_PROXY
-// the proxy resolves the name on its own, so the guard fails closed there: a
-// proxy on an internal address is refused (every delivery through it fails),
-// and behind a public proxy the target must resolve locally to public
-// addresses. Deployments whose egress proxy sits on a private address must
-// put the alert hosts in NO_PROXY so they are dialled directly and guarded.
+// DNS-rebinding window, is egress.GuardedTransport on every client built
+// here, and egress.NoRedirects keeps a policy-passing endpoint from steering
+// the signed payload somewhere that never passed validation. Behind an
+// HTTP(S)_PROXY the guard fails closed: a proxy on an internal address is
+// refused, and behind a public proxy the target must resolve locally to
+// public addresses — deployments whose egress proxy sits on a private address
+// must put the alert hosts in NO_PROXY so they are dialled directly.
 func validateAlertURL(raw string, policy TargetPolicy) (string, error) {
 	return validateAlertURLContext(context.Background(), raw, policy)
 }
@@ -287,9 +270,8 @@ func validateAlertURLContext(ctx context.Context, raw string, policy TargetPolic
 
 // rejectPrivateTargetContext resolves host (skipping resolution for IPs and
 // the loopback dev names) and refuses RFC1918/loopback/link-local/unique-local
-// addresses (B1.9). The check is egress.RejectPrivateHostContext; this
-// wrapper keeps the "alert URL ..." wording that the channel endpoints
-// surface to org admins.
+// addresses (B1.9). A wrapper over egress.RejectPrivateHostContext that keeps
+// the "alert URL ..." wording the channel endpoints surface to org admins.
 func rejectPrivateTargetContext(ctx context.Context, host string, policy TargetPolicy) error {
 	if host == "" {
 		return fmt.Errorf("alert URL has no host")
@@ -300,11 +282,11 @@ func rejectPrivateTargetContext(ctx context.Context, host string, policy TargetP
 	return nil
 }
 
-// New builds a Dispatcher from cfg. Channels with empty URLs are omitted, so the
-// returned dispatcher may have zero notifiers (Enabled() == false) — that's a
+// New builds a Dispatcher from cfg. Channels with empty URLs are omitted, so
+// the returned dispatcher may have zero notifiers (Enabled() == false) — a
 // valid, no-op configuration. Non-HTTPS URLs are rejected with an error so the
-// caller can surface the misconfiguration rather than silently leaking alert
-// payloads over plaintext.
+// misconfiguration surfaces instead of silently leaking alert payloads over
+// plaintext.
 func New(cfg Config) (*Dispatcher, error) {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
@@ -384,10 +366,17 @@ func (d *Dispatcher) Enabled() bool {
 	return d != nil && len(d.notifiers) > 0
 }
 
-// Dispatch delivers ev to every channel synchronously. Per-channel failures and
-// panics are logged, not propagated, so one bad channel never blocks the others
-// or the caller. Run it from a background goroutine if you don't want to wait.
-// Nil-safe and a no-op when no channels are configured.
+// maxDispatchConcurrency bounds how many deployment-global channels deliver
+// at once: sequential delivery meant one dead webhook burned its whole retry
+// budget (~32 s) into EVERY sweep while the healthy channels waited. The cap
+// makes a dispatch cost its slowest channel, not the sum of all — the same
+// discipline the scanner's org-channel path applies with its own semaphore.
+const maxDispatchConcurrency = 4
+
+// Dispatch delivers ev to every channel, up to maxDispatchConcurrency at a
+// time, and returns once all have finished. Per-channel failures and panics
+// are logged, not propagated (isolation lives in deliver), so one bad channel
+// never blocks the others or the caller. Nil-safe; a no-op when unconfigured.
 func (d *Dispatcher) Dispatch(ctx context.Context, ev Event) {
 	if !d.Enabled() {
 		return
@@ -395,9 +384,20 @@ func (d *Dispatcher) Dispatch(ctx context.Context, ev Event) {
 	if ev.At.IsZero() {
 		ev.At = time.Now().UTC()
 	}
+	sem := make(chan struct{}, min(maxDispatchConcurrency, len(d.notifiers)))
+	var wg sync.WaitGroup
 	for _, n := range d.notifiers {
-		deliver(ctx, n, ev, d.timeout)
+		// Acquire BEFORE spawning, as the org-channel path does: the semaphore,
+		// not a goroutine per channel, is what bounds concurrency.
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(n AlertNotifier) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			deliver(ctx, n, ev, d.timeout)
+		}(n)
 	}
+	wg.Wait()
 }
 
 // deliver runs one notifier with a timeout and panic recovery.
@@ -415,11 +415,10 @@ func deliver(ctx context.Context, n AlertNotifier, ev Event, timeout time.Durati
 	}
 }
 
-// postJSON is the shared HTTP delivery helper: POST a JSON body and treat any
-// non-2xx response as an error. Retries on transient failures (network error,
-// 429, 5xx) with exponential backoff. When secret is non-empty, an
-// X-Baki-Signature header (HMAC-SHA256 hex of the body) is set so receivers
-// can verify authenticity.
+// postJSON is the shared HTTP delivery helper: POST a JSON body, treat any
+// non-2xx response as an error, retry transient failures (network error, 429,
+// 5xx) with exponential backoff. A non-empty secret sets X-Baki-Signature
+// (HMAC-SHA256 hex of the body) so receivers can verify authenticity.
 func postJSON(ctx context.Context, client *http.Client, url string, payload any, secret string, maxAttempts int, backoff time.Duration) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -494,8 +493,8 @@ func (n *WebhookNotifier) Notify(ctx context.Context, ev Event) error {
 	return postJSON(ctx, n.Client, n.URL, ev, n.Secret, n.MaxAttempts, n.Backoff)
 }
 
-// TeamsNotifier POSTs a legacy MessageCard to a Microsoft Teams incoming-webhook
-// URL. MessageCard is the format Teams incoming webhooks render natively.
+// TeamsNotifier POSTs a legacy MessageCard (the format Teams incoming webhooks
+// render natively) to a Microsoft Teams incoming-webhook URL.
 type TeamsNotifier struct {
 	URL         string
 	Client      *http.Client
@@ -555,7 +554,7 @@ func themeColor(ev Event) string {
 }
 
 // eventHasErrors reports whether an event represents an error-level signal —
-// either new errors in a drift, or errors in an analysis summary. Used to pick
+// new errors in a drift, a regression, or errors in an analysis summary. Picks
 // the red vs amber accent across all card-rendering channels.
 func eventHasErrors(ev Event) bool {
 	if ev.NewErrors > 0 {
@@ -569,10 +568,9 @@ func eventHasErrors(ev Event) bool {
 
 // --- Slack channel ---
 
-// SlackNotifier POSTs a Slack incoming-webhook attachment. The payload format
-// is also rendered correctly by Discord, Mattermost, and Microsoft Teams (via
-// the Slack-compatible webhook connector), so this one channel covers several
-// chat platforms.
+// SlackNotifier POSTs a Slack incoming-webhook attachment — a payload format
+// also rendered by Discord, Mattermost, and Teams (Slack-compatible connector),
+// so this one channel covers several chat platforms.
 type SlackNotifier struct {
 	URL         string
 	Client      *http.Client

@@ -10,9 +10,9 @@ import (
 	"pad-core/logger"
 )
 
-// toolExecResult is one executed tool call of a turn, in CALL order (results
-// are buffered and emitted sequentially so the journal, SSE ordering and the
-// msgs sequence stay deterministic regardless of execution concurrency).
+// toolExecResult is one executed tool call of a turn, in CALL order (results are
+// buffered and emitted sequentially so journal, SSE ordering and the msgs sequence stay
+// deterministic regardless of execution concurrency).
 type toolExecResult struct {
 	id     string
 	name   string
@@ -20,18 +20,16 @@ type toolExecResult struct {
 	took   time.Duration
 }
 
-// maxParallelTools bounds how many read-only tools of one turn execute at
-// once. The read-only tools are in-memory scans (ms-fast), so this is a
-// politeness bound, not a capacity one.
+// maxParallelTools bounds how many read-only tools of one turn execute at once; the
+// read-only tools are in-memory scans (ms-fast), so this is a politeness bound, not a
+// capacity one.
 const maxParallelTools = 4
 
 // guardedToolRun runs one PARALLEL tool call, converting a panic in the tool —
 // model-controlled input reaching a bug in the tool implementation — into the
-// error-shaped result tool failures already surface to the model
-// (ai.ExecuteTool's "error: ..." strings), so the turn continues. The parallel
-// goroutines need this guard themselves: they run outside the stream worker's
-// recover, so without it a panicking tool kills the whole process. The
-// sequential path runs inside that recover and needs none.
+// error-shaped result tool failures already surface to the model, so the turn continues.
+// The parallel goroutines run outside the stream worker's recover, so without this guard
+// a panicking tool kills the whole process; the sequential path needs none.
 func guardedToolRun(call ai.ToolCall, run func() toolExecResult) (res toolExecResult) {
 	start := time.Now()
 	defer func() {
@@ -49,15 +47,13 @@ func guardedToolRun(call ai.ToolCall, run func() toolExecResult) (res toolExecRe
 	return run()
 }
 
-// execTurnTools runs a model turn's tool calls through the loop memory,
-// emitting each call's tool (starting) / tool_result (finished) events itself
-// and returning the results in call order. A turn whose calls are ALL
-// read-only and has more than one call executes concurrently (bounded by
-// maxParallelTools) with the starting events emitted up front — the finished
-// events still land in call order, so the journal and the msgs sequence stay
-// deterministic. Any turn containing a fix tool (apply_fix/apply_fixes: one
-// blocks on a human decision for up to 60s and both mutate the document) is
-// fully sequential, preserving the tool-status UX during the approval wait.
+// execTurnTools runs a model turn's tool calls through the loop memory, emitting each
+// call's tool (starting) / tool_result (finished) events itself and returning results in
+// call order. All-read-only turns of more than one call execute concurrently (bounded by
+// maxParallelTools), starting events up front, finished events in call order — journal
+// and msgs stay deterministic. A turn containing a fix tool (apply_fix/apply_fixes: one
+// blocks on a human decision for up to 60s, both mutate the document) is fully
+// sequential, preserving the tool-status UX during the approval wait.
 func (s *ChatService) execTurnTools(
 	emit func(string, map[string]interface{}),
 	ctl *streamCtl,
@@ -70,10 +66,9 @@ func (s *ChatService) execTurnTools(
 
 	run := func(i int) toolExecResult {
 		tc := calls[i]
-		// Tool execution produces no provider chunks, and the idle watchdog
-		// counts ONLY provider chunks + these touches as activity — without
-		// them a legitimately slow tool (>90s) gets the healthy turn
-		// cancelled as "provider stopped responding".
+		// Tool execution produces no provider chunks, and the idle watchdog counts ONLY
+		// provider chunks + these touches as activity — without them a legitimately slow
+		// tool (>90s) gets the healthy turn cancelled as "provider stopped responding".
 		ctl.touch()
 		start := time.Now()
 		result := mem.exec(tc.Name, tc.Input, tctx)

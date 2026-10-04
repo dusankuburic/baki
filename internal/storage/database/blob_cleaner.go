@@ -11,19 +11,14 @@ import (
 )
 
 // blobCleaner runs deferred blob-cleanup work (deleting superseded content
-// blobs, pruned version snapshots, and whole-flow prefixes) on a small, fixed
-// worker pool instead of spawning one goroutine per cleanup. Previously every
-// SaveFlow/SaveFlowVersion/DeleteFlow/DeleteUser spawned a detached goroutine —
-// each of which slept for the reader-grace delay before deleting — so a burst
-// of writes (bulk import, migration reruns) could leave thousands of sleeping
-// goroutines alive at once, and a process shutdown abandoned them mid-flight.
-//
-// The cleaner decouples enqueue (cheap, non-blocking, O(log n) heap push) from
-// execution (bounded to blobCleanupWorkers concurrent blob ops). A single
-// dispatcher goroutine holds pending jobs in a min-heap ordered by their
-// notBefore time and releases each to the workers when its delay elapses.
-// Stop() flushes remaining work and waits (bounded) so a graceful shutdown
-// doesn't leak the last window of superseded blobs.
+// blobs, pruned version snapshots, and whole-flow prefixes) on a small fixed
+// worker pool; previously every Save/Delete spawned a detached goroutine that
+// slept out the reader-grace delay, so a burst of writes left thousands of
+// sleeping goroutines alive and a shutdown abandoned them mid-flight. A single
+// dispatcher holds pending jobs in a min-heap ordered by their notBefore time
+// and releases each to the workers when its delay elapses. Stop() flushes
+// remaining work and waits (bounded) so a graceful shutdown doesn't leak the
+// last window of superseded blobs.
 type blobCleaner struct {
 	mu      sync.Mutex
 	pending jobHeap

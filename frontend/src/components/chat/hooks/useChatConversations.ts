@@ -14,7 +14,7 @@ interface UseChatConversationsOptions {
   activeThreadId: string | null
   /**
    * Re-attach a stream the conversation load reports as still in-flight
-   * (F-21) — the chat stream engine's resumeAfterReload. Optional so tests
+   * — the chat stream engine's resumeAfterReload. Optional so tests
    * and non-panel hosts can mount the hook without the engine.
    */
   resumeActiveStream?: (threadId: string, streamId: string, onGone: () => void) => boolean
@@ -49,7 +49,7 @@ function loadThreadHistory(
       if (inFlight && !now.streams[threadId] && inFlight.streamId !== load.activeStreamId) {
         now.updateThread(threadId, {inFlight: undefined})
       }
-      // F-21: the server says a stream for this conversation is still
+      // The server says a stream for this conversation is still
       // in-flight (a reload / reopen happened mid-turn): re-attach to it
       // instead of showing the thread without its answer. The user turn is
       // already in `messages` — the server persisted it at stream start. If

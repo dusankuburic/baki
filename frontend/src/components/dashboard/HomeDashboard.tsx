@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from 'react'
+import {lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode} from 'react'
 import {useTranslation} from 'react-i18next'
 import {ArrowRight} from 'lucide-react'
 import {dashboardApi, libraryApi} from '@/api'
@@ -11,17 +11,30 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import {useAnalyticsStore} from '@/stores/analyticsStore'
 import type {DashboardHomeData, FlowDocument} from '@/types'
 import {HomeKpiRow} from './home/HomeKpiRow'
-import {HealthTrendCard} from './home/HealthTrendCard'
-import {FindingsByCategoryCard} from './home/FindingsByCategoryCard'
-import {FindingsByRuleCard} from './home/FindingsByRuleCard'
-import {TriageCard} from './home/TriageCard'
 import {RecentFlowsCard} from './home/RecentFlowsCard'
 import {ActivityFeedCard} from './home/ActivityFeedCard'
-import {AiUsageCard} from './home/AiUsageCard'
 import {SecurityPostureCard} from './home/SecurityPostureCard'
-import {HealthDistributionCard} from './home/HealthDistributionCard'
-import {FlowComplexityCard} from './home/FlowComplexityCard'
-import {SkeletonDashboard} from './home/SkeletonDashboard'
+import {SkeletonCard, SkeletonDashboard} from './home/SkeletonDashboard'
+
+// The recharts-backed cards arrive with the charts chunk (~120 kB gz), one
+// hop after this one; the cards above (KPI tiles, recent flows, activity,
+// security) import only ChartCard/StatTile and paint with this chunk. Each
+// chart card sits in its own Suspense with a skeleton holding its grid slot,
+// so a slow charts chunk never blanks the content that is already here.
+const chartCards = () => import('./home/HomeChartCards')
+const HealthTrendCard = lazy(() => chartCards().then(m => ({default: m.HealthTrendCard})))
+const FindingsByCategoryCard = lazy(() => chartCards().then(m => ({default: m.FindingsByCategoryCard})))
+const FindingsByRuleCard = lazy(() => chartCards().then(m => ({default: m.FindingsByRuleCard})))
+const TriageCard = lazy(() => chartCards().then(m => ({default: m.TriageCard})))
+const AiUsageCard = lazy(() => chartCards().then(m => ({default: m.AiUsageCard})))
+const HealthDistributionCard = lazy(() => chartCards().then(m => ({default: m.HealthDistributionCard})))
+const FlowComplexityCard = lazy(() => chartCards().then(m => ({default: m.FlowComplexityCard})))
+
+// bodyHeight mirrors the front-end chart's height (see the card) so the grid
+// row keeps its size while the charts chunk loads.
+function ChartSlot({span, bodyHeight, children}: {span: string; bodyHeight?: number; children: ReactNode}) {
+  return <Suspense fallback={<SkeletonCard className={span} bodyHeight={bodyHeight} />}>{children}</Suspense>
+}
 
 // Home is the at-a-glance overview: the headline numbers and one card per
 // theme, each with a "Details" link into the section of the Analytics page
@@ -235,31 +248,45 @@ export default function HomeDashboard() {
         <div className="home-grid">
           {isCloud ? (
             <>
-              <HealthTrendCard data={healthTrend} onDetails={cloudDetails('analytics-trend')} className="home-span-8" />
-              <FindingsByCategoryCard
-                findings={findings}
-                onDetails={cloudDetails('analytics-findings')}
-                className="home-span-4"
-              />
-              <FindingsByRuleCard
-                data={ruleFrequency}
-                onDetails={cloudDetails('analytics-findings')}
-                className="home-span-7"
-              />
-              <TriageCard data={workflow} onDetails={cloudDetails('analytics-triage')} className="home-span-5" />
+              <ChartSlot span="home-span-8" bodyHeight={200}>
+                <HealthTrendCard
+                  data={healthTrend}
+                  onDetails={cloudDetails('analytics-trend')}
+                  className="home-span-8"
+                />
+              </ChartSlot>
+              <ChartSlot span="home-span-4">
+                <FindingsByCategoryCard
+                  findings={findings}
+                  onDetails={cloudDetails('analytics-findings')}
+                  className="home-span-4"
+                />
+              </ChartSlot>
+              <ChartSlot span="home-span-7">
+                <FindingsByRuleCard
+                  data={ruleFrequency}
+                  onDetails={cloudDetails('analytics-findings')}
+                  className="home-span-7"
+                />
+              </ChartSlot>
+              <ChartSlot span="home-span-5">
+                <TriageCard data={workflow} onDetails={cloudDetails('analytics-triage')} className="home-span-5" />
+              </ChartSlot>
               <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="home-span-7" />
               <ActivityFeedCard
                 data={activity}
                 onDetails={cloudDetails('analytics-activity')}
                 className="home-span-5"
               />
-              <AiUsageCard
-                tokens={tokenUsage}
-                cost={costByProvider}
-                isCloud
-                onDetails={cloudDetails('analytics-ai')}
-                className="home-span-8"
-              />
+              <ChartSlot span="home-span-8" bodyHeight={170}>
+                <AiUsageCard
+                  tokens={tokenUsage}
+                  cost={costByProvider}
+                  isCloud
+                  onDetails={cloudDetails('analytics-ai')}
+                  className="home-span-8"
+                />
+              </ChartSlot>
               <SecurityPostureCard
                 data={security}
                 onDetails={cloudDetails('analytics-security')}
@@ -268,20 +295,28 @@ export default function HomeDashboard() {
             </>
           ) : (
             <>
-              <FindingsByCategoryCard findings={findings} className="home-span-5" />
-              <FindingsByRuleCard data={ruleFrequency} className="home-span-7" />
+              <ChartSlot span="home-span-5">
+                <FindingsByCategoryCard findings={findings} className="home-span-5" />
+              </ChartSlot>
+              <ChartSlot span="home-span-7">
+                <FindingsByRuleCard data={ruleFrequency} className="home-span-7" />
+              </ChartSlot>
               <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="home-span-7" />
-              <HealthDistributionCard data={healthBuckets} className="home-span-5" />
-              <FlowComplexityCard
-                rows={complexity.map(c => ({
-                  id: c.flowId,
-                  name: c.flowName,
-                  blocks: c.blockCount,
-                  findings: c.findingCount,
-                  health: c.healthScore,
-                }))}
-                className="home-span-12"
-              />
+              <ChartSlot span="home-span-5" bodyHeight={180}>
+                <HealthDistributionCard data={healthBuckets} className="home-span-5" />
+              </ChartSlot>
+              <ChartSlot span="home-span-12" bodyHeight={220}>
+                <FlowComplexityCard
+                  rows={complexity.map(c => ({
+                    id: c.flowId,
+                    name: c.flowName,
+                    blocks: c.blockCount,
+                    findings: c.findingCount,
+                    health: c.healthScore,
+                  }))}
+                  className="home-span-12"
+                />
+              </ChartSlot>
             </>
           )}
         </div>

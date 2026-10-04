@@ -131,6 +131,8 @@ const NO_USER_FACING_COPY = new Set([
   // Loading shapes with no copy.
   'src/components/dashboard/home/SkeletonDashboard.tsx',
   'src/components/dashboard/analytics/SkeletonAnalytics.tsx',
+  // Re-exports the recharts-backed Home cards for HomeDashboard's lazy import.
+  'src/components/dashboard/home/HomeChartCards.ts',
   // Section chrome: renders only the copy its callers pass in.
   'src/components/dashboard/analytics/ChartSection.tsx',
 
@@ -156,6 +158,7 @@ const NO_USER_FACING_COPY = new Set([
   'src/components/chat/hooks/useChatConversations.ts',
   'src/components/chat/hooks/useChatRequestBuilder.ts',
   'src/components/chat/hooks/useProviderSetup.ts',
+  'src/components/chat/hooks/useSelectedBlock.ts',
   // The app-wide stream host and its context: render only their children.
   'src/components/chat/ChatStreamProvider.tsx',
   'src/components/chat/chatStreamContext.ts',

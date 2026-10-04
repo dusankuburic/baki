@@ -75,11 +75,6 @@ func TestStress_HighFrequencyBroadcast_100Messages(t *testing.T) {
 	srvB := newTestServer(hub, "receiver", "Receiver")
 	defer srvB.Close()
 
-	connA := dial(t, srvA, "stress-broadcast-room")
-	defer connA.Close()
-	connB := dial(t, srvB, "stress-broadcast-room")
-	defer connB.Close()
-
 	// B1.10: the join-phase reads use a stress-sized retry deadline — the
 	// shared 2s single-shot readEnvelope deadline under parallel -race load
 	// produced the flaky "i/o timeout"; retrying transient deadline errors
@@ -109,9 +104,20 @@ func TestStress_HighFrequencyBroadcast_100Messages(t *testing.T) {
 			t.Fatalf("readStressEnvelope: %v", err)
 		}
 	}
+
+	// Join one at a time. With both dials issued back to back the receiver
+	// could register first; the sender's presence.join then landed in the
+	// receiver's stream where the first block.update was expected.
+	connA := dial(t, srvA, "stress-broadcast-room")
+	defer connA.Close()
 	_ = readStressEnvelope(connA) // sender join
-	_ = readStressEnvelope(connA) // receiver join received by sender
+	_ = readStressEnvelope(connA) // sender's presence.sync
+
+	connB := dial(t, srvB, "stress-broadcast-room")
+	defer connB.Close()
 	_ = readStressEnvelope(connB) // receiver join
+	_ = readStressEnvelope(connB) // receiver's presence.sync
+	_ = readStressEnvelope(connA) // receiver join received by sender
 
 	for i := range 100 {
 		sendEnvelope(t, connA, Envelope{
@@ -158,17 +164,22 @@ func TestStress_RoomIsolation(t *testing.T) {
 	srvC := newTestServer(hub, "user-c", "Charlie")
 	defer srvC.Close()
 
+	// Join one at a time, so each client's stream is known: its own join
+	// and presence.sync, then later joiners to its room. Dialed back to back,
+	// Charlie could register before Alice and Alice never got his join.
 	connA := dial(t, srvA, "room-alpha")
 	defer connA.Close()
+	_ = readEnvelope(t, connA) // Alice join
+	_ = readSync(t, connA)
 	connB := dial(t, srvB, "room-beta")
 	defer connB.Close()
+	_ = readEnvelope(t, connB) // Bob join
+	_ = readSync(t, connB)
 	connC := dial(t, srvC, "room-alpha")
 	defer connC.Close()
-
-	_ = readEnvelope(t, connA) // Alice join
-	_ = readEnvelope(t, connB) // Bob join
-	_ = readEnvelope(t, connA) // Charlie join (same room as Alice)
 	_ = readEnvelope(t, connC) // Charlie's own join
+	_ = readSync(t, connC)
+	_ = readEnvelope(t, connA) // Charlie join (same room as Alice)
 
 	sendEnvelope(t, connC, Envelope{
 		Type:    EventBlockUpdate,

@@ -49,7 +49,7 @@ func seedShare(t *testing.T, rt *Router, flowID, flowName, token string) {
 	}
 	if err := rt.security.Backend.SaveFlow(context.Background(), &storageif.FlowDocument{
 		ID:      flowID,
-		Name:    flowID,
+		Name:    flowName,
 		OwnerID: "alice",
 		Content: content,
 		Source:  "#Region \"Main\"\nDisplay.ShowMessageBox Message: 'hi'\n#EndRegion\n",

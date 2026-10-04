@@ -409,7 +409,7 @@ describe('KnowledgeBasePanel', () => {
     expect(await screen.findByText(/Your embedding model changed while the re-index was running/)).toBeInTheDocument()
     expect(call).toBe(2)
   })
-  // F-13: Stop keeps the committed pages resumable — the Resume action
+  // Stop keeps the committed pages resumable — the Resume action
   // continues from the last committed page's cursor without a re-confirm.
   it('offers Resume after Stop and continues from the committed page', async () => {
     seedStore('admin')
@@ -493,7 +493,7 @@ describe('KnowledgeBasePanel', () => {
     expect(screen.queryByRole('button', {name: 'Resume re-index'})).toBeNull()
   })
 
-  // F-13: a failed page hands the committed progress back on the error
+  // A failed page hands the committed progress back on the error
   // envelope (details.nextCursor); the panel resumes from THAT cursor.
   it('resumes a failed page from the error details cursor', async () => {
     seedStore('admin')
@@ -520,7 +520,7 @@ describe('KnowledgeBasePanel', () => {
     )
   })
 
-  // F-14: the document-too-large verdict is the server's own message (the
+  // The document-too-large verdict is the server's own message (the
   // figures name the real limit), not a generic upload failure.
   it('shows the document-too-large verdict verbatim on upload', async () => {
     seedStore('admin')
@@ -542,7 +542,7 @@ describe('KnowledgeBasePanel', () => {
     expect(await screen.findByText(/3000 passages exceed the limit of 2500/)).toBeInTheDocument()
   })
 
-  // F-33: the org credential's missing embedding deployment is the org
+  // The org credential's missing embedding deployment is the org
   // admin's to fix — the server message says so verbatim.
   it("shows the org's not-configured verdict verbatim on re-index", async () => {
     seedStore('admin')

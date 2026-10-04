@@ -116,7 +116,6 @@ func TestReportToCSV_BasicStructure(t *testing.T) {
 	if rows[1][0] != "unhandled-error" {
 		t.Errorf("row[1][0] = %q, want unhandled-error", rows[1][0])
 	}
-	// Verify comma in description was quoted properly (CSV reader handles it)
 	if rows[1][3] != "a,comma" {
 		t.Errorf("description = %q, want 'a,comma'", rows[1][3])
 	}

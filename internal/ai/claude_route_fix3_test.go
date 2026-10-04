@@ -525,8 +525,8 @@ func TestClaudeCatalogue_FoundryModelsAreUnpricedOnAzure(t *testing.T) {
 	if e, ok := catalogEntryFor("claude", "claude-opus-5-5-20261001"); !ok || e.ID != "claude-opus-5-5" {
 		t.Errorf("a dated Opus 5.5 must resolve to Opus 5.5, not Opus 5: %+v %v", e, ok)
 	}
-	// F-25: a portal-default mythos-preview deployment is catalogued at its
-	// real 1M/128K limits and stays out of the direct provider's picker.
+	// A portal-default mythos-preview deployment is catalogued at its real
+	// 1M/128K limits and stays out of the direct provider's picker.
 	if e, ok := catalogEntryFor("claude", "claude-mythos-preview"); !ok || e.ContextLimit != 1000000 || e.MaxOutputTokens != 128000 {
 		t.Errorf("claude-mythos-preview entry = %+v %v, want 1M / 128K", e, ok)
 	}

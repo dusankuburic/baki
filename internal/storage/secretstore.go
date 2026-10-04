@@ -27,12 +27,9 @@ var ErrSecretDecryptFailed = errors.New("secret could not be decrypted (deployme
 // the OS keychain (desktop mode, via NewKeyringSecretStore); cloud deployments
 // construct an encrypted, database-backed store instead (see
 // database.KeyStoreProvider) and inject it through fx like any other
-// dependency — there is deliberately no package-level active-store global here.
-// A prior version of this package held one (SetSecretStore/CurrentSecretStore),
-// which made cloud-mode secret storage depend on fx *invoke* ordering (the
-// global had to be set before anything resolved it) instead of the DAG; the
-// caller now gets a SecretStore value directly from whichever provider
-// constructed it.
+// dependency — there is deliberately no package-level active-store global here
+// (a prior SetSecretStore/CurrentSecretStore global made cloud-mode secret
+// storage depend on fx *invoke* ordering instead of the DAG).
 //
 // All methods take a scope that namespaces the secret to an owner. An empty
 // scope ("") is the legacy/local (single-user desktop) namespace and MUST map

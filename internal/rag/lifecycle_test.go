@@ -48,7 +48,7 @@ func TestAddDocument_ReplacesSameFilename(t *testing.T) {
 		t.Fatalf("second AddDocument: %v", err)
 	}
 
-	docs, err := store.ListKnowledgeDocuments(ctx, "org-1", 0)
+	docs, err := store.ListKnowledgeDocuments(ctx, "org-1", 0, 0)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestAddDocument_ReplaceIsolatesOrgs(t *testing.T) {
 	_ = svc.AddDocument(ctx, "scope", "org-B", "guide.md", "org B copy")
 
 	for _, org := range []string{"org-A", "org-B"} {
-		docs, _ := store.ListKnowledgeDocuments(ctx, org, 0)
+		docs, _ := store.ListKnowledgeDocuments(ctx, org, 0, 0)
 		if len(docs) != 1 {
 			t.Errorf("%s: want 1 document, got %d", org, len(docs))
 		}
@@ -171,7 +171,7 @@ func TestListKnowledgeDocuments_ChunkCounts(t *testing.T) {
 	ctx := context.Background()
 	_ = svc.AddDocument(ctx, "scope", "org-1", "a.md", strings.Repeat("x ", 1500)) // 2+ chunks
 
-	docs, err := store.ListKnowledgeDocuments(ctx, "org-1", 0)
+	docs, err := store.ListKnowledgeDocuments(ctx, "org-1", 0, 0)
 	if err != nil || len(docs) != 1 {
 		t.Fatalf("list: %v (%d docs)", err, len(docs))
 	}

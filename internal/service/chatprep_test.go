@@ -17,7 +17,7 @@ func TestBuildMessages_MergesContextIntoSingleUserTurn(t *testing.T) {
 		},
 		UserMessage: "what does this flow do?",
 	}
-	out := buildMessages(req, "FLOW CONTEXT HERE", "")
+	out := buildScopedMessages("", req, "FLOW CONTEXT HERE", "")
 
 	if len(out) != 3 {
 		t.Fatalf("want 3 messages (2 history + 1 merged user turn), got %d", len(out))
@@ -38,7 +38,7 @@ func TestBuildMessages_ExcludeContext(t *testing.T) {
 		UserMessage:    "plain question",
 		ExcludeContext: true,
 	}
-	out := buildMessages(req, "SHOULD NOT APPEAR", "")
+	out := buildScopedMessages("", req, "SHOULD NOT APPEAR", "")
 	if len(out) != 1 {
 		t.Fatalf("want 1 message, got %d", len(out))
 	}
@@ -51,7 +51,7 @@ func TestBuildMessages_ExcludeContext(t *testing.T) {
 // ExcludeContext is false.
 func TestBuildMessages_NoContext(t *testing.T) {
 	req := models.ChatRequest{UserMessage: "hi"}
-	out := buildMessages(req, "", "")
+	out := buildScopedMessages("", req, "", "")
 	if len(out) != 1 || out[0].Content != "hi" {
 		t.Errorf("empty context: got %+v, want single 'hi' user turn", out)
 	}
@@ -66,7 +66,7 @@ func TestBuildMessages_NoConsecutiveUserPairFromContext(t *testing.T) {
 		Messages:    []models.ChatMessage{{Role: "assistant", Content: "a"}},
 		UserMessage: "q",
 	}
-	out := buildMessages(req, "ctx", "")
+	out := buildScopedMessages("", req, "ctx", "")
 	// Exactly one trailing user message is appended; the context did not become a
 	// separate message.
 	if len(out) != 2 {
@@ -94,7 +94,7 @@ func TestBuildMessages_GuidelinesInUserTurnNotSystemPrompt(t *testing.T) {
 		UserMessage: "what does this flow do?",
 	}
 	guidelines := "**Relevant Organizational Guidelines**:\n- never log credentials"
-	out := buildMessages(req, "FLOW CONTEXT", guidelines)
+	out := buildScopedMessages("", req, "FLOW CONTEXT", guidelines)
 	if len(out) != 3 || out[0].Content != "earlier" || out[1].Content != "answer" {
 		t.Fatalf("history changed: %+v", out)
 	}
@@ -104,7 +104,7 @@ func TestBuildMessages_GuidelinesInUserTurnNotSystemPrompt(t *testing.T) {
 	}
 
 	req.ExcludeContext = true
-	out = buildMessages(req, "FLOW CONTEXT", guidelines)
+	out = buildScopedMessages("", req, "FLOW CONTEXT", guidelines)
 	if got := out[2].Content; got != guidelines+"\n\nwhat does this flow do?" {
 		t.Errorf("ExcludeContext user turn = %q, want the guidelines kept and the context dropped", got)
 	}

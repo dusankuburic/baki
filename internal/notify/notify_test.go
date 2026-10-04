@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -367,12 +368,10 @@ func TestValidateAlertURL_PrivateTargets(t *testing.T) {
 // TestNotifier_DoesNotFollowRedirects is the second half of the SSRF fix.
 //
 // Only the CONFIGURED URL passes through validateAlertURL — a redirect target
-// never did. 307/308 replay the method AND the body, so a perfectly legitimate,
-// policy-passing https endpoint could answer "307 -> http://127.0.0.1:2379/..."
-// and have the signed governance payload delivered there instead. The dial guard
-// would refuse the loopback hop, but the general shape (an external host
-// steering delivery somewhere the operator never configured) is what redirects
-// have to be refused for.
+// never did. 307/308 replay the method AND the body, so a policy-passing
+// https endpoint could answer "307 -> http://127.0.0.1:2379/..." and have the
+// signed governance payload delivered there instead: an external host
+// steering delivery somewhere the operator never configured.
 func TestNotifier_DoesNotFollowRedirects(t *testing.T) {
 	var followed int32
 	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -394,5 +393,56 @@ func TestNotifier_DoesNotFollowRedirects(t *testing.T) {
 
 	if n := atomic.LoadInt32(&followed); n != 0 {
 		t.Errorf("redirect was followed %d time(s); the payload reached a host the operator never configured", n)
+	}
+}
+
+// fakeDeliverer is a Dispatch test channel with controllable behaviour: it can
+// block (proving channels deliver concurrently), fail (proving isolation), or
+// both. It stands in for a notifier so the timing of the fan-out itself, not
+// HTTP round trips, is what the test measures.
+type fakeDeliverer struct {
+	name  string
+	delay time.Duration
+	err   error
+	calls atomic.Int32
+}
+
+func (f *fakeDeliverer) Name() string { return f.name }
+
+func (f *fakeDeliverer) Notify(ctx context.Context, ev Event) error {
+	f.calls.Add(1)
+	if f.delay > 0 {
+		select {
+		case <-time.After(f.delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return f.err
+}
+
+// TestDispatch_DeliversChannelsConcurrently: two channels that each hold the
+// delivery for 200 ms plus a permanently failing one must finish in about one
+// channel's time, not the sum — the scanner calls Dispatch synchronously per
+// alert, and the sequential walk made every sweep pay its slowest AND dead
+// channels back to back. All three still delivered exactly once; the failure
+// stays isolated in deliver.
+func TestDispatch_DeliversChannelsConcurrently(t *testing.T) {
+	slow1 := &fakeDeliverer{name: "slow-1", delay: 200 * time.Millisecond}
+	slow2 := &fakeDeliverer{name: "slow-2", delay: 200 * time.Millisecond}
+	dead := &fakeDeliverer{name: "dead", err: errors.New("channel is down")}
+	d := &Dispatcher{notifiers: []AlertNotifier{slow1, dead, slow2}, timeout: time.Second}
+
+	start := time.Now()
+	d.Dispatch(context.Background(), sampleEvent())
+	elapsed := time.Since(start)
+
+	for _, f := range []*fakeDeliverer{slow1, dead, slow2} {
+		if f.calls.Load() != 1 {
+			t.Errorf("%s delivered %d times, want exactly 1", f.name, f.calls.Load())
+		}
+	}
+	if elapsed >= 350*time.Millisecond {
+		t.Errorf("Dispatch of two concurrent 200ms channels took %v; want well under 350ms", elapsed)
 	}
 }

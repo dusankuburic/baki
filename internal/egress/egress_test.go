@@ -401,10 +401,9 @@ var noDNS = &net.Resolver{PreferGo: true, Dial: func(context.Context, string, st
 // Fix round for finding #13 (regression): GuardTransport — the guard notify's
 // GuardedTransport installs on tenant webhook targets — must not trust a
 // proxy. Behind a proxy on an internal address every request fails closed,
-// whatever the target, because that proxy's own resolution of the name is
-// beyond this process (the reproduction: GET http://internal-only.invalid/
-// latest/meta-data with HTTP_PROXY on a private address was forwarded to the
-// proxy). Behind a proxy the dial guard allows, the target is judged strictly.
+// whatever the target, because the proxy's own resolution of the name is
+// beyond this process. Behind a proxy the dial guard allows, the target is
+// judged strictly.
 func TestGuardTransport_ProxyFailsClosed(t *testing.T) {
 	proxyURL, proxied, lastTarget := countingProxy(t)
 	client := func(r *net.Resolver, policy Policy) (*http.Client, *http.Transport) {

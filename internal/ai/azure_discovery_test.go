@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// Part 9 discovery: a saved resource's project deployments and agents as
+// Discovery: a saved resource's project deployments and agents as
 // candidate registry entries — kinds, windows, "already added" — with
 // partial failures as warnings, typed refusals, and nothing written to the
 // process caches the chat path reads.

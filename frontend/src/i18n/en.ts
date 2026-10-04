@@ -880,7 +880,7 @@ export const chat = {
     searchClose: 'Close message search',
     toolsOn: 'Tools on',
     toolsOff: 'Tools off',
-    // F-39: shown (disabled) for Foundry agents, whose portal definition owns
+    // Shown (disabled) for Foundry agents, whose portal definition owns
     // the tool list — the on/off toggle would be inert. The reason is read
     // with it (the item stays reachable by keyboard).
     toolsAgent: 'Tools: defined by the agent',
@@ -1196,7 +1196,7 @@ export const chat = {
     busyBody: '{{count}} chats are already generating — wait for one to finish or stop it, then try again.',
     noStream: '*Error: No response stream was created. Please check your connection and try again.*',
     sendFailed: 'Failed to send message',
-    // F-42: offered next to (or instead of) openSettings when the failure
+    // Offered next to (or instead of) openSettings when the failure
     // came from the organisation's shared credential.
     openOrgSettings: 'Open organisation settings',
     budgetTitle: "You've reached today's AI budget{{detail}}",

@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// ---- parseClaudeSSE: uncovered branches ------------------------------------
-
 func TestParseClaudeSSE_MessageStart_InputTokens(t *testing.T) {
 	input := "event: message_start\n" +
 		"data: {\"message\": {\"usage\": {\"input_tokens\": 42}}}\n\n" +
@@ -72,8 +70,6 @@ func TestParseClaudeSSE_EOF_WithoutDone_ReturnsTruncatedError(t *testing.T) {
 		t.Error("truncated stream should not emit a Done chunk — that would mask the partial response")
 	}
 }
-
-// ---- parseOpenAISSE: uncovered branches ------------------------------------
 
 func TestParseOpenAISSE_WithUsageInFinishChunk(t *testing.T) {
 	// Finish chunk includes usage metadata → tokensIn and tokensOut in Done chunk.
@@ -150,8 +146,6 @@ func TestParseOpenAISSE_EOF_WithoutDone_ReturnsTruncatedError(t *testing.T) {
 		t.Error("truncated stream should not emit a Done chunk")
 	}
 }
-
-// ---- parseGeminiSSE: EOF without doneSent → auto-done ---------------------
 
 func TestParseGeminiSSE_EOF_WithoutFinishReason_ReturnsTruncatedError(t *testing.T) {
 	// Stream ends without any finishReason. Same rationale as Claude/OpenAI.

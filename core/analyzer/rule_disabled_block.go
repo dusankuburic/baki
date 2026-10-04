@@ -18,10 +18,9 @@ func (r *DisabledBlockRule) Category() string                 { return "Style" }
 
 func (r *DisabledBlockRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	// The DISABLED_ RawType prefix is the primary signal (Power Automate marks
-	// disabled actions this way). The "(disabled)" name substring is a secondary
-	// heuristic for renamed actions — but it must NOT match COMMENT blocks,
-	// whose Name carries arbitrary comment text (e.g. "# TODO re-enable
-	// (disabled) action"), which would otherwise be a false positive.
+	// disabled actions this way); the "(disabled)" name substring is a secondary
+	// heuristic that must NOT match COMMENT blocks, whose Name carries arbitrary
+	// comment text (e.g. "# TODO re-enable (disabled) action").
 	isDisabled := strings.HasPrefix(block.RawType, "DISABLED_") ||
 		(block.Type != models.BlockTypeComment && strings.Contains(block.Name, "(disabled)"))
 	if !isDisabled {
@@ -39,6 +38,4 @@ func (r *DisabledBlockRule) Check(block *models.Block, ctx *RuleContext) []model
 	}}
 }
 
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
 func init() { registerRule(&DisabledBlockRule{}) }

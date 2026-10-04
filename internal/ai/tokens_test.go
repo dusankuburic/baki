@@ -30,12 +30,10 @@ func TestTruncateToTokenLimit(t *testing.T) {
 	// 14 words, ~15 tokens
 	result := TruncateToTokenLimit(text, 10)
 
-	// The result should end with "..."
 	if !strings.HasSuffix(result, "...") {
 		t.Errorf("expected truncated text to end with '...', got: %q", result)
 	}
 
-	// The truncated text should be ~10 tokens
 	truncatedTokens := EstimateTokens(result)
 	if truncatedTokens > 10 {
 		t.Errorf("truncated text has too many tokens: got %d, max 10", truncatedTokens)

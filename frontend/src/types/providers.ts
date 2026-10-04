@@ -99,7 +99,7 @@ export type AzureFoundryAuthMode = 'api_key' | 'entra' | 'entra_cli'
 export type AzureFoundryAuthInput =
   | {mode: 'api_key'; key?: string}
   | {mode: 'entra'; tenantId: string; clientId: string; clientSecret?: string}
-  /** Azure CLI sign-in (F-51): the CLI's signed-in user is the credential — no client id or secret, just an optional tenant. */
+  /** Azure CLI sign-in: the CLI's signed-in user is the credential — no client id or secret, just an optional tenant. */
   | {mode: 'entra_cli'; tenantId?: string}
 
 // ---- Azure AI Foundry model registry: several resources, each with models ----

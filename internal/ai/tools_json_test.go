@@ -8,10 +8,10 @@ import (
 )
 
 // ExecuteTool answers malformed argument JSON with the standard retryable
-// error result (audit #9 F-11) instead of letting a handler choke on it: the
-// model reads the message and can re-issue the call with valid JSON, and the
-// loop keeps its bounded tool-result contract. Empty input is the providers'
-// "no arguments" and still runs.
+// error result instead of letting a handler choke on it: the model reads the
+// message and can re-issue the call with valid JSON, and the loop keeps its
+// bounded tool-result contract. Empty input is the providers' "no arguments"
+// and still runs.
 func TestExecuteTool_InvalidJSONArguments(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

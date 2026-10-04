@@ -14,31 +14,17 @@ import (
 )
 
 // ── Block editing (R3-1b) ───────────────────────────────────────────────────
-//
-// RemoveBlock / DuplicateBlock are the visual-editor write operations: they
-// turn a block identity into a line-range Patch (the same machinery the
-// auto-fixers use) and persist through the established mutation paths —
-// PatchFlow on desktop (locking, parse gate, snapshot, reload) and
-// applyCloudPatch in cloud (alignment, folder member targeting, snapshot) —
-// so every edit is snapshotted for undo and parse-gated against corruption.
+// RemoveBlock / DuplicateBlock patch by line range via PatchFlow / applyCloudPatch.
 
-// inlineRetryDirective reports whether a source line is an `ON ERROR REPEAT…`
-// directive — the retry policy folded into the PRECEDING block's properties
-// at parse time. It carries no block of its own, so a block's physical span
-// must absorb it when present (delete removes it with its action; duplicate
-// copies it with its action).
+// inlineRetryDirective reports whether a line is an `ON ERROR REPEAT…`
+// directive — parsed into the PRECEDING block, so a span must absorb it.
 func inlineRetryDirective(line string) bool {
 	t := strings.TrimSpace(line)
 	return strings.HasPrefix(t, "ON ERROR") && strings.Contains(t, "REPEAT")
 }
 
-// spanMatchesBlock is the stale-source drift guard: the block's span was
-// computed against the doc's parse, but the patch applies to bytes read from
-// disk NOW. If the file changed underneath (external edit between load and
-// edit), the span's start line no longer holds this block — verify the line
-// still mentions the block's own action keyword before patching. Keyword
-// blocks (IF/LOOP/SET/COMMENT/…) carry their keyword in RawType too, so one
-// containment check covers every shape.
+// spanMatchesBlock is the stale-source drift guard: the span came from the
+// doc's parse but patches bytes read NOW — the start line must still carry the block keyword.
 func spanMatchesBlock(line string, block *models.Block) bool {
 	if block.RawType == "" {
 		return true // nothing to verify against
@@ -46,9 +32,8 @@ func spanMatchesBlock(line string, block *models.Block) bool {
 	return strings.Contains(line, block.RawType)
 }
 
-// blockEditPatch builds the remove/insert ops for one block against the
-// given text. Span = BlockSpan + any trailing inline-retry directive lines.
-// kind is "remove" or "duplicate".
+// blockEditPatch builds the remove/insert ops for one block: span = BlockSpan
+// plus trailing inline-retry directive lines; kind is "remove" or "duplicate".
 func blockEditPatch(text string, block *models.Block, file, kind string) (models.Patch, error) {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	start, end := analyzer.BlockSpan(block)
@@ -99,9 +84,8 @@ func (s *FlowService) editBlock(ctx context.Context, doc *models.FlowDocument, b
 		return nil, fmt.Errorf("block %q not found", blockID)
 	}
 
-	// Desktop: the block's line numbers come from the parse of its member
-	// file — read that file, build the patch, and let PatchFlow do the rest
-	// (per-file lock, parse gate, snapshot, folder-aware reload).
+	// Desktop: line numbers come from the member file's parse — read it,
+	// build the patch, let PatchFlow do the rest (lock, gate, snapshot, reload).
 	if doc.FilePath != "" {
 		text, file, _, _, _, err := s.blockEditTargetText(doc, block, blockID)
 		if err != nil {
@@ -144,10 +128,8 @@ func (s *FlowService) editBlock(ctx context.Context, doc *models.FlowDocument, b
 
 // ── Bulk delete + rename (U3b power editing) ────────────────────────────────
 
-// removeBlocksPatch builds ONE patch removing every block span (plus trailing
-// retry directives) against the same text snapshot. Spans must not overlap
-// (an ancestor+descendant selection refuses rather than double-deleting
-// shared lines); ApplyPatch applies the removes bottom-up.
+// removeBlocksPatch builds ONE patch removing every block span (+trailing
+// retry directives) from one snapshot; overlapping spans refuse, removes run bottom-up.
 func removeBlocksPatch(text, file string, blocks []*models.Block) (models.Patch, error) {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	type span struct{ start, end int }
@@ -187,8 +169,7 @@ func memberFileFor(doc *models.FlowDocument, blockID string) string {
 }
 
 // RemoveBlocks deletes several blocks in ONE patch (U3b bulk delete): one
-// parse gate, one snapshot, one write. All targets must live in the SAME
-// member file (a cross-file batch would need one patch per file).
+// parse gate, one snapshot, one write; all targets must share a member file.
 func (s *FlowService) RemoveBlocks(ctx context.Context, doc *models.FlowDocument, blockIDs []string) (*models.FlowDocument, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
@@ -292,11 +273,8 @@ func (s *FlowService) RemoveBlocks(ctx context.Context, doc *models.FlowDocument
 	return s.applyCloudPatch(ctx, doc, cctx)
 }
 
-// RenameBlock renames a block whose name is USER-CONTROLLED text on its
-// first source line: LABEL blocks (and every same-file GOTO that targets the
-// old label name) and COMMENT blocks. Action names are derived from raw type
-// + properties — those refuse with a pointer to Edit properties.
-// Returns the updated document and the number of GOTO references rewritten.
+// RenameBlock renames a LABEL block (rewriting same-file GOTO references) or
+// a COMMENT block; derived action names refuse. Returns doc + GOTOs rewritten.
 func (s *FlowService) RenameBlock(ctx context.Context, doc *models.FlowDocument, blockID, newName string) (*models.FlowDocument, int, error) {
 	if doc == nil {
 		return nil, 0, fmt.Errorf("no flow loaded")
@@ -364,9 +342,8 @@ func (s *FlowService) RenameBlock(ctx context.Context, doc *models.FlowDocument,
 	patch := models.Patch{File: file}
 	gotoRefs := 0
 	if target.RawType == "LABEL" {
-		// Labels appear quoted in user exports ('Done') but the CANONICAL
-		// serializer emits them bare — match the form the label's own line
-		// uses, and accept that form on GOTO reference lines.
+		// Labels appear quoted in user exports but the CANONICAL serializer
+		// emits them bare — match the label's own form, on it and on GOTOs.
 		oldQ, newQ := "'"+oldName+"'", "'"+newName+"'"
 		useBare := !strings.Contains(lines[start-1], oldQ)
 		if useBare {
@@ -403,12 +380,8 @@ func (s *FlowService) RenameBlock(ctx context.Context, doc *models.FlowDocument,
 	return updated, gotoRefs, err
 }
 
-// blockEditTargetText resolves, for a DESKTOP doc, the CURRENT source text
-// the block's line numbers refer to plus its member file (the block from the
-// caller's doc — its parse read this file; "" file for single-file docs).
-// Cloud callers use alignCloudBlock instead; the cctx/target/targetDoc
-// returns are nil on this path (kept in the signature so property edits read
-// uniformly).
+// blockEditTargetText resolves a DESKTOP doc's CURRENT member-file text and
+// file ("" = single-file); cloud callers use alignCloudBlock instead.
 func (s *FlowService) blockEditTargetText(doc *models.FlowDocument, block *models.Block, blockID string) (line, file string, cctx *cloudFixContext, target *models.Block, targetDoc *models.FlowDocument, err error) {
 	targetPath := doc.FilePath
 	if info, serr := os.Stat(doc.FilePath); serr == nil && info.IsDir() {
@@ -433,20 +406,14 @@ func isBareValue(form string) bool {
 	return !strings.HasPrefix(form, "'")
 }
 
-// quotedValueForms renders v in every surface form a parsed property value
-// may take in the source line, most-explicit first (PAD quotes values
-// containing spaces/specials; bare is the enum/default form). Each entry is
-// the FULL literal — open quotes, value, matching close quotes.
+// quotedValueForms renders v in every surface form a parsed property value may
+// take in the source, most-explicit first; bare is the enum/default form.
 func quotedValueForms(v string) []string {
 	return []string{"$'''" + v + "'''", "'''" + v + "'''", "'" + v + "'", v}
 }
 
-// locatePropertyValue finds `key: <oldvalue>` in the block's source line and
-// returns the exact matched segment (key + separator + quoted old value) so a
-// targeted replace can swap ONLY this property. The old value's surface form
-// is tried in each quoting style — the parser unwraps any of them to the same
-// parsed value. Returns ok=false when no form matches (drifted source, or the
-// property is synthetic/derived) — callers refuse rather than guess.
+// locatePropertyValue returns the exact `key: <oldvalue>` segment of the
+// block's line (every quoting form tried); ok=false = drift or synthetic key — callers refuse.
 func locatePropertyValue(line, key, oldValue string) (string, bool) {
 	if key == "" || strings.ContainsAny(key, `:$`) {
 		return "", false
@@ -478,10 +445,8 @@ func locatePropertyValue(line, key, oldValue string) (string, bool) {
 			if !strings.HasPrefix(line[valStart:], old) {
 				continue
 			}
-			// Bare form guard: a bare prefix could match early inside a
-			// longer token (old="30" must not match "300"). The char after a
-			// bare match must be a boundary: EOL or whitespace. Quoted forms
-			// self-terminate at their closing quotes, so no extra check.
+			// Bare form guard: the char after a bare match must be EOL or
+			// whitespace (old="30" must not match "300"); quoted forms self-terminate.
 			segEnd := valStart + len(old)
 			if isBareValue(old) && segEnd < len(line) && line[segEnd] != ' ' && line[segEnd] != '\t' {
 				continue // bare match is a strict prefix of a longer token
@@ -492,13 +457,8 @@ func locatePropertyValue(line, key, oldValue string) (string, bool) {
 	return "", false
 }
 
-// UpdateBlockProperties applies a batch of property edits to one block: each
-// changed value becomes a targeted in-line replace (`Key: oldform` →
-// `Key: newform`), preserving every other property's original text, order,
-// and quoting on the line. Multi-line-literal blocks and `_`-prefixed
-// (parser-derived) keys are refused — the source editor covers those. The
-// mutation rides the established paths (parse gate, snapshot, folder/cloud
-// alignment) exactly like RemoveBlock.
+// UpdateBlockProperties applies a batch of edits as targeted in-line replaces
+// (`Key: oldform` → `Key: newform`); multi-line-literal blocks and `_` keys refuse.
 func (s *FlowService) UpdateBlockProperties(ctx context.Context, doc *models.FlowDocument, blockID string, changes map[string]string) (*models.FlowDocument, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
@@ -589,10 +549,8 @@ func (s *FlowService) UpdateBlockProperties(ctx context.Context, doc *models.Flo
 	return s.PatchFlow(doc, patch)
 }
 
-// siblingList returns the ordered non-END siblings of blockID in its parent
-// scope (container children, or subflow top-level blocks), plus the target's
-// index. Containers' END markers parse as children and are excluded — moving
-// past an END would eject the block from its container.
+// siblingList returns the ordered non-END siblings of blockID in its scope
+// plus its index; END markers are excluded — moving past one ejects the block.
 func siblingList(doc *models.FlowDocument, blockID string) ([]*models.Block, int, bool) {
 	// editable reports whether a parsed child is a movable sibling (structural
 	// markers are not).
@@ -642,11 +600,8 @@ func siblingList(doc *models.FlowDocument, blockID string) ([]*models.Block, int
 	return nil, -1, false
 }
 
-// MoveBlock reorders a block among its siblings ("up" = before the previous
-// sibling, "down" = after the next). The move is a remove + verbatim insert
-// patch pair — ApplyPatch applies removes first, so the insert's BeforeLine
-// is computed in POST-REMOVAL coordinates. Parse-gated and snapshotted like
-// every block edit; containers carry their whole span (children + END).
+// MoveBlock reorders a block among its siblings ("up"/"down") via a remove +
+// insert pair; the insert's BeforeLine is in POST-REMOVAL coordinates.
 func (s *FlowService) MoveBlock(ctx context.Context, doc *models.FlowDocument, blockID, direction string) (*models.FlowDocument, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
@@ -660,9 +615,7 @@ func (s *FlowService) MoveBlock(ctx context.Context, doc *models.FlowDocument, b
 	}
 
 	// Alignment: desktop reads the member file; cloud bridges canonically.
-	// Sibling enumeration happens on the SAME doc the line numbers refer to
-	// (desktop: the caller's doc — its parse read this file; cloud bridge:
-	// the canon re-parse).
+	// Sibling enumeration happens on the SAME doc the line numbers refer to.
 	var moveDoc *models.FlowDocument
 	var patchFile string
 	var cctx *cloudFixContext
@@ -785,12 +738,8 @@ func (s *FlowService) MoveBlock(ctx context.Context, doc *models.FlowDocument, b
 	return s.PatchFlow(doc, patch)
 }
 
-// MoveBlockTo reorders a block relative to a REFERENCE sibling ("before" or
-// "after" it) — the atomic primitive a drag-and-drop maps to (up/down can't
-// express a multi-position move). Re-parenting is out of scope by design:
-// the reference must be a SIBLING of the moved block (same scope), else the
-// edit is refused — moving into/out of a container changes tree semantics
-// (indentation, variable scope) and is the L-sized freeform-reorder story.
+// MoveBlockTo reorders a block relative to a REFERENCE sibling ("before"/"after")
+// — the drag-and-drop primitive up/down cannot express; cross-container refs re-indent.
 func (s *FlowService) MoveBlockTo(ctx context.Context, doc *models.FlowDocument, blockID, refBlockID, position string) (*models.FlowDocument, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
@@ -828,8 +777,7 @@ func (s *FlowService) MoveBlockTo(ctx context.Context, doc *models.FlowDocument,
 		}
 		block = target
 		// Bridge re-parses mint fresh block IDs: relocate the REFERENCE block
-		// from the caller's doc into the canon tree by preorder index (the
-		// same relocation+shape-guard contract as the moved block).
+		// by preorder index (same relocation+shape-guard contract as the moved block).
 		idx, orig := preorderIndexOf(doc, refBlockID)
 		if orig == nil {
 			return nil, fmt.Errorf("reference block %q not found", refBlockID)
@@ -873,10 +821,8 @@ func (s *FlowService) MoveBlockTo(ctx context.Context, doc *models.FlowDocument,
 			return nil, fmt.Errorf("the block is already there")
 		}
 	} else {
-		// Cross-scope re-parent: the reference lives in another container.
-		// The same remove+insert composes the move; the copied lines are
-		// re-indented to the reference's depth (below). Structural markers
-		// stay invalid anchors — dropping next to one is ambiguous.
+		// Cross-scope re-parent: the same remove+insert composes the move;
+		// copied lines re-indent to the reference's depth; markers stay invalid.
 		ref = s.FindBlockByID(moveDoc, refBlockID)
 		if ref == nil {
 			return nil, fmt.Errorf("reference block %q not found", refBlockID)
@@ -962,9 +908,7 @@ func (s *FlowService) MoveBlockTo(ctx context.Context, doc *models.FlowDocument,
 	copied := make([]string, removed)
 	copy(copied, lines[bs-1:be])
 	// Cross-scope: shift the copied subtree's indentation to the reference's
-	// depth so the re-parse nests it under the reference's parent. Interior
-	// blank lines stay blank; multi-line literals shift with their block (the
-	// same trade-off the wrap fixer's IndentDelta makes).
+	// depth so the re-parse nests it under the reference's parent; blanks stay blank.
 	if refIndex < 0 {
 		copied = reindentLines(copied, ref.Indent-block.Indent)
 	}
@@ -984,8 +928,7 @@ func (s *FlowService) MoveBlockTo(ctx context.Context, doc *models.FlowDocument,
 }
 
 // reindentLines shifts each line's leading whitespace by delta COLUMNS
-// (Block.Indent units: space=1, tab=4 — so one nesting level is 4). Blank
-// lines stay blank; an outdent never eats past the first non-whitespace byte.
+// (space=1, tab=4); blanks stay blank, outdent stops at the first non-space byte.
 func reindentLines(lines []string, delta int) []string {
 	if delta == 0 {
 		return lines
@@ -1004,9 +947,8 @@ func reindentLines(lines []string, delta int) []string {
 	return out
 }
 
-// outdentColumns strips up to cols leading whitespace columns from ln. A tab
-// that straddles the target column is dropped and its surviving columns
-// re-emitted as spaces, so the text after it keeps its physical position.
+// outdentColumns strips up to cols leading whitespace columns from ln; a tab
+// straddling the target is dropped, its surviving columns re-emitted as spaces.
 func outdentColumns(ln string, cols int) string {
 	i, seen := 0, 0
 	for i < len(ln) && seen < cols {

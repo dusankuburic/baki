@@ -25,18 +25,14 @@ func (p *promptLoopProvider) Stream(ctx context.Context, req ai.Request, onChunk
 	return p.FakeProvider.Stream(ctx, req, onChunk)
 }
 
-// TestRunPromptToolLoop_FeedbackFormatIsSchemaValid pins A3 + the truncation
-// pin for the prompt-based tool loop (Copilot):
-//
-//  1. Tool results feed back as a USER message carrying <tool_result> markers.
-//     The pre-fix code appended a bare role:"tool" message — schema-invalid on
-//     OpenAI-compatible wires (tool messages must answer an assistant
-//     tool_calls turn this protocol never emits), so Copilot 400-rejected the
-//     second request of every tool conversation.
-//  2. The tool protocol lives in the request's SystemPrompt, not an injected
-//     leading system message — the injected variant took the truncation pin
-//     (Messages[:1]), so under context overflow the junction repair dropped
-//     the USER'S QUESTION while pinning tool-instruction boilerplate.
+// TestRunPromptToolLoop_FeedbackFormatIsSchemaValid pins A3 + the truncation pin for the
+// prompt-based tool loop (Copilot): (1) tool results feed back as a USER message carrying
+// <tool_result> markers — the pre-fix bare role:"tool" message was schema-invalid on
+// OpenAI-compatible wires (tool messages must answer an assistant tool_calls turn this
+// protocol never emits), 400-rejecting every tool conversation's second request; (2) the
+// tool protocol lives in the request's SystemPrompt, not an injected leading system
+// message — the injected variant took the truncation pin (Messages[:1]), so under context
+// overflow the junction repair dropped the USER'S QUESTION while pinning tool boilerplate.
 func TestRunPromptToolLoop_FeedbackFormatIsSchemaValid(t *testing.T) {
 	prov := &promptLoopProvider{FakeProvider: testutil.FakeProvider{Tools: false, Turns: []testutil.FakeTurn{
 		{Text: "Let me check.\n<tool_call>\n{\"name\": \"search_flow\", \"input\": {\"query\": \"xav\"}}\n</tool_call>", TokensIn: 10, TokensOut: 5},

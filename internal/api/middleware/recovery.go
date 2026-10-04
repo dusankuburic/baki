@@ -27,11 +27,15 @@ func Recovery(h http.Handler) http.Handler {
 
 // AttrsFromRequest builds the structured context attached to a forwarded HTTP
 // panic: method, path, and request id (when present) so the exception backend
-// can group/route by endpoint and correlate with access logs.
+// can group/route by endpoint and correlate with access logs. The path is
+// canonicalised before redaction, as in AccessLog: a panic below the router
+// sees the path it cleaned, but one before it (in the rate limiter) sees the
+// raw spelling, where /api/v1/invites/{token} or /api//invites/{token} would
+// slip past redactPath's prefix match.
 func AttrsFromRequest(r *http.Request) errreport.Attrs {
 	attrs := errreport.Attrs{
 		"method": r.Method,
-		"path":   redactPath(r.URL.Path),
+		"path":   redactPath(canonicalPath(r.URL.Path)),
 	}
 	if rid := r.Header.Get("X-Request-Id"); rid != "" {
 		attrs["request_id"] = rid

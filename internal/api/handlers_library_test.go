@@ -9,8 +9,6 @@ import (
 	"pad-analyzer/internal/auth"
 )
 
-// --- No-storage (nil backend) baseline tests ---
-
 func TestHandleLibraryCreate_BadBodyReturns400(t *testing.T) {
 	rt := newTestRouter(nil, false)
 	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/library")
@@ -34,8 +32,6 @@ func TestHandleLibrary_UnknownMethodReturns405(t *testing.T) {
 	rr := doRequest(t, rt, http.MethodPatch, "/api/library", nil)
 	checkStatus(t, rr, http.StatusMethodNotAllowed)
 }
-
-// --- JWT + filesystem backend ownership tests ---
 
 func TestHandleLibraryGet_OwnerCanRead(t *testing.T) {
 	rt, seed := newLibraryTestRouter(t)
@@ -167,8 +163,6 @@ func TestHandleLibraryUpdate_OwnerCanUpdate(t *testing.T) {
 		t.Errorf("expected name=renamed, got %v", resp["name"])
 	}
 }
-
-// --- Org scoping tests (H1: enumeration, H4: spoofing) ---
 
 func TestLibraryList_OrgNonMemberForbidden(t *testing.T) {
 	rt, _ := newLibraryTestRouter(t)

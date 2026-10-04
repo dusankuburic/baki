@@ -24,14 +24,10 @@ const sensitiveExposureFlow = "#Region \"Main\"\n" +
 	"#EndRegion\n"
 
 // TestFixLoop_SkipsBehaviourChangingFixesByDefault is the gate on unattended
-// application.
-//
-// Both of these fixers document, in their own doc comments, that they change
-// what the flow DOES — "stop the bleed" fixes the user is expected to follow up
-// on. Nothing enforced that: ApplyFixesToSourceDoc applies any finding carrying
-// a non-empty AutoFix, so `bakicli fix` and the UI's "fix all" applied them
-// unattended, with the round-trip gate reporting success because the finding had
-// indeed disappeared.
+// application: both of these fixers are "stop the bleed" fixes the user is
+// expected to follow up on, and nothing enforced that — the fix loop applied
+// any finding carrying a non-empty AutoFix, with the round-trip gate
+// reporting success because the finding had indeed disappeared.
 func TestFixLoop_SkipsBehaviourChangingFixesByDefault(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -114,18 +110,13 @@ func TestIsBehaviourChangingFix(t *testing.T) {
 	}
 }
 
-// TestBehaviourChangingGate_HasOneDefinition guards against the gate being added
-// in one place and forgotten in the others.
-//
-// When this gate was first added it was consulted in exactly ONE place — the
-// batch fix loop. Three other call sites reach PatchForFix directly: the cloud
-// folder fix, the single-finding apply, and the assistant's proposal builder.
-// The assistant one mattered most: its approval card shows a one-line summary
-// with no risk signal, so "Approve" could not convey what was being accepted.
-//
-// This test exists so the SET is authoritative. If a fix type is added here,
-// every gated path picks it up; whether a given path consults the gate is
-// asserted in that path's own package.
+// TestBehaviourChangingGate_HasOneDefinition guards against the gate being
+// added in one place and forgotten in the others: when first added it was
+// consulted only by the batch fix loop, while the single-finding apply and
+// the assistant's proposal builder (whose approval card shows no risk
+// signal) reached PatchForFix directly. The SET is authoritative — a fix
+// type added here is picked up by every gated path; whether a given path
+// consults the gate is asserted in that path's own package.
 func TestBehaviourChangingGate_HasOneDefinition(t *testing.T) {
 	// A fix type not in the set must be applicable everywhere, or the gate has
 	// silently widened.
@@ -157,17 +148,13 @@ var undefinedVarFlows = map[string]string{
 
 // TestReplaceWithVariable_NotAppliedUnattended is the regression gate for the
 // third behaviour-changing fixer, found after the first two were gated.
-//
-// replace-with-variable swaps a working literal for %input_<prop>% and emits NO
-// companion initialisation, so the flow is left referencing a variable defined
-// nowhere — the action still runs and now fails. That is precisely the failure
-// mode mask-sensitive-variable was gated for. It went unnoticed because
-// rule_uninitialized_variable deliberately ignores the input_ prefix, so the
-// analyzer calls the broken result clean.
-//
-// It is the auto-fix for hardcoded-credential, -url, -ip, -filepath and
-// -ui-coordinates: the security findings a user is most likely to accept from a
-// one-line approval card.
+// replace-with-variable swaps a working literal for %input_<prop>% and emits
+// NO companion initialisation, so the flow is left referencing a variable
+// defined nowhere — precisely the failure mode mask-sensitive-variable was
+// gated for. It went unnoticed because rule_uninitialized_variable
+// deliberately ignores the input_ prefix, so the analyzer calls the broken
+// result clean. It is the auto-fix for the hardcoded-* security findings a
+// user is most likely to accept from a one-line approval card.
 func TestReplaceWithVariable_NotAppliedUnattended(t *testing.T) {
 	for rule, flow := range undefinedVarFlows {
 		t.Run(rule, func(t *testing.T) {

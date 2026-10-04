@@ -36,14 +36,7 @@ func newParseState() *parseState {
 	return &parseState{}
 }
 
-// processToken dispatches one Token to the handler for its Kind. Each handler
-// is an independent, self-contained mutation of parseState (no case depends
-// on another having run first beyond the shared stack/current fields they all
-// read and write directly) — that independence is what makes extracting them
-// into named methods pure code movement rather than a behavior change: a
-// `return` inside a handler ends that handler exactly where the original
-// inline case body would have ended (there is nothing after the switch for
-// control to fall into either way).
+// processToken dispatches one Token to the handler for its Kind.
 func (s *parseState) processToken(tok Token) {
 	switch tok.Kind {
 	case TokEmpty:
@@ -79,11 +72,7 @@ func (s *parseState) processToken(tok Token) {
 	}
 }
 
-// requireSubflow reports whether processing is currently inside a subflow (has
-// seen a TokSubflowStart with no matching TokSubflowEnd yet). If not, it
-// records a "<kind> outside subflow" parse error and returns false, so the
-// caller can bail out. Shared by every token kind that only makes sense
-// inside a subflow.
+// requireSubflow records a "<kind> outside subflow" parse error and returns false when outside a subflow.
 func (s *parseState) requireSubflow(tok Token, kind string) bool {
 	if s.current != nil {
 		return true
@@ -95,12 +84,10 @@ func (s *parseState) requireSubflow(tok Token, kind string) bool {
 	return false
 }
 
-// stackHas reports whether any entry on the stack has the given block type.
-// Used by the CASE/DEFAULT/ELSE handlers to detect a misplaced branch before
-// popping: previously they popped unconditionally to find their parent type,
-// and when it was absent they cleared the entire stack — destroying the
-// nesting context and orphaning every subsequent sibling at the root, with no
-// parse error recorded.
+// stackHas reports whether any stack entry has the given block type; the
+// CASE/DEFAULT/ELSE handlers must check before popping — unconditional popping
+// when the parent type was absent cleared the entire stack, orphaning every
+// subsequent sibling at the root.
 func (s *parseState) stackHas(t models.BlockType) bool {
 	for _, e := range s.stack {
 		if e.block.Type == t {
@@ -110,11 +97,9 @@ func (s *parseState) stackHas(t models.BlockType) bool {
 	return false
 }
 
-// requireDepth reports whether the nesting stack has room for one more level.
-// If not, it records a "nesting depth exceeds N" parse error and returns
-// false. Shared by every block-opening token kind (the flat ones — CASE/
-// DEFAULT/ELSE reuse an existing stack level instead of pushing a new nesting
-// level, so they don't need this guard).
+// requireDepth reports whether the nesting stack has room for one more level,
+// else records a "nesting depth exceeds N" parse error; flat kinds
+// (CASE/DEFAULT/ELSE) reuse a level.
 func (s *parseState) requireDepth(tok Token) bool {
 	if len(s.stack) < maxNestingDepth {
 		return true
@@ -127,11 +112,10 @@ func (s *parseState) requireDepth(tok Token) bool {
 }
 
 func (s *parseState) recordMalformedLine(tok Token) {
-	// An unterminated multi-line span is not an ordinary unclassifiable line.
-	// One malformed line loses one entry; an unclosed /# or ''' consumed every
-	// line after it, so the tree is missing arbitrary amounts of content. Report
-	// the specific cause at error severity, which is the severity CountParseErrors
-	// (and so the CI gate and the fix loop's regression guard) actually counts.
+	// An unterminated multi-line span is not an ordinary unclassifiable line:
+	// an unclosed /# or triple-quote consumed every line after it — report at
+	// error severity, the severity CountParseErrors counts (CI gate, fix-loop
+	// regression guard).
 	if tok.RawType == "UNTERMINATED" {
 		s.parseErrors = append(s.parseErrors, models.ParseError{
 			Line: tok.Line, Column: tok.Column, Message: tok.Name,
@@ -146,9 +130,9 @@ func (s *parseState) recordMalformedLine(tok Token) {
 }
 
 func (s *parseState) handleSubflowStart(tok Token) {
-	// Check for unclosed blocks before starting a new subflow (mirrors
-	// handleSubflowEnd). Without this, a missing EndRegion before the next
-	// Region silently drops all open IF/LOOP/BLOCK entries.
+	// Record unclosed blocks before starting a new subflow (mirrors
+	// handleSubflowEnd): a missing EndRegion would otherwise silently drop
+	// all open IF/LOOP/BLOCK entries.
 	s.recordUnclosedBlocks()
 	s.current = &builtSubflow{id: uuid.NewString(), name: tok.Name}
 	s.built = append(s.built, s.current)
@@ -161,13 +145,10 @@ func (s *parseState) handleSubflowEnd(Token) {
 	s.stack = nil
 }
 
-// recordUnclosedBlocks records a parse error for every closable block still
-// open on the stack — called before a subflow boundary (start or end) clears
-// it, so a missing END isn't silently dropped. Only block types that are
-// closed by an END (Loop/Condition/ErrorHandler/Block/Switch) are flagged;
-// leaf entries (Action/Comment/Case/Default/Else/End) live on the stack
-// between siblings and are popped by popStack, so flagging them produced
-// spurious "unclosed block" errors.
+// recordUnclosedBlocks flags every END-closable block still open on the stack
+// before a subflow boundary clears it, so a missing END isn't silently
+// dropped. Leaf entries live on the stack between siblings and were popped by
+// popStack, so flagging them produced spurious errors.
 func (s *parseState) recordUnclosedBlocks() {
 	for _, entry := range s.stack {
 		t := entry.block.Type
@@ -202,18 +183,9 @@ func (s *parseState) handleErrorHandlerStart(tok Token) {
 		s.skipNextEnd = true
 		return
 	}
-	// The depth guard sits HERE, not at the top of the function like its five
-	// peers (handleBlockStart, handleSwitchStart, ...). The early-return path
-	// above converts an already-accepted BLOCK into an error handler and pushes
-	// nothing, so guarding the whole function would reject that conversion at
-	// max depth for a block that is already on the stack. Only this path grows
-	// it.
-	//
-	// Without any guard, nested ON BLOCK ERROR was the one opener that could
-	// exceed maxNestingDepth — a 10 MB upload builds a tree thousands deep, and
-	// every recursive walker downstream (toValueTree, CountDescendants,
-	// computeMaxDepth, the search indexer, the serializer, the analyzer) then
-	// runs at that depth.
+	// The depth guard sits HERE, not at the top like its peers: the early-return path above converts an
+	// accepted BLOCK into an error handler and pushes nothing, so a whole-function guard would reject that
+	// conversion at max depth — and unguarded, nested ON BLOCK ERROR could exceed maxNestingDepth.
 	if !s.requireDepth(tok) {
 		return
 	}
@@ -282,17 +254,13 @@ func (s *parseState) handleDefault(tok Token) {
 	s.stack = append(s.stack, stackEntry{indent: tok.Indent + 1, block: defBlock})
 }
 
-// loopKindProperty names the parser-derived loop kind on a LOOP block. The
-// leading underscore marks it as parser metadata rather than a PAD property,
-// matching _retryCount / _output / _var.
-// LoopKindProperty is exported so analyzer rules can read the kind.
+// LoopKindProperty names the parser-derived loop kind; the underscore marks parser metadata. Exported for analyzer rules.
 const LoopKindProperty = "_loopKind"
 
 // Loop kinds. foreach and counted are bounded BY CONSTRUCTION — a FOREACH
-// consumes a fixed collection and a counted range has an end — so neither can
-// run forever regardless of what its body does. while is conditional and may
-// not terminate; other covers dotted (Loop.X) and unrecognised headers, which
-// are treated conservatively like while.
+// consumes a fixed collection, a counted range has an end; while is
+// conditional and may not terminate, and other (dotted Loop.X headers,
+// unrecognised) is treated conservatively like while.
 const (
 	LoopKindForEach = "foreach"
 	LoopKindCounted = "counted"
@@ -319,18 +287,13 @@ func (s *parseState) handleLoopStart(tok Token) {
 		return
 	}
 	blk := newBlock(tok, s.current.id, models.BlockTypeLoop)
-	// Record the loop KIND alongside the variables. Kind is what distinguishes a
-	// loop that can run forever from one that terminates by construction, and it
-	// was being discarded at parse time — so infinite-loop-risk had to infer it
-	// from variable modification, could not, and fired on every FOREACH and
-	// counted loop in the corpus (204 of 204 Error findings, i.e. the entire
-	// default CI gate, on provably bounded loops).
+	// Record the loop KIND: distinguishes a loop that can run forever from
+	// one bounded by construction — discarded, infinite-loop-risk had to
+	// infer it and fired on every FOREACH and counted loop.
 	blk.Properties[LoopKindProperty] = classifyLoopKind(tok.Content)
 	// Track loop-declared variables so analysis rules can detect scope and usage.
 	if m := reLoopForEach.FindStringSubmatch(tok.Content); m != nil {
-		// LOOP FOREACH CurrentItem IN List
-		// m[1] = iteration variable ("CurrentItem") — declared/written by the loop.
-		// m[3] = bare collection name ("List")      — read/consumed by the loop.
+		// LOOP FOREACH CurrentItem IN List: m[1] = iteration variable (written by the loop), m[3] = bare collection (read).
 		blk.Variables = append(blk.Variables, m[1])
 		if len(m) >= 4 && m[3] != "" {
 			blk.Variables = append(blk.Variables, m[3])
@@ -363,29 +326,10 @@ func (s *parseState) handleEnd(tok Token) {
 			}
 			endBlk.Tokens = tokenizeBlock(endBlk)
 			top.ChildPtrs = append(top.ChildPtrs, endBlk)
-			// Deliberately NOT popped. `BLOCK` + `ON BLOCK ERROR` is two
-			// containers sharing one promoted node, and PAD closes them with
-			// two ENDs:
-			//
-			//	BLOCK
-			//	ON BLOCK ERROR all
-			//	END            <- this one: closes the HANDLER section only
-			//	    <protected body>
-			//	END            <- closes the BLOCK
-			//
-			// Popping here closed the whole construct on the first END, so the
-			// protected body -- 33 of the 42 lines in the browsercloser sample,
-			// Microsoft's own published flow -- landed at ROOT level as
-			// siblings. HasErrorHandlerAncestor then returned false for every
-			// action inside a correctly handled block, so unhandled-error and
-			// file-op-no-error-handler both fired on it. The earlier comment
-			// here read the body as "following siblings parenting under it";
-			// they are the block's contents, and nesting them is the point.
-			//
-			// The BLOCK stays on the stack with its own indent, so the body
-			// nests under it and the second END closes it through the normal
-			// branch below. A missing second END now correctly reports an
-			// unclosed block rather than silently discarding the body.
+			// Deliberately NOT popped: BLOCK + ON BLOCK ERROR is two containers sharing one promoted node, closed
+			// by two ENDs — the first closes only the HANDLER section. Popping here put the protected body at ROOT
+			// level (HasErrorHandlerAncestor false for every action in a correctly handled block); the BLOCK stays
+			// so the second END closes it normally, and a missing second END reports unclosed, not discarded.
 		}
 		return
 	}
@@ -446,11 +390,10 @@ func (s *parseState) handleConditionElse(tok Token) {
 	for s.stack[len(s.stack)-1].block.Type != models.BlockTypeCondition {
 		s.stack = s.stack[:len(s.stack)-1]
 	}
-	// Built through newBlock rather than by hand so an ELSE IF rung gets the
-	// same treatment as any other condition -- in particular extractVariables
-	// over the branch condition, which a hardcoded Name/RawType discarded. For a
-	// plain ELSE the token already carries Name "Else" / RawType "ELSE", so this
-	// produces exactly the block the hand-built literal did.
+	// Built via newBlock so an ELSE IF rung gets the same treatment as any
+	// other condition (notably extractVariables); a plain ELSE token already
+	// carries Name "Else" / RawType "ELSE", producing the same block the
+	// hand-built literal did.
 	elseBlock := newBlock(tok, s.current.id, models.BlockTypeElse)
 	parent := s.stack[len(s.stack)-1].block
 	elseBlock.ParentID = parent.ID
@@ -462,8 +405,7 @@ func (s *parseState) handleComment(tok Token) {
 	if s.current == nil {
 		return
 	}
-	// Inline error handler: attach retry policy as properties on the parent action block
-	// rather than creating a visible child comment block.
+	// Inline error handler: attach retry policy as properties on the parent action block, not a visible child.
 	if tok.RawType == "ON_ERROR_INLINE" {
 		if len(s.stack) > 0 {
 			parent := s.stack[len(s.stack)-1].block
@@ -506,9 +448,7 @@ func (s *parseState) handleAction(tok Token) {
 	s.stack = insertIntoTree(s.current, blk, s.stack)
 }
 
-// lineCount returns the number of lines in text. strings.Split(text, "\n")
-// over-counts by one when text ends with a newline (it produces a trailing
-// empty element), which is the overwhelmingly common case for source files.
+// lineCount counts lines: strings.Split over-counts by one when text ends with a newline (the common case).
 func lineCount(text string) int {
 	if text == "" {
 		return 0
@@ -520,11 +460,8 @@ func lineCount(text string) int {
 	return n
 }
 
-// trimPrefixFold removes prefix from s using case-insensitive comparison.
-// The classifier regexes are case-insensitive ((?i)), so a lowercase/mixed-case
-// keyword like "switch %x%" classifies as a SWITCH but the display-name
-// stripper used case-sensitive TrimPrefix — leaving the keyword in the rendered
-// name. This matches the classifier's behavior.
+// trimPrefixFold removes prefix case-insensitively, matching the classifier's
+// (?i) regexes — a case-sensitive trim would leave the keyword in the name.
 func trimPrefixFold(s, prefix string) string {
 	if len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix) {
 		return s[len(prefix):]
@@ -553,10 +490,7 @@ func buildDocument(text, fileName string, fileSize int64, subflows []models.Subf
 			MaxDepth:     maxDepth,
 			ParsedAt:     time.Now(),
 			FileSize:     fileSize,
-			// strings.Split(text, "\n") over-counts by one when the text ends
-			// with a newline (the common case): it produces a trailing empty
-			// element. Count newlines and add one only if the final line lacks
-			// a trailing newline.
+			// strings.Split over-counts by one on a trailing newline; see lineCount.
 			RawLineCount: lineCount(text),
 		},
 		BlocksByID:   make(map[string]*models.Block, totalBlocks),
@@ -566,14 +500,10 @@ func buildDocument(text, fileName string, fileSize int64, subflows []models.Subf
 
 	for i := range doc.Subflows {
 		sf := &doc.Subflows[i]
-		// Stamp the source file on every subflow that does not already carry one.
-		//
-		// ParseFiles/ParseFolder set this per member file; the single-file
-		// ParseText path never did, and SARIF's artifactLocation.uri falls back
-		// to SubflowID+".txt" when it is empty — a UUID the parser MINTS ON
-		// EVERY PARSE. GitHub Code Scanning resolves that against the repo,
-		// finds nothing, and cannot place the alert; and because the name
-		// changes each run, nothing correlates between runs either.
+		// Stamp the source file on subflows without one: SARIF's
+		// artifactLocation.uri falls back to SubflowID+".txt" — a UUID the
+		// parser MINTS ON EVERY PARSE — so without a stable name GitHub Code
+		// Scanning cannot place the alert and nothing correlates between runs.
 		if sf.SourceFile == "" {
 			sf.SourceFile = fileName
 		}
@@ -608,8 +538,7 @@ func newBlock(tok Token, subflowID string, blockType models.BlockType) *models.B
 		Variables:     extractVariables(tok.Raw),
 	}
 
-	// For SET x TO expr, inject structured properties that parseProperties cannot
-	// derive (no colon-delimited pairs in SET syntax).
+	// For SET x TO expr, inject structured properties parseProperties cannot derive (no colon pairs in SET syntax).
 	if tok.SetVarName != "" {
 		blk.Properties["_var"] = tok.SetVarName
 		blk.Properties["_value"] = tok.SetVarValue
@@ -729,7 +658,7 @@ func tokenizeBlock(blk *models.Block) []models.BlockToken {
 		}
 	}
 
-	// ReverseList → just the list name as a variable reference
+	// ReverseList → just the list name
 	if blk.RawType == "Variables.ReverseList" {
 		if list := blk.Properties["List"]; list != "" {
 			return tokenizeVariables("%" + list + "%")
@@ -779,18 +708,17 @@ func tokenizeBlock(blk *models.Block) []models.BlockToken {
 		}
 	}
 
-	// Handle other types by stripping keywords
+	// Others: strip keywords. For conditions and loops blk.Name already
+	// contains the full expression stripBlockKeywords would further trim.
 	name := blk.Name
-	// For conditions and loops, blk.Name already contains the full expression
-	// which stripBlockKeywords would further trim.
 	switch blk.Type {
 	case models.BlockTypeCondition:
 		name = trimPrefixFold(name, "IF ")
 		name = trimSuffixFold(name, " THEN")
 	case models.BlockTypeLoop:
-		// ForEach: emit variable-styled tokens for both the iteration variable and
-		// the collection — "LOOP FOREACH CurrentItem IN List" → %CurrentItem% IN %List%.
-		// Both become clickable variable tokens in the UI (lineage, usage count).
+		// ForEach: emit variable tokens for both the iteration variable and
+		// the collection ("LOOP FOREACH x IN List" → %x% IN %List%) — both
+		// clickable in the UI (lineage, usage count).
 		if m := reLoopForEach.FindStringSubmatch(name); m != nil {
 			iterVar := m[1]
 			collection := ""
@@ -805,10 +733,8 @@ func tokenizeBlock(blk *models.Block) []models.BlockToken {
 			return toks
 		}
 
-		// Range loop: "LOOP LoopIndex FROM 0 TO 10 STEP 2"
-		// → %LoopIndex% FROM 0 TO 10 STEP 2
-		// The counter variable becomes a clickable variable token; FROM/TO/STEP
-		// values are rendered as-is (plain numbers stay text, %vars% become tokens).
+		// Range loop: %LoopIndex% FROM 0 TO 10 STEP 2 — the counter becomes a
+		// clickable token; FROM/TO/STEP render as-is (numbers stay text).
 		if m := reLoopRange.FindStringSubmatch(name); m != nil {
 			varName := m[1]
 			from := m[2]
@@ -850,28 +776,24 @@ func tokenizeVariables(text string) []models.BlockToken {
 		return nil
 	}
 
-	// We need to find both %variables% and string literals.
-	// Since % can contain strings and strings can contain %, we need to be careful.
-	// In PAD, %expression% is usually the top level.
-
+	// Find both %variables% and string literals: % can contain strings and
+	// strings can contain %. In PAD, %expression% is usually the top level.
 	varMatches := reVariableRef.FindAllStringSubmatchIndex(text, -1)
 	tokens := make([]models.BlockToken, 0, len(varMatches)*2+1)
 
 	lastPos := 0
 	for _, m := range varMatches {
 		if m[0] > lastPos {
-			// Search for strings in the text between variables
 			tokens = append(tokens, tokenizeStrings(text[lastPos:m[0]])...)
 		}
 
 		expression := text[m[2]:m[3]]
 		masked := maskStrings(expression)
 		target := ""
-		// Every index below is read from — and applied back onto — masked, never
-		// expression: maskStrings collapses each literal to a single space, so
-		// the two strings' lengths diverge and an offset computed against one
-		// must never slice the other. See the identical comment on
-		// extractVariables in extractors.go for the full explanation.
+		// Every index below is read from — and applied back onto — masked,
+		// never expression: maskStrings collapses each literal to a single
+		// space, so the two strings' lengths diverge and an offset computed
+		// against one must never slice the other (see extractVariables).
 		ids := reIdentifier.FindAllStringSubmatchIndex(masked, -1)
 		for _, idMatch := range ids {
 			start, end := idMatch[0], idMatch[1]
@@ -1033,6 +955,10 @@ func computeMaxDepth(b *models.Block, depth int) int {
 }
 
 func truncate(s string, maxLen int) string {
+	// Byte length upper-bounds rune count, so within-limit-by-bytes cannot exceed it by runes — skips the rune decode.
+	if len(s) <= maxLen {
+		return s
+	}
 	runes := []rune(s)
 	if len(runes) <= maxLen {
 		return s

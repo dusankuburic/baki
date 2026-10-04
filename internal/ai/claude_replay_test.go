@@ -140,8 +140,8 @@ func TestClaudeToolLoop_ReplaysThinkingVerbatim(t *testing.T) {
 		t.Errorf("replayed assistant turn = %s, want the recorded blocks %s", got, wantBlocks)
 	}
 	// Opus 5.5 with tools: no temperature, and adaptive thinking is asked
-	// for explicitly on every loop iteration (audit #9 F-17) — omitted IS
-	// adaptive on 5.x, and explicit is what Opus 4.7/4.8 need.
+	// for explicitly on every loop iteration — omitted IS adaptive on 5.x,
+	// and explicit is what Opus 4.7/4.8 need.
 	for _, b := range bodies {
 		if _, ok := b["temperature"]; ok {
 			t.Errorf("temperature sent to a model that rejects sampling: %v", b["temperature"])
@@ -150,9 +150,9 @@ func TestClaudeToolLoop_ReplaysThinkingVerbatim(t *testing.T) {
 		if think["type"] != "adaptive" {
 			t.Errorf("thinking must be adaptive on every loop request, got %v", b["thinking"])
 		}
-		// Audit #9 F-02: the top-level automatic-caching marker rides every
-		// loop request, so the history prefix and tool_results behind the
-		// system block are cache reads from iteration 2 on.
+		// The top-level automatic-caching marker rides every loop request,
+		// so the history prefix and tool_results behind the system block are
+		// cache reads from iteration 2 on.
 		if top, _ := b["cache_control"].(map[string]any); top["type"] != "ephemeral" {
 			t.Errorf("top-level cache_control must be ephemeral, got %v", b["cache_control"])
 		}

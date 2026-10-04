@@ -92,3 +92,30 @@ func TestIsExitLoopRawType(t *testing.T) {
 		}
 	}
 }
+
+// TestInfiniteLoop_CounterProgressInsideNestedLoopIgnored pins the
+// nested-loop skip for the COUNTER side of hasExitCondition's fused
+// single walk. walkLoopBody skips nested-loop subtrees so that an EXIT
+// LOOP inside a nested loop cannot satisfy the OUTER loop; a SET of the
+// outer loop's condition variable inside that same nested body must not
+// bound the outer loop either — the inner loop may exit before ever
+// running its advance, or never run at all. hasExitCondition used to be
+// two separate walks and is now one fused pass; both predicates inherit
+// the same skip, and this test keeps the counter half honest.
+func TestInfiniteLoop_CounterProgressInsideNestedLoopIgnored(t *testing.T) {
+	inc := makeBlock("inc", "Advance", models.BlockTypeAction, "SetVariable.Set", 4)
+	inc.Properties = map[string]string{"_output": "Counter", "_value": "%Counter% + 1"}
+	inner := makeBlock("inner", "Inner loop", models.BlockTypeLoop, "Loop.While", 4)
+	inner.Variables = []string{"Unrelated"} // inner's own condition, not Counter
+	inner.Children = []models.Block{*inc}
+	outer := makeBlock("outer", "Outer loop", models.BlockTypeLoop, "Loop.While", 0)
+	outer.SubflowID = "sf1"
+	outer.Variables = []string{"Counter"} // outer's condition references %Counter%
+	outer.Children = []models.Block{*inner}
+	flow := &models.FlowDocument{ID: "t", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*outer}}}}
+
+	rule := &InfiniteLoopRiskRule{}
+	if got := rule.Check(outer, buildContext(flow, nil)); len(got) != 1 {
+		t.Fatalf("expected the outer loop flagged (nested-loop counter progress must not bound it), got %d findings", len(got))
+	}
+}

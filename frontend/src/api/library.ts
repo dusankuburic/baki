@@ -124,9 +124,16 @@ export const libraryApi = {
     return request(`/api/library/portfolio${qs ? '?' + qs : ''}`, {method: 'GET', signal})
   },
 
-  get: (id: string): Promise<LibraryFlow> => request(`/api/library/${id}`, {method: 'GET'}),
+  // Never deduped or micro-cached: both are read right after a collaborator's
+  // save (useFlowChangeSync) and must reflect it — the 5 s cache served the
+  // PREVIOUS version/document, so the edit stayed invisible and the next save
+  // 409'd. The content is also the largest body the client fetches (tens of
+  // MB for big flows), which the cache would clone on every write and hit.
+  get: (id: string, signal?: AbortSignal): Promise<LibraryFlow> =>
+    request(`/api/library/${id}`, {method: 'GET', noDedup: true, signal}),
 
-  getContent: (id: string): Promise<FlowDocument> => request(`/api/library/${id}/content`, {method: 'GET'}),
+  getContent: (id: string, signal?: AbortSignal): Promise<FlowDocument> =>
+    request(`/api/library/${id}/content`, {method: 'GET', noDedup: true, signal}),
 
   versions: (id: string, limit?: number): Promise<LibraryFlowVersion[]> => {
     const qs = limit ? `?limit=${limit}` : ''

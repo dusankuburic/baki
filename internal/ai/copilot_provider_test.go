@@ -33,7 +33,6 @@ func TestCopilotProvider_ID(t *testing.T) {
 }
 
 func TestCopilotProvider_Models(t *testing.T) {
-	// 1. Valid fetch (dynamic)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/models" {
 			t.Errorf("path = %q, want /models", r.URL.Path)
@@ -70,7 +69,7 @@ func TestCopilotProvider_Models(t *testing.T) {
 		}
 	}
 
-	// 2. Cache hit (server should NOT be called again)
+	// Cache hit: the server must NOT be called again.
 	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("server should not have been called due to cache")
 	})
@@ -89,7 +88,6 @@ func TestCopilotProvider_Pricing_IsZero(t *testing.T) {
 	if pricing.InputCostPerM != 0 || pricing.OutputCostPerM != 0 {
 		t.Errorf("Copilot pricing should be zero (subscription-based), got %+v", pricing)
 	}
-	// We can't easily test p.Models() here without a mock server or pre-filling the cache
 }
 
 // TestCopilotProvider_Models_BoundedErrorBodyRead is the regression test for the
@@ -138,7 +136,6 @@ func TestCopilotProvider_Models_BoundedErrorBodyRead(t *testing.T) {
 
 func TestCopilotProvider_Chat_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify Copilot-specific required headers
 		if r.Header.Get("Authorization") != "Bearer cop-session-tok" {
 			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
 		}

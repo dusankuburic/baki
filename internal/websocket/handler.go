@@ -65,33 +65,32 @@ type FlowAccessChecker interface {
 	// the same "editor" rank the HTTP write endpoints require.
 	//
 	// Joining is gated at "viewer" on purpose: presence and cursor traffic is
-	// what read-only collaborators are there for. But handleIncoming used to
-	// broadcast block.update/create/delete from the same case arm as cursor
-	// moves, with no rank check, so a collaborator refused by
-	// POST /api/flow/save-source could send the identical mutation over the
-	// socket. This method is deliberately part of the REQUIRED interface
-	// rather than an optional type assertion: a new adapter that forgets it
-	// should fail to compile, not silently fail open.
+	// what read-only collaborators are there for, but mutations must not be
+	// relayable over the socket by a collaborator the HTTP write endpoints
+	// would refuse. Deliberately part of the REQUIRED interface rather than an
+	// optional type assertion: a new adapter that forgets it should fail to
+	// compile, not silently fail open.
+	//
+	// The editor rank includes read access (CanEdit true implies CheckAccess
+	// nil); the re-authz loop relies on this to skip the read check for a user
+	// who can still edit (Client.recheckAccess).
 	CanEdit(ctx context.Context, flowID, userID string) bool
 }
 
 // Handler returns an http.HandlerFunc that upgrades the connection to WebSocket
 // and runs the client loop.
 //
-// allowedOrigins is the same allowlist used by the HTTP router. An empty list
+// allowedOrigins is the same allowlist used by the HTTP router; an empty list
 // means only non-browser (empty Origin) connections are accepted.
 //
 // accessJTI / accessExp identify the ACCESS TOKEN that authenticated the
 // ticket-issuance request (embedded in the WS ticket at issuance). The re-authz
 // goroutine re-checks accessJTI against the token blacklist so a logout /
-// explicit revoke disconnects the live socket, and an expiry timer closes the
-// connection when the underlying access token expires — matching the SSE
-// channel's semantics. Pass accessJTI="" and a zero accessExp to disable both
-// (used in tests / local mode with no blacklist).
-//
-// The caller is responsible for extracting userID and displayName from the
-// authenticated request context (e.g. from auth.ClaimsFromContext) before
-// calling this handler.
+// revoke disconnects the live socket, and an expiry timer closes the connection
+// when the access token expires — matching the SSE channel. Pass accessJTI=""
+// and a zero accessExp to disable both (tests / local mode with no blacklist).
+// The caller extracts userID and displayName from the authenticated request
+// context (e.g. auth.ClaimsFromContext) before calling this handler.
 func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, checker FlowAccessChecker, accessJTI string, accessExp time.Time, isRevoked func(string) bool) http.HandlerFunc {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -173,8 +172,8 @@ func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, chec
 		// Client.runReauthzLoop for the full mechanism.
 		//
 		// Deferred so a panic anywhere below still cancels the context and stops
-		// the re-authz goroutine (previously authzCancel was a plain statement
-		// after client.Run(), which leaked the goroutine + context on panic).
+		// the re-authz goroutine (a plain authzCancel after client.Run() leaked
+		// the goroutine + context on panic).
 		authzCtx, authzCancel := context.WithCancel(context.Background())
 		defer authzCancel()
 		if checker != nil || isRevoked != nil {

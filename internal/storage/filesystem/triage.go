@@ -12,17 +12,14 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// Finding triage & baselines (desktop / single-user filesystem mode).
-//
-// Triage state lives in one JSON file per flow under triage/<flowID>.json (a
-// map keyed by finding key), and baselines under baselines/<flowID>.json. The
-// read-modify-write of the triage map is serialized by triageMu so concurrent
-// status updates can't clobber each other; writes are atomic (temp + rename).
+// Finding triage & baselines (desktop / single-user filesystem mode): one JSON
+// file per flow under triage/<flowID>.json, baselines under
+// baselines/<flowID>.json. The triage map's read-modify-write is serialized by
+// triageMu; writes are atomic (temp + rename).
 
 // triagePath and baselinePath build the on-disk path for a flow's triage /
 // baseline file, rejecting any flowID that could traverse outside the data dir
-// (defense-in-depth parity with the service-layer convFilePath; flowIDs are
-// server-generated UUIDs, but the path builder should not trust that alone).
+// (defense-in-depth: flowIDs are server-generated UUIDs, untrusted anyway).
 func (lsb *LocalStorageBackend) triagePath(flowID string) (string, error) {
 	if !safePathSegment(flowID) {
 		return "", fmt.Errorf("invalid flow id %q", flowID)
@@ -96,10 +93,9 @@ func (lsb *LocalStorageBackend) SetFindingStatus(ctx context.Context, st *interf
 	return lsb.writeStatuses(st.FlowID, m)
 }
 
-// BatchSetFindingStatus applies all items in a single read-modify-write under
-// the triage mutex. Atomicity is guaranteed by the mutex (single-process local
-// mode); either every item lands on disk or none (writeStatuses is a single
-// atomic file replace). userID is unused — local mode has no RLS.
+// BatchSetFindingStatus applies all items in one read-modify-write under the
+// triage mutex: either every item lands on disk or none (writeStatuses is a
+// single atomic replace). userID is unused — local mode has no RLS.
 func (lsb *LocalStorageBackend) BatchSetFindingStatus(ctx context.Context, flowID, userID string, items []*interfaces.FindingStatus) error {
 	if flowID == "" {
 		return fmt.Errorf("batch finding status requires flowId")
@@ -141,6 +137,23 @@ func (lsb *LocalStorageBackend) ListFindingStatuses(ctx context.Context, flowID 
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].FindingKey < out[j].FindingKey })
 	return out, nil
+}
+
+// GetFindingStatus returns one finding's triage state, or (nil, nil) when none
+// is persisted (interfaces.FindingStatusGetter, parity with Postgres).
+func (lsb *LocalStorageBackend) GetFindingStatus(ctx context.Context, flowID, findingKey string) (*interfaces.FindingStatus, error) {
+	lsb.triageMu.Lock()
+	defer lsb.triageMu.Unlock()
+
+	m, err := lsb.readStatuses(flowID)
+	if err != nil {
+		return nil, err
+	}
+	st, ok := m[findingKey]
+	if !ok {
+		return nil, nil
+	}
+	return st, nil
 }
 
 func (lsb *LocalStorageBackend) DeleteFindingStatus(ctx context.Context, flowID, findingKey string) error {

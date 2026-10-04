@@ -60,10 +60,7 @@ func awaitMetric(t *testing.T, stub *auditStub, req Request) *interfaces.UsageMe
 	}
 }
 
-// TestAudited_NilRecorderDoesNotPanic guards the local/desktop-mode wiring:
-// when there is no storage backend the factory passes a nil recorder, and the
-// audited provider must skip recording rather than calling through it. Chat and
-// Stream both have to be safe (record() runs in a goroutine on the Stream path).
+// TestAudited_NilRecorderDoesNotPanic: a nil recorder (local/desktop wiring) must skip recording on Chat and Stream.
 func TestAudited_NilRecorderDoesNotPanic(t *testing.T) {
 	stub := &auditStub{
 		models: []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
@@ -94,8 +91,7 @@ func TestAudited_PricesFromCatalogWhenModelKnown(t *testing.T) {
 	}
 }
 
-// TestAudited_RecordsOrgID is the T4.2 guarantee: usage carries the request's
-// OrgID, so org-scoped flows can be summed for an org-wide daily budget.
+// TestAudited_RecordsOrgID (T4.2): usage carries the request's OrgID, so org flows sum into the org budget.
 func TestAudited_RecordsOrgID(t *testing.T) {
 	stub := &auditStub{
 		models: []ModelInfo{{ID: "known", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
@@ -110,9 +106,8 @@ func TestAudited_RecordsOrgID(t *testing.T) {
 	}
 }
 
-// TestAudited_FallsBackToProviderPriceForUnknownModel is the T1.3 guarantee:
-// an out-of-catalog model is priced from PricePerMillionTokens instead of being
-// silently recorded as $0 (which would let the daily budget never trip).
+// TestAudited_FallsBackToProviderPriceForUnknownModel (T1.3): an out-of-catalog model prices from
+// PricePerMillionTokens, never $0 (which would let the daily budget never trip).
 func TestAudited_FallsBackToProviderPriceForUnknownModel(t *testing.T) {
 	stub := &auditStub{
 		models: []ModelInfo{{ID: "something-else", Pricing: Pricing{InputCostPerM: 3, OutputCostPerM: 15}}},
@@ -125,10 +120,8 @@ func TestAudited_FallsBackToProviderPriceForUnknownModel(t *testing.T) {
 	}
 }
 
-// TestAudited_RecordsEstimatedUsageOnTruncatedStream: a stream that ends
-// without a Done chunk (truncation, mid-stream error) still consumed provider
-// tokens — usage must be recorded from estimates instead of silently counting
-// as $0 against the daily budget.
+// TestAudited_RecordsEstimatedUsageOnTruncatedStream: a stream ending without Done still consumed tokens —
+// usage is recorded from estimates, not silently $0.
 func TestAudited_RecordsEstimatedUsageOnTruncatedStream(t *testing.T) {
 	stub := &auditStub{
 		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
@@ -160,9 +153,8 @@ func TestAudited_RecordsEstimatedUsageOnTruncatedStream(t *testing.T) {
 	}
 }
 
-// TestAudited_NoUsageForStreamThatNeverStarted: a failure before the provider
-// produced anything (circuit open, connection refused) must not bill an
-// input-token estimate for a call that consumed nothing.
+// TestAudited_NoUsageForStreamThatNeverStarted: a failure before the provider produced anything (circuit
+// open, connection refused) must not bill an estimate for a call that consumed nothing.
 func TestAudited_NoUsageForStreamThatNeverStarted(t *testing.T) {
 	stub := &auditStub{
 		models:    []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
@@ -185,12 +177,8 @@ func TestAudited_NoUsageForStreamThatNeverStarted(t *testing.T) {
 	}
 }
 
-// TestAudited_RecorderBoundedUnderSaturation is the regression test for the
-// unbounded-goroutine bug: record() used to spawn a goroutine per finished AI
-// request that then blocked on recordSem (size 16). A slow recorder under load
-// piled up goroutines without limit. After the fix the semaphore acquire is
-// non-blocking — at most maxConcurrentRecords recorders run at once, and the
-// rest of the metrics are dropped (not parked as goroutines).
+// TestAudited_RecorderBoundedUnderSaturation: record() used to spawn a goroutine per finished request that
+// then blocked on recordSem. The acquire is non-blocking: past maxConcurrentRecords the metric is dropped.
 func TestAudited_RecorderBoundedUnderSaturation(t *testing.T) {
 	stub := &auditStub{
 		models: []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
@@ -240,12 +228,8 @@ func TestAudited_RecorderBoundedUnderSaturation(t *testing.T) {
 	close(release)
 }
 
-// TestAudited_ModelsMemoisedPerInstance proves the audited wrapper consults
-// the inner provider's Models() at most once per request chain: a single
-// tool-loop request records up to ~7 metrics (each pricing via Models) and
-// also calls ContextLimitFor/ModelMaxOutputTokens — for wire-backed Models()
-// implementations (GitHub Models pre-cache) that multiplied into a live HTTP
-// GET per usage record.
+// TestAudited_ModelsMemoisedPerInstance: one tool-loop request consults Models ~7 times; for wire-backed
+// Models() that multiplied into a live HTTP GET per usage record.
 func TestAudited_ModelsMemoisedPerInstance(t *testing.T) {
 	stub := &auditStub{
 		models: []ModelInfo{{ID: "m", ContextLimit: 8192, Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
@@ -308,8 +292,6 @@ func awaitEmbedMetric(t *testing.T, stub *embedAuditStub, texts []string) *inter
 
 // TestAuditedEmbed_RecordsUsage pins R2: embedding spend (RAG indexing +
 // per-turn query embeddings) must hit usage_metrics and the daily budget.
-// Before this, auditedProvider.Embed was a bare delegation — every embedding
-// call was unbilled.
 func TestAuditedEmbed_RecordsUsage(t *testing.T) {
 	stub := &embedAuditStub{
 		auditStub: auditStub{
@@ -384,10 +366,8 @@ func awaitStreamMetric(t *testing.T, stub *auditStub, req Request) *interfaces.U
 	}
 }
 
-// TestAuditedStream_DoneWithZeroUsageEstimates pins R3: OpenAI-COMPAT servers
-// that ignore stream_options (older vLLM/Ollama/proxies; base URLs are
-// env-overridable) end every stream with Done(0,0). Without the fallback,
-// every such stream billed $0 — no metric, budget never trips.
+// TestAuditedStream_DoneWithZeroUsageEstimates (R3): compat servers that ignore stream_options end every
+// stream with Done(0,0); without the fallback every such stream billed $0.
 func TestAuditedStream_DoneWithZeroUsageEstimates(t *testing.T) {
 	stub := &auditStub{
 		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 2}}},
@@ -414,9 +394,8 @@ func TestAuditedStream_DoneWithZeroUsageEstimates(t *testing.T) {
 	}
 }
 
-// TestAuditedStream_DoneZeroNoContentRecordsNothing: Done(0,0) with NO
-// delivered content is an empty response, not a usage event — nothing billed
-// (mirrors the never-started gate on the no-Done path).
+// TestAuditedStream_DoneZeroNoContentRecordsNothing: Done(0,0) with no delivered content is an empty
+// response, not a usage event (mirrors the never-started gate).
 func TestAuditedStream_DoneZeroNoContentRecordsNothing(t *testing.T) {
 	stub := &auditStub{
 		models:       []ModelInfo{{ID: "m"}},
@@ -432,11 +411,8 @@ func TestAuditedStream_DoneZeroNoContentRecordsNothing(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 }
 
-// countedRecorder counts usage records under a mutex. The Done-chunk record
-// and the !sawDone fallback both decide synchronously inside Stream (the
-// goroutine only delivers), so once Stream has returned and the first record
-// landed, no further record can appear — a FINAL count assertion is sound
-// where the await-one helpers above could not fail on a second record.
+// countedRecorder counts usage records under a mutex. Both record decisions happen synchronously inside
+// Stream (the goroutine only delivers), so a FINAL count assertion is sound once the first record lands.
 type countedRecorder struct {
 	mu      sync.Mutex
 	metrics []*interfaces.UsageMetric
@@ -455,9 +431,8 @@ func (c *countedRecorder) count() int {
 	return len(c.metrics)
 }
 
-// assertExactlyOneRecorded waits for the async record goroutine to deliver,
-// gives any would-be duplicate a grace interval, then pins the FINAL count at
-// exactly one.
+// assertExactlyOneRecorded waits for the async record to deliver, gives a would-be duplicate a grace
+// interval, then pins the FINAL count at exactly one.
 func assertExactlyOneRecorded(t *testing.T, rec *countedRecorder) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -470,11 +445,8 @@ func assertExactlyOneRecorded(t *testing.T, rec *countedRecorder) {
 	}
 }
 
-// TestAuditedStream_RecordsUsageExactlyOnce_Done: the Done-chunk record and
-// the !sawDone fallback are meant to be mutually exclusive via sawDone, but
-// nothing pinned that — deleting the gate would double-bill every successful
-// stream. A stream with text plus a Done chunk carrying usage must produce
-// EXACTLY one usage record.
+// TestAuditedStream_RecordsUsageExactlyOnce_Done: the Done-chunk record and the !sawDone fallback are
+// mutually exclusive via sawDone — deleting the gate would double-bill every successful stream.
 func TestAuditedStream_RecordsUsageExactlyOnce_Done(t *testing.T) {
 	stub := &auditStub{
 		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
@@ -488,9 +460,8 @@ func TestAuditedStream_RecordsUsageExactlyOnce_Done(t *testing.T) {
 	assertExactlyOneRecorded(t, rec)
 }
 
-// TestAuditedStream_RecordsUsageExactlyOnce_Truncated: the truncated-stream
-// fallback must fire exactly once too — a stream cut before Done (some text,
-// error return) records one estimated-usage metric, never two.
+// TestAuditedStream_RecordsUsageExactlyOnce_Truncated: the truncated-stream fallback fires exactly once —
+// one estimated-usage metric for a stream cut before Done, never two.
 func TestAuditedStream_RecordsUsageExactlyOnce_Truncated(t *testing.T) {
 	stub := &auditStub{
 		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
@@ -505,10 +476,8 @@ func TestAuditedStream_RecordsUsageExactlyOnce_Truncated(t *testing.T) {
 	assertExactlyOneRecorded(t, rec)
 }
 
-// A7: the cached slices are clamped like the totals before pricing — a
-// negative CacheWrite used to price negative (lowering the caller's daily
-// spend), and slices beyond the total they are part of priced tokens that
-// were never sent. CacheRead ∈ [0, In], CacheWrite ∈ [0, In-CacheRead].
+// A7: cached slices are clamped like the totals before pricing — a negative CacheWrite used to price
+// negative, and slices beyond the total priced tokens never sent. Read ∈ [0, In], Write ∈ [0, In-Read].
 func TestAudited_CacheSlicesClamped(t *testing.T) {
 	const perM = 1_000_000.0
 	models := []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 0}}}

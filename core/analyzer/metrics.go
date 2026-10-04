@@ -33,16 +33,15 @@ func ComputeFlowMetrics(doc *models.FlowDocument, report *models.AnalysisReport)
 }
 
 // ComputeFlowMetricsFromCtx assembles the report metrics from the artifacts
-// buildContext already computed (call graph, fan-in, cycles, per-subflow
-// complexity) — the analysis path calls this so the graph/metrics phase runs
-// once per analysis instead of twice.
+// buildContext already computed, so the graph/metrics phase runs once per
+// analysis instead of twice.
 func ComputeFlowMetricsFromCtx(ctx *RuleContext, report *models.AnalysisReport) *models.FlowMetrics {
 	return assembleFlowMetrics(ctx.subflowMetrics, len(ctx.Flow.Subflows), ctx.circularDeps, report)
 }
 
-// assembleFlowMetrics reduces per-subflow metrics (already computed) into the
-// aggregate FlowMetrics. Shared by the from-scratch and from-ctx paths so the
-// two can never drift.
+// assembleFlowMetrics reduces per-subflow metrics into the aggregate
+// FlowMetrics; shared by the from-scratch and from-ctx paths so the two can
+// never drift.
 func assembleFlowMetrics(subflowMetrics []models.SubflowMetrics, subflowCount int, circular []string, report *models.AnalysisReport) *models.FlowMetrics {
 	var totalBlocks, totalVars int
 	var maxCyclo, maxCog int
@@ -91,10 +90,9 @@ func assembleFlowMetrics(subflowMetrics []models.SubflowMetrics, subflowCount in
 	}
 }
 
-// computeSubflowMetrics walks the subflow tree exactly once, carrying the
-// nesting depth, to derive block count, cyclomatic/cognitive complexity and max
-// depth. The previous version re-walked the whole tree per decision block (via
-// nestingDepthForBlock) plus a separate pass for max depth — O(decisions·blocks).
+// computeSubflowMetrics walks the subflow tree once, carrying nesting depth,
+// to derive block count, cyclomatic/cognitive complexity and max depth (the
+// old version re-walked per decision block — O(decisions·blocks)).
 func computeSubflowMetrics(sf *models.Subflow, callGraph map[string]map[string]bool, fanInByID map[string]int) models.SubflowMetrics {
 	blockCount := 0
 	cyclo := 1

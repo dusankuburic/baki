@@ -20,54 +20,39 @@ const (
 	EmailVerifyTTL   = 24 * time.Hour
 )
 
-// failedLoginLockThreshold / accountLockDuration govern the login lockout
-// policy: an account is locked for accountLockDuration once it accumulates
-// failedLoginLockThreshold consecutive failed attempts.
+// failedLoginLockThreshold / accountLockDuration govern the lockout policy: an account locks for the duration
+// once failedLoginLockThreshold consecutive attempts accumulate.
 const (
 	failedLoginLockThreshold = 5
 	accountLockDuration      = 15 * time.Minute
 )
 
 var (
-	// ErrInvalidOldPassword is returned by ChangePassword when oldPassword
-	// doesn't match the account's current password.
+	// ErrInvalidOldPassword is returned by ChangePassword for a wrong oldPassword.
 	ErrInvalidOldPassword = errors.New("invalid old password")
-	// ErrUserLookupFailed wraps a LoadUserByID failure in ChangePassword — kept
-	// distinct from other failures so the caller can map it to 404
-	// (unconditionally, for any lookup error).
+	// ErrUserLookupFailed wraps a LoadUserByID failure in ChangePassword, so the caller can map it to 404.
 	ErrUserLookupFailed = errors.New("user lookup failed")
-	// ErrPasswordHashFailed wraps a bcrypt hashing failure in Register, kept
-	// distinct from CreateUser failures so the caller can return 500 instead of
-	// the 409 used for a duplicate-email conflict.
+	// ErrPasswordHashFailed wraps a bcrypt hashing failure in Register, so the caller returns 500, not the 409
+	// used for a duplicate-email conflict.
 	ErrPasswordHashFailed = errors.New("password hashing failed")
-	// ErrInvalidResetToken / ErrInvalidVerifyToken are returned by
-	// ResetPassword / VerifyEmail for any token-redemption failure (expired,
-	// already used, or simply unknown) — the underlying storage error is
-	// deliberately not surfaced, since it isn't meaningful to the caller and
-	// (for an unknown token) could hint at what exists.
+	// ErrInvalidResetToken / ErrInvalidVerifyToken are returned for any token-redemption failure (expired,
+	// already used, unknown) — the storage error is deliberately not surfaced: it could hint at what exists.
 	ErrInvalidResetToken  = errors.New("invalid or expired reset token")
 	ErrInvalidVerifyToken = errors.New("invalid or expired verification token")
 )
 
-// authStore is the narrow slice of StorageBackend AuthService needs: account
-// CRUD/lookup plus the one-shot tokens backing password-reset/email-verify.
+// authStore is the narrow slice of StorageBackend AuthService needs: account CRUD/lookup plus one-shot tokens.
 type authStore interface {
 	storageif.UserStore
 	storageif.UserTokenStore
 }
 
-// AuthService owns the credential-verification and account-mutation business
-// logic: bcrypt timing-attack mitigation, failed-login lockout, password
-// hashing/change, and the token-redemption flows for password reset and email
-// verification. JWT issuance and refresh-token/session bookkeeping stay in
-// AuthHandler — those are thin delegations to the already-well-abstracted
-// auth.Manager and RefreshTokenStore, not business logic that benefits from
-// a service seam.
+// AuthService owns the credential-verification and account-mutation business logic: bcrypt timing-attack
+// mitigation, failed-login lockout, password hashing/change, and token redemption for reset/verify.
+// JWT issuance and refresh-token bookkeeping stay in AuthHandler — thin delegations, not business logic.
 type AuthService struct {
 	backend authStore
-	// email may be nil in tests that don't exercise the notification paths;
-	// callers must nil-check before use (mirrors mailer.Service's own
-	// Enabled() gate for a log-only fallback).
+	// email may be nil in tests; callers must nil-check before use.
 	email *mailer.Service
 }
 
@@ -75,10 +60,8 @@ func NewAuthService(backend authStore, email *mailer.Service) *AuthService {
 	return &AuthService{backend: backend, email: email}
 }
 
-// Register hashes the password and creates the account. CreateUser atomically
-// promotes the very first user in the system to RoleAdmin (this path opts into
-// the bootstrap-admin rule via auth.WithAllowBootstrap; SSO JIT does not, so a
-// fresh deployment's admin is the first *registered* user, not whoever hits SSO).
+// Register hashes the password and creates the account; CreateUser atomically promotes the very first user to
+// RoleAdmin (this path opts into the bootstrap rule; SSO JIT does not, so the admin is the first registered user).
 func (s *AuthService) Register(ctx context.Context, email, password string) (*storageif.User, error) {
 	hashed, err := auth.HashPassword(password)
 	if err != nil {
@@ -96,9 +79,7 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (*st
 	return user, nil
 }
 
-// SendVerificationEmail issues an email-verification token and mails the link.
-// Best-effort: failures are logged but never returned, since email is optional
-// and a user can request a resend later.
+// SendVerificationEmail issues an email-verification token and mails the link; best-effort, never an error.
 func (s *AuthService) SendVerificationEmail(ctx context.Context, user *storageif.User) {
 	if s.email == nil || user.Email == "" {
 		return
@@ -123,12 +104,9 @@ func (s *AuthService) SendVerificationEmail(ctx context.Context, user *storageif
 	}
 }
 
-// ResendVerification re-issues the email-verification link for a known,
-// still-unverified account. Returns (nil, nil) — NOT an error — when the
-// address is unknown or already verified, so the caller can respond
-// identically in every case (anti-enumeration, same posture as
-// RequestPasswordReset). Outstanding verification tokens are invalidated
-// first so only the newest link redeems.
+// ResendVerification re-issues the verification link for a known, still-unverified account. Returns (nil, nil) —
+// NOT an error — for unknown or already-verified addresses, so the caller responds identically in every case
+// (anti-enumeration). Outstanding tokens are invalidated first so only the newest link redeems.
 func (s *AuthService) ResendVerification(ctx context.Context, email string) (*storageif.User, error) {
 	user, err := s.backend.LoadUserByEmail(ctx, email)
 	if err != nil || user == nil || user.EmailVerified {
@@ -141,9 +119,8 @@ func (s *AuthService) ResendVerification(ctx context.Context, email string) (*st
 	return user, nil
 }
 
-// LoginOutcome distinguishes why Authenticate failed (or that it succeeded),
-// so the caller can log the correct audit reason and resource identifier
-// without re-deriving any of Authenticate's internal, timing-sensitive logic.
+// LoginOutcome distinguishes why Authenticate failed, so the caller logs the correct audit reason without
+// re-deriving timing-sensitive logic.
 type LoginOutcome int
 
 const (
@@ -151,58 +128,39 @@ const (
 	LoginUserNotFound
 	LoginAccountLocked
 	LoginInvalidPassword
-	// LoginEmailNotVerified indicates the credentials were correct but the
-	// account's email has not been verified. Checked AFTER the password so a
-	// stranger can't learn whether an unverified account exists (they get
-	// "invalid credentials" regardless); an attacker who registered a victim's
-	// email and set a known password is blocked from using the shadow account
-	// until they complete verification (which they can't, since they don't
-	// control the inbox).
+	// LoginEmailNotVerified indicates correct credentials but an unverified email. Checked AFTER the password
+	// so a stranger can't learn whether an unverified account exists ("invalid credentials" regardless); an
+	// attacker who registered a victim's email with a known password is blocked until verification (which they
+	// can't complete without the inbox).
 	LoginEmailNotVerified
 )
 
-// LoginResult is returned by Authenticate for every outcome (including
-// failures), so the caller always has enough information to build an accurate
-// audit event.
+// LoginResult is returned by Authenticate for every outcome (including failures), enough for an accurate audit event.
 type LoginResult struct {
 	Outcome LoginOutcome
-	// User is set whenever a matching account was found — every outcome
-	// except LoginUserNotFound — even on failure, so the caller can
-	// audit-log against the correct user ID.
+	// User is set whenever a matching account was found — even on failure, so the caller audits the correct ID.
 	User *storageif.User
-	// AccountJustLocked is true when THIS call pushed the account over the
-	// failed-attempt threshold and newly locked it (vs. an already-locked
-	// account) — the caller uses it to decide whether to also emit the
-	// separate "account locked" audit event.
+	// AccountJustLocked is true when THIS call newly locked the account (vs. already locked) — the caller uses
+	// it to decide whether to also emit the "account locked" audit event.
 	AccountJustLocked bool
 }
 
-// Authenticate verifies an email+password pair with the timing-attack
-// mitigations this endpoint requires:
+// Authenticate verifies an email+password pair with the timing-attack mitigations this endpoint requires:
 //
-//   - A non-existent user still runs a (dummy) bcrypt check before returning,
-//     so response time can't be used to enumerate accounts (bcrypt is
-//     expensive; an early return would make a missing-user response
-//     measurably faster than a real one).
-//   - For an existing user, the REAL bcrypt check runs BEFORE the lock-status
-//     check, so a locked account (fast: DB lookup only) can't be
-//     timing-distinguished from an unlocked one with a wrong password (slow:
-//     DB + bcrypt).
+//   - A non-existent user still runs a (dummy) bcrypt check before returning, so response time can't enumerate
+//     accounts (bcrypt is expensive; an early return would make a missing-user response measurably faster).
+//   - For an existing user, the REAL bcrypt check runs BEFORE the lock-status check, so a locked account (fast:
+//     DB only) can't be timing-distinguished from an unlocked one with a wrong password (slow: DB + bcrypt).
 //
 // Do not reorder these checks.
 //
-// On a wrong password it increments the failed-attempt counter and locks the
-// account for accountLockDuration once failedLoginLockThreshold is reached; on
-// success it resets the counter. Both updates are best-effort — a SaveUser
-// failure is logged but does not fail the login/lockout decision itself.
+// On a wrong password it increments the counter and locks at failedLoginLockThreshold; on success it resets it.
+// Both updates are best-effort — a SaveUser failure is logged but does not fail the login/lockout decision.
 func (s *AuthService) Authenticate(ctx context.Context, email, password string) LoginResult {
 	user, err := s.backend.LoadUserByEmail(ctx, email)
 	if err != nil {
-		// A login for a non-existent account still runs a bcrypt check (against
-		// a dummy hash), so it takes as long as one for a real account with a
-		// wrong password. Without it a missing-user response returns in ~1 ms
-		// while a real account's takes ~0.2 s, letting an attacker enumerate
-		// valid emails purely from response timing.
+		// A login for a non-existent account still runs a bcrypt check against a dummy hash: without it a
+		// missing-user response returns in ~1 ms vs ~0.2 s for a real one, enumerating emails by timing.
 		auth.CheckDummyPassword(password)
 		return LoginResult{Outcome: LoginUserNotFound}
 	}
@@ -236,11 +194,9 @@ func (s *AuthService) Authenticate(ctx context.Context, email, password string) 
 		}
 	}
 
-	// The password is correct, but the account's email is unverified. This
-	// blocks the shadow-registration takeover: an attacker who registered a
-	// victim's email and knows the password still can't get a session. Placed
-	// after the failed-attempt reset so a correct password doesn't accumulate
-	// lockout pressure.
+	// Correct password, unverified email: blocks the shadow-registration takeover — an attacker who registered
+	// a victim's email with a known password still can't get a session. Placed after the reset so a correct
+	// password doesn't accumulate lockout pressure.
 	if !user.EmailVerified {
 		return LoginResult{Outcome: LoginEmailNotVerified, User: user}
 	}
@@ -248,11 +204,8 @@ func (s *AuthService) Authenticate(ctx context.Context, email, password string) 
 	return LoginResult{Outcome: LoginSuccess, User: user}
 }
 
-// ChangePassword verifies oldPassword against the account's current hash,
-// then hashes and stores newPassword. It invalidates any outstanding
-// password-reset / email-verify tokens (best-effort — a failure is logged, not
-// returned) so a user who changes their password through the logged-in UI
-// can't remain recoverable via a previously-issued reset link.
+// ChangePassword verifies oldPassword, then hashes and stores newPassword. Outstanding reset/verify tokens are
+// invalidated (best-effort) so a previously-issued reset link can't recover the account afterwards.
 func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {
 	user, err := s.backend.LoadUserByID(ctx, userID)
 	if err != nil {
@@ -275,11 +228,8 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, n
 	return nil
 }
 
-// RequestPasswordReset issues a password-reset token and emails it, for a
-// known account. Returns (nil, nil) — NOT an error — when email doesn't match
-// a user, so the caller can respond identically to the success case
-// (anti-enumeration: an unknown address must not be distinguishable from a
-// known one by response shape).
+// RequestPasswordReset issues a reset token and emails it. Returns (nil, nil) — NOT an error — when email
+// doesn't match a user, so the caller responds identically (anti-enumeration).
 func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) (*storageif.User, error) {
 	user, err := s.backend.LoadUserByEmail(ctx, email)
 	if err != nil {
@@ -319,9 +269,7 @@ func (s *AuthService) ResetPassword(ctx context.Context, token, newPassword stri
 	if err := s.backend.UpdateUserPassword(ctx, userID, hashed); err != nil {
 		return "", err
 	}
-	// Revoke all other outstanding reset / verify tokens for this user so a
-	// previously-issued (and possibly leaked) reset link can't be redeemed
-	// after the account has already been recovered.
+	// Revoke other outstanding reset/verify tokens so a possibly-leaked link can't be redeemed after recovery.
 	if err := s.backend.InvalidateUserTokens(ctx, userID,
 		storageif.TokenPurposePasswordReset, storageif.TokenPurposeEmailVerify); err != nil {
 		logger.Error("failed to invalidate outstanding reset/verify tokens after reset", "error", err, "userID", userID)
@@ -329,8 +277,7 @@ func (s *AuthService) ResetPassword(ctx context.Context, token, newPassword stri
 	return userID, nil
 }
 
-// VerifyEmail redeems an email-verification token and marks the account's
-// email verified.
+// VerifyEmail redeems an email-verification token and marks the email verified.
 func (s *AuthService) VerifyEmail(ctx context.Context, token string) (userID string, err error) {
 	userID, err = s.backend.ConsumeUserToken(ctx, storageif.TokenPurposeEmailVerify, auth.HashOpaqueToken(token))
 	if err != nil {

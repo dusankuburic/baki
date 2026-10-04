@@ -54,7 +54,7 @@ export function buildChatRequest({
     filesToUse = overrideFiles
   }
   const sendHistory = includeHistory || aiSettings.saveConversationHistory === false
-  // F-19: the per-provider reasoning effort ('' = provider default), sent
+  // The per-provider reasoning effort ('' = provider default), sent
   // next to temperature/maxTokens; the backend ignores it on models without
   // reasoning (one repair round trip at worst). Temperature, Max tokens and
   // the effort stay per provider; a registry entry's own max output caps the

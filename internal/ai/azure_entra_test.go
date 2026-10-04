@@ -66,10 +66,8 @@ func TestEntraTokenSource_CachesUntilNearExpiry(t *testing.T) {
 	}
 }
 
-// PERF-12: between entraTokenRefreshAhead and entraTokenMinRemaining of
-// expiry the cached token is returned at once and refreshed in the
-// background, so no caller pays the round trip; a refresh that fails fails
-// nobody while the cached token still works.
+// between entraTokenRefreshAhead and entraTokenMinRemaining of expiry the cached token is returned at once
+// and refreshed in the background — no caller pays the round trip, and a failed refresh fails nobody.
 func TestEntraTokenSource_EarlyRefreshRunsInTheBackground(t *testing.T) {
 	cred := &fakeCred{ttl: 2 * time.Minute, delay: 30 * time.Millisecond}
 	src := newEntraTokenSource(cred)
@@ -108,7 +106,7 @@ func TestEntraTokenSource_EarlyRefreshRunsInTheBackground(t *testing.T) {
 		t.Error("the background refresh must fill the cache for the next caller")
 	}
 
-	// A failing refresh keeps serving the cached token, and (F-46) it is not
+	// A failing refresh keeps serving the cached token, and it is not
 	// retried by every caller while the cooldown lasts.
 	flaky := &flakyCred{ttl: 2 * time.Minute}
 	src = newEntraTokenSource(flaky)
@@ -177,9 +175,8 @@ func (f *flakyCred) GetToken(context.Context, policy.TokenRequestOptions) (azcor
 	return azcore.AccessToken{Token: fmt.Sprintf("tok-%d", n), ExpiresOn: time.Now().Add(f.ttl)}, nil
 }
 
-// stickyCred returns the SAME token on every GetToken, as azidentity's MSAL
-// cache does for an unexpired token; a rebuilt credential (newCred) is the
-// only way to a different one.
+// stickyCred returns the SAME token on every GetToken, as azidentity's MSAL cache does for an unexpired
+// token; a rebuilt credential is the only way to a different one.
 type stickyCred struct {
 	token string
 	calls atomic.Int32
@@ -190,9 +187,8 @@ func (s *stickyCred) GetToken(context.Context, policy.TokenRequestOptions) (azco
 	return azcore.AccessToken{Token: s.token, ExpiresOn: time.Now().Add(time.Hour)}, nil
 }
 
-// D-26: Invalidate clears the cache AND rebuilds the credential (a fresh MSAL
-// cache), bounded by entraRebuildCooldown; without a constructor (tests) it
-// only clears the cache.
+// D-26: Invalidate clears the cache AND rebuilds the credential (a fresh MSAL cache), bounded by
+// entraRebuildCooldown; without a constructor (tests) it only clears the cache.
 func TestEntraTokenSource_InvalidateRebuildsCredential(t *testing.T) {
 	src := newEntraTokenSource(&stickyCred{token: "tok-1"})
 	var rebuilds atomic.Int32
@@ -285,11 +281,8 @@ func TestEntraSourceFor_ReusesPerCredential(t *testing.T) {
 	}
 }
 
-// The token fetch must not bypass the egress guard: the credential's
-// transport is the package's runtime client — the guarded, no-redirects one
-// in cloud mode — not azcore's default pipeline (nil options). The fake
-// authorities other tests use inject their own transport-carrying credential
-// and are unaffected.
+// The token fetch must not bypass the egress guard: the credential's transport is the package's runtime
+// client (guarded, no-redirects in cloud mode), not azcore's default pipeline.
 func TestEntraCredentialOptions_UseTheRuntimeClient(t *testing.T) {
 	saveAzureRuntime(t, AzureFoundryOptions{Egress: egress.BlockInternal})
 	opts := entraCredentialOptions()
@@ -300,10 +293,8 @@ func TestEntraCredentialOptions_UseTheRuntimeClient(t *testing.T) {
 	if !ok {
 		t.Fatalf("cloud client transport = %T, want a guarded *http.Transport", azureHTTPClient().Transport)
 	}
-	// The guard is live on the token path too: an internal address is refused
-	// at the dial. The authority itself (login.microsoftonline.com) is a
-	// fixed public host and passes it — that is the safety property that
-	// keeps this fix from breaking Entra auth in cloud mode.
+	// The guard is live on the token path too: an internal address is refused at the dial, while the
+	// authority itself (a fixed public host) passes — the property that keeps Entra auth working in cloud mode.
 	if _, err := tr.DialContext(context.Background(), "tcp", "127.0.0.1:443"); !errors.Is(err, egress.ErrInternalAddress) {
 		t.Errorf("a loopback dial through the credential's transport must be refused in cloud mode, got %v", err)
 	}
@@ -312,9 +303,8 @@ func TestEntraCredentialOptions_UseTheRuntimeClient(t *testing.T) {
 	}
 }
 
-// The registry makes room by dropping the least recently used source, not by
-// wiping itself: the wipe also discarded the sources the active chat turns
-// were about to use, forcing a client-credentials sign-in for each.
+// The registry makes room by dropping the least recently used source, not by wiping itself (the wipe also
+// discarded the sources active chat turns were about to use).
 func TestEntraSources_EvictionDropsLeastRecentlyUsed(t *testing.T) {
 	resetEntraSources()
 	t.Cleanup(resetEntraSources)
@@ -375,10 +365,8 @@ func lookupEntraSourceLocked(src *entraTokenSource) bool {
 	return false
 }
 
-// L-ai-1: a source nobody built a provider from for entraSourceIdleTTL is
-// reclaimed on the next registry access — the LRU cap alone never fires on a
-// small deployment, so a deleted document's secret and token stayed in memory
-// for the life of the process.
+// a source nobody built a provider from for entraSourceIdleTTL is reclaimed on the next registry access —
+// the LRU cap alone never fires on a small deployment.
 func TestEntraSources_IdleEntriesArePruned(t *testing.T) {
 	resetEntraSources()
 	t.Cleanup(resetEntraSources)
@@ -430,9 +418,8 @@ func lookupEntraSource(src *entraTokenSource) bool {
 	return lookupEntraSourceLocked(src)
 }
 
-// blockingCred blocks every GetToken until release is closed or the fetch's
-// own ctx ends, so a test can cancel the caller that started the fetch while
-// another caller waits on it.
+// blockingCred blocks every GetToken until release is closed or the fetch's own ctx ends, so a test can
+// cancel the caller that started the fetch while another waits on it.
 type blockingCred struct {
 	calls   atomic.Int32
 	started chan struct{}
@@ -455,9 +442,8 @@ func (b *blockingCred) GetToken(ctx context.Context, _ policy.TokenRequestOption
 	}
 }
 
-// Finding #46: the shared fetch is detached from the caller that started it.
-// That caller's deadline ends its own wait promptly; a concurrent caller with
-// a live ctx still gets the token, and the cache is filled.
+// the shared fetch is detached from the caller that started it: that caller's deadline ends its own wait
+// promptly, a concurrent caller with a live ctx still gets the token, and the cache is filled.
 func TestEntraTokenSource_LeaderCancelDoesNotFailJoiners(t *testing.T) {
 	cred := newBlockingCred()
 	src := newEntraTokenSource(cred)
@@ -508,9 +494,8 @@ func TestEntraTokenSource_LeaderCancelDoesNotFailJoiners(t *testing.T) {
 
 const entraTestTenant = "11111111-2222-3333-4444-555555555555"
 
-// entraAuthority is a fake Microsoft Entra ID authority (tenant discovery and
-// the token endpoint) that refuses every client-credentials request with the
-// given status and body, counting token requests.
+// entraAuthority is a fake Entra ID authority (tenant discovery + token endpoint) that refuses every
+// client-credentials request with the given status and body, counting token requests.
 func entraAuthority(t *testing.T, status int, body map[string]any) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var tokenCalls atomic.Int32
@@ -534,10 +519,8 @@ func entraAuthority(t *testing.T, status int, body map[string]any) (*httptest.Se
 	return srv, &tokenCalls
 }
 
-// Finding #15: a refused client secret is an auth failure (ErrApiKeyInvalid,
-// ErrEntraCredentialsRejected) with a one-line message carrying the AADSTS
-// code — not azidentity's multi-line dump with trace and correlation ids —
-// and it is not retried with a second sign-in.
+// a refused client secret is an auth failure (ErrApiKeyInvalid, ErrEntraCredentialsRejected) with a one-line
+// message carrying the AADSTS code — not azidentity's multi-line dump — and is not retried with a second sign-in.
 func TestEntraTokenSource_RejectedCredentialsAreOneLineAuthErrors(t *testing.T) {
 	authority, tokenCalls := entraAuthority(t, http.StatusUnauthorized, map[string]any{
 		"error":             "invalid_client",
@@ -605,7 +588,7 @@ func (f erroringCred) GetToken(context.Context, policy.TokenRequestOptions) (azc
 	return azcore.AccessToken{}, f.err
 }
 
-// Finding #15: other token failures are one line too, and are not auth
+// other token failures are one line too, and are not auth
 // failures (the credentials may be fine).
 func TestEntraTokenSource_OtherFailuresAreOneLine(t *testing.T) {
 	outage := &azidentity.AuthenticationFailedError{RawResponse: &http.Response{
@@ -629,10 +612,8 @@ func TestEntraTokenSource_OtherFailuresAreOneLine(t *testing.T) {
 			if errors.Is(err, ErrApiKeyInvalid) || errors.Is(err, ErrEntraCredentialsRejected) {
 				t.Errorf("not an auth failure: %v", err)
 			}
-			// D-30: a typed sentinel the chat service can give a code and copy
-			// to — and deliberately NOT ErrProviderDown: the retry wrapper
-			// would re-run 30 s fetches and the resource's breaker would open
-			// for the identity service's outage.
+			// D-30: a typed sentinel the chat service can code and copy — deliberately NOT ErrProviderDown:
+			// the retry wrapper would re-run 30 s fetches and the breaker would open for the identity outage.
 			if !errors.Is(err, ErrEntraTokenUnavailable) {
 				t.Errorf("want ErrEntraTokenUnavailable, got %v", err)
 			}
@@ -662,7 +643,7 @@ func TestOneLine(t *testing.T) {
 	}
 }
 
-// F-51: the CLI credential's token source is shared per tenant and its
+// The CLI credential's token source is shared per tenant and its
 // "not signed in" failure becomes the az-login instruction.
 func TestEntraCLISourceAndUnavailableMessage(t *testing.T) {
 	t.Cleanup(resetEntraSources)
@@ -691,11 +672,9 @@ func TestEntraCLISourceAndUnavailableMessage(t *testing.T) {
 	}
 }
 
-// A1: the CLI registry prunes its own map under its own lock. It used to
-// run the service-principal prune — iterating and deleting entraSources.m
-// while holding only entraCLISources.mu — so a CLI provider built while a
-// service-principal credential resolved crashed the process with
-// "concurrent map iteration and map write". Run under -race.
+// The CLI registry prunes its own map under its own lock — it used to run the service-principal prune,
+// iterating entraSources.m while holding only entraCLISources.mu, crashing with "concurrent map iteration
+// and map write". Run under -race.
 func TestEntraCLISourceFor_ConcurrentWithServicePrincipal(t *testing.T) {
 	resetEntraSources()
 	t.Cleanup(resetEntraSources)
@@ -735,7 +714,7 @@ func TestEntraCLISourceFor_ConcurrentWithServicePrincipal(t *testing.T) {
 	}
 }
 
-// A1: a CLI source nobody built a provider from for entraSourceIdleTTL is
+// A CLI source nobody built a provider from for entraSourceIdleTTL is
 // reclaimed on the next CLI registry access (the CLI map was never pruned).
 func TestEntraCLISources_IdleEntriesArePruned(t *testing.T) {
 	resetEntraSources()

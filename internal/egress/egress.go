@@ -1,53 +1,7 @@
 // Package egress is the single definition of "an address the outside world
-// must not make this server reach".
-//
-// Several features accept a URL from a tenant or user and then make the server
-// connect to it — governance alert channels (webhook / Teams / Slack / Jira in
-// package notify) and user-supplied AI provider endpoints (Azure). Each of
-// those is an SSRF surface: in a multi-tenant deployment any authenticated
-// user can point such a URL at cloud-internal endpoints
-// (https://169.254.169.254/... metadata, private RFC1918 services, the
-// server's own loopback listeners), use the synchronous response as a
-// reachability oracle, or POST attacker-influenced bodies at internal
-// listeners (B1.9).
-//
-// The guard has two layers, and both lean on the same IsInternalIP so they
-// cannot drift:
-//
-//   - RejectPrivateHost is the validation-time check: resolve the configured
-//     host once and refuse it when any address is internal. Run it when the
-//     URL is saved so the operator gets a clear error instead of a silently
-//     dead channel.
-//   - GuardDialContext / GuardTransport / GuardedTransport is the dial-time
-//     check: the validation-time resolution alone is vulnerable to DNS
-//     rebinding between validation and request (or to the record simply
-//     changing later), so the dialer's own resolution is judged — the policy
-//     runs on the concrete IP of every connection attempt, right before
-//     connect(). There is no second lookup whose answer could differ from the
-//     address actually dialled.
-//   - Behind an operator-configured HTTP(S) proxy the socket reaches the
-//     proxy, not the target, and the proxy resolves the target name itself.
-//     For tenant-controlled targets (GuardTransport / GuardedTransport) the
-//     hop to the proxy stays under the dial guard, so a proxy on an internal
-//     address fails closed, and the target is judged strictly in the Proxy
-//     hook. Only transports whose targets are restricted to an operator
-//     allow-list (GuardAllowListedTransport) trust the proxy hop.
-//
-// NoRedirects completes the picture for HTTP clients: only the CONFIGURED URL
-// ever passed validation, and 307/308 replay the method AND body, so a
-// policy-passing https endpoint must not be able to answer
-// "307 -> http://127.0.0.1:2379/..." and have the payload delivered there.
-//
-// Policy is the only knob. BlockInternal — the zero value — is what every
-// multi-tenant (cloud) deployment must use; AllowLoopback exists for the
-// desktop/local mode where the "tenant" is the single user running the app on
-// their own machine and a target on localhost is exactly what they meant. The
-// loopback allowance is loopback only: link-local and RFC1918 stay refused
-// under it. AllowPrivateNetwork is the operator's opt-in for private-link AI
-// endpoints (PAD_AI_ALLOW_PRIVATE_EGRESS): RFC 1918 and IPv6 unique-local
-// addresses pass, everything else IsInternalIP names — loopback, link-local
-// (169.254.169.254 metadata), unspecified, the Azure platform address — stays
-// refused.
+// must not make this server reach": URLs accepted from tenants/users (governance
+// alert channels, AI provider endpoints) are SSRF surfaces — cloud metadata,
+// RFC1918 services, the server's own loopback (B1.9).
 package egress
 
 import (
@@ -69,54 +23,37 @@ import (
 var ErrInternalAddress = errors.New("egress: refusing connection to internal address")
 
 // ErrUnverifiedTarget is GuardTransport's refusal of a proxied request whose
-// target host does not resolve locally: the proxy would resolve the name on
-// its own, to an address this process never got to judge.
+// target host does not resolve locally: the proxy would resolve the name to an
+// address this process never got to judge.
 var ErrUnverifiedTarget = errors.New("egress: refusing proxied request to an unverifiable target")
 
 // Policy decides whether an outbound target may point at the machine (or the
-// private network) the server itself runs on.
-//
-// It exists because the notify package's "http://localhost for dev" escape
-// hatch was originally unconditional. In a multi-tenant deployment ANY
-// authenticated user can create an org and become its admin (handleOrgCreate
-// takes no role), add a webhook channel, and hit the synchronous test endpoint
-// — whose response distinguishes connection-refused from non-2xx from 2xx.
-// That is a loopback port scanner plus the ability to POST
+// private network) the server itself runs on: in a multi-tenant deployment ANY
+// authenticated user can create an org, add a webhook channel and hit the
+// synchronous test endpoint — a loopback port scanner plus a POST of
 // attacker-influenced JSON at internal listeners.
 type Policy int
 
 const (
 	// BlockInternal refuses loopback, private, link-local and unspecified
-	// addresses. (URL validators layered on top, such as notify, additionally
-	// refuse plaintext http:// entirely under this policy.)
-	//
-	// This is the ZERO VALUE on purpose: a caller that forgets to pass a policy
-	// gets the safe one. Opting into the permissive behaviour has to be typed
-	// out, which is also why the tests that need a loopback httptest server say
-	// so explicitly.
+	// addresses. The ZERO VALUE on purpose: a caller that forgets a policy
+	// gets the safe one.
 	BlockInternal Policy = iota
 	// AllowLoopback additionally permits loopback targets (a literal loopback
 	// IP or the name "localhost"). DESKTOP AND LOCAL MODE ONLY — there the
-	// "org" is the single user running the app, so a target pointing at their
-	// own machine is exactly what they meant. Nothing else is relaxed:
-	// link-local and private ranges stay refused.
+	// "org" is the single user running the app; nothing else is relaxed.
 	AllowLoopback
-	// AllowPrivateNetwork is BlockInternal that additionally permits RFC 1918
-	// (10/8, 172.16/12, 192.168/16) and IPv6 unique-local (fc00::/7)
-	// addresses — the private-link case, where an allow-listed AI endpoint
-	// resolves to a private address by design (PAD_AI_ALLOW_PRIVATE_EGRESS).
-	// Nothing else is relaxed: loopback (a literal "localhost" included),
-	// link-local (169.254.169.254 metadata), unspecified and the other
-	// special-purpose ranges IsInternalIP names stay refused, and an RFC 1918
-	// address embedded in a NAT64 / 6to4 address does not count as private.
+	// AllowPrivateNetwork additionally permits RFC 1918 (10/8, 172.16/12,
+	// 192.168/16) and IPv6 unique-local (fc00::/7) — the private-link AI
+	// endpoint case (PAD_AI_ALLOW_PRIVATE_EGRESS). An RFC 1918 address
+	// embedded in a NAT64 / 6to4 address does not count.
 	AllowPrivateNetwork
 )
 
-// Refuses reports whether the policy refuses a connection to ip: every
-// address IsInternalIP names, except — under AllowPrivateNetwork — RFC 1918
-// and unique-local ones. AllowLoopback's loopback allowance is by host name
-// (see IsLoopbackHost), not by address: a name that merely resolves to
-// loopback is refused under every policy.
+// Refuses reports whether the policy refuses ip: every address IsInternalIP
+// names, except — under AllowPrivateNetwork — RFC 1918 and unique-local ones.
+// AllowLoopback's loopback allowance is by host name (IsLoopbackHost): a name
+// that merely resolves to loopback is refused under every policy.
 func (p Policy) Refuses(ip net.IP) bool {
 	if !IsInternalIP(ip) {
 		return false
@@ -134,29 +71,20 @@ var internalPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("198.18.0.0/15"),    // benchmarking (RFC 2544), used for internal plumbing
 }
 
-// Prefixes of IPv6 addresses that carry an IPv4 address the network
-// translates to: a NAT64 gateway (RFC 6052 well-known prefix) connects to the
-// last 32 bits, a 6to4 relay (RFC 3056) to bits 16–47. IsInternalIP judges
-// the embedded address, so 64:ff9b::a9fe:a9fe is 169.254.169.254.
+// Prefixes of IPv6 addresses that carry an IPv4 address the network translates
+// to: NAT64 (RFC 6052) connects to the last 32 bits, 6to4 (RFC 3056) to bits
+// 16–47. IsInternalIP judges the embedded address.
 var (
 	nat64Prefix   = netip.MustParsePrefix("64:ff9b::/96")
 	sixToFourPref = netip.MustParsePrefix("2002::/16")
 )
 
-// IsInternalIP is the single definition of "an address the outside world
-// should not be able to make this server reach": loopback, link-local (unicast
-// and multicast — 169.254.0.0/16 is where cloud metadata lives), private
-// (RFC 1918 and IPv6 unique-local), unspecified (0.0.0.0 / ::, which some
-// stacks route to loopback), "this network" 0.0.0.0/8, carrier-grade NAT
-// 100.64.0.0/10, the Azure platform address 168.63.129.16, IETF protocol
-// assignments 192.0.0.0/24 and benchmarking 198.18.0.0/15. A NAT64
-// (64:ff9b::/96) or 6to4 (2002::/16) address is judged by the IPv4 address it
-// embeds, and an IPv4-mapped IPv6 address by its IPv4 form.
-//
-// Both layers (validation-time RejectPrivateHost and dial-time
-// GuardDialContext) use it, so they cannot drift — previously the dial guard
-// omitted IsLoopback while the resolver check included it, which is precisely
-// how a literal http://127.0.0.1 passed both.
+// IsInternalIP is the single definition of "an address the outside world should
+// not be able to make this server reach": loopback, link-local unicast and
+// multicast (169.254.0.0/16 is where cloud metadata lives), RFC 1918 and IPv6
+// unique-local, unspecified, plus internalPrefixes. A NAT64/6to4 address is
+// judged by the IPv4 it embeds, an IPv4-mapped IPv6 by its IPv4 form. Both
+// guard layers use it, so they cannot drift.
 func IsInternalIP(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 		ip.IsPrivate() || ip.IsUnspecified() {
@@ -206,26 +134,20 @@ func IsLoopbackHost(host string) bool {
 }
 
 // RejectPrivateHost is RejectPrivateHostContext with no deadline and the
-// default resolver (boot-time configuration, tests). Request paths should
-// pass their context so the lookup ends with the request.
+// default resolver (boot-time configuration, tests); request paths should pass
+// their context so the lookup ends with the request.
 func RejectPrivateHost(host string, policy Policy) error {
 	return RejectPrivateHostContext(context.Background(), net.DefaultResolver, host, policy)
 }
 
-// RejectPrivateHostContext is the validation-time half of the guard: it
-// resolves host with r (LookupIPAddr short-circuits literal IPs, so those
-// never touch DNS) and refuses it when the policy refuses ANY resolved address
-// (Policy.Refuses). Under AllowLoopback a loopback host passes without
-// resolution — the desktop/local escape hatch, opted into explicitly. An
-// empty host is an error. The lookup honours ctx (the request's deadline,
-// the client's disconnect): on Windows/cgo the system resolver can block
-// ~10 s per unresolvable name, and a handler holding a pooled DB connection
-// for that long is a pool exhaustion vector. A nil r is the default
-// resolver.
-//
-// The error text is deliberately generic ("host %q ...") so a caller can
-// prefix it with what the host is (notify says "alert URL host ..."); wrap it
-// with %w to keep the chain.
+// RejectPrivateHostContext is the validation-time half of the guard: it resolves
+// host with r (LookupIPAddr short-circuits literal IPs, so those never touch
+// DNS) and refuses it when the policy refuses ANY resolved address. Under
+// AllowLoopback a loopback host passes without resolution; an empty host is an
+// error; nil r is the default resolver. The lookup honours ctx — the system
+// resolver can block ~10 s per unresolvable name on Windows/cgo, and a handler
+// holding a pooled DB connection that long is a pool exhaustion vector. The
+// error text is deliberately generic; prefix it, wrap with %w.
 func RejectPrivateHostContext(ctx context.Context, r *net.Resolver, host string, policy Policy) error {
 	if host == "" {
 		return fmt.Errorf("host is empty")
@@ -249,31 +171,15 @@ func RejectPrivateHostContext(ctx context.Context, r *net.Resolver, host string,
 }
 
 // GuardDialContext returns a DialContext that dials with d and enforces the
-// policy at DIAL time (B1.9) on the concrete address of every connection
-// attempt: the check runs in the dialer's ControlContext hook, after the
-// dialer's own resolution and right before connect(), for each candidate
-// address it tries (Happy Eyeballs fallbacks included). A validation-time
-// resolution check alone is vulnerable to DNS rebinding between validation and
-// request, and so was the previous form of this guard, which resolved the
-// name once to judge it and then let the dialer resolve it AGAIN to connect —
-// a TTL-0 record alternating between a public and an internal address passed
-// the first lookup and was connected to on the second. The material SSRF
-// surfaces (cloud metadata 169.254.0.0/16, RFC1918 services, loopback
-// listeners) are therefore blocked on both layers.
-//
-// An address the hook cannot parse as an IP (a zoned IPv6 literal, say) is
-// refused; a name that does not resolve fails in the dialer itself, so nothing
-// falls through unchecked. d is copied, never modified; a Control or
-// ControlContext hook it already carries still runs after the check.
-//
-// The ONLY bypass, and it is explicit: under AllowLoopback a loopback host
-// (see IsLoopbackHost) is dialled with d as is — the documented dev escape
-// hatch (http://localhost) and the test harness. Any other name that resolves
-// to a loopback address is still refused under both policies. The previous
-// notify code skipped the whole check whenever the host was literally
-// "localhost", and its IP test omitted IsLoopback — so "127.0.0.1" was not
-// skipped but passed anyway. Both holes stay closed: under BlockInternal
-// nothing is skipped, and IsInternalIP covers loopback.
+// policy at DIAL time: the check runs in the dialer's ControlContext hook,
+// after the dialer's own resolution and right before connect(), for each
+// candidate address it tries (Happy Eyeballs fallbacks included) — a
+// validation-time check alone is vulnerable to DNS rebinding, so the policy
+// must run on the address actually dialled. An unparseable address is refused;
+// d is copied, never modified (its own Control(ControlContext) hook still
+// runs). The ONLY bypass, and it is explicit: under AllowLoopback a loopback
+// host (IsLoopbackHost) is dialled with d as is — the dev/test hatch; any other
+// name that resolves to loopback is refused under both policies.
 func GuardDialContext(d *net.Dialer, policy Policy) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	guarded := *d
 	prevCtx, prev := d.ControlContext, d.Control
@@ -326,37 +232,19 @@ func newGuardDialer() *net.Dialer {
 }
 
 // GuardTransport installs the dial-time guard on t (modified in place) with d
-// as the dialer. It is the guard for targets a tenant or user controls (the
-// notify webhooks): EVERY connection t makes — the hop to a proxy that t.Proxy
-// selects (HTTP_PROXY / HTTPS_PROXY) included — goes through GuardDialContext
-// and is judged on its concrete IP.
-//
-// Behind a proxy the socket reaches the proxy, not the target, and the proxy
-// resolves the target name again on its own: this process can neither see nor
-// pin the address the proxy connects to, so it cannot close the DNS-rebinding
-// window there (a name that resolves to a public address here and to an
-// internal one for the proxy, or does not resolve here at all). A proxied
-// request therefore fails closed:
-//
-//   - a proxy on an internal address — the usual corporate egress proxy or
-//     sidecar, which can reach this server's private network — is refused by
-//     the dial guard, so no request is routed through it;
-//   - behind a proxy on a public address the TARGET is judged in the Proxy hook
-//     as well, strictly: it must resolve locally (with d's resolver) and no
-//     address may be internal under the same policy. A local resolution
-//     failure is a refusal — RejectPrivateHost demands a resolving host at
-//     validation time too. What remains is the gap between that lookup and the
-//     proxy's own, and a proxy outside the private network cannot turn it into
-//     a probe of this one.
-//
-// Deployments whose egress goes through a proxy on a private address must
-// list the tenant target hosts in NO_PROXY, so they are dialled directly and
-// judged on the address actually connected to. Transports whose targets are
-// restricted to an operator allow-list can trust the proxy hop instead: see
-// GuardAllowListedTransport.
-//
-// t.DialTLSContext is cleared so every connection goes through the guarded
-// DialContext.
+// as the dialer, for targets a tenant or user controls (the notify webhooks):
+// EVERY connection t makes — the hop to a proxy t.Proxy selects (HTTP_PROXY /
+// HTTPS_PROXY) included — goes through GuardDialContext and is judged on its
+// concrete IP. Behind a proxy the socket reaches the proxy, which resolves the
+// target itself: this process can neither see nor pin that address, so a
+// proxied request fails closed — a proxy on an internal address is refused by
+// the dial guard, and behind a public proxy the TARGET is also judged in the
+// Proxy hook, strictly (it must resolve locally and hold no internal address;
+// checkProxiedTarget). Deployments whose egress proxy sits on a private address
+// must list the tenant target hosts in NO_PROXY so they are dialled directly;
+// operator allow-listed targets can instead trust the proxy hop
+// (GuardAllowListedTransport). t.DialTLSContext is cleared so every connection
+// goes through the guarded DialContext.
 func GuardTransport(t *http.Transport, d *net.Dialer, policy Policy) {
 	t.DialTLSContext = nil
 	t.DialContext = GuardDialContext(d, policy)
@@ -379,31 +267,17 @@ func GuardTransport(t *http.Transport, d *net.Dialer, policy Policy) {
 // GuardAllowListedTransport is GuardTransport for a transport whose targets are
 // restricted to an operator allow-list of hosts whose DNS no tenant or user
 // controls — the Azure AI Foundry client (*.openai.azure.com and friends, plus
-// the operator's own additions). Connections dialled directly are judged by
-// GuardDialContext on the concrete IP, exactly as in GuardTransport.
-//
-// The difference is the proxy: here the operator-configured proxy is trusted.
-// Judging its socket would judge the PROXY — every request behind a proxy on a
-// private address, the normal corporate setup, was refused, while behind a
-// public proxy the real target went unchecked. So for a request that t.Proxy
-// routes through a proxy the TARGET host is judged in the Proxy hook (resolved
-// with d's resolver; internal addresses are refused under the same policy; a
-// local resolution failure is not a verdict, since the proxy resolves the
-// name itself and may see names this host cannot), and the hop to exactly the
-// host:port the hook selected goes through d unguarded.
-//
-// Never use it for tenant-supplied hosts: there the local lookup and the
-// proxy's own can differ (rebinding, or a name that does not resolve here),
-// and a private proxy then connects wherever the name points. Use
-// GuardTransport.
-//
-// net/http calls the Proxy hook on every request, pooled connection or not,
-// so behind a proxy every chat call, tool iteration, embedding and listing
-// page would do its own lookup bounded only by the request's context (the
-// chat context lasts minutes). The lookup is bounded by proxyLookupTimeout
-// and a PASS is reused for proxyVerdictTTL per target host; a refusal is
-// never cached. The hosts are operator-allow-listed and the proxy resolves
-// them itself anyway.
+// the operator's own additions). Direct connections are judged identically;
+// the difference is the proxy: here the operator-configured proxy is TRUSTED —
+// judging its socket would judge the PROXY, and every request behind a proxy on
+// a private address (the normal corporate setup) was refused. For a proxied
+// request the TARGET host is judged in the Proxy hook (internal addresses
+// refused; a local resolution failure is not a verdict, the proxy resolves the
+// name), and the hop to exactly the host:port the hook selected goes through d
+// unguarded. Never use it for tenant-supplied hosts (there the local lookup
+// and the proxy's own can differ — use GuardTransport). The Proxy hook runs on
+// every request; a PASS is reused for proxyVerdictTTL per target host, a
+// refusal is never cached.
 func GuardAllowListedTransport(t *http.Transport, d *net.Dialer, policy Policy) {
 	guarded := GuardDialContext(d, policy)
 	t.DialTLSContext = nil
@@ -440,9 +314,8 @@ func GuardAllowListedTransport(t *http.Transport, d *net.Dialer, policy Policy) 
 	}
 }
 
-// proxyVerdictTTL is how long GuardAllowListedTransport's proxy hook reuses
-// a target host's pass (its local resolution held no internal address).
-// Only passes are cached; a refusal is re-judged on the next request.
+// proxyVerdictTTL is how long GuardAllowListedTransport's proxy hook reuses a
+// target host's pass. Only passes are cached; refusals are re-judged.
 const proxyVerdictTTL = time.Minute
 
 // proxyLookupTimeout bounds the local lookup in that hook: a resolver that
@@ -480,10 +353,10 @@ func (v *proxyVerdicts) pass(host string) {
 }
 
 // checkProxiedTarget judges the target of a proxied request: its local
-// resolution must not contain an internal address. A literal IP is judged
-// without DNS. A name that does not resolve locally is refused when strict
-// (GuardTransport: an address that cannot be checked is not allowed) and
-// passes otherwise (GuardAllowListedTransport: the proxy resolves it).
+// resolution must not contain an internal address (a literal IP is judged
+// without DNS). A name that does not resolve locally is refused when strict
+// (GuardTransport: what cannot be checked is not allowed) and passes otherwise
+// (the allow-listed transport: the proxy resolves it).
 func checkProxiedTarget(ctx context.Context, r *net.Resolver, host string, policy Policy, strict bool) error {
 	if host == "" {
 		return errors.New("egress: request has no target host")
@@ -530,10 +403,9 @@ func proxyDialAddr(u *url.URL) string {
 }
 
 // GuardedTransport returns a clone of http.DefaultTransport guarded by
-// GuardTransport (with the default transport's dialer settings): the
-// tenant-target guard, under which a request routed through a proxy on an
-// internal address fails closed. Pair it with NoRedirects on the http.Client
-// so a redirect cannot steer the request around the guard.
+// GuardTransport with the default transport's dialer settings. Pair it with
+// NoRedirects on the http.Client so a redirect cannot steer the request around
+// the guard.
 func GuardedTransport(policy Policy) *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	GuardTransport(t, newGuardDialer(), policy)
@@ -542,24 +414,19 @@ func GuardedTransport(policy Policy) *http.Transport {
 
 // transportFailureMarkers recognise a connection failure in an error whose
 // chain was flattened to text (azidentity reports a failed token request as a
-// string): the net and net/http phrasings of DNS, dial, proxy and TLS
-// failures, and this package's own refusals.
+// string): the net/net/http phrasings, and this package's own refusals.
 var transportFailureMarkers = []string{
 	"dial tcp", "dial udp", "proxyconnect", "no such host", "connection refused",
 	"connection reset", "i/o timeout", "network is unreachable", "host is unreachable",
 	"tls: ", "x509: ", "egress: refusing",
 }
 
-// DescribeFailure maps a failed outbound connection to fixed, client-safe
-// copy ("the host name does not resolve"). The raw text of a transport or
-// guard failure names addresses — the target's resolved IP, the operator's
-// HTTP(S) proxy — that must stay in the server log, never in a response. ok
-// is false when err is not a connection failure (an HTTP answer, a provider
-// error, a validation error), whose own text is the caller's to show.
-//
-// Recognised: this package's refusals (ErrInternalAddress,
-// ErrUnverifiedTarget), *url.Error / *net.OpError / *net.DNSError anywhere
-// in the chain, and the same failures in an error flattened to text.
+// DescribeFailure maps a failed outbound connection to fixed, client-safe copy
+// ("the host name does not resolve"): the raw text names addresses — the
+// target's resolved IP, the operator's HTTP(S) proxy — that must stay in the
+// server log, never in a response. ok is false when err is not a connection
+// failure. Recognised: this package's refusals, *url.Error / *net.OpError /
+// *net.DNSError anywhere in the chain, and the same failures flattened to text.
 func DescribeFailure(err error) (msg string, ok bool) {
 	if err == nil {
 		return "", false
@@ -611,15 +478,11 @@ func DescribeFailure(err error) (msg string, ok bool) {
 	return "the connection failed", true
 }
 
-// NoRedirects is an http.Client CheckRedirect that refuses to follow 3xx.
-//
-// Only the CONFIGURED url passes through a caller's validation; a redirect
-// target never did, and 307/308 replay the method AND body — so a perfectly
-// legitimate https://attacker.example/hook could answer
-// "307 -> http://127.0.0.1:2379/..." and have a signed payload delivered there
-// instead. An endpoint that redirects is already misconfigured, so returning
-// the 3xx as the final response (where it fails the caller's 2xx check with a
-// clear status) is both safer and more debuggable than following it.
+// NoRedirects is an http.Client CheckRedirect that refuses to follow 3xx:
+// only the CONFIGURED url passed validation, and 307/308 replay the method AND
+// body — a passing https endpoint must not be able to answer "307 ->
+// http://127.0.0.1:2379/" and have the payload delivered there. Returning the
+// 3xx as the final response is safer and more debuggable.
 func NoRedirects(_ *http.Request, _ []*http.Request) error {
 	return http.ErrUseLastResponse
 }

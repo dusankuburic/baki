@@ -22,37 +22,28 @@ import (
 // context budget. Results are truncated with a marker when they exceed it.
 const maxToolResultBytes = 6000
 
-// defaultToolTimeout bounds a single tool execution. The grounding tools are
-// in-memory scans (milliseconds); only apply_fix legitimately runs longer (it
-// waits for a human decision), and it carries its own per-tool timeout. A
-// bound exists so a pathological handler can't wedge a turn until the 10-min
-// stream cap.
+// defaultToolTimeout bounds a single tool execution: the grounding tools are in-memory scans; only apply_fix
+// runs longer (it waits for a human decision) and carries its own per-tool timeout.
 const defaultToolTimeout = 30 * time.Second
 
-// FixDecisionTimeout bounds how long apply_fix waits for the user's
-// approve/decline before giving up (nothing is written on timeout). Exported
-// so the chat service's applier and this package's tool timeout share one
-// number. Kept below the stream idle timeout (90s) even though the applier
-// touches keepalive — defense in depth against a wedged wait.
+// FixDecisionTimeout bounds how long apply_fix waits for the user's approve/decline (nothing is written on
+// timeout). Exported so the chat service's applier shares the number; below the 90s stream idle timeout.
 const FixDecisionTimeout = 60 * time.Second
 
 // fixApplyToolTimeout covers the decision wait plus the apply + re-analyze
 // round-trip on a large flow.
 const fixApplyToolTimeout = FixDecisionTimeout + 60*time.Second
 
-// ToolAnalysis is the slice of the analysis service the tools need. Declared
-// here (rather than importing internal/service) so the ai package stays a leaf
-// of service, not a dependency cycle. *service.AnalysisService satisfies it.
+// ToolAnalysis is the slice of the analysis service the tools need, declared here so the ai package stays a
+// leaf of service (no dependency cycle). *service.AnalysisService satisfies it.
 type ToolAnalysis interface {
 	AnalyzeFlow(ctx context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error)
 	GetVariableLineage(doc *models.FlowDocument, varName string) (*models.VariableHistory, error)
 }
 
-// FixProposal describes one auto-fix awaiting the user's approval. It carries
-// everything the apply path needs (fix dispatch is re-run server-side against
-// the REAL, unscrubbed flow — the model never handles patch application), plus
-// the human-readable Summary (rendered from the scrubbed doc, so it is
-// safe to show) for the approval prompt.
+// FixProposal describes one auto-fix awaiting approval: everything the apply path needs (fix dispatch re-runs
+// server-side against the REAL, unscrubbed flow — the model never handles patch application) plus the
+// human-readable Summary, rendered from the scrubbed doc.
 type FixProposal struct {
 	ProposalID  string
 	RuleID      string
@@ -66,43 +57,33 @@ type FixProposal struct {
 	Summary     string
 }
 
-// ToolFixApplier is the human-in-the-loop apply hook implemented by the chat
-// service: it shows the proposal to the stream's owner, waits for their
-// decision (bounded), and on approval applies the fix to the real flow,
-// re-analyzes, and reports the outcome. The returned string is the
-// model-readable result (approved/applied, declined, timed out); an error is
-// returned only when the stream itself is failing.
+// ToolFixApplier is the human-in-the-loop apply hook implemented by the chat service: show the proposal to
+// the stream's owner, wait for their decision (bounded), on approval apply to the real flow, re-analyze and
+// report. An error is returned only when the stream itself is failing.
 type ToolFixApplier interface {
 	ApplyFixWithApproval(ctx context.Context, prop FixProposal) (string, error)
-	// ApplyFixesWithApproval requests ONE approval for a batch of fixes, then
-	// applies each sequentially (re-associating targets on the re-parsed flow
-	// between applies — a patch shifts line numbers and mints fresh block
-	// IDs). The returned string is the model-readable per-item outcome.
+	// ApplyFixesWithApproval requests ONE approval for a batch, then applies each sequentially
+	// (re-associating targets on the re-parsed flow between applies — a patch shifts lines and mints new IDs).
 	ApplyFixesWithApproval(ctx context.Context, props []FixProposal) (string, error)
 }
 
-// ToolContext is the data a tool handler operates on. Doc MUST already be
-// scrubbed by the caller; Analysis may be nil (tools that need it say so).
-// Fixes is nil unless the caller wired the approval-gated apply path.
+// ToolContext is the data a tool handler operates on: Doc MUST already be scrubbed by the caller; Analysis
+// may be nil; Fixes is nil unless the approval-gated apply path is wired.
 type ToolContext struct {
 	Ctx context.Context
 	// Doc is the SCRUBBED document the model sees: every string rendered from
 	// it (search results, block details, patch previews) is safe to return.
 	Doc *models.FlowDocument
-	// RealDoc is the unscrubbed document, SERVER-SIDE ONLY — never render
-	// anything from it without ScrubText. Analyses and fix resolution run
-	// against it (A2): value-dependent findings (hardcoded credentials in
-	// property values) vanish on the redacted copy, so propose_fix/apply_fix
-	// failed for exactly the security findings the UI lists. Nil falls back
-	// to Doc (older callers, tests).
+	// RealDoc is the unscrubbed document, SERVER-SIDE ONLY — never render from it without ScrubText.
+	// Analyses and fix resolution run against it (value-dependent findings vanish on the redacted copy);
+	// nil falls back to Doc.
 	RealDoc  *models.FlowDocument
 	Analysis ToolAnalysis
 	Fixes    ToolFixApplier
 }
 
-// analysisDoc returns the document analyses must run against: RealDoc when
-// wired, else the scrubbed Doc. The block handed to the fixer still comes
-// from Doc — patch previews render property VALUES, which must stay masked.
+// analysisDoc returns the document analyses run against: RealDoc when wired, else the scrubbed Doc. The block
+// handed to the fixer still comes from Doc — patch previews render property VALUES, which must stay masked.
 func (tctx ToolContext) analysisDoc() *models.FlowDocument {
 	if tctx.RealDoc != nil {
 		return tctx.RealDoc
@@ -148,20 +129,15 @@ func ToolLabel(name string) string {
 	return name
 }
 
-// ExecuteTool runs a tool and always returns a string result — including for
-// unknown tools, bad input, handler errors, and timeouts — so the model can
-// read the outcome and recover rather than the loop aborting.
+// ExecuteTool runs a tool and always returns a string result — unknown tools, bad input, handler errors and
+// timeouts included — so the model can read the outcome and recover instead of the loop aborting.
 func ExecuteTool(name string, input json.RawMessage, tctx ToolContext) string {
 	t, ok := toolRegistry[name]
 	if !ok {
 		return "error: unknown tool " + name
 	}
-	// Malformed argument JSON (a call cut mid-argument, or the malformed JSON
-	// open models emit with finish tool_calls — Microsoft's function-calling
-	// guide: "the JSON response might not always be valid") becomes the
-	// standard retryable error result instead of aborting the turn: the model
-	// reads it, re-issues the call with valid JSON, and the loop stays bounded
-	// (audit #9 F-11). Empty input is the providers' "no arguments" and runs.
+	// Malformed argument JSON (a call cut mid-argument, or the malformed JSON open models emit) becomes the
+	// standard retryable error result so the model re-issues the call; empty input runs.
 	if in := bytes.TrimSpace(input); len(in) > 0 && !json.Valid(in) {
 		return fmt.Sprintf("error: the arguments for %s were not valid JSON — call it again with valid JSON arguments", name)
 	}
@@ -184,9 +160,8 @@ func ExecuteTool(name string, input json.RawMessage, tctx ToolContext) string {
 	return truncateResult(res)
 }
 
-// truncateResult caps a tool result at maxToolResultBytes without splitting a
-// multi-byte UTF-8 rune: a mid-rune byte slice would feed the model (and any
-// log surface) invalid UTF-8.
+// truncateResult caps a tool result at maxToolResultBytes without splitting a UTF-8 rune — a mid-rune slice
+// would feed the model (and any log surface) invalid UTF-8.
 func truncateResult(s string) string {
 	if len(s) <= maxToolResultBytes {
 		return s
@@ -326,9 +301,8 @@ func toolSearchFlow(tctx ToolContext, input json.RawMessage) (string, error) {
 	if len(matches) == 0 {
 		return fmt.Sprintf("No blocks matched %q.", in.Query), nil
 	}
-	// Block/subflow NAMES are never masked by ScrubDocument (only Properties
-	// are) — a secret pasted into a block name would reach the model verbatim.
-	// ScrubText as defense in depth over the joined output.
+	// Block/subflow NAMES are never masked by ScrubDocument (only Properties are) — a secret pasted into a
+	// block name would reach the model verbatim. ScrubText as defense in depth.
 	return scrubber.ScrubText(fmt.Sprintf("%d match(es) for %q:\n%s", len(matches), in.Query, strings.Join(matches, "\n"))), nil
 }
 
@@ -440,10 +414,8 @@ func toolListFindings(tctx ToolContext, input json.RawMessage) (string, error) {
 	if in.Offset < 0 {
 		in.Offset = 0
 	}
-	// Two passes: filter (all matches) then window. Counting the full set
-	// first is what lets the model page through EVERYTHING (the old hard cap
-	// of 40 made large flows literally unenumerable — and "fix everything"
-	// impossible past the cap).
+	// Two passes: filter (all matches) then window — counting the full set first is what lets the model page
+	// through EVERYTHING (the old hard cap of 40 made large flows unenumerable).
 	var matching []string
 	for _, f := range report.Findings {
 		if cat != "" && strings.ToLower(f.Category) != cat {
@@ -452,9 +424,8 @@ func toolListFindings(tctx ToolContext, input json.RawMessage) (string, error) {
 		if in.SubflowID != "" && f.SubflowID != in.SubflowID {
 			continue
 		}
-		// Titles can embed evidence from the REAL doc's properties — ScrubText
-		// before the string leaves the server. The finding key lets the model
-		// emit finding:<key> deep links that actually navigate in the UI.
+		// Titles can embed evidence from the REAL doc's properties — ScrubText before the string leaves the
+		// server. The finding key lets the model emit finding:<key> deep links.
 		line := fmt.Sprintf("[%s/%s] %s: %s — block=%s subflow=%s",
 			f.Severity, firstNonEmpty(f.Category, "uncategorized"), f.RuleID,
 			scrubber.ScrubText(f.Title), f.BlockID, f.SubflowID)
@@ -522,15 +493,10 @@ type fixTargetInput struct {
 	RuleID  string `json:"ruleId"`
 }
 
-// resolveFixTarget finds the finding (and its block) for a blockId+ruleId
-// pair, returning a model-readable explanation when the reference doesn't
-// resolve or isn't auto-fixable. The returned finding/block are non-nil iff
-// the explanation is empty.
-//
-// The finding comes from REAL-doc analysis (value-dependent rules see the
-// true properties); the BLOCK comes from the scrubbed Doc so the patch
-// preview renders masked values. IDs are identical across the two copies
-// (ScrubDocument clones without re-minting), so the pairing is safe.
+// resolveFixTarget finds the finding (and its block) for a blockId+ruleId pair, returning a model-readable
+// explanation when the reference doesn't resolve or isn't auto-fixable. The finding comes from REAL-doc
+// analysis (value-dependent rules see the true properties); the block comes from the scrubbed Doc so the
+// patch preview renders masked values — IDs are identical across the two copies.
 func resolveFixTarget(tctx ToolContext, in fixTargetInput) (*models.Finding, *models.Block, string) {
 	if strings.TrimSpace(in.BlockID) == "" || strings.TrimSpace(in.RuleID) == "" {
 		return nil, nil, "error: blockId and ruleId are required — take both from list_findings"
@@ -563,25 +529,17 @@ func resolveFixTarget(tctx ToolContext, in fixTargetInput) (*models.Finding, *mo
 	return finding, block, ""
 }
 
-// buildFixProposal resolves the target and computes the patch preview. Shared
-// by propose_fix (returns the preview) and apply_fix (carries it into the
-// approval prompt). The second return is a model-readable explanation when the
-// fixer declines/errs; Summary is empty in that case.
+// buildFixProposal resolves the target and computes the patch preview, shared by propose_fix (returns it)
+// and apply_fix (carries it into the approval prompt). The second return is a model-readable explanation
+// when the fixer declines/errs.
 func buildFixProposal(tctx ToolContext, in fixTargetInput) (FixProposal, string) {
 	finding, block, explain := resolveFixTarget(tctx, in)
 	if explain != "" {
 		return FixProposal{}, explain
 	}
-	// Behaviour-changing fixes are not offered through the assistant.
-	//
-	// These alter what the flow DOES at runtime, not how it handles failure:
-	// sanitize-command-vars strips the variables out of a command line, and
-	// mask-sensitive-variable swaps a live credential for a literal. The
-	// approval card carries a one-line summary and no risk signal, so a user
-	// clicking "Approve" is not being told they are about to break the command
-	// — and unlike `bakicli fix -unsafe` there is no way for them to say
-	// "yes, I understand". Until the card can express that, the assistant
-	// explains the issue instead and the user applies it deliberately.
+	// Behaviour-changing fixes are not offered through the assistant: they alter what the flow DOES at
+	// runtime and the approval card carries no risk signal (no "yes, I understand" as `bakicli fix -unsafe`
+	// has) — until the card can express that, the assistant explains the issue instead.
 	if analyzer.IsBehaviourChangingFix(finding.AutoFix) {
 		return FixProposal{}, fmt.Sprintf(
 			"the %q fix changes what this flow does at runtime, so it is not applied through chat — "+
@@ -612,11 +570,8 @@ func buildFixProposal(tctx ToolContext, in fixTargetInput) (FixProposal, string)
 	}, ""
 }
 
-// renderPatchPreview produces the human/model-readable description of what a
-// patch would change. The patch was computed from the SCRUBBED doc, so any
-// property values it echoes are already masked; ScrubText is re-applied to
-// the rendered text as defense in depth (e.g. for masked-but-recombined
-// fragments).
+// renderPatchPreview produces the human/model-readable description of what a patch would change. The patch
+// was computed from the SCRUBBED doc, so echoed values are masked; ScrubText is re-applied as defense in depth.
 func renderPatchPreview(finding *models.Finding, block *models.Block, patch models.Patch) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Fix %q for rule %q on block %s (%s, line %d):\n",
@@ -687,10 +642,8 @@ func toolApplyFix(tctx ToolContext, input json.RawMessage) (string, error) {
 	return tctx.Fixes.ApplyFixWithApproval(tctx.Ctx, prop)
 }
 
-// maxBatchFixTargets bounds one apply_fixes batch. Each item costs a
-// sequential apply + re-parse + re-analysis; 10 keeps the worst-case batch
-// well inside fixApplyToolTimeout while covering every realistic "fix these"
-// request.
+// maxBatchFixTargets bounds one apply_fixes batch: each item costs a sequential apply + re-parse +
+// re-analysis; 10 stays inside fixApplyToolTimeout while covering every realistic "fix these" request.
 const maxBatchFixTargets = 10
 
 func toolApplyFixes(tctx ToolContext, input json.RawMessage) (string, error) {

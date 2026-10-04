@@ -35,7 +35,7 @@ func NewSharingHandler(backend storageif.StorageBackend, flowSvc *service.FlowSe
 // @Router       /api/flows/{flowId}/collaborators [get]
 func (h *SharingHandler) handleCollaboratorList(w http.ResponseWriter, r *http.Request) {
 	flowID := chi.URLParam(r, "flowId")
-	if _, ok := resolveFlow(w, r, h.flowSvc, h.security, flowID, "viewer"); !ok {
+	if !requireFlowPerm(w, r, h.flowSvc, h.security, flowID, "viewer") {
 		return
 	}
 	limit, ok := clampListLimit(w, r.URL.Query().Get("limit"))

@@ -312,12 +312,11 @@ func TestPrepareTurn_ReservationCoversWhatIsSent(t *testing.T) {
 	}
 }
 
-// Generation params on a small window: the backstop keeps half the window for
-// the prompt instead of all of it (a 4096 window used to cap max tokens at 96,
-// a 1024 one at 0 — the provider's own default then went out), the reasoning
-// floor is re-capped by it, and a request that leaves max tokens unset gets the
-// common default capped to the window instead of the provider's own default,
-// which the window cannot hold. From a backstop of 4096 up (windows of 8096
+// Generation params on a small window: the backstop keeps half the window for the prompt
+// instead of all of it (a 4096 window used to cap max tokens at 96, a 1024 one at 0 — the
+// provider's own default then went out), the reasoning floor is re-capped by it, and an
+// unset max tokens gets the common default capped to the window instead of the provider's
+// default, which the window cannot hold. From a backstop of 4096 up (windows of 8096
 // tokens and more) an unset cap still goes out as the provider's default.
 func TestTurnGenerationParams_SmallWindows(t *testing.T) {
 	p := &itemsProvider{id: "local-ish", limit: 1 << 20, models: []ai.ModelInfo{

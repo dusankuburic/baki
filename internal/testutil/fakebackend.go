@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"pad-analyzer/internal/auth"
@@ -14,16 +15,14 @@ import (
 )
 
 // FakeBackend is an in-memory implementation of storageinterfaces.StorageBackend
-// for tests. It stores flows and settings in maps; all other operations are
-// no-ops returning zero values. Tests can directly manipulate the exported
-// fields (Flows, Settings, PingErr) to seed or inspect state.
+// for tests: flows and settings in maps, everything else a no-ops zero value.
+// Tests can directly manipulate the exported fields (Flows, Settings, PingErr).
 type FakeBackend struct {
 	Flows    map[string]*interfaces.FlowDocument
 	Settings *interfaces.AppSettings
 	PingErr  error
-	// Conversations stores chat history keyed by scope+"\x00"+flowID so cloud-mode
-	// conversation persistence can be round-tripped in tests. nil-safe: the methods
-	// below tolerate a zero-valued FakeBackend built with a struct literal.
+	// Conversations stores chat history keyed by scope+"\x00"+flowID; nil-safe
+	// (the methods below tolerate a zero-valued struct-literal FakeBackend).
 	Conversations map[string][]interfaces.ChatMessage
 	// FlowTags backs the in-memory UpdateFlowTags (tag filter tests).
 	FlowTags map[string][]string
@@ -38,31 +37,29 @@ type FakeBackend struct {
 	// EmbeddingDim is the deployment's vector width: a chunk counts as
 	// vector-indexed (CountKnowledgeChunks, the sample's ordering) only when
 	// its embedding has this width, mirroring the Postgres embedding_vec
-	// rule. 0 keeps the any-embedding rule (every embedded chunk is indexed).
+	// rule. 0 keeps the any-embedding rule.
 	EmbeddingDim int
 	// UpdateKnowledgeEmbeddingsFailAt, when >0, makes the Nth (1-based) call
 	// of UpdateKnowledgeChunkEmbeddings fail without writing — one re-index
-	// page's commit failing. Every other call writes (each call is its own
-	// committed page, like the Postgres per-page RLS transaction).
-	// UpdateKnowledgeEmbeddingsCalls counts the calls.
+	// page's commit failing; every other call writes (each call is its own
+	// committed page). UpdateKnowledgeEmbeddingsCalls counts the calls.
 	UpdateKnowledgeEmbeddingsFailAt int
 	UpdateKnowledgeEmbeddingsCalls  int
 	// FindingStatuses (flowID -> findingKey -> status) and Baselines (flowID ->
-	// baseline) back the triage methods. Lazily initialized, so a struct-literal
-	// FakeBackend works without NewFakeBackend.
+	// baseline) back the triage methods; lazily initialized for a struct literal.
 	FindingStatuses map[string]map[string]*interfaces.FindingStatus
 	Baselines       map[string]*interfaces.FlowBaseline
 	// BatchSetFindingStatusErr, when non-nil, makes BatchSetFindingStatus fail
 	// immediately. BatchSetFindingStatusFailAt, when >0, makes it fail at the
-	// 0-based item index (used to prove the atomicity contract — items 0..K-1
-	// must NOT persist on a mid-batch failure).
+	// 0-based item index (proves the atomicity contract — items 0..K-1 must
+	// NOT persist on a mid-batch failure).
 	BatchSetFindingStatusErr    error
 	BatchSetFindingStatusFailAt int
 	// APITokens is keyed by token ID. Lazily initialized.
 	APITokens map[string]*interfaces.APIToken
-	// Users backs DeleteUser/ExportUserData for account-lifecycle tests. Lazily
-	// initialized. (The existing LoadUserByID/CreateUser stubs are intentionally
-	// left untouched to avoid changing other suites' behaviour.)
+	// Users backs DeleteUser/ExportUserData for account-lifecycle tests;
+	// lazily initialized. LoadUserByID/CreateUser stubs are left untouched to
+	// avoid changing other suites' behaviour.
 	Users        map[string]*interfaces.User
 	DeletedUsers []string
 	// UserTokens is keyed by token hash (password reset / email verify). Lazily
@@ -75,7 +72,7 @@ type FakeBackend struct {
 	DailyUsage float64
 	UsageErr   error
 	// UsageMetrics collects every SaveUsageMetric row in arrival order (the
-	// audited provider records asynchronously, hence the mutex); read it via
+	// audited provider records asynchronously, hence the mutex); read via
 	// SavedUsageMetrics.
 	UsageMetrics []*interfaces.UsageMetric
 	usageMu      sync.Mutex
@@ -84,6 +81,34 @@ type FakeBackend struct {
 	// GovernanceAlerts backs the governance-alert inbox methods (id -> alert).
 	// Lazily initialized; the methods are in-memory mirrors of the real store.
 	GovernanceAlerts map[string]*interfaces.GovernanceAlert
+	// Orgs backs SaveOrg/LoadOrg (id -> org). Lazily initialized; LoadOrg of
+	// an unseeded id is ErrNotFound, as before.
+	Orgs map[string]*interfaces.Organisation
+
+	// Read counters for what one governance sweep costs (scanner tests):
+	// each is incremented on every call and never reset; atomic, since
+	// services load flows concurrently. ListFlowsContentBytes sums the
+	// Content bytes ListFlows returned — a MetadataOnly page ships none.
+	// ListFlowsFilterLog returns every ListFlows filter in call order.
+	ListFlowsCalls             atomic.Int64
+	ListFlowsContentBytes      atomic.Int64
+	LoadFlowCalls              atomic.Int64
+	GetFlowBaselineCalls       atomic.Int64
+	GetFlowBaselinesBatchCalls atomic.Int64
+	LoadFlowHealthCalls        atomic.Int64
+	LoadFlowHealthBatchCalls   atomic.Int64
+	LoadOrgCalls               atomic.Int64
+	ListCollaboratorsCalls     atomic.Int64
+	listFlowsFilters           []interfaces.FlowFilter // guarded by readsMu
+	readsMu                    sync.Mutex
+}
+
+// ListFlowsFilterLog returns a copy of every filter ListFlows was called
+// with, in call order.
+func (m *FakeBackend) ListFlowsFilterLog() []interfaces.FlowFilter {
+	m.readsMu.Lock()
+	defer m.readsMu.Unlock()
+	return append([]interfaces.FlowFilter(nil), m.listFlowsFilters...)
 }
 
 func NewFakeBackend() *FakeBackend {
@@ -98,7 +123,7 @@ func convKey(flowID, scope string) string { return scope + "\x00" + flowID }
 func (m *FakeBackend) Ping(_ context.Context) error { return m.PingErr }
 func (m *FakeBackend) Close() error                 { return nil }
 
-// FlowTags backs UpdateFlowTags/ListFlows tag filtering in tests.
+// UpdateFlowTags normalizes and stores the tags in FlowTags.
 func (m *FakeBackend) UpdateFlowTags(_ context.Context, flowID string, tags []string) error {
 	normalized, err := interfaces.NormalizeFlowTags(tags)
 	if err != nil {
@@ -131,6 +156,7 @@ func (m *FakeBackend) SaveFlow(_ context.Context, f *interfaces.FlowDocument) er
 }
 
 func (m *FakeBackend) LoadFlow(_ context.Context, id string) (*interfaces.FlowDocument, error) {
+	m.LoadFlowCalls.Add(1)
 	if f, ok := m.Flows[id]; ok {
 		cp := *f
 		return &cp, nil
@@ -142,15 +168,31 @@ func (m *FakeBackend) LoadFlowHeader(_ context.Context, id string) (*interfaces.
 	if f, ok := m.Flows[id]; ok {
 		cp := *f
 		cp.Content = nil
+		cp.Source = "" // like both real backends: a header carries no document
 		return &cp, nil
 	}
 	return nil, interfaces.ErrNotFound
 }
 
+// ListFlows pages every stored flow in id order (whatever SortBy says). It
+// honours the keyset cursor (AfterID: only ids after it, like Postgres's
+// `id > $n`), Offset, Limit and MetadataOnly (rows carry no Content or
+// Source), so a walker's paging can be tested.
 func (m *FakeBackend) ListFlows(_ context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
+	m.ListFlowsCalls.Add(1)
+	m.readsMu.Lock()
+	m.listFlowsFilters = append(m.listFlowsFilters, filter)
+	m.readsMu.Unlock()
 	var result []*interfaces.FlowDocument
 	for _, f := range m.Flows {
+		if filter.AfterID != "" && f.ID <= filter.AfterID {
+			continue
+		}
 		cp := *f
+		if filter.MetadataOnly {
+			cp.Content = nil
+			cp.Source = ""
+		}
 		result = append(result, &cp)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
@@ -166,6 +208,9 @@ func (m *FakeBackend) ListFlows(_ context.Context, filter interfaces.FlowFilter)
 	}
 	if limit < len(result) {
 		result = result[:limit]
+	}
+	for _, f := range result {
+		m.ListFlowsContentBytes.Add(int64(len(f.Content)))
 	}
 	return result, nil
 }
@@ -303,8 +348,22 @@ func (m *FakeBackend) UpdateUserProfile(_ context.Context, _, _, _ string) error
 }
 
 // ---- Organisation operations ----
-func (m *FakeBackend) SaveOrg(_ context.Context, _ *interfaces.Organisation) error { return nil }
-func (m *FakeBackend) LoadOrg(_ context.Context, _ string) (*interfaces.Organisation, error) {
+func (m *FakeBackend) SaveOrg(_ context.Context, org *interfaces.Organisation) error {
+	if m.Orgs == nil {
+		m.Orgs = make(map[string]*interfaces.Organisation)
+	}
+	cp := *org
+	cp.Members = append([]interfaces.OrgMember(nil), org.Members...)
+	m.Orgs[org.ID] = &cp
+	return nil
+}
+func (m *FakeBackend) LoadOrg(_ context.Context, id string) (*interfaces.Organisation, error) {
+	m.LoadOrgCalls.Add(1)
+	if org, ok := m.Orgs[id]; ok {
+		cp := *org
+		cp.Members = append([]interfaces.OrgMember(nil), org.Members...)
+		return &cp, nil
+	}
 	return nil, interfaces.ErrNotFound
 }
 func (m *FakeBackend) ListOrgsForUser(_ context.Context, _ string) ([]*interfaces.Organisation, error) {
@@ -314,6 +373,7 @@ func (m *FakeBackend) DeleteOrg(_ context.Context, _ string) error { return nil 
 
 // ---- Sharing operations ----
 func (m *FakeBackend) ListCollaborators(_ context.Context, _ string, _ int) ([]*interfaces.Collaborator, error) {
+	m.ListCollaboratorsCalls.Add(1)
 	return nil, nil
 }
 func (m *FakeBackend) ListCollaboratorsBatch(_ context.Context, _ []string) (map[string][]*interfaces.Collaborator, error) {
@@ -354,12 +414,14 @@ func (m *FakeBackend) SaveFlowAnalysis(_ context.Context, _ *interfaces.FlowAnal
 	return nil
 }
 func (m *FakeBackend) LoadFlowHealth(_ context.Context, flowID string) (*interfaces.HealthSnapshot, error) {
+	m.LoadFlowHealthCalls.Add(1)
 	if h, ok := m.FlowHealth[flowID]; ok {
 		return h, nil
 	}
 	return nil, nil
 }
 func (m *FakeBackend) LoadFlowHealthBatch(_ context.Context, flowIDs []string) (map[string]*interfaces.HealthSnapshot, error) {
+	m.LoadFlowHealthBatchCalls.Add(1)
 	out := make(map[string]*interfaces.HealthSnapshot, len(flowIDs))
 	for _, id := range flowIDs {
 		if h, ok := m.FlowHealth[id]; ok {
@@ -415,15 +477,14 @@ func (m *FakeBackend) RevokeRefreshTokenForUser(_ context.Context, _ string, _ s
 }
 
 // ---- Knowledge Base ----
-// KnowledgeDocs / KnowledgeChunks back the knowledge methods in-memory so
-// rag service tests can round-trip upload/replace/re-index. Lazily
-// initialized; a struct-literal FakeBackend works without them.
-func (m *FakeBackend) SaveKnowledgeDocument(_ context.Context, doc *interfaces.KnowledgeDocument) error {
+// KnowledgeDocs / KnowledgeChunks back the knowledge methods in memory;
+// lazily initialized, so a struct-literal FakeBackend works without them.
+func (m *FakeBackend) SaveKnowledgeDocument(_ context.Context, _ string, doc *interfaces.KnowledgeDocument) error {
 	m.initKnowledge()
 	m.KnowledgeDocs[doc.ID] = doc
 	return nil
 }
-func (m *FakeBackend) DeleteKnowledgeDocument(_ context.Context, orgID, id string) error {
+func (m *FakeBackend) DeleteKnowledgeDocument(_ context.Context, _ string, orgID, id string) error {
 	m.initKnowledge()
 	if d, ok := m.KnowledgeDocs[id]; ok && d.OrgID == orgID {
 		delete(m.KnowledgeDocs, id)
@@ -439,12 +500,12 @@ func (m *FakeBackend) DeleteKnowledgeDocumentByName(_ context.Context, orgID, fi
 	m.initKnowledge()
 	for id, d := range m.KnowledgeDocs {
 		if d.OrgID == orgID && d.Filename == filename {
-			_ = m.DeleteKnowledgeDocument(context.TODO(), orgID, id)
+			_ = m.DeleteKnowledgeDocument(context.TODO(), "", orgID, id)
 		}
 	}
 	return nil
 }
-func (m *FakeBackend) ListKnowledgeDocuments(_ context.Context, orgID string, limit int) ([]*interfaces.KnowledgeDocument, error) {
+func (m *FakeBackend) ListKnowledgeDocuments(_ context.Context, orgID string, limit, offset int) ([]*interfaces.KnowledgeDocument, error) {
 	m.initKnowledge()
 	var out []*interfaces.KnowledgeDocument
 	for _, d := range m.KnowledgeDocs {
@@ -458,10 +519,32 @@ func (m *FakeBackend) ListKnowledgeDocuments(_ context.Context, orgID string, li
 			out = append(out, &cp)
 		}
 	}
+	if offset > 0 {
+		if offset >= len(out) {
+			return nil, nil
+		}
+		out = out[offset:]
+	}
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
 	return out, nil
+}
+func (m *FakeBackend) ListKnowledgeDocumentIDsByFilename(_ context.Context, orgID, filename string) ([]string, int, error) {
+	m.initKnowledge()
+	var ids []string
+	total := 0
+	for _, d := range m.KnowledgeDocs {
+		if d.OrgID != orgID {
+			continue
+		}
+		total++
+		if d.Filename == filename {
+			ids = append(ids, d.ID)
+		}
+	}
+	sort.Strings(ids)
+	return ids, total, nil
 }
 func (m *FakeBackend) SaveKnowledgeChunks(_ context.Context, _ string, chunks []interfaces.KnowledgeChunk) error {
 	m.initKnowledge()
@@ -510,8 +593,8 @@ func (m *FakeBackend) vectorIndexed(c interfaces.KnowledgeChunk) bool {
 
 // SampleKnowledgeChunkEmbeddings mirrors the Postgres sample: ONE chunk per
 // document (the vector-indexed one first, then the lowest ID), documents
-// whose pick is indexed first, then DocID order, capped at n — with the
-// embedding copied so callers cannot alias the stored slice.
+// whose pick is indexed first, then DocID order, capped at n — embeddings
+// copied so callers cannot alias the stored slice.
 func (m *FakeBackend) SampleKnowledgeChunkEmbeddings(_ context.Context, orgID string, n int) ([]interfaces.KnowledgeChunk, error) {
 	m.initKnowledge()
 	if n <= 0 {
@@ -557,8 +640,8 @@ func (m *FakeBackend) SampleKnowledgeChunkEmbeddings(_ context.Context, orgID st
 }
 
 // SampleKnowledgeChunkEmbeddingsUpTo mirrors the Postgres query: the org's
-// embedded chunks at or before the (DocID, ID) cursor, nearest first,
-// capped at n, embeddings copied.
+// embedded chunks at or before the (DocID, ID) cursor, nearest first, capped
+// at n, embeddings copied.
 func (m *FakeBackend) SampleKnowledgeChunkEmbeddingsUpTo(_ context.Context, orgID string, upTo interfaces.KnowledgeChunkCursor, n int) ([]interfaces.KnowledgeChunk, error) {
 	m.initKnowledge()
 	if n <= 0 {
@@ -643,8 +726,8 @@ func (m *FakeBackend) SetFindingStatus(_ context.Context, st *interfaces.Finding
 
 // BatchSetFindingStatus mirrors the single-item loop but stages updates in a
 // local copy so an injected failure mid-batch leaves NO partial state behind
-// (matching the Postgres impl's atomicity contract). Atomicity is the whole
-// point of the batch method — a non-atomic fake would hide real bugs.
+// (matching the Postgres atomicity contract — a non-atomic fake would hide
+// real bugs).
 func (m *FakeBackend) BatchSetFindingStatus(_ context.Context, flowID, userID string, items []*interfaces.FindingStatus) error {
 	if m.FindingStatuses == nil {
 		m.FindingStatuses = make(map[string]map[string]*interfaces.FindingStatus)
@@ -673,7 +756,6 @@ func (m *FakeBackend) BatchSetFindingStatus(_ context.Context, flowID, userID st
 	if m.BatchSetFindingStatusErr != nil {
 		return m.BatchSetFindingStatusErr
 	}
-	// Commit: merge staged into the live map.
 	for k, v := range staged {
 		m.FindingStatuses[flowID][k] = v
 	}
@@ -698,10 +780,22 @@ func (m *FakeBackend) DeleteFindingStatus(_ context.Context, flowID, findingKey 
 }
 
 func (m *FakeBackend) GetFlowBaseline(_ context.Context, flowID string) (*interfaces.FlowBaseline, error) {
+	m.GetFlowBaselineCalls.Add(1)
 	if b, ok := m.Baselines[flowID]; ok {
 		return b, nil
 	}
 	return nil, nil
+}
+
+func (m *FakeBackend) GetFlowBaselinesBatch(_ context.Context, flowIDs []string) (map[string]*interfaces.FlowBaseline, error) {
+	m.GetFlowBaselinesBatchCalls.Add(1)
+	out := make(map[string]*interfaces.FlowBaseline, len(flowIDs))
+	for _, id := range flowIDs {
+		if b, ok := m.Baselines[id]; ok {
+			out[id] = b
+		}
+	}
+	return out, nil
 }
 
 func (m *FakeBackend) SetFlowBaseline(_ context.Context, b *interfaces.FlowBaseline) error {
@@ -784,8 +878,7 @@ func (m *FakeBackend) ConsumeUserToken(_ context.Context, purpose, tokenHash str
 func (m *FakeBackend) SetUserEmailVerified(_ context.Context, _ string) error { return nil }
 
 // InvalidateUserTokens mirrors the real backend: removes every unused token of
-// the given purposes for userID. Stored in memory on the fake, so callers can
-// assert post-state directly.
+// the given purposes for userID — assertable directly on the fake's state.
 func (m *FakeBackend) InvalidateUserTokens(_ context.Context, userID string, purposes ...string) error {
 	if len(purposes) == 0 {
 		return nil
@@ -986,13 +1079,10 @@ func (m *FakeBackend) ClearGovernanceAlerts(_ context.Context, _ string) error {
 	return nil
 }
 
-// OrgCustomRules backs the per-org custom-rule store in memory (R4 tests).
-//
+// SaveOrgCustomRule backs the per-org custom-rule store in memory (R4 tests).
 // The (OrgID, RuleID) uniqueness and the org-ownership guard mirror the
-// Postgres upsert exactly. B8 showed what happens when a fake is laxer than the
-// real backend: the fake reported success on precisely the cross-tenant write
-// the real one rejects, so every service-level test written against it agreed
-// with the bug.
+// Postgres upsert exactly — a fake laxer than the real backend would report
+// success on precisely the cross-tenant write the real one rejects (B8).
 func (m *FakeBackend) SaveOrgCustomRule(_ context.Context, rule *interfaces.OrgCustomRule) error {
 	if m.OrgCustomRules == nil {
 		m.OrgCustomRules = make(map[string]*interfaces.OrgCustomRule)
@@ -1028,8 +1118,8 @@ func (m *FakeBackend) ListOrgCustomRules(_ context.Context, orgID string, enable
 		}
 	}
 	// Deterministic order — the analysis path compiles these into a rule set
-	// whose digest feeds the cache key, so a map-iteration order would make the
-	// key unstable across calls.
+	// whose digest feeds the cache key; map-iteration order would make it
+	// unstable across calls.
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
 			return out[i].CreatedAt.Before(out[j].CreatedAt)
@@ -1039,13 +1129,10 @@ func (m *FakeBackend) ListOrgCustomRules(_ context.Context, orgID string, enable
 	return out, nil
 }
 
-// OrgChannels backs the org-channel store in memory (R2-3 tests).
-//
-// The org-ownership check mirrors the Postgres upsert's
-// `WHERE org_channels.org_id = EXCLUDED.org_id`: an id that already exists under
-// a DIFFERENT org is ErrNotFound, never a silent overwrite. Without it the fake
-// would report success on exactly the cross-tenant hijack the real backend now
-// rejects, and any service-level test written against the fake would be wrong.
+// SaveOrgChannel backs the org-channel store in memory (R2-3 tests). The
+// org-ownership check mirrors the Postgres upsert's
+// `WHERE org_channels.org_id = EXCLUDED.org_id`: an id existing under a
+// DIFFERENT org is ErrNotFound, never a silent cross-tenant overwrite.
 func (m *FakeBackend) SaveOrgChannel(_ context.Context, ch *interfaces.OrgChannel) error {
 	if m.OrgChannels == nil {
 		m.OrgChannels = make(map[string]*interfaces.OrgChannel)

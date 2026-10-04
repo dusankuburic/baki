@@ -39,8 +39,8 @@ func gatherCounter(t *testing.T, name string, labels map[string]string) float64 
 	return 0
 }
 
-// TestAuditedReservationPricing_AzureReservesNothing (D-13): Azure AI
-// Foundry is unpriced, so the in-flight reservation is zero for every alias —
+// TestAuditedReservationPricing_AzureReservesNothing: Azure AI Foundry is
+// unpriced, so the in-flight reservation is zero for every alias —
 // stable, varied or a router — while the router's listing still shows the
 // last routed model (display only, no price) and non-alias providers keep
 // their provider-wide rate.
@@ -85,7 +85,7 @@ func TestAuditedReservationPricing_AzureReservesNothing(t *testing.T) {
 	}
 }
 
-// TestAuditedUsagePricing_ResolvesLikeTheUsageRow (D-38): UsagePricing is the
+// TestAuditedUsagePricing_ResolvesLikeTheUsageRow: UsagePricing is the
 // rate the turn was billed at. Azure is unpriced: a zero rate that counts as
 // found for every served/unknown model and embedding deployment. A free
 // listing on a non-alias provider is still "found" at $0, and false only when
@@ -119,8 +119,8 @@ func TestAuditedUsagePricing_ResolvesLikeTheUsageRow(t *testing.T) {
 	}
 }
 
-// TestAuditedAzure_CustomEmbeddingDeploymentRecordsZeroCost (D-12): a
-// custom-named Azure embedding deployment in API-key mode records the
+// TestAuditedAzure_CustomEmbeddingDeploymentRecordsZeroCost: a custom-named
+// Azure embedding deployment in API-key mode records the
 // embedding deployment, its token count and $0 — and no pricing-fallback
 // metric moves.
 func TestAuditedAzure_CustomEmbeddingDeploymentRecordsZeroCost(t *testing.T) {
@@ -154,7 +154,7 @@ func TestAuditedAzure_CustomEmbeddingDeploymentRecordsZeroCost(t *testing.T) {
 	}
 }
 
-// TestAuditedStream_CountsHostedToolSteps (D-41): each completed hosted
+// TestAuditedStream_CountsHostedToolSteps: each completed hosted
 // agent tool step raises pad_ai_hosted_tool_steps_total{provider,tool}; the
 // start notifications do not.
 func TestAuditedStream_CountsHostedToolSteps(t *testing.T) {
@@ -225,7 +225,7 @@ func TestAudited_NegativeUsageClampedToZero(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 }
 
-// TestAudited_StreamEstimateDoesNotRetainText (D-18 / L-ai-4): the fallback
+// TestAudited_StreamEstimateDoesNotRetainText: the fallback
 // output estimate is counted per delta; the stream is no longer buffered in
 // memory for an end-of-stream tokenizer pass.
 func TestAudited_StreamEstimateDoesNotRetainText(t *testing.T) {
@@ -274,8 +274,8 @@ func (s *lazyStreamStub) Models(context.Context) ([]ModelInfo, error) {
 	return []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}}, nil
 }
 
-// TestAuditedAzure_TruncatedRouterStreamRecordsRoutedModel (D-40): the served
-// model rides on every content chunk, so a stream cut before Done (Stop,
+// TestAuditedAzure_TruncatedRouterStreamRecordsRoutedModel: the served model
+// rides on every content chunk, so a stream cut before Done (Stop,
 // watchdog, truncation) still teaches the memo and records the routed model
 // with the estimated tokens; Azure is unpriced, so the cost is $0.
 func TestAuditedAzure_TruncatedRouterStreamRecordsRoutedModel(t *testing.T) {

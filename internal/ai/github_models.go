@@ -12,13 +12,11 @@ import (
 
 var githubModelsBaseURL = providerURL("GITHUB_MODELS_API_URL", "https://models.inference.ai.azure.com/chat/completions")
 
-// ghModelsCache holds the GitHub Models /models listing process-wide: the
-// list is a property of the service (same for every authenticated caller),
-// and Models() sits on the audited/pricing/context-limit path — without the
-// cache, every usage record re-GET the endpoint (each request constructs a
-// fresh provider instance, so an instance-level cache like Copilot's
-// wouldn't survive). Only successful non-empty listings are cached;
-// fallbacks to the static catalog stay uncached so the next call retries.
+// ghModelsCache holds the GitHub Models /models listing process-wide (the list
+// is a property of the service, and Models() sits on the audited/pricing/
+// context-limit path while each request constructs a fresh provider, so an
+// instance-level cache wouldn't survive). Only successful non-empty listings
+// are cached; catalog fallbacks stay uncached so the next call retries.
 var (
 	ghModelsMu     sync.Mutex
 	ghModelsCached []ModelInfo
@@ -91,15 +89,12 @@ func (g *GitHubModelsProvider) Models(ctx context.Context) ([]ModelInfo, error) 
 	return res, nil
 }
 
-// fetchModels performs the live /models GET with the existing silent
-// catalog-fallback semantics. live reports whether the listing came from the
-// wire (cacheable) — fallbacks return live=false so a transient outage isn't
-// pinned for the cache TTL.
+// fetchModels performs the live /models GET with silent catalog fallback;
+// live=false for fallbacks so a transient outage isn't pinned for the cache TTL.
 func (g *GitHubModelsProvider) fetchModels(ctx context.Context) (models []ModelInfo, live bool) {
 	// No token (metadata provider for an unconfigured user) → the GET would
-	// 401 every time. ListProviders calls this synchronously per provider, so
-	// skipping the doomed outbound call also keeps the listing fast — and the
-	// 401 fallback was never cached (live=false), so it repeated per call.
+	// 401 every time; ListProviders calls this synchronously, and the uncached
+	// 401 fallback (live=false) would repeat the doomed call every time.
 	if g.apiKey == "" {
 		return catalogModels("github-models"), false
 	}

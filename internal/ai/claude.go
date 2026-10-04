@@ -22,33 +22,21 @@ var claudeAPIVersion = "2023-06-01"
 type ClaudeProvider struct {
 	apiKey string
 	client *http.Client
-	// messagesURL is the Messages endpoint of a provider that speaks the
-	// Anthropic wire format on another host — Claude deployments on an Azure
-	// AI Foundry resource (azure_claude.go). Empty for the plain provider,
-	// which reads the package URL (claudeAPIURL) at request time, so the
-	// plain provider's requests are unchanged and tests can still swap the
-	// package variable after construction.
+	// messagesURL is the Messages endpoint of a provider speaking the Anthropic wire format on another host —
+	// Claude deployments on an Azure AI Foundry resource. Empty reads the package URL so tests can swap it.
 	messagesURL string
-	// authorize sets the request's credential; nil sends the API key as
-	// x-api-key (the plain provider).
+	// authorize sets the request's credential; nil sends the API key as x-api-key (the plain provider).
 	authorize func(ctx context.Context, req *http.Request) error
-	// unauthorized, when set, classifies a 401/403 response from its status
-	// and body (Azure: an Entra ID access token the resource refused carries
-	// Azure's explanation); nil keeps the plain mapping (401 → ErrApiKeyInvalid,
-	// 403 → the service's message).
+	// unauthorized, when set, classifies a 401/403 from its status and body (Azure: a refused Entra ID token
+	// carries Azure's explanation); nil keeps the plain mapping (401 → ErrApiKeyInvalid, 403 → the message).
 	unauthorized func(status int, body []byte) error
-	// servedModelFor, when set, names the model a deployment serves (Azure
-	// AI Foundry: the project listing's modelName, else the served-model
-	// memo), "" when unknown. The sampling policy is decided from it: a
-	// deployment name such as "prod-claude" says nothing about the model.
+	// servedModelFor, when set, names the model a deployment serves (the project listing's modelName, else the
+	// served-model memo), "" when unknown — the sampling policy is decided from it; "prod-claude" says nothing.
 	servedModelFor func(deployment string) string
 	// label names the route in logs; "" is "claude".
 	label string
-	// itemsOwner is the provider ID whose replay records
-	// (Message.ProviderItems) this route replays: the chat service's tool
-	// loop tags a turn's record with the ID of the provider it called, which
-	// for a Claude deployment on Azure AI Foundry is the Azure provider's.
-	// "" is this provider's own ID.
+	// itemsOwner is the provider ID whose replay records (Message.ProviderItems) this route replays: for a
+	// Claude deployment on Azure AI Foundry, the Azure provider's ID. "" is this provider's own ID.
 	itemsOwner string
 }
 
@@ -59,8 +47,7 @@ func NewClaudeProvider(apiKey string) *ClaudeProvider {
 	}
 }
 
-// endpoint is the Messages URL requests go to: the instance override, else
-// the package URL.
+// endpoint is the Messages URL requests go to: the instance override, else the package URL.
 func (c *ClaudeProvider) endpoint() string {
 	if c.messagesURL != "" {
 		return c.messagesURL
@@ -68,7 +55,6 @@ func (c *ClaudeProvider) endpoint() string {
 	return claudeAPIURL
 }
 
-// auth sets the credential header(s) on req.
 func (c *ClaudeProvider) auth(ctx context.Context, req *http.Request) error {
 	if c.authorize != nil {
 		return c.authorize(ctx, req)
@@ -77,8 +63,7 @@ func (c *ClaudeProvider) auth(ctx context.Context, req *http.Request) error {
 	return nil
 }
 
-// classifyUnauthorized runs the unauthorized hook for a 401/403; nil (no
-// hook, or another status) leaves the response to the shared mapping.
+// classifyUnauthorized runs the unauthorized hook for a 401/403; nil (no hook, or another status) leaves the shared mapping.
 func (c *ClaudeProvider) classifyUnauthorized(status int, body []byte) error {
 	if c.unauthorized == nil || (status != http.StatusUnauthorized && status != http.StatusForbidden) {
 		return nil
@@ -107,9 +92,8 @@ func (c *ClaudeProvider) EstimateTokens(text string) int {
 	return EstimateTokensClaude(text)
 }
 
-// Models is the Claude catalogue without the invite-only models
-// (claudeInviteOnly): those stay in the catalogue so a Foundry deployment of
-// one is sized, but are not offered in the direct provider's picker.
+// Models is the Claude catalogue without the invite-only models (claudeInviteOnly): those stay in the catalogue
+// so a Foundry deployment of one is sized, but are not offered in this picker.
 func (c *ClaudeProvider) Models(_ context.Context) ([]ModelInfo, error) {
 	models := catalogModels("claude")
 	out := models[:0]
@@ -124,64 +108,42 @@ func (c *ClaudeProvider) Models(_ context.Context) ([]ModelInfo, error) {
 type claudeRequest struct {
 	Model     string `json:"model"`
 	MaxTokens int    `json:"max_tokens"`
-	// Temperature is a pointer so an explicit 0 (deterministic sampling) is
-	// sent; nil omits it (the model's default, or a model that rejects
-	// sampling parameters).
+	// Temperature is a pointer so an explicit 0 (deterministic sampling) is sent; nil omits it.
 	Temperature *float64            `json:"temperature,omitempty"`
 	System      []claudeSystemBlock `json:"system,omitempty"`
 	Messages    []claudeMessage     `json:"messages"`
 	Tools       []claudeTool        `json:"tools,omitempty"`
 	Thinking    *claudeThinking     `json:"thinking,omitempty"`
-	// OutputConfig carries output_config.effort (F-19): the user-chosen
-	// reasoning depth, sent ONLY on the models that also reject sampling
-	// parameters (claudeRemovesSampling — Opus 4.5+/5.x/Fable/Mythos accept
-	// effort); older models would reject the object.
+	// OutputConfig carries output_config.effort: the user-chosen reasoning depth, sent ONLY on the models that
+	// also reject sampling parameters (claudeRemovesSampling); older models would reject the object.
 	OutputConfig *claudeOutputConfig `json:"output_config,omitempty"`
 	Stream       bool                `json:"stream,omitempty"`
-	// CacheControl is the TOP-LEVEL automatic-caching marker (audit #9 F-02):
-	// the API applies the cache breakpoint to the last cacheable block itself
-	// and moves it forward as the conversation grows, so the growing history
-	// and accumulated tool_results of a tool loop are cache reads (~0.1x the
-	// input rate) instead of full-price input on every iteration. Compatible
-	// with the explicit system-block marker buildClaudeSystem keeps (same
-	// 5-minute TTL: a no-op when system is the last cacheable block,
-	// otherwise the second of the four breakpoint slots); no per-block
-	// markers are added. Any change to the request prefix (e.g. the thinking
-	// field) invalidates the cache once.
+	// CacheControl is the TOP-LEVEL automatic-caching marker: the API picks the last cacheable block itself and
+	// moves the breakpoint forward, so a tool loop's growing history is cache reads (~0.1x input) instead of
+	// full-price input; compatible with the explicit system-block marker (same 5-minute TTL).
 	CacheControl *claudeCacheControl `json:"cache_control,omitempty"`
 }
 
-// claudeOutputConfig is the Messages request's output_config object; its
-// effort field is Claude's reasoning-effort lever (low|medium|high).
+// claudeOutputConfig is the Messages request's output_config object; its effort field is Claude's reasoning-effort lever.
 type claudeOutputConfig struct {
 	Effort string `json:"effort,omitempty"`
 }
 
-// claudeCacheControl marks a prompt-cache breakpoint. On a content block the
-// stable prefix up to and including the marked block is cached; at the TOP
-// level of the request (claudeRequest.CacheControl) it turns on automatic
-// caching: the API picks the last cacheable block itself and moves the
-// breakpoint forward as the conversation grows. Cache reads bill ~0.025-0.1x
-// the input rate by model, 5-minute writes 1.25x, which pays off when the
-// same prefix is re-sent — every iteration of the agentic tool loop and
-// every turn of a conversation.
+// claudeCacheControl marks a prompt-cache breakpoint (top level: automatic caching). Cache reads bill
+// ~0.025-0.1x the input rate by model, 5-minute writes 1.25x — it pays off whenever the same prefix is re-sent.
 type claudeCacheControl struct {
 	Type string `json:"type"` // "ephemeral"
 }
 
 var ephemeralCache = &claudeCacheControl{Type: "ephemeral"}
 
-// claudeThinking enables adaptive extended thinking. Required form on Opus 4.7+
-// (manual budget_tokens is rejected there); a quality lift for multi-step flow
-// reasoning. The thinking text is omitted from responses by default on these
-// models (the block still carries its signature); the blocks are recorded for
-// verbatim replay within a tool loop (Response.ProviderItems) and never shown.
+// claudeThinking enables adaptive extended thinking — the required form on Opus 4.7+ (manual budget_tokens is
+// rejected there). The blocks are recorded for verbatim replay in a tool loop, never shown.
 type claudeThinking struct {
 	Type string `json:"type"` // "adaptive"
 }
 
-// claudeSystemBlock is one system-prompt content block. Sending system as an
-// array (rather than a bare string) is what lets us attach cache_control to it.
+// claudeSystemBlock is one system-prompt content block. Sending system as an array is what lets us attach cache_control to it.
 type claudeSystemBlock struct {
 	Type         string              `json:"type"` // "text"
 	Text         string              `json:"text"`
@@ -195,15 +157,13 @@ type claudeTool struct {
 	CacheControl *claudeCacheControl `json:"cache_control,omitempty"`
 }
 
-// claudeMessage.Content is either a plain string (text-only turn) or an array of
-// content blocks (when tool_use / tool_result blocks are present), hence any.
+// claudeMessage.Content is either a plain string (text-only turn) or an array of content blocks, hence any.
 type claudeMessage struct {
 	Role    string `json:"role"`
 	Content any    `json:"content"`
 }
 
-// claudeBlock is one content block: text, tool_use (assistant), or tool_result
-// (user). Only the fields relevant to a block's Type are populated.
+// claudeBlock is one content block: text, tool_use (assistant), or tool_result (user).
 type claudeBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
@@ -212,9 +172,8 @@ type claudeBlock struct {
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   string          `json:"content,omitempty"` // tool_result payload
-	// IsError marks a tool_result whose tool failed (the tool's text starts
-	// with "error:", see claudeToolResultIsError), so the model reads it as
-	// a failed call rather than as data.
+	// IsError marks a tool_result whose tool failed (the tool's text starts with "error:"), so the model reads
+	// it as a failed call rather than as data.
 	IsError bool `json:"is_error,omitempty"`
 }
 
@@ -239,17 +198,12 @@ type claudeContent struct {
 type claudeUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
-	// Cache tokens are billed separately (reads 0.025-0.1× by family, writes
-	// 1.25×) and are EXCLUDED from input_tokens — folded into TokensIn as the
-	// total so cached conversations don't silently bypass the budget, and
-	// carried separately (Response.CacheReadTokens / CacheWriteTokens) so the
-	// audited wrapper prices the slice at the cached rates (see parseClaudeSSE
-	// for the same treatment on streams).
+	// Cache tokens are billed separately (reads 0.025-0.1× by family, writes 1.25×) and are EXCLUDED from
+	// input_tokens — folded into TokensIn as the total and carried separately for cached-rate pricing.
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 }
 
-// totalInputTokens returns input_tokens plus cache reads/writes.
 func (u claudeUsage) totalInputTokens() int {
 	return u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 }
@@ -263,19 +217,10 @@ type claudeErrorDetail struct {
 	Message string `json:"message"`
 }
 
-// toClaudeMessages converts the provider-neutral messages into Claude's wire
-// format. Text turns use a plain string content; assistant turns that issued
-// tool calls become a content-block array (optional text + tool_use blocks);
-// and a run of consecutive Role=="tool" results is coalesced into a single user
-// message carrying one tool_result block per result — Anthropic requires the
-// tool results for an assistant turn to arrive together in the next user turn.
-//
-// An assistant turn carrying this route's own replay record (ProviderItems
-// written under owner, see claudeReplayBlocks) is sent as that record instead:
-// the content blocks exactly as the model produced them, thinking and
-// redacted_thinking with their signatures included. Rebuilding the turn from
-// Content/ToolCalls drops those blocks, and within a tool loop the API wants
-// them back complete and unmodified.
+// toClaudeMessages converts neutral messages to Claude's wire format: tool results for an assistant turn are
+// coalesced into one user message (Anthropic requires them together in the next user turn), and an assistant
+// turn carrying this route's replay record is sent as that record verbatim — the API wants its blocks back
+// complete and unmodified in a tool loop.
 func toClaudeMessages(msgs []Message, owner string) []claudeMessage {
 	var out []claudeMessage
 	for i := 0; i < len(msgs); i++ {
@@ -322,9 +267,8 @@ func toClaudeMessages(msgs []Message, owner string) []claudeMessage {
 			out = append(out, claudeMessage{Role: "assistant", Content: blocks})
 
 		default:
-			// A blank turn (an interrupted answer) is rejected by the Messages API;
-			// consecutive same-role turns are merged by it, so dropping is safe.
-			// The last message is kept so the request is never emptied.
+			// A blank turn (an interrupted answer) is rejected by the Messages API; consecutive same-role turns
+			// are merged by it, so dropping is safe. The last message is kept so the request is never emptied.
 			if strings.TrimSpace(m.Content) == "" && i < len(msgs)-1 {
 				continue
 			}
@@ -334,16 +278,13 @@ func toClaudeMessages(msgs []Message, owner string) []claudeMessage {
 	return out
 }
 
-// claudeToolResultIsError reports a tool result that is a failure: the chat
-// tools answer "error: …" when a call fails (unknown tool, bad arguments, a
-// timeout, a declined fix).
+// claudeToolResultIsError reports a tool result that is a failure: the chat tools answer "error: …" when a call fails.
 func claudeToolResultIsError(content string) bool {
 	return strings.HasPrefix(content, "error:")
 }
 
-// claudeReplayTypes are the assistant content-block types a replay record may
-// hold — everything parseClaudeSSE and Chat record. A record holding anything
-// else is not replayed (the turn is rebuilt instead).
+// claudeReplayTypes are the assistant content-block types a replay record may hold — everything parseClaudeSSE
+// and Chat record. A record holding anything else is not replayed (the turn is rebuilt instead).
 var claudeReplayTypes = map[string]bool{
 	"thinking":          true,
 	"redacted_thinking": true,
@@ -351,13 +292,9 @@ var claudeReplayTypes = map[string]bool{
 	"tool_use":          true,
 }
 
-// claudeReplayBlocks returns an assistant turn's replay record for verbatim
-// resending, or ok=false when the turn must be rebuilt from Content and
-// ToolCalls: no record, a record another provider wrote (ProviderItemsFrom
-// is not owner — a switch of provider never replays a foreign record), a
-// record that is not an array of Claude content blocks, or one whose tool_use
-// blocks are not exactly the turn's tool calls in order (the tool results
-// that follow answer those ids).
+// claudeReplayBlocks returns an assistant turn's replay record for verbatim resending, or ok=false when the
+// turn must be rebuilt: no record, another provider's, not an array of Claude blocks, or tool_use blocks not
+// exactly the turn's tool calls in order.
 func claudeReplayBlocks(m Message, owner string) (json.RawMessage, bool) {
 	if len(m.ProviderItems) == 0 || owner == "" || m.ProviderItemsFrom != owner {
 		return nil, false
@@ -389,11 +326,8 @@ func claudeReplayBlocks(m Message, owner string) (json.RawMessage, bool) {
 	return m.ProviderItems, true
 }
 
-// claudeReplayRecord joins an assistant turn's content blocks, in order, into
-// its replay record (Response/Chunk.ProviderItems). nil when there is nothing
-// to record or a block cannot be replayed (a type outside claudeReplayTypes,
-// a malformed block): the turn is then rebuilt from its text and tool calls,
-// as before thinking was recorded.
+// claudeReplayRecord joins an assistant turn's content blocks, in order, into its replay record
+// (Response/Chunk.ProviderItems); nil when there is nothing to record or a block cannot be replayed.
 func claudeReplayRecord(blocks []json.RawMessage) json.RawMessage {
 	if len(blocks) == 0 {
 		return nil
@@ -413,7 +347,6 @@ func claudeReplayRecord(blocks []json.RawMessage) json.RawMessage {
 	return raw
 }
 
-// replayOwner is the provider ID this route's replay records are tagged with.
 func (c *ClaudeProvider) replayOwner() string {
 	if c.itemsOwner != "" {
 		return c.itemsOwner
@@ -432,24 +365,16 @@ func toClaudeTools(tools []ToolDefinition) []claudeTool {
 	return out
 }
 
-// claudeModelVersionRe finds the family and version in a Claude model or
-// deployment name ("claude-opus-4-7", "prod-claude-sonnet-5-20260801"): the
-// major version and an optional one- or two-digit minor version (a longer
-// number is a snapshot date: "claude-opus-4-20250514" is Opus 4).
+// claudeModelVersionRe finds the family and version in a Claude model or deployment name: the major version
+// and an optional one- or two-digit minor (a longer number is a snapshot date: "claude-opus-4-20250514" is 4).
 var claudeModelVersionRe = regexp.MustCompile(`(opus|sonnet|haiku|fable|mythos)-(\d{1,2})(?:[-.](\d{1,2}))?(?:[^0-9]|$)`)
 
-// claudeAlwaysThinkingFamilyRe finds the Fable and Mythos families in a name
-// with or without a version ("claude-mythos-preview", "claude-fable-5-1").
+// claudeAlwaysThinkingFamilyRe finds the Fable and Mythos families in a name with or without a version.
 var claudeAlwaysThinkingFamilyRe = regexp.MustCompile(`(?:^|[^a-z])(?:fable|mythos)(?:[^a-z]|$)`)
 
-// claudeRemovesSampling reports whether a model rejects temperature/top_p/top_k
-// with a 400: Opus 4.7 and later, every model of generation 5 and later
-// (Sonnet 5 and 5.5 reject non-default values too) and the Fable and Mythos
-// families, versioned or not (Claude Mythos Preview). For those we omit
-// sampling params and ask for adaptive thinking, with or without tools (see
-// buildBody). Matched case-insensitively; callers pass the SERVED model when
-// it is known (policyModel), else the deployment name. A name that reveals
-// nothing keeps temperature, and send repairs a rejection of it once.
+// claudeRemovesSampling reports whether a model rejects temperature/top_p/top_k with a 400: Opus 4.7+, every
+// generation-5+ model, and the Fable/Mythos families. Callers pass the SERVED model when known (policyModel);
+// a name that reveals nothing keeps temperature, and send repairs a rejection once.
 func claudeRemovesSampling(model string) bool {
 	lower := strings.ToLower(model)
 	if claudeAlwaysThinkingFamilyRe.MatchString(lower) {
@@ -475,9 +400,8 @@ func claudeRemovesSampling(model string) bool {
 	return false
 }
 
-// policyModel is the lower-cased name the sampling policy is decided from:
-// the model the deployment serves when known (servedModelFor), else the
-// requested model / deployment name.
+// policyModel is the lower-cased name the sampling policy is decided from: the model the deployment serves
+// when known (servedModelFor), else the requested model / deployment name.
 func (c *ClaudeProvider) policyModel(model string) string {
 	if c.servedModelFor != nil {
 		if served := strings.TrimSpace(c.servedModelFor(model)); served != "" {
@@ -487,11 +411,8 @@ func (c *ClaudeProvider) policyModel(model string) string {
 	return strings.ToLower(model)
 }
 
-// buildClaudeSystem wraps the system prompt in a single cached text block.
-// Marking it with cache_control caches the whole stable prefix (tools render
-// before system), so the tool loop's repeated turns and multi-turn chat reuse
-// it instead of re-paying full input price. Returns nil when empty so `system`
-// is omitted.
+// buildClaudeSystem wraps the system prompt in a single cached text block: cache_control caches the whole
+// stable prefix (tools render before system), so the tool loop's repeated turns reuse it. nil when empty.
 func buildClaudeSystem(prompt string) []claudeSystemBlock {
 	if prompt == "" {
 		return nil
@@ -499,8 +420,7 @@ func buildClaudeSystem(prompt string) []claudeSystemBlock {
 	return []claudeSystemBlock{{Type: "text", Text: prompt, CacheControl: ephemeralCache}}
 }
 
-// buildBody assembles the wire request shared by Chat and Stream: structured
-// (cached) system, tools, messages, and model-conditional sampling/thinking.
+// buildBody assembles the wire request shared by Chat and Stream: structured (cached) system, tools, messages, model-conditional sampling/thinking.
 func (c *ClaudeProvider) buildBody(req Request, stream bool) claudeRequest {
 	body := claudeRequest{
 		Model:        req.Model,
@@ -512,26 +432,11 @@ func (c *ClaudeProvider) buildBody(req Request, stream bool) claudeRequest {
 		CacheControl: ephemeralCache,
 	}
 	if claudeRemovesSampling(c.policyModel(req.Model)) {
-		// Opus 4.7+ and every 5.x / Fable / Mythos model reject non-default
-		// temperature/top_p/top_k — omit them.
-		//
-		// Thinking: adaptive is asked for explicitly, with or without tools
-		// (audit #9 F-17). On Opus 4.7/4.8 an omitted field means thinking
-		// OFF, and the chat service always attaches the flow tools — so the
-		// agentic loop, the case where interleaved reasoning between tool
-		// results matters most, used to run without it while a tool-less
-		// question thought. On the 5.x/Fable/Mythos models an omitted field
-		// IS adaptive thinking, so asking explicitly is the same mode. Their
-		// thinking blocks survive the tool steps because the chat service's
-		// loop replays each assistant turn verbatim (Message.ProviderItems,
-		// toClaudeMessages); where it cannot (history truncated or rewritten
-		// mid-loop) it drops every block, and adaptive mode needs none — no
-		// assistant turn has to start with a thinking block, unlike the
-		// manual budget_tokens mode.
+		// These models reject non-default sampling params — omitted — and get adaptive thinking explicitly
+		// (omitted means OFF on Opus 4.7/4.8, adaptive on 5.x/Fable/Mythos); thinking survives tool steps
+		// via the verbatim replay, and where that is impossible every block drops — adaptive needs none.
 		body.Thinking = &claudeThinking{Type: "adaptive"}
-		// F-19: the reasoning-effort lever, only inside this branch — the
-		// models that reject sampling parameters (Opus 4.5+, 5.x, Fable,
-		// Mythos) are the ones that accept output_config.effort.
+		// The reasoning-effort lever, only here — the models that reject sampling parameters accept output_config.effort.
 		if req.ReasoningEffort != "" {
 			body.OutputConfig = &claudeOutputConfig{Effort: req.ReasoningEffort}
 		}
@@ -541,11 +446,8 @@ func (c *ClaudeProvider) buildBody(req Request, stream bool) claudeRequest {
 	return body
 }
 
-// claudeTemperature is the temperature sent to a model that accepts sampling
-// parameters: the caller's value clamped to Claude's range [0, 1] (the chat
-// service normalises to the OpenAI range [0, 2]). Sent when the caller set it,
-// 0 included (Request.TemperatureSet), or when it is non-zero — an unset 0
-// keeps meaning "the model's default" and is omitted (ok=false).
+// claudeTemperature is the caller's temperature clamped to Claude's [0, 1]: sent when the caller set it (0
+// included) or when non-zero — an unset 0 means "the model's default" and is omitted.
 func claudeTemperature(req Request) (float64, bool) {
 	if !req.TemperatureSet && req.Temperature == 0 {
 		return 0, false
@@ -556,7 +458,6 @@ func claudeTemperature(req Request) (float64, bool) {
 // claudeErrorMessageMax bounds the service text kept on an error.
 const claudeErrorMessageMax = 500
 
-// post sends one Messages request (the body already carries the stream flag).
 func (c *ClaudeProvider) post(ctx context.Context, body claudeRequest) (*http.Response, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -581,19 +482,12 @@ func (c *ClaudeProvider) post(ctx context.Context, body claudeRequest) (*http.Re
 	return resp, nil
 }
 
-// claudeSamplingParam is the learnedRepairs entry of a deployment that
-// rejects temperature: later requests go out without it.
+// claudeSamplingParam is the learnedRepairs entry of a deployment that rejects temperature: later requests omit it.
 const claudeSamplingParam = "temperature"
 
-// send posts the request and returns a 200 response with its body unread, or
-// the rejection with its body read (and closed). A 400 that names
-// `temperature` or `top_p` while the request carries a temperature is
-// repaired ONCE: the request is sent again without it, and the repair a 200
-// confirmed is remembered per endpoint and deployment (learnedRepairs, shared
-// with the OpenAI-compatible route) so the next turn does not pay the
-// rejection round trip again. The name-based sampling policy
-// (claudeRemovesSampling) cannot know every model behind a custom deployment
-// name; this is the safety net.
+// send posts the request and returns a 200 with its body unread, or the rejection read and closed. A 400
+// naming `temperature`/`top_p` while the request carries one is repaired once and memoised per endpoint and
+// deployment (learnedRepairs) — the safety net for a custom deployment name the policy cannot know.
 func (c *ClaudeProvider) send(ctx context.Context, body claudeRequest) (*http.Response, []byte, error) {
 	memoKey := c.endpoint() + "\x00" + body.Model
 	if body.Temperature != nil && slices.Contains(repairsFor(memoKey), claudeSamplingParam) {
@@ -625,10 +519,8 @@ func (c *ClaudeProvider) send(ctx context.Context, body claudeRequest) (*http.Re
 	}
 }
 
-// claudeSamplingRejected reports whether a rejection is the model refusing
-// sampling parameters: an invalid-request 400 whose message names
-// `temperature` or `top_p` ("temperature is deprecated for this model",
-// "`temperature` and `top_p` cannot both be specified").
+// claudeSamplingRejected reports whether a rejection is the model refusing sampling parameters: an
+// invalid-request 400 whose message names `temperature` or `top_p`.
 func claudeSamplingRejected(status int, body []byte) bool {
 	if status != http.StatusBadRequest {
 		return false
@@ -644,7 +536,6 @@ func claudeSamplingRejected(status int, body []byte) bool {
 	return strings.Contains(msg, "temperature") || strings.Contains(msg, "top_p")
 }
 
-// logLabel names the route in logs.
 func (c *ClaudeProvider) logLabel() string {
 	if c.label != "" {
 		return c.label
@@ -652,12 +543,8 @@ func (c *ClaudeProvider) logLabel() string {
 	return "claude"
 }
 
-// claudeRequestIDs are the correlation ids of a Messages response: Anthropic's
-// own request-id and the gateway's (apim-request-id — Azure API Management in
-// front of a Claude deployment on Azure AI Foundry — else x-ms-request-id /
-// x-request-id, see upstreamRequestID). Anthropic's Foundry page asks for
-// BOTH when contacting support: each team searches its own. Either may be
-// empty.
+// claudeRequestIDs are the correlation ids of a Messages response: Anthropic's request-id and the gateway's
+// (apim-request-id). Anthropic's Foundry page asks for BOTH when contacting support; either may be empty.
 func claudeRequestIDs(resp *http.Response) (anthropicID, gatewayID string) {
 	if resp == nil {
 		return "", ""
@@ -665,8 +552,7 @@ func claudeRequestIDs(resp *http.Response) (anthropicID, gatewayID string) {
 	return resp.Header.Get("request-id"), upstreamRequestID(resp)
 }
 
-// claudeRequestIDSuffix formats the request ids present for an error text:
-// ", request id req_…, apim-request-id …" (either part omitted when absent).
+// claudeRequestIDSuffix formats the request ids present for an error text: ", request id req_…, apim-request-id …".
 func claudeRequestIDSuffix(resp *http.Response) string {
 	anthropicID, gatewayID := claudeRequestIDs(resp)
 	var s string
@@ -679,9 +565,8 @@ func claudeRequestIDSuffix(resp *http.Response) string {
 	return s
 }
 
-// logUpstreamRejection records a non-200's status and request ids (as the
-// OpenAI-compatible route does): a parameter rejection may still be repaired
-// by send, so it logs at debug.
+// logUpstreamRejection records a non-200's status and request ids: a parameter rejection may still be
+// repaired by send, so it logs at debug.
 func (c *ClaudeProvider) logUpstreamRejection(resp *http.Response, model string) {
 	anthropicID, gatewayID := claudeRequestIDs(resp)
 	if anthropicID == "" && gatewayID == "" {
@@ -696,8 +581,7 @@ func (c *ClaudeProvider) logUpstreamRejection(resp *http.Response, model string)
 	logger.Warn("AI upstream error", attrs...)
 }
 
-// permissionDeniedMessage is the explanation kept on a permission-denied
-// error, with a fallback when the service sent none.
+// permissionDeniedMessage is the explanation kept on a permission-denied error, with a fallback when the service sent none.
 func permissionDeniedMessage(msg string) string {
 	if msg = oneLine(strings.Join(strings.Fields(msg), " "), claudeErrorMessageMax); msg != "" {
 		return msg
@@ -705,14 +589,9 @@ func permissionDeniedMessage(msg string) string {
 	return "the credential is not allowed to use this model"
 }
 
-// classifyError maps a non-200 Messages response onto the shared errors.
-// STATUS first, the JSON envelope only enriching the message (as
-// openaiBase.handleChatError): a gateway 502/503 with an HTML or empty body
-// is still ErrProviderDown (retried, counted by the breaker), a 429 without
-// a body is still rate-limited with its Retry-After. 401/403 go to the
-// unauthorized hook (Azure AI Foundry); otherwise an Anthropic
-// permission_error is a permission denial and every other 401/403 an invalid
-// credential. Residual errors carry the upstream request id.
+// classifyError maps a non-200 Messages response onto the shared errors, STATUS first (a bodyless gateway
+// 502/429 still counts for retry/breaker); 401/403 go to the unauthorized hook, a permission_error is a
+// permission denial, every other 401/403 an invalid credential.
 func (c *ClaudeProvider) classifyError(resp *http.Response, body []byte, stream bool) error {
 	status := resp.StatusCode
 	var apiErr claudeErrorResp
@@ -754,27 +633,18 @@ func (c *ClaudeProvider) classifyError(resp *http.Response, body []byte, stream 
 	return fmt.Errorf("claude API error (status %d%s)", status, suffix)
 }
 
-// claudeRefusalError is a response Claude ended with stop_reason "refusal"
-// (its safety classifiers declined the request). Deterministic on the input
-// like a content-filter block, so it is ErrContentFiltered: never retried,
-// never a breaker failure, and explained by the chat service instead of
-// presenting whatever text arrived as a complete answer.
+// claudeRefusalError is a response Claude ended with stop_reason "refusal" (its safety classifiers declined).
+// Deterministic like a content-filter block, so ErrContentFiltered: never retried, never a breaker failure.
 func claudeRefusalError() error {
 	return fmt.Errorf("%w: the model declined to respond (stop_reason refusal)", ErrContentFiltered)
 }
 
-// ErrOutputLimit is a completion that stopped at its output cap — max_tokens
-// ("max_tokens", "length", "MAX_TOKENS") or the model's context window
-// ("model_context_window_exceeded") — before producing anything usable: no
-// answer text and no tool call (thinking models spend the budget reasoning).
-// Deterministic for the request, so never retried; the chat service reports
-// it as PROVIDER_OUTPUT_LIMIT. The API call itself succeeded and was billed.
+// ErrOutputLimit is a completion that stopped at its output cap (max_tokens or the context window) before
+// producing any answer text or tool call. Deterministic, never retried (PROVIDER_OUTPUT_LIMIT); the call was billed.
 var ErrOutputLimit = errors.New("the model reached its output limit before answering")
 
-// claudeOutputLimitStop reports a Claude stop_reason that cut the output
-// short: the max_tokens cap, or the context window filling up during
-// generation (Claude 4.5+ models accept input + max_tokens beyond the window
-// and stop with model_context_window_exceeded instead of a 400).
+// claudeOutputLimitStop reports a stop_reason that cut the output short: the max_tokens cap, or the context
+// window filling during generation (4.5+ models stop with model_context_window_exceeded instead of a 400).
 func claudeOutputLimitStop(reason string) bool {
 	return reason == "max_tokens" || reason == "model_context_window_exceeded"
 }
@@ -798,8 +668,7 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return nil, fmt.Errorf("parse claude response: %w", err)
 	}
-	// The same content blocks undecoded, for the replay record: every field
-	// exactly as received (a thinking block's signature, a tool_use's input).
+	// The same content blocks undecoded, for the replay record: every field exactly as received.
 	var raw struct {
 		Content []json.RawMessage `json:"content"`
 	}
@@ -808,9 +677,8 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 		return nil, claudeRefusalError()
 	}
 
-	// Aggregate text blocks and collect any tool_use blocks. With tools enabled
-	// a response may contain only tool_use blocks (no text), so we don't require
-	// text to be present.
+	// Aggregate text blocks and collect tool_use blocks: with tools enabled a response may contain only
+	// tool_use blocks, so text is not required.
 	var text string
 	var toolCalls []ToolCall
 	for _, c := range parsed.Content {
@@ -822,8 +690,7 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 		}
 	}
 	if text == "" && len(toolCalls) == 0 && claudeOutputLimitStop(parsed.StopReason) {
-		// Cut at the cap before any answer — typically a thinking model that
-		// spent max_tokens reasoning. Not an empty success.
+		// Cut at the cap before any answer — typically a thinking model that spent max_tokens reasoning.
 		return nil, fmt.Errorf("%w (stop_reason %s)", ErrOutputLimit, parsed.StopReason)
 	}
 	if len(parsed.Content) == 0 {
@@ -855,10 +722,8 @@ func (c *ClaudeProvider) Stream(ctx context.Context, req Request, onChunk func(C
 	return parseClaudeSSE(resp.Body, onChunk)
 }
 
-// claudeCountTokensRequest is the count_tokens body: the same model, system,
-// messages, tools and thinking buildBody assembles, without the fields the
-// endpoint does not take — max_tokens, stream, temperature/top_p — and
-// without the top-level cache marker.
+// claudeCountTokensRequest is the count_tokens body: the same model, system, messages, tools and thinking
+// buildBody assembles, without max_tokens, stream, temperature/top_p and the top-level cache marker.
 type claudeCountTokensRequest struct {
 	Model    string              `json:"model"`
 	System   []claudeSystemBlock `json:"system,omitempty"`
@@ -867,16 +732,12 @@ type claudeCountTokensRequest struct {
 	Thinking *claudeThinking     `json:"thinking,omitempty"`
 }
 
-// countTokensParam is the learnedRepairs entry of an endpoint with no
-// count_tokens route (404): remembered per endpoint so later calls fail fast
-// instead of paying the rejection round trip every turn.
+// countTokensParam is the learnedRepairs entry of an endpoint with no count_tokens route (404): remembered per
+// endpoint so later calls fail fast instead of paying the rejection round trip every turn.
 const countTokensParam = "count_tokens"
 
-// anthropicNotFound reports whether a 404 body is Anthropic's own error
-// envelope ({"type":"error","error":{"type":"not_found_error",…}}): the route
-// exists and refused THIS request — an unknown model or deployment, one
-// user's mistake — unlike a gateway's route-level 404, which says the
-// endpoint has no count_tokens route for anyone.
+// anthropicNotFound reports whether a 404 body is Anthropic's own error envelope ({"error":{"type":
+// "not_found_error"}}): the route exists and refused THIS request, unlike a gateway's route-level 404.
 func anthropicNotFound(body []byte) bool {
 	var env struct {
 		Type  string            `json:"type"`
@@ -885,17 +746,9 @@ func anthropicNotFound(body []byte) bool {
 	return json.Unmarshal(body, &env) == nil && env.Type == "error" && env.Error.Type == "not_found_error"
 }
 
-// CountTokens asks the provider's own tokenizer how many input tokens req
-// will consume (Anthropic's count_tokens endpoint, free and GA on Microsoft
-// Foundry; TokenCounter). The estimate (EstimateTokensClaude) is the OpenAI
-// BPE, and Anthropic documents ~30% more tokens on the 4.7+ tokenizer — an
-// exact count lets the chat service re-check a near-window prompt before the
-// estimate's error band lets an oversized request through. The count carries
-// no sampling or generation fields; errors are classified by the shared
-// decode path, and an endpoint whose route answers 404 is memoised as
-// unavailable (learnedRepairs) for the memo TTL. Anthropic's own
-// not_found_error is not: the memo is per endpoint, and one request's unknown
-// model must not turn exact counting off for every user of it.
+// CountTokens asks the provider's own tokenizer how many input tokens req will consume — the OpenAI BPE is
+// ~30% low on the 4.7+ tokenizer, and an exact count re-checks a near-window prompt. A route 404 is memoised
+// per endpoint; Anthropic's own not_found_error is not (one request's unknown model must not disable counting).
 func (c *ClaudeProvider) CountTokens(ctx context.Context, req Request) (int, error) {
 	url := c.endpoint() + "/count_tokens"
 	if slices.Contains(repairsFor(url), countTokensParam) {

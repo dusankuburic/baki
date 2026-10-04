@@ -326,8 +326,30 @@ export interface RequestOptions {
 // are served from cache. Non-GETs bypass both; logout clears everything.
 
 const GET_CACHE_TTL_MS = 5_000
-const getInFlight = new Map<string, Promise<unknown>>()
+
+/**
+ * Bodies larger than this are neither cached nor cloned. The cache costs one
+ * structuredClone on write and one per hit; for a 50k-block document (21 MB
+ * of JSON) a clone measured 413 ms and +44 MB of heap — three times what the
+ * parse itself cost — for a payload the 5 s TTL practically never serves
+ * twice. Measured as the decoded body's UTF-16 length (≈ bytes for ASCII
+ * JSON); Content-Length is not used because it reports the compressed size.
+ */
+export const GET_CACHE_MAX_BODY_CHARS = 512 * 1024
+
+interface ParsedBody {
+  value: unknown
+  /** Decoded body length in UTF-16 code units — the size-gate's input. */
+  size: number
+}
+
+const getInFlight = new Map<string, Promise<ParsedBody>>()
 const getCache = new Map<string, {value: unknown; expiresAt: number}>()
+
+/** Live entries in the GET micro-cache (diagnostics and tests). */
+export function requestCacheSize(): number {
+  return getCache.size
+}
 
 // Bumped by clearRequestCache(); a response resolving after a clear must not
 // write the old session's data back into the cache.
@@ -347,7 +369,9 @@ function cloneCached<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
-// Drops expired entries on writes so the map can't grow unboundedly.
+// Drops expired entries on writes so the map can't grow unboundedly. Reads
+// also drop the one expired entry they hit (see request): a write may not
+// come for a long time, and until it did an expired clone stayed referenced.
 function evictExpiredCache(): void {
   const now = Date.now()
   for (const [key, entry] of getCache) {
@@ -409,7 +433,7 @@ function offlineMutation(method: string): boolean {
   return !READ_METHODS.has(method.toUpperCase()) && typeof navigator !== 'undefined' && navigator.onLine === false
 }
 
-async function doRequest<T>(path: string, opts: RequestOptions): Promise<T> {
+async function doRequest(path: string, opts: RequestOptions): Promise<ParsedBody> {
   const {body, method = 'POST', timeoutMs = DEFAULT_TIMEOUT_MS} = opts
   if (offlineMutation(method)) {
     throw new ApiError(OFFLINE_MESSAGE, 0, OFFLINE_CODE)
@@ -429,10 +453,14 @@ async function doRequest<T>(path: string, opts: RequestOptions): Promise<T> {
     throw new ApiError(env.message, response.status, env.code, env.requestId, env.details)
   }
 
-  // A 200 with a non-JSON body (misconfigured proxy) must throw a clean Error.
-  return response.json().catch(() => {
+  // Read as text so the body's size is known for the cache gate; a 200 with
+  // a non-JSON body (misconfigured proxy) must throw a clean Error.
+  try {
+    const text = await response.text()
+    return {value: JSON.parse(text), size: text.length}
+  } catch {
     throw new Error('Server returned a non-JSON response')
-  }) as Promise<T>
+  }
 }
 
 // Public entry: adds GET dedup + the 5s micro-cache on top of doRequest.
@@ -440,14 +468,15 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   const {method = 'POST'} = opts
   const cacheable = !opts.noDedup && !opts.body && (method === 'GET' || method === 'get')
   if (!cacheable) {
-    return doRequest<T>(path, opts)
+    return (await doRequest(path, opts)).value as T
   }
 
   const key = path
   const epoch = cacheEpoch
   const cached = getCache.get(key)
-  if (cached && cached.expiresAt > Date.now()) {
-    return cloneCached(cached.value) as T
+  if (cached) {
+    if (cached.expiresAt > Date.now()) return cloneCached(cached.value) as T
+    getCache.delete(key)
   }
   // An abortable request belongs to its caller and is never shared: the
   // caller's abort would reject every sharer with it. React StrictMode
@@ -458,26 +487,30 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   const existing = shareable ? getInFlight.get(key) : undefined
   if (existing) {
     // Share the round trip, not the object: clone from the pristine cached
-    // copy; on an epoch mismatch fall back to the propagated value.
-    return existing.then(v => {
+    // copy; on an epoch mismatch fall back to the propagated value. An
+    // oversized body is never cloned — sharers of one receive the same
+    // object (concurrent identical GETs of a multi-megabyte body do not
+    // happen in practice: those callers pass a signal or noDedup).
+    return existing.then(res => {
       const entry = epoch === cacheEpoch ? getCache.get(key) : undefined
-      return cloneCached(entry ? entry.value : v)
+      if (entry) return cloneCached(entry.value)
+      return res.size > GET_CACHE_MAX_BODY_CHARS ? res.value : cloneCached(res.value)
     }) as Promise<T>
   }
 
-  const promise = doRequest<T>(path, opts)
-    .then(value => {
-      if (epoch !== cacheEpoch) return value
+  const promise = doRequest(path, opts)
+    .then(res => {
+      if (epoch !== cacheEpoch || res.size > GET_CACHE_MAX_BODY_CHARS) return res
       evictExpiredCache()
       // Cache a pristine copy; the original goes only to the initiating caller.
-      getCache.set(key, {value: cloneCached(value), expiresAt: Date.now() + GET_CACHE_TTL_MS})
-      return value
+      getCache.set(key, {value: cloneCached(res.value), expiresAt: Date.now() + GET_CACHE_TTL_MS})
+      return res
     })
     .finally(() => {
       if (getInFlight.get(key) === promise) getInFlight.delete(key)
     })
   if (shareable) getInFlight.set(key, promise)
-  return promise
+  return (await promise).value as T
 }
 
 // Fetches and validates against a zod schema — for high-risk endpoints where
@@ -500,7 +533,7 @@ export async function requestBlob(
   await ensureFreshToken(path)
   const response = await fetchWithRetry(path, undefined, method, timeoutMs, opts.signal)
   if (!response.ok) {
-    // Shared envelope→error mapping (F1.9): blob downloads deserve the same
+    // Shared envelope→error mapping: blob downloads deserve the same
     // PermissionDenied/VersionConflict specialization as JSON requests.
     const env = await parseErrorEnvelope(response)
     if (response.status === 403) throw new PermissionDeniedError(env.message, env.code, env.requestId, env.details)

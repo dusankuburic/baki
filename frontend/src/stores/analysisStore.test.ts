@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach, vi} from 'vitest'
-import {useAnalysisStore, findingKey} from './analysisStore'
+import {useAnalysisStore, findingKey, findingsByBlockOf, MAX_RETAINED_FINDINGS} from './analysisStore'
 import type {Finding, AnalysisReport} from '@/types'
 
 // Suppression persists via the triage API in cloud mode (jsdom reports !isTauri).
@@ -111,22 +111,32 @@ describe('filters', () => {
   })
 })
 
-describe('findingsByBlock', () => {
-  it('indexes each report by block for the inspector', () => {
-    const report = {
+describe('findingsByBlockOf', () => {
+  const report = () =>
+    ({
       flowId: 'doc1',
       findings: [
         makeFinding('f1', {blockId: 'b1'}),
         makeFinding('f2', {blockId: 'b2'}),
         makeFinding('f3', {blockId: 'b1'}),
       ],
-    } as unknown as AnalysisReport
-    useAnalysisStore.getState().setReport('doc1', report)
+    }) as unknown as AnalysisReport
 
-    const index = useAnalysisStore.getState().findingsByBlock
-    const b1 = index.get('doc1')?.get('b1') ?? []
-    expect(b1.map(f => f.id)).toEqual(['f1', 'f3'])
-    expect(index.get('missing')).toBeUndefined()
+  it('indexes a report by block for the inspector', () => {
+    useAnalysisStore.getState().setReport('doc1', report())
+    const index = findingsByBlockOf(useAnalysisStore.getState().reports.get('doc1'))
+    expect((index.get('b1') ?? []).map(f => f.id)).toEqual(['f1', 'f3'])
+    expect(index.get('b9')).toBeUndefined()
+    expect(findingsByBlockOf(undefined).size).toBe(0)
+  })
+
+  // Built on demand, once per report object: the store no longer carries an
+  // eager index for every retained report.
+  it('is cached per report object and rebuilt for a new report', () => {
+    const r1 = report()
+    expect(findingsByBlockOf(r1)).toBe(findingsByBlockOf(r1))
+    expect(findingsByBlockOf(report())).not.toBe(findingsByBlockOf(r1))
+    expect(useAnalysisStore.getState()).not.toHaveProperty('findingsByBlock')
   })
 })
 
@@ -166,6 +176,39 @@ describe('setReport eviction', () => {
     expect(useAnalysisStore.getState().reports.has('flow-0')).toBe(true)
     expect(useAnalysisStore.getState().reports.has('flow-1')).toBe(false)
   })
+
+  function makeBigReport(flowId: string, findings: number): AnalysisReport {
+    const list: Finding[] = new Array(findings)
+    for (let i = 0; i < findings; i++) list[i] = makeFinding(`${flowId}-${i}`, {blockId: `b${i}`})
+    return {flowId, findings: list} as unknown as AnalysisReport
+  }
+
+  // 20 reports of a 20k-finding flow kept ~10 MB of JSON each alive per
+  // session: the cap is now also a findings budget.
+  it('evicts the oldest non-active report once the retained findings exceed the budget', () => {
+    const store = useAnalysisStore.getState()
+    const half = Math.ceil(MAX_RETAINED_FINDINGS / 2)
+    store.setProtectedFlowId('active')
+    store.setReport('active', makeBigReport('active', half))
+    store.setReport('old', makeBigReport('old', half - 1))
+    expect(useAnalysisStore.getState().reports.size).toBe(2) // within budget
+
+    store.setReport('newer', makeBigReport('newer', 10))
+
+    const reports = useAnalysisStore.getState().reports
+    expect(reports.has('active')).toBe(true) // the open flow's report survives
+    expect(reports.has('newer')).toBe(true) // the one just set survives
+    expect(reports.has('old')).toBe(false) // the oldest non-active one went
+  })
+
+  it('a refreshed report becomes the newest, not the oldest, entry', () => {
+    const store = useAnalysisStore.getState()
+    for (let i = 0; i < 20; i++) store.setReport(`flow-${i}`, makeReport(`flow-${i}`))
+    store.setReport('flow-0', makeReport('flow-0')) // refreshed: moves to the newest slot
+    store.setReport('flow-20', makeReport('flow-20'))
+    expect(useAnalysisStore.getState().reports.has('flow-0')).toBe(true)
+    expect(useAnalysisStore.getState().reports.has('flow-1')).toBe(false)
+  })
 })
 
 describe('reset', () => {
@@ -185,7 +228,6 @@ describe('reset', () => {
 
     const s = useAnalysisStore.getState()
     expect(s.reports.size).toBe(0)
-    expect(s.findingsByBlock.size).toBe(0)
     expect(s.suppressedFindings).toHaveLength(0)
     expect(s.suppressedKeys.size).toBe(0)
     expect(s.isAnalyzing).toBe(false)

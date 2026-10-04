@@ -273,7 +273,7 @@ describe('OrganizationsPanel', () => {
       target: {value: 'https://acme.openai.azure.com'},
     })
     fireEvent.change(within(dialog).getByLabelText('API key', {selector: 'input'}), {target: {value: 'sk-org'}})
-    // F-51: no Azure CLI sign-in for an organisation's resource.
+    // No Azure CLI sign-in for an organisation's resource.
     expect(within(dialog).queryByRole('radio', {name: 'Azure CLI'})).toBeNull()
     fireEvent.click(within(dialog).getByRole('button', {name: 'Add resource'}))
     await waitFor(() => expect(bumpProviderEpoch).toHaveBeenCalledTimes(1))
@@ -411,7 +411,7 @@ describe('OrganizationsPanel', () => {
     expect(azureApi.listAzureConnections).not.toHaveBeenCalled()
   })
 
-  // F-48: removing or demoting the lender of an org resource's credential
+  // Removing or demoting the lender of an org resource's credential
   // disables it server-side — the panel explains what disappeared and loads
   // the registry again (the resource now needs credentials) instead of
   // leaving the admin a silent disappearance.

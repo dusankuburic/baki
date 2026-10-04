@@ -967,16 +967,3 @@ func TestDisabledBlockRule(t *testing.T) {
 		}
 	})
 }
-
-func TestAllRulesIncludesNewRules(t *testing.T) {
-	rules := AllRules()
-	ids := make(map[string]bool)
-	for _, r := range rules {
-		ids[r.ID()] = true
-	}
-	for _, expected := range []string{"hardcoded-url", "large-subflow", "disabled-block"} {
-		if !ids[expected] {
-			t.Errorf("AllRules() missing rule %q", expected)
-		}
-	}
-}

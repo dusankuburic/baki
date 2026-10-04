@@ -29,6 +29,12 @@ func NewService(cfg config.EmailConfig, mode config.DeploymentMode) *Service {
 	}
 }
 
+// NewServiceWithMailer builds the email service around an explicit Mailer
+// (tests capture the rendered messages this way); baseURL as in NewService.
+func NewServiceWithMailer(m Mailer, baseURL string) *Service {
+	return &Service{mailer: m, baseURL: strings.TrimRight(baseURL, "/")}
+}
+
 // Enabled reports whether real SMTP delivery is configured (vs log-only).
 func (s *Service) Enabled() bool { return s.mailer != nil && s.mailer.Enabled() }
 
@@ -162,11 +168,10 @@ const commentPreviewBytes = 300
 
 // previewOf truncates a comment body to a preview, cutting on a RUNE boundary.
 //
-// The cut used to be a plain byte slice (s[:300]), which splits a multi-byte
-// UTF-8 character whenever the boundary lands inside one — so a comment in any
-// non-ASCII script could put a mangled byte sequence into the email body, which
-// html.EscapeString passes straight through. Same class as the stream-scrubber
-// and chat-resume fixes; this mirrors ai.truncateResult's approach.
+// A plain byte slice (s[:300]) splits a multi-byte UTF-8 character whenever
+// the boundary lands inside one, putting a mangled byte sequence into the
+// email body (html.EscapeString passes it straight through). Mirrors
+// ai.truncateResult's approach.
 func previewOf(s string) string {
 	if len(s) <= commentPreviewBytes {
 		return s

@@ -11,7 +11,7 @@ import (
 	"pad-core/models"
 )
 
-// F-10: an assistant message with blank content and no tool calls or fix
+// An assistant message with blank content and no tool calls or fix
 // proposals is not stored. An empty 'stop' answer saved as an empty assistant
 // message used to brick the thread on Claude, whose Messages API rejects
 // {"role":"assistant","content":""} on every later turn; a tool-bearing turn
@@ -27,10 +27,10 @@ func TestSaveConversation_DropsBlankAssistantMessages(t *testing.T) {
 		{ID: "5", Role: "assistant", Content: "", FixProposals: []models.FixProposalSnapshot{{ProposalID: "p1"}}},
 		{ID: "6", Role: "user", Content: "again"},
 	}
-	if err := svc.SaveConversation(context.Background(), doc, "flow", msgs); err != nil {
+	if err := svc.SaveConversation(context.Background(), doc.ID, "flow", msgs); err != nil {
 		t.Fatalf("SaveConversation: %v", err)
 	}
-	got, err := svc.GetConversation(context.Background(), doc, "flow")
+	got, err := svc.GetConversation(context.Background(), doc.ID, "flow")
 	if err != nil {
 		t.Fatalf("GetConversation: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestSaveConversation_DropsBlankAssistantMessages(t *testing.T) {
 	}
 }
 
-// F-26: a refusal a Claude Mythos deployment gave an API-key credential is
+// A refusal a Claude Mythos deployment gave an API-key credential is
 // Entra-only copy, not the generic invalid-key text — and not the permission
 // copy either (it also unwraps to ErrApiKeyInvalid, which the permission and
 // auth cases both match).
@@ -67,12 +67,12 @@ func TestClassifyFailure_ClaudeMythosEntraOnly(t *testing.T) {
 	}
 }
 
-// F-21: ActiveStreamFor resolves the caller's stream on a (flow,
-// conversation) whose answer the stored history does not carry yet: a live
-// stream once its question is stored (review #4 B1 — a client re-attaching
-// before then saved a history without it), preferred over a finished one; a
-// finished stream only while its cleanup — the answer persist — has not
-// settled (B2); nothing once it settled or left the retention set.
+// ActiveStreamFor resolves the caller's stream on a (flow, conversation)
+// whose answer the stored history does not carry yet: a live stream once
+// its question is stored (a client re-attaching before then saved a
+// history without it), preferred over a finished one; a finished stream
+// only while its cleanup — the answer persist — has not settled; nothing
+// once it settled or left the retention set.
 func TestActiveStreamFor(t *testing.T) {
 	svc := &ChatService{}
 	mk := func(owner, conv, id string) *streamCtl {
@@ -119,7 +119,7 @@ func TestActiveStreamFor(t *testing.T) {
 	}
 }
 
-// F-29: the context preview reports the MODEL's window (the listing entry),
+// The context preview reports the MODEL's window (the listing entry),
 // not the provider-wide placeholder, and falls back to the provider-wide
 // value for an unlisted model.
 func TestPreviewContext_UsesModelWindow(t *testing.T) {

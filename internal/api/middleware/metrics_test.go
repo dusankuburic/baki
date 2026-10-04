@@ -2,6 +2,9 @@ package middleware
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -82,6 +85,9 @@ func TestNormalizeRoute(t *testing.T) {
 		// Static assets
 		{"/assets/main.js", "/static/*"},
 		{"/favicon.ico", "/static/*"},
+
+		// The WebSocket upgrade is its own route, not an asset.
+		{"/ws", "/ws"},
 	}
 
 	known := map[string]struct{}{
@@ -97,12 +103,25 @@ func TestNormalizeRoute(t *testing.T) {
 	}
 }
 
-// TestNormalizeRoute_UnknownAPIPathsAreBounded is the regression test for the
-// metrics cardinality bomb. The Metrics middleware runs OUTSIDE the mux and
-// BEFORE auth, so every request — unauthenticated, unrouted, 404 — reaches it.
-// The old `/api/` fallthrough returned the path verbatim, so an attacker
-// minted one Prometheus time series per request until the process ran out of
-// memory. Unregistered paths must now collapse to a single bounded label.
+// TestNormalizeRoute_WebSocketIsNotAStaticAsset: /ws is not under /api/ and
+// would otherwise fall through to /static/*. The Metrics layer observes the
+// handler's whole lifetime, so every WebSocket's open-to-close duration would
+// pollute the asset histogram. It is labelled as itself — and only the exact path: the
+// known set is consulted for /api/ routes only, so this must not depend on it.
+func TestNormalizeRoute_WebSocketIsNotAStaticAsset(t *testing.T) {
+	for _, known := range []map[string]struct{}{nil, {"/ws": {}}} {
+		if got := normalizeRoute("/ws", known); got != "/ws" {
+			t.Errorf("normalizeRoute(/ws, known=%v) = %q, want %q", known, got, "/ws")
+		}
+	}
+	if got := normalizeRoute("/ws/anything", nil); got != "/static/*" {
+		t.Errorf("normalizeRoute(/ws/anything) = %q, want the static fallback (no such route)", got)
+	}
+}
+
+// Regression: the metrics-cardinality bomb. Metrics runs outside the mux and before auth, so every
+// request reaches it; the old `/api/` fallthrough minted one Prometheus series per request until OOM.
+// Unregistered paths must collapse to a single bounded label.
 func TestNormalizeRoute_UnknownAPIPathsAreBounded(t *testing.T) {
 	known := map[string]struct{}{"/api/auth/login": {}}
 
@@ -148,5 +167,109 @@ func TestNormalizeRoute_UnknownAPIPathsAreBounded(t *testing.T) {
 	// A nil set is fail-closed: unrecognized rather than unbounded.
 	if got := normalizeRoute("/api/auth/login", nil); got != routeOther {
 		t.Errorf("nil known set: got %q, want %q (fail-closed)", got, routeOther)
+	}
+}
+
+func TestNormalizeMethod(t *testing.T) {
+	for _, m := range []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE"} {
+		if got := normalizeMethod(m); got != m {
+			t.Errorf("normalizeMethod(%q) = %q, want it verbatim", m, got)
+		}
+	}
+	for _, m := range []string{"FOO", "get", "PROPFIND", "", strings.Repeat("X", 4096)} {
+		if got := normalizeMethod(m); got != methodOther {
+			t.Errorf("normalizeMethod(%q) = %q, want %q", m, got, methodOther)
+		}
+	}
+}
+
+// TestMetrics_CustomMethodsAreBounded is the regression test for the method
+// half of the cardinality bomb: the route label was bounded, but r.Method was
+// labelled verbatim, so `LEAK1 /`, `LEAK2 /`, ... each minted a permanent
+// series. Drive the real middleware and read the real exposition.
+func TestMetrics_CustomMethodsAreBounded(t *testing.T) {
+	h := Metrics(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}), nil)
+	for i := 0; i < 20; i++ {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Method = fmt.Sprintf("CARDTEST%d", i)
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	rr := httptest.NewRecorder()
+	MetricsHandler().ServeHTTP(rr, httptest.NewRequest("GET", "/metrics", nil))
+	body := rr.Body.String()
+	if strings.Contains(body, `method="CARDTEST`) {
+		t.Error("a custom request method reached the method label verbatim")
+	}
+	if !strings.Contains(body, `method="OTHER",route="/",status="404"`) {
+		t.Error(`custom methods were not recorded under method="OTHER"`)
+	}
+}
+
+// TestMetrics_LabelsTheCanonicalRoute: the route label comes from the path the
+// router dispatches on, not the raw one. A request turned away before the
+// router has rewritten its path — a 429 from the rate limiter — was labelled
+// on the raw string: /api/v1/library/x as /api/other, the /api/v1 alias of a
+// registered static route likewise, and a dot segment could pull a path into
+// the wrong family altogether.
+func TestMetrics_LabelsTheCanonicalRoute(t *testing.T) {
+	known := map[string]struct{}{"/api/auth/login": {}}
+	serve := func(path string, status int, rewrite bool) {
+		Metrics(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if rewrite {
+				r.URL.Path = canonicalPath(r.URL.Path)
+			}
+			w.WriteHeader(status)
+		}), known).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	// Each case answers with a status of its own, so its series cannot be
+	// mistaken for another case's.
+	cases := []struct {
+		path    string
+		status  int
+		rewrite bool // the handler rewrites r.URL.Path in place, as the router does
+		want    string
+	}{
+		// Refused before the router: r.URL.Path is still the raw path.
+		{"/api/v1/library/canon-abc", http.StatusTooManyRequests, false, "/api/library/:id"},
+		{"/api/v1/auth/login", http.StatusServiceUnavailable, false, "/api/auth/login"},
+		{"/api/library/../v1/orgs/canon-org/members", http.StatusForbidden, false, "/api/orgs/:id/members"},
+		// Reached the router, which rewrote the path before the handler
+		// returned. The label is still one canonicalization of the path as
+		// received: /api/v1/v1/library/x dispatches as /api/v1/library/x,
+		// which no route matches — not as /api/library/:id.
+		{"/api/v1/v1/library/canon-x", http.StatusTeapot, true, routeOther},
+	}
+	for _, c := range cases {
+		serve(c.path, c.status, c.rewrite)
+	}
+	// Still bounded: an unregistered /api/v1 path is one label, not one each.
+	for i := 0; i < 20; i++ {
+		serve(fmt.Sprintf("/api/v1/canon-%d", i), http.StatusGone, false)
+	}
+
+	rr := httptest.NewRecorder()
+	MetricsHandler().ServeHTTP(rr, httptest.NewRequest("GET", "/metrics", nil))
+	body := rr.Body.String()
+	for _, c := range cases {
+		if want := fmt.Sprintf(`method="GET",route=%q,status="%d"`, c.want, c.status); !strings.Contains(body, want) {
+			t.Errorf("%s: no series %s", c.path, want)
+		}
+		for _, wrong := range []string{routeOther, "/api/library/:id"} {
+			if wrong == c.want {
+				continue
+			}
+			if series := fmt.Sprintf(`route=%q,status="%d"`, wrong, c.status); strings.Contains(body, series) {
+				t.Errorf("%s: labelled %s", c.path, series)
+			}
+		}
+	}
+	if !strings.Contains(body, `method="GET",route="/api/other",status="410"`) {
+		t.Error("unregistered /api/v1 paths were not recorded under routeOther")
+	}
+	if strings.Contains(body, "canon-") {
+		t.Error("a raw path segment reached the route label")
 	}
 }

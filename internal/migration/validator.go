@@ -11,7 +11,6 @@ import (
 // Validator checks flow documents for issues before migration.
 type Validator struct{}
 
-// NewValidator returns a Validator.
 func NewValidator() *Validator { return &Validator{} }
 
 // ValidateFlow returns a slice of human-readable problem descriptions.

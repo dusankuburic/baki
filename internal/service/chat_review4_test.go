@@ -13,9 +13,6 @@ import (
 	"pad-core/models"
 )
 
-// Code review #4 of the audit #9 work: resume after reload (B1, B2), Azure
-// and the daily budget (B6), provider status lines (B7).
-
 // waitClosed fails the test unless ch closes within 5 s.
 func waitClosed(t *testing.T, ch <-chan struct{}, what string) {
 	t.Helper()
@@ -26,7 +23,7 @@ func waitClosed(t *testing.T, ch <-chan struct{}, what string) {
 	}
 }
 
-// --- B1: a stream is reported only once its question is stored ------------------
+// --- a stream is reported only once its question is stored ---------------------
 
 // questionGateProvider parks the turn in prepareTurn — its model listing
 // (the output-limit lookup) blocks until models is closed — and then in
@@ -86,13 +83,13 @@ func TestActiveStream_ReportedOnlyOnceTheQuestionIsStored(t *testing.T) {
 	if got := svc.ActiveStreamFor("u1", "f1", conv); got != "" {
 		t.Errorf("ActiveStreamFor while prepareTurn runs = %q, want empty (the question is not stored yet)", got)
 	}
-	if msgs, sid, err := svc.ConversationWithActiveStream(ctx, "u1", doc, conv); err != nil || sid != "" || len(msgs) != 0 {
+	if msgs, sid, err := svc.ConversationWithActiveStream(ctx, "u1", doc.ID, conv); err != nil || sid != "" || len(msgs) != 0 {
 		t.Errorf("GET before the question is stored = (%d messages, %q, %v), want no messages and no stream", len(msgs), sid, err)
 	}
 
 	close(p.models)
 	waitClosed(t, p.streaming, "the provider stream")
-	msgs, sid, err := svc.ConversationWithActiveStream(ctx, "u1", doc, conv)
+	msgs, sid, err := svc.ConversationWithActiveStream(ctx, "u1", doc.ID, conv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +102,7 @@ func TestActiveStream_ReportedOnlyOnceTheQuestionIsStored(t *testing.T) {
 
 	close(p.release)
 	waitStreamFinished(t, svc, id)
-	msgs, sid, err = svc.ConversationWithActiveStream(ctx, "u1", doc, conv)
+	msgs, sid, err = svc.ConversationWithActiveStream(ctx, "u1", doc.ID, conv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +132,7 @@ func TestPersistInitialUserTurn_ReportsWhetherStored(t *testing.T) {
 	}
 }
 
-// --- B2: a finished stream is reported while its answer is being stored ---------
+// --- a finished stream is reported while its answer is being stored ------------
 
 // answerGateStore is a conversation store whose second save — the turn's
 // answer, after its question — parks until release (saving closes as it
@@ -203,7 +200,7 @@ func TestActiveStream_ReportedWhileTheAnswerIsStored(t *testing.T) {
 	if _, live := svc.activeStreams.Load(id); live {
 		t.Fatal("the stream is still live while its answer is stored")
 	}
-	msgs, sid, err := svc.ConversationWithActiveStream(ctx, "u1", doc, conv)
+	msgs, sid, err := svc.ConversationWithActiveStream(ctx, "u1", doc.ID, conv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +213,7 @@ func TestActiveStream_ReportedWhileTheAnswerIsStored(t *testing.T) {
 
 	releaseStore()
 	waitStreamFinished(t, svc, id)
-	msgs, sid, err = svc.ConversationWithActiveStream(ctx, "u1", doc, conv)
+	msgs, sid, err = svc.ConversationWithActiveStream(ctx, "u1", doc.ID, conv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,16 +236,16 @@ func TestConversationWithActiveStream_DropsAStreamWhoseAnswerIsStored(t *testing
 	svc.finishedStreams.Store("s1", ctl)
 	question := models.ChatMessage{ID: "m1", Role: "user", Content: "the question"}
 
-	if err := svc.SaveConversation(ctx, doc, "c1", []models.ChatMessage{question}); err != nil {
+	if err := svc.SaveConversation(ctx, doc.ID, "c1", []models.ChatMessage{question}); err != nil {
 		t.Fatal(err)
 	}
-	if _, sid, err := svc.ConversationWithActiveStream(ctx, "u1", doc, "c1"); err != nil || sid != "s1" {
+	if _, sid, err := svc.ConversationWithActiveStream(ctx, "u1", doc.ID, "c1"); err != nil || sid != "s1" {
 		t.Errorf("answer not stored yet: sid = %q (%v), want s1", sid, err)
 	}
-	if err := svc.SaveConversation(ctx, doc, "c1", []models.ChatMessage{question, {ID: "m2", Role: "assistant", Content: "the answer"}}); err != nil {
+	if err := svc.SaveConversation(ctx, doc.ID, "c1", []models.ChatMessage{question, {ID: "m2", Role: "assistant", Content: "the answer"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, sid, err := svc.ConversationWithActiveStream(ctx, "u1", doc, "c1"); err != nil || sid != "" {
+	if _, sid, err := svc.ConversationWithActiveStream(ctx, "u1", doc.ID, "c1"); err != nil || sid != "" {
 		t.Errorf("answer stored: sid = %q (%v), want none", sid, err)
 	}
 	if got := svc.ActiveStreamFor("u1", "f1", "c1"); got != "s1" {
@@ -256,7 +253,7 @@ func TestConversationWithActiveStream_DropsAStreamWhoseAnswerIsStored(t *testing
 	}
 }
 
-// --- B6: Azure AI Foundry is never refused by the daily budget --------------------
+// --- Azure AI Foundry is never refused by the daily budget ---------------------
 
 // exhaustedBudget is a ChatService whose daily budget ($1) is already spent
 // ($5) by priced providers.
@@ -382,7 +379,7 @@ func TestToolLoops_AzureIgnoresAnExhaustedBudget(t *testing.T) {
 	}
 }
 
-// --- B7: a provider status line is a trail row, not a hosted step -----------------
+// --- a provider status line is a trail row, not a hosted step -------------------
 
 // noticeProvider streams a provider status line (the "reasoning off" notice)
 // twice — RetryingProvider forwards a failed attempt's notice as well as the

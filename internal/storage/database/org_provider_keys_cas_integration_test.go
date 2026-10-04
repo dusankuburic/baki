@@ -116,7 +116,7 @@ func TestOrgProviderKeys_CompareAndSwap_Postgres(t *testing.T) {
 		t.Errorf("delete of another admin's row: deleted=%v err=%v", deleted, err)
 	}
 	// The editor's departure must NOT delete the lender's still-valid
-	// credential (F-32: an edit that carried the secret is not a loan).
+	// credential: an edit that carried the secret is not a loan.
 	if deleted, err := ks.DeleteOrgIfSavedBy(orgA.ID, provider, editor); err != nil || deleted {
 		t.Errorf("delete by the carrying editor: deleted=%v err=%v, want the lender's credential kept", deleted, err)
 	}

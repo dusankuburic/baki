@@ -51,6 +51,14 @@ func TestExtractToken_QueryParamOnlyOnSSEPath(t *testing.T) {
 			want:  "",
 		},
 		{
+			// Path decodes to /api/events, but chi routes the RawPath,
+			// which is no route's spelling of the SSE bus.
+			name:  "query ignored when the path only decodes to the SSE path",
+			path:  "/api/%65vents",
+			query: "token=abc.def.ghi",
+			want:  "",
+		},
+		{
 			name:   "header preferred over query on SSE path",
 			header: "Bearer from-header",
 			path:   "/api/events",

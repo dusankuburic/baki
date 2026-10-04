@@ -145,7 +145,7 @@ func TestReindexOrg_PageFailureKeepsEarlierPages(t *testing.T) {
 			if err == nil {
 				t.Fatal("re-index succeeded, want the page-3 failure")
 			}
-			// F-13: the failure still answers the committed pages with a
+			// The failure still answers the committed pages with a
 			// resume cursor, so the client continues instead of re-buying them.
 			order := walkOrder(store)
 			if res.Chunks != 6 || res.NextCursor == nil || res.NextCursor.ID != order[5] || !res.Truncated {
@@ -245,7 +245,7 @@ func seedModelCorpus(store *testutil.FakeBackend, docs, per int, vec []float32) 
 	var chunks []interfaces.KnowledgeChunk
 	for d := range docs {
 		doc := fmt.Sprintf("doc-%02d", d)
-		_ = store.SaveKnowledgeDocument(ctx, &interfaces.KnowledgeDocument{ID: doc, OrgID: "org-1", Filename: doc + ".md"})
+		_ = store.SaveKnowledgeDocument(ctx, "", &interfaces.KnowledgeDocument{ID: doc, OrgID: "org-1", Filename: doc + ".md"})
 		for i := range per {
 			chunks = append(chunks, interfaces.KnowledgeChunk{
 				ID: fmt.Sprintf("%s-c%d", doc, i), DocID: doc, Content: fmt.Sprintf("rule %d of %s", i, doc),
@@ -332,8 +332,8 @@ func TestReindexOrg_ResumeWithNothingConvertedIsAFirstRequest(t *testing.T) {
 	}
 }
 
-// TestReindexOrg_RequestBudgetStopsWithCursor pins the wall-clock budget
-// (F-13): a request that would run past reindexRequestBudget stops after a
+// TestReindexOrg_RequestBudgetStopsWithCursor pins the wall-clock budget:
+// a request that would run past reindexRequestBudget stops after a
 // COMMITTED page and answers with a cursor well inside the platform's
 // request cap; the resumed loop finishes the corpus without re-embedding
 // anything already converted, and a corpus that fits one page needs no

@@ -10,44 +10,34 @@ import (
 )
 
 var secretRegexes = []*regexp.Regexp{
-	// Generic key/value secrets. Allows whitespace around the delimiter and a
-	// YAML-style `key: value` form (not just a bare `key=value`/`key:value`).
+	// Generic key/value secrets: whitespace around the delimiter and YAML-style `key: value` too.
 	regexp.MustCompile(`(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\s*[:=]\s*["']?([A-Za-z0-9\-._~+/=]{8,})["']?`),
 	// Bearer tokens
 	regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*`),
 	// Specific well-known prefixes (Stripe, GitHub)
 	regexp.MustCompile(`(?i)\b(sk_[a-zA-Z0-9_]{20,}|pk_[a-zA-Z0-9_]{20,}|ghp_[a-zA-Z0-9]{36}|glpat_[a-zA-Z0-9\-]{20,})\b`),
 	// Connection-string secrets: Password=/PWD= (covers User=;Password= forms).
-	// The value stops at ';' (connection-string delimiter) or end of line —
-	// letting it run to end-of-text made any prose mentioning "password=…"
-	// swallow the entire rest of the message into the mask.
+	// The value stops at ';' or end of line — running to end-of-text made prose
+	// mentioning "password=…" swallow the entire rest of the message.
 	regexp.MustCompile(`(?i)(?:Password|PWD)\s*=\s*([^;\r\n]+)`),
-	// AWS access key IDs (AKIA = normal, ASIA = temporary/STS). 16 chars after
-	// the prefix is the canonical length; word-bounded to avoid mid-word hits.
+	// AWS access key IDs (AKIA = normal, ASIA = temporary/STS): canonical
+	// 16 chars, word-bounded to avoid mid-word hits.
 	regexp.MustCompile(`\b((?:AKIA|ASIA)[0-9A-Z]{16})\b`),
-	// Google API key (AIza + 35 chars). Covers Google Cloud API keys and the
-	// typical Android/Maps key shape.
+	// Google API key (AIza + 35 chars): Google Cloud API and Android/Maps keys.
 	regexp.MustCompile(`\b(AIza[0-9A-Za-z_-]{35})\b`),
-	// Slack tokens: xox[abprs]- followed by 10+ chars. Covers bot (xoxb),
-	// user (xoxp), app (xoxa), refresh (xoxr), and legacy (xoxs) tokens.
+	// Slack tokens: xox[abprs]- + 10+ chars (bot, user, app, refresh, legacy).
 	regexp.MustCompile(`\b(xox[abprs]-[A-Za-z0-9-]{10,})\b`),
-	// JWT (eyJ prefix on both header and payload segments). The eyJ prefix is
-	// the base64url encoding of `{"` — every JWT header starts with it, so
-	// false positives require a coincidental eyJ match in two segments.
+	// JWT: eyJ (base64url of `{"`) on both segments, so false positives need a
+	// coincidental eyJ match in two segments.
 	regexp.MustCompile(`\b(eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b`),
-	// PEM private key blocks (RSA, EC, OPENSSH, DSA, PGP, etc). The pattern
-	// spans multiple lines, anchored by the BEGIN/END markers — content
-	// between them is always base64-encoded key material.
+	// PEM private key blocks between BEGIN/END markers, spanning lines.
 	regexp.MustCompile(`-----BEGIN (?:[A-Z ]+)PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z ]+)PRIVATE KEY-----`),
 }
 
-// sensitiveActions maps a PAD action RawType to specific property fields whose
-// values must always be masked, regardless of their content. This is a belt-and-
-// suspenders layer on top of the field-name and regex/entropy passes below.
+// sensitiveActions maps PAD action RawTypes to property fields always masked — belt-and-suspenders over the passes below.
 var sensitiveActions = map[string][]string{
 	"WebAutomation.PopulateTextField": {"Text"},
-	// Fill actions: FillWith is the value typed into the field (the
-	// credential); Text is the element locator text and stays visible.
+	// FillWith is the typed value (the credential); Text is the locator and stays visible.
 	"WebAutomation.FillTextByText":        {"FillWith"},
 	"WebAutomation.FillTextByName":        {"FillWith"},
 	"WebAutomation.FillTextByPlaceholder": {"FillWith"},
@@ -72,10 +62,8 @@ var sensitiveActions = map[string][]string{
 	"Terminal.Open":                       {"Password"},
 }
 
-// sensitiveFieldNames is the set of property keys (normalized: lowercased with
-// separators stripped) whose value is treated as a credential and masked on ANY
-// action. This catches credentials in actions not enumerated in sensitiveActions
-// — the dominant real-world leak path, since PAD has 200+ action types.
+// sensitiveFieldNames: normalized keys masked on ANY action — catches
+// credentials in the long tail of PAD's 200+ action types.
 var sensitiveFieldNames = map[string]struct{}{
 	"password": {}, "passwd": {}, "pwd": {}, "passphrase": {},
 	"secret": {}, "secretkey": {}, "clientsecret": {},
@@ -84,8 +72,7 @@ var sensitiveFieldNames = map[string]struct{}{
 	"connectionstring": {}, "credential": {}, "credentials": {},
 }
 
-// normalizeFieldName lowercases a property key and strips common separators so
-// "Api_Key", "api-key" and "ApiKey" all collapse to "apikey".
+// normalizeFieldName lowercases a key and strips separators so "Api_Key", "api-key" and "ApiKey" collapse to "apikey".
 func normalizeFieldName(k string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(k) {
@@ -103,13 +90,8 @@ func isSensitiveFieldName(k string) bool {
 }
 
 // ScrubDocument returns a deep copy of the FlowDocument with secrets masked.
-//
-// It clones only what scrubBlock mutates — each block's Properties map and the
-// Children tree — plus the slices that structurally contain them. This avoids
-// the previous full json.Marshal→json.Unmarshal round-trip, which serialized the
-// entire flow (potentially 10k+ blocks) twice on the AI hot path. Read-only
-// fields (Variables, Tokens, metadata) are shallow-copied since the scrubber
-// never mutates them. The error return is retained for API compatibility.
+// It clones only what scrubBlock mutates (Properties maps and Children trees)
+// — the json round-trip serialized the entire flow twice on the AI hot path.
 func ScrubDocument(doc *models.FlowDocument) (*models.FlowDocument, error) {
 	if doc == nil {
 		return nil, nil
@@ -130,9 +112,8 @@ func ScrubDocument(doc *models.FlowDocument) (*models.FlowDocument, error) {
 		}
 	}
 
-	// The transient lookup maps copied above still reference the original blocks;
-	// drop and rebuild them against the cloned tree (mirrors the prior behaviour
-	// where the maps were absent after unmarshal and rebuilt here).
+	// The transient lookup maps copied above still reference the original
+	// blocks; rebuild them against the cloned tree.
 	copyDoc.BlocksByID = nil
 	copyDoc.BlockSubflow = nil
 	copyDoc.SubflowsByID = nil
@@ -141,8 +122,7 @@ func ScrubDocument(doc *models.FlowDocument) (*models.FlowDocument, error) {
 	return &copyDoc, nil
 }
 
-// cloneBlocks deep-copies a block tree, duplicating each block's Properties map
-// and Children slice recursively so masking never mutates the caller's document.
+// cloneBlocks deep-copies a block tree (Properties maps, Children) so masking never mutates the caller's document.
 func cloneBlocks(src []models.Block) []models.Block {
 	if src == nil {
 		return nil
@@ -163,8 +143,7 @@ func cloneBlocks(src []models.Block) []models.Block {
 }
 
 func scrubBlock(b *models.Block) {
-	// 1. AST-Aware masking based on specific action and properties
-	// b.RawType is the actual PAD action name like "WebAutomation.PopulateTextField"
+	// 1. AST-aware masking on specific action properties (RawType is the PAD action name).
 	if fieldsToMask, ok := sensitiveActions[b.RawType]; ok {
 		for _, field := range fieldsToMask {
 			if val, exists := b.Properties[field]; exists {
@@ -175,9 +154,7 @@ func scrubBlock(b *models.Block) {
 		}
 	}
 
-	// 2. Field-name masking: any property whose KEY names a credential is masked
-	//    outright, regardless of action. Catches secrets in the long tail of
-	//    actions not enumerated in sensitiveActions.
+	// 2. Field-name masking: any property whose KEY names a credential (the long tail sensitiveActions misses).
 	for k := range b.Properties {
 		if b.Properties[k] == "[REDACTED]" {
 			continue
@@ -187,11 +164,8 @@ func scrubBlock(b *models.Block) {
 		}
 	}
 
-	// 2b. SET <name> TO <literal> injects _var/_value/_output (parser.go):
-	// the literal is masked when the target variable names a credential —
-	// the key-based pass can't see it because the keys are the synthetic
-	// _var/_value names, so `SET Password TO $'''secret'''` used to survive
-	// the document scrub with the secret intact.
+	// 2b. SET <name> TO <literal> injects synthetic _var/_value keys the key
+	//     pass cannot see: mask the literal when the target names a credential.
 	if name, ok := b.Properties["_var"]; ok && isSensitiveFieldName(name) {
 		if v := b.Properties["_value"]; len(v) > 0 {
 			b.Properties["_value"] = "[REDACTED]"
@@ -199,8 +173,7 @@ func scrubBlock(b *models.Block) {
 	}
 
 	// 3. Generic regex masking on all properties, plus a high-entropy fallback
-	//    for opaque tokens/keys that don't match a known pattern (restores the
-	//    entropy-based catch-all that the prior context.go masking provided).
+	//    for opaque tokens matching no known pattern.
 	for k, v := range b.Properties {
 		if b.Properties[k] == "[REDACTED]" {
 			continue
@@ -212,38 +185,33 @@ func scrubBlock(b *models.Block) {
 		b.Properties[k] = scrubbed
 	}
 
-	// Recurse
 	for i := range b.Children {
 		scrubBlock(&b.Children[i])
 	}
 }
 
 // looksLikeHighEntropySecret reports whether a standalone value resembles an
-// opaque secret (API key, token, hash) rather than human-readable text. It
-// targets long, whitespace-free, high-entropy strings so prose and short values
-// are left intact for the AI to analyse.
+// opaque secret (API key, token, hash) rather than human-readable text, which
+// stays intact for the AI to analyse.
 func looksLikeHighEntropySecret(v string) bool {
 	if len(v) < 20 || strings.ContainsAny(v, " \t\n\r") {
 		return false
 	}
-	// URLs/URIs are long, space-free, and often high-entropy but are not secrets
-	// (e.g. a WebAutomation "Url" property); keep them for the AI to analyse.
-	// Any embedded credential in the URL is still caught by the regex pass.
+	// URLs are long, space-free, often high-entropy but not secrets (e.g. a
+	// WebAutomation "Url" property); embedded credentials are still caught by
+	// the regex pass.
 	if strings.Contains(v, "://") {
 		return false
 	}
-	// Filesystem paths are likewise long, space-free, and regularly clear the
-	// entropy bar (Windows/POSIX paths entropy ~4.2+). Masking them degrades the
-	// AI's analysis of file/folder actions; a credential embedded in such a
-	// value is still caught by the regex pass above.
+	// Paths likewise regularly clear the entropy bar (~4.2+); masking them
+	// degrades file/folder analysis, and embedded credentials are still
+	// caught by the regex pass.
 	if looksLikePath(v) {
 		return false
 	}
-	// Length-tiered thresholds (S3): a longer opaque string is almost certainly
-	// not prose, so it is treated as a secret at a lower entropy bar — a 64-char
-	// hex token entropies ~3.7, below the 4.0 the short tier requires but clearly
-	// not human-readable. Shorter values keep the stricter bar to avoid masking
-	// identifiers. See scrubber_test.go for the measured boundary cases.
+	// Length-tiered thresholds: longer opaque strings are almost certainly
+	// not prose and get a lower bar (64-char hex ~3.7); shorter values keep
+	// the stricter bar (boundary cases in scrubber_test.go).
 	threshold := 4.0
 	if len(v) > 50 {
 		threshold = 3.5
@@ -251,16 +219,15 @@ func looksLikeHighEntropySecret(v string) bool {
 	return shannonEntropy(v) > threshold
 }
 
-// looksLikePath reports whether v resembles a filesystem path rather than an
-// opaque token: a POSIX root (/), a home shortcut (~/), or a Windows drive root
-// (e.g. C:\). Mid-string separators alone don't qualify, since standard base64
-// tokens legitimately contain '/'.
+// looksLikePath reports whether v resembles a filesystem path: POSIX root (/),
+// home shortcut (~/), or Windows drive root — mid-string separators alone
+// don't qualify, since base64 tokens contain '/'.
 func looksLikePath(v string) bool {
 	if strings.HasPrefix(v, `/`) || strings.HasPrefix(v, `~/`) {
 		return true
 	}
-	// Windows drive root: "<letter>:\" or "<letter>:/". v[1] is a continuation
-	// byte for a non-ASCII lead byte, which never equals ':' — safe for UTF-8.
+	// Windows drive root: "<letter>:\" or "<letter>:/". v[1] of a non-ASCII
+	// lead byte is a continuation byte, never ':' — UTF-8 safe.
 	if len(v) >= 3 && v[1] == ':' && (v[2] == '\\' || v[2] == '/') {
 		return true
 	}
@@ -285,14 +252,11 @@ func shannonEntropy(s string) float64 {
 }
 
 // mayContainSecret is the prefilter for ScrubText: every secretRegexes match
-// contains one of anchorLiterals (stored lower-case; the same list the
-// stream scrubber keeps in sync with anchorRegex) case-insensitively, so
-// text with none cannot match — one folding pass plus substring scans
-// replaces nine regex scans over the whole text (measured ~35× faster on
-// clean prose). U+017F (ſ) and U+212A (Kelvin sign) fold to 's'/'k' under
-// the regexes' (?i) but not under a plain lower-casing, so they are folded
-// explicitly; the prefilter therefore stays a strict superset of the
-// regexes' lead-ins and detection is unchanged.
+// contains an anchorLiteral case-insensitively, so text with none cannot
+// match — one folding pass plus substring scans replaces nine regex scans
+// (~35× faster on clean prose). U+017F (ſ) and U+212A fold to 's'/'k' under
+// the regexes' (?i) but not plain lower-casing, so folded explicitly; the
+// prefilter stays a strict superset of the regexes' lead-ins.
 func mayContainSecret(text string) bool {
 	lower := strings.Map(func(r rune) rune {
 		switch r {
@@ -318,8 +282,7 @@ func ScrubText(text string) string {
 	}
 	result := text
 	for _, pat := range secretRegexes {
-		// MatchString first: it is cheaper than the replace machinery and the
-		// overwhelmingly common case (chat output, prose context) has no match.
+		// MatchString first: cheaper than the replace machinery, and the common case (prose) has no match.
 		if !pat.MatchString(result) {
 			continue
 		}
@@ -330,11 +293,7 @@ func ScrubText(text string) string {
 	return result
 }
 
-// HasCompleteSecret reports whether b already contains a finished secret
-// match. The stream scrubber uses it to distinguish "still waiting to find out
-// whether this is a secret" from "this IS a secret and we are only deciding
-// how much trailing text the redaction covers" — the second case can be
-// released early without weakening detection.
+// HasCompleteSecret reports whether b already contains a finished secret match — lets the stream scrubber decide redaction coverage early without weakening detection.
 func HasCompleteSecret(b []byte) bool {
 	for _, pat := range secretRegexes {
 		if pat.Match(b) {
@@ -345,11 +304,10 @@ func HasCompleteSecret(b []byte) bool {
 }
 
 func maskMatch(pat *regexp.Regexp, match string) string {
-	// If the regex has a submatch (capture group), we only mask the capture group.
-	// Otherwise, we mask the whole string.
+	// With a capture group, mask only the group; otherwise the whole string.
 	submatches := pat.FindStringSubmatchIndex(match)
 	if len(submatches) > 2 { // Has a capture group
-		// submatches[2] and [3] are the start/end of the first capture group
+		// submatches[2]/[3] are the first capture group's start/end.
 		start := submatches[2]
 		end := submatches[3]
 		return match[:start] + "[REDACTED]" + match[end:]

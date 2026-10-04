@@ -15,12 +15,10 @@ import (
 // Settings tables (app_settings, user_settings, org_settings) carry no RLS
 // policies — scoping is by primary key, and the handler supplies the caller's
 // own id. They still go through b.query(ctx) rather than b.db so that a write
-// joins the request's RLS transaction when one is open.
-//
-// Using b.db bypassed that transaction: the write committed on a separate
-// pooled connection, so a request that wrote settings and then failed (>=400 or
-// a panic) had its transaction rolled back by rlsMiddleware while the settings
-// change survived. Nothing about visibility changes here; only atomicity.
+// joins the request's RLS transaction when one is open: a write on b.db
+// committed on a separate pooled connection and survived the rollback
+// rlsMiddleware applied to a request that failed afterwards. Nothing about
+// visibility changes here; only atomicity.
 
 // SaveSettings upserts the single-row app settings record.
 func (b *PostgresStorageBackend) SaveSettings(ctx context.Context, settings *interfaces.AppSettings) error {

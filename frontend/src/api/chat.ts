@@ -4,7 +4,7 @@ import type {ChatRequest, ChatMessage, ContextPreview} from '@/types'
 
 // ConversationLoad is a /api/chat/get response: the validated message list
 // plus, while the server tracks an in-flight (or still-resumable) stream for
-// this conversation, the id a reloaded client can re-attach to (F-21). The
+// this conversation, the id a reloaded client can re-attach to. The
 // backend historically answers a bare array — that shape carries no id.
 export interface ConversationLoad {
   messages: ChatMessage[]
@@ -36,7 +36,7 @@ export interface BeginStreamResult {
   // Machine-readable class of `error` (AI_BUDGET_EXCEEDED, …), when known.
   errorCode?: string
   // True when the failure came from the organisation's shared credential
-  // (F-42) — the error bubble then also offers the Organizations section.
+  // — the error bubble then also offers the Organizations section.
   errorShared?: boolean
   tokensIn?: number
   tokensOut?: number
@@ -76,7 +76,7 @@ export const chatApi = {
     tokensIn: number
     tokensOut: number
     // Same as BeginStreamResult: the served model and billed rates of a
-    // finished turn (or, with error, a BILLED failed one — F-15), when known.
+    // finished turn (or, with error, a BILLED failed one), when known.
     servedModel?: string
     inputCostPerM?: number
     outputCostPerM?: number

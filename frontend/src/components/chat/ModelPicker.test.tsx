@@ -175,7 +175,7 @@ describe('ModelPicker trigger', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  // C9: the logout reset takes the request counter back to 0.
+  // The logout reset takes the request counter back to 0.
   it('opens only on a request, never on the counter going back (the logout reset)', () => {
     useChatStore.setState({modelPickerRequest: 3})
     renderPicker()
@@ -185,7 +185,7 @@ describe('ModelPicker trigger', () => {
     expect(dialog()).toBeInTheDocument()
   })
 
-  // C8: the chat moves focus to the trigger after a notice is dismissed.
+  // The chat moves focus to the trigger after a notice is dismissed.
   it('hands its trigger to a ref the chat passes', () => {
     const triggerRef: {current: HTMLButtonElement | null} = {current: null}
     renderPicker({triggerRef})
@@ -443,7 +443,7 @@ describe('ModelPicker empty states and prompts', () => {
     expect(openSettings).toHaveBeenCalledWith('accounts', 'provider-azure-foundry')
   })
 
-  // C3: with nothing to pick there is no search box or list to take focus;
+  // With nothing to pick there is no search box or list to take focus;
   // it stayed outside, so Escape reached the chat's own (stop the reply,
   // leave focus mode) and focus leaving never closed the popup.
   it('with nothing to pick, focus still lands in the popup; Escape closes it and never reaches the chat', async () => {

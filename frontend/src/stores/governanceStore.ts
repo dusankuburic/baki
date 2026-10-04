@@ -34,18 +34,40 @@ interface GovernanceState {
 }
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let onVisible: (() => void) | null = null
 
+function pageHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden'
+}
+
+// The poll is a safety net under the SSE push (governance:alert → refreshUnread),
+// so a background tab gets nothing from it: the tick is skipped while the page
+// is hidden, and one refresh runs when the tab becomes visible again to
+// catch up on anything the skipped ticks would have shown.
 function startPolling(get: () => GovernanceState) {
   if (pollTimer != null) return
   // Immediately fetch once, then on the interval.
   void get().refreshUnread()
-  pollTimer = setInterval(() => void get().refreshUnread(), UNREAD_POLL_MS)
+  pollTimer = setInterval(() => {
+    if (pageHidden()) return
+    void get().refreshUnread()
+  }, UNREAD_POLL_MS)
+  if (typeof document !== 'undefined') {
+    onVisible = () => {
+      if (!pageHidden()) void get().refreshUnread()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+  }
 }
 
 function stopPolling() {
   if (pollTimer != null) {
     clearInterval(pollTimer)
     pollTimer = null
+  }
+  if (onVisible != null) {
+    document.removeEventListener('visibilitychange', onVisible)
+    onVisible = null
   }
 }
 

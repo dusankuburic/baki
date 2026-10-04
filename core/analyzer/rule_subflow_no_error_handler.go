@@ -6,10 +6,10 @@ import (
 	"pad-core/models"
 )
 
-// SubflowNoErrorHandlerRule flags non-trivial subflows that have no error-handler
-// block anywhere in their block tree. A subflow is considered non-trivial when it
-// contains more than 3 blocks that are not comments, variable declarations, or
-// structural terminators.
+// SubflowNoErrorHandlerRule flags non-trivial subflows that have no
+// error-handler block anywhere in their block tree; non-trivial means more
+// than 3 blocks that are not comments, variable declarations, or structural
+// terminators.
 type SubflowNoErrorHandlerRule struct{}
 
 func (r *SubflowNoErrorHandlerRule) ID() string   { return "subflow-no-error-handler" }
@@ -98,6 +98,4 @@ func sfHasErrorHandler(blocks []models.Block) bool {
 	return false
 }
 
-// init self-registers this rule with the analyzer's rule catalog
-// (see registry.go) — no separate registration step required.
 func init() { registerRule(&SubflowNoErrorHandlerRule{}) }

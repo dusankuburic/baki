@@ -33,10 +33,8 @@ func ruleBody(id, match, severity string) map[string]any {
 	}
 }
 
-// TestOrgRules_AdminCRUD drives the per-org custom-rule lifecycle and the
-// member/admin split. Reads are member-level (a developer needs to see what
-// their org enforces); writes are admin-only, because analysis configuration
-// decides what a team is told about its own flows.
+// TestOrgRules_AdminCRUD drives the per-org rule lifecycle: reads are member-level, writes admin-only
+// (rule configuration decides what a team is told about its own flows).
 func TestOrgRules_AdminCRUD(t *testing.T) {
 	env := newChannelEnv(t)
 	rt, admin, orgID := env.rt, env.admin, env.orgID
@@ -153,15 +151,10 @@ func TestDeploymentRuleConfig_RequiresSystemAdmin(t *testing.T) {
 	}
 }
 
-// TestOrgSettings_InvalidatesRuleProfile covers a gap found by running the
-// feature rather than by reading it: an admin could save an org rule override,
-// re-analyze immediately, and see NO change, because the resolver kept serving
-// its cached profile until the 30s TTL elapsed. The rules endpoints invalidated;
-// the org-SETTINGS endpoint (which is where rule enable/severity actually live)
-// did not.
-//
-// The symptom is indistinguishable from "the feature does not work", so the
-// invalidation is worth pinning rather than trusting.
+// Regression (R4): org-settings rule overrides used not to invalidate the
+// resolver's cached profile (the rules endpoints did; settings didn't), so a
+// save changed nothing until the TTL elapsed — the symptom looks like "the
+// feature does not work", so pin it.
 func TestOrgSettings_InvalidatesRuleProfile(t *testing.T) {
 	env := newChannelEnv(t)
 	rt, admin, orgID := env.rt, env.admin, env.orgID

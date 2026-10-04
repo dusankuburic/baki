@@ -61,7 +61,6 @@ describe('resetAllStores', () => {
     })
     useAnalysisStore.setState({
       reports: new Map([['flow-1', {flowId: 'flow-1', findings: []} as never]]),
-      findingsByBlock: new Map([['flow-1', new Map()]]),
       suppressedFindings: [{key: 'r1:b1', ruleId: 'r1', reason: 'x', suppressedAt: '2024'}],
       suppressedKeys: new Set(['r1:b1']),
       protectedFlowId: 'flow-1',
@@ -86,7 +85,6 @@ describe('resetAllStores', () => {
     expect(usePresenceStore.getState().status).toBe('disconnected')
 
     expect(useAnalysisStore.getState().reports.size).toBe(0)
-    expect(useAnalysisStore.getState().findingsByBlock.size).toBe(0)
     expect(useAnalysisStore.getState().suppressedFindings).toHaveLength(0)
     expect(useAnalysisStore.getState().suppressedKeys.size).toBe(0)
     expect(useAnalysisStore.getState().protectedFlowId).toBeNull()

@@ -225,7 +225,7 @@ func TestKnowledgeCounts_WithoutPgvector(t *testing.T) {
 		if !pgvector && indexed != 0 {
 			t.Errorf("without pgvector nothing is vector-indexed, got %d", indexed)
 		}
-		docs, err := b.ListKnowledgeDocuments(ctx, "nopgv-org", 0)
+		docs, err := b.ListKnowledgeDocuments(ctx, "nopgv-org", 0, 0)
 		if err != nil || len(docs) != 1 || docs[0].ChunkCount != 2 {
 			t.Fatalf("pgvector=%v: ListKnowledgeDocuments = %+v, %v; want one doc with 2 chunks", pgvector, docs, err)
 		}

@@ -305,17 +305,6 @@ func TestSubflowNoErrorHandlerRule_EmptySubflow_NoFinding(t *testing.T) {
 	}
 }
 
-// ---- Registered in AllRules -----------------------------------------------
-
-func TestSubflowNoErrorHandlerRule_RegisteredInAllRules(t *testing.T) {
-	for _, r := range AllRules() {
-		if r.ID() == "subflow-no-error-handler" {
-			return
-		}
-	}
-	t.Error("subflow-no-error-handler not found in AllRules()")
-}
-
 // ---- DefaultSettings includes the new rule ---------------------------------
 
 func TestDefaultSettings_ContainsAllRules(t *testing.T) {

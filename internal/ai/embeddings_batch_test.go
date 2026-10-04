@@ -13,10 +13,9 @@ import (
 	"time"
 )
 
-// embedBatchServer answers /embeddings with one vector per input, echoing each
-// input's numeric label as its single dimension so order survives; a request
-// carrying more than maxInputs inputs is refused with a realistic Azure-style
-// batch-limit 400. It returns the sizes of every request observed, in order.
+// embedBatchServer answers /embeddings with one vector per input, echoing each input's numeric label as its
+// single dimension so order survives; a request over maxInputs is refused with a realistic batch-limit 400.
+// Returns the sizes of every request observed, in order.
 func embedBatchServer(t *testing.T, maxInputs int) (*httptest.Server, func() []int) {
 	t.Helper()
 	var mu sync.Mutex
@@ -68,10 +67,8 @@ func numberedInputs(n int) []string {
 	return texts
 }
 
-// A resource capping /embeddings at 16 inputs (Azure's classic route) must
-// not fail indexing: the 40-input batch is split until every request fits,
-// with the full batch attempted FIRST (no pre-splitting) and the results
-// returned in the original order.
+// A resource capping /embeddings at 16 inputs must not fail indexing: the 40-input batch splits until every
+// request fits, the full batch attempted FIRST, results in original order.
 func TestEmbed_SplitsBatchOnInputCapAndPreservesOrder(t *testing.T) {
 	srv, sizes := embedBatchServer(t, 16)
 	p := embedProviderFor(srv)
@@ -89,17 +86,15 @@ func TestEmbed_SplitsBatchOnInputCapAndPreservesOrder(t *testing.T) {
 			t.Fatalf("vector %d = %v, want [%d] (order not preserved across the splits)", i, v, i)
 		}
 	}
-	// Depth-first halving of 40 under a 16 cap: 40 is refused, its left half
-	// 20 is refused, then that half's 10|10 succeed before the right 20 and
-	// its 10|10 follow.
+	// Depth-first halving of 40 under a 16 cap: 40 refused, its left half 20 refused, then that half's
+	// 10|10 succeed before the right 20 and its 10|10 follow.
 	want := []int{40, 20, 10, 10, 20, 10, 10}
 	if got := sizes(); !equalInts(got, want) {
 		t.Errorf("request sizes = %v, want %v (full batch first, then halves)", got, want)
 	}
 }
 
-// A provider that accepts the full batch sees exactly ONE request — the split
-// path only exists behind a batch-limit 400.
+// A provider that accepts the full batch sees exactly ONE request — no pre-splitting.
 func TestEmbed_AcceptingServerSingleRequest(t *testing.T) {
 	srv, sizes := embedBatchServer(t, 1024)
 	p := embedProviderFor(srv)
@@ -113,9 +108,8 @@ func TestEmbed_AcceptingServerSingleRequest(t *testing.T) {
 	}
 }
 
-// A server rejecting EVERY batch size (even a single input) with a batch
-// message must not loop: the split bottoms out at one input and the error
-// surfaces after a bounded number of requests.
+// A server rejecting EVERY batch size (even a single input) must not loop: the split bottoms out at one input
+// and the error surfaces after a bounded number of requests.
 func TestEmbed_SplitBoundedAtSingleInput(t *testing.T) {
 	srv, sizes := embedBatchServer(t, 0)
 	p := embedProviderFor(srv)
@@ -142,12 +136,8 @@ func equalInts(a, b []int) bool {
 	return true
 }
 
-// TestEmbedBatchLimitRejection_CountOnly: the split trigger matches batch
-// COUNT rejections in their observed wordings, and no longer matches
-// per-input SIZE rejections — a single oversized input cannot be shrunk by
-// any split, so those used to run a doomed cascade before surfacing the same
-// error. Checked through embedBatchLimitRejected (the real call path), so the
-// token guard is exercised alongside the pattern itself.
+// TestEmbedBatchLimitRejection_CountOnly: the split trigger matches batch COUNT rejections only — a single
+// oversized input cannot be shrunk by any split, so per-input SIZE rejections used to run a doomed cascade.
 func TestEmbedBatchLimitRejection_CountOnly(t *testing.T) {
 	for _, msg := range []string{
 		"Too many input items in a single request. The maximum number of input items allowed is 16.",
@@ -176,11 +166,9 @@ func TestEmbedBatchLimitRejection_CountOnly(t *testing.T) {
 	}
 }
 
-// TestEmbed_Leaf429HealsInCascadeWithoutOuterReRun: a transient 429 on one
-// leaf used to fail the whole cascade AND make the outer RetryingProvider
-// re-run it up to 3 more times. The leaf now gets one local retry, and the
-// final error is terminal (not retryable), so the total request count is the
-// cascade alone and the error surfaces exactly once.
+// TestEmbed_Leaf429HealsInCascadeWithoutOuterReRun: a transient leaf 429 used to fail the cascade AND make
+// the outer RetryingProvider re-run it; the leaf now gets one local retry and a terminal error, so the
+// request count is the cascade alone.
 func TestEmbed_Leaf429HealsInCascadeWithoutOuterReRun(t *testing.T) {
 	var mu sync.Mutex
 	var sizes []int
@@ -230,18 +218,16 @@ func TestEmbed_Leaf429HealsInCascadeWithoutOuterReRun(t *testing.T) {
 	if !strings.Contains(err.Error(), "rate limited") {
 		t.Errorf("the server's rejection must surface in the error, got: %v", err)
 	}
-	// Cascade: 4 rejected, its left 2 rejected then 1|1 ok, its right 2
-	// rejected, leaf [2] ok, leaf [3] throttled twice (local retry) — and the
-	// outer wrapper adds nothing.
+	// Cascade: 4 rejected, its left 2 rejected then 1|1 ok, its right 2 rejected, leaf [2] ok, leaf [3]
+	// throttled twice (local retry) — the outer wrapper adds nothing.
 	want := []int{4, 2, 1, 1, 2, 1, 1, 1}
 	if got := sizes; !equalInts(got, want) {
 		t.Errorf("request sizes = %v, want %v (no outer re-run of the cascade)", got, want)
 	}
 }
 
-// TestEmbed_Leaf429RecoversLocally: when the leaf's second attempt succeeds,
-// the local retry heals the cascade and the batch completes — the transient
-// error never leaves embed().
+// TestEmbed_Leaf429RecoversLocally: when the leaf's second attempt succeeds, the local retry heals the
+// cascade — the transient error never leaves embed().
 func TestEmbed_Leaf429RecoversLocally(t *testing.T) {
 	var mu sync.Mutex
 	var sizes []int
@@ -295,12 +281,9 @@ func TestEmbed_Leaf429RecoversLocally(t *testing.T) {
 	}
 }
 
-// TestEmbed_Leaf429WithHugeRetryAfterFailsFast: backoff() raises the wait to
-// the server's raw Retry-After when it exceeds the computed delay, so a leaf
-// 429 carrying "Retry-After: 120" used to sleep two minutes per leaf,
-// sequentially, stalling the whole index. The leaf retry must refuse hints
-// beyond embedLocalRetryMax: the doomed leaf gets NO second request and its
-// terminal error surfaces immediately.
+// TestEmbed_Leaf429WithHugeRetryAfterFailsFast: a leaf 429 with "Retry-After: 120" used to sleep two minutes
+// per leaf, sequentially. The leaf retry refuses hints beyond embedLocalRetryMax: no second request, the
+// terminal error surfaces at once.
 func TestEmbed_Leaf429WithHugeRetryAfterFailsFast(t *testing.T) {
 	var mu sync.Mutex
 	var sizes []int
@@ -373,9 +356,8 @@ func TestEmbed_Leaf429WithHugeRetryAfterFailsFast(t *testing.T) {
 	}
 }
 
-// TestEmbed_Leaf429WithShortRetryAfterStillRetries: a SHORT server hint stays
-// on the local-retry path — the leaf waits it out and the second attempt
-// completes the cascade (no-hint coverage: the heals/recovers tests above).
+// TestEmbed_Leaf429WithShortRetryAfterStillRetries: a SHORT server hint stays on the local-retry path — the
+// leaf waits it out and the second attempt completes the cascade.
 func TestEmbed_Leaf429WithShortRetryAfterStillRetries(t *testing.T) {
 	var mu sync.Mutex
 	var sizes []int
@@ -432,11 +414,9 @@ func TestEmbed_Leaf429WithShortRetryAfterStillRetries(t *testing.T) {
 	}
 }
 
-// TestEmbed_TokenSizeRejectionDoesNotCascade: a per-input SIZE rejection
-// (token wording) must surface after ONE request — the split trigger in
-// embedBatch is guarded, so the count pattern matching a substring of the
-// message ("too many input" inside "too many input tokens exceeded") must not
-// run the doomed 2n-1-request cascade.
+// TestEmbed_TokenSizeRejectionDoesNotCascade: a per-input SIZE rejection (token wording) must surface after
+// ONE request — the count pattern matching a substring of it ("too many input" inside "too many input tokens
+// exceeded") must not run the doomed 2n-1-request cascade.
 func TestEmbed_TokenSizeRejectionDoesNotCascade(t *testing.T) {
 	var mu sync.Mutex
 	requests := 0
@@ -466,10 +446,8 @@ func TestEmbed_TokenSizeRejectionDoesNotCascade(t *testing.T) {
 	}
 }
 
-// TestEmbed_SplitBudgetFailsWithServerError: a server that rejects every
-// batch size cannot make the cascade exceed its request budget; when a split
-// would outrun it, the server's own rejection surfaces instead of more
-// requests.
+// TestEmbed_SplitBudgetFailsWithServerError: a server rejecting every batch size cannot make the cascade
+// exceed its request budget; the server's own rejection surfaces instead of more requests.
 func TestEmbed_SplitBudgetFailsWithServerError(t *testing.T) {
 	srv, sizes := embedBatchServer(t, 0)
 	p := embedProviderFor(srv)

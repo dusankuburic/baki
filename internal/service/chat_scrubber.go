@@ -8,23 +8,21 @@ import (
 	"pad-core/ai/scrubber"
 )
 
-// chunkBatchInterval caps how long the chunk coalescer holds small deltas
-// before flushing them as one merged "chunk" event. Each SSE event carries
-// ~115 bytes of framing, so token-at-a-time providers spend most of the wire
-// budget on framing; batching for one frame (~16ms) cuts that by an order of
-// magnitude on fast streams. The first chunk of a stream and every terminal /
-// non-chunk event (done/error/tool) bypass the batch, so first-token latency
-// and completion ordering are unaffected.
+// chunkBatchInterval caps how long the chunk coalescer holds small deltas before
+// flushing one merged "chunk" event: each SSE event carries ~115 bytes of framing, so
+// token-at-a-time providers spend most of the wire budget on framing; ~16ms batching
+// cuts that by an order of magnitude on fast streams. The stream's first chunk and
+// every terminal / non-chunk event (done/error/tool) bypass the batch, so first-token
+// latency and completion ordering are unaffected.
 const chunkBatchInterval = 16 * time.Millisecond
 
-// scrubbedEmitter forwards model output to the client with secrets masked.
-// Each text delta passes through a StreamScrubber — so a secret split across
-// chunk boundaries is still caught — before being appended to the resume
-// buffer and emitted as a chunk event. flush must be called at stream end
-// (done or error) so text still held by the scrubber is delivered. The model's
-// raw output never reaches the client or the resume buffer unscrubbed. (The
-// emitted-chunk count for the done event's dropped-chunk detection lives on
-// chunkCoalescer, which is the one that actually emits over SSE.)
+// scrubbedEmitter forwards model output to the client with secrets masked: each text
+// delta passes a StreamScrubber (a secret split across chunk boundaries is still
+// caught) before joining the resume buffer and the chunk event. flush must run at
+// stream end (done or error) so text the scrubber still holds is delivered; the
+// model's raw output never reaches the client or the resume buffer unscrubbed. (The
+// emitted-chunk count for done's dropped-chunk detection lives on chunkCoalescer,
+// which is the one that actually emits over SSE.)
 type scrubbedEmitter struct {
 	ctl   *streamCtl
 	emit  func(string, map[string]interface{})
@@ -48,40 +46,29 @@ func (e *scrubbedEmitter) push(t string) {
 	e.emit("chunk", map[string]interface{}{"content": t})
 }
 
-// chunkCoalescer batches consecutive "chunk" events to cut SSE framing
-// overhead on fast token streams. Each SSE event carries ~115 bytes of framing
-// regardless of payload size; a token-at-a-time provider emitting 5-char deltas
-// spends ~95% of the wire budget on framing. The coalescer merges deltas for up
-// to chunkBatchInterval before forwarding a single merged "chunk" event.
-//
-// Ordering guarantees:
-//   - The FIRST chunk of a stream is emitted immediately so the user sees the
-//     first token without a frame of added latency.
-//   - Non-chunk events (done/error/tool) flush the pending batch FIRST, then
-//     pass through, so chunks always precede the terminal event in order.
-//   - flush is goroutine-safe: the batch timer fires from time.AfterFunc's
-//     goroutine while the worker thread drives flush via non-chunk events.
-//   - Every emit is serialized through emitMu, so a chunk flushed by the timer
-//     goroutine cannot be overtaken by a terminal (done/error) event emitted by
-//     the worker. Without this, flush() releases the batch mutex before emitting
-//     (see below), so a concurrent timer flush could deliver its chunk AFTER the
-//     worker's done/error — reordering the terminal event before the last chunk.
-//
-// The emitted-chunk count (count) replaces scrubbedEmitter.chunks in the done
-// event's dropped-chunk field so the client's received-vs-expected check stays
-// meaningful (it now counts EMITTED events, which is what the client observes).
+// chunkCoalescer batches consecutive "chunk" events to cut SSE framing overhead on
+// fast token streams (each event carries ~115 bytes regardless of payload). Ordering
+// guarantees: the stream's FIRST chunk is emitted immediately (first-token latency);
+// non-chunk events (done/error/tool) flush the pending batch first, so chunks always
+// precede the terminal event in order; flush is goroutine-safe (the batch timer fires
+// from time.AfterFunc's goroutine while the worker drives flush); and every emit
+// serializes through emitMu, so a timer flush cannot deliver its chunk AFTER the
+// worker's done/error — flushLocked releases the batch mutex before emitting, so
+// emitMu, not mu, is the ordering gate. The emitted-chunk count (count) replaces
+// scrubbedEmitter.chunks in done's dropped-chunk field: the client's
+// received-vs-expected check counts EMITTED events, which is what the client observes.
 type chunkCoalescer struct {
 	emit func(string, map[string]interface{}) // raw notifier emit (NOT the wrapped one)
-	// mu guards the batch state (buf, timer, first, count). It is deliberately
-	// NOT held across emit — c.emit reaches EventManager.deliver (clientsMu +
-	// per-client iteration), and coupling the batch critical section to every
-	// client would let a slow delivery stall buffering.
+	// mu guards the batch state (buf, timer, first, count) but is deliberately NOT held
+	// across emit — c.emit reaches EventManager.deliver (clientsMu + per-client
+	// iteration), and coupling the batch critical section to every client would let a
+	// slow delivery stall buffering.
 	mu sync.Mutex
-	// emitMu serializes the actual emits so their ORDER is preserved across the
-	// worker and the timer goroutines. It is a lightweight ordering gate (only
-	// the coalescer's own emit paths contend on it), so the worker can keep
-	// buffering deltas via add() while an emit is in flight. Lock order is always
-	// emitMu → mu (flushLocked); no path takes mu then blocks on emitMu.
+	// emitMu serializes the actual emits so their ORDER is preserved across the worker
+	// and timer goroutines; a lightweight gate (only the coalescer's emit paths contend
+	// on it), so the worker keeps buffering deltas via add() while an emit is in
+	// flight. Lock order is always emitMu → mu (flushLocked); no path takes mu then
+	// blocks on emitMu.
 	emitMu sync.Mutex
 	buf    strings.Builder
 	timer  *time.Timer
@@ -93,15 +80,15 @@ func newChunkCoalescer(emit func(string, map[string]interface{})) *chunkCoalesce
 	return &chunkCoalescer{emit: emit, first: true}
 }
 
-// wrap returns an emit-shaped function that routes "chunk" through the batch
-// and flushes before any other event type. Bind this as the worker's emit so
-// every event (scrubbedEmitter + direct done/error/tool) routes through here.
+// wrap returns an emit-shaped function that routes "chunk" through the batch and
+// flushes before any other event type. Bind this as the worker's emit so every event
+// (scrubbedEmitter + direct done/error/tool) routes through here.
 func (c *chunkCoalescer) wrap() func(string, map[string]interface{}) {
 	return func(eventType string, data map[string]interface{}) {
 		if eventType != "chunk" {
-			// Flush pending chunks and emit the terminal/non-chunk event as one
-			// atomic unit under emitMu, so a concurrent timer flush cannot slip a
-			// chunk out AFTER this done/error/tool event.
+			// Flush pending chunks and emit the terminal event as one atomic unit under
+			// emitMu: a concurrent timer flush cannot slip a chunk out AFTER this
+			// done/error/tool event.
 			c.emitMu.Lock()
 			c.flushLocked()
 			c.emit(eventType, data)
@@ -125,10 +112,10 @@ func (c *chunkCoalescer) add(content string) {
 		c.count++
 		c.mu.Unlock()
 		// Emit under emitMu (the emit-ordering gate) but NOT mu: c.emit reaches
-		// EventManager.deliver which takes clientsMu and iterates every connected
-		// SSE client. Holding the batch mutex across it would couple the batch
-		// critical section to every client (a latency hazard). content is a Go
-		// string (immutable), so it's safe to use after unlocking mu.
+		// EventManager.deliver (clientsMu + every connected client), and holding the
+		// batch mutex across it would couple the batch critical section to every
+		// client (a latency hazard). content is a Go string (immutable), safe after
+		// unlocking mu.
 		c.emitMu.Lock()
 		c.emit("chunk", map[string]interface{}{"content": content})
 		c.emitMu.Unlock()
@@ -149,10 +136,9 @@ func (c *chunkCoalescer) flush() {
 	c.flushLocked()
 }
 
-// flushLocked emits any pending batch as a single chunk. The caller MUST hold
-// emitMu (so the emit is ordered against every other emit); flushLocked manages
-// the batch mutex (mu) itself and releases it before emitting. A no-op when
-// nothing is pending.
+// flushLocked emits any pending batch as a single chunk; the caller MUST hold emitMu
+// (so the emit is ordered against every other emit). flushLocked manages the batch
+// mutex (mu) itself and releases it before emitting. A no-op when nothing is pending.
 func (c *chunkCoalescer) flushLocked() {
 	c.mu.Lock()
 	if c.timer != nil {

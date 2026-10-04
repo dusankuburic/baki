@@ -68,8 +68,8 @@ func failOnOpenAIRoute(t *testing.T, r *http.Request) bool {
 	return false
 }
 
-// TestAzureClaude_TopLevelCacheControlAndThinking (audit #9 F-02/F-17): a
-// claude:<name> deployment's Messages request carries the top-level
+// TestAzureClaude_TopLevelCacheControlAndThinking: a claude:<name>
+// deployment's Messages request carries the top-level
 // automatic-caching marker (the growing history and tool_results behind the
 // cached system block become cache reads on later tool-loop iterations) and
 // asks for adaptive thinking even with tools attached.
@@ -103,13 +103,11 @@ func TestAzureClaude_TopLevelCacheControlAndThinking(t *testing.T) {
 	}
 }
 
-// TestAzureClaude_MythosRequiresEntra (audit #9 F-26): a Mythos deployment
-// configured in API-key mode fails with the Entra-only explanation instead
-// of the misleading "invalid API key" (the key is valid for every other
-// deployment on the resource). The error carries BOTH sentinels so the
-// no-retry/no-breaker rules of an auth failure hold; Fable is NOT Entra-gated
-// and keeps the bare invalid-key classification; Entra mode is untouched; a
-// permission_error keeps Azure's own explanation.
+// TestAzureClaude_MythosRequiresEntra: a Mythos deployment in API-key mode
+// fails with the Entra-only explanation instead of the misleading "invalid
+// API key" (the key is valid for every other deployment). The error carries
+// BOTH sentinels so the auth-failure rules hold; Fable is not Entra-gated;
+// Entra mode is untouched; a permission_error keeps Azure's explanation.
 func TestAzureClaude_MythosRequiresEntra(t *testing.T) {
 	// A Mythos deployment (portal-named) in API-key mode: any 401 on the
 	// invalid-key path is remapped.
@@ -471,9 +469,9 @@ func TestAzureClaude_ModelsListClaudeDeployments(t *testing.T) {
 	if m := byID["claude:my-claude"]; m.DisplayName != "my-claude · Claude" || m.ContextLimit != 200000 || m.MaxOutputTokens != claudeOnFoundryDefaultOutput || m.Pricing != (Pricing{}) || m.ServedModel != "" {
 		t.Errorf("custom-named Claude deployment = %+v, want the defaults (output cap %d) and no price", m, claudeOnFoundryDefaultOutput)
 	}
-	// Audit #9 F-04: the unlisted-deployment default output cap must be the
-	// smallest cap of any Claude model Foundry serves (64K), so the reasoning
-	// floor of a first turn on an unknown Opus deployment is not clipped.
+	// The unlisted-deployment default output cap must be the smallest cap
+	// of any Claude model Foundry serves (64K), so the reasoning floor of a
+	// first turn on an unknown Opus deployment is not clipped.
 	if claudeOnFoundryDefaultOutput != 64000 {
 		t.Errorf("claudeOnFoundryDefaultOutput = %d, want 64000", claudeOnFoundryDefaultOutput)
 	}
@@ -540,12 +538,10 @@ func TestAzureClaude_ProjectListingDiscoversAnthropicDeployments(t *testing.T) {
 	}
 }
 
-// The claudeDeployments document field: normalised like the other lists
-// (trimmed, blanks and case-insensitive duplicates dropped, names already
-// listed as chat or embedding deployments dropped), validated and bounded,
-// in the public view and the stored document, counted as a chat deployment
-// by the save-time rule, and part of the listing cache key but not of the
-// credential fingerprint.
+// The claudeDeployments document field: normalised like the other lists,
+// validated and bounded, present in the public view and the stored
+// document, counted as a chat deployment by the save-time rule, part of the
+// listing cache key but not of the credential fingerprint.
 func TestAzureClaude_ConfigClaudeDeployments(t *testing.T) {
 	cfg, err := ParseAzureFoundryConfig(`{"endpoint":"https://my-res.services.ai.azure.com","auth":{"mode":"api_key","key":"k"},` +
 		`"chatDeployment":"chat","embeddingDeployment":"emb","deployments":["gpt-4o"],` +

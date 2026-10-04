@@ -8,14 +8,12 @@ import (
 )
 
 // TestParsePadIgnore_DoesNotFailOpen is the regression gate for a suppression
-// directive that disabled every rule by accident.
-//
-// The pattern was unanchored with an optional bracket group, so ANY occurrence
-// of the word in ANY comment matched with an empty capture and fell through to
-// "suppress all". Two shapes mattered in practice: prose that merely mentions
-// the directive, and a directive with a mistyped bracket list. Both silenced
-// all 45 rules on the following action — Security rules included — and bakicli
-// is the CI gate, so this failed OPEN in the one place it must not.
+// directive that disabled every rule by accident: the pattern was unanchored
+// with an optional bracket group, so ANY occurrence of the word in ANY
+// comment matched with an empty capture and fell through to "suppress all" —
+// prose mentioning the directive and a mistyped bracket list alike silenced
+// all 45 rules on the following action, and bakicli, the CI gate, failed
+// OPEN in the one place it must not.
 func TestParsePadIgnore_DoesNotFailOpen(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -48,11 +46,10 @@ func TestParsePadIgnore_DoesNotFailOpen(t *testing.T) {
 			wantAll: true,
 		},
 		{
-			// The blanket form must stand alone. Allowing trailing prose would
-			// reintroduce the ambiguity this fix closes — "pad-ignore should
-			// never be used in production" opens with the directive too. A
-			// justification belongs with the targeted form, which is tested
-			// below and may carry free text on either side.
+			// The blanket form must stand alone: allowing trailing prose would
+			// reintroduce the ambiguity this fix closes. A justification
+			// belongs with the targeted form, which may carry free text on
+			// either side (tested below).
 			name:   "blanket directive with trailing prose is not a directive",
 			text:   "pad-ignore should never be used in production",
 			wantOK: false,
@@ -154,15 +151,11 @@ func actionBlockIDs(doc *models.FlowDocument) []string {
 	return ids
 }
 
-// TestInlineSuppression_IsScopedToBothRuleAndBlock covers the ENFORCEMENT side,
-// which had no test of its own.
-//
-// The existing end-to-end test asserted only that the targeted finding vanished
-// and that the total decreased. Both mutations of the match condition satisfy
-// that: dropping the rule check (any directive silences every rule on the
-// block) and dropping the block check (any directive silences that rule
-// flow-wide) each pass it. Construction of the suppression map was tested;
-// application of it was not.
+// TestInlineSuppression_IsScopedToBothRuleAndBlock covers the ENFORCEMENT
+// side: the existing end-to-end test asserted only that the targeted finding
+// vanished and the total decreased — both mutations of the match condition
+// (dropping the rule check, or the block check) satisfy that. Construction
+// of the suppression map was tested; application of it was not.
 func TestInlineSuppression_IsScopedToBothRuleAndBlock(t *testing.T) {
 	doc, findings := analyzeSuppressed(t, suppressionFlow)
 	ids := actionBlockIDs(doc)
@@ -199,12 +192,11 @@ func TestInlineSuppression_IsScopedToBothRuleAndBlock(t *testing.T) {
 	}
 }
 
-// TestInlineSuppression_ProseDoesNotSilenceTheFlow is the end-to-end companion:
-// the unit test above proves the parse, this proves it reaches the report.
-//
-// It compares findings on the ACTION block only. Comparing raw totals would be
-// wrong: the comment line is itself a block and draws its own findings, so the
-// two reports legitimately differ in length.
+// TestInlineSuppression_ProseDoesNotSilenceTheFlow is the end-to-end
+// companion: the unit test above proves the parse, this proves it reaches
+// the report. It compares findings on the ACTION block only (the comment
+// line is itself a block and draws its own findings, so raw totals
+// legitimately differ in length).
 func TestInlineSuppression_ProseDoesNotSilenceTheFlow(t *testing.T) {
 	const action = "File.Delete Files: $'''C:\\\\t\\\\a.txt'''\n"
 	prose := "#Region \"Main\"\nCOMMENT never use pad-ignore in production flows\n" + action + "#EndRegion\n"

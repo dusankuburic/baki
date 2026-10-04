@@ -24,15 +24,10 @@ func analyzeBroken(t *testing.T, lines int) (*models.FlowDocument, *models.Analy
 }
 
 // TestParseErrorFindings_AreCapped is the resource gate for the analysis
-// endpoints.
-//
-// Parse errors became findings 1:1 with no cap, and a parse error costs as
-// little as five bytes of input, so finding count scaled with file size:
-// measured 2,048 findings from 10 KB, 20,480 from 100 KB and 209,715 from 1 MB
-// (894 MB allocated) — against an endpoint that accepts 2 MB. Every finding is
-// then serialised into the response, which is where the ~141x
-// request-to-response amplification and the multi-hundred-megabyte bodies came
-// from, and is retained afterwards by the report cache.
+// endpoints: parse errors became findings 1:1 with no cap, and one costs as
+// little as five bytes of input — 209,715 findings (894 MB allocated) from a
+// 1 MB upload against an endpoint that accepts 2 MB, every finding then
+// serialised into the response and retained by the report cache.
 func TestParseErrorFindings_AreCapped(t *testing.T) {
 	for _, lines := range []int{500, 5_000, 50_000} {
 		doc, rep := analyzeBroken(t, lines)
@@ -79,17 +74,12 @@ func TestParseErrorFindings_TruncationIsReported(t *testing.T) {
 	}
 }
 
-// TestParseErrorFindings_CapDoesNotWeakenTheGate is the assertion that matters
-// most operationally, and it targets the sharp case: the Error-severity problems
-// appear AFTER the cap position, buried behind thousands of warnings.
-//
-// Truncating the LIST must never lower the report's severity ceiling, or a file
-// whose real errors happen to sort late would start passing CI. The summary
-// finding therefore carries the highest severity among the errors it omitted.
-//
-// (The bulk filler here is `ELSE` outside an IF, which is a WARNING-severity
-// parse error — an earlier version of this test assumed it was an Error and
-// failed for that reason, not because the cap had broken anything.)
+// TestParseErrorFindings_CapDoesNotWeakenTheGate targets the sharp case: the
+// Error-severity problems appear AFTER the cap position, buried behind
+// thousands of warnings. Truncating the LIST must never lower the report's
+// severity ceiling, or a file whose real errors sort late would start
+// passing CI; the summary finding carries the highest severity omitted.
+// (The bulk filler is `ELSE` outside an IF, a WARNING-severity parse error.)
 func TestParseErrorFindings_CapDoesNotWeakenTheGate(t *testing.T) {
 	// Thousands of warning-severity errors, then an unterminated block comment,
 	// which the tokenizer reports at ERROR severity.
@@ -144,18 +134,12 @@ func TestParseErrorFindings_SmallFilesAreUnchanged(t *testing.T) {
 }
 
 // TestBuildParseErrorFindings_SummaryCarriesTheWorstOmittedSeverity tests the
-// helper DIRECTLY, because the end-to-end path cannot see this.
-//
-// models.DefaultSettings() configures a severity override for parse-error, and
-// the engine applies overrides to every finding a rule returns — so in the
-// default configuration all parse-error findings come out Error regardless of
-// the individual error's severity. That is what preserves the gate end to end,
-// and it means TestParseErrorFindings_CapDoesNotWeakenTheGate would pass even if
-// this logic were wrong.
-//
-// The ceiling still matters wherever no override is configured (RunAnalysis with
-// nil settings, or a deployment that sets parse-error to warning): truncating
-// the list must not drop the severity of what was omitted.
+// helper DIRECTLY, because the end-to-end path cannot see this:
+// models.DefaultSettings() configures a severity override for parse-error,
+// so in the default configuration all its findings come out Error regardless
+// of individual severity — the gate survives even if this logic is wrong.
+// The ceiling still matters wherever no override is configured (nil
+// settings, or a deployment that sets parse-error to warning).
 func TestBuildParseErrorFindings_SummaryCarriesTheWorstOmittedSeverity(t *testing.T) {
 	errs := make([]models.ParseError, 0, maxParseErrorFindings+5)
 	for i := 0; i < maxParseErrorFindings; i++ {

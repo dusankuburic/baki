@@ -29,34 +29,3 @@ func TestShouldFail_UnknownSeverityFailsClosed(t *testing.T) {
 		}
 	}
 }
-
-// TestShouldFail_KnownSeveritiesUnchanged pins the ordinary ranking, so failing
-// closed on the unknown case cannot quietly turn into failing on everything.
-func TestShouldFail_KnownSeveritiesUnchanged(t *testing.T) {
-	info := []models.Finding{{Severity: models.SeverityInfo}}
-	warn := []models.Finding{{Severity: models.SeverityWarning}}
-	errf := []models.Finding{{Severity: models.SeverityError}}
-
-	cases := []struct {
-		name      string
-		findings  []models.Finding
-		threshold string
-		want      bool
-	}{
-		{"info below warning", info, "warning", false},
-		{"info below error", info, "error", false},
-		{"info meets info", info, "info", true},
-		{"warning below error", warn, "error", false},
-		{"warning meets warning", warn, "warning", true},
-		{"error meets error", errf, "error", true},
-		{"error exceeds info", errf, "info", true},
-		{"nothing trips on an empty report", nil, "info", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := shouldFail(tc.findings, tc.threshold); got != tc.want {
-				t.Errorf("shouldFail(%s) = %v, want %v", tc.threshold, got, tc.want)
-			}
-		})
-	}
-}

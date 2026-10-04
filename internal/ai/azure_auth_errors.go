@@ -6,13 +6,9 @@ import (
 	"strings"
 )
 
-// ErrEntraTokenRejected marks a 401/403 the resource gave an Entra ID access
-// token that WAS issued: the audience the resource expects is not
-// https://ai.azure.com, the resource is in another cloud or has Entra ID
-// authentication disabled, or the token was revoked. Also ErrApiKeyInvalid so
-// every auth-failure rule applies (no retry, no breaker count, one
-// withTokenRetry replay); the chat copy and the connection test check it
-// first — the principal has no API key to check.
+// ErrEntraTokenRejected marks a 401/403 the resource gave an Entra ID token that WAS issued: wrong audience
+// (not https://ai.azure.com), another cloud, Entra ID disabled on the resource, or a revoked token. Also
+// ErrApiKeyInvalid, so every auth-failure rule applies (no retry, no breaker count, one withTokenRetry replay).
 var ErrEntraTokenRejected = errors.New("azure ai foundry rejected the entra id access token")
 
 // entraTokenRejectedError carries the service's own one-line explanation.
@@ -32,11 +28,9 @@ func (e *entraTokenRejectedError) Unwrap() []error {
 // azureAuthMessageMax bounds the service text kept on the error.
 const azureAuthMessageMax = 300
 
-// azureAuthMessage is the service's one-line explanation of a 401/403 from
-// either envelope: {"error":{"code","message"}} or API Management's
-// {"statusCode":401,"message":…} ("Unauthorized. Access token is missing,
-// invalid, audience is incorrect (...), or have expired."), which decodes
-// into openAIErrorResp with an empty message.
+// azureAuthMessage is the service's one-line explanation of a 401/403 from either envelope,
+// {"error":{"code","message"}} or API Management's {"statusCode":401,"message":…}, which decodes into
+// openAIErrorResp with an empty message.
 func azureAuthMessage(apiErr openAIErrorResp, body []byte) string {
 	msg := apiErr.Error.Message
 	if msg == "" {
@@ -50,15 +44,10 @@ func azureAuthMessage(apiErr openAIErrorResp, body []byte) string {
 	return oneLine(strings.Join(strings.Fields(msg), " "), azureAuthMessageMax)
 }
 
-// entraUnauthorized is openaiBase's handle401 hook in Entra ID mode (set by
-// the Azure provider only, so OpenAI, xAI, GLM, GitHub Models, Copilot and
-// API-key Azure keep the bare invalid-key classification): a permission
-// denial — Azure's PermissionDenied code, or the Anthropic route's
-// permission_error type (Claude deployments) — keeps its own path (nil →
-// unauthorizedError / claudeUnauthorized): the token was accepted and a fresh
-// one cannot grant the missing role. Every other 401/403, an Anthropic
-// authentication_error included, is a rejected token carrying Azure's
-// explanation.
+// entraUnauthorized is openaiBase's handle401 hook in Entra ID mode (Azure only — API-key Azure and the other
+// providers keep the bare invalid-key classification): a permission denial (Azure's PermissionDenied code, the
+// Anthropic route's permission_error) keeps its own path — the token was accepted and a fresh one cannot grant
+// the missing role. Every other 401/403 is a rejected token carrying Azure's explanation.
 func entraUnauthorized(apiErr openAIErrorResp, body []byte) error {
 	if strings.EqualFold(apiErr.Error.Code, "PermissionDenied") || strings.EqualFold(apiErr.Error.Type, "permission_error") {
 		return nil
@@ -69,15 +58,10 @@ func entraUnauthorized(apiErr openAIErrorResp, body []byte) error {
 // azureForbiddenFallback explains a 403 whose body says nothing.
 const azureForbiddenFallback = "the Azure resource refused the request (HTTP 403): check its networking rules (firewall, virtual network, private endpoint) and the role the credential holds on it"
 
-// azureForbidden is openaiBase's handle403 hook for Azure AI Foundry, in
-// both auth modes. Azure answers 403 when the credential WAS accepted but
-// the request is not allowed — the resource's network rules ("Access denied
-// due to Virtual Network/Firewall rules."), a missing data-plane role
-// (PermissionDenied) — so it is never an invalid key or a rejected token: it
-// keeps Azure's explanation as a permission denial (ErrProviderPermissionDenied,
-// which is also ErrApiKeyInvalid: no retry, no breaker count), and
-// withTokenRetry does not replay it with a fresh Entra ID token, which could
-// not change the answer. A 401 keeps its own classification (handle401).
+// azureForbidden is openaiBase's handle403 hook for Azure, in both auth modes: a 403 means the credential WAS
+// accepted but the request is not allowed (network rules, a missing data-plane role) — never an invalid key or
+// rejected token. Kept as a permission denial (ErrProviderPermissionDenied, also ErrApiKeyInvalid: no retry,
+// no breaker count, no withTokenRetry replay — a fresh token could not change the answer).
 func azureForbidden(apiErr openAIErrorResp, body []byte) error {
 	msg := azureAuthMessage(apiErr, body)
 	if msg == "" {

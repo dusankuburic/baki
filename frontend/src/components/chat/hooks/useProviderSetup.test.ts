@@ -215,7 +215,7 @@ describe('useProviderSetup listing', () => {
     expect(result.current.providers[0].models.find(m => m.id === 'opus')?.supportsTools).toBe(false)
   })
 
-  // C15: the server sends it (ProviderInfo.suggestDiscovery, omitted when false).
+  // The server sends it (ProviderInfo.suggestDiscovery, omitted when false).
   it("passes the picker's Review prompt flag through, and only a true one", async () => {
     listing(CLAUDE, azure([GPT], {suggestDiscovery: true}))
     const {result} = renderHook(() => useProviderSetup())
@@ -487,7 +487,7 @@ describe('useProviderSetup per-thread model', () => {
     expect(result.current.notice).toBeNull()
   })
 
-  // C4: the refusal is the server's own word — it needs no listing to be
+  // The refusal is the server's own word — it needs no listing to be
   // believed when the refetch it asked for fails.
   it('raises the refusal notice when the refetch after it fails', async () => {
     setAI('azure-foundry')
@@ -507,8 +507,8 @@ describe('useProviderSetup per-thread model', () => {
     expect(result.current.notice).toMatchObject({kind: 'refused', wanted: {label: 'Docs writer'}})
   })
 
-  // C10: sent while an unpinned thread's history loads, a turn used to pin
-  // the new-chat default — and legacy inference never ran on that history.
+  // A turn sent while an unpinned thread's history loads must not pin
+  // the new-chat default — legacy inference never ran on that history.
   it('does not pin an unpinned thread until its history is in', async () => {
     setAI('azure-foundry')
     listing(CLAUDE, azure([GPT, DOCS]))
@@ -532,7 +532,7 @@ describe('useProviderSetup per-thread model', () => {
     expect(result.current.turnModel).toMatchObject({model: DOCS.id, pinThread: true})
   })
 
-  // C6: before the listing loads, a registry id has no name to send.
+  // Before the listing loads, a registry id has no name to send.
   it('never sends an id as the turn’s label', async () => {
     setAI('azure-foundry', {'azure-foundry': DOCS.id})
     vi.mocked(providersApi.listProviders).mockReturnValue(new Promise(() => {}))
@@ -595,7 +595,7 @@ describe('the saved Azure default from before the registry', () => {
     expect(second.result.current.legacyDefaultNotice).toBeNull()
   })
 
-  // C2: Azure lists nothing while its legacy import is pending.
+  // Azure lists nothing while its legacy import is pending.
   it('says nothing, and rewrites nothing, while Azure lists nothing to chat with', async () => {
     setAI('azure-foundry', {'azure-foundry': 'gpt-4.1'})
     listing(CLAUDE, azure([], {defaultModel: ''}))

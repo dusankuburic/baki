@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -26,7 +27,7 @@ func TestRateLimitGroup_AuthPathsInclusive(t *testing.T) {
 		// Auth-grouping is path-based and method-independent (a GET probe of a
 		// reset endpoint should still be throttled as auth).
 		for _, m := range []string{"GET", "POST"} {
-			if got := rateLimitGroup(m, p); got != rlGroupAuth {
+			if got := rateLimitGroup(m, &url.URL{Path: p}); got != rlGroupAuth {
 				t.Errorf("rateLimitGroup(%s,%s) = %q, want %q", m, p, got, rlGroupAuth)
 			}
 		}
@@ -63,7 +64,7 @@ func TestRateLimitGroup_OtherBuckets(t *testing.T) {
 		{"POST", "/api/providers/azure-foundry/models", rlGroupGeneral},
 	}
 	for _, c := range cases {
-		if got := rateLimitGroup(c.method, c.path); got != c.want {
+		if got := rateLimitGroup(c.method, &url.URL{Path: c.path}); got != c.want {
 			t.Errorf("rateLimitGroup(%s,%s) = %q, want %q", c.method, c.path, got, c.want)
 		}
 	}
@@ -72,7 +73,7 @@ func TestRateLimitGroup_OtherBuckets(t *testing.T) {
 // B1.9: the unauthenticated share-link report rides the tighter analysis
 // bucket — it resolves a flow and runs the analyzer per fresh flow.
 func TestRateLimitGroup_SharedReportInAnalysisBucket(t *testing.T) {
-	if got := rateLimitGroup("GET", "/api/shared"); got != rlGroupAnalysis {
+	if got := rateLimitGroup("GET", &url.URL{Path: "/api/shared"}); got != rlGroupAnalysis {
 		t.Errorf("GET /api/shared group = %q, want %q", got, rlGroupAnalysis)
 	}
 }
@@ -112,7 +113,7 @@ func TestRateLimitGroup_NormalizesPath(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := rateLimitGroup(c.method, c.path); got != c.want {
+			if got := rateLimitGroup(c.method, &url.URL{Path: c.path}); got != c.want {
 				t.Errorf("rateLimitGroup(%s,%s) = %q, want %q", c.method, c.path, got, c.want)
 			}
 		})

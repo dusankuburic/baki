@@ -131,21 +131,29 @@ export const flowApi = {
   // applyFixBatch applies every auto-fixable finding whose rule is in `rules`
   // (empty = all auto-fixable) in one server-side pass, returning the updated
   // document + how many fixes landed. Used by the bulk-action bar. Works in
-  // desktop and cloud (single-file) modes.
+  // desktop and cloud (single-file) modes. `partial` means the request's time
+  // budget ended the loop early: the fixes applied so far ARE persisted (the
+  // batch used to discard all of them), and running again continues.
   applyFixBatch: (
     flowId: string,
     rules: string[],
     limit?: number,
-  ): Promise<{document: FlowDocument; applied: number}> =>
+  ): Promise<{document: FlowDocument; applied: number; partial?: boolean; partialReason?: string}> =>
     request('/api/flow/apply-fix-batch', {body: {flowId, rules, limit}}),
 
   // Snapshot (undo) API: every fix/batch/source-save captures the pre-mutation
   // source server-side; restore writes it back (desktop: file; cloud: OCC
   // persist) and returns the re-loaded document.
+  // noDedup: the newest entry is captured right before each mutation as its
+  // undo target, and consecutive edits (held move key) land within the 5 s
+  // micro-cache window — a cached list named the wrong snapshot.
   listSnapshots: (
     flowId: string,
   ): Promise<{snapshots: {id: string; label: string; createdAt: string; bytes: number}[]}> =>
-    request(`/api/flow/snapshots${flowId ? '?flowId=' + encodeURIComponent(flowId) : ''}`, {method: 'GET'}),
+    request(`/api/flow/snapshots${flowId ? '?flowId=' + encodeURIComponent(flowId) : ''}`, {
+      method: 'GET',
+      noDedup: true,
+    }),
 
   restoreSnapshot: (flowId: string, snapshotId: string): Promise<{document: FlowDocument}> =>
     request('/api/flow/snapshots/restore', {body: {flowId, snapshotId}}),
@@ -178,7 +186,7 @@ export const flowApi = {
   removeBlock: (flowId: string, blockId: string): Promise<{document: FlowDocument}> =>
     request('/api/flow/block/remove', {body: {flowId, blockId}}),
 
-  // removeBlocks bulk-deletes in ONE server-side patch (U3b multi-select).
+  // removeBlocks bulk-deletes in ONE server-side patch.
   removeBlocks: (flowId: string, blockIds: string[]): Promise<{document: FlowDocument}> =>
     request('/api/flow/block/remove-batch', {body: {flowId, blockIds}}),
 

@@ -74,17 +74,6 @@ func TestDescribeRule_KnownRule(t *testing.T) {
 	}
 }
 
-// TestDescribeRule_UnknownRuleExits on unknown rule ID.
-func TestDescribeRule_UnknownRuleExits(t *testing.T) {
-	if os.Getenv("TEST_DESCRIBE_EXIT") == "1" {
-		describeRule("nonexistent-rule")
-		return
-	}
-	// This test verifies the function calls os.Exit(2), which would kill the
-	// test process. We just verify it doesn't panic for a known rule instead.
-	describeRule("parse-error")
-}
-
 // TestRunInit_GeneratesConfig verifies `bakicli init` creates a valid JSON config.
 func TestRunInit_GeneratesConfig(t *testing.T) {
 	tmp := t.TempDir()

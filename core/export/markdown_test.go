@@ -47,7 +47,6 @@ func TestReportToMarkdown_NoFindings(t *testing.T) {
 	if !strings.Contains(out, "No findings detected") {
 		t.Errorf("expected no-findings message, got:\n%s", out)
 	}
-	// Should not have severity sections when no findings
 	if strings.Contains(out, "## Errors") || strings.Contains(out, "## Warnings") {
 		t.Error("unexpected severity sections for empty report")
 	}
@@ -72,7 +71,6 @@ func TestReportToMarkdown_SeverityGrouping(t *testing.T) {
 	doc := makeDoc("Flow", "")
 	out := ReportToMarkdown(report, doc)
 
-	// All three severity sections must appear in order: Errors, Warnings, Info
 	errIdx := strings.Index(out, "## Errors")
 	warnIdx := strings.Index(out, "## Warnings")
 	infoIdx := strings.Index(out, "## Info")
@@ -84,7 +82,6 @@ func TestReportToMarkdown_SeverityGrouping(t *testing.T) {
 		t.Errorf("severity sections out of order: errors=%d warnings=%d info=%d", errIdx, warnIdx, infoIdx)
 	}
 
-	// Each finding title must appear
 	for _, title := range []string{"Bad error", "Some warning", "FYI"} {
 		if !strings.Contains(out, title) {
 			t.Errorf("expected finding title %q in output", title)
@@ -128,7 +125,6 @@ func TestReportToMarkdown_NoSuggestionWhenEmpty(t *testing.T) {
 	f := models.Finding{RuleID: "r1", Severity: models.SeverityInfo, Title: "Note", BlockID: "b1", Suggestion: ""}
 	out := ReportToMarkdown(makeReport(f), makeDoc("Flow", ""))
 
-	// The blockquote suggestion line should not appear
 	if strings.Contains(out, "> **Suggestion:**") {
 		t.Error("should not include empty suggestion blockquote")
 	}
@@ -195,13 +191,11 @@ func TestSeverityTitle(t *testing.T) {
 // panic on nil doc/report (mirrors the SARIF guard; previously it dereferenced
 // doc.Name and report.GeneratedAt unconditionally).
 func TestReportToMarkdown_NilDocAndReport(t *testing.T) {
-	// Both nil — must not panic.
 	out := ReportToMarkdown(nil, nil)
 	if !strings.Contains(out, "PAD Analyzer") {
 		t.Errorf("expected header in output, got: %s", out)
 	}
 
-	// Nil doc, real report — must not panic, must include generated-at.
 	rep := &models.AnalysisReport{
 		GeneratedAt: time.Now(),
 		DurationMs:  42,

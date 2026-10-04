@@ -5,23 +5,14 @@ import (
 	"testing"
 )
 
-// TestResolveFixDecision_ConcurrentCallersDoNotRace is the regression gate for a
-// data race on a shared slice header.
-//
-// fixDecisionState documented "first decision wins; later sends find the buffer
-// full and are dropped", and the per-item opt-out list was written to the state
-// struct BEFORE that send on the theory that the channel supplied the
-// happens-before edge. It does — but only for the caller whose send actually
-// succeeds. EVERY caller performed the write, including the ones dropped into
-// the `default:` arm, so two concurrent resolutions raced each other and raced
-// the consumer's read, on an unsynchronised slice header. A torn read (new
-// pointer, stale length) walks off the backing array; the `i < len(props)`
-// bounds check downstream guards the INDICES, not the iteration.
-//
-// Reachable without any special privilege: a double-clicked Approve on a batch
-// card, two tabs open on the same stream, or an ordinary client retry.
-//
-// Run under -race; without it this test cannot fail.
+// TestResolveFixDecision_ConcurrentCallersDoNotRace is the regression gate for a data
+// race on a shared slice header: the per-item opt-out list was written to the state
+// struct BEFORE the decision send on the theory that the channel supplied the
+// happens-before edge — but only for the caller whose send succeeds, so EVERY caller
+// (the `default:` drops included) raced the write and the consumer's read on an
+// unsynchronised slice header; a torn read (new pointer, stale length) walks off the
+// backing array. Reachable without special privilege: a double-clicked Approve, two tabs
+// on one stream, an ordinary retry. Run under -race; without it this test cannot fail.
 func TestResolveFixDecision_ConcurrentCallersDoNotRace(t *testing.T) {
 	svc, _ := newFixTestService(fixTestDoc(), nil)
 

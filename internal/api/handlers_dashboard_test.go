@@ -9,7 +9,6 @@ import (
 	"pad-analyzer/internal/auth"
 )
 
-// TestDisplayFromEmail verifies the email-to-name derivation.
 func TestDisplayFromEmail(t *testing.T) {
 	cases := []struct {
 		email string
@@ -27,7 +26,6 @@ func TestDisplayFromEmail(t *testing.T) {
 	}
 }
 
-// TestGreeting_LocalMode verifies the greeting uses the local display name.
 func TestGreeting_LocalMode(t *testing.T) {
 	sec := &SecurityConfig{JWTEnabled: false, LocalName: "TestUser"}
 	h := &DashboardHandler{security: sec}
@@ -35,15 +33,6 @@ func TestGreeting_LocalMode(t *testing.T) {
 	if g.UserDisplayName != "TestUser" {
 		t.Errorf("expected 'TestUser', got %q", g.UserDisplayName)
 	}
-}
-
-// TestGreeting_LocalModeDefault verifies the fallback when LocalName is unset.
-func TestGreeting_LocalModeDefault(t *testing.T) {
-	sec := &SecurityConfig{JWTEnabled: false}
-	h := &DashboardHandler{security: sec}
-	g := h.greeting(&http.Request{})
-	// LocalName unset → empty is valid; the frontend has its own fallback.
-	_ = g // just verify it doesn't panic
 }
 
 // TestHandleHome_ConcurrentCacheHitRaceFree is the handler-level regression

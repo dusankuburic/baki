@@ -7,16 +7,11 @@ import (
 	"time"
 )
 
-// Learned context windows (alias providers only). An Azure AI Foundry
-// deployment name says nothing about the model's window, so an uncatalogued
-// small-window model (a 16k Phi deployment under a custom name) is listed at
-// the provider-wide 128k default and history is never truncated for it. Its
-// own context-length rejection states the real window ("maximum context
-// length is 16384 tokens" → *ContextLimitError); the audited wrapper records
-// it here and every later model listing on the same (scope, resource,
-// deployment) is clamped to it, so the next request is truncated to fit.
-// Same bounds as the served-model memo: servedMemoMax entries, servedMemoTTL
-// after the last rejection.
+// Learned context windows (alias providers only): a deployment name says nothing about the model's window, so an
+// uncatalogued small-window model lists at the provider-wide 128k default until its own context-length rejection
+// ("maximum context length is 16384 tokens" → *ContextLimitError) states the real one; it is recorded and clamped onto
+// every later listing for the same (scope, resource, deployment), so the next request is truncated to fit. Served-memo
+// bounds: servedMemoMax entries, servedMemoTTL after the last rejection.
 
 type learnedWindow struct {
 	limit int
@@ -28,9 +23,8 @@ var (
 	learnedWindows = map[string]learnedWindow{}
 )
 
-// recordContextWindow remembers the window a rejection of requestModel
-// stated. Keeps the smaller of two observations within the TTL (a model
-// router may be routed to models with different windows). No-op for
+// recordContextWindow remembers the window a rejection of requestModel stated, keeping the smaller of two
+// observations within the TTL (a model router may be routed to models with different windows); no-op for
 // providers whose model ids are model names.
 func recordContextWindow(scope, providerID, requestModel string, limit int) {
 	requestModel = strings.TrimSpace(requestModel)
@@ -77,18 +71,16 @@ func lookupContextWindow(scope, providerID, requestModel string) (int, bool) {
 	return e.limit, true
 }
 
-// forgetContextWindow drops the learned window of an alias whose served
-// model changed (recordServedModel): the rejection that taught it belonged
-// to the model the deployment pointed at before, and a 24 h sticky window
-// silently over-truncated a deployment re-pointed at a larger model. Lock
-// order: callers may hold servedMu; nothing takes learnedMu before servedMu.
+// forgetContextWindow drops the learned window of an alias whose served model changed (recordServedModel): the
+// rejection that taught it belonged to the model the deployment pointed at before, and a sticky window would
+// over-truncate a deployment re-pointed at a larger model. Lock order: callers may hold servedMu; nothing takes
+// learnedMu before servedMu.
 func forgetContextWindow(scope, providerID, requestModel string) {
 	learnedMu.Lock()
 	delete(learnedWindows, servedKey(scope, providerID, requestModel))
 	learnedMu.Unlock()
 }
 
-// learnContextWindow records the window a *ContextLimitError in err states.
 func learnContextWindow(scope, providerID, requestModel string, err error) {
 	var cle *ContextLimitError
 	if errors.As(err, &cle) {
@@ -96,12 +88,9 @@ func learnContextWindow(scope, providerID, requestModel string, err error) {
 	}
 }
 
-// applyLearnedWindows clamps each listed entry to its learned window: the
-// context limit never exceeds what the deployment's own rejection stated,
-// and the output cap is kept to a quarter of it so prompt + completion fit
-// once the chat service truncates the history to the window. Applies to
-// every entry (project-annotated, catalogued-name and agent entries too): a
-// rejection is more authoritative than any listing.
+// applyLearnedWindows clamps each listed entry to its learned window (output cap a quarter of it, so prompt +
+// completion fit once the chat service truncates the history). A rejection is more authoritative than any listing,
+// so every entry is clamped — project-annotated, catalogued-name and agent entries too.
 func applyLearnedWindows(scope, providerID string, models []ModelInfo) []ModelInfo {
 	if !aliasModelProviders[providerID] {
 		return models

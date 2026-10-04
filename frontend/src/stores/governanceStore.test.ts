@@ -1,5 +1,5 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {useGovernanceStore} from './governanceStore'
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
+import {useGovernanceStore, startGovernancePolling, stopGovernancePolling} from './governanceStore'
 import type {GovernanceAlert} from '@/api/governance'
 
 // Stub the API layer so tests don't hit a real backend.
@@ -154,5 +154,60 @@ describe('governanceStore', () => {
     expect(st.showDismissed).toBe(false)
     expect(st.unreadCount).toBe(0)
     expect(st.panelOpen).toBe(false)
+  })
+})
+
+describe('governanceStore unread polling and page visibility', () => {
+  let visibility: DocumentVisibilityState = 'visible'
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    visibility = 'visible'
+    Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => visibility})
+  })
+
+  afterEach(() => {
+    stopGovernancePolling()
+    vi.useRealTimers()
+    Reflect.deleteProperty(document, 'visibilityState')
+  })
+
+  const becomeVisible = () => {
+    visibility = 'visible'
+    document.dispatchEvent(new Event('visibilitychange'))
+  }
+
+  it('skips the tick while the tab is hidden and refreshes once when it becomes visible', () => {
+    visibility = 'hidden'
+    startGovernancePolling()
+    // The initial fetch still runs (the badge needs a value for when the
+    // tab is next shown)...
+    expect(mockUnreadCount).toHaveBeenCalledTimes(1)
+    // ...but three intervals in the background fetch nothing.
+    vi.advanceTimersByTime(180_000)
+    expect(mockUnreadCount).toHaveBeenCalledTimes(1)
+    // Coming back catches up with one refresh.
+    becomeVisible()
+    expect(mockUnreadCount).toHaveBeenCalledTimes(2)
+    // A visibilitychange that lands on 'hidden' is not a refresh.
+    visibility = 'hidden'
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(mockUnreadCount).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps polling on the interval while the tab is visible', () => {
+    startGovernancePolling()
+    expect(mockUnreadCount).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(120_000)
+    expect(mockUnreadCount).toHaveBeenCalledTimes(3)
+  })
+
+  it('stops listening for visibility once polling stops', () => {
+    visibility = 'hidden'
+    startGovernancePolling()
+    stopGovernancePolling()
+    becomeVisible()
+    vi.advanceTimersByTime(120_000)
+    expect(mockUnreadCount).toHaveBeenCalledTimes(1)
   })
 })

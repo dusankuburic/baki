@@ -11,14 +11,14 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// maxPortfolioFlows caps how many accessible flows the portfolio ranks in one
-// pass. Ranking is in-memory (worst-health-first across the whole set), so the
-// cap bounds the work; org fleets in the hundreds fit comfortably.
+// maxPortfolioFlows caps how many accessible flows the portfolio ranks in one pass.
+// Ranking is in-memory (worst-health-first across the whole set), so the cap bounds the
+// work; org fleets in the hundreds fit comfortably.
 const maxPortfolioFlows = 1000
 
-// PortfolioSort orders the portfolio's entries. The rollup totals always cover
-// every ranked flow; sort and limit only shape the entries list, so "the 20
-// riskiest flows" still reports the fleet's real average health.
+// PortfolioSort orders the portfolio's entries. The rollup totals always cover every
+// ranked flow; sort and limit only shape the entries list, so "the 20 riskiest flows"
+// still reports the fleet's real average health.
 type PortfolioSort string
 
 const (
@@ -34,10 +34,10 @@ const (
 	PortfolioSortAnalyzed PortfolioSort = "analyzed"
 )
 
-// ParsePortfolioSort maps the public ?sort= value to a PortfolioSort. Empty
-// means the default risk ranking. Unknown values are rejected rather than
-// silently ranked by risk, because a caller asking for an order it does not
-// get would read the wrong flows as "top".
+// ParsePortfolioSort maps the public ?sort= value to a PortfolioSort. Empty means the
+// default risk ranking; unknown values are rejected rather than silently ranked by
+// risk, because a caller asking for an order it does not get would read the wrong
+// flows as "top".
 func ParsePortfolioSort(raw string) (PortfolioSort, error) {
 	switch PortfolioSort(raw) {
 	case "":
@@ -48,17 +48,16 @@ func ParsePortfolioSort(raw string) (PortfolioSort, error) {
 	return "", fmt.Errorf("%w: sort must be one of risk, health, errors, name, analyzed", ErrInvalidInput)
 }
 
-// BuildPortfolio assembles the org-wide governance portfolio for the caller:
-// every flow they can access (optionally filtered to one org), ordered by
-// sortBy, with each flow's latest persisted health. limit trims the entries
-// (<= 0 or above the ranking cap means all ranked flows). Two queries (list +
-// batch health), never N+1.
+// BuildPortfolio assembles the org-wide governance portfolio for the caller: every
+// flow they can access (optionally filtered to one org), ordered by sortBy, with each
+// flow's latest persisted health; limit trims the entries (<= 0 or above the ranking
+// cap means all ranked flows). Two queries (list + batch health), never N+1.
 func (s *LibraryService) BuildPortfolio(ctx context.Context, userID, orgID string, sortBy PortfolioSort, limit int) (*models.Portfolio, error) {
-	// Desktop/local mode has no storage backend: ListLibraryFlows already
-	// returns an empty list there, but the health batch below dereferenced
-	// s.storage regardless, so GET /api/library/portfolio panicked into a 500
-	// on every desktop hit (the home KPI tile routed there). Same guard as
-	// FlowHealth: an empty portfolio is the honest answer, not an error.
+	// Desktop/local mode has no storage backend: ListLibraryFlows already returns an
+	// empty list, but the health batch below dereferenced s.storage regardless, so
+	// GET /api/library/portfolio panicked into a 500 on every desktop hit (the home KPI
+	// tile routed there). Same guard as FlowHealth: an empty portfolio is the honest
+	// answer, not an error.
 	if s.mode == config.ModeLocal || s.storage == nil {
 		return &models.Portfolio{Entries: []models.PortfolioEntry{}}, nil
 	}
@@ -66,9 +65,9 @@ func (s *LibraryService) BuildPortfolio(ctx context.Context, userID, orgID strin
 	if err != nil {
 		return nil, err
 	}
-	// The real fleet size, not the size of the capped page: TotalFlows came
-	// from len(docs), so a fleet larger than the ranking cap reported exactly
-	// the cap and averaged over that slice as if it were everything.
+	// The real fleet size, not the size of the capped page: TotalFlows came from
+	// len(docs), so a fleet larger than the ranking cap reported exactly the cap and
+	// averaged over that slice as if it were everything.
 	totalAccessible, err := s.CountLibraryFlows(ctx, userID, orgID, ScopeAll, "")
 	if err != nil {
 		return nil, err
@@ -97,12 +96,11 @@ func (s *LibraryService) BuildPortfolio(ctx context.Context, userID, orgID strin
 	return assemblePortfolio(docs, health, names, sortBy, limit, totalAccessible), nil
 }
 
-// assemblePortfolio is the pure assembly + ranking core (no I/O) so it can be
-// unit-tested directly. Rollups are computed over every ranked doc before the
-// entries are ordered and trimmed. totalAccessible is the caller's whole
-// fleet (which may exceed the ranking cap); pass <= 0 to report the ranked
-// count as the total. Every order except name puts unanalyzed flows last
-// (they have no health to rank by); ties break by name.
+// assemblePortfolio is the pure assembly + ranking core (no I/O), unit-testable
+// directly. Rollups are computed over every ranked doc before the entries are ordered
+// and trimmed; totalAccessible is the caller's whole fleet (may exceed the ranking cap;
+// pass <= 0 to report the ranked count as the total). Every order except name puts
+// unanalyzed flows last (no health to rank by); ties break by name.
 func assemblePortfolio(docs []*storageif.FlowDocument, health map[string]*storageif.HealthSnapshot, ownerNames map[string]string, sortBy PortfolioSort, limit int, totalAccessible int) *models.Portfolio {
 	p := &models.Portfolio{Entries: make([]models.PortfolioEntry, 0, len(docs))}
 	for _, d := range docs {

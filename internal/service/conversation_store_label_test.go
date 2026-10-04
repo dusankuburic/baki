@@ -51,10 +51,10 @@ func TestConversationStore_ModelLabelRoundTrip(t *testing.T) {
 	// The filesystem path (desktop): the domain type serialises verbatim.
 	svc := &ChatService{configDir: t.TempDir()}
 	doc := &models.FlowDocument{ID: "flow-1"}
-	if err := svc.SaveConversation(context.Background(), doc, "flow", msgs); err != nil {
+	if err := svc.SaveConversation(context.Background(), doc.ID, "flow", msgs); err != nil {
 		t.Fatal(err)
 	}
-	got, err := svc.GetConversation(context.Background(), doc, "flow")
+	got, err := svc.GetConversation(context.Background(), doc.ID, "flow")
 	if err != nil || len(got) != 2 || got[1].ModelLabel != "Docs writer" {
 		t.Errorf("filesystem round trip = %+v, %v", got, err)
 	}

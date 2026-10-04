@@ -84,13 +84,12 @@ func TestCarryAzureSecret_EndpointHostRule(t *testing.T) {
 	}
 }
 
-// R-8 on the org route: another admin cannot point the lender's stored key at
-// another host without re-entering it; a document error wins over the
-// refusal (the host itself is not allowed).
-// F-51: the Azure CLI sign-in mode is the lender's own desktop identity —
-// an org-shared document runs on every member's machine, so saving one in
-// that mode is refused with INVALID_AUTH in every deployment mode (the
-// provider-level validation refuses it only on server deployments).
+// R-8 on the org route: another admin cannot point the lender's stored key at another
+// host without re-entering it; a document error wins over the refusal (the host itself is
+// not allowed). The Azure CLI sign-in mode is the lender's own desktop identity — an
+// org-shared document runs on every member's machine, so saving one in that mode is
+// refused with INVALID_AUTH in every deployment mode (the provider-level validation
+// refuses it only on server deployments).
 func TestSaveOrgAzureFoundryConfig_RefusesEntraCLI(t *testing.T) {
 	orgKeys := testutil.NewFakeOrgSecretStore()
 	svc := newOrgProviderService(t, testutil.NewFakeSecretStore(), orgKeys)
@@ -264,7 +263,7 @@ func TestDisableOrgAzureFoundryConfigSavedBy(t *testing.T) {
 		t.Error("another org's credential was removed")
 	}
 
-	// F-32: an edit that CARRIED the stored secret does not make its editor
+	// An edit that CARRIED the stored secret does not make its editor
 	// a lender — their departure keeps the credential, the lender's takes it.
 	if _, err := svc.SaveOrgAzureFoundryConfig("org-carry", "lender-a", "", doc); err != nil {
 		t.Fatal(err)
@@ -370,7 +369,7 @@ func TestChatService_CheckBudget(t *testing.T) {
 	}
 }
 
-// F-12: an unreadable stored org credential (a decrypt failure after a key
+// An unreadable stored org credential (a decrypt failure after a key
 // rotation, or a document this build cannot parse) can be repaired from the
 // UI — the token-less save with a fresh secret becomes a true compare-and-
 // swap on the unreadable row's own stamp instead of the always-409

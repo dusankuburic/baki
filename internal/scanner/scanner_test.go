@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"pad-core/analyzer"
 	"pad-core/models"
 
 	"pad-analyzer/internal/notify"
@@ -61,19 +63,18 @@ func (c *capture) all() []notify.Event {
 	return append([]notify.Event(nil), c.events...)
 }
 
-// healthBackend embeds the in-memory FakeBackend and adds prior-health lookups so
-// the regression path can be exercised (FakeBackend's LoadFlowHealth is a no-op).
+// healthBackend embeds the in-memory FakeBackend; health is the fake's own
+// FlowHealth map (seed it to exercise the regression path), so both the
+// single and the batched health reads — and their call counters — see it.
 type healthBackend struct {
 	*testutil.FakeBackend
 	health map[string]*storageif.HealthSnapshot
 }
 
-func (b *healthBackend) LoadFlowHealth(_ context.Context, flowID string) (*storageif.HealthSnapshot, error) {
-	return b.health[flowID], nil
-}
-
 func newBackend() *healthBackend {
-	return &healthBackend{FakeBackend: testutil.NewFakeBackend(), health: map[string]*storageif.HealthSnapshot{}}
+	fb := testutil.NewFakeBackend()
+	fb.FlowHealth = map[string]*storageif.HealthSnapshot{}
+	return &healthBackend{FakeBackend: fb, health: fb.FlowHealth}
 }
 
 func seedFlow(t *testing.T, b storageif.StorageBackend, id string) {
@@ -445,5 +446,361 @@ func TestEnabled_DoesNotRequireEnvNotifier(t *testing.T) {
 	}
 	if s := New(nil, analyzeReturning(nil), empty, time.Hour, notify.AllowLoopbackTargets); s.enabled() {
 		t.Errorf("nil backend must still disable the scanner")
+	}
+}
+
+// skipHarness is a scanner with skipping enabled (a rule-set digest wired),
+// an analyzer that counts runs per flow, and a mutable rule-set digest.
+type skipHarness struct {
+	b   *healthBackend
+	s   *Scanner
+	cap *capture
+
+	mu       sync.Mutex
+	runs     map[string]int
+	reports  map[string]*models.AnalysisReport
+	fail     map[string]bool
+	ruleHash string
+}
+
+func newSkipHarness(t *testing.T, b *healthBackend) *skipHarness {
+	h := &skipHarness{
+		b:        b,
+		cap:      newCapture(t),
+		runs:     map[string]int{},
+		reports:  map[string]*models.AnalysisReport{},
+		fail:     map[string]bool{},
+		ruleHash: "rules-v1",
+	}
+	analyze := func(_ context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.runs[doc.ID]++
+		if h.fail[doc.ID] {
+			return nil, errors.New("analysis failed")
+		}
+		if r, ok := h.reports[doc.ID]; ok {
+			return r, nil
+		}
+		return &models.AnalysisReport{FlowID: doc.ID}, nil
+	}
+	h.s = New(b, analyze, mustNotifier(t, h.cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	h.s.SetRuleSetDigest(func(context.Context, string) string {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.ruleHash
+	})
+	return h
+}
+
+func (h *skipHarness) runsOf(flowID string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.runs[flowID]
+}
+
+// TestScanOnce_SkipsFlowsWhoseInputsAreUnchanged: every sweep used to parse
+// and analyze every flow, and with the analysis cache capped at 50 reports a
+// sweep over a larger library missed on all of them (evicting interactive
+// users' entries on the way). A flow nothing has changed for is analyzed once.
+func TestScanOnce_SkipsFlowsWhoseInputsAreUnchanged(t *testing.T) {
+	b := newBackend()
+	seedFlow(t, b, "f1")
+	seedFlow(t, b, "f2")
+	h := newSkipHarness(t, b)
+
+	for range 3 {
+		h.s.ScanOnce(context.Background())
+	}
+	if f1, f2 := h.runsOf("f1"), h.runsOf("f2"); f1 != 1 || f2 != 1 {
+		t.Fatalf("three sweeps over unchanged flows analyzed f1 %d and f2 %d times, want 1 each", f1, f2)
+	}
+}
+
+// TestScanOnce_RescansAFlowWhenAnInputChanges walks every input the skip key
+// covers: changing any one of them re-analyzes that flow (and, except for the
+// shared rule set, only that flow), and a changed baseline or recorded health
+// still raises its alert.
+func TestScanOnce_RescansAFlowWhenAnInputChanges(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name   string
+		change func(t *testing.T, h *skipHarness)
+		alert  notify.EventType // "" = the change raises no alert
+	}{
+		{"content", func(t *testing.T, h *skipHarness) {
+			if err := h.b.SaveFlow(ctx, &storageif.FlowDocument{ID: "f1", Name: "f1",
+				Content: json.RawMessage(`{"id":"f2","subflows":[]}`)}); err != nil { // same length, new bytes
+				t.Fatal(err)
+			}
+		}, ""},
+		{"organization", func(t *testing.T, h *skipHarness) {
+			if err := h.b.SaveFlow(ctx, &storageif.FlowDocument{ID: "f1", Name: "f1", OrganizationID: "org-2",
+				Content: json.RawMessage(`{"id":"f1","subflows":[]}`)}); err != nil {
+				t.Fatal(err)
+			}
+		}, ""},
+		{"owner", func(t *testing.T, h *skipHarness) {
+			if err := h.b.SaveFlow(ctx, &storageif.FlowDocument{ID: "f1", Name: "f1", OwnerID: "u-2",
+				Content: json.RawMessage(`{"id":"f1","subflows":[]}`)}); err != nil {
+				t.Fatal(err)
+			}
+		}, ""},
+		{"rule set", func(t *testing.T, h *skipHarness) {
+			h.mu.Lock()
+			h.ruleHash = "rules-v2"
+			h.mu.Unlock()
+		}, ""},
+		{"baseline keys", func(t *testing.T, h *skipHarness) {
+			// Same number of keys; r2:b2 is no longer accepted.
+			if err := h.b.SetFlowBaseline(ctx, &storageif.FlowBaseline{FlowID: "f1", Keys: []string{"r1:b1", "r3:b3"}}); err != nil {
+				t.Fatal(err)
+			}
+		}, notify.EventDrift},
+		{"baseline removed", func(t *testing.T, h *skipHarness) {
+			delete(h.b.Baselines, "f1")
+		}, ""},
+		{"recorded health", func(t *testing.T, h *skipHarness) {
+			h.b.health["f1"] = &storageif.HealthSnapshot{HealthScore: 90}
+		}, notify.EventHealthRegression},
+		{"recorded health removed", func(t *testing.T, h *skipHarness) {
+			delete(h.b.health, "f1")
+		}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBackend()
+			seedFlow(t, b, "f1")
+			seedFlow(t, b, "f2")
+			// f1's report matches its baseline (no drift) and is healthier
+			// than its recorded health (no regression): no alert to start.
+			if err := b.SetFlowBaseline(ctx, &storageif.FlowBaseline{FlowID: "f1", Keys: []string{"r1:b1", "r2:b2"}}); err != nil {
+				t.Fatal(err)
+			}
+			b.health["f1"] = &storageif.HealthSnapshot{HealthScore: 60}
+			h := newSkipHarness(t, b)
+			h.reports["f1"] = &models.AnalysisReport{FlowID: "f1",
+				Findings: []models.Finding{
+					{RuleID: "r1", BlockID: "b1", Severity: models.SeverityWarning},
+					{RuleID: "r2", BlockID: "b2", Severity: models.SeverityError},
+				},
+				Metrics: &models.FlowMetrics{HealthScore: 70},
+			}
+
+			h.s.ScanOnce(ctx)
+			h.s.ScanOnce(ctx)
+			if n := h.runsOf("f1"); n != 1 {
+				t.Fatalf("f1 analyzed %d times before the change, want 1", n)
+			}
+
+			tc.change(t, h)
+			h.s.ScanOnce(ctx)
+			if n := h.runsOf("f1"); n != 2 {
+				t.Fatalf("f1 analyzed %d times after its %s changed, want 2", n, tc.name)
+			}
+			if n := h.runsOf("f2"); n != 1 && tc.name != "rule set" {
+				t.Fatalf("unchanged f2 was re-analyzed (%d runs)", n)
+			}
+
+			got := h.cap.all()
+			switch {
+			case tc.alert == "" && len(got) != 0:
+				t.Fatalf("unexpected alerts: %+v", got)
+			case tc.alert != "" && (len(got) != 1 || got[0].Type != tc.alert):
+				t.Fatalf("alerts = %+v, want one %s", got, tc.alert)
+			}
+
+			// And the new inputs are now the recorded ones.
+			h.s.ScanOnce(ctx)
+			if n := h.runsOf("f1"); n != 2 {
+				t.Fatalf("f1 re-analyzed again with nothing changed (%d runs)", n)
+			}
+		})
+	}
+}
+
+// baselineErrBackend fails every baseline read.
+type baselineErrBackend struct{ *healthBackend }
+
+func (baselineErrBackend) GetFlowBaseline(context.Context, string) (*storageif.FlowBaseline, error) {
+	return nil, errors.New("baseline store down")
+}
+
+func (baselineErrBackend) GetFlowBaselinesBatch(context.Context, []string) (map[string]*storageif.FlowBaseline, error) {
+	return nil, errors.New("baseline store down")
+}
+
+// TestScanOnce_RescansWhatItCouldNotCompletelyScan: a failed analysis records
+// nothing, so the next sweep tries again; and a flow whose inputs could not
+// all be read is never skipped, since its key is unknown.
+func TestScanOnce_RescansWhatItCouldNotCompletelyScan(t *testing.T) {
+	ctx := context.Background()
+
+	b := newBackend()
+	seedFlow(t, b, "f1")
+	h := newSkipHarness(t, b)
+	h.fail["f1"] = true
+	h.s.ScanOnce(ctx)
+	h.mu.Lock()
+	h.fail["f1"] = false
+	h.mu.Unlock()
+	h.s.ScanOnce(ctx)
+	h.s.ScanOnce(ctx)
+	if n := h.runsOf("f1"); n != 2 {
+		t.Fatalf("f1 analyzed %d times (fail, succeed, unchanged), want 2", n)
+	}
+
+	eb := baselineErrBackend{newBackend()}
+	seedFlow(t, eb, "f1")
+	analyzed := 0
+	s := New(eb, func(_ context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
+		analyzed++
+		return &models.AnalysisReport{FlowID: doc.ID}, nil
+	}, nil, 0, notify.AllowLoopbackTargets)
+	s.SetRuleSetDigest(func(context.Context, string) string { return "rules" })
+	s.ScanOnce(ctx)
+	s.ScanOnce(ctx)
+	if analyzed != 2 {
+		t.Fatalf("flow with an unreadable baseline analyzed %d times in two sweeps, want 2", analyzed)
+	}
+}
+
+// TestScanOnce_WithoutARuleSetDigestNothingIsSkipped: a scanner that cannot
+// see rule changes keeps re-analyzing every flow on every sweep.
+func TestScanOnce_WithoutARuleSetDigestNothingIsSkipped(t *testing.T) {
+	b := newBackend()
+	seedFlow(t, b, "f1")
+	var n int
+	s := New(b, func(_ context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
+		n++
+		return &models.AnalysisReport{FlowID: doc.ID}, nil
+	}, nil, 0, notify.AllowLoopbackTargets)
+	s.ScanOnce(context.Background())
+	s.ScanOnce(context.Background())
+	if n != 2 {
+		t.Fatalf("analyzed %d times in two sweeps, want 2", n)
+	}
+}
+
+// TestScanOnce_PrunesScanKeysForDeletedFlows: like lastSig, the per-flow scan
+// keys are dropped once a complete sweep no longer sees the flow.
+func TestScanOnce_PrunesScanKeysForDeletedFlows(t *testing.T) {
+	b := newBackend()
+	seedFlow(t, b, "f1")
+	h := newSkipHarness(t, b)
+	h.s.ScanOnce(context.Background())
+	if h.s.lastScanKey("f1") == "" {
+		t.Fatal("no scan key recorded for f1")
+	}
+	if err := b.DeleteFlow(context.Background(), "f1"); err != nil {
+		t.Fatal(err)
+	}
+	h.s.ScanOnce(context.Background())
+	h.s.mu.Lock()
+	defer h.s.mu.Unlock()
+	if len(h.s.lastScan) != 0 {
+		t.Fatalf("lastScan = %v, want empty after the deleted flow is pruned", h.s.lastScan)
+	}
+}
+
+func mustCustomRule(t *testing.T, id, nameMatch string) analyzer.Rule {
+	t.Helper()
+	r, err := analyzer.NewCustomRule(analyzer.CustomRuleConfig{ID: id, Name: id, NameMatch: nameMatch})
+	if err != nil {
+		t.Fatalf("custom rule: %v", err)
+	}
+	return r
+}
+
+// TestDigestRuleSet covers what a rule-set change is: the set of rule IDs
+// (in any order), a configured rule's configuration under an unchanged ID,
+// and the per-rule settings.
+func TestDigestRuleSet(t *testing.T) {
+	builtins := analyzer.AllRules()
+	if len(builtins) < 2 {
+		t.Fatal("need at least two built-in rules")
+	}
+	settings := func(enabled bool) *models.AppSettings {
+		return &models.AppSettings{Analysis: models.AnalysisSettings{Rules: map[string]models.RuleConfig{
+			builtins[0].ID(): {Enabled: enabled, Severity: "warning", Options: map[string]interface{}{"max": 3}},
+		}}}
+	}
+	base := DigestRuleSet(settings(true), builtins)
+
+	reversed := append([]analyzer.Rule(nil), builtins...)
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	if DigestRuleSet(settings(true), reversed) != base {
+		t.Error("rule order changed the digest")
+	}
+	if DigestRuleSet(settings(false), builtins) == base {
+		t.Error("disabling a rule did not change the digest")
+	}
+	if DigestRuleSet(settings(true), builtins[1:]) == base {
+		t.Error("removing a rule did not change the digest")
+	}
+	if DigestRuleSet(nil, builtins) == base {
+		t.Error("dropping the settings did not change the digest")
+	}
+	withFoo := DigestRuleSet(settings(true), append(append([]analyzer.Rule(nil), builtins...), mustCustomRule(t, "org-1", "Foo")))
+	withBar := DigestRuleSet(settings(true), append(append([]analyzer.Rule(nil), builtins...), mustCustomRule(t, "org-1", "Bar")))
+	if withFoo == base || withFoo == withBar {
+		t.Error("a custom rule's configuration did not reach the digest")
+	}
+}
+
+// panickySSE panics on EmitTo while armed.
+type panickySSE struct{ armed bool }
+
+func (p *panickySSE) EmitTo(string, string, any) {
+	if p.armed {
+		panic("sse push failed")
+	}
+}
+
+// TestScanOnce_AnInterruptedScanIsNotRecorded: a scan that dies part-way
+// (here a panic after the dedup state moved on, before the dispatch) must not
+// leave the PREVIOUS scan's key in place — otherwise the restored state is
+// skipped although lastSig holds the interrupted scan's signature, and never
+// alerts.
+func TestScanOnce_AnInterruptedScanIsNotRecorded(t *testing.T) {
+	ctx := context.Background()
+	b := newBackend()
+	if err := b.SaveFlow(ctx, &storageif.FlowDocument{ID: "f1", Name: "f1", OwnerID: "u1",
+		Content: json.RawMessage(`{"id":"f1","subflows":[]}`)}); err != nil {
+		t.Fatal(err)
+	}
+	h := newSkipHarness(t, b)
+	h.reports["f1"] = &models.AnalysisReport{FlowID: "f1", Findings: []models.Finding{
+		{RuleID: "r1", BlockID: "b1", Severity: models.SeverityWarning},
+		{RuleID: "r2", BlockID: "b2", Severity: models.SeverityError},
+	}}
+	sse := &panickySSE{}
+	h.s.SetEventNotifier(sse)
+	setBaseline := func(keys ...string) {
+		if err := b.SetFlowBaseline(ctx, &storageif.FlowBaseline{FlowID: "f1", Keys: keys}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	setBaseline("r1:b1") // one new error
+	h.s.ScanOnce(ctx)
+	if got := h.cap.all(); len(got) != 1 {
+		t.Fatalf("first scan: %d alerts, want 1", len(got))
+	}
+
+	setBaseline() // one new error and one new warning; the push panics
+	sse.armed = true
+	h.s.ScanOnce(ctx)
+	sse.armed = false
+
+	setBaseline("r1:b1") // back to the first scan's inputs
+	h.s.ScanOnce(ctx)
+	if n := h.runsOf("f1"); n != 3 {
+		t.Fatalf("f1 analyzed %d times, want 3", n)
+	}
+	if got := h.cap.all(); len(got) != 2 {
+		t.Fatalf("restored drift raised %d alerts in total, want 2 (it changed shape twice)", len(got))
 	}
 }

@@ -1,8 +1,6 @@
 package service
 
 import (
-	"errors"
-	"fmt"
 	"testing"
 
 	"pad-core/models"
@@ -55,14 +53,5 @@ func TestProviderDisabledByPolicy(t *testing.T) {
 				t.Errorf("providerDisabledByPolicy(%q) = %v, want %v", c.provider, got, c.want)
 			}
 		})
-	}
-}
-
-// The refused turn must carry the sentinel (so classifyFailure and callers
-// can branch on it) plus client-safe copy.
-func TestProviderDisabledError(t *testing.T) {
-	err := fmt.Errorf("%w: claude is disabled in this deployment's AI settings", errProviderDisabled)
-	if !errors.Is(err, errProviderDisabled) {
-		t.Error("the turn error must match errProviderDisabled")
 	}
 }

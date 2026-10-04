@@ -25,20 +25,16 @@ import (
 	"pad-analyzer/internal/testutil"
 )
 
-// newNilBackendOrgHandler builds an OrgHandler whose backend is nil (local mode)
-// but whose knowledge service is non-nil — the exact configuration that
-// previously nil-panicked in handleKnowledgeList/handleKnowledgeDelete because
-// the handlers dereferenced h.backend after only checking the (non-nil) service.
+// newNilBackendOrgHandler builds an OrgHandler whose backend is nil (local mode) but whose knowledge service is non-nil — the exact configuration that
+// previously nil-panicked in handleKnowledgeList/handleKnowledgeDelete (the handlers dereferenced h.backend after only checking the non-nil service).
 func newNilBackendOrgHandler() *OrgHandler {
 	security := &SecurityConfig{}
 	orgSvc := collaboration.NewOrgService(nil) // unused — the guards return before reaching it
 	return NewOrgHandler(orgSvc, nil /*backend*/, rag.NewKnowledgeService(nil, nil, nil), security, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
 }
 
-// Regression (H8/Track 6): the Knowledge Base handlers must return 503 when the
-// storage backend is nil (local mode) instead of nil-panicking on h.backend.
-// The latent bug: the service is constructed non-nil even with a nil store, so
-// the `h.knowledge == nil` guard did not protect the h.backend dereference.
+// Regression (H8/Track 6): the Knowledge Base handlers must return 503 when the storage backend is nil (local mode) instead of nil-panicking on h.backend.
+// The latent bug: the service is constructed non-nil even with a nil store, so the h.knowledge == nil guard did not protect the h.backend dereference.
 func TestKnowledgeHandlers_NilBackend_Returns503NotPanic(t *testing.T) {
 	h := newNilBackendOrgHandler()
 
@@ -66,10 +62,8 @@ func TestKnowledgeHandlers_NilBackend_Returns503NotPanic(t *testing.T) {
 	}
 }
 
-// KnowledgeService with a nil store must itself degrade cleanly (defense in
-// depth): the store-touching methods must not nil-panic. With nil factory the
-// embedder check surfaces first (also no panic); the store-nil guard is what
-// would have panicked previously once an embedder succeeds.
+// KnowledgeService with a nil store must itself degrade cleanly (defense in depth): the store-touching methods must not nil-panic.
+// With nil factory the embedder check surfaces first (also no panic); the store-nil guard is what would have panicked previously once an embedder succeeds.
 func TestKnowledgeService_NilStore_DegradesCleanly(t *testing.T) {
 	svc := rag.NewKnowledgeService(nil, nil, nil)
 
@@ -111,9 +105,7 @@ func (d directionEmbedder) Embed(_ context.Context, text []string) ([][]float32,
 	return out, nil
 }
 
-// newKnowledgeGuardRouter serves the knowledge routes for an org whose admin
-// is the (local-mode) caller and whose corpus was indexed as [1 0]; the
-// caller embeds as callerVec.
+// newKnowledgeGuardRouter serves the knowledge routes for an org whose admin is the (local-mode) caller and whose corpus was indexed as [1 0]; the caller embeds as callerVec.
 func newKnowledgeGuardRouter(t *testing.T, callerVec []float32) (http.Handler, *testutil.FakeBackend, string) {
 	t.Helper()
 	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
@@ -122,7 +114,7 @@ func newKnowledgeGuardRouter(t *testing.T, callerVec []float32) (http.Handler, *
 		t.Fatalf("create org: %v", err)
 	}
 	store := &testutil.FakeBackend{}
-	_ = store.SaveKnowledgeDocument(bgCtx(), &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
+	_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", []storageif.KnowledgeChunk{
 		{ID: "c1", DocID: "doc-1", Content: "retry every call", Embedding: []float32{1, 0}},
 		{ID: "c2", DocID: "doc-1", Content: "name flows by team", Embedding: []float32{1, 0}},
@@ -155,10 +147,8 @@ func errorCode(t *testing.T, rr *httptest.ResponseRecorder) string {
 	return env.Code
 }
 
-// TestKnowledgeReindex_ModelChanged409UnlessForced pins #35 at the HTTP
-// layer: a re-index whose embedding model differs from the corpus's answers
-// 409 EMBEDDING_MODEL_CHANGED and writes nothing; the same request with
-// {"force": true} re-indexes.
+// TestKnowledgeReindex_ModelChanged409UnlessForced pins #35 at the HTTP layer: a re-index whose embedding model differs from the corpus's answers 409
+// EMBEDDING_MODEL_CHANGED and writes nothing; the same request with {"force": true} re-indexes.
 func TestKnowledgeReindex_ModelChanged409UnlessForced(t *testing.T) {
 	h, store, orgID := newKnowledgeGuardRouter(t, []float32{0, 1})
 	path := "/api/orgs/" + orgID + "/knowledge/reindex"
@@ -190,10 +180,8 @@ func TestKnowledgeReindex_ModelChanged409UnlessForced(t *testing.T) {
 	}
 }
 
-// TestKnowledgeUpload_AzureWithoutEmbeddingDeployment400 pins #16 at the HTTP
-// layer: with Azure AI Foundry opted in but the caller's document naming no
-// embedding deployment, the upload answers 400 EMBEDDING_NOT_CONFIGURED (the
-// panel's guidance) instead of a masked 500 from Embed.
+// TestKnowledgeUpload_AzureWithoutEmbeddingDeployment400 pins #16 at the HTTP layer: with Azure AI Foundry opted in but the caller's document naming no
+// embedding deployment, the upload answers 400 EMBEDDING_NOT_CONFIGURED (the panel's guidance) instead of a masked 500 from Embed.
 func TestKnowledgeUpload_AzureWithoutEmbeddingDeployment400(t *testing.T) {
 	ai.ResetAzureFoundryCaches()
 	factory := ai.NewProviderFactory(func(_, provider string) (string, error) {
@@ -226,11 +214,8 @@ func (s failingAzureEmbedderSource) KnowledgeEmbedder(context.Context, string, s
 	return nil, s.err
 }
 
-// TestKnowledgeUpload_AzureRegistryFailureIs503Masked: when the Azure AI
-// Foundry model registry (or the key store behind it) cannot be read, the
-// upload is no 400 EMBEDDING_NOT_CONFIGURED echoing the driver's error — it
-// names database hosts and roles — but a 503 EMBEDDING_PROVIDER_UNAVAILABLE
-// with masked copy, the frontend's "try again" (review S6).
+// TestKnowledgeUpload_AzureRegistryFailureIs503Masked: when the Azure AI Foundry model registry (or the key store behind it) cannot be read, the upload is
+// no 400 EMBEDDING_NOT_CONFIGURED echoing the driver's error — it names database hosts and roles — but a 503 EMBEDDING_PROVIDER_UNAVAILABLE with masked copy.
 func TestKnowledgeUpload_AzureRegistryFailureIs503Masked(t *testing.T) {
 	const driver = "read the organisation's Azure AI Foundry model registry: failed to connect to `host=10.1.2.3 user=baki_app database=baki`: dial error"
 	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
@@ -314,10 +299,8 @@ func errorEnvelope(t *testing.T, rr *httptest.ResponseRecorder) render.ErrorResp
 	return env
 }
 
-// providerErrorCases is the table of provider-side embedding failures and
-// the status/code they must map to. None is a 500: they are the admin's
-// credentials, deployment or quota (4xx, message kept) or the provider's
-// availability (503, message masked) — never a server fault.
+// providerErrorCases is the table of provider-side embedding failures and the status/code they must map to. None is a 500: they are the admin's credentials,
+// deployment or quota (4xx, message kept) or the provider's availability (503, message masked) — never a server fault.
 var providerErrorCases = []struct {
 	name       string
 	err        error
@@ -337,11 +320,8 @@ var providerErrorCases = []struct {
 	{"unknown deployment", fmt.Errorf("azure ai foundry API: The API deployment for this resource does not exist"), http.StatusBadRequest, "EMBEDDING_PROVIDER_REJECTED", "deployment for this resource does not exist"},
 }
 
-// TestKnowledgeUpload_ProviderErrorsAreNot500 pins the error ladder at the
-// HTTP layer, on both bulk routes: a rotated key, a missing data-plane
-// role, a throttled resource, an outage or a mistyped deployment each get
-// their machine code, and the 4xx envelope keeps the provider's message so
-// the panel can show it.
+// TestKnowledgeUpload_ProviderErrorsAreNot500 pins the error ladder at the HTTP layer, on both bulk routes: a rotated key, a missing data-plane role, a
+// throttled resource, an outage or a mistyped deployment each get their machine code, and the 4xx envelope keeps the provider's message so the panel can show it.
 func TestKnowledgeUpload_ProviderErrorsAreNot500(t *testing.T) {
 	for _, tc := range providerErrorCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -377,11 +357,8 @@ func TestKnowledgeUpload_ProviderErrorsAreNot500(t *testing.T) {
 	}
 }
 
-// TestRenderKnowledgeEmbeddingError_Ladder pins the mapping itself,
-// including the rag sentinels the routes reach through other paths and the
-// ordering hazards (permission-denied before invalid-key; the
-// ErrEmbeddingFailed catch-all last; unknown errors fall through to the
-// caller's 500).
+// TestRenderKnowledgeEmbeddingError_Ladder pins the mapping itself, including the rag sentinels the routes reach through other paths and the ordering hazards
+// (permission-denied before invalid-key; the ErrEmbeddingFailed catch-all last; unknown errors fall through to the caller's 500).
 func TestRenderKnowledgeEmbeddingError_Ladder(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -391,13 +368,13 @@ func TestRenderKnowledgeEmbeddingError_Ladder(t *testing.T) {
 	}{
 		{"not configured", rag.ErrEmbeddingNotConfigured, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED"},
 		{"unavailable", fmt.Errorf("x: %w", rag.ErrEmbeddingUnavailable), http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED"},
-		// F-33: the org sentinel must map ahead of the ErrEmbeddingUnavailable
+		// The org sentinel must map ahead of the ErrEmbeddingUnavailable
 		// case the rag embedder wraps it with.
 		{"org credential has no embedding deployment", fmt.Errorf("%w: azure-foundry: %w", rag.ErrEmbeddingUnavailable, ai.ErrOrgEmbeddingDeploymentMissing), http.StatusBadRequest, "EMBEDDING_ORG_NOT_CONFIGURED"},
-		// F-14.
+		// More passages than one upload may index.
 		{"document too large", fmt.Errorf("%w: 3000 passages exceed the limit of 2500", rag.ErrDocumentTooLarge), http.StatusRequestEntityTooLarge, "KNOWLEDGE_DOCUMENT_TOO_LARGE"},
 		{"model changed", rag.ErrEmbeddingModelChanged, http.StatusConflict, "EMBEDDING_MODEL_CHANGED"},
-		// S6: which model embeds could not be decided (the registry or the
+		// Which model embeds could not be decided (the registry or the
 		// key store unreadable): transient and masked, no configuration gap.
 		{"setup unavailable", fmt.Errorf("embedding provider unavailable: %w", rag.ErrEmbeddingSetupUnavailable), http.StatusServiceUnavailable, "EMBEDDING_PROVIDER_UNAVAILABLE"},
 		{"busy", rag.ErrKnowledgeBusy, http.StatusConflict, "KNOWLEDGE_BUSY"},
@@ -462,9 +439,8 @@ func (a *auditRecordingBackend) lastEvent(t *testing.T, action string) *storagei
 	return nil
 }
 
-// TestKnowledgeReindex_TruncatedSurfacesInBodyAndAudit: a corpus beyond the
-// per-request ceiling answers {"truncated":true} (the panel tells the admin
-// to re-run) and the audit row records it alongside force.
+// TestKnowledgeReindex_TruncatedSurfacesInBodyAndAudit: a corpus beyond the per-request ceiling answers {"truncated":true} (the panel tells the admin to
+// re-run) and the audit row records it alongside force.
 func TestKnowledgeReindex_TruncatedSurfacesInBodyAndAudit(t *testing.T) {
 	// Route the audit rows to the backend directly (no pool in tests, but a
 	// neighbour may have installed one).
@@ -480,7 +456,7 @@ func TestKnowledgeReindex_TruncatedSurfacesInBodyAndAudit(t *testing.T) {
 	store := &auditRecordingBackend{FakeBackend: &testutil.FakeBackend{}}
 	const docs, ceiling = 3, 10000
 	for d := range docs {
-		_ = store.SaveKnowledgeDocument(bgCtx(), &storageif.KnowledgeDocument{ID: fmt.Sprintf("doc-%d", d), OrgID: org.ID, Filename: fmt.Sprintf("doc-%d.md", d)})
+		_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: fmt.Sprintf("doc-%d", d), OrgID: org.ID, Filename: fmt.Sprintf("doc-%d.md", d)})
 	}
 	chunks := make([]storageif.KnowledgeChunk, ceiling+1)
 	for i := range chunks {
@@ -508,9 +484,8 @@ func TestKnowledgeReindex_TruncatedSurfacesInBodyAndAudit(t *testing.T) {
 		t.Errorf("audit meta = %v, want truncated=true and force=true", ev.Meta)
 	}
 
-	// An unforced re-run (the converted corpus is now the caller's model, so
-	// the guard passes) is truncated again — the walk restarts per request —
-	// and its audit row carries truncated without force.
+	// An unforced re-run (the converted corpus is now the caller's model, so the guard passes) is truncated again — the walk restarts per request — and its
+	// audit row carries truncated without force.
 	rr = postJSON(t, r, "/api/orgs/"+org.ID+"/knowledge/reindex", `{}`)
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"truncated":true`) {
 		t.Fatalf("unforced re-run: status = %d, body = %s; want 200 with truncated", rr.Code, rr.Body.String())

@@ -1,15 +1,72 @@
 package render
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
+
+// countingHandler is a slog.Handler that only counts the records it sees.
+type countingHandler struct{ n atomic.Int64 }
+
+func (h *countingHandler) Enabled(context.Context, slog.Level) bool  { return true }
+func (h *countingHandler) Handle(context.Context, slog.Record) error { h.n.Add(1); return nil }
+func (h *countingHandler) WithAttrs([]slog.Attr) slog.Handler        { return h }
+func (h *countingHandler) WithGroup(string) slog.Handler             { return h }
+
+// TestErrorUnlogged_SameResponseNoLog: ErrorUnlogged exists so a public
+// endpoint's configuration 503 stops writing an ERROR line per request. It
+// must put exactly the bytes Error would on the wire — status mapping,
+// machine code, 5xx masking, request ID — and log nothing. Not parallel: it
+// swaps the process-wide slog default, which the parallel Error cases log to.
+func TestErrorUnlogged_SameResponseNoLog(t *testing.T) {
+	logs := &countingHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(logs))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	cases := []struct {
+		name string
+		err  error
+		code int
+	}{
+		{"503 is masked", errors.New("CI webhook not configured: set PAD_CI_WEBHOOK_SECRET"), http.StatusServiceUnavailable},
+		{"zero status defaults to 500", errors.New("boom"), 0},
+		{"domain error auto-maps", service.ErrNotFound, 0},
+		{"4xx keeps its message", errors.New("flowId is required"), http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		want := httptest.NewRecorder()
+		want.Header().Set("X-Request-ID", "req-1")
+		Error(want, c.err, c.code)
+
+		before := logs.n.Load()
+		got := httptest.NewRecorder()
+		got.Header().Set("X-Request-ID", "req-1")
+		ErrorUnlogged(got, c.err, c.code)
+
+		if n := logs.n.Load() - before; n != 0 {
+			t.Errorf("%s: ErrorUnlogged logged %d records, want none", c.name, n)
+		}
+		if got.Code != want.Code {
+			t.Errorf("%s: status %d, Error writes %d", c.name, got.Code, want.Code)
+		}
+		if g, w := got.Header().Get("Content-Type"), want.Header().Get("Content-Type"); g != w {
+			t.Errorf("%s: Content-Type %q, Error writes %q", c.name, g, w)
+		}
+		if got.Body.String() != want.Body.String() {
+			t.Errorf("%s: body %q, Error writes %q", c.name, got.Body.String(), want.Body.String())
+		}
+	}
+}
 
 func TestError(t *testing.T) {
 	t.Parallel()

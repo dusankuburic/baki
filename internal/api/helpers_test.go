@@ -183,8 +183,8 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	libSvc := service.NewLibraryService(backend, flowSvc, authzSvc)
 	analysisSvc, err := service.NewAnalysisService(notifier, settings, nil)
 	if err != nil {
-		// maxAnalysisReports is a >0 const so lru.New never errors in
-		// practice; this helper isn't t-aware, so panic is acceptable.
+		// NewAnalysisService keeps an error return for the DI signature but
+		// never fails; this helper isn't t-aware, so panic is acceptable.
 		panic("NewAnalysisService: " + err.Error())
 	}
 	exportSvc := service.NewExportService(notifier, flowSvc, analysisSvc)

@@ -33,7 +33,10 @@ func TestSearch_ScrubsQueryBeforeEmbedding(t *testing.T) {
 	// Assembled so no credential scanner matches the test source.
 	secret := "sk_" + "live_" + strings.Repeat("abcdefgh", 3)
 	emb := &recordingEmbedder{}
-	svc := NewKnowledgeService(&testutil.FakeBackend{}, nil, nil, WithEmbedder(emb))
+	// One indexed chunk: an org with nothing indexed skips the embedding.
+	store := &testutil.FakeBackend{}
+	seedCorpus(store, []float32{1}, "retry policy: three attempts")
+	svc := NewKnowledgeService(store, nil, nil, WithEmbedder(emb))
 
 	if _, err := svc.Search(context.Background(), "scope", "org-1", "deploy with api_key="+secret+" and tell me the retry policy"); err != nil {
 		t.Fatalf("Search: %v", err)

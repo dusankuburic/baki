@@ -136,7 +136,7 @@ func TestAzureFoundryConfig_Validate(t *testing.T) {
 		{"project dot", AzureFoundryConfig{Endpoint: "https://my-res.services.ai.azure.com", Auth: entra, ProjectEndpoint: "https://my-res.services.ai.azure.com/api/projects/."}, AzureCfgErrInvalidProject},
 		{"project leading dash", AzureFoundryConfig{Endpoint: "https://my-res.services.ai.azure.com", Auth: entra, ProjectEndpoint: "https://my-res.services.ai.azure.com/api/projects/-p"}, AzureCfgErrInvalidProject},
 		{"project digit first", AzureFoundryConfig{Endpoint: "https://my-res.services.ai.azure.com", Auth: entra, ProjectEndpoint: "https://my-res.services.ai.azure.com/api/projects/1proj.v2"}, ""},
-		// Serverless (MaaS) endpoints are refused outright (F-09): the
+		// Serverless (MaaS) endpoints are refused outright: the
 		// provider speaks only /openai/v1, which they do not serve;
 		// Microsoft's other *.ai.azure.com hosts are no resource's endpoint.
 		{"serverless models host", AzureFoundryConfig{Endpoint: "https://phi-4-xyz.eastus2.models.ai.azure.com", Auth: apiKey}, AzureCfgErrInvalidEndpoint},
@@ -144,7 +144,7 @@ func TestAzureFoundryConfig_Validate(t *testing.T) {
 		{"other ai.azure.com host", AzureFoundryConfig{Endpoint: "https://foo.ai.azure.com", Auth: apiKey}, AzureCfgErrHostNotAllowed},
 		{"unknown mode", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: AzureFoundryAuth{Mode: "managed"}}, AzureCfgErrInvalidAuth},
 		{"bad deployment name", AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", Auth: apiKey, ChatDeployment: "my deployment!"}, AzureCfgErrInvalidDeploy},
-		// Finding #14: IP literals never pass, whatever suffix a zone carries.
+		// IP literals never pass, whatever suffix a zone carries.
 		{"zoned ipv6 loopback", AzureFoundryConfig{Endpoint: "https://[::1%25.openai.azure.com]", Auth: apiKey}, AzureCfgErrHostNotAllowed},
 		{"zoned 4-in-6 metadata", AzureFoundryConfig{Endpoint: "https://[::ffff:169.254.169.254%25.openai.azure.com]", Auth: apiKey}, AzureCfgErrHostNotAllowed},
 		{"plain ipv6 literal", AzureFoundryConfig{Endpoint: "https://[::1]", Auth: apiKey}, AzureCfgErrHostNotAllowed},
@@ -352,7 +352,7 @@ func TestAzureHostPolicy(t *testing.T) {
 		"evil.example":                       false,
 		"127.0.0.1":                          false,
 		"my-res.openai.azure.com.evil.com":   false,
-		// Finding #14: zoned IPv6 and 4-in-6 literals carrying an allowed
+		// zoned IPv6 and 4-in-6 literals carrying an allowed
 		// suffix in the zone, and bare IPv6 literals.
 		"::1%.openai.azure.com":             false,
 		"::ffff:10.0.0.5%.openai.azure.com": false,
@@ -368,7 +368,7 @@ func TestAzureHostPolicy(t *testing.T) {
 	}
 }
 
-// Finding #13: behind an HTTP(S) proxy on a private address (a corporate
+// behind an HTTP(S) proxy on a private address (a corporate
 // egress proxy; here on loopback) the guarded Azure client reaches the
 // resource through the proxy instead of refusing the proxy's own address, and
 // a target that resolves to an internal address is refused in the proxy hook
@@ -563,7 +563,7 @@ func TestAzureRuntimeZeroValueClientIsNoRedirectsAndWarnsOnce(t *testing.T) {
 	}
 }
 
-// F-09: serverless *.models.ai.azure.com endpoints are refused with the
+// Serverless *.models.ai.azure.com endpoints are refused with the
 // migration message even when an operator lists the zone in
 // PAD_AZURE_FOUNDRY_ALLOWED_HOSTS — the provider only speaks /openai/v1,
 // which those endpoints never serve.
@@ -588,7 +588,7 @@ func TestAzureFoundry_ServerlessModelsHostRefusedEvenWhenAllowListed(t *testing.
 	}
 }
 
-// F-51: the Azure CLI sign-in mode (entra_cli) — the desktop user's own
+// The Azure CLI sign-in mode (entra_cli) — the desktop user's own
 // identity, no app registration, no secret.
 func TestAzureFoundry_EntraCLIMode(t *testing.T) {
 	valid := AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com",

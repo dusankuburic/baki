@@ -3,14 +3,16 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"pad-analyzer/internal/service"
+	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
-
-// ── Finding Comments API ──────────────────────────────────────────
 
 func TestComments_AddListDelete(t *testing.T) {
 	rt, _ := newLibraryTestRouter(t)
@@ -148,8 +150,6 @@ func TestComments_UnauthorizedUser(t *testing.T) {
 	}
 }
 
-// ── Share Token API ───────────────────────────────────────────────
-
 func TestShareTokens_CreateListRevoke(t *testing.T) {
 	rt, _ := newLibraryTestRouter(t)
 	seedAnalyzableFlow(t, rt, "flow1", "alice")
@@ -210,22 +210,6 @@ func TestShareTokens_MissingToken(t *testing.T) {
 	}
 }
 
-// ── Preview-Fix: cloud mode should reject ─────────────────────────
-
-// Cloud-mode preview-fix is now ENABLED (was 403) — see
-// TestPreviewFix_CloudMode_Works in handlers_flow_cloudfix_test.go.
-func TestPreviewFix_CloudModeForbidden(t *testing.T) {
-	t.Skip("cloud-mode preview-fix is now enabled; see TestPreviewFix_CloudMode_Works")
-}
-
-// Cloud-mode apply-fix is now ENABLED (was 403) — see TestApplyFix_CloudMode_Works
-// in handlers_flow_cloudfix_test.go. This stub kept the import set stable.
-func TestApplyFix_CloudModeForbidden(t *testing.T) {
-	t.Skip("cloud-mode apply-fix is now enabled; see TestApplyFix_CloudMode_Works")
-}
-
-// ── SARIF Export ──────────────────────────────────────────────────
-
 func TestExportSARIF(t *testing.T) {
 	rt, _ := newLibraryTestRouter(t)
 	seedAnalyzableFlow(t, rt, "flow1", "alice")
@@ -245,8 +229,6 @@ func TestExportSARIF(t *testing.T) {
 	}
 }
 
-// ── Webhook Notifier ──────────────────────────────────────────────
-
 func TestWebhookNotifier_DisabledByDefault(t *testing.T) {
 	wn := service.NewWebhookNotifier(nil)
 	if wn.Enabled() {
@@ -254,4 +236,141 @@ func TestWebhookNotifier_DisabledByDefault(t *testing.T) {
 	}
 	// NotifyAnalysis should be a safe no-op
 	wn.NotifyAnalysis("test-flow", nil)
+}
+
+// commentFanoutBackend wraps the filesystem backend in ATOMIC counters for the fan-out's three storage
+// touches: the fan-out runs on detached pools, so plain counters would race the email leg, and
+// alertWrites counts completions so a test can wait out the store's writes before TempDir cleanup.
+type commentFanoutBackend struct {
+	*filesystem.LocalStorageBackend
+	probes      atomic.Int64 // GetFindingStatus calls, fan-out included
+	lists       atomic.Int64 // ListFindingStatuses calls, fan-out included
+	alerts      atomic.Int64 // RecordGovernanceAlert calls
+	alertWrites atomic.Int64 // RecordGovernanceAlert completions
+}
+
+func (b *commentFanoutBackend) GetFindingStatus(ctx context.Context, flowID, findingKey string) (*storageif.FindingStatus, error) {
+	b.probes.Add(1)
+	return b.LocalStorageBackend.GetFindingStatus(ctx, flowID, findingKey)
+}
+
+func (b *commentFanoutBackend) ListFindingStatuses(ctx context.Context, flowID string) ([]*storageif.FindingStatus, error) {
+	b.lists.Add(1)
+	return b.LocalStorageBackend.ListFindingStatuses(ctx, flowID)
+}
+
+func (b *commentFanoutBackend) RecordGovernanceAlert(ctx context.Context, a *storageif.GovernanceAlert) error {
+	b.alerts.Add(1)
+	err := b.LocalStorageBackend.RecordGovernanceAlert(ctx, a)
+	b.alertWrites.Add(1)
+	return err
+}
+
+// noStatusProbeBackend shadows GetFindingStatus with an incompatible signature so the wrapper fails
+// storageif.FindingStatusGetter while still satisfying StorageBackend — forcing the comment handlers
+// onto the ListFindingStatuses fallback that backends predating the single-row probe take.
+type noStatusProbeBackend struct {
+	*commentFanoutBackend
+}
+
+// GetFindingStatus never runs: the 4-argument signature exists only to shadow
+// the promoted 3-argument probe out of this type's method set.
+func (b *noStatusProbeBackend) GetFindingStatus(ctx context.Context, flowID, findingKey, shadowed string) (*storageif.FindingStatus, error) {
+	return nil, fmt.Errorf("unreachable: the single-row probe is shadowed on purpose")
+}
+
+// newCommentFanoutRouter builds a JWT test router over the counting backend.
+func newCommentFanoutRouter(t *testing.T) (*Router, *commentFanoutBackend) {
+	t.Helper()
+	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
+	if err != nil {
+		t.Fatalf("create local storage: %v", err)
+	}
+	fb := &commentFanoutBackend{LocalStorageBackend: fs}
+	return newTestRouter(fb, true), fb
+}
+
+// waitForFanoutQuiescence returns once no fan-out counter has moved for 150 ms: the fan-outs run on
+// detached pools, so the test must not let TempDir cleanup remove the store while a counted call (or the
+// store write inside it) can still land; after the last counted call the remaining work only reads.
+func waitForFanoutQuiescence(t *testing.T, fb *commentFanoutBackend) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		before := fb.probes.Load() + fb.lists.Load() + fb.alertWrites.Load()
+		time.Sleep(150 * time.Millisecond)
+		if fb.probes.Load()+fb.lists.Load()+fb.alertWrites.Load() == before {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("comment fan-out never quiesced (probes=%d lists=%d alertWrites=%d)",
+				fb.probes.Load(), fb.lists.Load(), fb.alertWrites.Load())
+		}
+	}
+}
+
+// TestComments_AssigneeLookupSingleRow: the fan-out used to walk every finding_status row twice per
+// comment (bell alerts + assignee email) to find the one assignee; with the single-row probe both
+// lookups must read exactly that row and the flow's status list must never be walked.
+func TestComments_AssigneeLookupSingleRow(t *testing.T) {
+	rt, fb := newCommentFanoutRouter(t)
+	seedAnalyzableFlow(t, rt, "flow1", "alice")
+	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
+
+	// Give the finding an assignee first (the triage write's own probe call is
+	// not this test's subject; only the deltas after it are asserted).
+	set := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/triage/set", bearer, map[string]any{
+		"flowId": "flow1", "findingKey": "r1:b1", "ruleId": "r1", "status": "in_progress", "assigneeId": "bob",
+	})
+	checkStatus(t, set, http.StatusOK)
+	alertsBefore := fb.alerts.Load()
+
+	add := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/comments/add", bearer, map[string]any{
+		"flowId": "flow1", "findingKey": "r1:b1", "body": "looks fixed to me",
+	})
+	checkStatus(t, add, http.StatusOK)
+	// The fan-out is detached; bob (the assignee, not the actor) gets exactly
+	// one comment_added bell alert, which also proves the assignee was found.
+	waitUntil(t, "assignee comment alert", func() bool { return fb.alerts.Load() == alertsBefore+1 })
+	waitForFanoutQuiescence(t, fb)
+
+	if got := fb.lists.Load(); got != 0 {
+		t.Errorf("comment fan-out listed the flow's statuses %d times, want 0 (single-row probe)", got)
+	}
+	if got := fb.probes.Load(); got < 1 {
+		t.Errorf("comment fan-out used the single-row probe %d times, want at least 1", got)
+	}
+}
+
+// TestComments_AssigneeLookupFallback: without the single-row probe the
+// comment fan-out must still find the assignee, via the list-based fallback.
+func TestComments_AssigneeLookupFallback(t *testing.T) {
+	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
+	if err != nil {
+		t.Fatalf("create local storage: %v", err)
+	}
+	fb := &commentFanoutBackend{LocalStorageBackend: fs}
+	rt := newTestRouter(&noStatusProbeBackend{fb}, true)
+	seedAnalyzableFlow(t, rt, "flow1", "alice")
+	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
+
+	set := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/triage/set", bearer, map[string]any{
+		"flowId": "flow1", "findingKey": "r1:b1", "ruleId": "r1", "status": "in_progress", "assigneeId": "bob",
+	})
+	checkStatus(t, set, http.StatusOK)
+	listsBefore := fb.lists.Load()
+	alertsBefore := fb.alerts.Load()
+
+	add := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/comments/add", bearer, map[string]any{
+		"flowId": "flow1", "findingKey": "r1:b1", "body": "fallback still notifies the assignee",
+	})
+	checkStatus(t, add, http.StatusOK)
+	waitUntil(t, "assignee comment alert (fallback)", func() bool { return fb.alerts.Load() == alertsBefore+1 })
+	waitForFanoutQuiescence(t, fb)
+
+	// The bell-alert leg of the fan-out lists the statuses synchronously before
+	// the alert it precedes is recorded, so the fallback path has run by now.
+	if got := fb.lists.Load(); got <= listsBefore {
+		t.Errorf("fallback comment fan-out listed statuses %d times, want more than the pre-comment %d", got, listsBefore)
+	}
 }

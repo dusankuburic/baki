@@ -18,7 +18,6 @@ func TestParseTextWithProgress_NilCallback_DelegatesToParseText(t *testing.T) {
 		t.Fatal("expected non-nil document")
 	}
 
-	// Must produce the same result as ParseText for the same input.
 	docDirect, err := ParseText(samplePAD, "test.txt", int64(len(samplePAD)))
 	if err != nil {
 		t.Fatalf("ParseText: %v", err)
@@ -29,7 +28,6 @@ func TestParseTextWithProgress_NilCallback_DelegatesToParseText(t *testing.T) {
 }
 
 func TestParseTextWithProgress_SmallFile_DelegatesToParseText(t *testing.T) {
-	// fileSize < 1_000_000 → delegates even with a non-nil callback.
 	called := false
 	doc, err := ParseTextWithProgress(samplePAD, "test.txt", 100, func(pct int, msg string) {
 		called = true

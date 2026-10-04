@@ -123,10 +123,8 @@ var APIModule = fx.Options(
 		ProvideHandlers,
 		ProvideFlowAccessChecker,
 		api.NewEventManager,
-		// Adapter: *redis.Client (nil when PAD_REDIS_URL is unset) → api.RedisPinger.
-		// Wraps the cmd-returning Ping into the simple error-returning interface
-		// the readiness probe wants. Nil client produces a nil RedisPinger so the
-		// SystemHandler skips the Redis check entirely in single-replica mode.
+		// Adapter: *redis.Client (nil when PAD_REDIS_URL is unset) →
+		// api.RedisPinger (see ProvideRedisPinger above).
 		ProvideRedisPinger,
 		api.NewSystemHandler,
 		api.NewFlowHandler,

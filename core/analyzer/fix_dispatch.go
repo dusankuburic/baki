@@ -7,16 +7,9 @@ import (
 )
 
 // PatchForFix builds the patch for a deterministic auto-fix, dispatching on
-// fixType. It is the single source of truth for the fixType → patch mapping,
-// shared by FlowService.generateFixPatch (desktop/server apply-fix + preview)
-// and the headless CLI (bakicli fix). Keeping the dispatch in the analyzer
-// package means the CLI can apply fixes without depending on FlowService
-// (which carries desktop file-path/storage wiring).
-//
-// variable and property come from the finding's Metadata (keys "variable" /
-// "property"); only the fixers that need them read them. ruleID is used only by
-// the "suppress" fix (to write the pad-ignore directive). Returns an empty
-// patch (no ops) and an error for an unknown fixType.
+// fixType: the single source of truth shared by FlowService.generateFixPatch
+// and the headless CLI. variable/property come from the finding's Metadata;
+// ruleID is used only by the "suppress" fix. Unknown fixType ⇒ empty patch + error.
 func PatchForFix(block *models.Block, fixType, ruleID, variable, property string) (models.Patch, error) {
 	switch fixType {
 	case "wrap-error-handler":
@@ -62,54 +55,36 @@ func PatchForFix(block *models.Block, fixType, ruleID, variable, property string
 	}
 }
 
-// behaviourChangingFixes are fix types that alter what the flow DOES at runtime,
-// as opposed to how it handles failure.
+// behaviourChangingFixes are fix types that alter what the flow DOES at
+// runtime, as opposed to how it handles failure. Nothing used to enforce
+// that: the fix loop applied any finding with a non-empty AutoFix, so
+// `bakicli fix` applied them unattended and the round-trip gate reported
+// success because the finding had disappeared — never asking whether the
+// flow still means the same thing.
 //
-// Both entries say so in their own doc comments — they are "stop the bleed"
-// fixes the user is expected to follow up on. Nothing enforced that: the fix
-// loop applies any finding carrying a non-empty AutoFix, so `bakicli fix` and
-// the UI's "fix all" applied them unattended, and the round-trip gate reported
-// success because the finding had indeed disappeared. What the gate never asked
-// was whether the flow still means the same thing.
-//
-//   - sanitize-command-vars replaces each %Var% in a command line with NOTHING,
-//     so `robocopy %Src% %Dst% /MIR` becomes `robocopy   /MIR` — a mirror-delete
-//     against an empty source.
+//   - sanitize-command-vars replaces each %Var% in a command line with
+//     NOTHING (`robocopy %Src% %Dst% /MIR` becomes a mirror-delete against
+//     an empty source).
 //   - mask-sensitive-variable substitutes '*** MASKED ***' for a credential
 //     reference, so the request still goes out and now fails authentication.
 //
-// Deliberately NOT included: remove-block. Deleting a block the analyzer has
-// shown to be unreachable or redundant does not change a successful run — the
-// risk there is the ANALYSIS being wrong, which is a correctness problem in the
-// rule, not a reason to gate the fix.
-//
-// Also not included: parameterize-sql. It rewrites %Var% to @Var, which is
-// behaviour-changing only if PAD has no bind-parameter support at that call
-// site. I could not verify that, and gating it on a guess would be its own kind
-// of wrong.
+// Deliberately NOT included: remove-block (deleting an unreachable block does
+// not change a successful run — the risk is the ANALYSIS being wrong); and
+// parameterize-sql (behaviour-changing only if PAD lacks bind-parameter
+// support at that call site, which could not be verified — gating it on a
+// guess would be its own kind of wrong).
 var behaviourChangingFixes = map[string]bool{
 	"sanitize-command-vars":   true,
 	"mask-sensitive-variable": true,
-	// replace-with-variable swaps a working literal for %input_<prop>% and
-	// emits NO companion initialisation, so the flow is left referencing a
-	// variable that is defined nowhere. Measured on the default fix loop:
-	//
-	//	HTTPClient.InvokeUrl Url: $'''http://10.1.2.3/api'''
-	//	  -> HTTPClient.InvokeUrl Url: $'''%input_url%'''      (never defined)
-	//	File.ReadFromFile Path: $'''C:\Users\bob\in.txt'''
-	//	  -> File.ReadFromFile Path: $'''%input_path%'''       (never defined)
-	//
-	// That is exactly the failure mode mask-sensitive-variable is gated for —
-	// the action still runs and now fails — and the analyzer calls the result
-	// clean, because rule_uninitialized_variable deliberately ignores the
-	// input_ prefix. It is the auto-fix for hardcoded-credential,
-	// hardcoded-url, hardcoded-ip, hardcoded-filepath and
-	// hardcoded-ui-coordinates, i.e. the security findings a user is most
-	// likely to accept from a one-line approval card.
-	//
-	// Parameterising a flow is the right advice; doing it unattended is not.
-	// It stays available under the explicit opt-in (bakicli fix -unsafe /
-	// FixOptions.IncludeBehaviourChanging).
+	// replace-with-variable swaps a working literal for %input_<prop>% with
+	// NO companion initialisation, leaving the flow referencing a variable
+	// defined nowhere — the same failure mode mask-sensitive-variable is gated
+	// for, and the analyzer calls the result clean (rule_uninitialized_variable
+	// deliberately ignores the input_ prefix). It is the auto-fix for the
+	// hardcoded-* security findings a user is most likely to accept from a
+	// one-line approval card: parameterising is the right advice, doing it
+	// unattended is not — it stays behind the explicit opt-in
+	// (FixOptions.IncludeBehaviourChanging).
 	"replace-with-variable": true,
 }
 

@@ -18,16 +18,8 @@ import (
 	"pad-analyzer/internal/service"
 )
 
-// TestAzureFoundryE2E drives baki's Azure AI Foundry integration end to end,
-// in-process, through the REAL HTTP API (JWT/cloud-mode router served over
-// HTTP, client-visible chat events read from GET /api/events) against a FAKE
-// Foundry resource that asserts the exact wire requests and answers with
-// realistic Azure payloads. See azure_foundry_e2e_helpers_test.go for the
-// harness and the redirect seam.
-//
-// Each subtest runs as its own user on its own resource host
-// (<name>.unit-test.invalid), so circuit-breaker, served-model and listing
-// state never leak between scenarios.
+// TestAzureFoundryE2E drives baki's Azure AI Foundry integration end to end, in-process, through the REAL HTTP API (JWT/cloud-mode router served over HTTP, client-visible chat events read from GET /api/events) against a FAKE Foundry resource that asserts the exact wire requests and answers with realistic Azure payloads; see azure_foundry_e2e_helpers_test.go for the harness and the redirect seam.
+// Each subtest runs as its own user on its own resource host (<name>.unit-test.invalid), so circuit-breaker, served-model and listing state never leak between scenarios.
 func TestAzureFoundryE2E(t *testing.T) {
 	env := newAzureE2EEnv(t)
 
@@ -67,10 +59,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 			}
 		}
 
-		// The listing is the model registry's: the document's deployments
-		// became models of its resource "default" — "m/<id>" ids answering
-		// for their pre-registry ids (aliases, one release) — and the
-		// embedding deployment is not offered for chat.
+		// The listing is the model registry's: the document's deployments became models of its resource "default" — "m/<id>" ids answering for their pre-registry ids (aliases, one release) — and the embedding deployment is not offered for chat.
 		p := env.providerInfo(t, u.bearer, "")
 		if p["configured"] != true || p["shared"] == true || p["suggestDiscovery"] == true {
 			t.Errorf("listing configured/shared/suggestDiscovery = %v/%v/%v, want true/false/false", p["configured"], p["shared"], p["suggestDiscovery"])
@@ -90,10 +79,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 		if gpt == nil || router == nil || cl == nil || azE2EModelByAlias(p, "text-embedding-3-small") != nil {
 			t.Fatalf("models = %v, want gpt-4o, model-router and claude:claude-sonnet-4-6 by alias, no embedding", p["models"])
 		}
-		// The server default (plan 9.2, rule 1): the single-document save
-		// stores its document as saved, so its chat deployment gpt-4o is
-		// the default — not claude-sonnet-4-6, which display order (purpose,
-		// then name) would put first.
+		// The server default (plan 9.2, rule 1): the single-document save stores its document as saved, so its chat deployment gpt-4o is the default — not claude-sonnet-4-6, which display order (purpose, then name) would put first.
 		if p["defaultModel"] != gpt["id"] || gpt["isDefault"] != true || cl["isDefault"] == true {
 			t.Errorf("defaultModel = %v (gpt-4o isDefault %v, claude isDefault %v), want gpt-4o's %v",
 				p["defaultModel"], gpt["isDefault"], cl["isDefault"], gpt["id"])
@@ -129,9 +115,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 			azE2EWriteJSON(w, http.StatusOK, azE2ECompletionJSON("Hello! How can I help you today?", 8, 9))
 		})
 
-		// The Test button (/api/providers/test, deprecated with the model
-		// registry) tests resource "default": an authenticated probe of its
-		// v1 model route — no model call, nothing billed.
+		// The Test button (/api/providers/test, deprecated with the model registry) tests resource "default": an authenticated probe of its v1 model route — no model call, nothing billed.
 		var res map[string]any
 		env.mustDo(t, http.MethodPost, "/api/providers/test", u.bearer, map[string]any{"provider": ai.AzureFoundryProviderID}, http.StatusOK, &res)
 		if res["ok"] != true || res["error"] != nil {
@@ -266,8 +250,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 			t.Errorf("last message = %v, want the user's question", last)
 		}
 
-		// The server persisted the turn (history is server-owned: the client
-		// sent no messages); reload it as a fresh client would.
+		// The server persisted the turn (history is server-owned: the client sent no messages); reload it as a fresh client would.
 		msgs = env.conversation(t, u, u.flowID, conv, 2)
 		if len(msgs) != 2 {
 			t.Fatalf("reloaded conversation = %v, want the question and the answer", msgs)
@@ -314,9 +297,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 
 		conv := uuid.NewString()
 		sse := env.subscribe(t, u.bearer)
-		// A pre-registry id (a stale tab, an API client) still resolves
-		// through its alias for one release; the thread then switches to a
-		// registry id.
+		// A pre-registry id (a stale tab, an API client) still resolves through its alias for one release; the thread then switches to a registry id.
 		first := env.chatOn(t, sse, u, azE2EChatReq{Model: "gpt-4o", Message: "First question", ConversationID: conv})
 		if first.Err != nil || first.Text != "First answer." {
 			t.Fatalf("first turn = err %v text %q", first.Err, first.Text)
@@ -444,9 +425,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 		}
 	})
 
-	// F-47: a near-window Claude prompt is re-checked by the provider's own
-	// tokenizer (Anthropic count_tokens on the Foundry resource). The route is
-	// optional: whatever it answers, the chat turn still succeeds.
+	// F-47: a near-window Claude prompt is re-checked by the provider's own tokenizer (Anthropic count_tokens on the Foundry resource). The route is optional: whatever it answers, the chat turn still succeeds.
 	claudeReply := func(w http.ResponseWriter, text string) {
 		azE2EWriteSSE(w,
 			azE2EEvent("message_start", map[string]any{"type": "message_start", "message": map[string]any{
@@ -460,14 +439,8 @@ func TestAzureFoundryE2E(t *testing.T) {
 			azE2EEvent("message_stop", map[string]any{"type": "message_stop"}),
 		)
 	}
-	// Claude Haiku 4.5's 200k window; "a " is one cl100k token per two bytes,
-	// so ~300 KB of prompt estimates at ~150k tokens — with the completion
-	// reserve above 70% of the window (and under it), the band in which the
-	// estimate's ~30% Claude undercount could hide an overflow and the
-	// provider's tokenizer is asked. (The bytes alone decide nothing: review
-	// #4 B4 gates the count on the estimate, so a prompt whose BYTES merely
-	// crossed 80% of the window — 168 KB of "lorem " is ~28k tokens — no
-	// longer pays a round trip.)
+	// Claude Haiku 4.5's 200k window; "a " is one cl100k token per two bytes, so ~300 KB of prompt estimates at ~150k tokens — with the completion reserve above 70% of the window (and under it), the band where the estimate's ~30% Claude undercount could hide an overflow and the provider's tokenizer is asked.
+	// The bytes alone decide nothing (review #4 B4 gates the count on the estimate): a prompt whose BYTES merely crossed 80% of the window (168 KB of "lorem " is ~28k tokens) pays no round trip.
 	nearWindow := strings.Repeat("a ", 150000)
 	claudeCountDoc := func(host, key string) map[string]any {
 		doc := azE2EAPIKeyDoc(host, key)
@@ -539,9 +512,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 		env.saveConfig(t, u, claudeCountDoc(host, "s4c-secret-key"))
 		env.fake.handle(host, func(w http.ResponseWriter, _ *http.Request, rec azE2ERequest, _ int) {
 			if rec.Path == "/anthropic/v1/messages/count_tokens" {
-				// The gateway's route-level 404 (no count_tokens route on this
-				// resource). Anthropic's own not_found_error envelope names one
-				// request's unknown model instead and is not memoised (A6).
+				// The gateway's route-level 404 (no count_tokens route on this resource); Anthropic's own not_found_error envelope names one request's unknown model instead and is not memoised (A6).
 				azE2EWriteJSON(w, http.StatusNotFound, `{"error":{"code":"404","message":"Resource not found"}}`)
 				return
 			}
@@ -672,10 +643,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 					t.Errorf("retry %d came %s after the 429, want at least the retry-after-ms hint %s", i, gap, hint)
 				}
 			}
-			// The first backoff is at most 500 ms of jitter or the 150 ms
-			// hint: a wait of the coarse retry-after (5 s) means the ms hint
-			// was ignored. Asserting against the 5 s coarse value keeps the
-			// guard while leaving headroom for -race CI scheduling stalls.
+			// The first backoff is at most 500 ms of jitter or the 150 ms hint: a wait of the coarse retry-after (5 s) means the ms hint was ignored. Asserting against the 5 s coarse value keeps the guard while leaving headroom for -race CI scheduling stalls.
 			if gap := reqs[1].At.Sub(reqs[0].At); gap >= 5*time.Second {
 				t.Errorf("first retry waited %s: the retry-after-ms hint must win over the coarse retry-after (5 s)", gap)
 			}
@@ -808,9 +776,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 			}
 		})
 
-		// The picker offers only the models the user added: an Entra ID +
-		// project resource with none yet lists nothing, suggests
-		// discovering its project, and costs no request.
+		// The picker offers only the models the user added: an Entra ID + project resource with none yet lists nothing, suggests discovering its project, and costs no request.
 		signInsBefore := len(env.fake.requests(azE2EAADHost))
 		p := env.providerInfo(t, u.bearer, "")
 		if p["configured"] != true || len(azE2EModelIDs(p)) != 0 || p["defaultModel"] != "" || p["suggestDiscovery"] != true {
@@ -838,10 +804,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 			t.Errorf("defaultModel = %v, want gpt-4o's %s", p["defaultModel"], gptID)
 		}
 
-		// The listing never waits on Azure; it refreshes the project's own
-		// listing in the background: an Entra ID sign-in (client
-		// credentials, the Foundry scope), then the deployments and the
-		// agents on the Entra bearer.
+		// The listing never waits on Azure; it refreshes the project's own listing in the background: an Entra ID sign-in (client credentials, the Foundry scope), then the deployments and the agents on the Entra bearer.
 		var sawDeployments, sawAgents bool
 		deadline := time.Now().Add(5 * time.Second)
 		for (!sawDeployments || !sawAgents) && time.Now().Before(deadline) {
@@ -886,9 +849,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 			}
 		}
 
-		// The Test button tests resource "default" without a model call: a
-		// sign-in, the v1 model route and the project, on the Entra bearer
-		// (never an api-key).
+		// The Test button tests resource "default" without a model call: a sign-in, the v1 model route and the project, on the Entra bearer (never an api-key).
 		before := len(env.fake.requests(host))
 		var res map[string]any
 		env.mustDo(t, http.MethodPost, "/api/providers/test", u.bearer, map[string]any{"provider": ai.AzureFoundryProviderID}, http.StatusOK, &res)
@@ -1181,11 +1142,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 			t.Errorf("org connection test = %v", test)
 		}
 
-		// A member without a resource of their own is offered the org's
-		// models, flagged shared: the saved configuration became the org's
-		// resource "default", its chat deployment the org's default for
-		// members (and, for a member without a "default" of their own, the
-		// answer to the pre-registry id gpt-4o).
+		// A member without a resource of their own is offered the org's models, flagged shared: the saved configuration became the org's resource "default", its chat deployment the org's default for members (and, for a member without a "default" of their own, the answer to the pre-registry id gpt-4o).
 		p := env.providerInfo(t, memberU.bearer, org.ID)
 		sharedModel := azE2EModelByAlias(p, "gpt-4o")
 		sharedID, _ := sharedModel["id"].(string)
@@ -1261,9 +1218,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 		distilledID, _ := distilled["modelId"].(string)
 		gptID := env.modelIDFor(t, u, "gpt-4o")
 
-		// An unknown or removed model is refused at create time — 400
-		// MODEL_NOT_AVAILABLE, the text goes back to the composer — and by
-		// the preview alike; neither reaches the resource.
+		// An unknown or removed model is refused at create time — 400 MODEL_NOT_AVAILABLE, the text goes back to the composer — and by the preview alike; neither reaches the resource.
 		env.chatRefused(t, u, azE2EChatReq{Model: "m/zzzzzzzzzz", Message: "q"})
 		var refused map[string]any
 		env.mustDo(t, http.MethodPost, "/api/chat/preview-context", u.bearer, map[string]any{
@@ -1288,9 +1243,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 			t.Errorf("refusals and previews made %d request(s) to the resource", n)
 		}
 
-		// model "" is the server default — the first chat model in display
-		// order, gpt-4o (general before documentation) — stored with its
-		// registry id.
+		// model "" is the server default — the first chat model in display order, gpt-4o (general before documentation) — stored with its registry id.
 		conv := uuid.NewString()
 		if out := env.chat(t, u, azE2EChatReq{Message: "Which model?", ConversationID: conv}); out.Err != nil || out.Text != "Default answer." {
 			t.Fatalf("default model turn = err %v text %q", out.Err, out.Text)

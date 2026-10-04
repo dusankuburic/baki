@@ -176,7 +176,7 @@ export default function ChatHeader({
       // A Foundry agent always runs the tool loop with the tools its portal
       // definition carries — baki's flow tools are never sent and the
       // per-thread useTools flag is ignored — so an on/off toggle would be
-      // inert. Offer an unavailable item that says so instead (F-39) — with
+      // inert. Offer an unavailable item that says so instead — with
       // its reason, so it stays reachable by keyboard and the reason is read.
       // An agent is known by its listed kind (a registry entry is
       // "m/<id>"), or by the pre-registry "agent:" prefix before the listing

@@ -144,7 +144,7 @@ describe('MessageBubble — provider errors', () => {
     expect(screen.queryByRole('button', {name: 'Open settings'})).toBeNull()
   })
 
-  // F-42: a failure on the organisation's shared credential also offers the
+  // A failure on the organisation's shared credential also offers the
   // Organizations section — the member cannot fix it under their own
   // Accounts.
   it('a shared-credential auth failure also offers the organisation section', () => {
@@ -221,7 +221,8 @@ describe('MessageBubble — model labels', () => {
     expect(screen.getByText('· removed model')).toBeInTheDocument()
   })
 
-  // C6: a turn sent before the listing loaded stored its raw id as the label.
+  // A label that is only the id is no label: a turn sent before the listing
+  // loaded stored its raw id there.
   it('takes a label that is only the id for none', () => {
     const {rerender} = render(
       <MessageBubble message={azureMsg({modelLabel: 'm/docs000000'})} modelLabel="Docs writer" />,
@@ -232,7 +233,7 @@ describe('MessageBubble — model labels', () => {
     expect(screen.queryByText(/m\/docs000000/)).toBeNull()
   })
 
-  // C5: while nothing can be sent, Retry and Regenerate stay reachable and
+  // While nothing can be sent, Retry and Regenerate stay reachable and
   // say why they do nothing.
   it('keeps Retry and Regenerate reachable but unavailable while nothing can be sent, with the reason', () => {
     const onRegenerate = vi.fn()

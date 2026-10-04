@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// ---- toOpenAIMessages: system prompt path ----------------------------------
-
 func TestToOpenAIMessages_WithSystemPrompt(t *testing.T) {
 	msgs := []Message{{Role: "user", Content: "hello"}}
 	out := toOpenAIMessages("You are helpful", msgs)
@@ -36,8 +34,6 @@ func TestToOpenAIMessages_NoSystemPrompt(t *testing.T) {
 	}
 }
 
-// ---- toGeminiContents: assistant → "model" role ----------------------------
-
 func TestToGeminiContents_AssistantRole_MappedToModel(t *testing.T) {
 	msgs := []Message{
 		{Role: "user", Content: "hi"},
@@ -54,8 +50,6 @@ func TestToGeminiContents_AssistantRole_MappedToModel(t *testing.T) {
 		t.Errorf("assistant role should map to 'model', got %q", out[1].Role)
 	}
 }
-
-// ---- GitHubModelsProvider: Stream via httptest -----------------------------
 
 func TestGitHubModelsProvider_Stream_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -97,8 +91,6 @@ func TestGitHubModelsProvider_Stream_Success(t *testing.T) {
 		t.Errorf("text = %q, want %q", text.String(), "GitHub")
 	}
 }
-
-// ---- ClaudeProvider: additional error paths --------------------------------
 
 func TestClaudeProvider_Chat_500(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,8 +141,6 @@ func TestClaudeProvider_Stream_ErrorStatus(t *testing.T) {
 		t.Errorf("expected ErrRateLimited, got: %v", err)
 	}
 }
-
-// ---- OpenAIProvider: additional error paths --------------------------------
 
 func TestOpenAIProvider_Chat_429(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -220,8 +210,6 @@ func TestOpenAIProvider_Stream_ErrorStatus(t *testing.T) {
 		t.Errorf("expected ErrApiKeyInvalid, got: %v", err)
 	}
 }
-
-// ---- GeminiProvider: additional error paths --------------------------------
 
 func TestGeminiProvider_Chat_400_ApiKeyError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

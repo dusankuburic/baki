@@ -72,17 +72,11 @@ func TestProviderCatalogConsistency(t *testing.T) {
 	}
 }
 
-// TestProviderFallbackPricing_MatchesDefaultModelCatalog locks the invariant
-// that keeps the audited-provider pricing fallback honest: for a paid provider,
-// the provider-wide PricePerMillionTokens must equal the catalog pricing of its
-// DefaultModel. audited.record falls back to the provider-wide price when a
-// model ID isn't in the catalog; if that fallback under-reports (GLM shipped
-// 0.01/M against a 1.4/M default — ~140x under-billing), usage for new models
-// is recorded at the wrong cost and the daily budget silently never trips.
-//
-// Free providers (github-models, copilot) report a zero provider-wide
-// price by design — their access is billed at $0 regardless of the catalog's
-// reference prices — so they're exempt.
+// TestProviderFallbackPricing_MatchesDefaultModelCatalog locks the audited-provider pricing fallback: for a paid
+// provider, the provider-wide PricePerMillionTokens must equal its DefaultModel's catalog pricing — audited.record
+// falls back to it for uncatalogued IDs, and GLM once shipped 0.01/M against a 1.4/M default (~140x under-billing),
+// so usage was mispriced and the daily budget never tripped. Free providers (github-models, copilot) are $0 by
+// design — exempt.
 func TestProviderFallbackPricing_MatchesDefaultModelCatalog(t *testing.T) {
 	for _, meta := range AvailableProviders() {
 		t.Run(meta.ID, func(t *testing.T) {

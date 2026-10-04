@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"weak"
 
 	"pad-analyzer/internal/testutil"
 )
@@ -110,5 +111,45 @@ func TestBeginStream_ReplaysJournalOverSSE(t *testing.T) {
 	svc.BeginStream(context.Background(), "s2")
 	if notifier.Count() != 0 {
 		t.Errorf("empty journal replayed %d events", notifier.Count())
+	}
+}
+
+// journalProbe is a payload value whose collection proves the event holding
+// it was released (large enough to stay out of the tiny allocator).
+type journalProbe struct{ _ [256]byte }
+
+func recordProbeEvent(ctl *streamCtl) weak.Pointer[journalProbe] {
+	p := &journalProbe{}
+	ctl.recordJournal("tool_result", map[string]interface{}{"probe": p})
+	return weak.Make(p)
+}
+
+// TestJournal_DroppedEventsUnreachable: the capacity drop must release the
+// oldest half, not reslice past it — the backing array kept the dropped
+// events and their payload maps alive until an append reallocated it.
+func TestJournal_DroppedEventsUnreachable(t *testing.T) {
+	ctl := &streamCtl{}
+	ctl.mu.Lock()
+	oldest := recordProbeEvent(ctl)
+	for i := 1; i < maxJournalEvents; i++ {
+		ctl.recordJournal("tool_result", map[string]interface{}{"i": i})
+	}
+	// The next record crosses the cap and drops the oldest half.
+	ctl.recordJournal("tool_result", map[string]interface{}{"i": maxJournalEvents})
+	ctl.mu.Unlock()
+
+	if !weakCollected(oldest) {
+		t.Fatal("a dropped journal event is still reachable (pinned by the backing array)")
+	}
+	// Behaviour unchanged: the newest half survives, in order.
+	events := ctl.snapshotEvents()
+	if len(events) != maxJournalEvents/2+1 {
+		t.Fatalf("journal holds %d events, want %d", len(events), maxJournalEvents/2+1)
+	}
+	if first, _ := events[0].Data["i"].(int); first != maxJournalEvents/2 {
+		t.Errorf("oldest kept event i=%d, want %d", first, maxJournalEvents/2)
+	}
+	if last, _ := events[len(events)-1].Data["i"].(int); last != maxJournalEvents {
+		t.Errorf("newest event i=%d, want %d", last, maxJournalEvents)
 	}
 }
