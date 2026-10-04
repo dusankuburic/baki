@@ -543,3 +543,22 @@ func (h *SystemHandler) checkBlobCached(ctx context.Context, bc blobHealthChecke
 	h.blobCheckedAt = time.Now()
 	return nil
 }
+
+// --- System & Keys ---
+// registerRoutes wires the system/settings and API-key route groups.
+func (h *SystemHandler) registerRoutes(r chi.Router) {
+	r.Route("/api/system", func(r chi.Router) {
+		r.Get("/settings", h.handleGetSettings)
+		r.Post("/settings", h.handleUpdateSettings)
+		r.Get("/settings/org/{id}", h.handleGetOrgSettings)     // member-only
+		r.Post("/settings/org/{id}", h.handleUpdateOrgSettings) // admin-only
+		r.Get("/info", h.handleAppInfo)
+		r.Post("/log-error", h.handleLogError)
+	})
+
+	r.Route("/api/keys", func(r chi.Router) {
+		r.Post("/save", h.handleSaveApiKey)
+		r.Post("/has", h.handleHasApiKey)
+		r.Post("/delete", h.handleDeleteApiKey)
+	})
+}

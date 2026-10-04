@@ -416,3 +416,19 @@ func (h *AdminHandler) handleScannerScan(w http.ResponseWriter, r *http.Request)
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionScanNow, "scanner", "", nil)
 	render.JSON(w, map[string]bool{"started": true})
 }
+
+// registerRoutes wires the /api/admin group. sys serves the one route that
+// belongs to the system handler (health) but lives in the admin tree.
+func (h *AdminHandler) registerRoutes(r chi.Router, sys *SystemHandler) {
+	r.Route("/api/admin", func(r chi.Router) {
+		r.Get("/users/list", h.handleAdminUserList)
+		r.Get("/users/stats", h.handleAdminUserStats)
+		r.Put("/users/{id}/role", h.handleAdminUserRole)
+		r.Post("/migration/start", h.handleMigrationStart)
+		r.Get("/migration/status", h.handleMigrationStatus)
+		r.Get("/audit", h.handleAdminAuditList)
+		r.Get("/audit/actions", h.handleAdminAuditActions)
+		r.Post("/scanner/scan", h.handleScannerScan)
+		r.Get("/system/health", sys.handleAdminSystemHealth)
+	})
+}

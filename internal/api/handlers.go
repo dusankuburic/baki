@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"html"
 	"mime"
@@ -221,19 +220,8 @@ func (rt *Router) serveSharedShell(w http.ResponseWriter, r *http.Request, index
 	if token == "" {
 		return false
 	}
-	analysis := rt.handlers.Analysis
-	if analysis == nil || analysis.backend == nil || analysis.flowSvc == nil {
-		return false
-	}
-	hash := sha256.Sum256([]byte(token))
-	st, err := analysis.backend.GetShareTokenByHash(r.Context(), hex.EncodeToString(hash[:]))
-	if err != nil {
-		return false
-	}
-	// The header, not the resolved document: only the flow's name is injected on this unauthenticated route, and resolving the document per hit of a leaked link was
-	// the most expensive thing a stranger could make the server do for a <title>.
-	doc, err := analysis.backend.LoadFlowHeader(r.Context(), st.FlowID)
-	if err != nil || doc == nil {
+	doc := rt.handlers.Analysis.LookupSharedFlowHeader(r.Context(), token)
+	if doc == nil {
 		return false
 	}
 

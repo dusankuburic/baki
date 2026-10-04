@@ -539,3 +539,19 @@ func randomTokens(n int) ([]string, error) {
 	}
 	return toks, nil
 }
+
+// registerSSORoutes wires the OIDC SSO sub-routes: the login round trip plus
+// authenticated account linking.
+func (h *AuthHandler) registerSSORoutes(r chi.Router) {
+	r.Route("/sso", func(r chi.Router) {
+		r.Get("/info", h.handleSSOInfo)
+		r.Get("/start", h.handleSSOStart)
+		r.Get("/callback", h.handleSSOCallback)
+		r.Post("/exchange", h.handleSSOExchange)
+		// Account linking (authenticated): start a link round trip, list
+		// and remove the caller's linked identities.
+		r.Post("/link/start", h.handleSSOLinkStart)
+		r.Get("/links", h.handleSSOLinks)
+		r.Delete("/links/{provider}", h.handleSSOUnlink)
+	})
+}

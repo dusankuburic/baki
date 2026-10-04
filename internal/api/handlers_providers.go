@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/service"
@@ -411,4 +412,33 @@ func auditURLHost(raw string) string {
 		return ""
 	}
 	return strings.ToLower(u.Host)
+}
+
+// registerRoutes wires the /api/providers group: provider listing/testing and
+// OAuth device flows here; the Azure Foundry registry and local-model config
+// sub-groups live with their handlers.
+func (h *ProviderHandler) registerRoutes(r chi.Router) {
+	r.Route("/api/providers", func(r chi.Router) {
+		r.Get("/list", h.handleListProviders)
+		r.Post("/test", h.handleTestProviderConnection)
+		r.Route("/github", func(r chi.Router) {
+			r.Post("/start", h.handleStartGitHubAuth)
+			r.Post("/poll", h.handlePollGitHubAuth)
+			r.Post("/revoke", h.handleRevokeGitHubAuth)
+			r.Get("/user", h.handleGetGitHubUser)
+		})
+		r.Route("/copilot", func(r chi.Router) {
+			r.Post("/start", h.handleStartCopilotAuth)
+			r.Post("/poll", h.handlePollCopilotAuth)
+			r.Post("/revoke", h.handleRevokeCopilotAuth)
+			r.Get("/user", h.handleGetCopilotUser)
+		})
+		h.registerAzureFoundryRoutes(r)
+		// Local models (Foundry Local / Ollama / LM Studio): a loopback base
+		// URL document, desktop only. has/delete use /api/keys.
+		r.Route("/local", func(r chi.Router) {
+			r.Get("/config", h.handleGetLocalConfig)
+			r.Post("/config", h.handleSaveLocalConfig)
+		})
+	})
 }

@@ -177,3 +177,11 @@ func (h *AuthHandler) handleDeleteAPIToken(w http.ResponseWriter, r *http.Reques
 // so an already-open socket sees the revocation; a few cycles of margin is
 // plenty since a deleted PAT can no longer mint new WS tickets.
 const patRevokeBlacklistTTL = 10 * time.Minute
+
+// registerTokenRoutes wires the machine API-token (PAT) sub-routes for
+// headless/CI access (cloud mode).
+func (h *AuthHandler) registerTokenRoutes(r chi.Router) {
+	r.Get("/tokens", h.handleListAPITokens)
+	r.Post("/tokens", h.handleCreateAPIToken)
+	r.Delete("/tokens/{id}", h.handleDeleteAPIToken)
+}

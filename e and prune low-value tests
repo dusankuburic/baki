@@ -1,0 +1,15 @@
+  dependabot/docker/distroless/static-debian12-1b7b9f0[m
+  dependabot/docker/golang-1ae0735[m
+  dependabot/docker/node-25-alpine[m
+  dependabot/github_actions/actions/setup-go-7.0.0[m
+  dependabot/github_actions/actions/upload-artifact-7.0.1[m
+  dependabot/github_actions/azure/login-3.1.0[m
+  dependabot/github_actions/gitleaks/gitleaks-action-3.0.0[m
+  dependabot/github_actions/golangci/golangci-lint-action-9.3.0[m
+  dependabot/go_modules/patch-and-minor-3333daff5b[m
+  dependabot/npm_and_yarn/frontend/multi-3d3f0671f1[m
+  dependabot/npm_and_yarn/frontend/multi-b0dfc253ff[m
+  dependabot/npm_and_yarn/frontend/patch-and-minor-b5945b07bb[m
+  dependabot/npm_and_yarn/frontend/typescript-7.0.2[m
+  dependabot/npm_and_yarn/frontend/vite-8.1.4[m
+* [32mmaster[m

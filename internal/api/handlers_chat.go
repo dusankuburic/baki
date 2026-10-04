@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/service"
@@ -419,4 +420,20 @@ func (h *ChatHandler) handleGetSuggestedPrompts(w http.ResponseWriter, r *http.R
 		return
 	}
 	render.JSON(w, prompts)
+}
+
+// registerRoutes wires the /api/chat group.
+func (h *ChatHandler) registerRoutes(r chi.Router) {
+	r.Route("/api/chat", func(r chi.Router) {
+		r.Post("/stream", h.handleStreamChatMessage)
+		r.Post("/begin", h.handleBeginStream)
+		r.Post("/cancel", h.handleCancelStream)
+		r.Post("/fix-decision", h.handleFixDecision)
+		r.Post("/resume", h.handleResumeStream)
+		r.Post("/get", h.handleGetConversation)
+		r.Post("/save", h.handleSaveConversation)
+		r.Post("/clear", h.handleClearConversation)
+		r.Post("/preview-context", h.handlePreviewContext)
+		r.Post("/suggested-prompts", h.handleGetSuggestedPrompts)
+	})
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
@@ -490,4 +491,20 @@ func (h *AnalysisHandler) handleViewShared(w http.ResponseWriter, r *http.Reques
 		"report":   report,
 		"flowName": doc.Name,
 	})
+}
+
+// registerShareRoutes wires the /api/flow share-link sub-routes (read-only
+// public report links).
+func (h *FlowHandler) registerShareRoutes(r chi.Router) {
+	r.Post("/share/create", h.handleCreateShare)
+	r.Post("/share/list", h.handleListShares)
+	r.Post("/share/revoke", h.handleRevokeShare)
+}
+
+// registerCommentRoutes wires the finding-comment sub-routes (team-shared
+// review threads).
+func (h *AnalysisHandler) registerCommentRoutes(r chi.Router) {
+	r.Post("/comments/list", h.handleListComments)
+	r.Post("/comments/add", h.handleAddComment)
+	r.Post("/comments/delete", h.handleDeleteComment)
 }

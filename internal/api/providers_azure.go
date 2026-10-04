@@ -66,28 +66,6 @@ func (h *ProviderHandler) azureRegistry(w http.ResponseWriter, r *http.Request) 
 	}, true
 }
 
-func (h *OrgHandler) orgAzureRegistry(w http.ResponseWriter, r *http.Request, access orgAccess) (azureRegistryCall, bool) {
-	svc := azureModelsOf(h.providers)
-	if svc == nil {
-		renderAzureRegistryUnavailable(w)
-		return azureRegistryCall{}, false
-	}
-	if !svc.OrgRegistriesAvailable() {
-		render.ErrorWithCode(w, service.ErrOrgKeyStoreUnavailable, http.StatusNotFound, service.AzureCodeOrgKeystoreUnavailable)
-		return azureRegistryCall{}, false
-	}
-	orgID, ok := h.requireOrgAccess(w, r, access)
-	if !ok {
-		return azureRegistryCall{}, false
-	}
-	return azureRegistryCall{
-		svc:     svc,
-		scope:   service.AzureScope{Scope: h.security.KeyScope(r), OrgID: orgID},
-		backend: h.backend,
-		proxies: h.security.TrustedProxies,
-	}, true
-}
-
 // --- Bodies and errors ---
 
 func readAzureRegistryBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
@@ -606,214 +584,27 @@ func (h *ProviderHandler) handleAzureTest(w http.ResponseWriter, r *http.Request
 	c.test(w, r, in)
 }
 
-// --- Organisation routes: /api/orgs/{id}/providers/azure-foundry/… ---
-//
-// The org's curated registry. POST …/test is handleOrgAzureFoundryTest,
-// which also serves the deprecated body-less org credential test.
-
-// @Summary      List the organisation's Azure AI Foundry resources
-// @Description  The organisation's resources (all marked shared), as GET /api/providers/azure-foundry/connections lists a caller's own — plus, for each, sharedBy (who lent its credential) and credentialUpdatedAt (the compare-and-swap token of a credential change). Org admins and members; 403 for viewers, guests and non-members.
-// @Tags         org
-// @Produce      json
-// @Param        id path string true "Org ID"
-// @Success      200 {object} service.AzureConnectionsListing "OK"
-// @Failure      403 {object} render.ErrorResponse "Not an admin or member of the org"
-// @Failure      404 {object} render.ErrorResponse "No org keystore in this deployment (ORG_KEYSTORE_UNAVAILABLE)"
-// @Failure      503 {object} render.ErrorResponse "AZURE_REGISTRY_UNAVAILABLE"
-// @Router       /api/orgs/{id}/providers/azure-foundry/connections [get]
-func (h *OrgHandler) handleOrgAzureConnectionList(w http.ResponseWriter, r *http.Request) {
-	if c, ok := h.orgAzureRegistry(w, r, orgAccessSharedRead); ok {
-		c.listConnections(w, r)
-	}
-}
-
-// @Summary      Add an Azure AI Foundry resource to the organisation
-// @Description  POST /api/providers/azure-foundry/connections for the organisation. Org admins only. The admin who supplies a resource's secret becomes its lender: the credential is disabled when they stop being an admin. The Azure CLI sign-in cannot be shared (400 INVALID_AUTH, details.field mode). Audited (azure.connection_save on the org).
-// @Tags         org
-// @Accept       json
-// @Produce      json
-// @Param        id path string true "Org ID"
-// @Param        request body service.AzureConnectionInput true "The resource"
-// @Success      201 {object} service.AzureConnectionEnvelope "Created"
-// @Failure      400 {object} render.ErrorResponse "INVALID_CONFIG, INVALID_CONNECTION_NAME, INVALID_ENDPOINT, HOST_NOT_ALLOWED, INVALID_PROJECT_ENDPOINT, CONFIG_TOO_LARGE, INVALID_AUTH or MISSING_SECRET (details.field)"
-// @Failure      403 {object} render.ErrorResponse "Not an org admin"
-// @Failure      404 {object} render.ErrorResponse "Unknown org, or ORG_KEYSTORE_UNAVAILABLE"
-// @Failure      409 {object} render.ErrorResponse "DUPLICATE_CONNECTION_NAME, TOO_MANY_CONNECTIONS (details.limit) or CONFLICT"
-// @Failure      503 {object} render.ErrorResponse "AZURE_REGISTRY_UNAVAILABLE"
-// @Router       /api/orgs/{id}/providers/azure-foundry/connections [post]
-func (h *OrgHandler) handleOrgAzureConnectionCreate(w http.ResponseWriter, r *http.Request) {
-	if c, ok := h.orgAzureRegistry(w, r, orgAccessAdmin); ok {
-		c.createConnection(w, r)
-	}
-}
-
-// @Summary      Get one of the organisation's Azure AI Foundry resources
-// @Description  Org admins and members.
-// @Tags         org
-// @Produce      json
-// @Param        id path string true "Org ID"
-// @Param        connectionId path string true "Resource id"
-// @Success      200 {object} service.AzureConnectionEnvelope "OK"
-// @Failure      403 {object} render.ErrorResponse "Not an admin or member of the org"
-// @Failure      404 {object} render.ErrorResponse "CONNECTION_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE"
-// @Failure      503 {object} render.ErrorResponse "AZURE_REGISTRY_UNAVAILABLE"
-// @Router       /api/orgs/{id}/providers/azure-foundry/connections/{connectionId} [get]
-func (h *OrgHandler) handleOrgAzureConnectionGet(w http.ResponseWriter, r *http.Request) {
-	if c, ok := h.orgAzureRegistry(w, r, orgAccessSharedRead); ok {
-		c.getConnection(w, r)
-	}
-}
-
-// @Summary      Update one of the organisation's Azure AI Foundry resources
-// @Description  PUT /api/providers/azure-foundry/connections/{connectionId} for the organisation. Org admins only. A credential change sends credentialUpdatedAt, the token the resource was read with: a stale one (another admin saved in between) is 409 CONFLICT. Audited (azure.connection_save on the org).
-// @Tags         org
-// @Accept       json
-// @Produce      json
-// @Param        id path string true "Org ID"
-// @Param        connectionId path string true "Resource id"
-// @Param        request body service.AzureConnectionPatch true "The changes"
-// @Success      200 {object} service.AzureConnectionEnvelope "OK"
-// @Failure      400 {object} render.ErrorResponse "INVALID_CONFIG, INVALID_CONNECTION_NAME, INVALID_ENDPOINT, HOST_NOT_ALLOWED, INVALID_PROJECT_ENDPOINT, CONFIG_TOO_LARGE, INVALID_AUTH or MISSING_SECRET (details.field)"
-// @Failure      403 {object} render.ErrorResponse "Not an org admin"
-// @Failure      404 {object} render.ErrorResponse "Unknown org, CONNECTION_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE"
-// @Failure      409 {object} render.ErrorResponse "DUPLICATE_CONNECTION_NAME, CONFLICT or REINDEX_REQUIRED"
-// @Failure      503 {object} render.ErrorResponse "AZURE_REGISTRY_UNAVAILABLE"
-// @Router       /api/orgs/{id}/providers/azure-foundry/connections/{connectionId} [put]
-func (h *OrgHandler) handleOrgAzureConnectionUpdate(w http.ResponseWriter, r *http.Request) {
-	if c, ok := h.orgAzureRegistry(w, r, orgAccessAdmin); ok {
-		c.updateConnection(w, r)
-	}
-}
-
-// @Summary      Remove one of the organisation's Azure AI Foundry resources
-// @Description  DELETE /api/providers/azure-foundry/connections/{connectionId} for the organisation. Org admins only. Audited (azure.connection_delete on the org).
-// @Tags         org
-// @Produce      json
-// @Param        id path string true "Org ID"
-// @Param        connectionId path string true "Resource id"
-// @Param        cascade query bool false "Delete the resource's models too"
-// @Param        force query bool false "Confirm the knowledge-base re-index"
-// @Success      200 {object} service.AzureConnectionDeleteResult "OK"
-// @Failure      400 {object} render.ErrorResponse "A flag that is not true or false"
-// @Failure      403 {object} render.ErrorResponse "Not an org admin"
-// @Failure      404 {object} render.ErrorResponse "Unknown org, CONNECTION_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE"
-// @Failure      409 {object} render.ErrorResponse "CONNECTION_IN_USE (details.modelCount) or REINDEX_REQUIRED"
-// @Failure      503 {object} render.ErrorResponse "AZURE_REGISTRY_UNAVAILABLE"
-// @Router       /api/orgs/{id}/providers/azure-foundry/connections/{connectionId} [delete]
-func (h *OrgHandler) handleOrgAzureConnectionDelete(w http.ResponseWriter, r *http.Request) {
-	if c, ok := h.orgAzureRegistry(w, r, orgAccessAdmin); ok {
-		c.deleteConnection(w, r)
-	}
-}
-
-// @Summary      Discover the deployments and agents of an organisation resource
-// @Description  POST /api/providers/azure-foundry/connections/{connectionId}/discover for the organisation. Org admins only.
-// @Tags         org
-// @Produce      json
-// @Param        id path string true "Org ID"
-// @Param        connectionId path string true "Resource id"
-// @Success      200 {object} service.AzureDiscoveryView "OK"
-// @Failure      400 {object} render.ErrorResponse "DISCOVERY_UNAVAILABLE"
-// @Failure      403 {object} render.ErrorResponse "Not an org admin"
-// @Failure      404 {object} render.ErrorResponse "Unknown org, CONNECTION_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE"
-// @Failure      503 {object} render.ErrorResponse "AZURE_REGISTRY_UNAVAILABLE"
-// @Router       /api/orgs/{id}/providers/azure-foundry/connections/{connectionId}/discover [post]
-func (h *OrgHandler) handleOrgAzureConnectionDiscover(w http.ResponseWriter, r *http.Request) {
-	if c, ok := h.orgAzureRegistry(w, r, orgAccessAdmin); ok {
-		c.discover(w, r)
-	}
-}
-
-// @Summary      List the organisation's Azure AI Foundry models
-// @Description  The organisation's models (all marked shared; isDefault marks its "Default for members"), as GET /api/providers/azure-foundry/models lists a caller's own; no serverDefault. Org admins and members; 403 for viewers, guests and non-members.
-// @Tags         org
-// @Produce      json
-// @Param        id path string true "Org ID"
-// @Success      200 {object} service.AzureModelsListing "OK"
-// @Failure      403 {object} render.ErrorResponse "Not an admin or member of the org"
-// @Failure      404 {object} render.ErrorResponse "ORG_KEYSTORE_UNAVAILABLE"
-// @Failure      503 {object} render.ErrorResponse "AZURE_REGISTRY_UNAVAILABLE"
-// @Router       /api/orgs/{id}/providers/azure-foundry/models [get]
-func (h *OrgHandler) handleOrgAzureModelList(w http.ResponseWriter, r *http.Request) {
-	if c, ok := h.orgAzureRegistry(w, r, orgAccessSharedRead); ok {
-		c.listModels(w, r)
-	}
-}
-
-// @Summary      Add a model to the organisation
-// @Description  POST /api/providers/azure-foundry/models for the organisation. Org admins only. isDefault makes a chat, Claude or agent model the organisation's "Default for members". Audited (azure.model_save on the org).
-// @Tags         org
-// @Accept       json
-// @Produce      json
-// @Param        id path string true "Org ID"
-// @Param        request body service.AzureModelInput true "The model"
-// @Success      201 {object} service.AzureModelEnvelope "Created"
-// @Failure      400 {object} render.ErrorResponse "INVALID_CONFIG, INVALID_KIND, INVALID_DEPLOYMENT, INVALID_DISPLAY_NAME, INVALID_PURPOSE, INVALID_DESCRIPTION, INVALID_CONTEXT_WINDOW, INVALID_MAX_OUTPUT, INVALID_DESIGNATION or KIND_REQUIRES_PROJECT"
-// @Failure      403 {object} render.ErrorResponse "Not an org admin"
-// @Failure      404 {object} render.ErrorResponse "Unknown org, CONNECTION_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE"
-// @Failure      409 {object} render.ErrorResponse "DUPLICATE_MODEL (details.existingModelId), TOO_MANY_MODELS (details.limit), CONFLICT or REINDEX_REQUIRED"
-// @Failure      503 {object} render.ErrorResponse "AZURE_REGISTRY_UNAVAILABLE"
-// @Router       /api/orgs/{id}/providers/azure-foundry/models [post]
-func (h *OrgHandler) handleOrgAzureModelCreate(w http.ResponseWriter, r *http.Request) {
-	if c, ok := h.orgAzureRegistry(w, r, orgAccessAdmin); ok {
-		c.createModel(w, r)
-	}
-}
-
-// @Summary      Get one of the organisation's models
-// @Description  Org admins and members.
-// @Tags         org
-// @Produce      json
-// @Param        id path string true "Org ID"
-// @Param        modelId path string true "Model id"
-// @Success      200 {object} service.AzureModelEnvelope "OK"
-// @Failure      403 {object} render.ErrorResponse "Not an admin or member of the org"
-// @Failure      404 {object} render.ErrorResponse "MODEL_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE"
-// @Failure      503 {object} render.ErrorResponse "AZURE_REGISTRY_UNAVAILABLE"
-// @Router       /api/orgs/{id}/providers/azure-foundry/models/{modelId} [get]
-func (h *OrgHandler) handleOrgAzureModelGet(w http.ResponseWriter, r *http.Request) {
-	if c, ok := h.orgAzureRegistry(w, r, orgAccessSharedRead); ok {
-		c.getModel(w, r)
-	}
-}
-
-// @Summary      Update one of the organisation's models
-// @Description  PUT /api/providers/azure-foundry/models/{modelId} for the organisation; isDefault true makes it the "Default for members" (false clears it). Org admins only. Audited (azure.model_save on the org).
-// @Tags         org
-// @Accept       json
-// @Produce      json
-// @Param        id path string true "Org ID"
-// @Param        modelId path string true "Model id"
-// @Param        request body service.AzureModelPatch true "The changes"
-// @Success      200 {object} service.AzureModelEnvelope "OK"
-// @Failure      400 {object} render.ErrorResponse "INVALID_CONFIG, INVALID_KIND, INVALID_DEPLOYMENT, INVALID_DISPLAY_NAME, INVALID_PURPOSE, INVALID_DESCRIPTION, INVALID_CONTEXT_WINDOW, INVALID_MAX_OUTPUT, INVALID_DESIGNATION or KIND_REQUIRES_PROJECT"
-// @Failure      403 {object} render.ErrorResponse "Not an org admin"
-// @Failure      404 {object} render.ErrorResponse "Unknown org, MODEL_NOT_FOUND, CONNECTION_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE"
-// @Failure      409 {object} render.ErrorResponse "DUPLICATE_MODEL (details.existingModelId), CONFLICT or REINDEX_REQUIRED"
-// @Failure      503 {object} render.ErrorResponse "AZURE_REGISTRY_UNAVAILABLE"
-// @Router       /api/orgs/{id}/providers/azure-foundry/models/{modelId} [put]
-func (h *OrgHandler) handleOrgAzureModelUpdate(w http.ResponseWriter, r *http.Request) {
-	if c, ok := h.orgAzureRegistry(w, r, orgAccessAdmin); ok {
-		c.updateModel(w, r)
-	}
-}
-
-// @Summary      Remove one of the organisation's models
-// @Description  DELETE /api/providers/azure-foundry/models/{modelId} for the organisation. Org admins only. Audited (azure.model_delete on the org).
-// @Tags         org
-// @Produce      json
-// @Param        id path string true "Org ID"
-// @Param        modelId path string true "Model id"
-// @Param        force query bool false "Confirm the knowledge-base re-index"
-// @Success      200 {object} statusResponse "OK"
-// @Failure      400 {object} render.ErrorResponse "A flag that is not true or false"
-// @Failure      403 {object} render.ErrorResponse "Not an org admin"
-// @Failure      404 {object} render.ErrorResponse "Unknown org, MODEL_NOT_FOUND or ORG_KEYSTORE_UNAVAILABLE"
-// @Failure      409 {object} render.ErrorResponse "REINDEX_REQUIRED"
-// @Failure      503 {object} render.ErrorResponse "AZURE_REGISTRY_UNAVAILABLE"
-// @Router       /api/orgs/{id}/providers/azure-foundry/models/{modelId} [delete]
-func (h *OrgHandler) handleOrgAzureModelDelete(w http.ResponseWriter, r *http.Request) {
-	if c, ok := h.orgAzureRegistry(w, r, orgAccessAdmin); ok {
-		c.deleteModel(w, r)
-	}
+// registerAzureFoundryRoutes wires the caller's own /api/providers/azure-foundry
+// registry: resources ("connections": an endpoint + credential document each)
+// and the models registered on them. /test and
+// /connections/{connectionId}/discover dial Azure (own rate buckets, outside
+// the RLS transaction: azureOutboundRoute). /config is the deprecated
+// single-document form; has/delete use /api/keys.
+func (h *ProviderHandler) registerAzureFoundryRoutes(r chi.Router) {
+	r.Route("/azure-foundry", func(r chi.Router) {
+		r.Get("/config", h.handleGetAzureFoundryConfig)
+		r.Post("/config", h.handleSaveAzureFoundryConfig)
+		r.Get("/connections", h.handleAzureConnectionList)
+		r.Post("/connections", h.handleAzureConnectionCreate)
+		r.Get("/connections/{connectionId}", h.handleAzureConnectionGet)
+		r.Put("/connections/{connectionId}", h.handleAzureConnectionUpdate)
+		r.Delete("/connections/{connectionId}", h.handleAzureConnectionDelete)
+		r.Post("/connections/{connectionId}/discover", h.handleAzureConnectionDiscover)
+		r.Get("/models", h.handleAzureModelList)
+		r.Post("/models", h.handleAzureModelCreate)
+		r.Get("/models/{modelId}", h.handleAzureModelGet)
+		r.Put("/models/{modelId}", h.handleAzureModelUpdate)
+		r.Delete("/models/{modelId}", h.handleAzureModelDelete)
+		r.Post("/test", h.handleAzureTest)
+	})
 }

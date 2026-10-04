@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
 )
 
@@ -40,4 +41,9 @@ func (h *AnalysisHandler) handleSuppressionInventory(w http.ResponseWriter, r *h
 		return
 	}
 	render.JSON(w, entries)
+}
+
+// registerSuppressionRoutes wires the suppression-inventory sub-route.
+func (h *AnalysisHandler) registerSuppressionRoutes(r chi.Router) {
+	r.Post("/suppressions", h.handleSuppressionInventory)
 }

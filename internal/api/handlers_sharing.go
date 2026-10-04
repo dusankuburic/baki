@@ -224,3 +224,15 @@ func (h *SharingHandler) handleCollaboratorRemove(w http.ResponseWriter, r *http
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowShare, "flow", flowID, map[string]string{"targetUser": userID, "action": "remove"})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
+
+// registerRoutes wires the flow-collaborator sub-routes.
+func (h *SharingHandler) registerRoutes(r chi.Router) {
+	r.Route("/api/flows/{flowId}/collaborators", func(r chi.Router) {
+		r.Get("/", h.handleCollaboratorList)
+		r.Post("/", h.handleCollaboratorAdd)
+		r.Route("/{userId}", func(r chi.Router) {
+			r.Delete("/", h.handleCollaboratorRemove)
+			r.Put("/", h.handleCollaboratorUpdate)
+		})
+	})
+}

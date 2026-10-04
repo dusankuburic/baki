@@ -13,8 +13,8 @@ import (
 	"pad-core/models"
 )
 
-// Tests for the 2026-10 performance round (service side). The storage-side
-// statements are pinned in internal/storage/database/perf_round_test.go.
+// Read-count pins for the service side. The storage-side statements are
+// pinned in internal/storage/database/perf_statements_test.go.
 
 func newCountingFlowService(t *testing.T) (*FlowService, *loadCountingBackend) {
 	t.Helper()

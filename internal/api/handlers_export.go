@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/service"
 )
@@ -243,5 +244,16 @@ func (h *ExportHandler) handleExportPDF(w http.ResponseWriter, r *http.Request) 
 	render.JSON(w, map[string]any{
 		"status": "ok",
 		"data":   base64.StdEncoding.EncodeToString(content),
+	})
+}
+
+// registerRoutes wires the /api/export group.
+func (h *ExportHandler) registerRoutes(r chi.Router) {
+	r.Route("/api/export", func(r chi.Router) {
+		r.Post("/compare", h.handleCompareCurrentWith)
+		r.Post("/markdown", h.handleExportMarkdown)
+		r.Post("/html", h.handleExportHTML)
+		r.Post("/pdf", h.handleExportPDF)
+		r.Post("/save", h.handleSaveClientExport)
 	})
 }

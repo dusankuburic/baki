@@ -237,3 +237,14 @@ func (h *OrgHandler) handleOrgRuleExport(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Disposition", `attachment; filename=".bakirc.json"`)
 	render.JSON(w, out)
 }
+
+// registerRuleRoutes wires the per-org custom analyzer rules sub-routes.
+func (h *OrgHandler) registerRuleRoutes(r chi.Router) {
+	// Per-org custom analyzer rules. Reads: member. Writes: admin.
+	r.Route("/rules", func(r chi.Router) {
+		r.Get("/", h.handleOrgRuleList)
+		r.Get("/export", h.handleOrgRuleExport)
+		r.Post("/", h.handleOrgRuleSave)
+		r.Delete("/{ruleId}", h.handleOrgRuleDelete)
+	})
+}

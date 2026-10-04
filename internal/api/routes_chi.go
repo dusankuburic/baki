@@ -86,326 +86,42 @@ func registerRoutes(rt *Router, r chi.Router) {
 	r.Get("/api/events", rt.eventManager.HandleEvents)
 
 	// --- System & Keys ---
-	r.Route("/api/system", func(r chi.Router) {
-		r.Get("/settings", h.Sys.handleGetSettings)
-		r.Post("/settings", h.Sys.handleUpdateSettings)
-		r.Get("/settings/org/{id}", h.Sys.handleGetOrgSettings)     // member-only
-		r.Post("/settings/org/{id}", h.Sys.handleUpdateOrgSettings) // admin-only
-		r.Get("/info", h.Sys.handleAppInfo)
-		r.Post("/log-error", h.Sys.handleLogError)
-	})
-
-	r.Route("/api/keys", func(r chi.Router) {
-		r.Post("/save", h.Sys.handleSaveApiKey)
-		r.Post("/has", h.Sys.handleHasApiKey)
-		r.Post("/delete", h.Sys.handleDeleteApiKey)
-	})
+	h.Sys.registerRoutes(r)
 
 	// --- Flow Operations ---
-	r.Route("/api/flow", func(r chi.Router) {
-		r.Post("/upload", h.Flow.handleUploadFlow)
-		r.Post("/load-path", h.Flow.handleLoadFlowFromPath)
-		r.Post("/load-folder", h.Flow.handleLoadFlowFolder)
-		r.Get("/recent", h.Flow.handleRecentFiles)
-		r.Post("/remove-recent", h.Flow.handleRemoveRecentFile)
-		r.Post("/clear-recent", h.Flow.handleClearRecentFiles)
-		r.Post("/reveal", h.Flow.handleRevealInFileManager)
-		r.Post("/search", h.Flow.handleSearchFlow)
-		r.Post("/search-library", h.Flow.handleSearchLibrary)
-		r.Get("/source-files", h.Flow.handleGetSourceFiles)
-		r.Post("/suppress-in-source", h.Flow.handleSuppressInSource)
-		r.Post("/apply-fix", h.Flow.handleApplyFix)
-		r.Post("/apply-fix-batch", h.Flow.handleApplyFixBatch)
-		r.Post("/save-source", h.Flow.handleSaveSource)
-		r.Put("/tags", h.Flow.handleUpdateFlowTags)
-		r.Post("/block/remove", h.Flow.handleRemoveBlock)
-		r.Post("/block/duplicate", h.Flow.handleDuplicateBlock)
-		r.Post("/block/properties", h.Flow.handleUpdateBlockProperties)
-		r.Post("/block/move", h.Flow.handleMoveBlock)
-		r.Post("/block/move-to", h.Flow.handleMoveBlockTo)
-		r.Post("/block/remove-batch", h.Flow.handleRemoveBlocks)
-		r.Post("/block/rename", h.Flow.handleRenameBlock)
-		r.Get("/snapshots", h.Flow.handleListSourceSnapshots)
-		r.Post("/snapshots/restore", h.Flow.handleRestoreSourceSnapshot)
-		r.Get("/source", h.Flow.handleGetSource)
-		r.Get("/source-meta", h.Flow.handleGetSourceMeta)
-		r.Post("/preview-fix", h.Flow.handlePreviewFix)
-		r.Post("/reimport", h.Flow.handleReimport)
-		// Share links (read-only public report)
-		r.Post("/share/create", h.Flow.handleCreateShare)
-		r.Post("/share/list", h.Flow.handleListShares)
-		r.Post("/share/revoke", h.Flow.handleRevokeShare)
-	})
+	h.Flow.registerRoutes(r)
 	r.Get("/api/shared", h.Analysis.handleViewShared)          // unauthenticated: ?token=...
 	r.Post("/api/integrations/ci", h.Analysis.handleCIWebhook) // HMAC-authenticated (X-Baki-Signature)
 
 	// --- Library (Cloud CRUD) ---
-	r.Route("/api/library", func(r chi.Router) {
-		r.Get("/", h.Library.handleLibraryList)
-		r.Post("/", h.Library.handleLibraryCreate)
-		r.Get("/portfolio", h.Library.handlePortfolio) // org-wide governance fleet view
-		r.Route("/{id}", func(r chi.Router) {
-			r.Get("/", h.Library.handleLibraryGet)
-			r.Put("/", h.Library.handleLibraryUpdate)
-			r.Delete("/", h.Library.handleLibraryDelete)
-			r.Get("/content", h.Library.handleLibraryGetContent)
-			r.Route("/versions", func(r chi.Router) {
-				r.Get("/", h.Library.handleListFlowVersions)
-				r.Post("/", h.Library.handleSaveFlowVersion)
-				r.Get("/{vn}", h.Library.handleGetFlowVersion)
-				r.Post("/{vn}/restore", h.Library.handleRestoreFlowVersion)
-				r.Get("/{vn}/diff", h.Library.handleDiffFlowVersion)
-			})
-		})
-	})
+	h.Library.registerRoutes(r)
 
 	// --- AI Chat ---
-	r.Route("/api/chat", func(r chi.Router) {
-		r.Post("/stream", h.Chat.handleStreamChatMessage)
-		r.Post("/begin", h.Chat.handleBeginStream)
-		r.Post("/cancel", h.Chat.handleCancelStream)
-		r.Post("/fix-decision", h.Chat.handleFixDecision)
-		r.Post("/resume", h.Chat.handleResumeStream)
-		r.Post("/get", h.Chat.handleGetConversation)
-		r.Post("/save", h.Chat.handleSaveConversation)
-		r.Post("/clear", h.Chat.handleClearConversation)
-		r.Post("/preview-context", h.Chat.handlePreviewContext)
-		r.Post("/suggested-prompts", h.Chat.handleGetSuggestedPrompts)
-	})
+	h.Chat.registerRoutes(r)
 
-	// --- Analysis & Export ---
-	r.Route("/api/analysis", func(r chi.Router) {
-		r.Post("/analyze", h.Analysis.handleAnalyzeFlow)
-		r.Post("/analyze-raw", h.Analysis.handleAnalyzeRaw)
-		r.Post("/lineage", h.Analysis.handleGetVariableLineage)
-		r.Post("/graph", h.Analysis.handleGetExecutionGraph)
-		r.Post("/dataflow", h.Analysis.handleGetDataFlow)
-		r.Post("/batch", h.Analysis.handleBatchAnalyze)
-		r.Post("/diff", h.Analysis.handleDiff)
-		r.Post("/history", h.Analysis.handleGetHistory)
-		r.Post("/export/sarif", h.Analysis.handleExportSARIF)
-		r.Post("/export/junit", h.Analysis.handleExportJUnit)
-		r.Post("/suppressions", h.Analysis.handleSuppressionInventory)
-		r.Get("/dependencies", h.Analysis.handleGetDependencies)
-		r.Get("/dashboard", h.Analysis.handleGetDashboard)
-		r.Post("/deduplicate", h.Analysis.handleDeduplicate)
-		r.Post("/related", h.Analysis.handleRelatedFindings)
-		r.Post("/compare", h.Analysis.handleCompareFlows)
-		r.Get("/rules", h.Analysis.handleGetRules)
-		r.Post("/custom-rules/validate", h.Analysis.handleValidateCustomRules)
-		r.Post("/custom-rules/test", h.Analysis.handleTestCustomRule)
-		r.Post("/rule/enabled", h.Analysis.handleSetRuleEnabled)
-		r.Post("/rule/config", h.Analysis.handleUpdateRuleConfig)
-		// Finding triage & baselines (persistent, team-shared; cloud mode only)
-		r.Post("/triage/list", h.Analysis.handleListFindingStatuses)
-		r.Post("/triage/set", h.Analysis.handleSetFindingStatus)
-		r.Post("/triage/set-batch", h.Analysis.handleBatchSetFindingStatus)
-		r.Post("/triage/clear", h.Analysis.handleClearFindingStatus)
-		r.Post("/baseline/get", h.Analysis.handleGetBaseline)
-		r.Post("/baseline/set", h.Analysis.handleSetBaseline)
-		r.Post("/baseline/clear", h.Analysis.handleClearBaseline)
-		r.Post("/baseline/drift", h.Analysis.handleBaselineDrift)
-		r.Post("/policy/evaluate", h.Analysis.handleEvaluatePolicy)           // gate a flow against an inline policy
-		r.Post("/policy/save", h.Analysis.handleSavePolicy)                   // persist a named policy (cloud)
-		r.Post("/policy/list", h.Analysis.handleListPolicies)                 // list org's policies (cloud)
-		r.Post("/policy/get", h.Analysis.handleGetPolicy)                     // get a single policy (cloud)
-		r.Post("/policy/delete", h.Analysis.handleDeletePolicy)               // delete a policy (cloud)
-		r.Post("/policy/evaluate-by-id", h.Analysis.handleEvaluatePolicyByID) // gate a flow against a persisted policy
-		// Finding comments (team-shared review threads)
-		r.Post("/comments/list", h.Analysis.handleListComments)
-		r.Post("/comments/add", h.Analysis.handleAddComment)
-		r.Post("/comments/delete", h.Analysis.handleDeleteComment)
-	})
+	// --- Analysis ---
+	h.Analysis.registerRoutes(r)
 
 	// --- Welcome Dashboard (BFF) ---
-	r.Get("/api/dashboard/home", h.Dashboard.handleHome)
-	r.Get("/api/dashboard/analytics", h.Dashboard.handleAnalytics)
+	h.Dashboard.registerRoutes(r)
 
 	// --- Governance alerts inbox (notifications bell) ---
-	// Scanner-written drift/regression alerts; RLS-scoped to the caller's visible
-	// flows. All read/write (no jwtAuth bypass needed).
-	r.Route("/api/governance", func(r chi.Router) {
-		r.Get("/alerts", h.Analysis.handleListGovernanceAlerts)
-		r.Get("/alerts/unread-count", h.Analysis.handleUnreadGovernanceAlertCount)
-		r.Post("/alerts/read-all", h.Analysis.handleMarkAllGovernanceAlertsRead)
-		r.Post("/alerts/dismiss", h.Analysis.handleDismissGovernanceAlert)
-		r.Delete("/alerts", h.Analysis.handleClearGovernanceAlerts)
-	})
+	h.Analysis.registerGovernanceRoutes(r)
 
-	r.Route("/api/export", func(r chi.Router) {
-		r.Post("/compare", h.Export.handleCompareCurrentWith)
-		r.Post("/markdown", h.Export.handleExportMarkdown)
-		r.Post("/html", h.Export.handleExportHTML)
-		r.Post("/pdf", h.Export.handleExportPDF)
-		r.Post("/save", h.Export.handleSaveClientExport)
-	})
+	h.Export.registerRoutes(r)
 
 	// --- Providers & Auth ---
-	r.Route("/api/providers", func(r chi.Router) {
-		r.Get("/list", h.Provider.handleListProviders)
-		r.Post("/test", h.Provider.handleTestProviderConnection)
-		r.Route("/github", func(r chi.Router) {
-			r.Post("/start", h.Provider.handleStartGitHubAuth)
-			r.Post("/poll", h.Provider.handlePollGitHubAuth)
-			r.Post("/revoke", h.Provider.handleRevokeGitHubAuth)
-			r.Get("/user", h.Provider.handleGetGitHubUser)
-		})
-		r.Route("/copilot", func(r chi.Router) {
-			r.Post("/start", h.Provider.handleStartCopilotAuth)
-			r.Post("/poll", h.Provider.handlePollCopilotAuth)
-			r.Post("/revoke", h.Provider.handleRevokeCopilotAuth)
-			r.Get("/user", h.Provider.handleGetCopilotUser)
-		})
-		// Azure AI Foundry: the caller's model registry — resources ("connections": an endpoint +
-		// credential document each) and the models registered on them. /test and
-		// /connections/{connectionId}/discover dial Azure (own rate buckets, outside the RLS
-		// transaction: azureOutboundRoute). /config is the deprecated single-document form; has/delete
-		// use /api/keys.
-		r.Route("/azure-foundry", func(r chi.Router) {
-			r.Get("/config", h.Provider.handleGetAzureFoundryConfig)
-			r.Post("/config", h.Provider.handleSaveAzureFoundryConfig)
-			r.Get("/connections", h.Provider.handleAzureConnectionList)
-			r.Post("/connections", h.Provider.handleAzureConnectionCreate)
-			r.Get("/connections/{connectionId}", h.Provider.handleAzureConnectionGet)
-			r.Put("/connections/{connectionId}", h.Provider.handleAzureConnectionUpdate)
-			r.Delete("/connections/{connectionId}", h.Provider.handleAzureConnectionDelete)
-			r.Post("/connections/{connectionId}/discover", h.Provider.handleAzureConnectionDiscover)
-			r.Get("/models", h.Provider.handleAzureModelList)
-			r.Post("/models", h.Provider.handleAzureModelCreate)
-			r.Get("/models/{modelId}", h.Provider.handleAzureModelGet)
-			r.Put("/models/{modelId}", h.Provider.handleAzureModelUpdate)
-			r.Delete("/models/{modelId}", h.Provider.handleAzureModelDelete)
-			r.Post("/test", h.Provider.handleAzureTest)
-		})
-		// Local models (Foundry Local / Ollama / LM Studio): a loopback base
-		// URL document, desktop only. has/delete use /api/keys.
-		r.Route("/local", func(r chi.Router) {
-			r.Get("/config", h.Provider.handleGetLocalConfig)
-			r.Post("/config", h.Provider.handleSaveLocalConfig)
-		})
-	})
+	h.Provider.registerRoutes(r)
 
-	r.Route("/api/auth", func(r chi.Router) {
-		r.Post("/register", h.Auth.handleAuthRegister)
-		r.Post("/login", h.Auth.handleAuthLogin)
-		r.Post("/refresh", h.Auth.handleAuthRefresh)
-		r.Post("/forgot-password", h.Auth.handleAuthForgotPassword)
-		r.Post("/reset-password", h.Auth.handleAuthResetPassword)
-		r.Post("/verify-email", h.Auth.handleAuthVerifyEmail)
-		r.Post("/resend-verification", h.Auth.handleAuthResendVerification)
-		r.Get("/me", h.Auth.handleAuthMe)
-		r.Put("/profile", h.Auth.handleAuthUpdateProfile)
-		r.Post("/logout", h.Auth.handleAuthLogout)
-		r.Post("/change-password", h.Auth.handleAuthChangePassword)
-		r.Get("/sessions", h.Auth.handleAuthSessions)
-		r.Delete("/sessions/{id}", h.Auth.handleAuthSessionRevoke)
-		// Self-service account erasure (GDPR) + data-subject export.
-		r.Delete("/account", h.Auth.handleAuthDeleteAccount)
-		r.Get("/account/export", h.Auth.handleAuthExportAccount)
-		// Machine API tokens (PATs) for headless/CI access (cloud mode)
-		r.Get("/tokens", h.Auth.handleListAPITokens)
-		r.Post("/tokens", h.Auth.handleCreateAPIToken)
-		r.Delete("/tokens/{id}", h.Auth.handleDeleteAPIToken)
-		r.Route("/sso", func(r chi.Router) {
-			r.Get("/info", h.Auth.handleSSOInfo)
-			r.Get("/start", h.Auth.handleSSOStart)
-			r.Get("/callback", h.Auth.handleSSOCallback)
-			r.Post("/exchange", h.Auth.handleSSOExchange)
-			// Account linking (authenticated): start a link round trip, list
-			// and remove the caller's linked identities.
-			r.Post("/link/start", h.Auth.handleSSOLinkStart)
-			r.Get("/links", h.Auth.handleSSOLinks)
-			r.Delete("/links/{provider}", h.Auth.handleSSOUnlink)
-		})
-	})
-	r.Post("/api/ws-ticket", h.Auth.handleWSTicket)
+	h.Auth.registerRoutes(r)
 
 	// --- Organizations & Sharing ---
-	r.Route("/api/orgs", func(r chi.Router) {
-		r.Get("/", h.Org.handleOrgList)
-		r.Post("/", h.Org.handleOrgCreate)
-		r.Route("/{id}", func(r chi.Router) {
-			r.Put("/", h.Org.handleOrgUpdate)
-			r.Delete("/", h.Org.handleOrgDelete)
-			r.Route("/members", func(r chi.Router) {
-				r.Get("/", h.Org.handleOrgMemberList)
-				r.Route("/{userId}", func(r chi.Router) {
-					r.Delete("/", h.Org.handleOrgMemberRemove)
-					r.Put("/role", h.Org.handleOrgMemberRoleUpdate)
-				})
-			})
-			// Per-org custom analyzer rules. Reads: member. Writes: admin.
-			r.Route("/rules", func(r chi.Router) {
-				r.Get("/", h.Org.handleOrgRuleList)
-				r.Get("/export", h.Org.handleOrgRuleExport)
-				r.Post("/", h.Org.handleOrgRuleSave)
-				r.Delete("/{ruleId}", h.Org.handleOrgRuleDelete)
-			})
-			r.Route("/channels", func(r chi.Router) {
-				r.Get("/", h.Org.handleChannelList)
-				r.Post("/", h.Org.handleChannelSave)
-				r.Post("/{channelId}/test", h.Org.handleChannelTest)
-				r.Delete("/{channelId}", h.Org.handleChannelDelete)
-			})
-			r.Route("/knowledge", func(r chi.Router) {
-				r.Get("/", h.Org.handleKnowledgeList)
-				r.Post("/upload", h.Org.handleKnowledgeUpload)
-				r.Post("/reindex", h.Org.handleKnowledgeReindex)
-				r.Delete("/{docId}", h.Org.handleKnowledgeDelete)
-			})
-			// Organisation-shared Azure AI Foundry resources and models — same sub-paths as the
-			// caller's own registry. Read: admin or member; write/delete/test/discover: admin.
-			// /config is the deprecated single-document form; /test also serves its body-less org test.
-			r.Route("/providers/azure-foundry", func(r chi.Router) {
-				r.Get("/config", h.Org.handleOrgAzureFoundryConfigGet)
-				r.Post("/config", h.Org.handleOrgAzureFoundryConfigSave)
-				r.Delete("/config", h.Org.handleOrgAzureFoundryConfigDelete)
-				r.Post("/test", h.Org.handleOrgAzureFoundryTest)
-				r.Get("/connections", h.Org.handleOrgAzureConnectionList)
-				r.Post("/connections", h.Org.handleOrgAzureConnectionCreate)
-				r.Get("/connections/{connectionId}", h.Org.handleOrgAzureConnectionGet)
-				r.Put("/connections/{connectionId}", h.Org.handleOrgAzureConnectionUpdate)
-				r.Delete("/connections/{connectionId}", h.Org.handleOrgAzureConnectionDelete)
-				r.Post("/connections/{connectionId}/discover", h.Org.handleOrgAzureConnectionDiscover)
-				r.Get("/models", h.Org.handleOrgAzureModelList)
-				r.Post("/models", h.Org.handleOrgAzureModelCreate)
-				r.Get("/models/{modelId}", h.Org.handleOrgAzureModelGet)
-				r.Put("/models/{modelId}", h.Org.handleOrgAzureModelUpdate)
-				r.Delete("/models/{modelId}", h.Org.handleOrgAzureModelDelete)
-			})
-			r.Route("/invites", func(r chi.Router) {
-				r.Get("/", h.Org.handleOrgInviteList)
-				r.Post("/", h.Org.handleOrgInviteCreate)
-				r.Delete("/{inviteId}", h.Org.handleOrgInviteRevoke)
-			})
-		})
-	})
+	h.Org.registerRoutes(r)
 
-	r.Route("/api/invites", func(r chi.Router) {
-		r.Post("/{token}/accept", h.Org.handleInviteAccept)
-	})
-
-	r.Route("/api/flows/{flowId}/collaborators", func(r chi.Router) {
-		r.Get("/", h.Sharing.handleCollaboratorList)
-		r.Post("/", h.Sharing.handleCollaboratorAdd)
-		r.Route("/{userId}", func(r chi.Router) {
-			r.Delete("/", h.Sharing.handleCollaboratorRemove)
-			r.Put("/", h.Sharing.handleCollaboratorUpdate)
-		})
-	})
+	h.Sharing.registerRoutes(r)
 
 	// --- Admin ---
-	r.Route("/api/admin", func(r chi.Router) {
-		r.Get("/users/list", h.Admin.handleAdminUserList)
-		r.Get("/users/stats", h.Admin.handleAdminUserStats)
-		r.Put("/users/{id}/role", h.Admin.handleAdminUserRole)
-		r.Post("/migration/start", h.Admin.handleMigrationStart)
-		r.Get("/migration/status", h.Admin.handleMigrationStatus)
-		r.Get("/audit", h.Admin.handleAdminAuditList)
-		r.Get("/audit/actions", h.Admin.handleAdminAuditActions)
-		r.Post("/scanner/scan", h.Admin.handleScannerScan)
-		r.Get("/system/health", h.Sys.handleAdminSystemHealth)
-	})
+	h.Admin.registerRoutes(r, h.Sys)
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		importPath := r.URL.Path

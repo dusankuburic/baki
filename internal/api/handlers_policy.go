@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"pad-core/analyzer"
 	"pad-core/models"
 
@@ -224,4 +225,15 @@ func (h *AnalysisHandler) handleEvaluatePolicyByID(w http.ResponseWriter, r *htt
 		return
 	}
 	render.JSON(w, analyzer.EvaluatePolicy(report, *policy))
+}
+
+// registerPolicyRoutes wires the policy-gate sub-routes (evaluate inline or
+// a persisted named policy; cloud mode for persistence).
+func (h *AnalysisHandler) registerPolicyRoutes(r chi.Router) {
+	r.Post("/policy/evaluate", h.handleEvaluatePolicy)           // gate a flow against an inline policy
+	r.Post("/policy/save", h.handleSavePolicy)                   // persist a named policy (cloud)
+	r.Post("/policy/list", h.handleListPolicies)                 // list org's policies (cloud)
+	r.Post("/policy/get", h.handleGetPolicy)                     // get a single policy (cloud)
+	r.Post("/policy/delete", h.handleDeletePolicy)               // delete a policy (cloud)
+	r.Post("/policy/evaluate-by-id", h.handleEvaluatePolicyByID) // gate a flow against a persisted policy
 }

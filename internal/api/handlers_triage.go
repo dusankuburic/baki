@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
 	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -583,4 +584,17 @@ func (h *AnalysisHandler) handleBaselineDrift(w http.ResponseWriter, r *http.Req
 	}
 
 	render.JSON(w, analyzer.ComputeDrift(req.FlowID, report, keys))
+}
+
+// registerTriageRoutes wires the finding-triage and baseline sub-routes
+// (persistent, team-shared; cloud mode only).
+func (h *AnalysisHandler) registerTriageRoutes(r chi.Router) {
+	r.Post("/triage/list", h.handleListFindingStatuses)
+	r.Post("/triage/set", h.handleSetFindingStatus)
+	r.Post("/triage/set-batch", h.handleBatchSetFindingStatus)
+	r.Post("/triage/clear", h.handleClearFindingStatus)
+	r.Post("/baseline/get", h.handleGetBaseline)
+	r.Post("/baseline/set", h.handleSetBaseline)
+	r.Post("/baseline/clear", h.handleClearBaseline)
+	r.Post("/baseline/drift", h.handleBaselineDrift)
 }

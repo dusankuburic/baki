@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
@@ -161,4 +162,17 @@ func (h *AnalysisHandler) handleClearGovernanceAlerts(w http.ResponseWriter, r *
 	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionAlertClear, "alert", "", nil)
 	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// registerGovernanceRoutes wires the governance alerts inbox (notifications
+// bell): scanner-written drift/regression alerts, RLS-scoped to the caller's
+// visible flows. All read/write (no jwtAuth bypass needed).
+func (h *AnalysisHandler) registerGovernanceRoutes(r chi.Router) {
+	r.Route("/api/governance", func(r chi.Router) {
+		r.Get("/alerts", h.handleListGovernanceAlerts)
+		r.Get("/alerts/unread-count", h.handleUnreadGovernanceAlertCount)
+		r.Post("/alerts/read-all", h.handleMarkAllGovernanceAlertsRead)
+		r.Post("/alerts/dismiss", h.handleDismissGovernanceAlert)
+		r.Delete("/alerts", h.handleClearGovernanceAlerts)
+	})
 }
