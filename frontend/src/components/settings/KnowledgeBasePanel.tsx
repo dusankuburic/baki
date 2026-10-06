@@ -1,3 +1,4 @@
+import {getErrorCode} from '@/lib/getErrorMessage'
 import {useState, useMemo, useRef, useEffect} from 'react'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
@@ -178,7 +179,7 @@ export default function KnowledgeBasePanel() {
       // rewording), with the message regex as a fallback for older backends.
       const verdict = providerVerdict(e)
       const embeddingMissing =
-        (e instanceof ApiError && e.code === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
+        (getErrorCode(e) === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
       if (verdict) {
         // Before the message regex: a provider verdict's message mentions
         // the embedding provider too, and it is not a missing key.
@@ -262,7 +263,7 @@ export default function KnowledgeBasePanel() {
           // the admin's. Re-indexing anyway strands every member on that model,
           // so it takes a second, explicit confirmation before resending with
           // force.
-          if (!(e instanceof ApiError && e.code === 'EMBEDDING_MODEL_CHANGED')) throw e
+          if (getErrorCode(e) !== 'EMBEDDING_MODEL_CHANGED') throw e
           force = await confirm({
             title: t('knowledge.reindexModelChangedTitle'),
             message: t('knowledge.reindexModelChanged'),
@@ -321,10 +322,10 @@ export default function KnowledgeBasePanel() {
       // has to start over, so say that instead of a bare failure. A resumed
       // run's first page is a later page too — its earlier pages were
       // committed by the run it resumes.
-      const midRunModelChange = (pages > 0 || !!resume) && e instanceof ApiError && e.code === 'EMBEDDING_MODEL_CHANGED'
+      const midRunModelChange = (pages > 0 || !!resume) && getErrorCode(e) === 'EMBEDDING_MODEL_CHANGED'
       const verdict = midRunModelChange ? t('knowledge.reindexModelChangedMidRun') : providerVerdict(e)
       const embeddingMissing =
-        (e instanceof ApiError && e.code === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
+        (getErrorCode(e) === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
       toastError(verdict ?? (embeddingMissing ? t('knowledge.embeddingMissingReindex') : t('knowledge.reindexFailed')))
       // Earlier pages of a resumable run were committed before the failure.
       if (pages > 0) loadDocs()

@@ -62,7 +62,7 @@ func nodeOn(nodes []planNode, relation string) (planNode, bool) {
 // served by audit_events_action_created_idx in the list's own order — no Sort
 // node (the baseline action index made every page a Sort over every row).
 func TestPlan_AuditByAction_IndexOrderNoSort(t *testing.T) {
-	b := openMigrationTestDB(t)
+	b, _ := openIsolatedMigrationDB(t) // the plan must not depend on what earlier tests did to the table
 	seedAuditPopulation(t, b)
 	nodes := explainAsUser(t, b, planUser, auditListByActionSQL, []any{"flow.save", 100, 0})
 	t.Logf("ListAuditEvents(action) plan:\n%s", describePlan(nodes))
@@ -79,7 +79,7 @@ func TestPlan_AuditByAction_IndexOrderNoSort(t *testing.T) {
 // count reaches audit_events through the composite index with BOTH the action
 // and the window in the index condition, not by walking either whole.
 func TestPlan_FailedLoginCount_KeyedOnActionAndWindow(t *testing.T) {
-	b := openMigrationTestDB(t)
+	b, _ := openIsolatedMigrationDB(t)
 	seedAuditPopulation(t, b)
 	nodes := explainAsUser(t, b, planUser, failedLoginCountSQL, []any{auditPlanUser})
 	t.Logf("failed-login count plan:\n%s", describePlan(nodes))

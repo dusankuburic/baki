@@ -24,7 +24,7 @@ export default function Checkbox({checked, onChange, label, disabled = false, cl
         disabled={disabled}
         onClick={() => !disabled && onChange(!checked)}
         className={clsx(
-          'w-4 h-4 rounded-sm border flex items-center justify-center transition-colors duration-fast flex-shrink-0',
+          'w-4 h-4 rounded-sm border flex items-center justify-center transition-colors duration-fast shrink-0',
           checked ? 'bg-brand-500 border-brand-500' : 'bg-surface-2 border-border-default hover:border-border-strong',
         )}
       >

@@ -384,7 +384,7 @@ describe('OrganizationsPanel', () => {
       const leave = await screen.findAllByRole('button', {name: 'Leave organization'})
       // Only the caller's own row carries the control.
       expect(leave).toHaveLength(1)
-      fireEvent.click(leave[0])
+      fireEvent.click(leave[0]!)
       fireEvent.click(await screen.findByRole('button', {name: 'Leave'}))
 
       await waitFor(() => expect(removeMember).toHaveBeenCalledWith('org-1', 'u-2'))
@@ -449,7 +449,9 @@ describe('OrganizationsPanel', () => {
     expect(bumpProviderEpoch).toHaveBeenCalledTimes(1)
 
     // Expanding the other org does not carry Acme's note over.
-    act(() => useOrgStore.setState({activeOrgId: 'org-2'} as never))
+    act(() => {
+      useOrgStore.setState({activeOrgId: 'org-2'} as never)
+    })
     await waitFor(() => expect(azureApi.listAzureConnections).toHaveBeenCalledWith({kind: 'org', orgId: 'org-2'}))
     expect(await screen.findByText('Shared Azure AI Foundry')).toBeInTheDocument()
     expect(screen.queryByText(DISABLED_NOTE)).toBeNull()

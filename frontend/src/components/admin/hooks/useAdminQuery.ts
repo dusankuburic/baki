@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useEffect, useRef, useState} from 'react'
 import {useAdminStore} from '@/stores/adminStore'
 import {logger} from '@/lib/logger'
@@ -58,7 +59,7 @@ export function useAdminQuery<T>(
       .catch((e: unknown) => {
         if (controller.signal.aborted || (e instanceof Error && e.name === 'AbortError')) return
         logger.error('admin: load failed', e)
-        const message = e instanceof Error ? e.message : String(e)
+        const message = getErrorMessage(e)
         if (dataRef.current !== null) onErrorRef.current?.(message)
         setLoaded({key: requestKey, data: dataRef.current, error: message})
       })

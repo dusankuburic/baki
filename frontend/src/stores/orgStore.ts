@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import {persist} from 'zustand/middleware'
@@ -89,7 +90,7 @@ export const useOrgStore = create<OrgState>()(
             activeOrgId: s.activeOrgId && (orgs ?? []).some(o => o.id === s.activeOrgId) ? s.activeOrgId : null,
           }))
         } catch (err) {
-          set({isLoading: false, error: err instanceof Error ? err.message : 'Failed to load organisations'})
+          set({isLoading: false, error: getErrorMessage(err, 'Failed to load organisations')})
         }
       },
 
@@ -107,7 +108,7 @@ export const useOrgStore = create<OrgState>()(
           set(s => ({organisations: [...s.organisations, org], isBusy: false}))
           return org
         } catch (err) {
-          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to create organisation'})
+          set({isBusy: false, error: getErrorMessage(err, 'Failed to create organisation')})
           throw err
         }
       },
@@ -122,7 +123,7 @@ export const useOrgStore = create<OrgState>()(
             isBusy: false,
           }))
         } catch (err) {
-          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to rename organisation'})
+          set({isBusy: false, error: getErrorMessage(err, 'Failed to rename organisation')})
           throw err
         }
       },
@@ -138,7 +139,7 @@ export const useOrgStore = create<OrgState>()(
           set({isBusy: false})
           return res?.token
         } catch (err) {
-          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to send invite'})
+          set({isBusy: false, error: getErrorMessage(err, 'Failed to send invite')})
           throw err
         }
       },
@@ -152,7 +153,7 @@ export const useOrgStore = create<OrgState>()(
           if (org?.id) set({activeOrgId: org.id})
           set({isBusy: false})
         } catch (err) {
-          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to accept invite'})
+          set({isBusy: false, error: getErrorMessage(err, 'Failed to accept invite')})
           throw err
         }
       },
@@ -175,7 +176,7 @@ export const useOrgStore = create<OrgState>()(
           set({isBusy: false})
           return {sharedCredentialDisabled: reply?.sharedCredentialDisabled === true}
         } catch (err) {
-          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to remove member'})
+          set({isBusy: false, error: getErrorMessage(err, 'Failed to remove member')})
           throw err
         }
       },
@@ -192,7 +193,7 @@ export const useOrgStore = create<OrgState>()(
           set({isBusy: false})
           return {sharedCredentialDisabled: reply?.sharedCredentialDisabled === true}
         } catch (err) {
-          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to update member role'})
+          set({isBusy: false, error: getErrorMessage(err, 'Failed to update member role')})
           throw err
         }
       },
@@ -213,7 +214,7 @@ export const useOrgStore = create<OrgState>()(
           // leave path resets, and the org is gone for good here.
           if (wasActive) resetOrgScopedState()
         } catch (err) {
-          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to delete organisation'})
+          set({isBusy: false, error: getErrorMessage(err, 'Failed to delete organisation')})
           throw err
         }
       },
@@ -228,6 +229,6 @@ export const useOrgStore = create<OrgState>()(
 )
 
 // Reset on logout (see storeRegistry).
-registerStoreReset(() =>
-  useOrgStore.setState({organisations: [], activeOrgId: null, isLoading: false, isBusy: false, error: null}),
-)
+registerStoreReset(() => {
+  useOrgStore.setState({organisations: [], activeOrgId: null, isLoading: false, isBusy: false, error: null})
+})

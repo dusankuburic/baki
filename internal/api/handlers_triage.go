@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
-	storagedb "pad-analyzer/internal/storage/database"
+	"pad-analyzer/internal/platform/txhook"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
 	"pad-core/logger"
@@ -142,10 +142,10 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 		}
 		// After the commit, and detached: run inline here the alert/email held a SECOND pooled
 		// connection while the RLS transaction pinned the first (pool exhaustion), and announced
-		// an assignment the transaction could still roll back. RegisterPostCommit defers the hook
+		// an assignment the transaction could still roll back. txhook.Register defers the hook
 		// until the middleware commits; h.alerts caps how many run and is drained on shutdown.
 		actorEmail := claimsEmail(r.Context())
-		storagedb.RegisterPostCommit(r.Context(), func() {
+		txhook.Register(r.Context(), func(context.Context) {
 			fanOut := func() {
 				h.fanOutAssignment(req.FlowID, req.FindingKey, req.RuleID, flowName, req.AssigneeID, userID, actorEmail)
 			}

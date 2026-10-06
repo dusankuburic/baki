@@ -24,7 +24,7 @@ beforeEach(() => {
 })
 
 describe('AIBehaviorPanel', () => {
-  it('stores custom instructions as they are typed — no blur needed', () => {
+  it('stores custom instructions as they are typed — no blur-sm needed', () => {
     const {unmount} = render(<AIBehaviorPanel />)
     fireEvent.change(screen.getByRole('textbox', {name: 'Custom Instructions'}), {
       target: {value: 'Always answer in Serbian.'},
@@ -36,7 +36,7 @@ describe('AIBehaviorPanel', () => {
 
   it('switches the chat to the chosen active assistant right away', () => {
     render(<AIBehaviorPanel />)
-    fireEvent.click(screen.getAllByRole('radio', {name: 'Gemini'})[0])
+    fireEvent.click(screen.getAllByRole('radio', {name: 'Gemini'})[0]!)
     expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('gemini')
     // The chat used to keep its start-up provider until a reload.
     expect(useChatStore.getState().selectedProvider).toBe('gemini')
@@ -52,14 +52,14 @@ describe('AIBehaviorPanel', () => {
 
     // Azure AI Foundry models are registry entries: the default is chosen
     // with Make default in AI Accounts, never typed.
-    fireEvent.click(screen.getAllByRole('radio', {name: 'Azure AI Foundry'})[0])
+    fireEvent.click(screen.getAllByRole('radio', {name: 'Azure AI Foundry'})[0]!)
     expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('azure-foundry')
     expect(screen.queryByRole('textbox', {name: 'Default for new chats'})).toBeNull()
     expect(screen.getByText('Default for new chats')).toBeInTheDocument()
     expect(screen.getByText(/choose "Make default" on a model under AI Accounts/)).toBeInTheDocument()
 
     // And it comes back for a regular provider.
-    fireEvent.click(screen.getAllByRole('radio', {name: 'Claude'})[0])
+    fireEvent.click(screen.getAllByRole('radio', {name: 'Claude'})[0]!)
     expect(screen.getByRole('textbox', {name: 'Default for new chats'})).toBeInTheDocument()
   })
 })
@@ -68,7 +68,7 @@ describe('AIBehaviorPanel', () => {
 // refuses it (LOCAL_MODELS_UNAVAILABLE), so it is not offered as an assistant
 // there, and it is never an embedding provider (it cannot embed).
 describe('AIBehaviorPanel local model gating', () => {
-  const activeAssistant = () => screen.getAllByRole('radiogroup')[0]
+  const activeAssistant = () => screen.getAllByRole('radiogroup')[0]!
   const embeddingAssistant = () => screen.getByRole('radiogroup', {name: 'Embedding Assistant'})
 
   it('offers the local model as an assistant on a local backend', () => {
@@ -113,7 +113,7 @@ describe('AIBehaviorPanel embedding model for Azure AI Foundry', () => {
     render(<AIBehaviorPanel />)
     expect(screen.getByRole('textbox', {name: 'Embedding Model'})).toBeInTheDocument()
     // Index 1 = the EMBEDDING assistant control (0 is the active assistant).
-    fireEvent.click(screen.getAllByRole('radio', {name: 'Azure AI Foundry'})[1])
+    fireEvent.click(screen.getAllByRole('radio', {name: 'Azure AI Foundry'})[1]!)
     expect(useSettingsStore.getState().settings.ai.embeddingProvider).toBe('azure-foundry')
     // The knowledge-base model is a registry designation there, not free text.
     expect(screen.queryByRole('textbox', {name: 'Embedding Model'})).toBeNull()
@@ -121,7 +121,7 @@ describe('AIBehaviorPanel embedding model for Azure AI Foundry', () => {
     expect(screen.queryByText(/Override the embedding model name/i)).toBeNull()
 
     // Back to OpenAI: the field and the generic hint return.
-    fireEvent.click(screen.getAllByRole('radio', {name: 'OpenAI'})[1])
+    fireEvent.click(screen.getAllByRole('radio', {name: 'OpenAI'})[1]!)
     expect(useSettingsStore.getState().settings.ai.embeddingProvider).toBe('openai')
     expect(screen.getByRole('textbox', {name: 'Embedding Model'})).toBeInTheDocument()
     expect(screen.getByText(/Override the embedding model name/i)).toBeInTheDocument()
@@ -150,7 +150,7 @@ describe('AIBehaviorPanel reasoning effort', () => {
     expect(useSettingsStore.getState().settings.ai.providers.claude.reasoningEffort).toBe('high')
 
     // The choice is per provider: switching keeps it stored for the first.
-    fireEvent.click(screen.getAllByRole('radio', {name: 'Gemini'})[0])
+    fireEvent.click(screen.getAllByRole('radio', {name: 'Gemini'})[0]!)
     expect((screen.getByLabelText('Reasoning Effort') as HTMLSelectElement).value).toBe('')
     expect(useSettingsStore.getState().settings.ai.providers.claude.reasoningEffort).toBe('high')
   })

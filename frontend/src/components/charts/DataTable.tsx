@@ -19,7 +19,8 @@ export function DataTable<Row extends object>({
   columns: TableColumn<Row>[]
   rows: Row[]
   filename?: string
-  rowKey?: (row: Row, index: number) => string
+  /** Stable React key per row, derived from the row's own data (never the index). */
+  rowKey: (row: Row, index: number) => string
   maxRows?: number
   className?: string
 }) {
@@ -59,7 +60,7 @@ export function DataTable<Row extends object>({
           </thead>
           <tbody>
             {shown.map((row, i) => (
-              <tr key={rowKey ? rowKey(row, i) : i} className="border-b border-border-subtle/60 last:border-0">
+              <tr key={rowKey(row, i)} className="border-b border-border-subtle/60 last:border-0">
                 {columns.map(c => (
                   <td
                     key={c.key}
@@ -85,7 +86,7 @@ export function DataTable<Row extends object>({
             <button
               type="button"
               onClick={download}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-brand-400 hover:text-brand-300 transition-colors duration-fast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-brand-400 hover:text-brand-300 transition-colors duration-fast focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40"
             >
               <Download size={12} aria-hidden="true" />
               {t('table.csv')}

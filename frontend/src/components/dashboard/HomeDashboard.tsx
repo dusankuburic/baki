@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode} from 'react'
 import {useTranslation} from 'react-i18next'
 import {ArrowRight} from 'lucide-react'
@@ -82,10 +83,10 @@ export default function HomeDashboard() {
         logger.error('dashboard: load failed', e)
         if (hasDataRef.current) {
           toastRef.current.error(t('home.refreshFailed'), {
-            description: e instanceof Error ? e.message : t('common.unknownError'),
+            description: getErrorMessage(e, t('common.unknownError')),
           })
         } else {
-          setError(e instanceof Error ? e.message : t('home.loadFailed'))
+          setError(getErrorMessage(e, t('home.loadFailed')))
         }
       })
       .finally(() => {
@@ -136,7 +137,7 @@ export default function HomeDashboard() {
       } catch (e) {
         if (!isDocLoadCurrent(gen)) return
         toastRef.current.error(t('home.openFailed'), {
-          description: e instanceof Error ? e.message : t('common.unknownError'),
+          description: getErrorMessage(e, t('common.unknownError')),
         })
       }
     },
@@ -222,7 +223,7 @@ export default function HomeDashboard() {
             <button
               type="button"
               onClick={details('analytics-overview')}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border-default bg-surface-2 px-3 py-1.5 text-sm text-text-primary transition-colors duration-fast hover:bg-surface-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border-default bg-surface-2 px-3 py-1.5 text-sm text-text-primary transition-colors duration-fast hover:bg-surface-3 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40"
             >
               {t('common.openAnalytics')}
               <ArrowRight size={14} aria-hidden="true" />

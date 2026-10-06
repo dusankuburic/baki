@@ -45,8 +45,11 @@ export function computeDiff(original: string, patched: string): DiffLine[] {
   // LCS DP table
   const dp: number[][] = Array.from({length: m + 1}, () => new Array(n + 1).fill(0))
   for (let i = m - 1; i >= 0; i--) {
+    const row = dp[i]
+    const below = dp[i + 1]
+    if (!row || !below) continue
     for (let j = n - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+      row[j] = a[i] === b[j] ? (below[j + 1] ?? 0) + 1 : Math.max(below[j] ?? 0, row[j + 1] ?? 0)
     }
   }
 
@@ -58,23 +61,23 @@ export function computeDiff(original: string, patched: string): DiffLine[] {
     j = 0
   while (i < m && j < n) {
     if (a[i] === b[j]) {
-      rawDiff.push({type: 'context', text: a[i]})
+      rawDiff.push({type: 'context', text: a[i] ?? ''})
       i++
       j++
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      rawDiff.push({type: 'removed', text: a[i]})
+    } else if ((dp[i + 1]?.[j] ?? 0) >= (dp[i]?.[j + 1] ?? 0)) {
+      rawDiff.push({type: 'removed', text: a[i] ?? ''})
       i++
     } else {
-      rawDiff.push({type: 'added', text: b[j]})
+      rawDiff.push({type: 'added', text: b[j] ?? ''})
       j++
     }
   }
   while (i < m) {
-    rawDiff.push({type: 'removed', text: a[i]})
+    rawDiff.push({type: 'removed', text: a[i] ?? ''})
     i++
   }
   while (j < n) {
-    rawDiff.push({type: 'added', text: b[j]})
+    rawDiff.push({type: 'added', text: b[j] ?? ''})
     j++
   }
 

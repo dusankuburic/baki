@@ -1,4 +1,5 @@
 import React from 'react'
+import {useTranslation} from 'react-i18next'
 import {TrendingUp} from 'lucide-react'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
@@ -10,6 +11,7 @@ import type {AnalysisSnapshot} from '@/types'
 // sparkline with per-run severity counts on hover. Hidden until there are at
 // least two distinct runs to connect.
 export default function HealthTrend() {
+  const {t} = useTranslation('inspector')
   const doc = useFlowStore(s => s.document)
   const generatedAt = useAnalysisStore(s => (doc ? s.reports.get(doc.id)?.generatedAt : undefined))
   const [snapshots, setSnapshots] = React.useState<AnalysisSnapshot[]>([])
@@ -39,27 +41,32 @@ export default function HealthTrend() {
   const step = (W - PAD * 2) / (snapshots.length - 1)
   const y = (score: number) => PAD + (H - PAD * 2) * (1 - Math.max(0, Math.min(100, score)) / 100)
   const points = snapshots.map((s, i) => `${PAD + i * step},${y(s.healthScore)}`).join(' ')
-  const active = hover != null ? snapshots[hover] : snapshots[snapshots.length - 1]
+  // hover can point past the end after a re-fetch replaces snapshots with a
+  // shorter array (e.g. slice(-20)); a stale index would crash the render, so
+  // fall back to the latest snapshot.
+  const hovered = hover != null ? snapshots[hover] : undefined
+  const active = hovered ?? snapshots[snapshots.length - 1]
+  if (!active) return null
 
   return (
     <div className="p-3 rounded-lg border border-border-subtle bg-surface-0">
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-bold uppercase tracking-widest text-text-tertiary flex items-center gap-1.5">
           <TrendingUp size={12} />
-          Health Trend
+          {t('trend.title')}
         </span>
         <span className="text-xs text-text-tertiary tabular-nums">
-          {new Date(active.timestamp).toLocaleString()} · score {active.healthScore} ·{' '}
-          <span className="text-red-400">{active.errors}E</span>{' '}
-          <span className="text-amber-400">{active.warnings}W</span>{' '}
-          <span className="text-blue-400">{active.info}I</span>
+          {new Date(active.timestamp).toLocaleString()} · {t('trend.score', {score: active.healthScore})} ·{' '}
+          <span className="text-red-400">{t('trend.errorsShort', {value: active.errors})}</span>{' '}
+          <span className="text-amber-400">{t('trend.warningsShort', {value: active.warnings})}</span>{' '}
+          <span className="text-blue-400">{t('trend.infoShort', {value: active.info})}</span>
         </span>
       </div>
       <svg
         viewBox={`0 0 ${W} ${H}`}
         className="w-full"
         role="img"
-        aria-label={`Health score trend over ${snapshots.length} analysis runs`}
+        aria-label={t('trend.trendAria', {count: snapshots.length})}
         onMouseLeave={() => setHover(null)}
       >
         <polyline points={points} fill="none" stroke="var(--brand-500)" strokeWidth="1.5" strokeLinejoin="round" />

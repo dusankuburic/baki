@@ -1,4 +1,5 @@
 import {useMemo, lazy, Suspense} from 'react'
+import {useTranslation} from 'react-i18next'
 import {Box} from 'lucide-react'
 import {CollapsibleSection} from './CollapsibleSection'
 import DetailsHeader from './DetailsHeader'
@@ -22,6 +23,7 @@ import {logger} from '@/lib/logger'
 const VariableLineageInInspector = lazy(() => import('./VariableLineageInInspector'))
 
 export default function DetailsTab() {
+  const {t} = useTranslation('inspector')
   const document = useFlowStore(s => s.document)
   const selectedBlockId = useFlowStore(s => s.selectedBlockId)
   // Lineage presence gates the lazy mount above (mirrors the component's own
@@ -43,10 +45,8 @@ export default function DetailsTab() {
         <div className="w-12 h-12 rounded-full bg-surface-2 flex items-center justify-center mb-3">
           <Box size={24} className="text-text-tertiary" />
         </div>
-        <div className="text-sm font-medium text-text-primary mb-1">Select a block</div>
-        <div className="text-xs text-text-tertiary max-w-48">
-          Click any block in the flow to inspect its properties and metadata.
-        </div>
+        <div className="text-sm font-medium text-text-primary mb-1">{t('details.placeholderTitle')}</div>
+        <div className="text-xs text-text-tertiary max-w-48">{t('details.placeholderBody')}</div>
       </div>
     )
   }
@@ -71,7 +71,7 @@ export default function DetailsTab() {
         <PropertiesTable properties={block.properties || {}} />
         <BlockFindings />
         {block.variables?.length > 0 && (
-          <CollapsibleSection title={`Variables used (${block.variables.length})`}>
+          <CollapsibleSection title={t('details.variablesUsed', {count: block.variables.length})}>
             <VariableChips variables={block.variables} onVariableClick={handleVariableClick} />
           </CollapsibleSection>
         )}
@@ -86,7 +86,7 @@ export default function DetailsTab() {
         )}
         <BlockMetadata block={block} subflowName={subflowName} />
         {block.children?.length > 0 && (
-          <CollapsibleSection title={`Children (${block.children.length})`}>
+          <CollapsibleSection title={t('details.children', {count: block.children.length})}>
             <ChildrenList children={block.children} onSelect={id => useFlowStore.getState().selectBlock(id)} />
           </CollapsibleSection>
         )}

@@ -1,5 +1,7 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
-import {Github, Check, Loader2} from 'lucide-react'
+import {Check, Loader2} from 'lucide-react'
+import {GithubMark} from '@/components/shared'
 import {useState, useEffect, useRef, useCallback} from 'react'
 import {createAdapter} from '@/platform/adapters'
 import {logger} from '@/lib/logger'
@@ -45,7 +47,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
   // code expired.
   const attemptRef = useRef(0)
   const startingRef = useRef(false)
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
     // The attempt counter (not a DOM node): bumping it on unmount/provider
@@ -123,7 +125,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
     } catch (e: unknown) {
       if (attempt !== attemptRef.current) return
       setState('error')
-      setErrorMsg((e instanceof Error ? e.message : String(e)) || t('deviceAuth.startFailed'))
+      setErrorMsg(getErrorMessage(e) || t('deviceAuth.startFailed'))
     } finally {
       startingRef.current = false
       setStarting(false)
@@ -155,7 +157,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
           onClick={startAuth}
           disabled={starting}
         >
-          {starting ? <Loader2 size={16} className="animate-spin" /> : <Github size={16} />}
+          {starting ? <Loader2 size={16} className="animate-spin" /> : <GithubMark size={16} />}
           {provider.label}
         </button>
       )

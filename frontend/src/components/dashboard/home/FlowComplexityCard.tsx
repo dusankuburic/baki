@@ -67,6 +67,7 @@ export function FlowComplexityCard({
       table={{
         caption: heading,
         filename: 'flow-complexity.csv',
+        rowKey: r => r.id,
         columns: [
           {key: 'name', header: t('analytics.columns.flow')},
           {key: 'blocks', header: t('home.blocks'), align: 'right'},

@@ -66,6 +66,7 @@ export function TrendSection({data, refetching}: {data: DashboardAnalyticsData; 
         table={{
           caption: t('analytics.cards.healthTrend'),
           filename: 'health-trend.csv',
+          rowKey: r => r.date,
           columns: [
             dateCol,
             {
@@ -112,6 +113,7 @@ export function TrendSection({data, refetching}: {data: DashboardAnalyticsData; 
         table={{
           caption: t('analytics.cards.runs'),
           filename: 'analysis-runs.csv',
+          rowKey: r => r.date,
           columns: [dateCol, {key: 'runs', header: t('analytics.columns.runs'), align: 'right'}],
           rows,
         }}
@@ -128,6 +130,7 @@ export function TrendSection({data, refetching}: {data: DashboardAnalyticsData; 
         table={{
           caption: t('analytics.cards.severityTrend'),
           filename: 'findings-by-severity.csv',
+          rowKey: r => r.date,
           columns: [
             dateCol,
             {key: 'errors', header: t('analytics.columns.errors'), align: 'right'},

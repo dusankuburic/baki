@@ -106,7 +106,7 @@ export function FlowMultiSelect({
         aria-label={`${t('analytics.filters.flows')}: ${label}`}
         onClick={() => (open ? close() : setOpen(true))}
         className={clsx(
-          'inline-flex h-8 items-center gap-1.5 rounded-md border border-border-default bg-surface-2 px-3 text-sm text-text-primary transition-colors duration-fast hover:bg-surface-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40',
+          'inline-flex h-8 items-center gap-1.5 rounded-md border border-border-default bg-surface-2 px-3 text-sm text-text-primary transition-colors duration-fast hover:bg-surface-3 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40',
           disabled && 'cursor-not-allowed opacity-50',
           selected.length > 0 && 'border-brand-500/40',
         )}
@@ -131,7 +131,7 @@ export function FlowMultiSelect({
               }}
               placeholder={t('analytics.filters.flowsSearch')}
               aria-label={t('analytics.filters.flowsSearch')}
-              className="w-full bg-transparent text-sm text-text-primary outline-none placeholder:text-text-disabled"
+              className="w-full bg-transparent text-sm text-text-primary outline-hidden placeholder:text-text-disabled"
             />
           </div>
           <ul

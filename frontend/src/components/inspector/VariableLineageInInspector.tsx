@@ -1,4 +1,5 @@
 import {useState, useMemo} from 'react'
+import {useTranslation} from 'react-i18next'
 import {ArrowRight, Edit3, Eye, Info, Clock} from 'lucide-react'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
@@ -6,6 +7,7 @@ import clsx from 'clsx'
 import VariableLineageGraph from './VariableLineageGraph'
 
 export default function VariableLineageInInspector() {
+  const {t} = useTranslation('inspector')
   const history = useAnalysisStore(s => s.variableLineage)
   const navigateToBlock = useFlowStore(s => s.navigateToBlock)
   const document = useFlowStore(s => s.document)
@@ -41,21 +43,21 @@ export default function VariableLineageInInspector() {
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-[11px] font-bold uppercase tracking-wider text-text-tertiary flex items-center gap-1.5">
           <Clock size={12} />
-          Lineage: <span className="text-brand-500 font-mono">%{history.name}%</span>
+          {t('lineage.heading')} <span className="text-brand-500 font-mono">%{history.name}%</span>
         </h3>
         <button
           onClick={() => useAnalysisStore.getState().setVariableLineage(null)}
           className="text-2xs text-text-tertiary hover:text-text-secondary transition-colors"
         >
-          Clear
+          {t('lineage.clear')}
         </button>
       </div>
 
       <div className="flex items-center gap-2 mb-4">
         {[
-          {id: 'init', label: 'Inits', color: 'text-green-500', bg: 'bg-green-500/10'},
-          {id: 'mutate', label: 'Writes', color: 'text-amber-500', bg: 'bg-amber-500/10'},
-          {id: 'read', label: 'Reads', color: 'text-blue-500', bg: 'bg-blue-500/10'},
+          {id: 'init', label: t('lineage.filters.init'), color: 'text-green-500', bg: 'bg-green-500/10'},
+          {id: 'mutate', label: t('lineage.filters.mutate'), color: 'text-amber-500', bg: 'bg-amber-500/10'},
+          {id: 'read', label: t('lineage.filters.read'), color: 'text-blue-500', bg: 'bg-blue-500/10'},
         ].map(f => (
           <button
             key={f.id}
@@ -117,7 +119,7 @@ export default function VariableLineageInInspector() {
         {filteredEvents.length === 0 && (
           <div className="py-6 text-center opacity-40">
             <Info size={20} className="mx-auto mb-1.5" />
-            <p className="text-[11px]">No events match filters.</p>
+            <p className="text-[11px]">{t('lineage.noEvents')}</p>
           </div>
         )}
       </div>

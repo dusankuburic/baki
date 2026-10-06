@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
 import {useState, useCallback, useEffect} from 'react'
 import {useFlowStore, beginDocLoad, isDocLoadCurrent} from '@/stores/flowStore'
@@ -68,7 +69,7 @@ export function useFileOpen() {
     } catch (err) {
       logger.warn('Failed to create flow:', err)
       if (isDocLoadCurrent(gen))
-        toast.error(t('files.createFailed'), {description: err instanceof Error ? err.message : String(err)})
+        toast.error(t('files.createFailed'), {description: getErrorMessage(err)})
     } finally {
       if (isDocLoadCurrent(gen)) endLoad()
     }
@@ -88,7 +89,7 @@ export function useFileOpen() {
     } catch (err) {
       logger.warn('Failed to open file:', err)
       if (isDocLoadCurrent(gen))
-        toast.error(t('files.openFileFailed'), {description: err instanceof Error ? err.message : String(err)})
+        toast.error(t('files.openFileFailed'), {description: getErrorMessage(err)})
     } finally {
       if (isDocLoadCurrent(gen)) endLoad()
     }
@@ -103,14 +104,15 @@ export function useFileOpen() {
         setDocument(doc)
         if (doc.files && doc.files.length > 0) {
           setFolderFiles(doc.files)
-          setSelectedFilePath(doc.files[0].path)
+          const first = doc.files[0]
+          if (first) setSelectedFilePath(first.path)
         }
         checkView()
       }
     } catch (err) {
       logger.warn('Failed to open folder:', err)
       if (isDocLoadCurrent(gen))
-        toast.error(t('files.openFolderFailed'), {description: err instanceof Error ? err.message : String(err)})
+        toast.error(t('files.openFolderFailed'), {description: getErrorMessage(err)})
     } finally {
       if (isDocLoadCurrent(gen)) endLoad()
     }
@@ -146,7 +148,7 @@ export function useFileOpen() {
       } catch (err) {
         logger.warn('Failed to load file:', err)
         if (isDocLoadCurrent(gen))
-          toast.error(t('files.loadFailed'), {description: err instanceof Error ? err.message : String(err)})
+          toast.error(t('files.loadFailed'), {description: getErrorMessage(err)})
       } finally {
         if (isDocLoadCurrent(gen)) endLoad()
       }
@@ -166,7 +168,10 @@ export function useFileOpen() {
           setDocument(doc)
           if (doc.isFolder && doc.files) {
             setFolderFiles(doc.files)
-            setSelectedFilePath(doc.files[0].path)
+            // A folder can legitimately hold zero files; selecting the first
+            // file would crash on an empty array.
+            const first = doc.files[0]
+            if (first) setSelectedFilePath(first.path)
           } else {
             setFolderFiles([])
             setSelectedFilePath(doc.filePath)
@@ -176,7 +181,7 @@ export function useFileOpen() {
       } catch (err) {
         logger.warn('Failed to load recent item:', err)
         if (isDocLoadCurrent(gen))
-          toast.error(t('files.loadFailed'), {description: err instanceof Error ? err.message : String(err)})
+          toast.error(t('files.loadFailed'), {description: getErrorMessage(err)})
       } finally {
         if (isDocLoadCurrent(gen)) endLoad()
       }
@@ -215,7 +220,7 @@ export function useFileOpen() {
         await flowApi.revealInFileManager(path)
       } catch (err) {
         logger.warn('Failed to reveal file:', err)
-        toast.error(t('files.revealFailed'), {description: err instanceof Error ? err.message : String(err)})
+        toast.error(t('files.revealFailed'), {description: getErrorMessage(err)})
       }
     },
     [toast, t],
@@ -242,7 +247,7 @@ export function useFileOpen() {
       } catch (err) {
         logger.warn('Failed to reload file:', err)
         if (isDocLoadCurrent(gen))
-          toast.error(t('files.reloadFailed'), {description: err instanceof Error ? err.message : String(err)})
+          toast.error(t('files.reloadFailed'), {description: getErrorMessage(err)})
       } finally {
         if (isDocLoadCurrent(gen)) endLoad()
       }

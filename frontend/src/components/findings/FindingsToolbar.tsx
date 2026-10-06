@@ -287,7 +287,7 @@ export default function FindingsToolbar({
       </div>
       <button
         onClick={onReanalyze}
-        className="text-2xs text-brand-400 hover:text-brand-300 px-2 py-1 rounded hover:bg-brand-500/10 transition-colors flex-shrink-0"
+        className="text-2xs text-brand-400 hover:text-brand-300 px-2 py-1 rounded hover:bg-brand-500/10 transition-colors shrink-0"
       >
         Re-analyze
       </button>
@@ -301,7 +301,7 @@ export default function FindingsToolbar({
           aria-expanded={showSort}
           title={t('toolbar.sortTitle', {label: SORT_OPTIONS.find(o => o.mode === sortMode)?.label ?? 'Rule order'})}
           className={clsx(
-            'flex items-center gap-1 text-2xs px-1.5 py-1 rounded transition-colors flex-shrink-0',
+            'flex items-center gap-1 text-2xs px-1.5 py-1 rounded transition-colors shrink-0',
             sortMode !== 'severity'
               ? 'text-brand-400 bg-brand-500/10'
               : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3',
@@ -338,7 +338,7 @@ export default function FindingsToolbar({
         disabled={diffLoading}
         title={t('toolbar.compareTitle')}
         aria-label={t('toolbar.compareAria')}
-        className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0 disabled:opacity-50"
+        className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors shrink-0 disabled:opacity-50"
       >
         <GitCompareArrows size={12} />
       </button>
@@ -348,7 +348,7 @@ export default function FindingsToolbar({
         title={dedupActive ? 'Show all findings' : 'Group duplicate findings'}
         aria-label={t('toolbar.toggleGrouping')}
         className={clsx(
-          'text-2xs px-1.5 py-1 rounded transition-colors flex-shrink-0 disabled:opacity-50',
+          'text-2xs px-1.5 py-1 rounded transition-colors shrink-0 disabled:opacity-50',
           dedupActive
             ? 'text-brand-400 bg-brand-500/10'
             : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3',
@@ -360,7 +360,7 @@ export default function FindingsToolbar({
         <>
           <button
             onClick={onExportCSV}
-            className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
+            className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors shrink-0"
             aria-label={t('toolbar.exportCsvTitle')}
             title={t('toolbar.exportCsvAria')}
           >
@@ -368,7 +368,7 @@ export default function FindingsToolbar({
           </button>
           <button
             onClick={onExportHTML}
-            className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
+            className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors shrink-0"
             aria-label={t('toolbar.exportHtmlTitle')}
             title={t('toolbar.exportHtmlAria')}
           >
@@ -376,7 +376,7 @@ export default function FindingsToolbar({
           </button>
           <button
             onClick={onExportSARIF}
-            className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
+            className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors shrink-0"
             aria-label={t('toolbar.exportSarifTitle')}
             title={t('toolbar.exportSarifAria')}
           >
@@ -384,7 +384,7 @@ export default function FindingsToolbar({
           </button>
           <button
             onClick={onExportJUnit}
-            className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
+            className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors shrink-0"
             aria-label={t('toolbar.exportJunitTitle')}
             title={t('toolbar.exportJunitAria')}
           >
@@ -393,7 +393,7 @@ export default function FindingsToolbar({
         </>
       )}
       {cloudMode && (
-        <div className="flex items-center gap-1 flex-shrink-0 border-l border-border-subtle pl-1.5 ml-0.5">
+        <div className="flex items-center gap-1 shrink-0 border-l border-border-subtle pl-1.5 ml-0.5">
           {baselineNewCount !== null && baselineNewCount > 0 && (
             <span className="text-2xs font-medium text-semantic-warning bg-semantic-warning/10 px-1.5 py-0.5 rounded-full">
               {baselineNewCount} new

@@ -18,6 +18,7 @@ export function Sparkline({values, height = 28, className}: {values: number[]; h
   const y = (v: number) => pad + ((max - v) / span) * (height - pad * 2)
   const d = pts.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(' ')
   const last = pts.length - 1
+  const lastVal = pts[last]
   return (
     <svg
       viewBox={`0 0 ${width} ${height}`}
@@ -38,7 +39,9 @@ export function Sparkline({values, height = 28, className}: {values: number[]; h
         strokeLinecap="round"
         vectorEffect="non-scaling-stroke"
       />
-      <circle cx={x(last)} cy={y(pts[last])} r={4} fill={t.emphasis} stroke={t.surface} strokeWidth={2} />
+      {lastVal !== undefined && (
+        <circle cx={x(last)} cy={y(lastVal)} r={4} fill={t.emphasis} stroke={t.surface} strokeWidth={2} />
+      )}
     </svg>
   )
 }

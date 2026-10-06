@@ -1,4 +1,6 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
+import {useTranslation} from 'react-i18next'
 import {libraryApi, type LibraryFlow} from '@/api/library'
 import {flowApi} from '@/api/flow'
 import {useLibraryBrowseStore} from '@/stores/libraryBrowseStore'
@@ -36,6 +38,7 @@ function mergeTags(known: string[], flows: LibraryFlow[]): string[] {
 // Opening a flow takes the same code path as LibraryTab: fetch content,
 // hydrate flowStore, switch the main pane to 'block'.
 export default function LibraryWorkspace() {
+  const {t} = useTranslation('library')
   const view = useLibraryBrowseStore(s => s.view)
   const scope = useLibraryBrowseStore(s => s.scope)
   const selectedOrgIds = useLibraryBrowseStore(s => s.selectedOrgIds)
@@ -130,7 +133,7 @@ export default function LibraryWorkspace() {
       } catch (e) {
         // Abort (superseded fetch or unmount) is intentional, not an error.
         if (ac.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return
-        const msg = e instanceof Error ? e.message : String(e)
+        const msg = getErrorMessage(e)
         logger.warn('Library: list failed', e)
         setError(msg)
       } finally {
@@ -158,21 +161,21 @@ export default function LibraryWorkspace() {
         useFlowStore.setState({libraryFlowId: flow.id, libraryVersion: flow.version, readOnly: !flow.canEdit})
         setMainPaneView('block')
       } catch (e) {
-        toast.error('Failed to load flow', {description: e instanceof Error ? e.message : String(e)})
+        toast.error(t('toasts.openFailed'), {description: getErrorMessage(e)})
       } finally {
         setOpeningId(null)
       }
     },
-    [setDocument, setMainPaneView, toast],
+    [setDocument, setMainPaneView, toast, t],
   )
 
   const handleDelete = useCallback(
     async (flow: LibraryFlow) => {
       const ok = await confirm({
-        title: 'Delete flow',
-        message: `Delete "${flow.name}" from the cloud library? This cannot be undone.`,
+        title: t('toasts.deleteTitle'),
+        message: t('toasts.deleteMessage', {name: flow.name}),
         danger: true,
-        confirmLabel: 'Delete',
+        confirmLabel: t('toasts.delete'),
       })
       if (!ok) return
       try {
@@ -180,12 +183,12 @@ export default function LibraryWorkspace() {
         setItems(prev => prev.filter(f => f.id !== flow.id))
         setTotal(t => Math.max(0, t - 1))
         if (selectedFlowId === flow.id) setSelectedFlow(null)
-        toast.success('Flow deleted')
+        toast.success(t('toasts.deleted'))
       } catch (e) {
-        toast.error('Failed to delete', {description: e instanceof Error ? e.message : String(e)})
+        toast.error(t('toasts.deleteFailed'), {description: getErrorMessage(e)})
       }
     },
-    [selectedFlowId, setSelectedFlow, toast, confirm],
+    [selectedFlowId, setSelectedFlow, toast, confirm, t],
   )
 
   // A conflict reload re-reads both the page and the detail panel, so the next
@@ -200,23 +203,23 @@ export default function LibraryWorkspace() {
   const handleRename = useCallback(
     async (flow: LibraryFlow) => {
       const name = await prompt({
-        title: 'Rename flow',
-        label: 'Flow name',
+        title: t('toasts.renameTitle'),
+        label: t('toasts.renameLabel'),
         initialValue: flow.name,
-        placeholder: 'Enter a new name',
-        confirmLabel: 'Rename',
+        placeholder: t('toasts.renamePlaceholder'),
+        confirmLabel: t('toasts.rename'),
       })
       if (!name?.trim() || name.trim() === flow.name) return
       try {
         const updated = await libraryApi.update(flow.id, {name: name.trim(), version: flow.version})
         setItems(prev => prev.map(f => (f.id === flow.id ? updated : f)))
         setDetailReload(n => n + 1)
-        toast.success('Flow renamed')
+        toast.success(t('toasts.renamed'))
       } catch (e) {
-        reportWriteError(e, 'Failed to rename', reloadAfterConflict)
+        reportWriteError(e, t('toasts.renameFailed'), reloadAfterConflict)
       }
     },
-    [toast, prompt, reportWriteError, reloadAfterConflict],
+    [toast, prompt, reportWriteError, reloadAfterConflict, t],
   )
 
   // R0-4: duplicate = load content, save as "<name> (copy)" (same org).
@@ -231,12 +234,12 @@ export default function LibraryWorkspace() {
         })
         setItems(prev => [created, ...prev])
         setTotal(t => t + 1)
-        toast.success(`Duplicated as "${created.name}"`)
+        toast.success(t('toasts.duplicatedAs', {name: created.name}))
       } catch (e) {
-        toast.error('Failed to duplicate', {description: e instanceof Error ? e.message : String(e)})
+        toast.error(t('toasts.duplicateFailed'), {description: getErrorMessage(e)})
       }
     },
-    [toast],
+    [toast, t],
   )
 
   // Tag editor state (R2-4b): inline chip editing in the detail panel.
@@ -249,12 +252,12 @@ export default function LibraryWorkspace() {
         setItems(prev => prev.map(f => (f.id === flow.id ? {...f, tags: saved} : f)))
         setKnownTags(prev => mergeTags(prev, [{...flow, tags: saved}]))
         setDetailReload(n => n + 1)
-        toast.success('Tags updated')
+        toast.success(t('toasts.tagsUpdated'))
       } catch (e) {
-        reportWriteError(e, 'Failed to update tags', reloadAfterConflict)
+        reportWriteError(e, t('toasts.tagsUpdateFailed'), reloadAfterConflict)
       }
     },
-    [toast, reportWriteError, reloadAfterConflict],
+    [toast, reportWriteError, reloadAfterConflict, t],
   )
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -270,7 +273,7 @@ export default function LibraryWorkspace() {
       {/* relative: the detail panel slides over this box when there is no
           room to dock it (see .library-detail). */}
       <div className="relative flex-1 flex overflow-hidden">
-        <aside className="library-rail border-r border-border-subtle overflow-y-auto flex-shrink-0">
+        <aside className="library-rail border-r border-border-subtle overflow-y-auto shrink-0">
           <LibraryFilterRail orgs={orgs} tags={knownTags} />
         </aside>
 
@@ -312,16 +315,16 @@ export default function LibraryWorkspace() {
           </div>
 
           {total > pageSize && (
-            <div className="border-t border-border-subtle px-4 py-2 flex-shrink-0">
+            <div className="border-t border-border-subtle px-4 py-2 shrink-0">
               <LibraryPager page={page} totalPages={totalPages} total={total} onChange={setPage} />
             </div>
           )}
         </section>
 
         <aside
-          className="library-detail flex-shrink-0 overflow-y-auto"
+          className="library-detail shrink-0 overflow-y-auto"
           data-open={selectedFlowId ? 'true' : 'false'}
-          aria-label="Flow details"
+          aria-label={t('detail.panelAria')}
         >
           <LibraryDetailPanel
             flowId={selectedFlowId}

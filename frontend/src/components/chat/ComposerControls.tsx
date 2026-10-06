@@ -11,7 +11,7 @@ import {Kbd} from '@/components/shared'
 // a blur would also close the @ / slash menus.
 const keepFocus = (e: React.MouseEvent) => e.preventDefault()
 
-const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40'
+const focusRing = 'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40'
 
 const chipClasses =
   'relative inline-flex items-center gap-1.5 h-6 px-2 rounded-md border border-border-default text-2xs font-medium ' +

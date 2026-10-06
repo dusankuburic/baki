@@ -30,14 +30,14 @@ describe('Badge', () => {
       </>,
     )
     for (const tone of tones) {
-      expect(badgeOf(tone).className).toContain(`text-[color:var(--badge-${tone}-fg)]`)
+      expect(badgeOf(tone).className).toContain(`text-(--badge-${tone}-fg)`)
     }
   })
 
   it('defaults to the neutral tone and the uppercase badge style', () => {
     render(<Badge>API key</Badge>)
     const badge = badgeOf('API key')
-    expect(badge.className).toContain('var(--badge-neutral-fg)')
+    expect(badge.className).toContain('text-(--badge-neutral-fg)')
     expect(badge).toHaveClass('uppercase')
   })
 
@@ -72,7 +72,7 @@ describe('Badge', () => {
       expect(colour, `${tone}: no Tailwind colour for ${spec.fill}`).toBeTruthy()
       const fill = spec.fillAlpha === 1 ? `bg-${colour}` : `bg-${colour}/${Math.round(spec.fillAlpha * 100)}`
       expect(spec.className.split(/\s+/), tone).toContain(fill)
-      expect(spec.className, tone).toContain(`text-[color:var(${spec.fg})]`)
+      expect(spec.className, tone).toContain(`text-(${spec.fg})`)
     }
   })
 })

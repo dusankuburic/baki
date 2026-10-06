@@ -1,4 +1,5 @@
 import {memo, useMemo} from 'react'
+import {useTranslation} from 'react-i18next'
 import {AlertTriangle, AlertCircle, Info, Sparkles} from 'lucide-react'
 import clsx from 'clsx'
 import {useFlowStore} from '@/stores/flowStore'
@@ -26,6 +27,7 @@ const MAX_VISIBLE = 50
 const EMPTY: Finding[] = []
 
 function BlockFindings() {
+  const {t} = useTranslation('inspector')
   const docId = useFlowStore(s => s.document?.id ?? null)
   const blockId = useFlowStore(s => s.selectedBlockId)
   // The per-block index is built on demand and cached per report object, so
@@ -56,7 +58,7 @@ function BlockFindings() {
       <div className="px-3 py-2 bg-surface-2 border-b border-border-subtle flex items-center gap-2">
         <AlertTriangle size={12} className="text-amber-400" />
         <span className="text-2xs font-bold uppercase tracking-wider text-text-secondary">
-          Findings ({blockFindings.length})
+          {t('blockFindings.heading', {count: blockFindings.length})}
         </span>
       </div>
       <div className="divide-y divide-border-subtle">
@@ -91,7 +93,7 @@ function BlockFindings() {
                       className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 transition-colors"
                     >
                       <Sparkles size={9} />
-                      Fix with AI
+                      {t('blockFindings.fixWithAi')}
                     </button>
                   </div>
                 </div>
@@ -101,7 +103,7 @@ function BlockFindings() {
         })}
         {hiddenCount > 0 && (
           <div className="px-3 py-1.5 text-2xs text-text-tertiary text-center">
-            +{hiddenCount} more — see all findings →
+            {t('blockFindings.moreHidden', {count: hiddenCount})}
           </div>
         )}
       </div>
@@ -112,7 +114,7 @@ function BlockFindings() {
         }}
         className="w-full px-3 py-1.5 text-2xs text-text-tertiary hover:text-text-secondary hover:bg-surface-2 border-t border-border-subtle transition-colors"
       >
-        View all findings →
+        {t('blockFindings.viewAll')}
       </button>
     </div>
   )

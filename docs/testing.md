@@ -11,6 +11,9 @@ Conventions:
 - `internal/storage/database` additionally has `package database_test` files (external, black-box integration).
 - Shared helpers (`helpers_test.go`, `*helpers_test.go`, `main_test.go` with TestMain) are not coverage files.
 - Run everything: `go test ./... ./core/...` (CI also uses `-race`).
+- Cross-cutting safety nets (route-policy and authz goldens, migration checksum golden, architecture ratchets,
+  fake-backend contract, isolated Postgres databases, request-chain benchmark) are described in
+  [architecture/safety-nets.md](architecture/safety-nets.md).
 
 ## root (package main)
 

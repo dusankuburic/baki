@@ -109,7 +109,7 @@ export default function PaneDivider({
       aria-valuemax={max}
       tabIndex={0}
       className={clsx(
-        'group relative w-[3px] shrink-0 cursor-col-resize select-none touch-none outline-none print:hidden',
+        'group relative w-[3px] shrink-0 cursor-col-resize select-none touch-none outline-hidden print:hidden',
         'focus-visible:ring-2 focus-visible:ring-brand-500/60',
       )}
       onPointerDown={handlePointerDown}

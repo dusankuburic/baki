@@ -90,7 +90,7 @@ export function UserRow({
           onChange={e => onChangeRole(e.target.value as UserRole)}
           disabled={busy}
           aria-label={t('users.roleSelect', {email: user.email})}
-          className="h-8 rounded-md border border-border-default bg-surface-2 px-2 text-xs text-text-primary focus:outline-none focus:ring-2 focus:ring-brand-500/20 disabled:opacity-50"
+          className="h-8 rounded-md border border-border-default bg-surface-2 px-2 text-xs text-text-primary focus:outline-hidden focus:ring-2 focus:ring-brand-500/20 disabled:opacity-50"
         >
           {user.role === '' && (
             <option value="" disabled>

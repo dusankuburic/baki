@@ -114,8 +114,21 @@ func RouteAllowed(method, path string, scopes []string) bool {
 	if required == "" || required == ScopeDeny {
 		return required == ""
 	}
+	if !HasScope(scopes, required) {
+		return false
+	}
+	// Approving a chat fix proposal mutates the flow, so it needs write on top of chat: chat alone covers
+	// talking to the model, and a chat-only token must not be able to edit flows through it.
+	if path == "/api/chat/fix-decision" {
+		return HasScope(scopes, ScopeWrite)
+	}
+	return true
+}
+
+// HasScope reports whether scope is in scopes.
+func HasScope(scopes []string, scope string) bool {
 	for _, s := range scopes {
-		if s == required {
+		if s == scope {
 			return true
 		}
 	}

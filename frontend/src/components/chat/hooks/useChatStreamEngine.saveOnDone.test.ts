@@ -77,7 +77,7 @@ async function sendAndFinish(
     await Promise.resolve()
   })
   expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
-  const sid = useChatStore.getState().streams.threadA.streamId
+  const sid = useChatStore.getState().streams.threadA!.streamId
   await act(async () => {
     capturedHandler!.onChunk('answer', sid)
     capturedHandler!.onDone(3, 2, sid)
@@ -104,7 +104,7 @@ describe('useChatStreamEngine save on done', () => {
     const {result} = renderHook(() => useChatStreamEngine())
     seedThread()
     const answer = await sendAndFinish(result, META)
-    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0]
+    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0]
     expect(req.messages).toBeUndefined()
     // onDone's usage arguments are (tokensOut, tokensIn).
     expect(answer).toMatchObject({role: 'assistant', content: 'answer', finishReason: 'stop', tokensIn: 2, tokensOut: 3})
@@ -118,7 +118,7 @@ describe('useChatStreamEngine save on done', () => {
     const {result} = renderHook(() => useChatStreamEngine())
     seedThread([{id: 'u0', role: 'user', content: 'earlier', timestamp: 't'}])
     const answer = await sendAndFinish(result, {...META, includeHistory: true})
-    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0]
+    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0]
     expect(req.messages).toHaveLength(1)
     expect(answer).toMatchObject({role: 'assistant', content: 'answer', finishReason: 'stop'})
     expect(chatApi.saveConversation).toHaveBeenCalledTimes(1)
@@ -140,7 +140,7 @@ describe('useChatStreamEngine save on done', () => {
     await act(async () => {
       await Promise.resolve()
     })
-    const sid = useChatStore.getState().streams.threadA.streamId
+    const sid = useChatStore.getState().streams.threadA!.streamId
     await act(async () => {
       capturedHandler!.onChunk('partial', sid)
       result.current.stop('threadA')

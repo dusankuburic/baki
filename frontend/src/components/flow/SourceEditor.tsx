@@ -35,7 +35,7 @@ const LineGutter = memo(function LineGutter({
   textareaRef,
 }: {
   lineCount: number
-  textareaRef: RefObject<HTMLTextAreaElement>
+  textareaRef: RefObject<HTMLTextAreaElement | null>
 }) {
   const gutterRef = useRef<HTMLDivElement>(null)
   const [scrollLine, setScrollLine] = useState(0)
@@ -91,7 +91,7 @@ const LineGutter = memo(function LineGutter({
     <div
       ref={gutterRef}
       data-testid="line-gutter"
-      className="flex-shrink-0 overflow-hidden py-2 pr-2 pl-3 text-right text-text-tertiary select-none bg-surface-2 border-r border-border-subtle"
+      className="shrink-0 overflow-hidden py-2 pr-2 pl-3 text-right text-text-tertiary select-none bg-surface-2 border-r border-border-subtle"
       // Sized for the widest number so the width does not jump while scrolling
       // (only the visible numbers are in the DOM).
       style={{minWidth: `max(3rem, calc(${String(lineCount).length}ch + 1.5rem))`}}
@@ -128,6 +128,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   const toast = useToast()
   const {confirm} = useConfirm()
   const {t} = useTranslation('shell')
+  const {t: tf} = useTranslation('flow')
 
   // The buffer carries its line count: each edit adjusts it by scanning only
   // the changed region (lineCountAfterEdit) instead of re-splitting the
@@ -183,7 +184,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
       .catch(err => {
         if (!cancelled) {
           setLoadError(String(err))
-          toast.error('Failed to load source', {description: String(err)})
+          toast.error(tf('source.loadFailed'), {description: String(err)})
         }
       })
       .finally(() => {
@@ -234,13 +235,13 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
       } catch {
         /* re-analysis is best-effort */
       }
-      toast.success('Source saved', {description: 'Flow re-parsed successfully.'})
+      toast.success(tf('source.saved'), {description: tf('source.savedBody')})
     } catch (err) {
-      toast.error('Save failed', {description: String(err)})
+      toast.error(tf('source.saveFailed'), {description: String(err)})
     } finally {
       setSaving(false)
     }
-  }, [document, memberFile, source, dirty, saving, loadError, cloudFolder, setOriginal, setReport, toast])
+  }, [document, memberFile, source, dirty, saving, loadError, cloudFolder, setOriginal, setReport, toast, tf])
 
   const handleRevert = useCallback(() => {
     setSource(original)
@@ -297,20 +298,18 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   if (loadError) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 p-6 text-center">
-        <div className="text-sm font-medium text-text-primary">Couldn&apos;t load the flow source</div>
-        <div className="max-w-md text-xs text-text-tertiary break-words">{loadError}</div>
-        <div className="max-w-md text-xs text-text-tertiary">
-          The editor stays closed so a save can&apos;t overwrite the flow with an empty buffer.
-        </div>
+        <div className="text-sm font-medium text-text-primary">{tf('source.errorTitle')}</div>
+        <div className="max-w-md text-xs text-text-tertiary wrap-break-word">{loadError}</div>
+        <div className="max-w-md text-xs text-text-tertiary">{tf('source.errorBody')}</div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setReloadNonce(n => n + 1)}
             className="px-3 py-1.5 text-xs rounded bg-surface-3 text-text-primary hover:bg-surface-2"
           >
-            Retry
+            {tf('source.retry')}
           </button>
           <button onClick={onClose} className="px-3 py-1.5 text-xs rounded text-text-tertiary hover:text-text-primary">
-            Close
+            {tf('source.close')}
           </button>
         </div>
       </div>
@@ -323,28 +322,24 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border-subtle bg-surface-2">
         <div className="flex items-center gap-2 text-xs text-text-tertiary">
           <Code2 size={14} />
-          <span className="font-medium">Source Editor</span>
+          <span className="font-medium">{tf('source.title')}</span>
           {memberFile && (
-            <span className="font-mono text-text-secondary" title="Member file of this flow folder being edited">
+            <span className="font-mono text-text-secondary" title={tf('source.memberFileTitle')}>
               · {memberFile}
             </span>
           )}
-          {dirty && <span className="text-semantic-warning">• unsaved</span>}
-          {readOnly && <span className="text-2xs text-text-tertiary">· read-only</span>}
+          {dirty && <span className="text-semantic-warning">{tf('source.unsaved')}</span>}
+          {readOnly && <span className="text-2xs text-text-tertiary">{tf('source.readOnly')}</span>}
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setAddingAction(a => !a)}
             disabled={saving || !!document?.isFolder || readOnly}
             className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 disabled:opacity-40 transition-colors"
-            title={
-              document?.isFolder
-                ? 'Structured editing is single-file for now'
-                : 'Compose a PAD action line and insert it'
-            }
+            title={document?.isFolder ? tf('source.addActionFolderTitle') : tf('source.addActionTitle')}
           >
             <Plus size={12} />
-            Add action
+            {tf('source.addAction')}
           </button>
           <button
             onClick={handleRevert}
@@ -352,26 +347,22 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
             className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 disabled:opacity-40 transition-colors"
           >
             <RotateCcw size={12} />
-            Revert
+            {tf('source.revert')}
           </button>
           <button
             onClick={handleSave}
             disabled={!dirty || saving || readOnly || cloudFolder}
-            title={
-              cloudFolder
-                ? 'Saving a multi-file flow is not supported here (it would collapse the folder structure)'
-                : undefined
-            }
+            title={cloudFolder ? tf('source.cloudFolderSaveTitle') : undefined}
             className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-2 py-1 rounded hover:bg-surface-3 disabled:opacity-40 transition-colors"
           >
             {saving ? <Spinner size={12} /> : <Save size={12} />}
-            {saving ? 'Saving…' : 'Save & Re-parse'}
+            {saving ? tf('source.saving') : tf('source.save')}
           </button>
           <button
             onClick={handleClose}
             className="text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 transition-colors"
           >
-            Block view
+            {tf('source.blockView')}
           </button>
         </div>
       </div>
@@ -386,7 +377,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
           value={source}
           onChange={e => setSource(e.target.value)}
           spellCheck={false}
-          className="flex-1 bg-surface-1 text-text-primary p-2 outline-none resize-none leading-5 whitespace-pre overflow-auto"
+          className="flex-1 bg-surface-1 text-text-primary p-2 outline-hidden resize-none leading-5 whitespace-pre overflow-auto"
           style={{tabSize: 4}}
         />
       </div>

@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {adminApi, type AdminUser, type UserRole} from '@/api/admin'
@@ -84,7 +85,7 @@ export function useAdminUsers() {
         touchUsers()
         return true
       } catch (e) {
-        toastRef.current.error(t('users.roleFailed'), {description: e instanceof Error ? e.message : String(e)})
+        toastRef.current.error(t('users.roleFailed'), {description: getErrorMessage(e)})
         // The account is gone: drop it from the page.
         if (e instanceof ApiError && e.status === 404) touchUsers()
         return false

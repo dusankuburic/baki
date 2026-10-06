@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"os"
 	"testing"
 )
 
@@ -12,7 +11,7 @@ import (
 // latest with no checksum drift. Proves the down-migration is a faithful inverse
 // and the checksum gate survives a down→up cycle.
 func TestMigrateDown_RoundTrip(t *testing.T) {
-	b := openMigrationTestDB(t)
+	b, dsn := openIsolatedMigrationDB(t)
 	ctx := context.Background()
 
 	latest := migrations[len(migrations)-1].version
@@ -49,7 +48,7 @@ func TestMigrateDown_RoundTrip(t *testing.T) {
 	// returns without error). This also documents the boot-reapply gotcha: a
 	// manual down is undone by the next server boot unless the binary is rolled
 	// back too.
-	b2, err := New(ctx, DefaultConfig(os.Getenv("DATABASE_URL")))
+	b2, err := New(ctx, DefaultConfig(dsn))
 	if err != nil {
 		t.Fatalf("reconnect (forward re-apply) failed: %v — drift after down→up?", err)
 	}
@@ -66,7 +65,7 @@ func TestMigrateDown_RoundTrip(t *testing.T) {
 // TestMigrateDown_NoOpWhenAlreadyAtOrBelowTarget asserts the driver short-
 // circuits cleanly when there's nothing to roll back (no error, no rows touched).
 func TestMigrateDown_NoOpWhenAlreadyAtOrBelowTarget(t *testing.T) {
-	b := openMigrationTestDB(t)
+	b, _ := openIsolatedMigrationDB(t)
 	ctx := context.Background()
 	current, err := b.CurrentSchemaVersion(ctx)
 	if err != nil {

@@ -63,7 +63,8 @@ const BY_PREFIX: Record<string, LucideIcon> = {
 }
 
 export function actionIcon(action: string): LucideIcon {
-  return EXACT[action] ?? BY_PREFIX[action.split('.')[0]] ?? ActivityIcon
+  const prefix = action.split('.')[0] ?? ''
+  return EXACT[action] ?? BY_PREFIX[prefix] ?? ActivityIcon
 }
 
 // actionLabel looks the action up in the translated table (keys are the id

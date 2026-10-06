@@ -1,4 +1,5 @@
 import {useMemo, useState, useCallback} from 'react'
+import {useTranslation} from 'react-i18next'
 import {} from 'lucide-react'
 import {Button, Modal} from '@/components/shared'
 import {flowApi} from '@/api'
@@ -27,6 +28,7 @@ function editableProperties(block: Block): {key: string; value: string}[] {
 // only CHANGED keys are sent as targeted server-side replaces, so untouched
 // properties keep their original text, order, and quoting.
 export default function BlockPropertiesModal({block, onClose}: Props) {
+  const {t} = useTranslation('flow')
   const toast = useToast()
   const editable = useMemo(() => editableProperties(block), [block])
   const [values, setValues] = useState<Record<string, string>>(() => {
@@ -39,7 +41,9 @@ export default function BlockPropertiesModal({block, onClose}: Props) {
   const changes = useMemo(() => {
     const out: Record<string, string> = {}
     for (const p of editable) {
-      if (values[p.key] !== p.value) out[p.key] = values[p.key]
+      // values is seeded from editable above, so every p.key is present.
+      const v = values[p.key]
+      if (v !== undefined && v !== p.value) out[p.key] = v
     }
     return out
   }, [editable, values])
@@ -64,55 +68,50 @@ export default function BlockPropertiesModal({block, onClose}: Props) {
       const res = await flowApi.updateBlockProperties(doc.id, block.id, changes)
       if (res?.document) refresh(res.document)
       if (undoId) {
-        toast.success(
-          `Updated ${Object.keys(changes).length} propert${Object.keys(changes).length === 1 ? 'y' : 'ies'}`,
-          {
-            action: {
-              label: 'Undo',
-              onClick: () => {
-                void (async () => {
-                  try {
-                    const r = await flowApi.restoreSnapshot(doc.id, undoId)
-                    if (r?.document) refresh(r.document)
-                  } catch (e) {
-                    toast.error('Undo failed', {description: String(e)})
-                  }
-                })()
-              },
+        toast.success(t('props.updated', {count: Object.keys(changes).length}), {
+          action: {
+            label: t('props.undo'),
+            onClick: () => {
+              void (async () => {
+                try {
+                  const r = await flowApi.restoreSnapshot(doc.id, undoId)
+                  if (r?.document) refresh(r.document)
+                } catch (e) {
+                  toast.error(t('props.undoFailed'), {description: String(e)})
+                }
+              })()
             },
           },
-        )
+        })
       } else {
-        toast.success(
-          `Updated ${Object.keys(changes).length} propert${Object.keys(changes).length === 1 ? 'y' : 'ies'}`,
-        )
+        toast.success(t('props.updated', {count: Object.keys(changes).length}))
       }
       onClose()
     } catch (e) {
-      toast.error('Update failed', {description: String(e)})
+      toast.error(t('props.updateFailed'), {description: String(e)})
     } finally {
       setSaving(false)
     }
-  }, [dirty, saving, block.id, changes, refresh, toast, onClose])
+  }, [dirty, saving, block.id, changes, refresh, toast, onClose, t])
 
   return (
     <Modal
       isOpen
       onClose={onClose}
-      title="Edit properties"
-      ariaLabel={`Edit properties: ${block.name}`}
+      title={t('props.title')}
+      ariaLabel={t('props.ariaLabel', {name: block.name})}
       size="md"
       footer={
         <>
           <Button variant="ghost" size="sm" onClick={onClose}>
-            Cancel
+            {t('props.cancel')}
           </Button>
           <Button variant="primary" size="sm" disabled={!dirty || saving} onClick={() => void handleSave()}>
             {saving
-              ? 'Saving…'
+              ? t('props.saving')
               : dirty
-                ? `Save ${Object.keys(changes).length} change${Object.keys(changes).length === 1 ? '' : 's'}`
-                : 'Save'}
+                ? t('props.saveChanges', {count: Object.keys(changes).length})
+                : t('props.save')}
           </Button>
         </>
       }
@@ -120,7 +119,7 @@ export default function BlockPropertiesModal({block, onClose}: Props) {
       <p className="text-2xs text-text-tertiary truncate -mt-1 mb-2">{block.name}</p>
       <div className="space-y-2.5 max-h-[50vh] overflow-y-auto">
         {editable.length === 0 ? (
-          <p className="text-xs text-text-tertiary">This block has no editable properties.</p>
+          <p className="text-xs text-text-tertiary">{t('props.empty')}</p>
         ) : (
           editable.map(p => (
             <label key={p.key} className="block">
@@ -128,8 +127,8 @@ export default function BlockPropertiesModal({block, onClose}: Props) {
               <input
                 value={values[p.key] ?? ''}
                 onChange={e => setValues(v => ({...v, [p.key]: e.target.value}))}
-                className="mt-0.5 w-full px-2.5 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary outline-none focus:border-brand-500 font-mono"
-                aria-label={`Value for ${p.key}`}
+                className="mt-0.5 w-full px-2.5 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary outline-hidden focus:border-brand-500 font-mono"
+                aria-label={t('props.valueAria', {key: p.key})}
               />
             </label>
           ))

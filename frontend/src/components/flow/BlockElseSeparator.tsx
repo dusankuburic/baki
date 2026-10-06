@@ -1,4 +1,5 @@
 ﻿import {ChevronDown, ChevronRight} from 'lucide-react'
+import {useTranslation} from 'react-i18next'
 import {getBlockColor} from '@/lib/blocks'
 import {useFlowStore} from '@/stores/flowStore'
 
@@ -8,6 +9,7 @@ type BlockElseSeparatorProps = {
 }
 
 export default function BlockElseSeparator({blockId, collapsed}: BlockElseSeparatorProps) {
+  const {t} = useTranslation('flow')
   const color = getBlockColor('CONDITION')
   const toggleBlockExpand = useFlowStore(s => s.toggleBlockExpand)
   const Chevron = collapsed ? ChevronRight : ChevronDown
@@ -28,20 +30,20 @@ export default function BlockElseSeparator({blockId, collapsed}: BlockElseSepara
         }}
       />
       <button
-        className="flex items-center justify-center w-4 h-4 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
+        className="flex items-center justify-center w-4 h-4 rounded hover:bg-surface-3 transition-colors shrink-0"
         onClick={e => {
           e.stopPropagation()
           toggleBlockExpand(blockId)
         }}
-        aria-label={collapsed ? 'Expand branch' : 'Collapse branch'}
+        aria-label={collapsed ? t('branches.expand') : t('branches.collapse')}
         aria-expanded={!collapsed}
       >
         <Chevron size={12} style={{color}} />
       </button>
       <span className="text-2xs font-semibold uppercase tracking-widest" style={{color}}>
-        Else
+        {t('branches.else')}
       </span>
-      {collapsed && <span className="text-2xs text-text-tertiary ml-1">collapsed</span>}
+      {collapsed && <span className="text-2xs text-text-tertiary ml-1">{t('branches.collapsed')}</span>}
     </div>
   )
 }

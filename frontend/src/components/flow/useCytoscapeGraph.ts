@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useRef, useEffect, useState} from 'react'
 import cytoscape from 'cytoscape'
 // @ts-expect-error cytoscape-dagre has no types
@@ -173,7 +174,7 @@ export function useCytoscapeGraph(subflowId?: string) {
         setGraphZoom(cy.zoom())
       }
     } catch (err) {
-      if (cyRef.current === inst) setError(err instanceof Error ? err.message : String(err))
+      if (cyRef.current === inst) setError(getErrorMessage(err))
     } finally {
       if (cyRef.current === inst) setLoading(false)
     }

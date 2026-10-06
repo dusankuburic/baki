@@ -221,6 +221,7 @@ export function useAIChat({turnModel, exportModelName, sendBlocked = false}: Use
     const msgs = getMessages(activeThread.id)
     if (msgs.length < 2) return
     const lastMsg = msgs[msgs.length - 1]
+    if (!lastMsg) return
     if (lastMsg.role !== 'assistant') return
     if (!useChatStore.getState().canStartStream()) {
       // Checked BEFORE the exchange is removed: removing it first and then
@@ -230,9 +231,10 @@ export function useAIChat({turnModel, exportModelName, sendBlocked = false}: Use
     }
     let lastUserContent = ''
     for (let i = msgs.length - 2; i >= 0; i--) {
-      if (msgs[i].role === 'user') {
-        lastUserContent = msgs[i].content
-        removeMessage(activeThread.id, msgs[i].id)
+      const m = msgs[i]
+      if (m?.role === 'user') {
+        lastUserContent = m.content
+        removeMessage(activeThread.id, m.id)
         break
       }
     }

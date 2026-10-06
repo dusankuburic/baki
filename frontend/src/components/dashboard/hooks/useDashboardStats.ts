@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
@@ -63,10 +64,10 @@ export function useDashboardStats(enabled: boolean, isLoaded: boolean, depKey: s
             // We already have data on screen — a background refresh failure
             // toasts rather than wiping the good data with an error state.
             toastRef.current.error('Dashboard refresh failed', {
-              description: err instanceof Error ? err.message : 'Unknown error',
+              description: getErrorMessage(err, 'Unknown error'),
             })
           } else {
-            setError(err instanceof Error ? err.message : 'Failed to load')
+            setError(getErrorMessage(err, 'Failed to load'))
           }
         })
         .finally(() => {

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -31,10 +32,37 @@ type migration struct {
 	// downSQL is the optional reverse of sql; empty means intentionally irreversible
 	// (MigrateDown refuses to cross it). Never checksummed, never run on boot.
 	downSQL string
+	// compat is recorded with the step; the zero value counts as breaking (see migrationCompat).
+	compat migrationCompat
 }
 
-// migrations is the ordered, append-only set of schema versions (v1 is the baseline); append only at the end.
-var migrations = []migration{
+// migrationCompat says whether the release before a step can still run against a schema that includes it
+// (migrations/README.md). It is recorded in schema_migrations so an OLDER binary can read it.
+type migrationCompat string
+
+const (
+	// compatBreaking: older binaries must refuse the schema. The frozen Go steps (v1–v31) leave compat empty and
+	// count as breaking; no binary that checks compat predates them, so their value is never consulted.
+	compatBreaking migrationCompat = "breaking"
+	// compatExpand: additive only, so rolling the image back needs no schema rollback.
+	compatExpand migrationCompat = "expand"
+)
+
+// recordedCompat is the value stored in schema_migrations.compat.
+func (m migration) recordedCompat() migrationCompat {
+	if m.compat == compatExpand {
+		return compatExpand
+	}
+	return compatBreaking
+}
+
+// migrations is the ordered, append-only set of schema versions: the frozen Go literals, then the embedded .sql
+// steps from v32 on (migrations/README.md).
+var migrations = append(goMigrations[:len(goMigrations):len(goMigrations)],
+	mustLoadSQLMigrations(goMigrations[len(goMigrations)-1].version)...)
+
+// goMigrations are v1–v31 (v1 is the baseline). Frozen: new steps are .sql files in migrations/.
+var goMigrations = []migration{
 	{version: 1, name: "baseline", sql: schemaBaseline, downSQL: ""},
 	{version: 2, name: "comments_and_shares", sql: commentsAndSharesSQL, downSQL: commentsAndSharesDownSQL},
 	{version: 3, name: "refresh_token_device_info", sql: refreshSessionDdlSQL, downSQL: refreshSessionDdlDownSQL},
@@ -340,12 +368,21 @@ func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 		return fmt.Errorf("read schema version: %w", err)
 	}
 
-	// Refuse a schema this binary does not know: an old binary against a newer database would run
-	// queries against tables it has never seen. Roll back first (`bakicli migrate down`) or deploy newer.
+	// A schema newer than this binary is accepted only when every newer step was recorded as expand-only
+	// (the previous release keeps working on it, so an image rollback needs no schema rollback). Anything else,
+	// including steps applied before compat was recorded, is refused: the old binary would run queries against
+	// a shape it has never seen. Roll back first (`bakicli migrate down`) or deploy newer.
 	latest := migrations[len(migrations)-1].version
 	if current > latest {
-		return fmt.Errorf("schema is at v%d, newer than the v%d this binary knows: refusing to run against an unknown schema (roll the schema back to v%d with `bakicli migrate down %d`, or deploy a binary that knows v%d)",
-			current, latest, latest, latest, current)
+		newer, err := appliedStepsAfter(ctx, conn, latest)
+		if err != nil {
+			return fmt.Errorf("read schema steps newer than this binary: %w", err)
+		}
+		if breaking := breakingSteps(newer); len(breaking) > 0 {
+			return fmt.Errorf("schema is at v%d, newer than the v%d this binary knows, and %s cannot run under an older binary: refusing to run against an unknown schema (roll the schema back to v%d with `bakicli migrate down %d`, or deploy a binary that knows v%d)",
+				current, latest, strings.Join(breaking, ", "), latest, latest, current)
+		}
+		slog.Warn("schema is ahead of this binary by expand-only steps; running against it", "schema_version", current, "binary_version", latest)
 	}
 
 	// Integrity gate: fail boot when an applied migration's SQL no longer matches its checksum.
@@ -423,8 +460,49 @@ func ensureMigrationsTable(ctx context.Context, conn *sql.Conn) error {
 	}
 	// checksum records the step SQL's SHA-256, added additively; pre-checksum rows default to ''
 	// and are backfilled by verifyChecksums rather than treated as drift.
-	_, err := conn.ExecContext(ctx, `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NOT NULL DEFAULT ''`)
+	if _, err := conn.ExecContext(ctx, `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	// compat records whether an older binary may run on the schema (see migrationCompat); rows written before
+	// the column existed default to the safe answer.
+	_, err := conn.ExecContext(ctx, `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS compat TEXT NOT NULL DEFAULT 'breaking'`)
 	return err
+}
+
+// appliedStep is one schema_migrations row as an older binary sees it.
+type appliedStep struct {
+	version int
+	name    string
+	compat  migrationCompat
+}
+
+// appliedStepsAfter returns the recorded steps above version, in order.
+func appliedStepsAfter(ctx context.Context, conn *sql.Conn, version int) ([]appliedStep, error) {
+	rows, err := conn.QueryContext(ctx, `SELECT version, name, compat FROM schema_migrations WHERE version > $1 ORDER BY version`, version)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []appliedStep
+	for rows.Next() {
+		var s appliedStep
+		if err := rows.Scan(&s.version, &s.name, &s.compat); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// breakingSteps names the steps an older binary cannot run under.
+func breakingSteps(steps []appliedStep) []string {
+	var out []string
+	for _, s := range steps {
+		if s.compat != compatExpand {
+			out = append(out, fmt.Sprintf("v%d %q", s.version, s.name))
+		}
+	}
+	return out
 }
 
 // verifyChecksums compares each applied migration's recorded checksum against the current SQL; empty (pre-checksum) values are adopted, a mismatch is fatal drift.
@@ -486,8 +564,38 @@ func currentVersion(ctx context.Context, conn *sql.Conn) (int, error) {
 	return v, err
 }
 
-// applyMigration runs one step's SQL and records its version in a single transaction, so a half-applied step can never be marked complete.
-func applyMigration(ctx context.Context, conn *sql.Conn, m migration) (err error) {
+// A step waits at most migrationLockTimeout for each table lock, then rolls back and retries. With no limit, a
+// step queued behind a long transaction of the still-serving revision, and every query on that table queued
+// behind the step. The session's advisory-lock wait stays unbounded (lock_timeout is only SET LOCAL here).
+var (
+	migrationLockTimeout  = 5 * time.Second
+	migrationLockAttempts = 6
+	migrationLockBackoff  = 2 * time.Second
+)
+
+// pgLockNotAvailable is SQLSTATE lock_not_available, raised when lock_timeout expires.
+const pgLockNotAvailable = "55P03"
+
+// applyMigration applies one step, retrying (with a growing pause) while a table lock is not available.
+func applyMigration(ctx context.Context, conn *sql.Conn, m migration) error {
+	for attempt := 1; ; attempt++ {
+		err := applyMigrationOnce(ctx, conn, m)
+		if err == nil || !isPgErrCode(err, pgLockNotAvailable) || attempt >= migrationLockAttempts {
+			return err
+		}
+		wait := migrationLockBackoff * time.Duration(attempt)
+		slog.Warn("schema migration could not get a table lock in time; retrying",
+			"version", m.version, "name", m.name, "attempt", attempt, "retry_in", wait)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+// applyMigrationOnce runs one step's SQL and records its version in a single transaction, so a half-applied step can never be marked complete.
+func applyMigrationOnce(ctx context.Context, conn *sql.Conn, m migration) (err error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -497,11 +605,14 @@ func applyMigration(ctx context.Context, conn *sql.Conn, m migration) (err error
 			_ = tx.Rollback()
 		}
 	}()
+	if _, err = tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", migrationLockTimeout.Milliseconds())); err != nil {
+		return fmt.Errorf("set lock_timeout: %w", err)
+	}
 	if _, err = tx.ExecContext(ctx, m.sql); err != nil {
 		return fmt.Errorf("exec sql: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, $2, $3)`,
-		m.version, m.name, migrationChecksum(m.sql)); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, name, checksum, compat) VALUES ($1, $2, $3, $4)`,
+		m.version, m.name, migrationChecksum(m.sql), string(m.recordedCompat())); err != nil {
 		return fmt.Errorf("record version: %w", err)
 	}
 	return tx.Commit()

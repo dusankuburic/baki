@@ -106,7 +106,7 @@ describe('BlockView drag-to-reorder (R3.3)', () => {
   it('marks editable rows draggable and structural rows not', () => {
     const endDoc = {
       ...doc,
-      subflows: [{id: 'sf1', name: 'Main', blocks: [...doc.subflows[0].blocks, b('e1', 'End', 'END')]}],
+      subflows: [{id: 'sf1', name: 'Main', blocks: [...doc.subflows[0]!.blocks, b('e1', 'End', 'END')]}],
     } as unknown as FlowDocument
     useFlowStore.setState({document: endDoc} as never)
     renderView()
@@ -124,7 +124,7 @@ describe('BlockView drag-to-reorder (R3.3)', () => {
       clientY: 0,
     })
     await waitFor(() => expect(moveBlockTo).toHaveBeenCalled())
-    const [flowId, draggedId, refId, position] = moveBlockTo.mock.calls[0]
+    const [flowId, draggedId, refId, position] = moveBlockTo.mock.calls[0]!
     expect(flowId).toBe('flow-1')
     expect(draggedId).toBe('b1')
     expect(refId).toBe('b2')
@@ -223,7 +223,7 @@ describe('multi-select bulk actions (U3b)', () => {
     fireEvent.click(await screen.findByText('Delete'))
     // Danger dialog → confirm with the DIALOG's Delete (the last rendered).
     const delBtns = await screen.findAllByRole('button', {name: 'Delete'})
-    fireEvent.click(delBtns[delBtns.length - 1])
+    fireEvent.click(delBtns[delBtns.length - 1]!)
     await waitFor(() => expect(removeBlocks).toHaveBeenCalledWith('flow-1', ['b1', 'b2']))
   })
 

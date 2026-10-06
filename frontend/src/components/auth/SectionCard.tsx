@@ -60,7 +60,7 @@ export function SectionCard({
           <h3
             id={headingId}
             tabIndex={-1}
-            className={clsx('text-sm font-semibold outline-none', danger ? 'text-semantic-error' : 'text-text-primary')}
+            className={clsx('text-sm font-semibold outline-hidden', danger ? 'text-semantic-error' : 'text-text-primary')}
           >
             {title}
           </h3>

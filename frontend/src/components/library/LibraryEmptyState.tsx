@@ -1,4 +1,5 @@
 import {FolderOpen, SearchX, FilterX} from 'lucide-react'
+import {useTranslation} from 'react-i18next'
 import type {LibraryScope} from '@/api/library'
 
 interface Props {
@@ -8,35 +9,38 @@ interface Props {
 }
 
 export default function LibraryEmptyState({scope, hasQuery, hasOrgFilter}: Props) {
+  const {t} = useTranslation('library')
   if (hasQuery) {
-    return <Centered icon={SearchX} title="No matching flows" subtitle="Try a different search term." />
+    return (
+      <Centered
+        icon={SearchX}
+        title={t('empty.noMatchTitle')}
+        subtitle={t('empty.noMatchSubtitle')}
+      />
+    )
   }
   if (hasOrgFilter) {
     return (
-      <Centered icon={FilterX} title="No flows in this scope" subtitle="Adjust the filter rail to widen the results." />
+      <Centered
+        icon={FilterX}
+        title={t('empty.scopeTitle')}
+        subtitle={t('empty.scopeSubtitle')}
+      />
     )
   }
   if (scope === 'shared') {
     return (
       <Centered
         icon={FolderOpen}
-        title="Nothing shared with you yet"
-        subtitle="Flows shared by collaborators will appear here."
+        title={t('empty.sharedTitle')}
+        subtitle={t('empty.sharedSubtitle')}
       />
     )
   }
   if (scope === 'mine') {
-    return (
-      <Centered
-        icon={FolderOpen}
-        title="You haven't saved any flows yet"
-        subtitle="Save a flow to the cloud library from the sidebar."
-      />
-    )
+    return <Centered icon={FolderOpen} title={t('empty.mineTitle')} subtitle={t('empty.saveHint')} />
   }
-  return (
-    <Centered icon={FolderOpen} title="No flows yet" subtitle="Save a flow to the cloud library from the sidebar." />
-  )
+  return <Centered icon={FolderOpen} title={t('empty.noneTitle')} subtitle={t('empty.saveHint')} />
 }
 
 function Centered({icon: Icon, title, subtitle}: {icon: typeof FolderOpen; title: string; subtitle: string}) {

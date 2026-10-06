@@ -1,4 +1,5 @@
 import clsx from 'clsx'
+import {useTranslation} from 'react-i18next'
 import {getBlockColor} from '@/lib/blocks'
 import type {BlockType} from '@/types'
 
@@ -14,6 +15,7 @@ type BlockEndProps = {
 }
 
 export default function BlockEnd({label, parentType}: BlockEndProps) {
+  const {t} = useTranslation('flow')
   const color = parentType ? getBlockColor(parentType) : '#64748b'
 
   return (
@@ -24,9 +26,12 @@ export default function BlockEnd({label, parentType}: BlockEndProps) {
         'bg-surface-2/50 border-border-subtle',
       )}
     >
-      <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{backgroundColor: color}} />
+      <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{backgroundColor: color}} />
       <span className="text-2xs font-semibold uppercase tracking-wider opacity-60" style={{color}}>
-        {label || (parentType ? `End ${parentType === 'ERROR_HANDLER' ? 'Error' : parentType}` : 'End')}
+        {label ||
+          (parentType
+            ? t('end.withType', {type: parentType === 'ERROR_HANDLER' ? 'Error' : parentType})
+            : t('end.plain'))}
       </span>
     </div>
   )

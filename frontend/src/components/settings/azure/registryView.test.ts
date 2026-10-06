@@ -99,7 +99,7 @@ describe('registryView ownership and groups', () => {
       ['org-z', 'Zeta', ['zmodel0000'], ['zres']],
     ])
     // A group without a name anywhere falls back to its id.
-    expect(sharedGroups([], [model('x000000000', {shared: true, orgId: 'org-q'})])[0].orgName).toBe('org-q')
+    expect(sharedGroups([], [model('x000000000', {shared: true, orgId: 'org-q'})])[0]!.orgName).toBe('org-q')
   })
 })
 

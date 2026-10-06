@@ -1,4 +1,5 @@
-import {request} from './client'
+import {request, requestValidated} from './client'
+import {getGovernanceAlertsSchema, getUnreadCountSchema} from './schemas'
 
 // A governance alert row, mirroring storageif.GovernanceAlert on the backend.
 export interface GovernanceAlert {
@@ -28,16 +29,19 @@ export interface GovernanceAlertFilter {
 }
 
 export const governanceApi = {
-  list: (filter: GovernanceAlertFilter = {}): Promise<GovernanceAlert[]> => {
+  list: async (filter: GovernanceAlertFilter = {}): Promise<GovernanceAlert[]> => {
     const params = new URLSearchParams()
     if (filter.limit != null) params.set('limit', String(filter.limit))
     if (filter.offset != null) params.set('offset', String(filter.offset))
     if (filter.includeDismissed) params.set('includeDismissed', 'true')
     const qs = params.toString()
-    return request(`/api/governance/alerts${qs ? '?' + qs : ''}`, {method: 'GET'})
+    return requestValidated(`/api/governance/alerts${qs ? '?' + qs : ''}`, await getGovernanceAlertsSchema(), {
+      method: 'GET',
+    })
   },
 
-  unreadCount: (): Promise<{count: number}> => request('/api/governance/alerts/unread-count', {method: 'GET'}),
+  unreadCount: async (): Promise<{count: number}> =>
+    requestValidated('/api/governance/alerts/unread-count', await getUnreadCountSchema(), {method: 'GET'}),
 
   markAllRead: (): Promise<{status: string}> => request('/api/governance/alerts/read-all', {body: {}}),
 

@@ -22,14 +22,14 @@ describe('PatchPreviewText', () => {
     expect(kinds[3]).toContain('text-semantic-success')
     const removedIdx = kinds.findIndex(k => k.includes('text-semantic-error'))
     expect(removedIdx).toBeGreaterThan(0)
-    expect(rows[removedIdx].textContent).toContain('remove lines 5-6')
+    expect(rows[removedIdx]!.textContent).toContain('remove lines 5-6')
   })
 
   it('strips the leading + marker from added lines (gutter renders it)', () => {
     render(<PatchPreviewText text={'  insert 1 line(s) before line 4:\n    + ON BLOCK ERROR'} />)
     const rows = screen.getByTestId('patch-preview').children
     // The first span is the rendered gutter; the TEXT span must not repeat +.
-    const textSpan = rows[1].lastElementChild as HTMLElement
+    const textSpan = rows[1]!.lastElementChild as HTMLElement
     expect(textSpan.textContent).not.toMatch(/^\+/)
     expect(textSpan.textContent).toContain('ON BLOCK ERROR')
   })

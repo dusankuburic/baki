@@ -71,7 +71,7 @@ describe('resetAllStores', () => {
     await resetAllStores()
 
     expect(useSearchStore.getState().results).toHaveLength(0)
-    expect(useEditorStore.getState().groups[0].tabs).toHaveLength(0)
+    expect(useEditorStore.getState().groups[0]!.tabs).toHaveLength(0)
     expect(useUIStore.getState().activeDiff).toBeNull()
     expect(useUIStore.getState().mainPaneView).toBe('home')
     expect(useUIStore.getState().selectedVariable).toBeNull()

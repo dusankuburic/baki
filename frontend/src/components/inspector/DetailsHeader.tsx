@@ -14,7 +14,7 @@ export default function DetailsHeader({block}: DetailsHeaderProps) {
   return (
     <div className="flex items-center gap-3 px-4 py-4 border-b border-border-subtle">
       <div
-        className="w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0"
+        className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0"
         style={{backgroundColor: bg}}
       >
         <Icon size={24} style={{color}} />

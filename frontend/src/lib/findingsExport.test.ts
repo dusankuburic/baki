@@ -46,7 +46,7 @@ describe('exportFindingsCSV', () => {
     exportFindingsCSV([finding({suggestion: 'fix it'})], 'doc1')
 
     expect(downloadBlob).toHaveBeenCalledTimes(1)
-    const [csv, mime, filename] = downloadBlob.mock.calls[0]
+    const [csv, mime, filename] = downloadBlob.mock.calls[0]!
     expect(mime).toBe('text/csv;charset=utf-8;')
     expect(filename).toMatch(/^analysis-doc1-\d{4}-\d{2}-\d{2}\.csv$/)
     const lines = csv.split('\n')
@@ -58,7 +58,7 @@ describe('exportFindingsCSV', () => {
   it('handles findings with no category/suggestion', async () => {
     const {exportFindingsCSV} = await import('./findingsExport')
     exportFindingsCSV([finding({category: undefined, suggestion: undefined})], 'doc1')
-    const csv = downloadBlob.mock.calls[0][0]
+    const csv = downloadBlob.mock.calls[0]![0]
     expect(csv.split('\n')[1]).toBe('F1,error,,Title,Desc,blk-1,sf-1,')
   })
 })
@@ -82,7 +82,7 @@ describe('exportFindingsSARIF', () => {
     await exportFindingsSARIF('doc1')
 
     expect(exportSARIF).toHaveBeenCalled()
-    const [content, mime, filename] = downloadBlob.mock.calls[0]
+    const [content, mime, filename] = downloadBlob.mock.calls[0]!
     expect(JSON.parse(content)).toEqual({version: '2.1.0', runs: []})
     expect(mime).toBe('application/sarif+json;charset=utf-8;')
     expect(filename).toMatch(/^analysis-doc1-\d{4}-\d{2}-\d{2}\.sarif$/)
@@ -106,6 +106,6 @@ describe('desktop exports use the native save dialog', () => {
 
     expect(downloadBlob).not.toHaveBeenCalled()
     expect(saveTextExport).toHaveBeenCalledTimes(1)
-    expect(saveTextExport.mock.calls[0][1]).toEqual(expect.objectContaining({ext}))
+    expect(saveTextExport.mock.calls[0]![1]).toEqual(expect.objectContaining({ext}))
   })
 })

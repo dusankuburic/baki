@@ -67,10 +67,15 @@ func main() {
 		os.Exit(runHealthcheck())
 	}
 
-	fx.New(
+	fx.New(appOptions()...).Run()
+}
+
+// appOptions is the whole application graph: main runs it, TestAppGraph validates it without running anything.
+func appOptions() []fx.Option {
+	return []fx.Option{
 		// fx.Run() handles SIGINT and SIGTERM. StopTimeout raised from 15s to
 		// 25s: under ACA's 30s pod grace period, in-flight requests get to drain.
-		fx.StopTimeout(25*time.Second),
+		fx.StopTimeout(25 * time.Second),
 		fx.Provide(
 			func() context.Context { return context.Background() },
 			loadConfig,
@@ -95,9 +100,10 @@ func main() {
 			initAuditPool,
 			initScanner,
 			initRetentionPurge,
+			initFieldEncryption,
 			startServer,
 		),
-	).Run()
+	}
 }
 
 // loadConfig returns an error instead of exiting on a fatal misconfiguration,
@@ -125,6 +131,9 @@ func loadConfig() (*config.Config, error) {
 	if err := config.Validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
+	// Once, here: providers read the config and never fill it in later (the keystore used to pick up a
+	// secret the auth manager minted, depending on construction order).
+	config.ResolveRuntimeSecrets(cfg)
 
 	return cfg, nil
 }
@@ -324,6 +333,57 @@ func initRetentionPurge(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 // the migration runner's ("bakimigr").
 const retentionLockKey int64 = 0x62616b697265746e // "bakiretn"
 
+// fieldEncryptionLockKey serializes the at-rest backfill of secret columns across replicas.
+const fieldEncryptionLockKey int64 = 0x62616b6966656e63 // "bakifenc"
+
+// fieldEncryptionBackfill runs the one-shot backfill off the boot path; shutdown drains it.
+var fieldEncryptionBackfill = lifecycle.NewBounded("field_encryption_backfill", 1)
+
+// initFieldEncryption encrypts secret columns at rest (org notification channel URLs and signing secrets) with the
+// keystore's key and, once per boot across replicas, seals the rows written in plaintext before. It runs before
+// the server starts, so no request of this process writes plaintext. Desktop mode has no server store.
+func initFieldEncryption(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) error {
+	fe, ok := backend.(storagedb.FieldEncryptor)
+	if !ok {
+		return nil
+	}
+	key := keystoreKey(cfg.Auth)
+	if key == "" {
+		logger.Warn("no PAD_ENCRYPTION_KEY or PAD_AUTH_SECRET: org notification channel URLs and secrets are stored unencrypted")
+		return nil
+	}
+	if err := fe.EnableFieldEncryption([]byte(key)); err != nil {
+		return fmt.Errorf("field encryption: %w", err)
+	}
+	lc.Append(fx.Hook{OnStart: func(context.Context) error {
+		fieldEncryptionBackfill.Go(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if locker, ok := backend.(api.GlobalLocker); ok {
+				release, acquired, err := locker.TryGlobalLock(ctx, fieldEncryptionLockKey)
+				if err != nil {
+					logger.Warn("field encryption backfill skipped: lock unavailable", "error", err)
+					return
+				}
+				if !acquired {
+					return // another replica runs it
+				}
+				defer release()
+			}
+			n, err := fe.EncryptOrgChannelsAtRest(ctx)
+			if err != nil {
+				logger.Error("field encryption backfill failed; it resumes on the next boot", "sealed", n, "error", err)
+				return
+			}
+			if n > 0 {
+				logger.Info("field encryption backfill sealed plaintext org channels", "rows", n)
+			}
+		})
+		return nil
+	}})
+	return nil
+}
+
 // retentionSweepTimeout bounds one whole sweep; each batched statement is
 // still cut off by statement_timeout — this is only the ceiling on the sum.
 const retentionSweepTimeout = 10 * time.Minute
@@ -381,11 +441,9 @@ func runRetentionSweep(ctx context.Context, backend storageif.StorageBackend, au
 func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend, redisClient *redis.Client) (*auth.Manager, error) {
 	token := cfg.Auth.Secret
 	if token == "" {
-		if cfg.Mode == config.ModeCloud && cfg.Auth.Enabled {
-			return nil, fmt.Errorf("fatal: PAD_AUTH_SECRET must be set in cloud mode (auto-generation disabled)")
-		}
-		token = uuid.NewString()
-		cfg.Auth.Secret = token
+		// loadConfig resolves it (config.ResolveRuntimeSecrets); empty means a caller skipped that, so fail
+		// closed rather than mint a secret nothing else knows about.
+		return nil, fmt.Errorf("auth secret unresolved: run config.ResolveRuntimeSecrets before building the auth manager")
 	}
 
 	var blacklist auth.BlacklistStore
@@ -606,6 +664,19 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, 
 // everywhere else. A plain fx provider (not an Invoke mutating a global), so
 // consumers get the same DAG-resolved value and failures surface as provider
 // errors.
+// keystoreKey picks the database keystore's encryption key: the dedicated PAD_ENCRYPTION_KEY, else an
+// operator-provided auth secret (legacy fallback). A secret minted for this process never qualifies: provider
+// keys encrypted with it would be unreadable after a restart.
+func keystoreKey(a config.AuthConfig) string {
+	if a.EncryptionKey != "" {
+		return a.EncryptionKey
+	}
+	if a.SecretEphemeral {
+		return ""
+	}
+	return a.Secret
+}
+
 func provideKeyStore(cfg *config.Config, backend storageif.StorageBackend) (service.KeyStore, error) {
 	if cfg.Storage.Backend != config.StorageDatabase || backend == nil {
 		return storage.NewKeyringSecretStore(), nil
@@ -614,16 +685,17 @@ func provideKeyStore(cfg *config.Config, backend storageif.StorageBackend) (serv
 	if !ok {
 		return storage.NewKeyringSecretStore(), nil
 	}
-	encKey := cfg.Auth.EncryptionKey
-	if encKey == "" {
-		if cfg.Auth.Secret != "" {
-			encKey = cfg.Auth.Secret
-			logger.Warn("PAD_ENCRYPTION_KEY unset — falling back to PAD_AUTH_SECRET for keystore. " +
-				"Set a dedicated PAD_ENCRYPTION_KEY so rotating the JWT secret doesn't brick stored provider keys.")
-		}
-	}
-	if encKey == "" {
+	encKey := keystoreKey(cfg.Auth)
+	switch {
+	case encKey == "" && cfg.Auth.SecretEphemeral:
+		logger.Warn("database storage without PAD_ENCRYPTION_KEY or PAD_AUTH_SECRET: provider keys stay in the OS keyring, " +
+			"because a per-process secret would make them unreadable after a restart. Set PAD_ENCRYPTION_KEY to store them encrypted in the database.")
 		return storage.NewKeyringSecretStore(), nil
+	case encKey == "":
+		return storage.NewKeyringSecretStore(), nil
+	case cfg.Auth.EncryptionKey == "":
+		logger.Warn("PAD_ENCRYPTION_KEY unset — falling back to PAD_AUTH_SECRET for keystore. " +
+			"Set a dedicated PAD_ENCRYPTION_KEY so rotating the JWT secret doesn't brick stored provider keys.")
 	}
 	ks, err := ksBackend.NewEncryptedKeyStore([]byte(encKey))
 	if err != nil {
@@ -769,11 +841,13 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			shutdownCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
 			err := server.Shutdown(shutdownCtx)
-			// Best-effort notifications (analysis webhooks, finding emails)
-			// started by the requests that just finished get the rest of the
-			// same 8s budget; any still running after it are abandoned.
-			if derr := router.DrainBackground(shutdownCtx); derr != nil {
-				logger.Warn("background notifications still running at shutdown", "error", derr)
+			// Best-effort background work (webhooks, emails, alert fan-outs,
+			// usage rows, admin jobs) started by the requests that just finished
+			// gets the rest of the same 8s budget; any still running after it is
+			// abandoned. Every lifecycle.Bounded runner is drained, not just the
+			// ones a handler happens to expose.
+			if derr := lifecycle.DrainAll(shutdownCtx); derr != nil {
+				logger.Warn("background work still running at shutdown", "error", derr)
 			}
 			return err
 		},

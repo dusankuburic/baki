@@ -77,6 +77,6 @@ export const exportApi = {
     const path = await createAdapter().fileOpen({
       filters: extensions ? [{name: 'Files', extensions}] : undefined,
     })
-    return Array.isArray(path) ? path[0] : path
+    return Array.isArray(path) ? (path[0] ?? null) : path
   },
 }

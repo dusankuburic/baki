@@ -11,7 +11,7 @@ export function DetailsAction({title, onClick}: {title: string; onClick?: () => 
       type="button"
       onClick={onClick}
       aria-label={t('home.detailsOf', {title})}
-      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs font-medium text-brand-400 transition-colors duration-fast hover:text-brand-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs font-medium text-brand-400 transition-colors duration-fast hover:text-brand-300 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40"
     >
       {t('common.details')}
       <ArrowRight size={11} aria-hidden="true" />

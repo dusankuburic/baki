@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
 import React, {useState} from 'react'
 import {Download} from 'lucide-react'
@@ -35,7 +36,7 @@ export const AccountDataSection: React.FC = () => {
       toast.success(t('account.exportDone'))
     } catch (err) {
       logger.warn('data export failed', err)
-      toast.error(t('account.exportFailed'), {description: err instanceof Error ? err.message : String(err)})
+      toast.error(t('account.exportFailed'), {description: getErrorMessage(err)})
     } finally {
       setExporting(false)
     }

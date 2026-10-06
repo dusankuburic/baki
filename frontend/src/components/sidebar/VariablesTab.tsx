@@ -60,7 +60,7 @@ export default function VariablesTab() {
 
   return (
     <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1 bg-surface-1">
-      <div className="px-2 py-2 text-xs font-semibold text-text-tertiary uppercase tracking-wider sticky top-0 bg-surface-1 z-10 backdrop-blur">
+      <div className="px-2 py-2 text-xs font-semibold text-text-tertiary uppercase tracking-wider sticky top-0 bg-surface-1 z-10 backdrop-blur-sm">
         Variables ({allVariables.length})
       </div>
       {allVariables.length === 0 ? (

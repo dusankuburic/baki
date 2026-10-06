@@ -1,4 +1,5 @@
 import React from 'react'
+import {useTranslation} from 'react-i18next'
 import {ArrowDownToLine, ArrowUpFromLine} from 'lucide-react'
 import clsx from 'clsx'
 import type {SubflowMetrics} from '@/types'
@@ -19,6 +20,7 @@ const SubflowMetricsRow = React.memo(function SubflowMetricsRow({
   m: SubflowMetrics
   onSelect: () => void
 }) {
+  const {t} = useTranslation('inspector')
   const cycloColor =
     m.cyclomaticComplexity > 20 ? 'bg-red-500' : m.cyclomaticComplexity > 10 ? 'bg-amber-500' : 'bg-green-500'
   const cogColor =
@@ -31,19 +33,19 @@ const SubflowMetricsRow = React.memo(function SubflowMetricsRow({
     >
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-text-primary truncate">{m.subflowName}</span>
-        <span className="text-xs text-text-tertiary tabular-nums">{m.blockCount} blocks</span>
+        <span className="text-xs text-text-tertiary tabular-nums">{t('subflows.blocks', {count: m.blockCount})}</span>
       </div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
         <div>
           <div className="flex items-center justify-between mb-0.5">
-            <span className="text-xs text-text-tertiary uppercase tracking-wider">Cyclomatic</span>
+            <span className="text-xs text-text-tertiary uppercase tracking-wider">{t('subflows.cyclomatic')}</span>
             <span className="text-xs font-mono text-text-secondary tabular-nums">{m.cyclomaticComplexity}</span>
           </div>
           <MiniBar value={m.cyclomaticComplexity} max={30} color={cycloColor} />
         </div>
         <div>
           <div className="flex items-center justify-between mb-0.5">
-            <span className="text-xs text-text-tertiary uppercase tracking-wider">Cognitive</span>
+            <span className="text-xs text-text-tertiary uppercase tracking-wider">{t('subflows.cognitive')}</span>
             <span className="text-xs font-mono text-text-secondary tabular-nums">{m.cognitiveComplexity}</span>
           </div>
           <MiniBar value={m.cognitiveComplexity} max={40} color={cogColor} />
@@ -51,13 +53,13 @@ const SubflowMetricsRow = React.memo(function SubflowMetricsRow({
       </div>
       <div className="flex items-center gap-3 mt-2 pt-2 border-t border-border-subtle">
         <span className="flex items-center gap-1 text-xs text-text-tertiary">
-          <ArrowDownToLine size={12} /> Fan-in: {m.fanIn}
+          <ArrowDownToLine size={12} /> {t('subflows.fanIn', {value: m.fanIn})}
         </span>
         <span className="flex items-center gap-1 text-xs text-text-tertiary">
-          <ArrowUpFromLine size={12} /> Fan-out: {m.fanOut}
+          <ArrowUpFromLine size={12} /> {t('subflows.fanOut', {value: m.fanOut})}
         </span>
-        <span className="flex items-center gap-1 text-xs text-text-tertiary">Depth: {m.maxNestingDepth}</span>
-        <span className="flex items-center gap-1 text-xs text-text-tertiary">Vars: {m.variableCount}</span>
+        <span className="flex items-center gap-1 text-xs text-text-tertiary">{t('subflows.depth', {value: m.maxNestingDepth})}</span>
+        <span className="flex items-center gap-1 text-xs text-text-tertiary">{t('subflows.vars', {value: m.variableCount})}</span>
       </div>
     </button>
   )

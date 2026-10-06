@@ -70,7 +70,7 @@ function Toast({id, variant = 'info', title, description, action, duration = 400
         exiting ? 'animate-toast-out' : 'animate-toast-in',
       )}
     >
-      <span className="text-base flex-shrink-0">{variantIcons[variant]}</span>
+      <span className="text-base shrink-0">{variantIcons[variant]}</span>
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-text-primary">{title}</div>
         {description && <div className="text-xs text-text-secondary mt-0.5">{description}</div>}
@@ -82,7 +82,7 @@ function Toast({id, variant = 'info', title, description, action, duration = 400
       </div>
       <button
         onClick={handleClose}
-        className="text-text-tertiary hover:text-text-secondary flex-shrink-0 text-sm"
+        className="text-text-tertiary hover:text-text-secondary shrink-0 text-sm"
         aria-label={t('dismiss')}
       >
         ✕

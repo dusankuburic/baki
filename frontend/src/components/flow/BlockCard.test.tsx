@@ -382,7 +382,7 @@ describe('interaction polish (V1)', () => {
     expect(hint?.textContent).toContain('3 props')
   })
 
-  it('group-selected cards carry the selection ring when not singly selected', () => {
+  it('group-selected cards carry the selection ring-3 when not singly selected', () => {
     useFlowStore.setState({selectedBlockIds: new Set([baseBlock.id])} as never)
     const {container, unmount} = renderCard()
     const card = container.firstElementChild as HTMLElement

@@ -72,11 +72,11 @@ describe('FileList', () => {
         onReloadFile={onReloadFile}
       />,
     )
-    fireEvent.contextMenu(screen.getAllByRole('option')[0])
+    fireEvent.contextMenu(screen.getAllByRole('option')[0]!)
     fireEvent.click(screen.getByText('Reveal in file manager'))
     expect(onRevealFile).toHaveBeenCalledWith('/f/Alpha.txt')
 
-    fireEvent.contextMenu(screen.getAllByRole('option')[0])
+    fireEvent.contextMenu(screen.getAllByRole('option')[0]!)
     fireEvent.click(screen.getByText('Reload from disk'))
     expect(onReloadFile).toHaveBeenCalledWith('/f/Alpha.txt')
   })

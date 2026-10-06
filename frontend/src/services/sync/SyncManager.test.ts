@@ -45,7 +45,7 @@ describe('start(flowId)', () => {
     syncManager.start(flowId)
 
     expect(syncManager.getQueue()).toHaveLength(1)
-    expect(syncManager.getQueue()[0].id).toBe('op-1-1')
+    expect(syncManager.getQueue()[0]!.id).toBe('op-1-1')
   })
 
   it('drops stale ops on load (TTL expired)', () => {
@@ -57,7 +57,7 @@ describe('start(flowId)', () => {
     syncManager.start(flowId)
 
     expect(syncManager.getQueue()).toHaveLength(1)
-    expect(syncManager.getQueue()[0].id).toBe('op-1')
+    expect(syncManager.getQueue()[0]!.id).toBe('op-1')
   })
 
   it('starts empty when no persisted data exists', () => {
@@ -89,11 +89,11 @@ describe('start(flowId)', () => {
 
     syncManager.start('a')
     expect(syncManager.getQueue()).toHaveLength(1)
-    expect(syncManager.getQueue()[0].id).toBe('a1')
+    expect(syncManager.getQueue()[0]!.id).toBe('a1')
 
     syncManager.start('b')
     expect(syncManager.getQueue()).toHaveLength(1)
-    expect(syncManager.getQueue()[0].id).toBe('b1')
+    expect(syncManager.getQueue()[0]!.id).toBe('b1')
   })
 })
 
@@ -176,7 +176,7 @@ describe('stop()', () => {
     syncManager.start('flow-stop-2')
 
     expect(syncManager.getQueue()).toHaveLength(1)
-    expect(syncManager.getQueue()[0].env.type).toBe('block.update')
+    expect(syncManager.getQueue()[0]!.env.type).toBe('block.update')
   })
 })
 

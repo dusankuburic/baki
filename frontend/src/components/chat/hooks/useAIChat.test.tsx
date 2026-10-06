@@ -137,7 +137,7 @@ describe('useAIChat send/stream/commit', () => {
     // User message appended immediately, request sent with the right shape.
     await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(1))
     expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
-    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0]
+    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0]
     expect(req.flowId).toBe('flow1')
     expect(req.userMessage).toBe('hello')
     expect(req.clientStreamId).toBeTruthy()
@@ -184,7 +184,7 @@ describe('useAIChat send/stream/commit', () => {
     await act(async () => {
       result.current.handleSend('hi', [])
     })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
 
     act(() => {
@@ -196,9 +196,9 @@ describe('useAIChat send/stream/commit', () => {
 
     await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
     const messages = useChatStore.getState().getMessages(threadId)
-    expect(messages[1].finishReason).toBe('error')
-    expect(messages[1].content).toContain('partial')
-    expect(messages[1].content).toContain('provider exploded')
+    expect(messages[1]!.finishReason).toBe('error')
+    expect(messages[1]!.content).toContain('partial')
+    expect(messages[1]!.content).toContain('provider exploded')
   })
 
   it('rejects a second send on the same thread while one is already streaming', async () => {
@@ -227,7 +227,7 @@ describe('useAIChat handleCancelStream', () => {
     await act(async () => {
       result.current.handleSend('hi', [])
     })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
 
     act(() => {
@@ -266,7 +266,7 @@ describe('useAIChat handleResend', () => {
     await act(async () => {
       result.current.handleSend('first question', [])
     })
-    const sid1 = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid1 = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
     act(() => {
       capturedCb!(doneEvent(sid1))
@@ -280,7 +280,7 @@ describe('useAIChat handleResend', () => {
     // Both messages from the first turn are gone, and a new send goes out
     // with the truncated history explicitly included.
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
-    const secondReq = vi.mocked(chatApi.streamChatMessage).mock.calls[1][0]
+    const secondReq = vi.mocked(chatApi.streamChatMessage).mock.calls[1]![0]
     expect(secondReq.userMessage).toBe('first question')
     expect(secondReq.messages).toEqual([])
   })
@@ -482,7 +482,7 @@ describe('useAIChat history restore (H1)', () => {
     await act(async () => {
       result.current.handleSend('hello', [])
     })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
     act(() => {
       capturedCb!(chunkEvent(sid, 'answer'))
@@ -505,9 +505,9 @@ describe('useAIChat history restore (H1)', () => {
     await act(async () => {
       result.current.handleSend('hello', [])
     })
-    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0]
+    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0]
     const [userMsg] = useChatStore.getState().getMessages(threadId)
-    expect(req.userMessageId).toBe(userMsg.id)
+    expect(req.userMessageId).toBe(userMsg!.id)
     expect(req.assistantMessageId).toBe(useChatStore.getState().streams[threadId]?.messageId)
   })
 })
@@ -550,7 +550,7 @@ describe('useAIChat context preview (consent step)', () => {
     })
 
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].selectedSourceFiles).toEqual(['Main.txt'])
+    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].selectedSourceFiles).toEqual(['Main.txt'])
     await waitFor(() => expect(onConfirmed).toHaveBeenCalledTimes(1))
   })
 
@@ -591,7 +591,7 @@ describe('useAIChat context preview (consent step)', () => {
     })
 
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].conversationId).toBe(original)
+    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].conversationId).toBe(original)
     expect(
       useChatStore
         .getState()
@@ -619,7 +619,7 @@ describe('useChatStreamEngine send races', () => {
       result.current.handleSend('first', [])
     })
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
-    const sid1 = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid1 = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     act(() => {
       result.current.handleQueue('follow-up', [])
     })
@@ -629,7 +629,7 @@ describe('useChatStreamEngine send races', () => {
       result.current.handleCancelStream()
     })
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
-    const sid2 = vi.mocked(chatApi.streamChatMessage).mock.calls[1][0].clientStreamId!
+    const sid2 = vi.mocked(chatApi.streamChatMessage).mock.calls[1]![0].clientStreamId!
     expect(sid2).not.toBe(sid1)
     expect(useChatStore.getState().streams[threadId]?.streamId).toBe(sid2)
 
@@ -691,14 +691,14 @@ describe('useAIChat error codes', () => {
     await act(async () => {
       result.current.handleSend('hi', [])
     })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
     act(() => {
       capturedCb!(errorEvent(sid, 'daily AI budget exceeded ($1.02 / $1.00, of which $0.00 …)', 'AI_BUDGET_EXCEEDED'))
     })
 
     await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
-    const bubble = useChatStore.getState().getMessages(threadId)[1]
+    const bubble = useChatStore.getState().getMessages(threadId)[1]!
     expect(bubble.finishReason).toBe('error')
     expect(bubble.content).toContain('Daily AI budget reached')
     expect(bubble.content).toContain('$1.02 / $1.00')
@@ -723,7 +723,7 @@ describe('useAIChat model label', () => {
     await act(async () => {
       result.current.handleSend('hi', [])
     })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
     rerender({model: 'gpt-5'})
     act(() => {
@@ -734,7 +734,7 @@ describe('useAIChat model label', () => {
     })
 
     await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
-    expect(useChatStore.getState().getMessages(threadId)[1].model).toBe('gpt-4')
+    expect(useChatStore.getState().getMessages(threadId)[1]!.model).toBe('gpt-4')
   })
 })
 
@@ -774,7 +774,7 @@ describe('replies survive the chat panel unmounting (H2)', () => {
     await act(async () => {
       panelApi!.handleSend('long question', [])
     })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
     act(() => {
       capturedCb!(chunkEvent(sid, 'first half'))
@@ -809,7 +809,7 @@ describe('replies survive the chat panel unmounting (H2)', () => {
     await act(async () => {
       panelApi!.handleSend('first', [])
     })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
     act(() => {
       panelApi!.handleQueue('follow-up', [])
@@ -821,7 +821,7 @@ describe('replies survive the chat panel unmounting (H2)', () => {
     })
 
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
-    const second = vi.mocked(chatApi.streamChatMessage).mock.calls[1][0]
+    const second = vi.mocked(chatApi.streamChatMessage).mock.calls[1]![0]
     expect(second.userMessage).toBe('follow-up')
     expect(second.model).toBe('gpt-4')
   })
@@ -878,7 +878,7 @@ describe('useAIChat per-thread model memory', () => {
     await act(async () => {
       result.current.handleSend('document this flow', [])
     })
-    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0]
+    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0]
     expect(req).toMatchObject({provider: 'azure-foundry', model: 'm/docs000000'})
     expect(pinOf(threadId)).toEqual({provider: 'azure-foundry', model: 'm/docs000000', modelLabel: 'Docs writer'})
 
@@ -908,7 +908,7 @@ describe('useAIChat per-thread model memory', () => {
     await act(async () => {
       result.current.handleSend('hi', [])
     })
-    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].model).toBe('m/gpt4100000')
+    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].model).toBe('m/gpt4100000')
     // It returns to Docs writer once that can be used again.
     expect(pinOf(threadId)?.model).toBe('m/docs000000')
   })
@@ -946,7 +946,7 @@ describe('useAIChat per-thread model memory', () => {
     await act(async () => {
       view.result.current.handleSend('first', [])
     })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
     act(() => {
       view.result.current.handleQueue('follow-up', [])
@@ -962,7 +962,7 @@ describe('useAIChat per-thread model memory', () => {
     })
 
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
-    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[1][0]).toMatchObject({
+    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[1]![0]).toMatchObject({
       userMessage: 'follow-up',
       model: 'm/docs000000',
     })
@@ -983,7 +983,7 @@ describe('useAIChat per-thread model memory', () => {
     await act(async () => {
       await view.result.current.handlePreviewContext('q', [], false)
     })
-    expect(vi.mocked(chatApi.previewContext).mock.calls[0][0].model).toBe('m/docs000000')
+    expect(vi.mocked(chatApi.previewContext).mock.calls[0]![0].model).toBe('m/docs000000')
     // Something else becomes the panel's pair while the dialog is open.
     view.rerender({turnModel: GPT})
     act(() => {
@@ -991,7 +991,7 @@ describe('useAIChat per-thread model memory', () => {
     })
 
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].model).toBe('m/docs000000')
+    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].model).toBe('m/docs000000')
   })
 
   it('a preview refused with MODEL_NOT_AVAILABLE refreshes the listing and raises the notice, sending nothing', async () => {
@@ -1020,7 +1020,7 @@ describe('useAIChat per-thread model memory', () => {
     await act(async () => {
       first.result.current.handleSend('document this flow', [])
     })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
     act(() => {
       capturedCb!(doneEvent(sid))
@@ -1049,7 +1049,7 @@ describe('useAIChat per-thread model memory', () => {
     await act(async () => {
       second.result.current.handleSend('and the error handling?', [])
     })
-    const sid2 = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid2 = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
     act(() => {
       capturedCb!(doneEvent(sid2))
@@ -1065,15 +1065,15 @@ describe('useAIChat per-thread model memory', () => {
       second.result.current.handleResend()
     })
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
-    const sid3 = vi.mocked(chatApi.streamChatMessage).mock.calls[1][0].clientStreamId!
+    const sid3 = vi.mocked(chatApi.streamChatMessage).mock.calls[1]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
     act(() => {
       capturedCb!(doneEvent(sid3))
     })
     await waitFor(() => expect(chatApi.saveConversation).toHaveBeenCalledTimes(1))
-    const resaved = vi.mocked(chatApi.saveConversation).mock.calls[0][2]
+    const resaved = vi.mocked(chatApi.saveConversation).mock.calls[0]![2]
     expect(resaved).toHaveLength(4)
-    expect(resaved[1]).toMatchObject({id: saved[1].id, modelLabel: 'Docs writer'})
+    expect(resaved[1]!).toMatchObject({id: saved[1]!.id, modelLabel: 'Docs writer'})
     expect(resaved[3]).toMatchObject({modelLabel: 'Docs writer'})
   })
 
@@ -1090,7 +1090,7 @@ describe('useAIChat per-thread model memory', () => {
     await act(async () => {
       result.current.handleSend('document this flow', [])
     })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     expect(pinOf(threadId)).toEqual({provider: 'azure-foundry', model: 'm/docs000000'})
     await waitFor(() => expect(capturedCb).not.toBeNull())
     act(() => {
@@ -1129,7 +1129,7 @@ describe('useAIChat in-flight turn record', () => {
     await act(async () => {
       result.current.handleSend('hi', [])
     })
-    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0]
+    const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0]
     expect(inFlightOf(threadId)).toEqual({
       streamId: req.clientStreamId,
       messageId: req.assistantMessageId,
@@ -1206,7 +1206,7 @@ describe('useAIChat resend refused', () => {
     await act(async () => {
       result.current.handleSend('first question', [])
     })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
     act(() => {
       capturedCb!(doneEvent(sid))
@@ -1250,7 +1250,7 @@ describe('useAIChat while nothing can be sent', () => {
     await act(async () => {
       view.result.current.handleSend('q', [])
     })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
     act(() => {
       capturedCb!(doneEvent(sid))

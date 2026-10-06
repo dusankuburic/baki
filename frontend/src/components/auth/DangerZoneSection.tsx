@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
 import React, {useState} from 'react'
 import {AlertTriangle} from 'lucide-react'
@@ -43,7 +44,7 @@ export const DangerZoneSection: React.FC = () => {
       await logout()
     } catch (err) {
       setDeleting(false)
-      setDeleteErr(err instanceof Error ? err.message : t('account.deleteFailed'))
+      setDeleteErr(getErrorMessage(err, t('account.deleteFailed')))
     }
   }
 

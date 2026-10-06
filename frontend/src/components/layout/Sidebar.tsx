@@ -184,9 +184,11 @@ export default function Sidebar() {
 
   const folderName = useMemo(() => {
     if (!folderFiles?.length) return ''
-    const p = folderFiles[0].path
+    const first = folderFiles[0]
+    if (!first) return ''
+    const p = first.path
     const parts = p.split(p.includes('\\') ? '\\' : '/')
-    return parts.length > 1 ? parts[parts.length - 2] : ''
+    return parts.length > 1 ? (parts[parts.length - 2] ?? '') : ''
   }, [folderFiles])
 
   return (

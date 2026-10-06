@@ -108,7 +108,7 @@ export default function FindingCommentsPanel({
             }
           }}
           placeholder={t('comments.placeholder')}
-          className="flex-1 bg-surface-2 border border-border-subtle rounded px-2 py-1 text-2xs text-text-primary placeholder:text-text-disabled focus:outline-none focus:border-brand-500/50"
+          className="flex-1 bg-surface-2 border border-border-subtle rounded px-2 py-1 text-2xs text-text-primary placeholder:text-text-disabled focus:outline-hidden focus:border-brand-500/50"
         />
         <button
           onClick={onSubmit}

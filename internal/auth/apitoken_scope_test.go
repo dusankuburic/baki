@@ -56,6 +56,15 @@ func TestRouteAllowed(t *testing.T) {
 	if !RouteAllowed(http.MethodPost, "/api/chat/stream", []string{ScopeChat}) {
 		t.Error("chat token must reach chat")
 	}
+	if RouteAllowed(http.MethodPost, "/api/chat/fix-decision", []string{ScopeChat}) {
+		t.Error("approving a fix mutates the flow: chat alone must not be enough")
+	}
+	if RouteAllowed(http.MethodPost, "/api/chat/fix-decision", readWrite) {
+		t.Error("fix-decision is still a chat endpoint: write alone must not be enough")
+	}
+	if !RouteAllowed(http.MethodPost, "/api/chat/fix-decision", []string{ScopeChat, ScopeWrite}) {
+		t.Error("chat+write token must be able to approve a fix")
+	}
 	if RouteAllowed(http.MethodGet, "/api/auth/tokens", []string{ScopeRead, ScopeWrite, ScopeChat, ScopeAdmin}) {
 		t.Error("no scope grants credential management")
 	}

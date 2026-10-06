@@ -58,15 +58,18 @@ export function blocksToElements(subflow: Subflow): ElementDefinition[] {
 
     if (block.children.length > 0) {
       for (let i = 0; i < block.children.length; i++) {
-        processBlock(block.children[i], block.id, i)
+        const child = block.children[i]
+        const prev = block.children[i - 1]
+        if (!child) continue
+        processBlock(child, block.id, i)
         // Sequential edge between consecutive siblings (execution order).
-        if (i > 0) {
+        if (i > 0 && prev) {
           elements.push({
             group: 'edges',
             data: {
-              id: `edge-seq-${block.children[i - 1].id}-${block.children[i].id}`,
-              source: block.children[i - 1].id,
-              target: block.children[i].id,
+              id: `edge-seq-${prev.id}-${child.id}`,
+              source: prev.id,
+              target: child.id,
             },
           })
         }
@@ -75,15 +78,18 @@ export function blocksToElements(subflow: Subflow): ElementDefinition[] {
   }
 
   for (let i = 0; i < subflow.blocks.length; i++) {
-    processBlock(subflow.blocks[i], null, i)
+    const block = subflow.blocks[i]
+    const prev = subflow.blocks[i - 1]
+    if (!block) continue
+    processBlock(block, null, i)
     // Sequential edges between root-level blocks.
-    if (i > 0) {
+    if (i > 0 && prev) {
       elements.push({
         group: 'edges',
         data: {
-          id: `edge-seq-${subflow.blocks[i - 1].id}-${subflow.blocks[i].id}`,
-          source: subflow.blocks[i - 1].id,
-          target: subflow.blocks[i].id,
+          id: `edge-seq-${prev.id}-${block.id}`,
+          source: prev.id,
+          target: block.id,
         },
       })
     }

@@ -270,13 +270,13 @@ function ChannelForm({
           value={name}
           onChange={e => setName(e.target.value)}
           placeholder={t('channels.namePlaceholder')}
-          className="flex-1 px-2.5 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary placeholder:text-text-tertiary/60 outline-none focus:border-brand-500"
+          className="flex-1 px-2.5 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary placeholder:text-text-tertiary/60 outline-hidden focus:border-brand-500"
         />
         <select
           value={kind}
           onChange={e => setKind(e.target.value as ChannelKind)}
           disabled={!!initial}
-          className="px-2 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary outline-none focus:border-brand-500 disabled:opacity-60"
+          className="px-2 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary outline-hidden focus:border-brand-500 disabled:opacity-60"
           aria-label={t('channels.kindAria')}
         >
           {KINDS.map(k => (
@@ -290,14 +290,14 @@ function ChannelForm({
         value={url}
         onChange={e => setUrl(e.target.value)}
         placeholder="https://hooks.example.com/…"
-        className="w-full px-2.5 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary placeholder:text-text-tertiary/60 outline-none focus:border-brand-500 font-mono"
+        className="w-full px-2.5 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary placeholder:text-text-tertiary/60 outline-hidden focus:border-brand-500 font-mono"
       />
       <input
         value={secret}
         onChange={e => setSecret(e.target.value)}
         placeholder={initial ? t('channels.secretPlaceholderExisting') : t('channels.secretPlaceholderNew')}
         type="password"
-        className="w-full px-2.5 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary placeholder:text-text-tertiary/60 outline-none focus:border-brand-500 font-mono"
+        className="w-full px-2.5 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary placeholder:text-text-tertiary/60 outline-hidden focus:border-brand-500 font-mono"
       />
       {activeKind && (
         <p className="text-2xs text-text-tertiary/70">{t(activeKind.hintKey as never)}. HTTPS required.</p>

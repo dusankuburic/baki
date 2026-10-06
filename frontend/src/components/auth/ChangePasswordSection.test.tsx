@@ -59,7 +59,7 @@ describe('ChangePasswordSection', () => {
     expect(submit).toBeDisabled()
   })
 
-  it('flags a mismatched confirmation on blur and disarms the button', () => {
+  it('flags a mismatched confirmation on blur-sm and disarms the button', () => {
     renderSection()
     fill('old-password', 'Correct-horse-1', 'Correct-horse-2')
     fireEvent.blur(screen.getByLabelText('Confirm new password'))
@@ -80,7 +80,7 @@ describe('ChangePasswordSection', () => {
     const field = screen.getByLabelText('New password')
     expect(field).toHaveAttribute('type', 'password')
     const toggles = screen.getAllByRole('button', {name: 'Show password'})
-    fireEvent.click(toggles[1])
+    fireEvent.click(toggles[1]!)
     expect(field).toHaveAttribute('type', 'text')
     expect(screen.getByRole('button', {name: 'Hide password'})).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByLabelText('Current password')).toHaveAttribute('type', 'password')

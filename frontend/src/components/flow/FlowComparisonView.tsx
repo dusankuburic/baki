@@ -1,4 +1,5 @@
 import {useState, useMemo} from 'react'
+import {useTranslation} from 'react-i18next'
 import {GitCompare, ArrowRight, Plus, Minus, RefreshCw, Check} from 'lucide-react'
 import {libraryApi, type LibraryFlow} from '@/api/library'
 import {analysisApi} from '@/api'
@@ -11,12 +12,15 @@ import type {FlowComparison, SubflowComparison} from '@/types'
 // in the diff renderer. The backend's CompareFlows stamps `change` as a short
 // token ("same"/"added"/"removed"/"modified"); anything unrecognized reads as
 // "modified" so a new token never renders blank.
-function changeAppearance(change: string): {Icon: typeof Plus; color: string; label: string} {
+type ChangeLabelKey = 'compare.changeAdded' | 'compare.changeRemoved' | 'compare.changeSame' | 'compare.changeModified'
+
+function changeAppearance(change: string): {Icon: typeof Plus; color: string; labelKey: ChangeLabelKey} {
   const c = change.toLowerCase()
-  if (c === 'added' || c === 'new') return {Icon: Plus, color: 'text-semantic-success', label: 'Added'}
-  if (c === 'removed' || c === 'deleted') return {Icon: Minus, color: 'text-semantic-error', label: 'Removed'}
-  if (c === 'same' || c === 'unchanged') return {Icon: Check, color: 'text-text-tertiary', label: 'Same'}
-  return {Icon: RefreshCw, color: 'text-semantic-warning', label: 'Modified'}
+  if (c === 'added' || c === 'new') return {Icon: Plus, color: 'text-semantic-success', labelKey: 'compare.changeAdded'}
+  if (c === 'removed' || c === 'deleted')
+    return {Icon: Minus, color: 'text-semantic-error', labelKey: 'compare.changeRemoved'}
+  if (c === 'same' || c === 'unchanged') return {Icon: Check, color: 'text-text-tertiary', labelKey: 'compare.changeSame'}
+  return {Icon: RefreshCw, color: 'text-semantic-warning', labelKey: 'compare.changeModified'}
 }
 
 function similarityPct(s?: number): string {
@@ -40,15 +44,16 @@ function FlowPicker({
   flows: LibraryFlow[]
   exclude?: string
 }) {
+  const {t} = useTranslation('flow')
   return (
     <label className="flex flex-col gap-1.5 flex-1 min-w-0">
       <span className="text-2xs uppercase tracking-wider text-text-tertiary">{label}</span>
       <select
         value={value}
         onChange={e => onChange(e.target.value)}
-        className="px-3 py-2 rounded-lg border border-border-default bg-surface-2 text-sm text-text-primary outline-none focus:border-brand-500"
+        className="px-3 py-2 rounded-lg border border-border-default bg-surface-2 text-sm text-text-primary outline-hidden focus:border-brand-500"
       >
-        <option value="">Select a flow…</option>
+        <option value="">{t('compare.selectPrompt')}</option>
         {flows
           .filter(f => f.id !== exclude)
           .map(f => (
@@ -62,8 +67,9 @@ function FlowPicker({
 }
 
 function SubflowRow({sf}: {sf: SubflowComparison}) {
+  const {t} = useTranslation('flow')
   const [open, setOpen] = useState(false)
-  const name = sf.subflowA || sf.subflowB || '(unnamed)'
+  const name = sf.subflowA || sf.subflowB || t('compare.unnamed')
   return (
     <div className="border border-border-subtle rounded-lg bg-surface-1">
       <button
@@ -72,7 +78,7 @@ function SubflowRow({sf}: {sf: SubflowComparison}) {
       >
         <span className="text-sm font-medium text-text-primary truncate flex-1">{name}</span>
         <span className="text-2xs text-text-tertiary tabular-nums">
-          {sf.blockDiffs.length} block{sf.blockDiffs.length !== 1 ? 's' : ''} · {similarityPct(sf.similarity)}
+          {t('compare.blocks', {count: sf.blockDiffs.length, similarity: similarityPct(sf.similarity)})}
         </span>
       </button>
       {open && (
@@ -84,10 +90,10 @@ function SubflowRow({sf}: {sf: SubflowComparison}) {
               <div key={i} className="flex items-center gap-3 px-4 py-1.5">
                 <Icon size={12} className={`${app.color} shrink-0`} />
                 <span className={`text-2xs font-medium uppercase tracking-wider ${app.color} w-16 shrink-0`}>
-                  {app.label}
+                  {t(app.labelKey)}
                 </span>
                 <span className="text-xs text-text-primary truncate flex-1">
-                  {b.blockA?.name ?? b.blockB?.name ?? '(block)'}
+                  {b.blockA?.name ?? b.blockB?.name ?? t('compare.blockFallback')}
                 </span>
                 {b.similarity != null && b.change !== 'same' && (
                   <span className="text-2xs text-text-tertiary tabular-nums">{similarityPct(b.similarity)}</span>
@@ -109,6 +115,7 @@ function SubflowRow({sf}: {sf: SubflowComparison}) {
  * ("Compare Two Flows") in cloud mode.
  */
 export default function FlowComparisonView() {
+  const {t} = useTranslation('flow')
   const [flowA, setFlowA] = useState('')
   const [flowB, setFlowB] = useState('')
   const [result, setResult] = useState<FlowComparison | null>(null)
@@ -141,24 +148,22 @@ export default function FlowComparisonView() {
         <div>
           <h1 className="text-xl font-semibold text-text-primary flex items-center gap-2">
             <GitCompare size={20} className="text-brand-500" />
-            Compare Flows
+            {t('compare.title')}
           </h1>
-          <p className="text-sm text-text-secondary mt-1">
-            Side-by-side similarity diff of two library flows — block adds, removals, and modifications per subflow.
-          </p>
+          <p className="text-sm text-text-secondary mt-1">{t('compare.body')}</p>
         </div>
 
         <div className="flex items-end gap-3 p-4 border border-border-default rounded-xl bg-surface-1">
-          <FlowPicker label="Flow A" value={flowA} onChange={setFlowA} flows={flows} exclude={flowB} />
+          <FlowPicker label={t('compare.flowA')} value={flowA} onChange={setFlowA} flows={flows} exclude={flowB} />
           <ArrowRight size={16} className="text-text-tertiary shrink-0 mb-2.5" />
-          <FlowPicker label="Flow B" value={flowB} onChange={setFlowB} flows={flows} exclude={flowA} />
+          <FlowPicker label={t('compare.flowB')} value={flowB} onChange={setFlowB} flows={flows} exclude={flowA} />
           <button
             onClick={compare}
             disabled={!flowA || !flowB || comparing}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-500 text-brand-foreground text-sm font-medium hover:bg-brand-600 transition-colors disabled:opacity-50 shrink-0"
           >
             {comparing ? <Spinner /> : <GitCompare size={14} />}
-            Compare
+            {t('compare.compare')}
           </button>
         </div>
 
@@ -167,18 +172,15 @@ export default function FlowComparisonView() {
         {result && (
           <>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <Stat label="Similarity" value={similarityPct(result.similarity)} />
-              <Stat label="Shared blocks" value={result.sharedBlocks} />
-              <Stat label="Added" value={result.addedBlocks} accent="text-semantic-success" />
-              <Stat label="Removed" value={result.removedBlocks} accent="text-semantic-error" />
+              <Stat label={t('compare.similarity')} value={similarityPct(result.similarity)} />
+              <Stat label={t('compare.sharedBlocks')} value={result.sharedBlocks} />
+              <Stat label={t('compare.added')} value={result.addedBlocks} accent="text-semantic-success" />
+              <Stat label={t('compare.removed')} value={result.removedBlocks} accent="text-semantic-error" />
             </div>
 
             <div className="space-y-2">
               {result.subflowDiff.length === 0 ? (
-                <EmptyState
-                  title="No subflow differences"
-                  description="The two flows have no comparable subflow structure."
-                />
+                <EmptyState title={t('compare.emptyTitle')} description={t('compare.emptyBody')} />
               ) : (
                 result.subflowDiff.map((sf, i) => <SubflowRow key={i} sf={sf} />)
               )}

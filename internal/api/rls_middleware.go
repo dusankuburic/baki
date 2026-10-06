@@ -1,14 +1,14 @@
 package api
 
 import (
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"pad-analyzer/internal/api/render"
-
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/platform/txhook"
 	storagedb "pad-analyzer/internal/storage/database"
 )
 
@@ -149,7 +149,7 @@ func isOrgChannelTestPath(path string) bool {
 }
 
 // rlsMiddleware sets app.current_user_id for authenticated /api/ requests that are not exempt, in a transaction wrapping the entire request: LAZY for reads (first scoped statement, storagedb.RLSScope), fail-closed for mutations (starts before the handler; a start failure is a 503).
-// No-op without JWT auth, Postgres, or on public/exempt routes; /ws and background work (scanner, retention, audit writer, notifications) are outside it entirely and rest on Go-layer authz plus explicit clauses — RLS policies allow every row when app.current_user_id is unset. Commits only on a <400 response; an error or panic rolls back.
+// No-op without JWT auth, Postgres, or on public/exempt routes; /ws and background work (scanner, retention, audit writer, notifications) are outside it entirely and rest on Go-layer authz plus explicit clauses — RLS policies allow every row when app.current_user_id is unset. Ends the transaction before the first response byte (txResponseWriter): below 400 it commits, and a failed commit becomes a 503; 400 and above, or a panic before the response started, roll back.
 func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !rt.security.JWTEnabled {
@@ -179,90 +179,170 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 		// The scope is LAZY for reads: BEGIN + set_config run on the first scoped statement, so a read that never touches the store pins nothing.
 		// MUTATING requests fail CLOSED — without the transaction the policies short-circuit to allow-all — so a mutation's scope starts HERE, before handler code, landing the 503 before its non-transactional side effects (keystore writes, provider calls, blob uploads, audit rows). Reads stay fail-open (explicit ownership predicates also scope them).
 		failOpen := r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
-		ctx, scope := storagedb.WithLazyRLS(r.Context(), rlsBackend, claims.UserID, failOpen)
+		base := r.Context()
+		ctx, scope := storagedb.WithLazyRLS(base, rlsBackend, claims.UserID, failOpen)
 		if !failOpen {
 			if err := storagedb.EnsureRLS(ctx); err != nil {
 				slog.Error("rls: failed to begin transaction, refusing mutation", "method", r.Method, "path", r.URL.Path, "err", err)
-				render.Error(w, fmt.Errorf("temporarily unavailable — retry"), http.StatusServiceUnavailable)
+				render.Error(w, errRLSUnavailableResponse, http.StatusServiceUnavailable)
 				return
 			}
 		}
-		ctx, postCommit := storagedb.WithPostCommit(ctx)
+		ctx, hooks := txhook.With(ctx)
 		r = r.WithContext(ctx)
+		// Post-commit work runs with a fresh RLS scope for the same user per hook: the request's own scope has ended.
+		runHooks := func() { hooks.Commit(storagedb.RLSHookRunner(base, rlsBackend, claims.UserID)) }
 
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		tw := newTxResponseWriter(w, func(status int) bool {
+			if status >= http.StatusBadRequest {
+				if err := scope.Rollback(); err != nil {
+					slog.Warn("rls: rollback after error response failed", "err", err)
+				}
+				hooks.Abort()
+				return true
+			}
+			// Commit is a no-op for a scope that never started: the request wrote nothing through the
+			// transaction, so it is "committed" as it stands.
+			if err := scope.Commit(); err != nil {
+				slog.Error("rls: commit failed; answering 503 instead of the handler's response", "method", r.Method, "path", r.URL.Path, "err", err)
+				hooks.Abort()
+				return false
+			}
+			return true
+		})
 
-		// On panic, roll back and re-panic so an upstream recoverer still sees the original
-		// failure instead of a silently committed partial write.
+		// A panic before the response started rolls back. After it the write is already committed, so its
+		// post-commit work still runs. Either way the panic continues to the recoverer above.
 		defer func() {
 			if p := recover(); p != nil {
-				_ = scope.Rollback()
+				if tw.committed() {
+					runHooks()
+				} else {
+					_ = scope.Rollback()
+					hooks.Abort()
+				}
 				panic(p)
 			}
 		}()
 
-		next.ServeHTTP(rec, r)
+		next.ServeHTTP(tw, r)
 
 		// Only a read can get here with a start failure (a mutation's was
 		// refused above); it ran on the pool.
 		if err := scope.Err(); err != nil {
 			slog.Warn("rls: failed to begin transaction, proceeded without RLS (read-only)", "method", r.Method, "path", r.URL.Path, "err", err)
 		}
-
-		if rec.status >= 400 {
-			if err := scope.Rollback(); err != nil {
-				slog.Warn("rls: rollback after error response failed", "err", err)
-			}
-			return
+		// A handler that wrote nothing is decided now (net/http then sends its implicit 200, or the 503).
+		tw.finish()
+		// Deferred work runs only after the write is durable (e.g. blob cleanup for a deleted flow): a
+		// rolled-back request must not delete data whose row survives.
+		if tw.committed() {
+			runHooks()
 		}
-		// Commit is a no-op for a scope that never started: the request wrote
-		// nothing through the transaction, so it is "committed" as it stands.
-		if err := scope.Commit(); err != nil {
-			slog.Warn("rls: failed to commit transaction", "err", err)
-			return
-		}
-		// Run deferred work only after the write is durably committed (e.g. blob cleanup for a
-		// deleted flow): a rolled-back request must not delete data whose row survives.
-		postCommit.Run()
 	})
 }
 
-// statusRecorder captures the response status code so the RLS middleware can decide commit vs
-// rollback, while passing every write straight through to the underlying ResponseWriter.
-type statusRecorder struct {
+// errRLSUnavailableResponse is the error rendered when the request's transaction cannot be started or committed.
+// Like every 5xx its message is masked on the wire; the envelope's SERVICE_UNAVAILABLE code tells the client to
+// retry, and nothing about the database leaks.
+var errRLSUnavailableResponse = errors.New("temporarily unavailable — retry")
+
+// txResponseWriter ends the request's RLS transaction BEFORE the first byte of the response leaves. A response
+// below 400 is committed first, and a commit failure turns it into a 503, so a client is never told that a write
+// succeeded which did not persist (the response used to stream through, with Commit running after the handler
+// returned and its failure only logged). A response of 400 or more rolls back. A handler that writes nothing
+// is decided when it returns (finish). After the commit the scope has ended, so the handler must not touch
+// the database once it has started its response.
+type txResponseWriter struct {
 	http.ResponseWriter
-	status      int
-	wroteHeader bool
+	end     func(status int) bool // commits or rolls back for status; false = the commit failed
+	entry   http.Header           // the headers as they were before the handler ran
+	status  int
+	decided bool
+	failed  bool // the commit failed: a 503 went out instead, later writes are swallowed
 }
 
-func (r *statusRecorder) WriteHeader(code int) {
-	if !r.wroteHeader {
-		r.status = code
-		r.wroteHeader = true
-		r.ResponseWriter.WriteHeader(code)
+func newTxResponseWriter(w http.ResponseWriter, end func(status int) bool) *txResponseWriter {
+	return &txResponseWriter{ResponseWriter: w, end: end, entry: w.Header().Clone(), status: http.StatusOK}
+}
+
+// decide ends the transaction for status, once. On a failed commit it answers 503 itself, with the headers
+// restored to what they were before the handler ran: the security, CORS and request-ID headers stay, while
+// what the handler set for its own response (cookies, ETag, Content-Length) goes.
+func (t *txResponseWriter) decide(status int) {
+	if t.decided {
+		return
 	}
-	// A duplicate WriteHeader is silently dropped; freezing on the first status keeps the RLS
-	// commit/rollback decision based on what the client actually received.
-}
-
-func (r *statusRecorder) Write(b []byte) (int, error) {
-	if !r.wroteHeader {
-		r.status = http.StatusOK
-		r.wroteHeader = true
+	t.decided = true
+	t.status = status
+	if t.end(status) {
+		return
 	}
-	return r.ResponseWriter.Write(b)
+	t.failed = true
+	h := t.Header()
+	for k := range h {
+		delete(h, k)
+	}
+	for k, v := range t.entry {
+		h[k] = v
+	}
+	render.Error(t.ResponseWriter, errRLSUnavailableResponse, http.StatusServiceUnavailable)
 }
 
-// Flush forwards to the underlying writer when it supports flushing so handlers
-// that stream incremental output keep working through the wrapper.
-func (r *statusRecorder) Flush() {
-	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+func (t *txResponseWriter) WriteHeader(code int) {
+	if code < http.StatusOK {
+		// 1xx is informational, not the response: nothing to decide yet.
+		if !t.decided {
+			t.ResponseWriter.WriteHeader(code)
+		}
+		return
+	}
+	if t.decided {
+		return // a second WriteHeader is dropped, as net/http would
+	}
+	t.decide(code)
+	if !t.failed {
+		t.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (t *txResponseWriter) Write(b []byte) (int, error) {
+	if !t.decided {
+		t.WriteHeader(http.StatusOK)
+	}
+	if t.failed {
+		return 0, errRLSUnavailableResponse
+	}
+	return t.ResponseWriter.Write(b)
+}
+
+// Flush commits like a first write, then forwards to the underlying writer when it supports flushing, so
+// handlers that stream incremental output keep working through the wrapper.
+func (t *txResponseWriter) Flush() {
+	if !t.decided {
+		t.WriteHeader(http.StatusOK)
+	}
+	if t.failed {
+		return
+	}
+	if f, ok := t.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
 }
 
 // Unwrap lets http.ResponseController reach the underlying writer — without it, an RLS-wrapped
 // streaming handler could not lift the server's WriteTimeout and was cut off mid-stream.
-func (r *statusRecorder) Unwrap() http.ResponseWriter {
-	return r.ResponseWriter
+func (t *txResponseWriter) Unwrap() http.ResponseWriter {
+	return t.ResponseWriter
+}
+
+// finish decides a response the handler did not write.
+func (t *txResponseWriter) finish() {
+	t.decide(t.status)
+}
+
+// committed reports whether the transaction committed (as opposed to: not decided yet, rolled back, or a
+// failed commit).
+func (t *txResponseWriter) committed() bool {
+	return t.decided && !t.failed && t.status < http.StatusBadRequest
 }

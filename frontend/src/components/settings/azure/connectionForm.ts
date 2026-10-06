@@ -182,7 +182,7 @@ export function nameFromEndpoint(endpoint: string): string {
   } catch {
     return ''
   }
-  return [...host.split('.')[0]].slice(0, CONNECTION_NAME_MAX_LENGTH).join('')
+  return [...(host.split('.')[0] ?? '')].slice(0, CONNECTION_NAME_MAX_LENGTH).join('')
 }
 
 /** Sets the endpoint; the name follows its host until the user edits the name. */

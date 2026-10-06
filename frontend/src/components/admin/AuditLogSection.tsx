@@ -53,7 +53,7 @@ export function AuditLogSection() {
             value={filter.action}
             onChange={e => setAuditAction(e.target.value)}
             aria-label={t('audit.filterAction')}
-            className="h-9 max-w-[16rem] rounded-md border border-border-default bg-surface-2 px-2 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+            className="h-9 max-w-[16rem] rounded-md border border-border-default bg-surface-2 px-2 text-sm text-text-primary focus:outline-hidden focus:ring-2 focus:ring-brand-500/20"
           >
             <option value="">{t('audit.allActions')}</option>
             {groups.map(g => (

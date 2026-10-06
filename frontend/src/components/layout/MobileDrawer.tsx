@@ -39,7 +39,7 @@ export default function MobileDrawer({
   return (
     <div className={`fixed inset-0 z-50 flex ${side === 'right' ? 'justify-end' : ''} md:hidden`}>
       <button
-        className="absolute inset-0 bg-surface-overlay/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-surface-overlay/60 backdrop-blur-xs"
         onClick={onClose}
         aria-label={t('drawer.close', {label})}
       />

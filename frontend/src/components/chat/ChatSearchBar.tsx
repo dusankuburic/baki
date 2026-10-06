@@ -29,7 +29,7 @@ export default function ChatSearchBar({query, onChange, current, total, onPrev, 
   const hasQuery = query.trim().length > 0
 
   return (
-    <div className="chat-gutter flex items-center gap-1.5 py-1.5 border-b border-border-subtle bg-surface-2 flex-shrink-0">
+    <div className="chat-gutter flex items-center gap-1.5 py-1.5 border-b border-border-subtle bg-surface-2 shrink-0">
       <Search size={12} className="text-text-disabled shrink-0" />
       <input
         ref={inputRef}
@@ -38,7 +38,7 @@ export default function ChatSearchBar({query, onChange, current, total, onPrev, 
         onChange={e => onChange(e.target.value)}
         placeholder={t('search.placeholder')}
         aria-label={t('search.placeholder')}
-        className="flex-1 bg-transparent border-none outline-none text-xs text-text-primary placeholder:text-text-disabled min-w-0"
+        className="flex-1 bg-transparent border-none outline-hidden text-xs text-text-primary placeholder:text-text-disabled min-w-0"
         onKeyDown={e => {
           if (e.key === 'Escape') {
             e.preventDefault()

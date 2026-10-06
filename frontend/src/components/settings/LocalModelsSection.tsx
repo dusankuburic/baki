@@ -1,3 +1,4 @@
+import {getErrorMessage, getErrorCode} from '@/lib/getErrorMessage'
 import {useState, useCallback, useEffect, useId, useRef} from 'react'
 import {useTranslation} from 'react-i18next'
 import Input from '@/components/shared/Input'
@@ -59,7 +60,7 @@ function contextWindowErrorKey(value: string): ContextWindowErrorKey | null {
 const savedContextWindow = (cfg: LocalModelsConfig | null): string =>
   cfg?.contextWindow ? String(cfg.contextWindow) : ''
 
-const isUnavailable = (err: unknown): boolean => err instanceof ApiError && err.code === 'LOCAL_MODELS_UNAVAILABLE'
+const isUnavailable = (err: unknown): boolean => getErrorCode(err) === 'LOCAL_MODELS_UNAVAILABLE'
 
 export default function LocalModelsSection({onConfigured, onUnavailable}: Props) {
   const {t} = useTranslation('settings')
@@ -253,7 +254,7 @@ export default function LocalModelsSection({onConfigured, onUnavailable}: Props)
         setTestResult({ok: false, error: result?.error || t('providers.localTestFailed')})
       }
     } catch (err) {
-      setTestResult({ok: false, error: err instanceof Error ? err.message : t('providers.localTestFailed')})
+      setTestResult({ok: false, error: getErrorMessage(err, t('providers.localTestFailed'))})
     } finally {
       setTesting(false)
     }

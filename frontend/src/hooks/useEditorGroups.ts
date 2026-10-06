@@ -52,8 +52,10 @@ export function useEditorGroups() {
       const fraction = delta / containerWidth
       const current = pendingWidthsRef.current ?? [...widths]
       const newWidths = [...current]
-      const left = newWidths[leftIndex] + fraction
-      const right = newWidths[leftIndex + 1] - fraction
+      // Widths always parallel the groups (see the widths memo); the ?? 0
+      // fallbacks only satisfy the index-access type on this stale-copy path.
+      const left = (newWidths[leftIndex] ?? 0) + fraction
+      const right = (newWidths[leftIndex + 1] ?? 0) - fraction
       if (left < 0.1 || right < 0.1) return
       newWidths[leftIndex] = left
       newWidths[leftIndex + 1] = right

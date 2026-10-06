@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {adminApi} from '@/api/admin'
@@ -45,7 +46,7 @@ export function useMigration() {
       await adminApi.startMigration()
       setPoll(n => n + 1)
     } catch (e) {
-      toastRef.current.error(t('migration.startFailed'), {description: e instanceof Error ? e.message : String(e)})
+      toastRef.current.error(t('migration.startFailed'), {description: getErrorMessage(e)})
     } finally {
       setIsStarting(false)
     }

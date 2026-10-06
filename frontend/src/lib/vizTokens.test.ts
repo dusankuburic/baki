@@ -10,11 +10,11 @@ const css = readFileSync('src/index.css', 'utf-8')
 
 function tokensIn(block: string): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const m of block.matchAll(/(--viz-[\w-]+):\s*([^;]+);/g)) out[m[1]] = m[2].trim()
+  for (const m of block.matchAll(/(--viz-[\w-]+):\s*([^;]+);/g)) out[m[1]!] = m[2]!.trim()
   return out
 }
 
-const rootBlock = css.match(/^:root\s*\{([^}]+)\}/m)![1]
+const rootBlock = css.match(/^:root\s*\{([^}]+)\}/m)![1]!
 const lightRuleMatch = css.match(/:is\(([^)]*\[data-theme=[^)]*)\)\s*\{([^}]+)\}/)
 
 describe('data-viz tokens', () => {
@@ -40,7 +40,7 @@ describe('data-viz tokens', () => {
     const lightIds = THEME_REGISTRY.filter(t => t.category === 'light').map(t => t.id)
     expect(lightIds.length).toBeGreaterThan(0)
     for (const id of lightIds) expect(selector).toContain(`[data-theme='${id}']`)
-    const light = tokensIn(body)
+    const light = tokensIn(body!)
     const root = tokensIn(rootBlock)
     for (let i = 1; i <= 8; i++) {
       expect(light[`--viz-${i}`]).toMatch(/^#[0-9a-f]{6}$/i)

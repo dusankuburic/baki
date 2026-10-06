@@ -1,0 +1,4 @@
+# Schema migrations are checksummed at boot (internal/storage/database/migrations/README.md): keep them, and the
+# checksum golden, byte-identical on every checkout instead of letting core.autocrlf add CRs on Windows.
+*.sql text eol=lf
+*.golden text eol=lf

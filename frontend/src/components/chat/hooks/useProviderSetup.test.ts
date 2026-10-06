@@ -212,7 +212,7 @@ describe('useProviderSetup listing', () => {
       aliases: ['claude:docs'],
     })
     // The header's "no native tools" hint.
-    expect(result.current.providers[0].models.find(m => m.id === 'opus')?.supportsTools).toBe(false)
+    expect(result.current.providers[0]!.models.find(m => m.id === 'opus')?.supportsTools).toBe(false)
   })
 
   // The server sends it (ProviderInfo.suggestDiscovery, omitted when false).
@@ -257,12 +257,14 @@ describe('useProviderSetup listing', () => {
     const {result} = renderHook(() => useProviderSetup())
     await waitFor(() => expect(result.current.providers).toHaveLength(1))
     expect(providersApi.listProviders).toHaveBeenCalledWith('org-1', undefined)
-    expect(result.current.providers[0].shared).toBe(true)
+    expect(result.current.providers[0]!.shared).toBe(true)
     expect(result.current.orgName).toBe('Contoso')
 
     // Leaving the org drops the scope and refetches: the org's shared
     // credentials no longer count.
-    act(() => useOrgStore.setState({activeOrgId: null}))
+    act(() => {
+      useOrgStore.setState({activeOrgId: null})
+    })
     await waitFor(() => expect(providersApi.listProviders).toHaveBeenCalledTimes(2))
     expect(providersApi.listProviders).toHaveBeenLastCalledWith(undefined, undefined)
   })

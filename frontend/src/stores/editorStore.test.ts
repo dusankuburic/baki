@@ -12,25 +12,25 @@ describe('editorStore', () => {
 
   it('openInGroup adds tab to the group', () => {
     useEditorStore.getState().openInGroup('sf2', 0)
-    expect(useEditorStore.getState().groups[0].tabs).toContain('sf2')
+    expect(useEditorStore.getState().groups[0]!.tabs).toContain('sf2')
   })
 
   it('openInGroup sets activeTabId', () => {
     useEditorStore.getState().openInGroup('sf2', 0)
-    expect(useEditorStore.getState().groups[0].activeTabId).toBe('sf2')
+    expect(useEditorStore.getState().groups[0]!.activeTabId).toBe('sf2')
   })
 
   it('openInGroup does not duplicate tab', () => {
     useEditorStore.getState().openInGroup('sf1', 0)
     useEditorStore.getState().openInGroup('sf1', 0)
-    expect(useEditorStore.getState().groups[0].tabs.filter(t => t === 'sf1')).toHaveLength(1)
+    expect(useEditorStore.getState().groups[0]!.tabs.filter(t => t === 'sf1')).toHaveLength(1)
   })
 
   it('closeTab removes the tab', () => {
     useEditorStore.getState().openInGroup('sf1', 0)
     useEditorStore.getState().openInGroup('sf2', 0)
     useEditorStore.getState().closeTab(0, 'sf2')
-    expect(useEditorStore.getState().groups[0].tabs).not.toContain('sf2')
+    expect(useEditorStore.getState().groups[0]!.tabs).not.toContain('sf2')
   })
 
   it('closeTab activates adjacent tab when active tab is closed', () => {
@@ -38,7 +38,7 @@ describe('editorStore', () => {
     useEditorStore.getState().openInGroup('sf1', 0) // sf1 becomes active
     useEditorStore.getState().closeTab(0, 'sf1')
     const {groups} = useEditorStore.getState()
-    expect(groups[0].activeTabId).toBe('sf2')
+    expect(groups[0]!.activeTabId).toBe('sf2')
   })
 
   it('openInGroup is a referential no-op when the tab is already active in the focused group', () => {
@@ -77,8 +77,8 @@ describe('editorStore', () => {
 
     useEditorStore.getState().moveTabToGroup(0, 'sf2', 1)
     const {groups} = useEditorStore.getState()
-    expect(groups[0].tabs).not.toContain('sf2')
-    expect(groups[1].tabs).toContain('sf2')
+    expect(groups[0]!.tabs).not.toContain('sf2')
+    expect(groups[1]!.tabs).toContain('sf2')
   })
 
   it('closeGroup keeps focus on the same group when a group before it closes', () => {
@@ -100,7 +100,7 @@ describe('editorStore', () => {
     const {groups, focusedGroupIndex} = useEditorStore.getState()
     // The emptied source group is gone — no dead pane without a tab strip.
     expect(groups).toHaveLength(1)
-    expect(groups[0].tabs).toContain('sf2')
+    expect(groups[0]!.tabs).toContain('sf2')
     expect(focusedGroupIndex).toBe(0)
   })
 
@@ -114,8 +114,8 @@ describe('editorStore', () => {
     useEditorStore.getState().pruneToSubflows(['new1', 'new2'])
     const {groups, focusedGroupIndex} = useEditorStore.getState()
     expect(groups).toHaveLength(1)
-    expect(groups[0].tabs).toHaveLength(0)
-    expect(groups[0].activeTabId).toBeNull()
+    expect(groups[0]!.tabs).toHaveLength(0)
+    expect(groups[0]!.activeTabId).toBeNull()
     expect(focusedGroupIndex).toBe(0)
   })
 
@@ -134,8 +134,8 @@ describe('editorStore', () => {
     useEditorStore.getState().openInGroup('gone', 0) // active
     useEditorStore.getState().pruneToSubflows(['sf1'])
     const {groups} = useEditorStore.getState()
-    expect(groups[0].tabs).toEqual(['sf1'])
-    expect(groups[0].activeTabId).toBe('sf1')
+    expect(groups[0]!.tabs).toEqual(['sf1'])
+    expect(groups[0]!.activeTabId).toBe('sf1')
   })
 
   it('focusGroup changes focusedGroupIndex', () => {

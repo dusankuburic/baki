@@ -1,5 +1,6 @@
 import {Globe, User, Share2, Building2, Tag} from 'lucide-react'
 import clsx from 'clsx'
+import {useTranslation} from 'react-i18next'
 import {useLibraryBrowseStore} from '@/stores/libraryBrowseStore'
 import type {LibraryScope} from '@/api/library'
 import type {Organisation} from '@/stores/orgStore'
@@ -12,13 +13,15 @@ interface LibraryFilterRailProps {
   tags: string[]
 }
 
-const SCOPES: {value: LibraryScope; label: string; icon: typeof Globe}[] = [
-  {value: 'all', label: 'All flows', icon: Globe},
-  {value: 'mine', label: 'My flows', icon: User},
-  {value: 'shared', label: 'Shared with me', icon: Share2},
-]
+const SCOPES: {value: LibraryScope; label: 'rail.scopeAll' | 'rail.scopeMine' | 'rail.scopeShared'; icon: typeof Globe}[] =
+  [
+    {value: 'all', label: 'rail.scopeAll', icon: Globe},
+    {value: 'mine', label: 'rail.scopeMine', icon: User},
+    {value: 'shared', label: 'rail.scopeShared', icon: Share2},
+  ]
 
 export default function LibraryFilterRail({orgs, tags}: LibraryFilterRailProps) {
+  const {t} = useTranslation('library')
   const scope = useLibraryBrowseStore(s => s.scope)
   const setScope = useLibraryBrowseStore(s => s.setScope)
   const selectedOrgIds = useLibraryBrowseStore(s => s.selectedOrgIds)
@@ -37,7 +40,9 @@ export default function LibraryFilterRail({orgs, tags}: LibraryFilterRailProps) 
   return (
     <nav className="p-3 space-y-4">
       <div>
-        <div className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary mb-1.5 px-2">Scope</div>
+        <div className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary mb-1.5 px-2">
+          {t('rail.scopeHeading')}
+        </div>
         <ul className="space-y-0.5">
           {SCOPES.map(s => (
             <li key={s.value}>
@@ -52,7 +57,7 @@ export default function LibraryFilterRail({orgs, tags}: LibraryFilterRailProps) 
                 )}
               >
                 <s.icon size={13} />
-                {s.label}
+                {t(s.label)}
               </button>
             </li>
           ))}
@@ -61,40 +66,46 @@ export default function LibraryFilterRail({orgs, tags}: LibraryFilterRailProps) 
 
       <div>
         <div className="flex items-center justify-between mb-1.5 px-2">
-          <span className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary">Organisations</span>
+          <span className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary">
+            {t('rail.orgsHeading')}
+          </span>
           {!isAllOrgs && (
             <button
               type="button"
               onClick={() => setSelectedOrgIds(null)}
               className="text-2xs text-brand-400 hover:underline"
             >
-              All
+              {t('rail.allOrgs')}
             </button>
           )}
         </div>
         <ul className="space-y-0.5">
-          <OrgRow id="" label="Personal" checked={isOrgChecked('')} onToggle={toggleOrg} />
+          <OrgRow id="" label={t('rail.personal')} checked={isOrgChecked('')} onToggle={toggleOrg} />
           {orgs.map(o => (
             <OrgRow key={o.id} id={o.id} label={o.name} checked={isOrgChecked(o.id)} onToggle={toggleOrg} />
           ))}
-          {orgs.length === 0 && <li className="px-2 py-1.5 text-2xs text-text-tertiary italic">No organisations</li>}
+          {orgs.length === 0 && (
+            <li className="px-2 py-1.5 text-2xs text-text-tertiary italic">{t('rail.noOrgs')}</li>
+          )}
         </ul>
       </div>
 
       <div>
         <div className="flex items-center justify-between mb-1.5 px-2">
-          <span className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary">Tags</span>
+          <span className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary">
+            {t('rail.tagsHeading')}
+          </span>
           {selectedTags.size > 0 && (
             <button type="button" onClick={clearTags} className="text-2xs text-brand-400 hover:underline">
-              Clear
+              {t('rail.clearTags')}
             </button>
           )}
         </div>
         {tagChips.length === 0 ? (
-          <p className="px-2 py-1.5 text-2xs text-text-tertiary italic">No tagged flows</p>
+          <p className="px-2 py-1.5 text-2xs text-text-tertiary italic">{t('rail.noTaggedFlows')}</p>
         ) : (
           // ANY-of: a flow matches when it carries at least one selected tag.
-          <ul className="flex flex-wrap gap-1 px-2" aria-label="Filter by tag">
+          <ul className="flex flex-wrap gap-1 px-2" aria-label={t('rail.filterByTagAria')}>
             {tagChips.map(tag => {
               const active = selectedTags.has(tag)
               return (

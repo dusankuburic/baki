@@ -312,7 +312,7 @@ function legacyPair(messages: readonly SelectionMessage[] | undefined): ModelTar
   if (!messages) return null
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
-    if (m.role === 'assistant' && m.provider && m.model) {
+    if (m?.role === 'assistant' && m.provider && m.model) {
       return {provider: m.provider, model: m.model, label: m.modelLabel || m.model}
     }
   }

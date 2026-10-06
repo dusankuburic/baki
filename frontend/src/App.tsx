@@ -180,7 +180,7 @@ function AppInner() {
         jump straight to the flow view past the sidebar/inspector chrome. */}
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[100] focus:px-3 focus:py-1.5 focus:rounded focus:bg-brand-600 focus:text-brand-foreground focus:text-sm focus:shadow-lg"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-100 focus:px-3 focus:py-1.5 focus:rounded focus:bg-brand-600 focus:text-brand-foreground focus:text-sm focus:shadow-lg"
       >
         Skip to content
       </a>
@@ -197,7 +197,7 @@ function AppInner() {
             <>
               <div
                 ref={sidebarRef}
-                className="flex-shrink-0 overflow-hidden border-r border-border-subtle print:hidden"
+                className="shrink-0 overflow-hidden border-r border-border-subtle print:hidden"
                 style={{width: sidebarWidth}}
                 role="navigation"
                 aria-label="Flow library and navigation"
@@ -220,7 +220,7 @@ function AppInner() {
           )}
           <div
             id="main-content"
-            className="flex-1 overflow-hidden print:overflow-visible focus:outline-none"
+            className="flex-1 overflow-hidden print:overflow-visible focus:outline-hidden"
             role="main"
             tabIndex={-1}
           >
@@ -243,7 +243,7 @@ function AppInner() {
               />
               <div
                 ref={inspectorRef}
-                className="flex-shrink-0 overflow-hidden border-l border-border-subtle print:hidden"
+                className="shrink-0 overflow-hidden border-l border-border-subtle print:hidden"
                 style={{width: inspectorWidth}}
                 role="complementary"
                 aria-label="Inspector"

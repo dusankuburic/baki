@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"pad-analyzer/internal/lifecycle"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
@@ -388,13 +389,31 @@ func (p *auditedProvider) record(ctx context.Context, modelID, servedModel, orgI
 	if !p.acquireRecordSlot(modelID) {
 		return
 	}
-	// #nosec G118 -- usage accounting must survive the request that generated it: binding this to the caller's
-	// context would drop the spend record for exactly the turns a user cancels, under-counting the daily budget
-	// the chat path then enforces. The semaphore above bounds concurrency instead.
-	go func() {
-		defer p.releaseRecordSlot(modelID)
-		p.save(&metric)
-	}()
+	// Usage accounting must survive the request that generated it: binding this to the caller's context would
+	// drop the spend record for exactly the turns a user cancels, under-counting the daily budget the chat path
+	// then enforces. usageRecords drains it at shutdown; the semaphore above bounds concurrency.
+	p.goRecord(modelID, func() { p.save(&metric) })
+}
+
+// usageRecords runs every provider's background usage writes, so shutdown waits for the rows in flight (they
+// used to be bare goroutines a deploy cut off) and a panicking recorder is reported like any other.
+var usageRecords = lifecycle.NewBounded("ai_usage_record", maxConcurrentUsageRecords)
+
+// maxConcurrentUsageRecords caps usage writes across all providers; each wrapper is also capped at
+// maxConcurrentRecords.
+const maxConcurrentUsageRecords = 1024
+
+// goRecord runs fn on usageRecords holding one of p's record slots; the slot is released when fn returns, or
+// at once when the write cannot start (shutting down).
+func (p *auditedProvider) goRecord(modelID string, fn func()) {
+	if !usageRecords.Go(func() {
+		defer p.releaseRecordSlot()
+		fn()
+	}) {
+		p.releaseRecordSlot()
+		metrics.RecordUsageDropped("shutdown")
+		logger.Warn("AI usage metric dropped — shutting down", "provider", p.providerID, "model", modelID)
+	}
 }
 
 // recordDetached is record for callers on a short deadline (the per-turn RAG query embeds under 800 ms):
@@ -409,12 +428,11 @@ func (p *auditedProvider) recordDetached(ctx context.Context, modelID, servedMod
 		return
 	}
 	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedPricingTimeout)
-	go func() {
+	p.goRecord(modelID, func() {
 		defer cancel()
-		defer p.releaseRecordSlot(modelID)
 		metric := p.usageMetric(pctx, modelID, servedModel, orgID, u)
 		p.save(&metric)
-	}()
+	})
 }
 
 // acquireRecordSlot takes one of the maxConcurrentRecords background slots without blocking; false (metric dropped and counted) when all are busy.
@@ -430,14 +448,10 @@ func (p *auditedProvider) acquireRecordSlot(modelID string) bool {
 	}
 }
 
-// releaseRecordSlot is deferred by every background record goroutine: it frees the slot and keeps a panicking
-// recorder from taking the process down.
-func (p *auditedProvider) releaseRecordSlot(modelID string) {
+// releaseRecordSlot frees a slot taken by acquireRecordSlot. It is deferred by every background record, so a
+// panicking recorder (reported by usageRecords) cannot keep its slot.
+func (p *auditedProvider) releaseRecordSlot() {
 	<-p.recordSem
-	if r := recover(); r != nil {
-		logger.Warn("AI usage recording panicked",
-			"provider", p.providerID, "model", modelID, "panic", r)
-	}
 }
 
 // save writes one usage row on its own bounded context.

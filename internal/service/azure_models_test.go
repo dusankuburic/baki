@@ -12,8 +12,8 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/storage"
-	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -691,7 +691,7 @@ func TestAzureModels_WriteOrder(t *testing.T) {
 	t.Run("delete: the secret goes after the commit", func(t *testing.T) {
 		e := newAzureModelsEnv(t)
 		c := e.mustConn(t, azmUser, "x", azmKeyConfig("k"))
-		reqCtx, postCommit := storagedb.WithPostCommit(ctx) // the request's transaction
+		reqCtx, postCommit := txhook.With(ctx) // the request's transaction
 		if _, err := e.svc.DeleteConnection(reqCtx, azmUser, c.ID, AzureDeleteOptions{}); err != nil {
 			t.Fatal(err)
 		}
@@ -701,7 +701,7 @@ func TestAzureModels_WriteOrder(t *testing.T) {
 		if has, _ := e.secrets.Has("u1", "azure-foundry/"+c.ID); !has {
 			t.Fatal("the secret went before the commit")
 		}
-		postCommit.Run()
+		postCommit.Commit(nil)
 		if has, _ := e.secrets.Has("u1", "azure-foundry/"+c.ID); has {
 			t.Error("the secret outlived the commit")
 		}

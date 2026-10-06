@@ -326,6 +326,10 @@ type AuthConfig struct {
 	// doesn't brick encrypted secrets. Falls back to Secret when unset
 	// (backward compatibility, emits a deprecation warning).
 	EncryptionKey string
+	// SecretEphemeral is true when Secret was minted for this process because none was configured (only
+	// possible with auth disabled: Validate requires a secret when auth is enabled). Such a secret must never
+	// key data that outlives the process, such as the database keystore.
+	SecretEphemeral bool
 	// SSO configures account-level OIDC login (cloud mode only)
 	SSO SSOConfig
 }

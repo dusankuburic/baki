@@ -247,7 +247,7 @@ describe('AzureConnectionModal: validation and focus', () => {
     fireEvent.change(apiKey(), {target: {value: 'sk-test'}})
     submit()
     await waitFor(() => expect(api.createAzureConnection).toHaveBeenCalledTimes(1))
-    expect(api.createAzureConnection.mock.calls[0][1]).toStrictEqual({
+    expect(api.createAzureConnection.mock.calls[0]![1]).toStrictEqual({
       name: 'my-res',
       config: {endpoint: 'https://my-res.openai.azure.com', auth: {mode: 'api_key', key: 'sk-test'}},
     })
@@ -301,7 +301,7 @@ describe('AzureConnectionModal: validation and focus', () => {
     fireEvent.change(project(), {target: {value: 'https://my-res.services.ai.azure.com/api/projects/p'}})
     submit()
     await waitFor(() => expect(api.createAzureConnection).toHaveBeenCalledTimes(1))
-    expect(api.createAzureConnection.mock.calls[0][1]).toStrictEqual({
+    expect(api.createAzureConnection.mock.calls[0]![1]).toStrictEqual({
       name: 'my-res',
       config: {
         endpoint: 'https://my-res.services.ai.azure.com',
@@ -346,7 +346,7 @@ describe('AzureConnectionModal: carrying the stored secret', () => {
     fireEvent.change(apiKey(), {target: {value: 'sk-new'}})
     submit('Save changes')
     await waitFor(() => expect(api.updateAzureConnection).toHaveBeenCalledTimes(1))
-    expect(api.updateAzureConnection.mock.calls[0][2]).toStrictEqual({
+    expect(api.updateAzureConnection.mock.calls[0]![2]).toStrictEqual({
       config: {endpoint: 'https://other-res.openai.azure.com', auth: {mode: 'api_key', key: 'sk-new'}},
       updatedAt: '2026-09-30T10:00:00Z',
     })
@@ -389,7 +389,7 @@ describe('AzureConnectionModal: carrying the stored secret', () => {
     fireEvent.change(apiKey(), {target: {value: 'sk-again'}})
     submit('Save credentials')
     await waitFor(() => expect(api.updateAzureConnection).toHaveBeenCalledTimes(1))
-    expect(api.updateAzureConnection.mock.calls[0][2]).toMatchObject({
+    expect(api.updateAzureConnection.mock.calls[0]![2]).toMatchObject({
       config: {auth: {mode: 'api_key', key: 'sk-again'}},
     })
   })
@@ -426,7 +426,7 @@ describe('AzureConnectionModal: carrying the stored secret', () => {
     fireEvent.change(apiKey(), {target: {value: 'sk-again'}})
     submit('Save credentials')
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
-    expect(api.updateAzureConnection.mock.calls[0][2]).toStrictEqual({
+    expect(api.updateAzureConnection.mock.calls[0]![2]).toStrictEqual({
       config: {endpoint: 'https://my-res.openai.azure.com', auth: {mode: 'api_key', key: 'sk-again'}},
       updatedAt: '2026-09-30T10:00:00Z',
     })
@@ -447,7 +447,7 @@ describe('AzureConnectionModal: carrying the stored secret', () => {
     fireEvent.change(project(), {target: {value: 'https://my-res.services.ai.azure.com/api/projects/p'}})
     submit('Save credentials')
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
-    expect(api.updateAzureConnection.mock.calls[0][2]).toStrictEqual({
+    expect(api.updateAzureConnection.mock.calls[0]![2]).toStrictEqual({
       config: {
         endpoint: 'https://my-res.services.ai.azure.com',
         auth: {mode: 'entra', tenantId: TENANT_GUID, clientId: CLIENT_GUID, clientSecret: 's3cret'},
@@ -462,7 +462,7 @@ describe('AzureConnectionModal: carrying the stored secret', () => {
     fireEvent.change(nameField(), {target: {value: 'renamed'}})
     submit('Save changes')
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
-    expect(api.updateAzureConnection.mock.calls[0][2]).toStrictEqual({
+    expect(api.updateAzureConnection.mock.calls[0]![2]).toStrictEqual({
       name: 'renamed',
       updatedAt: '2026-09-30T10:00:00Z',
     })
@@ -548,7 +548,7 @@ describe('AzureConnectionModal: server errors', () => {
     submit('Save changes')
     // The credential's own stamp went along (org compare-and-swap).
     await waitFor(() => expect(api.updateAzureConnection).toHaveBeenCalledTimes(1))
-    expect(api.updateAzureConnection.mock.calls[0][2]).toMatchObject({
+    expect(api.updateAzureConnection.mock.calls[0]![2]).toMatchObject({
       credentialUpdatedAt: '2026-09-30T09:00:00.123456Z',
       updatedAt: '2026-09-30T10:00:00Z',
     })
@@ -635,7 +635,7 @@ describe('AzureConnectionModal: server errors', () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
     expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({title: 'Change the knowledge base model?'}))
     expect(api.updateAzureConnection).toHaveBeenCalledTimes(2)
-    expect(api.updateAzureConnection.mock.calls[1][2]).toMatchObject({force: true})
+    expect(api.updateAzureConnection.mock.calls[1]![2]).toMatchObject({force: true})
   })
 
   it('leaves it at the confirm when the re-index is declined', async () => {

@@ -88,7 +88,7 @@ describe('connectEvents inactivity watchdog', () => {
     // A ping every 20s for 2 minutes — well past the 45s inactivity timeout.
     for (let i = 0; i < 6; i++) {
       await vi.advanceTimersByTimeAsync(20_000)
-      conns[0].push(': ping\n\n')
+      conns[0]!.push(': ping\n\n')
       await vi.advanceTimersByTimeAsync(0)
     }
 
@@ -106,7 +106,7 @@ describe('connectEvents inactivity watchdog', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     await vi.advanceTimersByTimeAsync(40_000)
-    conns[0].push('data: {"name":"chat:event","data":{"streamId":"s1"}}\n\n')
+    conns[0]!.push('data: {"name":"chat:event","data":{"streamId":"s1"}}\n\n')
     await vi.advanceTimersByTimeAsync(40_000)
 
     expect(listener).toHaveBeenCalledWith({name: 'chat:event', data: {streamId: 's1'}})

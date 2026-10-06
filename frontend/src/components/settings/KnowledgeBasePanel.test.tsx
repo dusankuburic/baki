@@ -202,7 +202,7 @@ describe('KnowledgeBasePanel', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     const reindexCalls = requestMock.mock.calls.filter(c => String(c[0]).endsWith('/reindex'))
     expect(reindexCalls).toHaveLength(1)
-    expect((reindexCalls[0][1] as {body: unknown}).body).toEqual({})
+    expect((reindexCalls[0]![1] as {body: unknown}).body).toEqual({})
   })
 
   it('explains an embedding model mismatch on upload', async () => {

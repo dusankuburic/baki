@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"golang.org/x/sync/errgroup"
 	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
@@ -70,30 +71,13 @@ func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.
 	}
 
 	// The version bump and the content upload must commit together or the row could point at a
-	// version whose blob never landed; outside an RLS tx wrap in a local tx so a failed upload rolls the bump back.
-	if b.blobClient != nil && !hasRLSTx(ctx) {
-		tx, err := b.db.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("save flow: begin tx: %w", err)
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				_ = tx.Rollback()
-			}
-		}()
-		// Fresh post-commit registry so the stale-blob cleanup runs only after THIS tx commits —
-		// inline it would delete the previous version's blob before the new version is durable.
-		txCtx, postCommit := WithPostCommit(WithRLSTx(ctx, tx))
-		if err := b.saveFlowTx(txCtx, flow, content); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("save flow: commit: %w", err)
-		}
-		committed = true
-		postCommit.Run()
-		return nil
+	// version whose blob never landed: withTx joins the request's transaction, or opens one so a failed
+	// upload rolls the bump back. Its post-commit registry runs the stale-blob cleanup only after the new
+	// version is durable.
+	if b.blobClient != nil {
+		return b.withTx(ctx, func(txCtx context.Context, _ *sql.Tx) error {
+			return b.saveFlowTx(txCtx, flow, content)
+		})
 	}
 	return b.saveFlowTx(ctx, flow, content)
 }
@@ -160,10 +144,10 @@ func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interface
 		// The previous version's blob is now stale (an age-based lifecycle rule can't tell it from the
 		// LIVE blob of a rarely-edited flow): delete it post-commit, after a grace delay for readers
 		// that scanned the old version — inline inside an uncommitted tx it could delete the blob the row still points at.
-		if newVersion > 0 && hasPostCommit(ctx) {
+		if newVersion > 0 && txhook.Has(ctx) {
 			flowID := flow.ID
 			prevKey := flowContentKey(flowID, newVersion-1)
-			RegisterPostCommit(ctx, func() {
+			txhook.Register(ctx, func(context.Context) {
 				// notBefore computed post-commit so the grace window starts when the new version became durable.
 				b.scheduleBlobCleanup(time.Now().Add(staleBlobCleanupDelay), "stale-content:"+flowID, func(ctx context.Context) {
 					b.deleteSingleBlob(ctx, flowID, prevKey)
@@ -602,7 +586,7 @@ func (b *PostgresStorageBackend) DeleteFlow(ctx context.Context, id string) erro
 	// would orphan a surviving row's content if the request rolls back.
 	if b.blobClient != nil {
 		prefix := fmt.Sprintf("flows/%s/", id)
-		RegisterPostCommit(ctx, func() {
+		txhook.Register(ctx, func(context.Context) {
 			b.scheduleBlobCleanup(time.Now(), "delete-flow:"+id, func(ctx context.Context) {
 				if err := b.deleteBlobs(ctx, prefix); err != nil {
 					logger.Warn("failed to delete flow blobs", "flow_id", id, "error", err)
@@ -985,30 +969,10 @@ func (b *PostgresStorageBackend) SaveFlowVersion(ctx context.Context, v *interfa
 	if err := validFlowID(v.FlowID); err != nil {
 		return err
 	}
-	if !hasRLSTx(ctx) {
-		tx, err := b.db.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("save flow version: begin tx: %w", err)
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				_ = tx.Rollback()
-			}
-		}()
-		// Fresh post-commit registry for the prune cleanup — must run only after THIS commit (same rationale as SaveFlow).
-		txCtx, postCommit := WithPostCommit(WithRLSTx(ctx, tx))
-		if err := b.saveFlowVersionTx(txCtx, v); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("save flow version: commit: %w", err)
-		}
-		committed = true
-		postCommit.Run()
-		return nil
-	}
-	return b.saveFlowVersionTx(ctx, v)
+	// The prune's blob cleanup must run only after the new snapshot commits (same rationale as SaveFlow).
+	return b.withTx(ctx, func(txCtx context.Context, _ *sql.Tx) error {
+		return b.saveFlowVersionTx(txCtx, v)
+	})
 }
 
 // versionBlobKey derives the snapshot blob key from the row id, so it is knowable BEFORE the
@@ -1121,9 +1085,9 @@ func (b *PostgresStorageBackend) pruneFlowVersions(ctx context.Context, q DBTX, 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("prune flow versions: %w", err)
 	}
-	if b.blobClient != nil && len(prunedKeys) > 0 && hasPostCommit(ctx) {
+	if b.blobClient != nil && len(prunedKeys) > 0 && txhook.Has(ctx) {
 		keys := prunedKeys
-		RegisterPostCommit(ctx, func() {
+		txhook.Register(ctx, func(context.Context) {
 			// Same reader-grace delay as the stale-content path: an in-flight reader may hold a pruned row's snapshot.
 			for _, key := range keys {
 				k := key

@@ -6,7 +6,7 @@ type UseDebouncedSearchOptions = {
 }
 
 export function useDebouncedSearch({delay = 150, onSearch}: UseDebouncedSearchOptions) {
-  const timerRef = useRef<ReturnType<typeof setTimeout>>()
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const onSearchRef = useRef(onSearch)
   useEffect(() => {
     onSearchRef.current = onSearch

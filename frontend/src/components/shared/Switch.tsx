@@ -34,7 +34,7 @@ export default function Switch({
         disabled={disabled}
         onClick={() => !disabled && onChange(!checked)}
         className={clsx(
-          'relative w-8 h-[18px] rounded-full transition-colors duration-fast flex-shrink-0',
+          'relative w-8 h-[18px] rounded-full transition-colors duration-fast shrink-0',
           checked ? 'bg-brand-500' : 'bg-surface-4',
         )}
       >

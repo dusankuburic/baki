@@ -2,43 +2,35 @@ import {useTranslation} from 'react-i18next'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useSettingsStore} from '@/stores/settingsStore'
-import {useUIStore} from '@/stores/uiStore'
 import {useProviderSetup} from './hooks/useProviderSetup'
 import {useAIChat} from './hooks/useAIChat'
-import {logger} from '@/lib/logger'
-import {useSelectedBlock} from './hooks/useSelectedBlock'
-import {findModel, modelNameOf, storableModelLabel} from '@/lib/modelIds'
-import {isRegistryEntry} from '@/lib/modelGroups'
-import {purposeLabel, purposeLabelKey, type PurposeLabelOf} from '@/lib/modelPurpose'
-import {resolveThreadModel} from '@/lib/modelSelection'
-import {
-  MessageBubble,
-  ChatMessageList,
-  SuggestedPrompts,
-  ChatInput,
-  ApiKeyMissingState,
-  PromptTemplates,
-  ChatThreadBar,
-  FixProposalCard,
-} from '.'
-import {useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense, type ComponentProps} from 'react'
-import {AlertTriangle, RefreshCw} from 'lucide-react'
+import {MessageBubble, ChatMessageList, SuggestedPrompts, ChatInput, ChatThreadBar} from '.'
+import {useState, useMemo, useCallback, useRef, lazy, Suspense} from 'react'
+import {AlertTriangle} from 'lucide-react'
 import {useKeyboard} from '@/hooks/useKeyboard'
 import {useConfirm, useToast, Spinner} from '@/components/shared'
 import {isImeKeydown} from '@/lib/imeKey'
-import {useChatStore, threadModelOf} from '@/stores/chatStore'
-import {chatApi} from '@/api'
-import LiveToolTrail from './LiveToolTrail'
-import StreamingBubble from './StreamingBubble'
-import type {ChatMessage, ChatTextSize, ModelDetail} from '@/types'
+import {useChatStore} from '@/stores/chatStore'
+import type {ChatMessage, ChatTextSize} from '@/types'
 import ChatHeader from './ChatHeader'
-import ChatContextBar from './ChatContextBar'
 import EmptyChatState from './EmptyChatState'
 import ChatErrorBoundary from './ChatErrorBoundary'
 import ChatSearchBar from './ChatSearchBar'
-import {AZURE_ACCOUNTS_ANCHOR, type PickerProvider} from './ModelPicker'
 import ModelUnavailableNotice, {modelNoticeSentences, type ModelNoticeView} from './ModelUnavailableNotice'
 import {useChatPanel} from './ChatPanelShell'
+import {openAzureAccounts, useModelNames} from './aitab/useModelNames'
+import {useThreadModelLabels} from './aitab/useThreadModelLabels'
+import {useSuggestedPrompts} from './aitab/useSuggestedPrompts'
+import {useMessageSearch} from './aitab/useMessageSearch'
+import {useStreamFooter} from './aitab/useStreamFooter'
+import {
+  StatusRegion,
+  ProvidersPendingState,
+  ProvidersErrorState,
+  ProvidersNotConfiguredState,
+} from './aitab/StatusRegion'
+import {SelectionContextBar} from './aitab/SelectionContextBar'
+import {SelectionPromptTemplates} from './aitab/SelectionPromptTemplates'
 
 // Rarely-rendered overlays load on first open: the context-preview modal only
 // appears when the user confirms a context-heavy send, and the help popover
@@ -51,11 +43,8 @@ const ChatHelpPopover = lazy(() => import('./ChatHelpPopover'))
 // for providers that have no dedicated line; above it, the thread's model and
 // what it is for.
 
-const EMPTY_MODELS: ModelDetail[] = []
-
 export default function AITab() {
   const {t} = useTranslation('chat')
-  const {t: tc} = useTranslation('common')
   // The canvas selection is NOT subscribed here: the controls that show the
   // selected block (SelectionContextBar, SelectionPromptTemplates below)
   // follow it on their own, so block navigation in the editor leaves this
@@ -88,48 +77,11 @@ export default function AITab() {
     settings: selectionSettings,
   } = useProviderSetup()
 
-  const labelOf: PurposeLabelOf = useCallback(p => tc(purposeLabelKey(p)), [tc])
-  // A listed model's purpose label; none for a catalogue model.
-  const purposeOf = useCallback(
-    (m: ModelDetail | undefined) => (m && isRegistryEntry(m) ? purposeLabel(m, labelOf) : undefined),
-    [labelOf],
-  )
-  const providerName = useCallback((id: string) => providers.find(p => p.id === id)?.name || id, [providers])
-  const listedModels = useCallback(
-    (providerId: string | undefined) => providers.find(p => p.id === providerId)?.models ?? EMPTY_MODELS,
-    [providers],
-  )
-
-  // The header picker's list: the configured providers and their models.
-  const pickerProviders: PickerProvider[] = useMemo(
-    () =>
-      providers
-        .filter(p => p.configured)
-        .map(p => ({id: p.id, name: p.name, models: p.models, ...(p.shared ? {shared: true} : {})})),
-    [providers],
-  )
-
-  // The listing's name for a message's model, for a message that kept no
-  // label of its own (one that is only an id counts as none).
-  const listedModelName = useCallback(
-    (m: ChatMessage): string | undefined => {
-      if (m.role !== 'assistant' || !m.model || storableModelLabel(m.modelLabel, m.model)) return undefined
-      const entry = findModel(m.model, listedModels(m.provider))
-      return entry ? entry.displayName || entry.id : undefined
-    },
-    [listedModels],
-  )
-  // An exported turn names its model the same way ("removed model" for a
-  // registry id nothing names any more), never by its "m/<id>".
-  const exportModelName = useCallback(
-    (m: ChatMessage): string | undefined => {
-      if (!m.model) return undefined
-      return modelNameOf(m.model, m.modelLabel, listedModels(m.provider)) ?? t('message.removedModel')
-    },
-    [listedModels, t],
-  )
-
-  const openAzureAccounts = useCallback(() => useUIStore.getState().openSettings('accounts', AZURE_ACCOUNTS_ANCHOR), [])
+  // Model names: the header picker's list, a message's display name, the
+  // purpose labels and the export naming.
+  const {purposeOf, providerName, listedModels, pickerProviders, listedModelName, exportModelName} = useModelNames({
+    providers,
+  })
 
   // The composer's guidance: the thread is on Azure AI Foundry, and Azure
   // offers nothing to chat with — no model added yet, or none usable (every
@@ -150,7 +102,7 @@ export default function AITab() {
       actionLabel: t('composer.openAccounts'),
       onAction: openAzureAccounts,
     }
-  }, [listingLoaded, selection.provider, selection.model, azure, t, openAzureAccounts])
+  }, [listingLoaded, selection.provider, selection.model, azure, t])
   const sendBlockedReason = guidance?.text
 
   // The model picker's trigger: focus goes back to it when a notice's
@@ -195,60 +147,18 @@ export default function AITab() {
     confirmContextPreview,
   } = useAIChat({turnModel, exportModelName, sendBlocked: guidance !== null})
 
-  // Each tab's tooltip names its thread's model: the active thread's as
-  // resolved above, the others' from their pins, else — a thread from before
-  // per-thread memory — from their own loaded history (an unpinned one with
-  // none starts on the Default for new chats).
-  const conversations = useChatStore(s => s.conversations)
-  const threadModelLabels = useMemo(() => {
-    const out: Record<string, string> = {}
-    for (const th of flowThreads) {
-      const sel =
-        th.id === activeThreadId
-          ? selection
-          : resolveThreadModel({
-              pin: threadModelOf(th),
-              messages: conversations.get(th.id),
-              settings: selectionSettings,
-              providers,
-              listingLoaded,
-            })
-      if (!sel.label) continue
-      const purpose = sel.model ? purposeOf(findModel(sel.model, listedModels(sel.provider))) : undefined
-      out[th.id] = purpose ? t('threads.modelPurpose', {model: sel.label, purpose}) : sel.label
-    }
-    return out
-  }, [
+  const threadModelLabels = useThreadModelLabels({
     flowThreads,
     activeThreadId,
     selection,
-    conversations,
     selectionSettings,
     providers,
     listingLoaded,
     purposeOf,
     listedModels,
-    t,
-  ])
-
-  const [suggestedPrompts, setSuggestedPrompts] = useState<string[]>([])
-  const [msgSearch, setMsgSearch] = useState('')
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [helpOpen, setHelpOpen] = useState(false)
-  // Which match the user is standing on. The query is stored ALONGSIDE the
-  // index so a new query resets to the first hit by derivation rather than by
-  // an effect that would render one frame with a stale cursor. `nonce` makes
-  // stepping onto the same index twice scroll again.
-  const [matchCursor, setMatchCursor] = useState<{query: string; index: number; nonce: number}>({
-    query: '',
-    index: 0,
-    nonce: 0,
   })
-  const toggleSearch = useCallback(() => setSearchOpen(v => !v), [])
-  const closeSearch = useCallback(() => {
-    setSearchOpen(false)
-    setMsgSearch('')
-  }, [])
+
+  const [helpOpen, setHelpOpen] = useState(false)
   const showHelp = useCallback(() => setHelpOpen(true), [])
 
   // Chat-scope shortcuts (mod+enter lives in ChatInput, next to the draft it
@@ -360,58 +270,22 @@ export default function AITab() {
     return analysisReport.findings.some(f => f.blockId === contextBlockId)
   }, [contextBlockId, analysisReport])
 
-  useEffect(() => {
-    let active = true
-    chatApi
-      .getSuggestedPrompts(hasSelectedBlock, hasFindings)
-      .then((ps: string[] | null) => {
-        if (active) setSuggestedPrompts(ps || [])
-      })
-      .catch(err => {
-        logger.warn('Failed to load suggested prompts', err)
-      })
-    return () => {
-      active = false
-    }
-  }, [hasSelectedBlock, hasFindings])
+  const suggestedPrompts = useSuggestedPrompts(hasSelectedBlock, hasFindings)
 
-  // Search no longer FILTERS the conversation — it indexes it. Matches keep
-  // their surrounding turns, and the search bar steps through them.
-  const searchQuery = searchOpen ? msgSearch.trim() : ''
-  const matchIndices = useMemo(() => {
-    if (!searchQuery) return []
-    const q = searchQuery.toLowerCase()
-    const out: number[] = []
-    activeThreadMessages.forEach((m, i) => {
-      if (m.content.toLowerCase().includes(q)) out.push(i)
-    })
-    return out
-  }, [activeThreadMessages, searchQuery])
-
-  const stepMatch = useCallback(
-    (delta: number) => {
-      setMatchCursor(prev => {
-        const count = matchIndices.length
-        if (count === 0) return prev
-        const from = prev.query === searchQuery ? prev.index : 0
-        return {query: searchQuery, index: (from + delta + count) % count, nonce: prev.nonce + 1}
-      })
-    },
-    [matchIndices.length, searchQuery],
-  )
-  const nextMatch = useCallback(() => stepMatch(1), [stepMatch])
-  const prevMatch = useCallback(() => stepMatch(-1), [stepMatch])
-
-  // A cursor belonging to an older query reads as 0, so a new search always
-  // starts at its first hit without a reset pass.
-  const rawCursor = matchCursor.query === searchQuery ? matchCursor.index : 0
-  const safeCursor = matchIndices.length > 0 ? Math.min(rawCursor, matchIndices.length - 1) : 0
-  const activeMatchIndex = matchIndices.length > 0 ? matchIndices[safeCursor] : -1
-  const scrollTo = useMemo(
-    () =>
-      activeMatchIndex >= 0 && matchCursor.nonce > 0 ? {index: activeMatchIndex, nonce: matchCursor.nonce} : undefined,
-    [activeMatchIndex, matchCursor.nonce],
-  )
+  const {
+    msgSearch,
+    setMsgSearch,
+    searchOpen,
+    toggleSearch,
+    closeSearch,
+    searchQuery,
+    matchIndices,
+    nextMatch,
+    prevMatch,
+    safeCursor,
+    activeMatchIndex,
+    scrollTo,
+  } = useMessageSearch(activeThreadMessages)
 
   // Identify the regeneratable turn by message ID, not by index. Comparing a
   // render index against a position in the FILTERED array attached Regenerate
@@ -453,35 +327,13 @@ export default function AITab() {
     [listedModelName, lastAssistantId, handleResend, sendBlockedReason, searchQuery, activeMatchIndex],
   )
 
-  const streamFooter = useMemo(
-    () => (
-      <>
-        {showThinking && (
-          <MessageBubble
-            message={{id: 'thinking', role: 'assistant', content: '', timestamp: new Date().toISOString()}}
-            isThinking
-          />
-        )}
-        {isCurrentThreadStreaming && <StreamingBubble />}
-        {/* Agentic activity rides INSIDE the scroll region. Pinned below it,
-            the tool trail and approval cards grew row by row mid-stream and
-            squeezed the conversation as the answer arrived. */}
-        {isCurrentThreadStreaming && <LiveToolTrail />}
-        {isCurrentThreadStreaming &&
-          activeThreadId &&
-          fixProposals.map(card => (
-            <FixProposalCard
-              key={card.proposalId}
-              proposal={card}
-              onRespond={(approved, proposalId, excludedItemIndices) =>
-                respondFixProposal(activeThreadId, approved, proposalId, excludedItemIndices)
-              }
-            />
-          ))}
-      </>
-    ),
-    [showThinking, isCurrentThreadStreaming, fixProposals, activeThreadId, respondFixProposal],
-  )
+  const streamFooter = useStreamFooter({
+    showThinking,
+    isCurrentThreadStreaming,
+    fixProposals,
+    activeThreadId,
+    respondFixProposal,
+  })
 
   // The notice row: the thread's own (removed / unavailable / refused), else
   // the one-time word about a saved Azure default that names nothing.
@@ -496,11 +348,7 @@ export default function AITab() {
   // empty — from the panel's first render on: a live region inserted
   // already holding its text (a notice raised as the listing first loads) is
   // not announced.
-  const statusRegion = (
-    <div role="status" className="sr-only">
-      {noticeText}
-    </div>
-  )
+  const statusRegion = <StatusRegion text={noticeText} />
 
   if (configured === null) {
     // Still checking the providers — render nothing rather than flash the
@@ -509,29 +357,14 @@ export default function AITab() {
       return (
         <>
           {statusRegion}
-          <div className="flex-1 flex items-center justify-center">
-            <Spinner />
-          </div>
+          <ProvidersPendingState />
         </>
       )
     }
     return (
       <>
         {statusRegion}
-        <div className="flex flex-col items-center justify-center h-full gap-3 p-6 text-center" role="alert">
-          <AlertTriangle size={20} className="text-semantic-warning" />
-          <div>
-            <p className="text-sm font-medium text-text-primary">{t('empty.providersFailedTitle')}</p>
-            <p className="text-xs text-text-tertiary mt-1">{t('empty.providersFailedBody')}</p>
-          </div>
-          <button
-            onClick={retryProviders}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-3 border border-border-default text-xs text-text-secondary hover:text-text-primary hover:bg-surface-4 transition-colors"
-          >
-            <RefreshCw size={12} />
-            {t('empty.retry')}
-          </button>
-        </div>
+        <ProvidersErrorState onRetry={retryProviders} />
       </>
     )
   }
@@ -539,7 +372,7 @@ export default function AITab() {
     return (
       <>
         {statusRegion}
-        <ApiKeyMissingState />
+        <ProvidersNotConfiguredState />
       </>
     )
   }
@@ -573,9 +406,9 @@ export default function AITab() {
         ref={chatRootRef}
         tabIndex={-1}
         data-chat-text={chatTextSize}
-        className="chat-root flex flex-col h-full min-h-0 outline-none"
+        className="chat-root flex flex-col h-full min-h-0 outline-hidden"
       >
-        <div className="flex-shrink-0">
+        <div className="shrink-0">
           <ChatHeader
             providers={pickerProviders}
             provider={selection.provider}
@@ -680,7 +513,7 @@ export default function AITab() {
                   <div>
                     <div className="chat-gutter pt-4 pb-2">
                       {selection.label && (
-                        <p className="text-xs font-medium text-text-secondary leading-relaxed [overflow-wrap:anywhere]">
+                        <p className="text-xs font-medium text-text-secondary leading-relaxed wrap-anywhere">
                           {threadPurpose
                             ? t('welcome.modelPurpose', {model: selection.label, purpose: threadPurpose})
                             : t('welcome.model', {model: selection.label})}
@@ -723,7 +556,7 @@ export default function AITab() {
 
         {/* Pinned bottom — the composer, and nothing else. */}
         {doc && activeThread && (
-          <div className="flex-shrink-0">
+          <div className="shrink-0">
             <ChatInput
               onSend={handleSend}
               onPreview={handlePreviewContext}
@@ -769,28 +602,4 @@ export default function AITab() {
       {main}
     </>
   )
-}
-
-// The two controls that name the selected block subscribe to the canvas
-// selection themselves (useSelectedBlock), so a selection change re-renders
-// only them, not the panel above.
-type ContextBarProps = ComponentProps<typeof ChatContextBar>
-
-function SelectionContextBar(props: Omit<ContextBarProps, 'blockName' | 'blockType' | 'selectedBlockId'>) {
-  const {selectedBlockId, selectedBlock} = useSelectedBlock()
-  return (
-    <ChatContextBar
-      {...props}
-      blockName={selectedBlock?.name}
-      blockType={selectedBlock?.rawType}
-      selectedBlockId={selectedBlockId}
-    />
-  )
-}
-
-type PromptTemplatesProps = ComponentProps<typeof PromptTemplates>
-
-function SelectionPromptTemplates(props: Omit<PromptTemplatesProps, 'blockName'>) {
-  const {selectedBlock} = useSelectedBlock()
-  return <PromptTemplates {...props} blockName={selectedBlock?.name} />
 }

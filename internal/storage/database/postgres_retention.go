@@ -12,6 +12,7 @@ import (
 
 	"pad-core/logger"
 
+	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
@@ -23,7 +24,7 @@ import (
 // Go layer already authenticated the caller. Idempotent: a missing user is not an error.
 func (b *PostgresStorageBackend) DeleteUser(ctx context.Context, userID string) error {
 	var ownedFlowIDs []string
-	if err := b.withTx(ctx, func(tx *sql.Tx) error {
+	if err := b.withTx(ctx, func(_ context.Context, tx *sql.Tx) error {
 		var err error
 		ownedFlowIDs, err = b.deleteUserInTx(ctx, tx, userID)
 		return err
@@ -31,13 +32,13 @@ func (b *PostgresStorageBackend) DeleteUser(ctx context.Context, userID string) 
 		return err
 	}
 
-	// Best-effort blob cleanup for the flows just removed, deferred via RegisterPostCommit: when this
+	// Best-effort blob cleanup for the flows just removed, deferred via txhook.Register: when this
 	// request carries the middleware's RLS transaction, withTx JOINS it and nothing is durable until the
 	// middleware commits — deleting blobs here would orphan content a rollback puts back.
 	if b.blobClient != nil {
 		for _, fid := range ownedFlowIDs {
 			flowID := fid
-			RegisterPostCommit(ctx, func() {
+			txhook.Register(ctx, func(context.Context) {
 				b.scheduleBlobCleanup(time.Now(), "delete-user-flow:"+flowID, func(ctx context.Context) {
 					if err := b.deleteBlobs(ctx, fmt.Sprintf("flows/%s/", flowID)); err != nil {
 						logger.Warn("DeleteUser: failed to delete flow blobs", "flow_id", flowID, "error", err)

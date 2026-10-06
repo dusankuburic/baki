@@ -87,14 +87,14 @@ export default function Tabs<T extends string>({
             className={clsx(
               'flex-1 min-w-0 overflow-hidden flex items-center justify-center gap-1.5 h-7 px-2 text-xs font-medium',
               'rounded-md transition-colors duration-fast',
-              'focus-visible:ring-2 focus-visible:ring-brand-500/40 focus-visible:outline-none',
+              'focus-visible:ring-2 focus-visible:ring-brand-500/40 focus-visible:outline-hidden',
               selected
                 ? 'bg-surface-3 text-text-primary shadow-xs'
                 : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-2',
             )}
             onClick={() => onChange(item.value)}
           >
-            {Icon && <Icon size={13} className="flex-shrink-0" />}
+            {Icon && <Icon size={13} className="shrink-0" />}
             <span className="truncate min-w-0">{item.label}</span>
           </button>
         )

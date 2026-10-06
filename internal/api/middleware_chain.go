@@ -54,14 +54,12 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 		}
 
 		routerWithLimits = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// /assets/* is exempt from rate limiting: content-hashed and immutable, and one SPA load fetches dozens in a burst — counting them made an ordinary reload 429 its own lazy chunks. Matched on BOTH the dispatch path (inboundRoutePath) and the decoded one (the NotFound fallback serves the decoded, cleaned path).
-			if method := r.Method; method == http.MethodGet || method == http.MethodHead {
-				if strings.HasPrefix(inboundRoutePath(r.URL), "/assets/") && strings.HasPrefix(canonicalRequestPath(r.URL.Path), "/assets/") {
-					router.ServeHTTP(w, r)
-					return
-				}
+			group := rateLimitBucket(r.Method, r.URL)
+			if group == "" {
+				router.ServeHTTP(w, r)
+				return
 			}
-			rl, ok := rateLimitersByGroup[rateLimitGroup(r.Method, r.URL)]
+			rl, ok := rateLimitersByGroup[group]
 			if !ok {
 				rl = generalRl
 			}
@@ -146,6 +144,15 @@ func stripVersionAlias(p string) string {
 	return p
 }
 
+// applyVersionAlias rewrites u to the path chi dispatches on (the router's alias middleware): canonicalRequestPath
+// on Path, the alias strip alone on RawPath, which chi routes on when set (an escaped "/" in an id must survive).
+func applyVersionAlias(u *url.URL) {
+	u.Path = canonicalRequestPath(u.Path)
+	if u.RawPath != "" {
+		u.RawPath = stripVersionAlias(u.RawPath)
+	}
+}
+
 // routePath is the path chi dispatches r on, and so the only path a policy decision inside the mux may use (jwtAuth's public routes, rlsMiddleware's exemptions): RawPath verbatim when set, Path otherwise.
 // Deciding on the cleaned, decoded Path instead let the two disagree — /api/system/settings/org/..%2F..%2Fhealth decodes and cleans to the public /api/health, so jwtAuth let it through anonymous while chi ran the protected route. publicRoutes matches exactly on this path, so it fails closed.
 func routePath(r *http.Request) string {
@@ -164,6 +171,19 @@ func inboundRoutePath(u *url.URL) string {
 		return stripVersionAlias(u.RawPath)
 	}
 	return canonicalRequestPath(u.Path)
+}
+
+// rateLimitBucket is the limiter group BuildHandler charges a request to, "" when it is not rate limited.
+// /assets/* reads are exempt: content-hashed and immutable, and one SPA load fetches dozens in a burst — counting
+// them made an ordinary reload 429 its own lazy chunks. Matched on BOTH the dispatch path (inboundRoutePath) and
+// the decoded one (the NotFound fallback serves the decoded, cleaned path).
+func rateLimitBucket(method string, u *url.URL) string {
+	if method == http.MethodGet || method == http.MethodHead {
+		if strings.HasPrefix(inboundRoutePath(u), "/assets/") && strings.HasPrefix(canonicalRequestPath(u.Path), "/assets/") {
+			return ""
+		}
+	}
+	return rateLimitGroup(method, u)
 }
 
 // rateLimitGroup classifies a request into its rate-limit group; pure (no I/O) so the policy is

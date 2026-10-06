@@ -487,7 +487,7 @@ describe('AzureFoundryPanel: states', () => {
     // The designation moved (one per owner).
     const badges = screen.getAllByText('Default for members')
     expect(badges).toHaveLength(1)
-    expect(badges[0].closest('li')).toHaveTextContent('GPT-4.1')
+    expect(badges[0]!.closest('li')).toHaveTextContent('GPT-4.1')
   })
 
   it('a list file from a newer baki is read-only, and a recovered one says where the copy is', async () => {
@@ -539,7 +539,7 @@ describe('AzureFoundryPanel: the model list', () => {
       'Search index',
       'Docs writer',
     ])
-    const docsRow = rows[2]
+    const docsRow = rows[2]!
     expect(within(docsRow).getByText('Claude')).toBeInTheDocument()
     expect(within(docsRow).getByText('claude-sonnet-4-6').closest('p')).toHaveTextContent(
       'claude-sonnet-4-6 · Writes flow documentation from the canvas',
@@ -549,10 +549,10 @@ describe('AzureFoundryPanel: the model list', () => {
     expect(docsRow).toHaveTextContent(/Last test: Failed/)
     expect(within(docsRow).getByText('deployment not found')).toBeInTheDocument()
     // The server default is marked while the user saved none.
-    expect(within(rows[0]).getByText('Default')).toBeInTheDocument()
-    expect(rows[0]).toHaveTextContent('Default for new chats')
-    expect(within(rows[1]).getByText('KB')).toBeInTheDocument()
-    expect(rows[1]).toHaveTextContent('Used for the knowledge base')
+    expect(within(rows[0]!).getByText('Default')).toBeInTheDocument()
+    expect(rows[0]!).toHaveTextContent('Default for new chats')
+    expect(within(rows[1]!).getByText('KB')).toBeInTheDocument()
+    expect(rows[1]!).toHaveTextContent('Used for the knowledge base')
     // The dash is for the eye; a screen reader hears "none".
     expect(rows[1]).toHaveTextContent(/Context window: —\s*none/)
     // The header row is for sighted users only.
@@ -579,9 +579,9 @@ describe('AzureFoundryPanel: the model list', () => {
     renderPanel()
     const list = await screen.findByRole('list', {name: 'Models of my-res'})
     const [gptRow, docsRow] = within(list).getAllByRole('listitem')
-    expect(within(docsRow).getByText('Default')).toBeInTheDocument()
-    expect(within(gptRow).queryByText('Default')).toBeNull()
-    fireEvent.click(within(docsRow).getByRole('button', {name: 'More actions for Docs writer'}))
+    expect(within(docsRow!).getByText('Default')).toBeInTheDocument()
+    expect(within(gptRow!).queryByText('Default')).toBeNull()
+    fireEvent.click(within(docsRow!).getByRole('button', {name: 'More actions for Docs writer'}))
     expect(screen.queryByRole('menuitem', {name: 'Make default'})).toBeNull()
   })
 
@@ -594,14 +594,14 @@ describe('AzureFoundryPanel: the model list', () => {
     renderPanel()
     await screen.findByText('Docs writer')
     const rows = () => within(screen.getByRole('list', {name: 'Models of my-res'})).getAllByRole('listitem')
-    expect(within(rows()[0]).getByText('Default')).toBeInTheDocument()
+    expect(within(rows()[0]!).getByText('Default')).toBeInTheDocument()
 
     // What the server says once GPT-4.1 is gone.
     api.listAzureModels.mockResolvedValue({models: [docs], serverDefault: docs.modelId})
     pick('More actions for GPT-4.1', 'Remove')
     await waitFor(() => expect(rows()).toHaveLength(1))
-    await waitFor(() => expect(within(rows()[0]).getByText('Default')).toBeInTheDocument())
-    expect(rows()[0]).toHaveTextContent('Docs writer')
+    await waitFor(() => expect(within(rows()[0]!).getByText('Default')).toBeInTheDocument())
+    expect(rows()[0]!).toHaveTextContent('Docs writer')
   })
 
   it('Make default saves the one field optimistically and announces it', async () => {
@@ -625,8 +625,8 @@ describe('AzureFoundryPanel: the model list', () => {
     expect(updateProvider).toHaveBeenCalledWith('azure-foundry', {defaultModel: 'm/docs000000'})
     await waitFor(() => expect(status()).toHaveTextContent('Docs writer is now the default for new chats'))
     const rows = within(screen.getByRole('list', {name: 'Models of my-res'})).getAllByRole('listitem')
-    expect(within(rows[1]).getByText('Default')).toBeInTheDocument()
-    expect(within(rows[0]).queryByText('Default')).toBeNull()
+    expect(within(rows[1]!).getByText('Default')).toBeInTheDocument()
+    expect(within(rows[0]!).queryByText('Default')).toBeNull()
   })
 
   it('Make default rolls back only its field when the save fails, and says so', async () => {
@@ -638,7 +638,7 @@ describe('AzureFoundryPanel: the model list', () => {
     pick('More actions for Docs writer', 'Make default')
     // Optimistic: the badge moved at once.
     const rows = () => within(screen.getByRole('list', {name: 'Models of my-res'})).getAllByRole('listitem')
-    expect(within(rows()[1]).getByText('Default')).toBeInTheDocument()
+    expect(within(rows()[1]!).getByText('Default')).toBeInTheDocument()
     // Meanwhile another field of the same provider changes.
     void useSettingsStore.getState().updateProvider('azure-foundry', {temperature: 0.2})
     await act(async () => {
@@ -650,8 +650,8 @@ describe('AzureFoundryPanel: the model list', () => {
         "Couldn't make Docs writer the default for new chats; the previous default is kept.",
       ),
     )
-    expect(within(rows()[0]).getByText('Default')).toBeInTheDocument()
-    expect(within(rows()[1]).queryByText('Default')).toBeNull()
+    expect(within(rows()[0]!).getByText('Default')).toBeInTheDocument()
+    expect(within(rows()[1]!).queryByText('Default')).toBeNull()
     const saved = useSettingsStore.getState().settings.ai.providers['azure-foundry']
     expect(saved.defaultModel).not.toBe('m/docs000000')
   })
@@ -704,8 +704,8 @@ describe('AzureFoundryPanel: the model list', () => {
     await screen.findByText('Search index')
     pick('More actions for Search index', 'Use for knowledge base')
     await waitFor(() => expect(api.updateAzureModel).toHaveBeenCalledTimes(2))
-    expect(api.updateAzureModel.mock.calls[0][2]).toEqual({isKnowledgeEmbedding: true})
-    expect(api.updateAzureModel.mock.calls[1][2]).toEqual({isKnowledgeEmbedding: true, force: true})
+    expect(api.updateAzureModel.mock.calls[0]![2]).toEqual({isKnowledgeEmbedding: true})
+    expect(api.updateAzureModel.mock.calls[1]![2]).toEqual({isKnowledgeEmbedding: true, force: true})
     expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({title: 'Change the knowledge base model?'}))
     await waitFor(() => expect(status()).toHaveTextContent(/now uses Search index\. Re-index it under Knowledge Base/))
     // The Knowledge Base panel will ask for the re-index.
@@ -784,11 +784,11 @@ describe('AzureFoundryPanel: the model list', () => {
     expect(screen.getByText('KB')).toBeInTheDocument()
     pick('More actions for Search index', 'Remove')
     await waitFor(() => expect(api.deleteAzureModel).toHaveBeenCalledTimes(2))
-    expect(api.deleteAzureModel.mock.calls[0][2]).toEqual({})
-    expect(api.deleteAzureModel.mock.calls[1][2]).toEqual({force: true})
+    expect(api.deleteAzureModel.mock.calls[0]![2]).toEqual({})
+    expect(api.deleteAzureModel.mock.calls[1]![2]).toEqual({force: true})
     // The remove confirm said so up front: no second question.
     expect(confirmMock).toHaveBeenCalledTimes(1)
-    const {container} = render(<>{confirmMock.mock.calls[0][0].message}</>)
+    const {container} = render(<>{confirmMock.mock.calls[0]![0].message}</>)
     expect(container).toHaveTextContent('The knowledge base must be re-indexed afterwards')
     await waitFor(() => expect(status()).toHaveTextContent('Search index removed'))
     expect(useAzureFoundryStore.getState().knowledgeReindex).toEqual({user: true})
@@ -822,7 +822,7 @@ describe('AzureFoundryPanel: the model list', () => {
     // The resource that holds it goes without the re-index note or force.
     pick('More actions for my-res', 'Remove resource')
     await waitFor(() => expect(api.deleteAzureConnection).toHaveBeenCalledWith(USER, 'default', {cascade: true}))
-    const {container: resourceMessage} = render(<>{confirmMock.mock.calls[0][0].message}</>)
+    const {container: resourceMessage} = render(<>{confirmMock.mock.calls[0]![0].message}</>)
     expect(resourceMessage).not.toHaveTextContent('re-indexed')
     first.unmount()
 
@@ -833,7 +833,7 @@ describe('AzureFoundryPanel: the model list', () => {
     await screen.findByText('Search index')
     pick('More actions for Search index', 'Remove')
     await waitFor(() => expect(api.deleteAzureModel).toHaveBeenCalledWith(USER, 'search0000', {}))
-    const {container: modelMessage} = render(<>{confirmMock.mock.calls[0][0].message}</>)
+    const {container: modelMessage} = render(<>{confirmMock.mock.calls[0]![0].message}</>)
     expect(modelMessage).not.toHaveTextContent('re-indexed')
     expect(useAzureFoundryStore.getState().knowledgeReindex).toEqual({})
   })
@@ -847,7 +847,7 @@ describe('AzureFoundryPanel: resources', () => {
     await screen.findByText('Docs writer')
     pick('More actions for my-res', 'Remove resource')
     await waitFor(() => expect(api.deleteAzureConnection).toHaveBeenCalledWith(USER, 'default', {cascade: true}))
-    const opts = confirmMock.mock.calls[0][0]
+    const opts = confirmMock.mock.calls[0]![0]
     expect(opts).toMatchObject({title: 'Remove my-res?', confirmLabel: 'Remove resource and 2 models', danger: true})
     const {container} = render(<>{opts.message}</>)
     expect(container).toHaveTextContent(

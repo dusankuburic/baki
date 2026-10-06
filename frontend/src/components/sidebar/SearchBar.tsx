@@ -61,7 +61,7 @@ export default function SearchBar({
   return (
     <div className="flex items-center h-12 px-3">
       <div className="flex items-center w-full h-8 bg-surface-2 border border-border-default rounded-md px-2 gap-2 focus-within:border-border-focus transition-colors duration-fast">
-        <Search size={14} className="text-text-tertiary flex-shrink-0" />
+        <Search size={14} className="text-text-tertiary shrink-0" />
         <input
           ref={inputRef}
           type="text"
@@ -70,7 +70,7 @@ export default function SearchBar({
           onKeyDown={handleKeyDown}
           disabled={disabled}
           placeholder={t('sidebar.searchPlaceholder')}
-          className="flex-1 text-sm bg-transparent outline-none text-text-primary placeholder:text-text-tertiary disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex-1 text-sm bg-transparent outline-hidden text-text-primary placeholder:text-text-tertiary disabled:opacity-50 disabled:cursor-not-allowed"
         />
         {value && (
           <>

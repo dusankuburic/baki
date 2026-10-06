@@ -10,7 +10,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
-	storagedb "pad-analyzer/internal/storage/database"
+	"pad-analyzer/internal/platform/txhook"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -431,23 +431,23 @@ func TestAzureModels_DeletesSpareAKeySavedAgain(t *testing.T) {
 	// The post-commit delete of a removed resource.
 	c := e.mustConn(t, azmUser, "r", azmKeyConfig("k1"))
 	key := "azure-foundry/" + c.ID
-	reqCtx, postCommit := storagedb.WithPostCommit(ctx)
+	reqCtx, postCommit := txhook.With(ctx)
 	if _, err := e.svc.DeleteConnection(reqCtx, azmUser, c.ID, AzureDeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(2 * time.Millisecond) // a later stamp for the save below
 	_ = e.secrets.Save("u1", key, azmLegacyDoc(""))
-	postCommit.Run()
+	postCommit.Commit(nil)
 	if has, _ := e.secrets.Has("u1", key); !has {
 		t.Error("the post-commit delete took a key saved after its decision")
 	}
 	// Unchanged since the decision: deleted.
 	c2 := e.mustConn(t, azmUser, "r2", azmKeyConfig("k2"))
-	reqCtx, postCommit = storagedb.WithPostCommit(ctx)
+	reqCtx, postCommit = txhook.With(ctx)
 	if _, err := e.svc.DeleteConnection(reqCtx, azmUser, c2.ID, AzureDeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	postCommit.Run()
+	postCommit.Commit(nil)
 	if has, _ := e.secrets.Has("u1", "azure-foundry/"+c2.ID); has {
 		t.Error("the removed resource's credential survived")
 	}

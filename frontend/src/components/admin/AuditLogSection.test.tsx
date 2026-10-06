@@ -106,7 +106,7 @@ describe('AuditLogSection', () => {
       ),
     )
     expect(await screen.findByText('No events match')).toBeInTheDocument()
-    fireEvent.click(screen.getAllByRole('button', {name: 'Clear filters'})[0])
+    fireEvent.click(screen.getAllByRole('button', {name: 'Clear filters'})[0]!)
     await waitFor(() => expect(useAdminStore.getState().audit.action).toBe(''))
     await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(16))
   })
@@ -117,11 +117,11 @@ describe('AuditLogSection', () => {
     await screen.findAllByText('Changed settings')
     const toggles = screen.getAllByRole('button', {name: 'Show details'})
     expect(toggles).toHaveLength(2)
-    fireEvent.click(toggles[0])
+    fireEvent.click(toggles[0]!)
     expect(screen.getByText('new_role')).toBeInTheDocument()
     expect(screen.getByText('member')).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Hide details'})).toHaveAttribute('aria-expanded', 'true')
-    fireEvent.click(toggles[1])
+    fireEvent.click(toggles[1]!)
     expect(screen.getByText('No additional details')).toBeInTheDocument()
   })
 

@@ -1,5 +1,6 @@
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
+import {useTranslation} from 'react-i18next'
 import {csvCell, downloadBlob} from '@/lib/csv'
 import {formatCount} from '@/lib/format'
 import {scoreColor, scoreBg, scoreLabel, healthTier} from '@/lib/scoring'
@@ -38,6 +39,7 @@ function exportMetricsCSV(metrics: FlowMetrics, flowId: string) {
 }
 
 export default function MetricsTab() {
+  const {t} = useTranslation('inspector')
   const doc = useFlowStore(s => s.document)
   const report = useAnalysisStore(s => (doc ? s.reports.get(doc.id) : undefined))
   const selectSubflow = useFlowStore(s => s.selectSubflow)
@@ -48,7 +50,7 @@ export default function MetricsTab() {
   if (!doc) {
     return (
       <div className="flex items-center justify-center h-full text-sm text-text-tertiary p-4 text-center">
-        Load a flow to view metrics
+        {t('health.noFlow')}
       </div>
     )
   }
@@ -57,8 +59,8 @@ export default function MetricsTab() {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 p-4">
         <BarChart3 size={24} className="text-text-tertiary" />
-        <span className="text-sm text-text-tertiary">Run analysis to see metrics</span>
-        <span className="text-xs text-text-disabled">Click "Run Analysis" in the Findings tab</span>
+        <span className="text-sm text-text-tertiary">{t('health.noAnalysis')}</span>
+        <span className="text-xs text-text-disabled">{t('health.noAnalysisHint')}</span>
       </div>
     )
   }
@@ -69,11 +71,11 @@ export default function MetricsTab() {
         <div className={clsx('p-4 rounded-xl border', scoreBg(metrics.healthScore))}>
           <div className="flex items-center justify-between mb-1">
             <span className="text-xs font-bold uppercase tracking-widest text-text-tertiary flex items-center gap-2">
-              Health Score
+              {t('health.title')}
               <button
                 onClick={() => exportMetricsCSV(metrics, doc.id)}
-                title="Export metrics as CSV"
-                aria-label="Export metrics as CSV"
+                title={t('health.exportTitle')}
+                aria-label={t('health.exportAria')}
                 className="text-text-tertiary hover:text-text-secondary p-0.5 rounded hover:bg-surface-3 transition-colors"
               >
                 <Download size={12} />
@@ -82,7 +84,7 @@ export default function MetricsTab() {
             <span
               className={clsx('text-2xl font-black font-mono tabular-nums', scoreColor(metrics.healthScore))}
               role="img"
-              aria-label={`Health score ${metrics.healthScore} of 100: ${scoreLabel(metrics.healthScore)}`}
+              aria-label={t('health.scoreAria', {score: metrics.healthScore, label: scoreLabel(metrics.healthScore)})}
             >
               {metrics.healthScore}
             </span>
@@ -106,22 +108,26 @@ export default function MetricsTab() {
         <HealthTrend />
 
         <div className="grid grid-cols-2 gap-2">
-          <StatCard label="Subflows" value={formatCount(metrics.subflowCount)} />
-          <StatCard label="Total Blocks" value={formatCount(metrics.totalBlocks)} />
-          <StatCard label="Total Variables" value={formatCount(metrics.totalVariables)} />
-          <StatCard label="Avg Cyclomatic" value={metrics.avgCyclomatic.toFixed(1)} />
-          <StatCard label="Max Cyclomatic" value={metrics.maxCyclomatic} warn={metrics.maxCyclomatic > 20} />
-          <StatCard label="Max Cognitive" value={metrics.maxCognitive} warn={metrics.maxCognitive > 30} />
+          <StatCard label={t('stats.subflows')} value={formatCount(metrics.subflowCount)} />
+          <StatCard label={t('stats.totalBlocks')} value={formatCount(metrics.totalBlocks)} />
+          <StatCard label={t('stats.totalVariables')} value={formatCount(metrics.totalVariables)} />
+          <StatCard label={t('stats.avgCyclomatic')} value={metrics.avgCyclomatic.toFixed(1)} />
+          <StatCard
+            label={t('stats.maxCyclomatic')}
+            value={metrics.maxCyclomatic}
+            warn={metrics.maxCyclomatic > 20}
+          />
+          <StatCard label={t('stats.maxCognitive')} value={metrics.maxCognitive} warn={metrics.maxCognitive > 30} />
         </div>
 
         {metrics.circularDependencies && metrics.circularDependencies.length > 0 && (
           <div className="p-3 rounded-lg border border-red-500/20 bg-red-500/5">
             <div className="flex items-center gap-2 mb-1">
               <RefreshCw size={12} className="text-red-400" />
-              <span className="text-xs font-bold text-red-400">Circular Dependencies</span>
+              <span className="text-xs font-bold text-red-400">{t('circular.title')}</span>
             </div>
             <p className="text-xs text-text-secondary">
-              Subflow call cycle detected: {metrics.circularDependencies.join(' → ')}
+              {t('circular.body', {cycle: metrics.circularDependencies.join(' → ')})}
             </p>
           </div>
         )}
@@ -134,7 +140,7 @@ export default function MetricsTab() {
 
         {ruleProfiles && ruleProfiles.length > 0 && (
           <div>
-            <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Rule Performance</h3>
+            <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">{t('rules.title')}</h3>
             <div className="space-y-1">
               {ruleProfiles
                 .filter(rp => rp.durationMs > 0)
@@ -147,7 +153,7 @@ export default function MetricsTab() {
                   >
                     <span className="text-xs text-text-primary flex-1 truncate">{rp.ruleName}</span>
                     <span className="text-xs text-text-tertiary tabular-nums">
-                      {formatCount(rp.findingCount)} findings
+                      {t('rules.findingsLabel', {findings: formatCount(rp.findingCount)})}
                     </span>
                     <span
                       className={clsx(
@@ -165,7 +171,7 @@ export default function MetricsTab() {
 
         <div>
           <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">
-            Per-Subflow Complexity
+            {t('subflows.title')}
           </h3>
           <div className="space-y-2">
             {metrics.subflows.map(sf => (

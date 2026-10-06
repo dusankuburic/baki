@@ -20,17 +20,15 @@ func RequestTimeout(d time.Duration) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Classify on the path the router will dispatch on (dispatchPath), not the raw one: this layer runs outside the mux, before its path.Clean and /api/v1 alias strip.
 			// On the raw string, GET /api/v1/events — the SSE bus, served by the same handler as /api/events — got the 30 s default and the EventSource reconnected every 30 s, and a non-canonical spelling of a */stream or knowledge bulk route (".../stream/", ".../knowledge/./upload") got the short deadline its handler cannot finish inside.
-			p := dispatchPath(r)
-			if isLongLivedPath(p) {
+			deadline := d
+			switch TimeoutClass(r) {
+			case TimeoutNone:
 				// WebSocket and SSE sessions live as long as the tab does.
 				next.ServeHTTP(w, r)
 				return
-			}
-			deadline := d
-			switch {
-			case isStreamingPath(p):
+			case TimeoutStream:
 				deadline = StreamRequestTimeout
-			case isBulkPath(p):
+			case TimeoutBulk:
 				deadline = BulkRequestTimeout
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), deadline)
@@ -38,6 +36,29 @@ func RequestTimeout(d time.Duration) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// Deadline classes RequestTimeout assigns (TimeoutClass).
+const (
+	TimeoutNone    = "none"    // WebSocket and SSE: open-ended by design
+	TimeoutStream  = "stream"  // StreamRequestTimeout
+	TimeoutBulk    = "bulk"    // BulkRequestTimeout
+	TimeoutDefault = "default" // the configured request timeout
+)
+
+// TimeoutClass is the deadline class RequestTimeout gives r, judged on the path the router will dispatch on.
+// Exported for the route-policy golden in package api.
+func TimeoutClass(r *http.Request) string {
+	p := dispatchPath(r)
+	switch {
+	case isLongLivedPath(p):
+		return TimeoutNone
+	case isStreamingPath(p):
+		return TimeoutStream
+	case isBulkPath(p):
+		return TimeoutBulk
+	}
+	return TimeoutDefault
 }
 
 // dispatchPath returns the path chi will route r on: RawPath as sent (path.Clean rewrites only r.URL.Path; the /api/v1 alias strip applies to both), else canonicalPath of r.URL.Path. It mirrors inboundRoutePath in package api (see canonicalPath).

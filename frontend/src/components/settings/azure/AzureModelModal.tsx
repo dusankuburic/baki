@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useCallback, useId, useMemo, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {
@@ -76,7 +77,7 @@ const ADVANCED_FIELDS: readonly ModelFormField[] = ['contextWindow', 'maxOutputT
 const MAX_CHIPS = 8
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : ''
+  return getErrorMessage(err, '')
 }
 
 // The Model modal (md, full screen below 640 px): Resource, Kind, Deployment

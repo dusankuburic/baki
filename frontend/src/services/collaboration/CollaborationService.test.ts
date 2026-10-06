@@ -124,7 +124,7 @@ describe('CollaborationService', () => {
     }
     mockWs!.receive(env)
     expect(received).toHaveLength(1)
-    expect(received[0].type).toBe('presence.join')
+    expect(received[0]!.type).toBe('presence.join')
   })
 
   // presence.sync (the server's snapshot of the room, sent only to a joining
@@ -150,7 +150,7 @@ describe('CollaborationService', () => {
 
     collaborationService.send({type: 'ping'})
     expect(mockWs!.sent).toHaveLength(1)
-    expect(JSON.parse(mockWs!.sent[0]).type).toBe('ping')
+    expect(JSON.parse(mockWs!.sent[0]!).type).toBe('ping')
   })
 
   // Regression (per-handler isolation): a throwing event handler must not
@@ -172,7 +172,7 @@ describe('CollaborationService', () => {
       expect(() => mockWs!.receive(env)).not.toThrow()
       expect(throwing).toHaveBeenCalledTimes(1)
       expect(received).toHaveLength(1)
-      expect(received[0].type).toBe('presence.join')
+      expect(received[0]!.type).toBe('presence.join')
     } finally {
       errSpy.mockRestore()
     }

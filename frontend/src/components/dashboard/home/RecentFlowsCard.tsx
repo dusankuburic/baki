@@ -28,7 +28,7 @@ export function RecentFlowsCard({
         <button
           type="button"
           onClick={() => setMainPaneView('library')}
-          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs font-medium text-brand-400 transition-colors duration-fast hover:text-brand-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs font-medium text-brand-400 transition-colors duration-fast hover:text-brand-300 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40"
         >
           {t('common.browseAll')}
           <ArrowRight size={11} aria-hidden="true" />
@@ -44,7 +44,7 @@ export function RecentFlowsCard({
             <button
               type="button"
               onClick={() => onOpen(f.id)}
-              className="flex w-full items-center gap-3 rounded-md px-1 py-2 text-left transition-colors duration-fast hover:bg-surface-3/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+              className="flex w-full items-center gap-3 rounded-md px-1 py-2 text-left transition-colors duration-fast hover:bg-surface-3/60 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40"
             >
               <FileText size={15} className="shrink-0 text-text-tertiary" aria-hidden="true" />
               <span title={f.name || t('home.untitled')} className="flex-1 truncate text-sm text-text-primary">

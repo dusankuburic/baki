@@ -4,6 +4,10 @@ import {getAuthUserSchema, getLoginResponseSchema, getRegisterResponseSchema, ge
 export interface LoginRequest {
   email: string
   password: string
+  // Shapes the backend's HttpOnly refresh cookie: persistent (Expires =
+  // refresh-token TTL) vs a browser-session cookie. Desktop ignores it —
+  // it authenticates with the body token and never relies on the cookie.
+  rememberMe?: boolean
 }
 
 export interface LoginResponse {
@@ -102,8 +106,16 @@ export const authApi = {
 
   logout: (): Promise<void> => request('/api/auth/logout'),
 
-  refresh: async (refreshToken: string): Promise<RefreshResponse> =>
-    requestValidated('/api/auth/refresh', await getRefreshResponseSchema(), {body: {refreshToken}}),
+  // Web clients pass refreshToken: null — the HttpOnly `pad_refresh` cookie
+  // (scoped to /api/auth) authenticates the rotation and the server rotates
+  // the cookie in place; the backend's body-token fallback keeps the desktop
+  // build working unchanged. rememberMe reshapes the rotated cookie.
+  refresh: async (refreshToken: string | null, rememberMe: boolean): Promise<RefreshResponse> =>
+    requestValidated(
+      '/api/auth/refresh',
+      await getRefreshResponseSchema(),
+      {body: refreshToken ? {refreshToken, rememberMe} : {rememberMe}},
+    ),
 
   me: async (): Promise<AuthUser> => requestValidated('/api/auth/me', await getAuthUserSchema(), {method: 'GET'}),
 

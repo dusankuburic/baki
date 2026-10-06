@@ -45,7 +45,7 @@ export default function Avatar({name, colorSeed, avatarUrl, size = 'md', classNa
   return (
     <div
       className={clsx(
-        'rounded-full flex-shrink-0 flex items-center justify-center font-semibold text-white overflow-hidden select-none',
+        'rounded-full shrink-0 flex items-center justify-center font-semibold text-white overflow-hidden select-none',
         SIZE_CLASSES[size],
         className,
       )}

@@ -131,7 +131,7 @@ describe('FindingCard apply-fix chain', () => {
     // Click "Apply fix" in the modal to confirm. There are now two "Apply fix"
     // buttons (the card's + the modal's) — click the last one (the modal's).
     const buttons = await screen.findAllByText('Apply fix')
-    fireEvent.click(buttons[buttons.length - 1])
+    fireEvent.click(buttons[buttons.length - 1]!)
 
     await waitFor(() => {
       expect(applyFix).toHaveBeenCalledWith(

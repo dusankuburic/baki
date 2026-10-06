@@ -1,4 +1,12 @@
-import {request} from './client'
+import {request, requestValidated} from './client'
+import {
+  getAzureConnectionsListingSchema,
+  getAzureConnectionResponseSchema,
+  getAzureDiscoverySchema,
+  getAzureModelsListingSchema,
+  getGitHubUserSchema,
+  getProviderListSchema,
+} from './schemas'
 import type {
   ProviderInfo,
   ProviderTestResult,
@@ -19,8 +27,6 @@ import type {
   AzureModelUpdateInput,
   AzureModelDeleteOptions,
   AzureDiscovery,
-  AzureDiscoveryItem,
-  AzureModelKind,
   AzureTestInput,
   AzureTestResult,
 } from '@/types'
@@ -50,30 +56,20 @@ function flagQuery(flags: Record<string, boolean | undefined>): string {
 // probe — so they get more than the 30 s metadata default.
 const AZURE_OUTBOUND_TIMEOUT_MS = 60_000
 
-// A Go server serialises an empty (nil) slice as null: read it as empty
-// rather than let `.map` on null crash a consumer.
-function list<T>(value: T[] | null | undefined): T[] {
-  return Array.isArray(value) ? value : []
-}
-
-// The server leaves out an unknown model (omitempty); fill it and a missing
-// kind in, so every item reads the same.
-function discoveryItems(value: AzureDiscoveryItem[] | null | undefined, kind: AzureModelKind): AzureDiscoveryItem[] {
-  return list(value).map(item =>
-    item.kind && typeof item.model === 'string' ? item : {...item, kind: item.kind || kind, model: item.model ?? ''},
-  )
-}
-
 export const providersApi = {
   // With an orgId the server also considers the organisation's shared
   // credentials; a provider that resolved to them carries `shared: true`.
   // `noDedup` bypasses the 5 s GET micro-cache for a refetch that must see a
   // change (a saved key, a deployment's served model revealed by a turn).
-  listProviders: (orgId?: string, opts?: {noDedup?: boolean}): Promise<ProviderInfo[]> =>
-    request(orgId ? `/api/providers/list?orgId=${encodeURIComponent(orgId)}` : '/api/providers/list', {
-      method: 'GET',
-      ...(opts?.noDedup ? {noDedup: true} : {}),
-    }),
+  listProviders: async (orgId?: string, opts?: {noDedup?: boolean}): Promise<ProviderInfo[]> =>
+    requestValidated(
+      orgId ? `/api/providers/list?orgId=${encodeURIComponent(orgId)}` : '/api/providers/list',
+      await getProviderListSchema(),
+      {
+        method: 'GET',
+        ...(opts?.noDedup ? {noDedup: true} : {}),
+      },
+    ),
 
   saveApiKey: (provider: string, key: string): Promise<void> => request('/api/keys/save', {body: {provider, key}}),
 
@@ -91,7 +87,9 @@ export const providersApi = {
 
   revokeGitHubAuth: (): Promise<void> => request('/api/providers/github/revoke'),
 
-  getGitHubUser: (): Promise<GitHubUser | null> => request('/api/providers/github/user', {method: 'GET'}),
+  // null (not connected — no stored token) is a valid answer, not a failure.
+  getGitHubUser: async (): Promise<GitHubUser | null> =>
+    requestValidated('/api/providers/github/user', await getGitHubUserSchema(), {method: 'GET'}),
 
   startCopilotAuth: (): Promise<DeviceAuthResponse> => request('/api/providers/copilot/start'),
 
@@ -100,7 +98,9 @@ export const providersApi = {
 
   revokeCopilotAuth: (): Promise<void> => request('/api/providers/copilot/revoke'),
 
-  getCopilotUser: (): Promise<GitHubUser | null> => request('/api/providers/copilot/user', {method: 'GET'}),
+  // See getGitHubUser: null means not connected.
+  getCopilotUser: async (): Promise<GitHubUser | null> =>
+    requestValidated('/api/providers/copilot/user', await getGitHubUserSchema(), {method: 'GET'}),
 
   // The local OpenAI-compatible provider (Foundry Local / Ollama / LM Studio;
   // desktop only, no key). Removal and connection tests go through
@@ -148,27 +148,21 @@ export const providersApi = {
   // In user scope the listing also carries the shared resources of every
   // organisation where the caller is an admin or member (shared: true, with
   // orgId/orgName; read-only there). In org scope, only that org's.
-  listAzureConnections: (scope: AzureScope): Promise<AzureConnectionsListing> =>
-    request<Partial<AzureConnectionsListing> | null>(azurePath(scope, 'connections'), {
+  // The schema reads a nil connections slice as [] (Go null on the wire) and
+  // requires the registryState/limits flags the listing struct always sends.
+  listAzureConnections: async (scope: AzureScope): Promise<AzureConnectionsListing> =>
+    requestValidated(azurePath(scope, 'connections'), await getAzureConnectionsListingSchema(), {
       method: 'GET',
       noDedup: true,
-    }).then(res => ({
-      connections: list(res?.connections),
-      registryState: res?.registryState ?? 'ok',
-      limits: res?.limits ?? {connections: 10, models: 50},
-      knowledgeEmbeddingEnabled: res?.knowledgeEmbeddingEnabled === true,
-      ...(typeof res?.recoveredCopyPath === 'string' && res.recoveredCopyPath
-        ? {recoveredCopyPath: res.recoveredCopyPath}
-        : {}),
-    })),
+    }),
 
   // The contract fixes {connection} for POST and PUT only; the single GET is
-  // read in either form.
-  getAzureConnection: (scope: AzureScope, id: string): Promise<AzureConnection> =>
-    request<{connection?: AzureConnection} | AzureConnection>(azurePath(scope, 'connections', id), {
+  // read in either form ({connection} envelope or the bare resource).
+  getAzureConnection: async (scope: AzureScope, id: string): Promise<AzureConnection> =>
+    requestValidated(azurePath(scope, 'connections', id), await getAzureConnectionResponseSchema(), {
       method: 'GET',
       noDedup: true,
-    }).then(res => ('connection' in res && res.connection ? res.connection : (res as AzureConnection))),
+    }),
 
   // 201 {connection}. TOO_MANY_CONNECTIONS at the limit; the settings codes
   // name the field at fault.
@@ -199,28 +193,20 @@ export const providersApi = {
   // The project's deployments and agents (Entra ID or the Azure CLI with a
   // project endpoint; DISCOVERY_UNAVAILABLE otherwise). An Azure refusal is a
   // 200 with `error`, and `alreadyAdded` marks what the registry holds.
-  discoverAzureConnection: (scope: AzureScope, id: string): Promise<AzureDiscovery> =>
-    request<Partial<AzureDiscovery> | null>(azurePath(scope, 'connections', id, 'discover'), {
+  discoverAzureConnection: async (scope: AzureScope, id: string): Promise<AzureDiscovery> =>
+    requestValidated(azurePath(scope, 'connections', id, 'discover'), await getAzureDiscoverySchema(), {
       timeoutMs: AZURE_OUTBOUND_TIMEOUT_MS,
-    }).then(res => ({
-      deployments: discoveryItems(res?.deployments, 'chat'),
-      agents: discoveryItems(res?.agents, 'agent'),
-      warnings: list(res?.warnings),
-      ...(res?.error ? {error: res.error} : {}),
-    })),
+    }),
 
   // Every chat, Claude, agent and embedding entry the scope sees (user scope:
   // the caller's own plus the shared entries of their organisations), and in
   // user scope the server's default for new chats ("m/<id>"), which AI
   // Accounts marks when the user saved no default of their own.
-  listAzureModels: (scope: AzureScope): Promise<AzureModelsListing> =>
-    request<{models?: AzureModelEntry[] | null; serverDefault?: string | null} | null>(azurePath(scope, 'models'), {
+  listAzureModels: async (scope: AzureScope): Promise<AzureModelsListing> =>
+    requestValidated(azurePath(scope, 'models'), await getAzureModelsListingSchema(), {
       method: 'GET',
       noDedup: true,
-    }).then(res => ({
-      models: list(res?.models),
-      ...(typeof res?.serverDefault === 'string' && res.serverDefault ? {serverDefault: res.serverDefault} : {}),
-    })),
+    }),
 
   // 201 {model}. DUPLICATE_MODEL (same resource, kind namespace and name),
   // TOO_MANY_MODELS, KIND_REQUIRES_PROJECT (an agent on an API-key resource).

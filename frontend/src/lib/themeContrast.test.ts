@@ -18,7 +18,7 @@ function parseTokens(block: string): Record<string, string> {
   const re = /(--[\w-]+):\s*([^;]+);/g
   let m: RegExpExecArray | null
   while ((m = re.exec(block)) !== null) {
-    tokens[m[1]] = m[2].trim()
+    tokens[m[1]!] = m[2]!.trim()
   }
   return tokens
 }
@@ -30,7 +30,7 @@ function parseThemes(css: string): {
   themes: Record<string, Record<string, string>>
 } {
   const rootMatch = css.match(/^:root\s*\{([^}]+)\}/m)
-  const root = rootMatch ? parseTokens(rootMatch[1]) : {}
+  const root = rootMatch ? parseTokens(rootMatch[1]!) : {}
 
   const themes: Record<string, Record<string, string>> = {}
   // Quote style is Prettier's call (currently single for CSS attribute
@@ -38,7 +38,7 @@ function parseThemes(css: string): {
   const themeRe = /\[data-theme=(["'])([\w-]+)\1\]\s*\{([^}]+)\}/g
   let m: RegExpExecArray | null
   while ((m = themeRe.exec(css)) !== null) {
-    themes[m[2]] = parseTokens(m[3])
+    themes[m[2]!] = parseTokens(m[3]!)
   }
   return {root, themes}
 }
@@ -98,7 +98,7 @@ describe('theme contrast (WCAG AA)', () => {
     // Primary text is body copy — must meet AA normal (4.5:1).
     describe.each(surfaces)('primary text on %s', surf => {
       it(`≥ ${AA_NORMAL}:1`, () => {
-        const ratio = contrastRatio(tokens['--text-primary'], tokens[surf])
+        const ratio = contrastRatio(tokens['--text-primary']!, tokens[surf]!)
         expect(ratio).toBeGreaterThanOrEqual(AA_NORMAL)
       })
     })
@@ -106,7 +106,7 @@ describe('theme contrast (WCAG AA)', () => {
     // Secondary text is subtitles/labels — must meet AA normal (4.5:1).
     describe.each(surfaces)('secondary text on %s', surf => {
       it(`≥ ${AA_NORMAL}:1`, () => {
-        const ratio = contrastRatio(tokens['--text-secondary'], tokens[surf])
+        const ratio = contrastRatio(tokens['--text-secondary']!, tokens[surf]!)
         expect(ratio).toBeGreaterThanOrEqual(AA_NORMAL)
       })
     })
@@ -114,7 +114,7 @@ describe('theme contrast (WCAG AA)', () => {
     // Tertiary text is captions/hints — AA large threshold (3:1).
     describe.each(surfaces)('tertiary text on %s', surf => {
       it(`≥ ${AA_LARGE}:1`, () => {
-        const ratio = contrastRatio(tokens['--text-tertiary'], tokens[surf])
+        const ratio = contrastRatio(tokens['--text-tertiary']!, tokens[surf]!)
         expect(ratio).toBeGreaterThanOrEqual(AA_LARGE)
       })
     })
@@ -122,7 +122,7 @@ describe('theme contrast (WCAG AA)', () => {
     // Brand-foreground (button/toggle text) on brand-500 (button background)
     // must meet AA normal — covers primary buttons, switches, checkboxes.
     it('brand-foreground on brand-500 ≥ 4.5:1', () => {
-      const ratio = contrastRatio(tokens['--brand-foreground'], tokens['--brand-500'])
+      const ratio = contrastRatio(tokens['--brand-foreground']!, tokens['--brand-500']!)
       expect(ratio).toBeGreaterThanOrEqual(AA_NORMAL)
     })
 
@@ -148,7 +148,7 @@ describe('theme contrast (WCAG AA)', () => {
     describe.each(blockColors)('%s on card surfaces', block => {
       describe.each(cardSurfaces)('%s', surf => {
         it(`≥ ${AA_BLOCK}:1`, () => {
-          const ratio = contrastRatio(tokens[block], tokens[surf])
+          const ratio = contrastRatio(tokens[block]!, tokens[surf]!)
           expect(ratio).toBeGreaterThanOrEqual(AA_BLOCK)
         })
       })
@@ -219,7 +219,7 @@ function composite(fill: string, surface: string, alpha: number): string {
     '#' +
     f
       .map((c, i) =>
-        Math.round(c * alpha + s[i] * (1 - alpha))
+        Math.round(c * alpha + s[i]! * (1 - alpha))
           .toString(16)
           .padStart(2, '0'),
       )
@@ -228,21 +228,21 @@ function composite(fill: string, surface: string, alpha: number): string {
 }
 
 const BADGE_BACKGROUNDS: [string, (tokens: Record<string, string>) => string][] = [
-  ['surface-1', tokens => tokens['--surface-1']],
-  ['surface-2', tokens => tokens['--surface-2']],
+  ['surface-1', tokens => tokens['--surface-1']!],
+  ['surface-2', tokens => tokens['--surface-2']!],
 ]
 
 describe('badge text on its fill (WCAG AA)', () => {
   describe.each(themeEntries)('theme: %s', (_themeId, tokens) => {
     describe.each(Object.entries(BADGE_TONES))('%s badge', (_tone, spec) => {
       it.each(BADGE_BACKGROUNDS)(`≥ ${AA_NORMAL}:1 on %s and on its fill over it`, (_name, surfaceOf) => {
-        const fg = tokens[spec.fg]
+        const fg = tokens[spec.fg]!
         // contrastRatio() skips what it cannot parse (Infinity), so a var()
         // or a missing token would pass silently: insist on a hex colour.
         expect(hexToRgb(fg ?? ''), `${spec.fg} must be a hex colour`).not.toBeNull()
         const surface = surfaceOf(tokens)
         expect(contrastRatio(fg, surface)).toBeGreaterThanOrEqual(AA_NORMAL)
-        const fill = composite(tokens[spec.fill], surface, spec.fillAlpha)
+        const fill = composite(tokens[spec.fill]!, surface, spec.fillAlpha)
         expect(contrastRatio(fg, fill)).toBeGreaterThanOrEqual(AA_NORMAL)
       })
     })
@@ -250,7 +250,7 @@ describe('badge text on its fill (WCAG AA)', () => {
     // The danger button of a confirm: text on the solid error fill.
     it(`error-foreground on error ≥ ${AA_NORMAL}:1`, () => {
       expect(hexToRgb(tokens['--error-foreground'] ?? ''), '--error-foreground must be a hex colour').not.toBeNull()
-      expect(contrastRatio(tokens['--error-foreground'], tokens['--error'])).toBeGreaterThanOrEqual(AA_NORMAL)
+      expect(contrastRatio(tokens['--error-foreground']!, tokens['--error']!)).toBeGreaterThanOrEqual(AA_NORMAL)
     })
   })
 

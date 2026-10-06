@@ -44,9 +44,9 @@ function RecentRow({
       onClick={() => onSelect(file.path)}
     >
       {file.isFolder ? (
-        <Folder size={14} className="text-brand-400 flex-shrink-0" />
+        <Folder size={14} className="text-brand-400 shrink-0" />
       ) : (
-        <FileText size={14} className="text-text-tertiary flex-shrink-0" />
+        <FileText size={14} className="text-text-tertiary shrink-0" />
       )}
       <div className="flex-1 min-w-0">
         <div className="text-sm text-text-primary truncate">{file.name}</div>

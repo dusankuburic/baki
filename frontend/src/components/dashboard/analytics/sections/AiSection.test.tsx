@@ -56,10 +56,10 @@ describe('AiSection model breakdown', () => {
     const table = screen.getByRole('table', {name: 'Usage by model'})
     const rows = within(table).getAllByRole('row').slice(1) // header row first
     expect(rows).toHaveLength(3)
-    expect(within(rows[0]).getByText('model-router · gpt-4o')).toBeInTheDocument()
-    expect(within(rows[1]).getByText('model-router · gpt-4.1-mini')).toBeInTheDocument()
-    expect(within(rows[2]).getByText('gpt-5')).toBeInTheDocument()
-    expect(within(rows[2]).queryByText(/·/)).toBeNull()
+    expect(within(rows[0]!).getByText('model-router · gpt-4o')).toBeInTheDocument()
+    expect(within(rows[1]!).getByText('model-router · gpt-4.1-mini')).toBeInTheDocument()
+    expect(within(rows[2]!).getByText('gpt-5')).toBeInTheDocument()
+    expect(within(rows[2]!).queryByText(/·/)).toBeNull()
   })
 
   it('modelLabel falls back to the requested id when served is absent or identical', () => {
@@ -124,10 +124,10 @@ describe('AiSection unpriced Azure AI Foundry rows', () => {
       .getAllByRole('row')
       .slice(1)
     expect(rows).toHaveLength(2)
-    expect(within(rows[0]).getByText('$1.02')).toBeInTheDocument()
-    expect(within(rows[0]).queryByText('—')).toBeNull()
-    expect(within(rows[1]).getByText('—')).toBeInTheDocument()
-    expect(within(rows[1]).queryByText(/\$/)).toBeNull()
+    expect(within(rows[0]!).getByText('$1.02')).toBeInTheDocument()
+    expect(within(rows[0]!).queryByText('—')).toBeNull()
+    expect(within(rows[1]!).getByText('—')).toBeInTheDocument()
+    expect(within(rows[1]!).queryByText(/\$/)).toBeNull()
 
     fireEvent.click(within(card).getByRole('button', {name: 'Download CSV'}))
     expect(downloadBlob).toHaveBeenCalledTimes(1)
@@ -150,11 +150,11 @@ describe('AiSection unpriced Azure AI Foundry rows', () => {
       .slice(1)
     expect(rows).toHaveLength(2)
     // Sorted by cost: the priced provider first, Azure's $0 last.
-    expect(within(rows[0]).getByText('openai')).toBeInTheDocument()
-    expect(within(rows[0]).getByText('$1.02')).toBeInTheDocument()
-    expect(within(rows[1]).getByText('azure-foundry')).toBeInTheDocument()
-    expect(within(rows[1]).getByText('—')).toBeInTheDocument()
-    expect(within(rows[1]).queryByText(/\$/)).toBeNull()
+    expect(within(rows[0]!).getByText('openai')).toBeInTheDocument()
+    expect(within(rows[0]!).getByText('$1.02')).toBeInTheDocument()
+    expect(within(rows[1]!).getByText('azure-foundry')).toBeInTheDocument()
+    expect(within(rows[1]!).getByText('—')).toBeInTheDocument()
+    expect(within(rows[1]!).queryByText(/\$/)).toBeNull()
   })
 
   it('names the dash "Not priced by baki" for assistive tech', () => {

@@ -74,7 +74,7 @@ func TestLazyRLS_StatementAfterEndOfAStartedScope(t *testing.T) {
 			if err := b.query(ctx).QueryRowContext(ctx, `SELECT 2`).Scan(new(int)); !errors.Is(err, ErrRLSUnavailable) {
 				t.Errorf("QueryRow after Commit: %v, want ErrRLSUnavailable", err)
 			}
-			err := b.withTx(ctx, func(*sql.Tx) error { t.Error("withTx ran its body after the scope ended"); return nil })
+			err := b.withTx(ctx, func(context.Context, *sql.Tx) error { t.Error("withTx ran its body after the scope ended"); return nil })
 			if !errors.Is(err, ErrRLSUnavailable) {
 				t.Errorf("withTx after Commit: %v, want ErrRLSUnavailable", err)
 			}
@@ -209,7 +209,7 @@ func TestLazyRLS_StartFailure(t *testing.T) {
 	t.Run("fail closed", func(t *testing.T) {
 		b, f := newFakeBackend(t, 1, respond)
 		ctx, scope := WithLazyRLS(context.Background(), b, "u1", false)
-		err := b.withTx(ctx, func(*sql.Tx) error { t.Error("withTx ran its body without a transaction"); return nil })
+		err := b.withTx(ctx, func(context.Context, *sql.Tx) error { t.Error("withTx ran its body without a transaction"); return nil })
 		if !errors.Is(err, ErrRLSUnavailable) || !errors.Is(err, boom) {
 			t.Errorf("withTx: %v, want ErrRLSUnavailable wrapping the cause", err)
 		}

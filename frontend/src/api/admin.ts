@@ -1,5 +1,6 @@
-import {request} from './client'
+import {request, requestValidated} from './client'
 import {type AuthUser} from './auth'
+import {getAdminUsersPageSchema, getAuditActionsSchema, getAuditEventsSchema, getUserStatsSchema} from './schemas'
 import type {PagedResponse} from '@/types'
 
 // Mirrors internal/migration.Result (no JSON tags, so the keys are Go field names).
@@ -125,14 +126,19 @@ export const adminApi = {
 
   // One page of users plus the number matching the filters: the server pages
   // by limit/offset (max 100) and searches the email and display name.
-  listUsers: (query: UserQuery, signal?: AbortSignal): Promise<PagedResponse<AdminUser>> => {
+  listUsers: async (query: UserQuery, signal?: AbortSignal): Promise<PagedResponse<AdminUser>> => {
     const params = new URLSearchParams({limit: String(query.limit), offset: String(query.offset)})
     if (query.q) params.set('q', query.q)
     if (query.role) params.set('role', query.role)
-    return get(`/api/admin/users/list?${params.toString()}`, signal)
+    return requestValidated(`/api/admin/users/list?${params.toString()}`, await getAdminUsersPageSchema(), {
+      method: 'GET',
+      noDedup: true,
+      signal,
+    })
   },
 
-  userStats: (signal?: AbortSignal): Promise<UserStats> => get('/api/admin/users/stats', signal),
+  userStats: async (signal?: AbortSignal): Promise<UserStats> =>
+    requestValidated('/api/admin/users/stats', await getUserStatsSchema(), {method: 'GET', noDedup: true, signal}),
 
   setUserRole: (userId: string, role: string): Promise<void> =>
     request(`/api/admin/users/${userId}/role`, {body: {role}, method: 'PUT'}),
@@ -145,18 +151,23 @@ export const adminApi = {
   // The closed set of action names the server emits; the audit filter is
   // built from it so it can never fall behind the backend (it used to offer
   // 7 of 35 actions).
-  listAuditActions: (signal?: AbortSignal): Promise<string[]> => get('/api/admin/audit/actions', signal),
+  listAuditActions: async (signal?: AbortSignal): Promise<string[]> =>
+    requestValidated('/api/admin/audit/actions', await getAuditActionsSchema(), {method: 'GET', noDedup: true, signal}),
 
   // A bare array, newest first, with no total: the caller asks for one row
   // more than its page to learn whether a next page exists.
-  listAuditEvents: (filter: AuditFilter = {}, signal?: AbortSignal): Promise<AuditEvent[]> => {
+  listAuditEvents: async (filter: AuditFilter = {}, signal?: AbortSignal): Promise<AuditEvent[]> => {
     const params = new URLSearchParams()
     if (filter.userId) params.set('userId', filter.userId)
     if (filter.action) params.set('action', filter.action)
     if (filter.limit) params.set('limit', String(filter.limit))
     if (filter.offset !== undefined) params.set('offset', String(filter.offset))
     const qs = params.toString()
-    return get(`/api/admin/audit${qs ? '?' + qs : ''}`, signal)
+    return requestValidated(`/api/admin/audit${qs ? '?' + qs : ''}`, await getAuditEventsSchema(), {
+      method: 'GET',
+      noDedup: true,
+      signal,
+    })
   },
 }
 

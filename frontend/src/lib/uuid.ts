@@ -16,8 +16,8 @@ export function uuid(): string {
   const bytes = new Uint8Array(16)
   c.getRandomValues(bytes)
   // RFC 4122 §4.4: version 4 in the high nibble of byte 6, variant 10x in byte 8.
-  bytes[6] = (bytes[6] & 0x0f) | 0x40
-  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80
 
   const hex: string[] = []
   for (let i = 0; i < 256; i++) hex.push((i + 0x100).toString(16).slice(1))

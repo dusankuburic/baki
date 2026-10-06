@@ -1,4 +1,5 @@
 import {useState, useMemo, useRef, useEffect} from 'react'
+import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import {Kbd} from '@/components/shared'
 import {useListNavigation} from '@/hooks/useListNavigation'
@@ -22,6 +23,7 @@ type CommandPaletteProps = {
 }
 
 export default function CommandPalette({isOpen, onClose, commands = []}: CommandPaletteProps) {
+  const {t} = useTranslation('search')
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -87,14 +89,14 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
 
   return (
     <div className="fixed inset-0 z-modal flex items-start justify-center pt-[20vh]" onClick={onClose}>
-      <div className="absolute inset-0 bg-surface-overlay backdrop-blur-sm" />
+      <div className="absolute inset-0 bg-surface-overlay backdrop-blur-xs" />
       <div
         ref={paletteRef}
         className="relative w-full max-w-[640px] max-md:max-w-none max-md:h-full max-md:rounded-none bg-surface-1 border border-border-default rounded-xl shadow-xl overflow-hidden animate-palette"
         onClick={e => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label="Command palette"
+        aria-label={t('palette.dialogAria')}
       >
         <div className="flex items-center px-4 border-b border-border-subtle">
           <span className="text-text-tertiary mr-2 text-sm">&#x1F50D;</span>
@@ -104,13 +106,13 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
             value={query}
             onChange={e => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a command..."
-            className="flex-1 bg-transparent py-3 text-sm outline-none text-text-primary placeholder:text-text-disabled"
+            placeholder={t('palette.placeholder')}
+            className="flex-1 bg-transparent py-3 text-sm outline-hidden text-text-primary placeholder:text-text-disabled"
             role="combobox"
             aria-expanded
             aria-controls={LISTBOX_ID}
             aria-autocomplete="list"
-            aria-label="Type a command"
+            aria-label={t('palette.inputAria')}
             aria-activedescendant={
               activeIndex >= 0 && flatItems[activeIndex] ? optionId(flatItems[activeIndex].id) : undefined
             }
@@ -156,7 +158,7 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
             ))
           ) : (
             <div role="status" className="py-8 text-center text-sm text-text-tertiary">
-              No commands found
+              {t('palette.empty')}
             </div>
           )}
         </div>

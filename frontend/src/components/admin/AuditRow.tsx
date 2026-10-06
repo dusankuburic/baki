@@ -52,7 +52,7 @@ export function AuditRow({
               type="button"
               onClick={() => onFilterUser(filterTarget)}
               title={t('audit.filterByUser', {user: actor || subjectId})}
-              className="max-w-[16rem] truncate rounded-sm text-left text-text-primary hover:text-brand-400 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+              className="max-w-[16rem] truncate rounded-sm text-left text-text-primary hover:text-brand-400 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40"
             >
               {actor || t('audit.subjectUser', {id: subjectId.slice(0, 8)})}
             </button>
@@ -99,7 +99,7 @@ export function AuditRow({
             aria-controls={detailsId}
             aria-label={open ? t('audit.hideDetails') : t('audit.showDetails')}
             onClick={() => setOpen(o => !o)}
-            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors duration-fast hover:bg-surface-3 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors duration-fast hover:bg-surface-3 hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40"
           >
             <ChevronDown
               size={14}

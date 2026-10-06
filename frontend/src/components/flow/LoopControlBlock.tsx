@@ -1,4 +1,5 @@
 import {RotateCcw, CornerUpRight} from 'lucide-react'
+import {useTranslation} from 'react-i18next'
 import {getBlockColor} from '@/lib/blocks'
 import type {Block} from '@/types'
 
@@ -12,6 +13,7 @@ type Props = {
 // BlockCards. They're visually grouped with the loop they belong to via the loop
 // accent color, but are clearly distinct from regular action blocks.
 export default function LoopControlBlock({block, selected = false, onClick}: Props) {
+  const {t} = useTranslation('flow')
   const isExit = block.rawType === 'EXIT_LOOP'
 
   // EXIT LOOP uses a warm warning accent so it reads as "early exit / danger";
@@ -20,7 +22,7 @@ export default function LoopControlBlock({block, selected = false, onClick}: Pro
   const color = isExit ? 'var(--block-condition)' : loopColor
 
   const Icon = isExit ? CornerUpRight : RotateCcw
-  const label = isExit ? 'Exit Loop' : 'Next Loop'
+  const label = isExit ? t('loopControl.exit') : t('loopControl.next')
   const stripeWidth = selected ? 5 : 3
 
   return (

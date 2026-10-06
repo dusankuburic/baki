@@ -1,5 +1,6 @@
 import {useState} from 'react'
 import clsx from 'clsx'
+import {useTranslation} from 'react-i18next'
 import {AlertTriangle, ChevronDown, X} from 'lucide-react'
 import {useFlowStore} from '@/stores/flowStore'
 
@@ -7,6 +8,7 @@ import {useFlowStore} from '@/stores/flowStore'
 // while loading the current flow. Previously these were silently dropped, so
 // a partially-parsed flow looked identical to a clean one.
 export default function ParseErrorsBanner() {
+  const {t} = useTranslation('flow')
   const document = useFlowStore(s => s.document)
   const [expanded, setExpanded] = useState(false)
   const [dismissed, setDismissed] = useState(false)
@@ -30,7 +32,7 @@ export default function ParseErrorsBanner() {
   return (
     // .parse-banner: the hint, then the counts, drop out as the pane narrows
     // (index.css) so the summary never wraps onto a second line.
-    <div className="parse-banner border-b border-amber-500/20 bg-amber-500/5 flex-shrink-0">
+    <div className="parse-banner border-b border-amber-500/20 bg-amber-500/5 shrink-0">
       <div className="px-3 h-8 flex items-center gap-2">
         <AlertTriangle size={13} className="text-amber-400 shrink-0" />
         <button
@@ -38,20 +40,18 @@ export default function ParseErrorsBanner() {
           aria-expanded={expanded}
           className="flex items-center gap-1.5 shrink-0 whitespace-nowrap text-2xs text-amber-300 hover:text-amber-200 transition-colors"
         >
-          <span className="font-medium">
-            {errors.length} parse issue{errors.length !== 1 ? 's' : ''} in this flow
-          </span>
+          <span className="font-medium">{t('parseBanner.summary', {count: errors.length})}</span>
           <span className="parse-banner-counts text-amber-400/70">
-            ({errorCount} error{errorCount !== 1 ? 's' : ''}, {warnCount} warning{warnCount !== 1 ? 's' : ''})
+            ({t('parseBanner.errors', {count: errorCount})}, {t('parseBanner.warnings', {count: warnCount})})
           </span>
           <ChevronDown size={11} className={clsx('transition-transform duration-fast', expanded && 'rotate-180')} />
         </button>
         <span className="parse-banner-hint min-w-0 truncate text-2xs text-text-tertiary">
-          — affected lines were skipped or partially parsed
+          {t('parseBanner.hint')}
         </span>
         <button
           onClick={() => setDismissed(true)}
-          aria-label="Dismiss parse issues banner"
+          aria-label={t('parseBanner.dismissAria')}
           className="ml-auto text-text-tertiary hover:text-text-secondary p-0.5 rounded hover:bg-surface-3 transition-colors shrink-0"
         >
           <X size={12} />
@@ -80,7 +80,9 @@ export default function ParseErrorsBanner() {
               </div>
             </div>
           ))}
-          {errors.length > 50 && <div className="text-2xs text-text-tertiary px-2">…and {errors.length - 50} more</div>}
+          {errors.length > 50 && (
+            <div className="text-2xs text-text-tertiary px-2">{t('parseBanner.more', {count: errors.length - 50})}</div>
+          )}
         </div>
       )}
     </div>

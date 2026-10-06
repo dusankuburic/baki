@@ -1,4 +1,5 @@
 import {useEffect} from 'react'
+import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import {usePresenceStore, type PresenceUser} from '@/stores/presenceStore'
 import Tooltip from '@/components/shared/Tooltip'
@@ -11,6 +12,7 @@ interface PresenceIndicatorsProps {
 }
 
 export default function PresenceIndicators({className, maxVisible = 5}: PresenceIndicatorsProps) {
+  const {t} = useTranslation('collaboration')
   const users = usePresenceStore(s => s.users)
   const status = usePresenceStore(s => s.status)
   const lastError = usePresenceStore(s => s.lastError)
@@ -34,10 +36,14 @@ export default function PresenceIndicators({className, maxVisible = 5}: Presence
   return (
     <div className={clsx('flex items-center gap-1', className)}>
       {status === 'connecting' && (
-        <span className="w-2 h-2 rounded-full bg-semantic-warning animate-pulse" title="Connecting…" />
+        <span className="w-2 h-2 rounded-full bg-semantic-warning animate-pulse" title={t('presence.statusConnecting')} />
       )}
-      {status === 'error' && <span className="w-2 h-2 rounded-full bg-semantic-error" title="Connection error" />}
-      {status === 'connected' && <span className="w-2 h-2 rounded-full bg-semantic-success" title="Connected" />}
+      {status === 'error' && (
+        <span className="w-2 h-2 rounded-full bg-semantic-error" title={t('presence.statusError')} />
+      )}
+      {status === 'connected' && (
+        <span className="w-2 h-2 rounded-full bg-semantic-success" title={t('presence.statusConnected')} />
+      )}
 
       <div className="flex -space-x-2">
         {visible.map(user => (
@@ -54,8 +60,9 @@ export default function PresenceIndicators({className, maxVisible = 5}: Presence
 }
 
 function UserAvatar({user}: {user: PresenceUser}) {
+  const {t} = useTranslation('collaboration')
   const label = user.selectedBlockId
-    ? `${user.displayName ?? user.userId} · viewing block`
+    ? t('presence.viewingBlock', {name: user.displayName ?? user.userId})
     : (user.displayName ?? user.userId)
   return (
     <Tooltip content={label}>

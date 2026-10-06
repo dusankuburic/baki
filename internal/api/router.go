@@ -145,15 +145,6 @@ func (rt *Router) Shutdown() {
 	rt.shutdownOnce.Do(func() { close(rt.shutdownCh) })
 }
 
-// DrainBackground stops starting best-effort background notifications and waits for the ones in
-// flight, or ctx. Call AFTER server.Shutdown, once no request can start another.
-func (rt *Router) DrainBackground(ctx context.Context) error {
-	if rt.handlers.Analysis == nil {
-		return nil
-	}
-	return rt.handlers.Analysis.DrainBackground(ctx)
-}
-
 // ShutdownWebSocket gracefully drains all WebSocket clients (CloseGoingAway, conns closed, pumps waited for). Call BEFORE server.Shutdown — http.Server.Shutdown does not close hijacked sockets. Idempotent.
 func (rt *Router) ShutdownWebSocket(ctx context.Context) error {
 	return rt.hub.Shutdown(ctx)

@@ -92,6 +92,7 @@ export default function MainPaneToolbar() {
   const setReport = useAnalysisStore(s => s.setReport)
   const [reimporting, setReimporting] = useState(false)
   const {t} = useTranslation('shell')
+  const {t: tf} = useTranslation('flow')
   const {confirm} = useConfirm()
 
   const toast = useToast()
@@ -147,7 +148,7 @@ export default function MainPaneToolbar() {
 
   const handleCompare = async () => {
     try {
-      const path = await exportApi.pickFile('Select Old Version for Comparison')
+      const path = await exportApi.pickFile(tf('toolbar.pickDialogTitle'))
       if (!path) return
 
       toast.info(t('toasts.comparing'))
@@ -210,11 +211,11 @@ export default function MainPaneToolbar() {
   const isGraphView = mainPaneView === 'graph' || mainPaneView === 'map' || mainPaneView === 'local-map'
   const toolbarView: ToolbarView = showSource ? 'source' : (mainPaneView as FlowView)
   const viewOptions: {value: ToolbarView; label: string; icon: typeof List}[] = [
-    {value: 'block', label: 'Block', icon: List},
-    {value: 'graph', label: 'Graph', icon: Network},
-    {value: 'local-map', label: 'Local Map', icon: MapPin},
-    {value: 'map', label: 'Map', icon: Map},
-    {value: 'diff', label: 'Diff', icon: History},
+    {value: 'block', label: tf('toolbar.block'), icon: List},
+    {value: 'graph', label: tf('toolbar.graph'), icon: Network},
+    {value: 'local-map', label: tf('toolbar.localMap'), icon: MapPin},
+    {value: 'map', label: tf('toolbar.map'), icon: Map},
+    {value: 'diff', label: tf('toolbar.diff'), icon: History},
   ]
   if (document) viewOptions.push({value: 'source', label: t('toolbar.source'), icon: Code2})
 
@@ -301,7 +302,7 @@ export default function MainPaneToolbar() {
         {mainPaneView === 'diff' && !showSource && (
           <div className="flex items-center gap-2 min-w-0 text-sm font-medium text-brand-500">
             <History size={16} className="shrink-0" />
-            <span className="truncate">Version Comparison</span>
+            <span className="truncate">{tf('toolbar.versionComparison')}</span>
           </div>
         )}
       </div>

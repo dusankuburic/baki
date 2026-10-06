@@ -1,10 +1,69 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {create} from 'zustand'
 import {authApi, type AuthUser, type LoginRequest} from '@/api/auth'
 import {registerRefreshCallback, invalidateConfigCache, setSessionToken} from '@/api/client'
 import {decodeJwtPayload} from '@/lib/jwt'
+import {isTauri} from '@/platform/guards'
 import {resetAllStores, registerCurrentUserResolver} from './storeRegistry'
 
 const REFRESH_TOKEN_KEY = 'auth_refresh_token'
+
+// Web builds authenticate token rotation with the backend's HttpOnly
+// `pad_refresh` cookie (scoped to /api/auth) and never hold the refresh token
+// in JS-readable storage. This non-sensitive marker records that a session
+// exists so boot can attempt a cookie refresh without a network call for
+// anonymous visitors; 'p' remembers the "remember me" choice so the rotated
+// cookie keeps its persistent shape. Desktop keeps the token in storage —
+// its cross-origin webview cannot carry the cookie.
+const SESSION_MARKER_KEY = 'auth_session_active'
+
+function readSessionMarker(): 'p' | '1' | null {
+  if (isTauri()) return null
+  try {
+    const v = localStorage.getItem(SESSION_MARKER_KEY)
+    return v === 'p' || v === '1' ? v : null
+  } catch {
+    return null
+  }
+}
+
+function writeSessionMarker(persistent: boolean): void {
+  try {
+    localStorage.setItem(SESSION_MARKER_KEY, persistent ? 'p' : '1')
+  } catch {
+    // storage unavailable — the session simply won't survive a reload.
+  }
+}
+
+function clearSessionMarker(): void {
+  try {
+    localStorage.removeItem(SESSION_MARKER_KEY)
+  } catch {
+    // ignore
+  }
+}
+
+// readLegacyRefresh reads a pre-cookie-flow stored token on any platform —
+// one-time migration input for web installs that logged in before the cookie
+// flow (loadFromStorage upgrades them to the marker).
+function readLegacyRefresh(): string | null {
+  try {
+    return localStorage.getItem(REFRESH_TOKEN_KEY) ?? sessionStorage.getItem(REFRESH_TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+// The refresh token's `jti` labels the "this device" row in the sessions UI.
+// On web the token itself is never stored, so the id is kept in memory only —
+// repopulated by the boot refresh — and dies with the tab like before.
+let webRefreshJti: string | null = null
+
+function jtiOf(token: string | undefined): string | null {
+  if (!token) return null
+  const payload = decodeJwtPayload(token)
+  return typeof payload?.jti === 'string' ? payload.jti : null
+}
 
 // Session epoch: incremented on every logout. The refresh function checks
 // this before writing tokens, preventing an in-flight refresh from
@@ -47,7 +106,10 @@ function isJwtExpired(token: string): boolean {
 // The refresh token lives in sessionStorage by default (cleared on tab close).
 // With "remember me" it goes to localStorage instead, so the session survives a
 // browser restart. We read from both and keep only one populated at a time.
+// WEB builds never touch it: the HttpOnly cookie is the carrier, so these
+// helpers are desktop-only.
 function readRefresh(): string | null {
+  if (!isTauri()) return null
   try {
     return localStorage.getItem(REFRESH_TOKEN_KEY) ?? sessionStorage.getItem(REFRESH_TOKEN_KEY)
   } catch {
@@ -66,6 +128,13 @@ function isPersistent(): boolean {
 }
 
 function writeRefresh(value: string, persistent: boolean): void {
+  if (!isTauri()) {
+    // Web: discard the body token — the HttpOnly cookie issued alongside it is
+    // the carrier. Remember only the flag and the session id for the UI.
+    writeSessionMarker(persistent)
+    webRefreshJti = jtiOf(value)
+    return
+  }
   try {
     if (persistent) {
       localStorage.setItem(REFRESH_TOKEN_KEY, value)
@@ -79,19 +148,22 @@ function writeRefresh(value: string, persistent: boolean): void {
   }
 }
 
-// getCurrentSessionId decodes the `jti` claim from the currently-held refresh
-// token, so the UI can mark which entry in the active-sessions list is "this
-// device" without any backend change (the session id IS the refresh token's
-// jti). Returns null if there is no refresh token or it isn't a decodable JWT.
+// getCurrentSessionId decodes the `jti` claim from the current refresh token,
+// so the UI can mark which entry in the active-sessions list is "this device"
+// without any backend change (the session id IS the refresh token's jti).
+// Desktop reads it from storage; web holds it in memory from the last refresh.
 export function getCurrentSessionId(): string | null {
   const token = readRefresh()
-  if (!token) return null
-  const payload = decodeJwtPayload(token)
-  const jti = payload?.jti
-  return typeof jti === 'string' ? jti : null
+  if (token) {
+    const payload = decodeJwtPayload(token)
+    return typeof payload?.jti === 'string' ? payload.jti : null
+  }
+  return webRefreshJti
 }
 
 function clearTokens(): void {
+  clearSessionMarker()
+  webRefreshJti = null
   try {
     sessionStorage.removeItem(REFRESH_TOKEN_KEY)
     localStorage.removeItem(REFRESH_TOKEN_KEY)
@@ -114,7 +186,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (get().isLoading) return
     set({isLoading: true, error: null})
     try {
-      const res = await authApi.login(credentials)
+      const res = await authApi.login({...credentials, rememberMe: remember})
       writeRefresh(res.refreshToken, remember)
       setSessionToken(res.accessToken)
       set({
@@ -126,7 +198,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (err) {
       set({
         isLoading: false,
-        error: err instanceof Error ? err.message : 'Login failed',
+        error: getErrorMessage(err, 'Login failed'),
       })
       throw err
     }
@@ -136,7 +208,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (get().isLoading) return 'verification-required'
     set({isLoading: true, error: null})
     try {
-      const res = await authApi.register(credentials)
+      const res = await authApi.register({...credentials, rememberMe: remember})
       if (res.verificationRequired || !res.accessToken || !res.refreshToken) {
         // Account created, no session: the caller shows "check your inbox".
         set({isLoading: false})
@@ -154,7 +226,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (err) {
       set({
         isLoading: false,
-        error: err instanceof Error ? err.message : 'Registration failed',
+        error: getErrorMessage(err, 'Registration failed'),
       })
       throw err
     }
@@ -181,7 +253,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (err) {
       set({
         isLoading: false,
-        error: err instanceof Error ? err.message : 'SSO login failed',
+        error: getErrorMessage(err, 'SSO login failed'),
       })
       throw err
     }
@@ -218,6 +290,30 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const myEpoch = sessionEpoch
 
     refreshInFlight = (async () => {
+      // Web: the HttpOnly cookie carries the refresh token — rotate it without
+      // ever exposing it to JS. The marker gates the attempt (no session, no
+      // call) and preserves the remember-me cookie shape across rotations.
+      if (!isTauri()) {
+        const persistent = readSessionMarker() === 'p'
+        if (!readSessionMarker()) {
+          clearTokens()
+          set({user: null, accessToken: null, isAuthenticated: false})
+          return false
+        }
+        try {
+          const res = await authApi.refresh(null, persistent)
+          if (myEpoch !== sessionEpoch) return false
+          setSessionToken(res.accessToken)
+          if (res.refreshToken) webRefreshJti = jtiOf(res.refreshToken)
+          set({accessToken: res.accessToken})
+          return true
+        } catch {
+          clearTokens()
+          set({user: null, accessToken: null, isAuthenticated: false})
+          return false
+        }
+      }
+
       const refreshToken = readRefresh()
       if (!refreshToken) {
         clearTokens()
@@ -226,7 +322,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
 
       try {
-        const res = await authApi.refresh(refreshToken)
+        const res = await authApi.refresh(refreshToken, isPersistent())
         // Guard against post-logout resurrection: if the user logged out
         // while this refresh was in flight, discard the new tokens.
         if (myEpoch !== sessionEpoch) {
@@ -251,6 +347,40 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   loadFromStorage: async () => {
+    // Web: the marker (not a token) says a session existed. A legacy install
+    // may still hold a stored token from before the cookie flow — upgrade it
+    // to the marker (session shape, the old default) and drop the now-stale
+    // copy so the refresh token leaves JS-readable storage entirely.
+    if (!isTauri()) {
+      const marker = readSessionMarker()
+      const legacy = readLegacyRefresh()
+      if (!marker && !legacy) {
+        set({user: null, accessToken: null, isAuthenticated: false})
+        return
+      }
+      if (!marker) writeSessionMarker(false)
+      try {
+        sessionStorage.removeItem(REFRESH_TOKEN_KEY)
+        localStorage.removeItem(REFRESH_TOKEN_KEY)
+      } catch {
+        // best-effort — the cookie decides from here on.
+      }
+      set({isLoading: true})
+      try {
+        const ok = await get().refresh()
+        if (!ok) {
+          set({isLoading: false})
+          return
+        }
+        const user = await authApi.me()
+        set({user, isAuthenticated: true, isLoading: false})
+      } catch {
+        clearTokens()
+        set({user: null, accessToken: null, isAuthenticated: false, isLoading: false})
+      }
+      return
+    }
+
     const refreshToken = readRefresh()
     // No token, or a token already expired by its `exp` claim: go straight to
     // the login form without any network call (avoids a startup 401).

@@ -47,7 +47,7 @@ const PRE_STYLE: React.CSSProperties = {
 // The header toggle switches one block to horizontal scrolling for the
 // cases where the exact column layout matters. Copy always takes the
 // original text, wrapped or not.
-const PRE_WRAP = 'whitespace-pre-wrap break-normal [overflow-wrap:anywhere]'
+const PRE_WRAP = 'whitespace-pre-wrap break-normal wrap-anywhere'
 const PRE_SCROLL = 'whitespace-pre overflow-x-auto custom-scrollbar'
 
 // prism-react-renderer names token classes after the grammar's token types
@@ -82,7 +82,7 @@ function CodeBlock({language, value, plain}: Props) {
 
   return (
     <div className="relative group min-w-0 max-w-full rounded-xl overflow-hidden border border-border-default my-3 bg-surface-0">
-      <div className="flex items-center justify-between gap-2 pl-4 pr-2 py-1.5 bg-surface-3/80 backdrop-blur-sm border-b border-border-subtle">
+      <div className="flex items-center justify-between gap-2 pl-4 pr-2 py-1.5 bg-surface-3/80 backdrop-blur-xs border-b border-border-subtle">
         <span className="min-w-0 truncate text-xs font-mono text-text-tertiary select-none">{language || 'text'}</span>
         <div className="flex items-center gap-0.5 shrink-0">
           <button

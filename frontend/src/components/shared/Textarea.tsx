@@ -18,7 +18,7 @@ export default function Textarea({error, hint, className, id, ...rest}: Textarea
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
         className={clsx(
-          'bg-surface-2 border rounded-md px-3 py-2 text-sm outline-none resize-y min-h-[80px] transition-colors duration-fast',
+          'bg-surface-2 border rounded-md px-3 py-2 text-sm outline-hidden resize-y min-h-[80px] transition-colors duration-fast',
           'text-text-primary placeholder:text-text-disabled',
           error
             ? 'border-semantic-error focus:border-semantic-error'

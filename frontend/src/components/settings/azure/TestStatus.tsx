@@ -33,7 +33,7 @@ export default function TestStatus({state, className}: {state: TestState; classN
           </>
         )}
       </p>
-      <p role="alert" className="flex items-start gap-1 break-words text-text-primary">
+      <p role="alert" className="flex items-start gap-1 wrap-break-word text-text-primary">
         {state.phase === 'failed' && (
           <>
             <XCircle size={12} aria-hidden="true" className="mt-0.5 shrink-0 text-semantic-error" />

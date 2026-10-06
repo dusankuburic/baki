@@ -86,7 +86,7 @@ export default function SegmentedControl<T extends string>({
     const reachable = options.flatMap((o, i) => (o.disabled ? [] : [i]))
     if (reachable.length === 0) return
     const at = reachable.indexOf(index)
-    let target: number
+    let target: number | undefined
     switch (e.key) {
       case 'ArrowRight':
       case 'ArrowDown':
@@ -110,10 +110,13 @@ export default function SegmentedControl<T extends string>({
       default:
         return
     }
+    // reachable is non-empty (early return above), so target is always set;
+    // the guard only satisfies the index-access type.
+    if (target === undefined) return
     e.preventDefault()
     groupRef.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[target]?.focus()
     const next = options[target]
-    if (activation === 'auto' && !disabled && next.value !== value) onChange(next.value)
+    if (activation === 'auto' && !disabled && next && next.value !== value) onChange(next.value)
   }
 
   return (

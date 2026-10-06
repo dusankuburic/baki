@@ -1,4 +1,5 @@
 import {useState, useCallback, useRef, useEffect} from 'react'
+import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import {Search, X, ChevronRight, FileCode} from 'lucide-react'
 import {useFlowStore} from '@/stores/flowStore'
@@ -17,20 +18,33 @@ type GlobalSearchOverlayProps = {
 
 type Scope = 'this-flow' | 'all-flows'
 
-const FILTER_TYPES: {type: BlockType; label: string}[] = [
-  {type: 'ACTION', label: 'Action'},
-  {type: 'CONDITION', label: 'If'},
-  {type: 'LOOP', label: 'Loop'},
-  {type: 'SWITCH', label: 'Switch'},
-  {type: 'VARIABLE', label: 'Var'},
-  {type: 'ERROR_HANDLER', label: 'Error'},
-  {type: 'COMMENT', label: 'Comment'},
+// Block-type filter chips; labels resolve through i18n inside the component
+// (the order mirrors the BlockType union as shown in the UI).
+const FILTER_TYPES: {type: BlockType; labelKey: keyof typeof TYPE_LABEL_KEYS}[] = [
+  {type: 'ACTION', labelKey: 'action'},
+  {type: 'CONDITION', labelKey: 'condition'},
+  {type: 'LOOP', labelKey: 'loop'},
+  {type: 'SWITCH', labelKey: 'switch'},
+  {type: 'VARIABLE', labelKey: 'variable'},
+  {type: 'ERROR_HANDLER', labelKey: 'errorHandler'},
+  {type: 'COMMENT', labelKey: 'comment'},
 ]
+
+const TYPE_LABEL_KEYS = {
+  action: 'overlay.types.action',
+  condition: 'overlay.types.condition',
+  loop: 'overlay.types.loop',
+  switch: 'overlay.types.switch',
+  variable: 'overlay.types.variable',
+  errorHandler: 'overlay.types.errorHandler',
+  comment: 'overlay.types.comment',
+} as const
 
 const LISTBOX_ID = 'global-search-listbox'
 const optionId = (index: number) => `global-search-option-${index}`
 
 export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverlayProps) {
+  const {t} = useTranslation('search')
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
@@ -149,18 +163,18 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
 
   return (
     <div className="fixed inset-0 z-modal flex items-start justify-center pt-[15vh]" onClick={onClose}>
-      <div className="absolute inset-0 bg-surface-overlay backdrop-blur-sm" />
+      <div className="absolute inset-0 bg-surface-overlay backdrop-blur-xs" />
       <div
         ref={overlayRef}
         className="relative w-full max-w-[720px] bg-surface-1 border border-border-default rounded-xl shadow-2xl overflow-hidden animate-palette flex flex-col max-h-[70vh]"
         onClick={e => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label="Search"
+        aria-label={t('overlay.dialogAria')}
       >
         {/* Search input row */}
         <div className="flex items-center px-4 border-b border-border-subtle bg-surface-2">
-          <Search className="text-text-tertiary mr-3 flex-shrink-0" size={18} />
+          <Search className="text-text-tertiary mr-3 shrink-0" size={18} />
           <input
             ref={inputRef}
             type="text"
@@ -170,22 +184,22 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
               debouncedSearch(e.target.value)
             }}
             onKeyDown={handleKeyDown}
-            placeholder="Search across all subflows and properties..."
-            className="flex-1 bg-transparent py-4 text-base outline-none text-text-primary placeholder:text-text-disabled"
+            placeholder={t('overlay.placeholder')}
+            className="flex-1 bg-transparent py-4 text-base outline-hidden text-text-primary placeholder:text-text-disabled"
             role="combobox"
             aria-expanded={results.length > 0}
             aria-controls={LISTBOX_ID}
             aria-autocomplete="list"
-            aria-label="Search across all subflows and properties"
+            aria-label={t('overlay.inputAria')}
             aria-activedescendant={activeIndex >= 0 && results[activeIndex] ? optionId(activeIndex) : undefined}
           />
           {isSearching && (
-            <div className="w-4 h-4 border-2 border-brand-500 border-t-transparent rounded-full animate-spin mr-2 flex-shrink-0" />
+            <div className="w-4 h-4 border-2 border-brand-500 border-t-transparent rounded-full animate-spin mr-2 shrink-0" />
           )}
           <button
             onClick={onClose}
-            className="p-1 hover:bg-surface-3 rounded-md transition-colors text-text-tertiary flex-shrink-0"
-            aria-label="Close search"
+            className="p-1 hover:bg-surface-3 rounded-md transition-colors text-text-tertiary shrink-0"
+            aria-label={t('overlay.closeAria')}
           >
             <X size={18} />
           </button>
@@ -193,7 +207,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
 
         {/* Scope toggle + type filter chips */}
         <div className="flex items-center gap-1.5 px-4 py-2 border-b border-border-subtle bg-surface-1 flex-wrap">
-          <div className="flex items-center rounded-lg border border-border-default overflow-hidden flex-shrink-0">
+          <div className="flex items-center rounded-lg border border-border-default overflow-hidden shrink-0">
             {(['this-flow', 'all-flows'] as Scope[]).map(s => (
               <button
                 key={s}
@@ -210,12 +224,14 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                     : 'bg-transparent text-text-tertiary hover:text-text-secondary',
                 )}
               >
-                {s === 'this-flow' ? 'This Flow' : 'All Flows'}
+                {s === 'this-flow' ? t('overlay.scopeThisFlow') : t('overlay.scopeAllFlows')}
               </button>
             ))}
           </div>
-          <span className="text-2xs text-text-disabled uppercase tracking-wider mr-1 flex-shrink-0">Filter:</span>
-          {FILTER_TYPES.map(({type, label}) => {
+          <span className="text-2xs text-text-disabled uppercase tracking-wider mr-1 shrink-0">
+            {t('overlay.filterLabel')}
+          </span>
+          {FILTER_TYPES.map(({type, labelKey}) => {
             const active = activeTypes.has(type)
             return (
               <button
@@ -228,7 +244,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                     : 'bg-transparent text-text-tertiary border-border-subtle hover:border-border-default hover:text-text-secondary',
                 )}
               >
-                {label}
+                {t(TYPE_LABEL_KEYS[labelKey])}
               </button>
             )
           })}
@@ -237,7 +253,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
               onClick={() => setActiveTypes(new Set())}
               className="text-2xs text-text-tertiary hover:text-semantic-error transition-colors ml-1"
             >
-              Clear
+              {t('overlay.clear')}
             </button>
           )}
         </div>
@@ -245,7 +261,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
         {/* Results list */}
         <div ref={listRef} className="flex-1 overflow-y-auto custom-scrollbar p-1">
           {results.length > 0 ? (
-            <div className="space-y-0.5" role="listbox" id={LISTBOX_ID} aria-label="Search results">
+            <div className="space-y-0.5" role="listbox" id={LISTBOX_ID} aria-label={t('overlay.resultsAria')}>
               {results.map((res, idx) => {
                 const subflow = document?.subflows.find(s => s.id === res.subflowId)
                 const prev = idx > 0 ? results[idx - 1] : undefined
@@ -279,7 +295,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                       <div className="flex items-center gap-2 mb-1">
                         <FileCode size={14} className="text-brand-400" />
                         <span className="text-xs font-semibold text-text-secondary uppercase tracking-tight">
-                          {subflow?.name || 'Unknown Subflow'}
+                          {subflow?.name || t('overlay.unknownSubflow')}
                         </span>
                         <ChevronRight size={12} className="text-text-disabled" />
                         <span className="text-xs text-text-tertiary">{res.matchedField}</span>
@@ -295,33 +311,40 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
           ) : query.length > 0 && !isSearching ? (
             <div className="py-12 text-center">
               <div className="text-sm text-text-tertiary">
-                No matches found for &quot;{query}&quot;{activeTypes.size > 0 && ' in selected types'}
+                {activeTypes.size > 0
+                  ? t('overlay.noMatchesScoped', {query})
+                  : t('overlay.noMatches', {query})}
               </div>
             </div>
           ) : (
             <div className="py-12 text-center text-text-disabled">
               <div className="text-sm">
-                {scope === 'all-flows'
-                  ? 'Type to search across all your flows...'
-                  : 'Type to search across the entire flow...'}
+                {scope === 'all-flows' ? t('overlay.hintAllFlows') : t('overlay.hintThisFlow')}
               </div>
-              <div className="text-xs mt-1">Search properties, variables, and comments</div>
+              <div className="text-xs mt-1">{t('overlay.hintSub')}</div>
             </div>
           )}
         </div>
 
         {/* Footer */}
         <div className="px-4 py-2 bg-surface-2 border-t border-border-subtle flex items-center justify-between text-2xs text-text-tertiary uppercase tracking-widest font-semibold">
-          <span>{results.length >= 50 ? '50+ results (refine query)' : `${results.length} results`}</span>
+          <span>
+            {results.length >= 50
+              ? t('overlay.resultsCapped')
+              : t('overlay.results', {count: results.length})}
+          </span>
           <div className="flex gap-4">
             <span>
-              <kbd className="bg-surface-3 px-1 rounded border border-border-default mr-1">↑↓</kbd> Navigate
+              <kbd className="bg-surface-3 px-1 rounded border border-border-default mr-1">↑↓</kbd>{' '}
+              {t('overlay.navigate')}
             </span>
             <span>
-              <kbd className="bg-surface-3 px-1 rounded border border-border-default mr-1">Enter</kbd> Open
+              <kbd className="bg-surface-3 px-1 rounded border border-border-default mr-1">Enter</kbd>{' '}
+              {t('overlay.open')}
             </span>
             <span>
-              <kbd className="bg-surface-3 px-1 rounded border border-border-default mr-1">Esc</kbd> Close
+              <kbd className="bg-surface-3 px-1 rounded border border-border-default mr-1">Esc</kbd>{' '}
+              {t('overlay.close')}
             </span>
           </div>
         </div>

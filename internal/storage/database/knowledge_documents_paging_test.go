@@ -175,7 +175,7 @@ func TestPlan_ListKnowledgeDocuments_ChunksCountedPerPagedDocument(t *testing.T)
 	owner := f.id("owner")
 	for _, limit := range []int{5, 0} {
 		t.Run(fmt.Sprintf("limit %d", limit), func(t *testing.T) {
-			nodes := explainAsUser(t, f.b, owner, listKnowledgeDocumentsSQL(f.b.hasPgvector), []any{orgA, limit})
+			nodes := explainAsUser(t, f.b, owner, listKnowledgeDocumentsSQL(f.b.hasPgvector), []any{orgA, limit, 0})
 			t.Logf("ListKnowledgeDocuments(limit %d) plan:\n%s", limit, describePlan(nodes))
 			scan, ok := nodeOn(nodes, "knowledge_chunks")
 			if !ok {

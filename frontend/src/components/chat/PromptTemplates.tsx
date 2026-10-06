@@ -72,7 +72,7 @@ export default function PromptTemplates({onSelect, hasBlock, flowName, blockName
           prompt: t(`templates.prompts.${tpl.id}`),
         }
         if (!acc[tpl.category]) acc[tpl.category] = []
-        acc[tpl.category].push(resolved)
+        acc[tpl.category]?.push(resolved)
         return acc
       },
       {} as Record<string, PromptTemplate[]>,

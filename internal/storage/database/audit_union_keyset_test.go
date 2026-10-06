@@ -214,7 +214,11 @@ const auditSpreadRows = 100000
 
 // seedAuditSpread writes auditSpreadRows audit rows, one per second back from
 // now, across fifty actors each naming another of the fifty as subject, then
-// ANALYZEs.
+// ANALYZEs. The rows go in in random physical order: inserted in time order,
+// created_at correlates perfectly with the heap, which makes a filtered
+// created_at walk look cheap and flipped these plans on every fresh database
+// (CI's included). They passed only on a shared database whose earlier runs had
+// already scrambled the heap; the plan tests now each get a database of their own.
 func seedAuditSpread(t *testing.T, b *PostgresStorageBackend) {
 	t.Helper()
 	ctx := context.Background()
@@ -227,7 +231,7 @@ func seedAuditSpread(t *testing.T, b *PostgresStorageBackend) {
 		       'user',
 		       'r4-spread-user-' || ((g * 7 + 3) % 50),
 		       NOW() - (g || ' seconds')::interval
-		FROM generate_series(1, $1::int) g ON CONFLICT (id) DO NOTHING`, auditSpreadRows); err != nil {
+		FROM generate_series(1, $1::int) g ORDER BY random() ON CONFLICT (id) DO NOTHING`, auditSpreadRows); err != nil {
 		t.Fatalf("seed spread audit population: %v", err)
 	}
 	if _, err := b.db.ExecContext(ctx, `ANALYZE audit_events`); err != nil {
@@ -239,7 +243,7 @@ func seedAuditSpread(t *testing.T, b *PostgresStorageBackend) {
 // is two index-ordered arms (user_created_idx, resource_created_idx) merged by
 // a Merge Append — no BitmapOr, no walk of created_at_idx, every access keyed.
 func TestPlan_AuditActorOrSubject_MergeAppendNoBitmap(t *testing.T) {
-	b := openMigrationTestDB(t)
+	b, _ := openIsolatedMigrationDB(t) // the plan must not depend on what earlier tests did to the table
 	seedAuditSpread(t, b)
 	for _, tc := range []struct {
 		name   string
@@ -280,7 +284,7 @@ func TestPlan_AuditActorOrSubject_MergeAppendNoBitmap(t *testing.T) {
 // user's whole history, or a filtered walk of created_at_idx — shapes the
 // Merge Append check rejects.
 func TestPlan_OldAuditOrShapeIsBitmapOr(t *testing.T) {
-	b := openMigrationTestDB(t)
+	b, _ := openIsolatedMigrationDB(t)
 	seedAuditSpread(t, b)
 	q, args := oldAuditListSQL(interfaces.AuditFilter{UserID: auditSpreadUser, IncludeSubject: true}, 100, 0)
 	nodes := explainAsUser(t, b, planUser, q, args)

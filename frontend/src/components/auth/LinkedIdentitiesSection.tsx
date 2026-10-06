@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
 import React, {useEffect, useState} from 'react'
 import {CheckCircle2, KeyRound, Link2} from 'lucide-react'
@@ -51,7 +52,7 @@ export const LinkedIdentitiesSection: React.FC = () => {
       window.location.href = url
     } catch (err) {
       setStarting(false)
-      toastError(t('linked.linkFailed', {message: err instanceof Error ? err.message : String(err)}))
+      toastError(t('linked.linkFailed', {message: getErrorMessage(err)}))
     }
   }
 
@@ -69,7 +70,7 @@ export const LinkedIdentitiesSection: React.FC = () => {
       toastSuccess(t('linked.unlinked', {provider: link.provider}))
       refetch()
     } catch (err) {
-      toastError(t('linked.unlinkFailed', {message: err instanceof Error ? err.message : String(err)}))
+      toastError(t('linked.unlinkFailed', {message: getErrorMessage(err)}))
     } finally {
       setUnlinking(null)
     }

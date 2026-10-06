@@ -64,7 +64,7 @@ describe('RulesPanel', () => {
 
     // The rule row Switch is the second switch (first is auto-analyze)
     const switches = screen.getAllByRole('switch')
-    fireEvent.click(switches[switches.length - 1])
+    fireEvent.click(switches[switches.length - 1]!)
 
     await waitFor(() => {
       expect(setRuleEnabled).toHaveBeenCalledWith('deep-nesting', false)
@@ -79,7 +79,7 @@ describe('RulesPanel', () => {
     await screen.findByText('Deeply nested logic')
 
     const switches = screen.getAllByRole('switch')
-    fireEvent.click(switches[switches.length - 1])
+    fireEvent.click(switches[switches.length - 1]!)
 
     expect(await screen.findByText(/Failed to update rule/)).toBeInTheDocument()
   })
@@ -113,7 +113,7 @@ describe('RulesPanel scoping (R4)', () => {
     // a read-only rules screen.
     renderPanel()
     const switches = await screen.findAllByRole('switch')
-    fireEvent.click(switches[switches.length - 1])
+    fireEvent.click(switches[switches.length - 1]!)
     await waitFor(() => expect(setRuleEnabled).toHaveBeenCalled())
     expect(screen.queryByText(/Applies to/)).not.toBeInTheDocument()
   })
@@ -122,8 +122,8 @@ describe('RulesPanel scoping (R4)', () => {
     signIn({id: 'u1', role: 'member'})
     renderPanel()
     const switches = await screen.findAllByRole('switch')
-    expect(switches[switches.length - 1]).toBeDisabled()
-    fireEvent.click(switches[switches.length - 1])
+    expect(switches[switches.length - 1]!).toBeDisabled()
+    fireEvent.click(switches[switches.length - 1]!)
     await waitFor(() => expect(setRuleEnabled).not.toHaveBeenCalled())
   })
 
@@ -135,14 +135,14 @@ describe('RulesPanel scoping (R4)', () => {
     await screen.findByText(/Applies to/)
 
     const switches = await screen.findAllByRole('switch')
-    fireEvent.click(switches[switches.length - 1])
+    fireEvent.click(switches[switches.length - 1]!)
 
     // The org profile is written; the deployment endpoint is NOT touched. That
     // separation is the whole point — before R4 this panel wrote the singleton
     // that every tenant shares.
     await waitFor(() => expect(updateOrgSettings).toHaveBeenCalled())
     expect(setRuleEnabled).not.toHaveBeenCalled()
-    expect(updateOrgSettings.mock.calls[0][0]).toBe('org-1')
+    expect(updateOrgSettings.mock.calls[0]![0]).toBe('org-1')
   })
 
   it('merges into the org profile rather than replacing it', async () => {
@@ -156,10 +156,10 @@ describe('RulesPanel scoping (R4)', () => {
     await screen.findByText(/Applies to/)
 
     const switches = await screen.findAllByRole('switch')
-    fireEvent.click(switches[switches.length - 1])
+    fireEvent.click(switches[switches.length - 1]!)
 
     await waitFor(() => expect(updateOrgSettings).toHaveBeenCalled())
-    const sent = updateOrgSettings.mock.calls[0][1] as {analysis: {rules: Record<string, unknown>}}
+    const sent = updateOrgSettings.mock.calls[0]![1] as {analysis: {rules: Record<string, unknown>}}
     expect(Object.keys(sent.analysis.rules)).toContain('other-rule')
     expect(Object.keys(sent.analysis.rules).length).toBeGreaterThan(1)
   })

@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
 import React, {useState, useEffect} from 'react'
 import {Library, Search, Trash2, FolderOpen, Save, RefreshCw} from 'lucide-react'
@@ -64,7 +65,7 @@ export default function LibraryTab() {
       setMainPaneView('block')
     } catch (err) {
       toast.error(t('libraryTab.loadFailed'), {
-        description: err instanceof Error ? err.message : t('libraryTab.unknownError'),
+        description: getErrorMessage(err, t('libraryTab.unknownError')),
       })
     }
   }
@@ -84,7 +85,7 @@ export default function LibraryTab() {
       setFlows(flows.filter(f => f.id !== id))
     } catch (err) {
       toast.error(t('libraryTab.deleteFailed'), {
-        description: err instanceof Error ? err.message : t('libraryTab.unknownError'),
+        description: getErrorMessage(err, t('libraryTab.unknownError')),
       })
     }
   }
@@ -97,7 +98,7 @@ export default function LibraryTab() {
       toast.success(t('libraryTab.reloaded'))
     } catch (err) {
       toast.error(t('libraryTab.reloadFailed'), {
-        description: err instanceof Error ? err.message : t('libraryTab.unknownError'),
+        description: getErrorMessage(err, t('libraryTab.unknownError')),
       })
     }
   }
@@ -147,7 +148,7 @@ export default function LibraryTab() {
       fetchLibrary()
     } catch (err) {
       toast.error(t('libraryTab.saveFailed'), {
-        description: err instanceof Error ? err.message : t('libraryTab.unknownError'),
+        description: getErrorMessage(err, t('libraryTab.unknownError')),
       })
     } finally {
       setIsSaving(false)
@@ -164,7 +165,7 @@ export default function LibraryTab() {
             placeholder={t('libraryTab.searchPlaceholder')}
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="w-full bg-surface-2 border border-border-default rounded-md py-1.5 pl-8 pr-3 text-xs focus:outline-none focus:ring-1 focus:ring-brand-500"
+            className="w-full bg-surface-2 border border-border-default rounded-md py-1.5 pl-8 pr-3 text-xs focus:outline-hidden focus:ring-1 focus:ring-brand-500"
           />
         </div>
 

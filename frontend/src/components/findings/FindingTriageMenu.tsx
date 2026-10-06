@@ -224,7 +224,7 @@ export default function FindingTriageMenu({finding}: Props) {
                           <span className="truncate">{t('triage.actions.assignToMe')}</span>
                         </button>
                       )}
-                      <div className="[&:not(:first-child)]:border-t border-border-subtle" />
+                      <div className="not-first:border-t border-border-subtle" />
                       {assignees
                         .filter(a => a.id !== currentUser?.id)
                         .map(a => (

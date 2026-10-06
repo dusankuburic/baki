@@ -76,7 +76,7 @@ export function UsersSection({stats}: {stats: UserStats | null}) {
               setDraft('')
               setUsersQuery('')
             }}
-            className="w-full min-w-[12rem] flex-1 sm:max-w-sm"
+            className="w-full min-w-48 flex-1 sm:max-w-sm"
           />
           <div className="analytics-chip-row" role="group" aria-label={t('users.roleFilter')}>
             {ROLE_FILTERS.map(r => {

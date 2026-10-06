@@ -152,7 +152,7 @@ function TreeNode({
         <button
           ref={chevronRef}
           className={clsx(
-            'w-4 h-4 flex items-center justify-center flex-shrink-0 text-text-tertiary transition-transform duration-fast',
+            'w-4 h-4 flex items-center justify-center shrink-0 text-text-tertiary transition-transform duration-fast',
             isExpanded && 'rotate-90',
           )}
           tabIndex={-1}
@@ -160,9 +160,9 @@ function TreeNode({
           <ChevronRight size={12} />
         </button>
       )}
-      {!(row.hasChildren || isSubflow) && <div className="w-4 flex-shrink-0" />}
+      {!(row.hasChildren || isSubflow) && <div className="w-4 shrink-0" />}
 
-      <Icon size={14} className={clsx('flex-shrink-0', colorClass)} />
+      <Icon size={14} className={clsx('shrink-0', colorClass)} />
 
       <span
         className={clsx(
@@ -174,13 +174,13 @@ function TreeNode({
       </span>
 
       {findingCount > 0 && (
-        <span className="flex-shrink-0 text-2xs bg-semantic-error/15 text-semantic-error px-1 rounded mr-2 tabular-nums">
+        <span className="shrink-0 text-2xs bg-semantic-error/15 text-semantic-error px-1 rounded mr-2 tabular-nums">
           {findingCount}
         </span>
       )}
 
       {row.hasChildren && !isExpanded && !findingCount && (
-        <span className="flex-shrink-0 text-2xs text-text-tertiary tabular-nums mr-2">{row.childCount}</span>
+        <span className="shrink-0 text-2xs text-text-tertiary tabular-nums mr-2">{row.childCount}</span>
       )}
     </div>
   )

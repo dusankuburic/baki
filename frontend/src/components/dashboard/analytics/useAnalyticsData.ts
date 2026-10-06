@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useEffect, useMemo, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {dashboardApi} from '@/api'
@@ -59,7 +60,7 @@ export function useAnalyticsData(): {
       .catch((e: unknown) => {
         if (controller.signal.aborted || (e instanceof Error && e.name === 'AbortError')) return
         logger.error('analytics: load failed', e)
-        const message = e instanceof Error ? e.message : t('common.unknownError')
+        const message = getErrorMessage(e, t('common.unknownError'))
         if (dataRef.current) toastRef.current.error(t('analytics.refreshFailed'), {description: message})
         setLoaded({key, data: dataRef.current, error: message})
       })

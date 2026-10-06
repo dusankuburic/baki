@@ -23,7 +23,7 @@ export default function TitleBar() {
 
   return (
     <div
-      className="flex items-center h-8 px-3 border-b border-border-subtle bg-surface-1 flex-shrink-0 print:hidden"
+      className="flex items-center h-8 px-3 border-b border-border-subtle bg-surface-1 shrink-0 print:hidden"
       data-tauri-drag-region
     >
       {/* Mobile sidebar toggle (hamburger) */}

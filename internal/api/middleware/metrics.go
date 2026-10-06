@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -23,16 +24,20 @@ func Metrics(h http.Handler, knownRoutes map[string]struct{}) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Label on the canonical dispatch path, taken before the handler runs: this layer sits outside the mux, and r.URL.Path only became canonical if the router rewrote it — a request refused earlier (429) was labelled on the raw path (/api/v1/library/x as routeOther instead of /api/library/:id).
 		// Canonicalizing AFTER the handler would not do either (the router already applied the /api/v1 strip once; a second pass labels /api/v1/v1/... as a route the request never reached). Not dispatchPath: its RawPath branch keeps the escaped, uncleaned spelling, which the collapses below do not match.
-		p := canonicalPath(r.URL.Path)
+		route := RouteLabel(r.URL, knownRoutes)
 		sr := NewResponseRecorder(w)
 		start := time.Now()
 		h.ServeHTTP(maybeHijackable(sr), r)
-		route := normalizeRoute(p, knownRoutes)
 		method := normalizeMethod(r.Method)
 		elapsed := time.Since(start).Seconds()
 		metrics.HTTPRequestsTotal.WithLabelValues(method, route, strconv.Itoa(sr.status)).Inc()
 		metrics.HTTPRequestDuration.WithLabelValues(method, route).Observe(elapsed)
 	})
+}
+
+// RouteLabel is the bounded route label Metrics records for u. Exported for the route-policy golden in package api.
+func RouteLabel(u *url.URL, knownRoutes map[string]struct{}) string {
+	return normalizeRoute(canonicalPath(u.Path), knownRoutes)
 }
 
 // methodOther is the bounded catch-all for any request method outside the

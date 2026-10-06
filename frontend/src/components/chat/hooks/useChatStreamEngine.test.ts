@@ -126,8 +126,8 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onChunk(' more A', 'streamA')
       })
       const streams = useChatStore.getState().streams
-      expect(streams.threadA.text).toBe('Hello from A more A')
-      expect(streams.threadB.text).toBe('Hello from B')
+      expect(streams.threadA!.text).toBe('Hello from A more A')
+      expect(streams.threadB!.text).toBe('Hello from B')
     })
 
     it('ignores chunks for an unknown streamId', () => {
@@ -152,7 +152,7 @@ describe('useChatStreamEngine', () => {
       act(() => {
         capturedHandler!.onChunk('ghost', 'unknown-stream')
       })
-      expect(useChatStore.getState().streams.threadA.text).toBe('')
+      expect(useChatStore.getState().streams.threadA!.text).toBe('')
     })
   })
 
@@ -338,8 +338,8 @@ describe('useChatStreamEngine', () => {
       })
       const msgs = useChatStore.getState().conversations.get('threadA')
       expect(msgs).toHaveLength(1)
-      expect(msgs![0].finishReason).toBe('error')
-      expect(msgs![0].content).toContain('provider down')
+      expect(msgs![0]!.finishReason).toBe('error')
+      expect(msgs![0]!.content).toContain('provider down')
     })
   })
 
@@ -414,8 +414,8 @@ describe('useChatStreamEngine', () => {
       // appendMessage writes to the conversations Map, not threads[].messages
       const msgs = useChatStore.getState().conversations.get('threadA')
       expect(msgs).toHaveLength(1)
-      expect(msgs![0].content).toBe('hello world')
-      expect(msgs![0].finishReason).toBe('interrupted')
+      expect(msgs![0]!.content).toBe('hello world')
+      expect(msgs![0]!.finishReason).toBe('interrupted')
     })
   })
 
@@ -592,9 +592,9 @@ describe('useChatStreamEngine', () => {
           'streamA',
         )
       })
-      const slot = useChatStore.getState().streams.threadA
+      const slot = useChatStore.getState().streams.threadA!
       expect(slot.fixProposals).toHaveLength(1)
-      expect(slot.fixProposals[0]).toMatchObject({
+      expect(slot.fixProposals[0]!).toMatchObject({
         proposalId: 'p1',
         ruleId: 'unhandled-error',
         fixType: 'wrap-error-handler',
@@ -603,8 +603,8 @@ describe('useChatStreamEngine', () => {
         summary: 'wrap lines 3-3',
         status: 'pending',
       })
-      expect(slot.fixProposals[0].items).toHaveLength(1)
-      expect(slot.fixProposals[0].items[0]).toMatchObject({ruleId: 'unhandled-error', status: 'pending'})
+      expect(slot.fixProposals[0]!.items).toHaveLength(1)
+      expect(slot.fixProposals[0]!.items[0]!).toMatchObject({ruleId: 'unhandled-error', status: 'pending'})
     })
 
     // U2: sequential proposals STACK — the model can propose a second fix
@@ -634,12 +634,12 @@ describe('useChatStreamEngine', () => {
           'streamA',
         )
       })
-      const slot = useChatStore.getState().streams.threadA
+      const slot = useChatStore.getState().streams.threadA!
       expect(slot.fixProposals).toHaveLength(2)
-      expect(slot.fixProposals[0].status).toBe('applied')
-      expect(slot.fixProposals[0].proposalId).toBe('p1')
-      expect(slot.fixProposals[1].status).toBe('pending')
-      expect(slot.fixProposals[1].proposalId).toBe('p2')
+      expect(slot.fixProposals[0]!.status).toBe('applied')
+      expect(slot.fixProposals[0]!.proposalId).toBe('p1')
+      expect(slot.fixProposals[1]!.status).toBe('pending')
+      expect(slot.fixProposals[1]!.proposalId).toBe('p2')
     })
 
     // Replaying a proposalId already on the slot is a no-op (journal replay
@@ -657,7 +657,7 @@ describe('useChatStreamEngine', () => {
       act(() => {
         capturedHandler!.onFixProposal!(payload, 'streamA')
       })
-      expect(useChatStore.getState().streams.threadA.fixProposals).toHaveLength(1)
+      expect(useChatStore.getState().streams.threadA!.fixProposals).toHaveLength(1)
     })
 
     // Batch decisions patch per-item statuses.
@@ -682,11 +682,11 @@ describe('useChatStreamEngine', () => {
           {ruleId: 'r2', status: 'applied-unresolved', message: 'still appears'},
         ])
       })
-      const card = useChatStore.getState().streams.threadA.fixProposals[0]
+      const card = useChatStore.getState().streams.threadA!.fixProposals[0]!
       expect(card.status).toBe('applied-unresolved')
-      expect(card.items[0].status).toBe('applied')
-      expect(card.items[1].status).toBe('applied-unresolved')
-      expect(card.items[1].message).toBe('still appears')
+      expect(card.items[0]!.status).toBe('applied')
+      expect(card.items[1]!.status).toBe('applied-unresolved')
+      expect(card.items[1]!.message).toBe('still appears')
     })
 
     // R1 frontend half: a resume journal rebuilds the slot's agentic state
@@ -715,12 +715,12 @@ describe('useChatStreamEngine', () => {
           'streamA',
         )
       })
-      const slot = useChatStore.getState().streams.threadA
+      const slot = useChatStore.getState().streams.threadA!
       expect(slot.toolCalls).toEqual([
         {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 4, summary: '2 matches'},
       ])
       expect(slot.fixProposals).toHaveLength(1)
-      expect(slot.fixProposals[0].status).toBe('applied')
+      expect(slot.fixProposals[0]!.status).toBe('applied')
 
       // Idempotent: replaying the same journal must not duplicate state.
       act(() => {
@@ -735,8 +735,8 @@ describe('useChatStreamEngine', () => {
           'streamA',
         )
       })
-      expect(useChatStore.getState().streams.threadA.toolCalls).toHaveLength(0)
-      expect(useChatStore.getState().streams.threadA.fixProposals).toHaveLength(1)
+      expect(useChatStore.getState().streams.threadA!.toolCalls).toHaveLength(0)
+      expect(useChatStore.getState().streams.threadA!.fixProposals).toHaveLength(1)
     })
 
     it('onFixDecision applied patches the card and re-analyzes the flow', async () => {
@@ -754,7 +754,7 @@ describe('useChatStreamEngine', () => {
       act(() => {
         capturedHandler!.onFixDecision!('p1', 'applied', undefined, 'streamA')
       })
-      expect(useChatStore.getState().streams.threadA.fixProposals[0]?.status).toBe('applied')
+      expect(useChatStore.getState().streams.threadA!.fixProposals[0]?.status).toBe('applied')
       // The refresh fires asynchronously; flush microtasks.
       await act(async () => {
         await Promise.resolve()
@@ -779,7 +779,7 @@ describe('useChatStreamEngine', () => {
         result.current.respondFixProposal('threadA', true)
       })
       expect(chatApi.respondFixDecision).toHaveBeenCalledWith('streamA', 'p1', true, undefined)
-      expect(useChatStore.getState().streams.threadA.fixProposals[0]?.status).toBe('applying')
+      expect(useChatStore.getState().streams.threadA!.fixProposals[0]?.status).toBe('applying')
 
       // Second click while no longer pending must not re-send.
       await act(async () => {
@@ -805,7 +805,7 @@ describe('useChatStreamEngine', () => {
       await act(async () => {
         result.current.respondFixProposal('threadA', true)
       })
-      expect(useChatStore.getState().streams.threadA.fixProposals[0]?.status).toBe('error')
+      expect(useChatStore.getState().streams.threadA!.fixProposals[0]?.status).toBe('error')
     })
   })
 
@@ -876,7 +876,7 @@ describe('useChatStreamEngine', () => {
           'streamA',
         )
       })
-      expect(useChatStore.getState().streams.threadA.toolCalls).toEqual([
+      expect(useChatStore.getState().streams.threadA!.toolCalls).toEqual([
         {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 7, summary: '3 matches'},
         {name: 'read_doc', label: 'Reading document', ok: false, durationMs: 1, summary: 'error: no doc'},
       ])
@@ -906,8 +906,8 @@ describe('useChatStreamEngine', () => {
       act(() => {
         capturedHandler!.onChunk('the answer', 'streamA')
       })
-      expect(useChatStore.getState().streams.threadA.toolStatus).toBeNull()
-      expect(useChatStore.getState().streams.threadA.text).toBe('the answer')
+      expect(useChatStore.getState().streams.threadA!.toolStatus).toBeNull()
+      expect(useChatStore.getState().streams.threadA!.text).toBe('the answer')
     })
 
     // U3: an errored turn keeps its tool trail — 4 tools ran before the
@@ -932,8 +932,8 @@ describe('useChatStreamEngine', () => {
       })
       const msgs = useChatStore.getState().conversations.get('threadA')!
       expect(msgs).toHaveLength(1)
-      expect(msgs[0].finishReason).toBe('error')
-      expect(msgs[0].toolCalls).toEqual([
+      expect(msgs[0]!.finishReason).toBe('error')
+      expect(msgs[0]!.toolCalls).toEqual([
         {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 3, summary: '2 matches'},
       ])
     })
@@ -946,7 +946,7 @@ describe('useChatStreamEngine', () => {
           'ghost',
         )
       })
-      expect(useChatStore.getState().streams.threadA.toolCalls).toHaveLength(0)
+      expect(useChatStore.getState().streams.threadA!.toolCalls).toHaveLength(0)
     })
 
     it('done pins toolCalls and the fix outcome snapshot onto the committed message', () => {
@@ -988,13 +988,13 @@ describe('useChatStreamEngine', () => {
 
       const msgs = useChatStore.getState().conversations.get('threadA')!
       expect(msgs).toHaveLength(1)
-      const committed = msgs[0]
+      const committed = msgs[0]!
       expect(committed.content).toBe('Fixed it')
       expect(committed.toolCalls).toEqual([
         {name: 'list_findings', label: 'Listing findings', ok: true, durationMs: 3, summary: '1 finding'},
       ])
       expect(committed.fixProposals).toHaveLength(1)
-      expect(committed.fixProposals![0]).toMatchObject({
+      expect(committed.fixProposals![0]!).toMatchObject({
         proposalId: 'p1',
         ruleId: 'unhandled-error',
         fixType: 'wrap-error-handler',
@@ -1003,8 +1003,8 @@ describe('useChatStreamEngine', () => {
         status: 'applied',
         message: 'verified gone',
       })
-      expect(committed.fixProposals![0].items).toHaveLength(1)
-      expect(committed.fixProposals![0].items![0].status).toBe('applied')
+      expect(committed.fixProposals![0]!.items).toHaveLength(1)
+      expect(committed.fixProposals![0]!.items![0]!.status).toBe('applied')
       // The trail is persisted with the conversation save.
       expect(chatApi.saveConversation).toHaveBeenCalledWith(
         'flow-1',
@@ -1059,7 +1059,7 @@ describe('useChatStreamEngine', () => {
       act(() => {
         capturedHandler!.onDone(2, 2, 'streamA')
       })
-      const committed = useChatStore.getState().conversations.get('threadA')![0]
+      const committed = useChatStore.getState().conversations.get('threadA')![0]!
       expect(committed.toolCalls).toBeUndefined()
       expect(committed.fixProposals).toBeUndefined()
     })
@@ -1113,7 +1113,7 @@ describe('useChatStreamEngine', () => {
       act(() => {
         capturedHandler!.onDone(9, 4, 'streamA', {servedModel: 'gpt-4o-2024-08-06', ...RATES})
       })
-      const committed = useChatStore.getState().conversations.get('threadA')![0]
+      const committed = useChatStore.getState().conversations.get('threadA')![0]!
       expect(committed).toMatchObject({
         content: 'answer',
         model: 'my-deployment',
@@ -1134,7 +1134,7 @@ describe('useChatStreamEngine', () => {
       act(() => {
         capturedHandler!.onDone(2, 2, 'streamA')
       })
-      const committed = useChatStore.getState().conversations.get('threadA')![0]
+      const committed = useChatStore.getState().conversations.get('threadA')![0]!
       expect('servedModel' in committed).toBe(false)
       expect('inputCostPerM' in committed).toBe(false)
       expect('outputCostPerM' in committed).toBe(false)
@@ -1207,7 +1207,7 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA', seedThread('threadA', 'streamA', 'azure-foundry'))
         capturedHandler!.onError('no Azure credentials for this flow', 'streamA', 'PROVIDER_NOT_CONFIGURED')
       })
-      const msg = useChatStore.getState().conversations.get('threadA')![0]
+      const msg = useChatStore.getState().conversations.get('threadA')![0]!
       expect(msg.finishReason).toBe('error')
       expect(msg.errorCode).toBe('PROVIDER_NOT_CONFIGURED')
       expect(msg.content).toBe('**This provider is not set up here** — no Azure credentials for this flow')
@@ -1218,7 +1218,7 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamB', 'threadB', seedThread('threadB', 'streamB', 'azure-foundry'))
         capturedHandler!.onError('missing Foundry User role', 'streamB', 'PROVIDER_PERMISSION')
       })
-      expect(useChatStore.getState().conversations.get('threadB')![0].errorCode).toBe('PROVIDER_PERMISSION')
+      expect(useChatStore.getState().conversations.get('threadB')![0]!.errorCode).toBe('PROVIDER_PERMISSION')
       expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
     })
 
@@ -1228,7 +1228,7 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA', seedThread('threadA', 'streamA', 'azure-foundry'))
         capturedHandler!.onError('timed out', 'streamA', 'STREAM_TIMEOUT')
       })
-      const msg = useChatStore.getState().conversations.get('threadA')![0]
+      const msg = useChatStore.getState().conversations.get('threadA')![0]!
       expect(msg.content).toBe('*Error: timed out*')
       expect(msg.errorCode).toBeUndefined()
     })
@@ -1390,9 +1390,9 @@ describe('useChatStreamEngine error usage', () => {
     })
     const st = useChatStore.getState()
     const msgs = st.conversations.get('threadA')!
-    expect('tokensIn' in msgs[0]).toBe(false)
-    expect('tokensOut' in msgs[0]).toBe(false)
-    expect('servedModel' in msgs[0]).toBe(false)
+    expect('tokensIn' in msgs[0]!).toBe(false)
+    expect('tokensOut' in msgs[0]!).toBe(false)
+    expect('servedModel' in msgs[0]!).toBe(false)
     expect(st.threads.find(t => t.id === 'threadA')!.tokensIn).toBe(0)
   })
 
@@ -1402,7 +1402,7 @@ describe('useChatStreamEngine error usage', () => {
       result.current.beginAcc('streamA', 'threadA', seedSlotThread('threadA', 'streamA', 'azure-foundry'))
       capturedHandler!.onError('ask your organisation admin', 'streamA', 'PROVIDER_NOT_CONFIGURED', {shared: true})
     })
-    expect(useChatStore.getState().conversations.get('threadA')![0].errorShared).toBe(true)
+    expect(useChatStore.getState().conversations.get('threadA')![0]!.errorShared).toBe(true)
   })
 })
 
@@ -1657,7 +1657,7 @@ describe('useChatStreamEngine model labels', () => {
       result.current.beginAcc('streamA', 'threadA', DOCS)
       capturedHandler!.onError('the model is not available', 'streamA', 'MODEL_NOT_AVAILABLE')
     })
-    const msg = useChatStore.getState().conversations.get('threadA')![0]
+    const msg = useChatStore.getState().conversations.get('threadA')![0]!
     expect(msg.errorCode).toBe('MODEL_NOT_AVAILABLE')
     expect(msg.content).toBe('**This model is no longer available** — the model is not available')
     expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)

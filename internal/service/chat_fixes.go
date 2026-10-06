@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
 	"pad-core/ai/scrubber"
 	"pad-core/logger"
@@ -33,6 +34,21 @@ const fixDecisionKeepalive = 15 * time.Second
 
 // ErrNoPendingFix is returned by ResolveFixDecision for an unknown, already-decided or other-stream proposal ID.
 var ErrNoPendingFix = errors.New("no pending fix proposal for this stream")
+
+// errFixNeedsWriteScope refuses a chat fix for a scoped API token without the write scope. The HTTP scope gate
+// never sees this mutation: it runs inside the chat stream, which a chat-only token is allowed to start.
+var errFixNeedsWriteScope = fmt.Errorf("%w: this API token lacks the %q scope needed to apply fixes", ErrPermissionDenied, auth.ScopeWrite)
+
+// fixScopeRefusal is the model-readable answer when the stream's token may not apply fixes.
+const fixScopeRefusal = "this session's API token is not allowed to modify flows (it lacks the write scope) — nothing was changed. Explain the fix instead so the user can apply it."
+
+// requireFixWriteScope allows interactive sessions and unscoped tokens; a scoped token needs ScopeWrite.
+func requireFixWriteScope(ctx context.Context) error {
+	if c := auth.ClaimsFromContext(ctx); c != nil && !c.AllowsScope(auth.ScopeWrite) {
+		return errFixNeedsWriteScope
+	}
+	return nil
+}
 
 // fixDecisionState is one registered approval prompt; decided is buffered so ResolveFixDecision never blocks and
 // the FIRST decision wins.
@@ -82,6 +98,10 @@ func (s *ChatService) newFixApplier(scope string, doc *models.FlowDocument, stre
 func (a *chatFixApplier) ApplyFixWithApproval(ctx context.Context, prop ai.FixProposal) (string, error) {
 	if a.touch != nil {
 		a.touch()
+	}
+	// Refuse before prompting: an approval the token could never act on would only waste the user's click.
+	if requireFixWriteScope(ctx) != nil {
+		return fixScopeRefusal, nil
 	}
 	st := &fixDecisionState{streamID: a.streamID, decided: make(chan fixDecision, 1)}
 	a.svc.pendingFixDecisions.Store(prop.ProposalID, st)
@@ -194,6 +214,9 @@ func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.
 	}
 	if a.touch != nil {
 		a.touch()
+	}
+	if requireFixWriteScope(ctx) != nil {
+		return fixScopeRefusal, nil
 	}
 	batchID := props[0].ProposalID + "-batch-" + uuid.NewString()[:8]
 	st := &fixDecisionState{streamID: a.streamID, decided: make(chan fixDecision, 1)}
@@ -358,6 +381,10 @@ func (s *ChatService) applyApprovedFix(ctx context.Context, scope string, snapsh
 	if snapshot == nil {
 		return chatFixOutcome{Status: "error", Detail: "no flow loaded"}, nil, fmt.Errorf("no flow loaded")
 	}
+	// Re-checked at apply time (defense in depth): this is the mutation itself.
+	if err := requireFixWriteScope(ctx); err != nil {
+		return chatFixOutcome{Status: "error", Detail: err.Error()}, nil, err
+	}
 	// Fresh doc + editor check at apply time: the stream was authorized as viewer and the snapshot may be stale.
 	doc, err := s.GetAuthorizedFlow(ctx, snapshot.ID, scope, "editor")
 	if err != nil {
@@ -511,6 +538,10 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, scope string, snap
 	if snapshot == nil {
 		out.Detail = "no flow loaded"
 		return out, nil, fmt.Errorf("no flow loaded")
+	}
+	if err := requireFixWriteScope(ctx); err != nil {
+		out.Detail = err.Error()
+		return out, nil, err
 	}
 	doc, err := s.GetAuthorizedFlow(ctx, snapshot.ID, scope, "editor")
 	if err != nil {

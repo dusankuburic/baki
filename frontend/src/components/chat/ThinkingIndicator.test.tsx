@@ -15,7 +15,7 @@ describe('ThinkingIndicator', () => {
     expect(screen.getByRole('status').textContent).toBe('Thinking...')
     const dots = document.querySelectorAll('.thinking-dot')
     expect(dots).toHaveLength(3)
-    expect(dots[0].parentElement?.getAttribute('aria-hidden')).toBe('true')
+    expect(dots[0]!.parentElement?.getAttribute('aria-hidden')).toBe('true')
   })
 
   it('shows how long the model has been thinking once a few seconds have passed', () => {

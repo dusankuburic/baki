@@ -531,3 +531,70 @@ func TestAuthRefreshCookie_SetOnLoginAndReadOnRefresh(t *testing.T) {
 		t.Error("refresh did not rotate the pad_refresh cookie")
 	}
 }
+
+// TestAuthRefreshCookie_RememberMeShapesLifetime pins the web remember-me
+// contract: login with rememberMe sets a persistent cookie (Expires = token
+// TTL); without it the cookie is a browser-session cookie (no Expires); the
+// refresh rotation preserves the requested shape.
+func TestAuthRefreshCookie_RememberMeShapesLifetime(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	login(t, rt, "remember@example.com", "Password123!") // register + verify + seed
+
+	// Persistent: rememberMe=true → cookie carries Expires.
+	body, _ := json.Marshal(map[string]any{"email": "remember@example.com", "password": "Password123!", "rememberMe": true})
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	rt.ServeHTTP(rr, req)
+	checkStatus(t, rr, http.StatusOK)
+	var persistent *http.Cookie
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == refreshCookieName {
+			persistent = c
+		}
+	}
+	if persistent == nil || persistent.Value == "" {
+		t.Fatal("login did not set the pad_refresh cookie")
+	}
+	if persistent.Expires.IsZero() {
+		t.Error("rememberMe=true must set a persistent cookie (non-zero Expires)")
+	}
+
+	// Session: rememberMe absent → cookie without Expires (dies with browser).
+	body2, _ := json.Marshal(map[string]any{"email": "remember@example.com", "password": "Password123!"})
+	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body2))
+	rr2 := httptest.NewRecorder()
+	rt.ServeHTTP(rr2, req2)
+	checkStatus(t, rr2, http.StatusOK)
+	var session *http.Cookie
+	for _, c := range rr2.Result().Cookies() {
+		if c.Name == refreshCookieName {
+			session = c
+		}
+	}
+	if session == nil || session.Value == "" {
+		t.Fatal("second login did not set the pad_refresh cookie")
+	}
+	if !session.Expires.IsZero() {
+		t.Error("rememberMe=false must set a browser-session cookie (zero Expires)")
+	}
+
+	// Rotation preserves the requested shape: rememberMe=true rotates to a
+	// persistent cookie even from a cookie-only refresh.
+	req3 := httptest.NewRequest(http.MethodPost, "/api/auth/refresh", bytes.NewReader([]byte(`{"rememberMe":true}`)))
+	req3.AddCookie(session)
+	rr3 := httptest.NewRecorder()
+	rt.ServeHTTP(rr3, req3)
+	checkStatus(t, rr3, http.StatusOK)
+	var rotatedPersistent *http.Cookie
+	for _, c := range rr3.Result().Cookies() {
+		if c.Name == refreshCookieName {
+			rotatedPersistent = c
+		}
+	}
+	if rotatedPersistent == nil || rotatedPersistent.Value == "" {
+		t.Fatal("refresh did not rotate the pad_refresh cookie")
+	}
+	if rotatedPersistent.Expires.IsZero() {
+		t.Error("refresh with rememberMe=true must rotate to a persistent cookie")
+	}
+}

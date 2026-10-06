@@ -23,10 +23,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 	// chi routes on RawPath, so strip it there too or an escaped "/" in an id 404s.
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			req.URL.Path = canonicalRequestPath(req.URL.Path)
-			if req.URL.RawPath != "" {
-				req.URL.RawPath = stripVersionAlias(req.URL.RawPath)
-			}
+			applyVersionAlias(req.URL)
 			next.ServeHTTP(w, req)
 		})
 	})

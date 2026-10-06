@@ -26,7 +26,7 @@ const KNOWN: ReadonlySet<string> = new Set(AUDIT_GROUPS)
 // actionGroup: "auth.login" → auth; the four dotless ids ("org_channel_save",
 // "org_rule_delete") → org; anything unrecognised → other.
 export function actionGroup(action: string): AuditGroup {
-  const head = action.includes('.') ? action.split('.')[0] : action.split('_')[0]
+  const head = action.includes('.') ? (action.split('.')[0] ?? '') : (action.split('_')[0] ?? '')
   return KNOWN.has(head) && head !== 'other' ? (head as AuditGroup) : 'other'
 }
 

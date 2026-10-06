@@ -55,3 +55,85 @@ export const getAnalysisReportSchema = (): Promise<Schemas['AnalysisReportSchema
 
 export const getAppSettingsSchema = (): Promise<Schemas['AppSettingsSchema']> =>
   loadSchemas().then(s => s.AppSettingsSchema)
+
+// ── Flow reads ──────────────────────────────────────────────────────────────
+export const getLoadedFlowDocumentSchema = (): Promise<Schemas['LoadedFlowDocumentSchema']> =>
+  loadSchemas().then(s => s.LoadedFlowDocumentSchema)
+
+export const getRecentFilesSchema = (): Promise<Schemas['RecentFilesSchema']> =>
+  loadSchemas().then(s => s.RecentFilesSchema)
+
+export const getSearchResultsSchema = (): Promise<Schemas['SearchResultsSchema']> =>
+  loadSchemas().then(s => s.SearchResultsSchema)
+
+export const getSourceFilesSchema = (): Promise<Schemas['SourceFilesSchema']> =>
+  loadSchemas().then(s => s.SourceFilesSchema)
+
+export const getSourceMetaSchema = (): Promise<Schemas['SourceMetaSchema']> =>
+  loadSchemas().then(s => s.SourceMetaSchema)
+
+export const getSnapshotsListSchema = (): Promise<Schemas['SnapshotsListSchema']> =>
+  loadSchemas().then(s => s.SnapshotsListSchema)
+
+// ── Library ─────────────────────────────────────────────────────────────────
+export const getLibraryFlowsPageSchema = (): Promise<Schemas['LibraryFlowsPageSchema']> =>
+  loadSchemas().then(s => s.LibraryFlowsPageSchema)
+
+export const getLibraryFlowSchema = (): Promise<Schemas['LibraryFlowSchema']> =>
+  loadSchemas().then(s => s.LibraryFlowSchema)
+
+export const getLibraryFlowVersionSchema = (): Promise<Schemas['LibraryFlowVersionsSchema']> =>
+  loadSchemas().then(s => s.LibraryFlowVersionsSchema)
+
+// ── Governance ──────────────────────────────────────────────────────────────
+export const getGovernanceAlertsSchema = (): Promise<Schemas['GovernanceAlertsSchema']> =>
+  loadSchemas().then(s => s.GovernanceAlertsSchema)
+
+export const getUnreadCountSchema = (): Promise<Schemas['UnreadCountSchema']> =>
+  loadSchemas().then(s => s.UnreadCountSchema)
+
+// ── Providers ───────────────────────────────────────────────────────────────
+export const getProviderListSchema = (): Promise<Schemas['ProviderListSchema']> =>
+  loadSchemas().then(s => s.ProviderListSchema)
+
+export const getGitHubUserSchema = (): Promise<Schemas['GitHubUserOrNullSchema']> =>
+  loadSchemas().then(s => s.GitHubUserOrNullSchema)
+
+export const getAzureConnectionsListingSchema = (): Promise<Schemas['AzureConnectionsListingSchema']> =>
+  loadSchemas().then(s => s.AzureConnectionsListingSchema)
+
+export const getAzureConnectionResponseSchema = (): Promise<Schemas['AzureConnectionResponseSchema']> =>
+  loadSchemas().then(s => s.AzureConnectionResponseSchema)
+
+export const getAzureModelsListingSchema = (): Promise<Schemas['AzureModelsListingSchema']> =>
+  loadSchemas().then(s => s.AzureModelsListingSchema)
+
+export const getAzureDiscoverySchema = (): Promise<Schemas['AzureDiscoverySchema']> =>
+  loadSchemas().then(s => s.AzureDiscoverySchema)
+
+// ── Chat ────────────────────────────────────────────────────────────────────
+export const getSuggestedPromptsSchema = (): Promise<Schemas['SuggestedPromptsSchema']> =>
+  loadSchemas().then(s => s.SuggestedPromptsSchema)
+
+// ── Admin ───────────────────────────────────────────────────────────────────
+export const getAdminUsersPageSchema = (): Promise<Schemas['AdminUsersPageSchema']> =>
+  loadSchemas().then(s => s.AdminUsersPageSchema)
+
+export const getUserStatsSchema = (): Promise<Schemas['UserStatsSchema']> =>
+  loadSchemas().then(s => s.UserStatsSchema)
+
+export const getAuditEventsSchema = (): Promise<Schemas['AuditEventsSchema']> =>
+  loadSchemas().then(s => s.AuditEventsSchema)
+
+export const getAuditActionsSchema = (): Promise<Schemas['AuditActionsSchema']> =>
+  loadSchemas().then(s => s.AuditActionsSchema)
+
+// ── Dashboard ───────────────────────────────────────────────────────────────
+export const getDashboardHomeSchema = (): Promise<Schemas['DashboardHomeSchema']> =>
+  loadSchemas().then(s => s.DashboardHomeSchema)
+
+export const getDashboardAnalyticsSchema = (): Promise<Schemas['DashboardAnalyticsSchema']> =>
+  loadSchemas().then(s => s.DashboardAnalyticsSchema)
+
+// ── System ──────────────────────────────────────────────────────────────────
+export const getAppInfoSchema = (): Promise<Schemas['AppInfoSchema']> => loadSchemas().then(s => s.AppInfoSchema)

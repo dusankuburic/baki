@@ -66,7 +66,7 @@ export default function Pager({
             <select
               value={pageSize}
               onChange={e => onPageSizeChange(Number(e.target.value))}
-              className="h-7 rounded-md border border-border-default bg-surface-2 px-1.5 text-xs text-text-primary focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+              className="h-7 rounded-md border border-border-default bg-surface-2 px-1.5 text-xs text-text-primary focus:outline-hidden focus:ring-2 focus:ring-brand-500/20"
             >
               {pageSizeOptions.map(n => (
                 <option key={n} value={n}>

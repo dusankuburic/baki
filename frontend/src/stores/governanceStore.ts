@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import {governanceApi, type GovernanceAlert} from '@/api/governance'
@@ -101,7 +102,7 @@ export const useGovernanceStore = create<GovernanceState>((set, get) => ({
       ])
       set({alerts, unreadCount: 0, loading: false, lastError: null})
     } catch (err) {
-      set({loading: false, lastError: err instanceof Error ? err.message : 'Failed to load alerts'})
+      set({loading: false, lastError: getErrorMessage(err, 'Failed to load alerts')})
     }
   },
 
@@ -144,7 +145,7 @@ export const useGovernanceStore = create<GovernanceState>((set, get) => ({
       set({
         alerts: prev.alerts,
         unreadCount: prev.unreadCount,
-        lastError: err instanceof Error ? err.message : 'Failed to mark all alerts read',
+        lastError: getErrorMessage(err, 'Failed to mark all alerts read'),
       })
     }
   },
@@ -161,7 +162,7 @@ export const useGovernanceStore = create<GovernanceState>((set, get) => ({
     try {
       await governanceApi.dismiss(id)
     } catch (err) {
-      set({alerts: prev, lastError: err instanceof Error ? err.message : 'Failed to dismiss alert'})
+      set({alerts: prev, lastError: getErrorMessage(err, 'Failed to dismiss alert')})
     }
   },
 
@@ -171,7 +172,7 @@ export const useGovernanceStore = create<GovernanceState>((set, get) => ({
     try {
       await governanceApi.clear()
     } catch (err) {
-      set({alerts: prev, lastError: err instanceof Error ? err.message : 'Failed to clear alerts'})
+      set({alerts: prev, lastError: getErrorMessage(err, 'Failed to clear alerts')})
     }
   },
 

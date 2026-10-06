@@ -206,7 +206,7 @@ describe('ModelPicker list', () => {
       ),
     ).toEqual(['General', 'Documentation', 'Review & analysis', 'Testing', 'Security'])
     expect(
-      within(groups[0])
+      within(groups[0]!)
         .getAllByRole('option')
         .map(o => o.textContent),
     ).toEqual([expect.stringMatching(/^GPT-4\.1/), expect.stringMatching(/^GPT-4\.1 mini/)])

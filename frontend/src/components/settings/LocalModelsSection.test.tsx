@@ -65,7 +65,7 @@ describe('LocalModelsSection', () => {
     expect(saveButton()).toBeDisabled()
   })
 
-  it('rejects a value that is not an http(s) URL after blur and keeps Save disabled', async () => {
+  it('rejects a value that is not an http(s) URL after blur-sm and keeps Save disabled', async () => {
     render(<LocalModelsSection />)
     fireEvent.change(await screen.findByRole('textbox', {name: 'Base URL'}), {target: {value: 'localhost:11434'}})
     expect(screen.queryByText('Enter a full http:// or https:// URL')).not.toBeInTheDocument()
@@ -148,7 +148,7 @@ describe('LocalModelsSection', () => {
   })
 
   it.each(['512', '2000001', '8192.5', '-8192', '8k', '1e4'])(
-    'flags the context window %s after blur and keeps Save disabled',
+    'flags the context window %s after blur-sm and keeps Save disabled',
     async value => {
       render(<LocalModelsSection />)
       fireEvent.change(await screen.findByRole('textbox', {name: 'Base URL'}), {target: {value: URL_OLLAMA}})
@@ -329,6 +329,6 @@ describe('providersApi.saveLocalModelsConfig', () => {
     expect(send).toHaveBeenNthCalledWith(2, '/api/providers/local/config', {
       body: {baseUrl: URL_OLLAMA, contextWindow: 16384},
     })
-    expect(Object.keys(send.mock.calls[0][1]?.body as object)).toEqual(['baseUrl'])
+    expect(Object.keys(send.mock.calls[0]![1]?.body as object)).toEqual(['baseUrl'])
   })
 })

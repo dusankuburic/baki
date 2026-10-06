@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/storage"
-	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
@@ -43,7 +43,7 @@ func (s *AzureModelService) importMemoFresh(owner storageif.AzureOwner) bool {
 
 // recordImportMemo remembers owner's marker once its transaction committed — a rolled-back request must not hide the registry.
 func (s *AzureModelService) recordImportMemo(ctx context.Context, owner storageif.AzureOwner) {
-	storagedb.RegisterPostCommit(ctx, func() {
+	txhook.Register(ctx, func(context.Context) {
 		s.memoMu.Lock()
 		defer s.memoMu.Unlock()
 		now := s.now()

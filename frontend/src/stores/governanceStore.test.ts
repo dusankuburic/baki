@@ -100,7 +100,7 @@ describe('governanceStore', () => {
   it('dismiss keeps the row (stamps dismissedAt) while dismissed alerts are shown', async () => {
     useGovernanceStore.setState({alerts: [baseAlert({id: 'a1'})], showDismissed: true})
     await useGovernanceStore.getState().dismiss('a1')
-    expect(useGovernanceStore.getState().alerts[0].dismissedAt).toBeTruthy()
+    expect(useGovernanceStore.getState().alerts[0]!.dismissedAt).toBeTruthy()
   })
 
   // "Clear dismissed" only reaches alerts the list actually contains. The

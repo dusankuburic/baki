@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -419,6 +420,16 @@ func isWeakSecret(s string) bool {
 		return true
 	}
 	return isLowEntropy(s)
+}
+
+// ResolveRuntimeSecrets fills in, once at load time, the secrets a running server needs, so no provider mutates
+// the config later. With no auth secret configured (auth disabled; Validate rejects that with auth enabled) it
+// mints a per-process one and marks it ephemeral.
+func ResolveRuntimeSecrets(cfg *Config) {
+	if cfg.Auth.Secret == "" {
+		cfg.Auth.Secret = uuid.NewString()
+		cfg.Auth.SecretEphemeral = true
+	}
 }
 
 // Validate checks that the configuration is internally consistent.

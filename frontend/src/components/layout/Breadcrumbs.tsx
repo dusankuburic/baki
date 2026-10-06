@@ -54,7 +54,7 @@ export default function Breadcrumbs() {
   return (
     <div className="flex items-center gap-1.5 px-3 h-8 text-[11px] text-text-tertiary bg-surface-1 border-b border-border-subtle overflow-hidden">
       <button
-        className="flex items-center gap-1 hover:text-text-primary transition-colors flex-shrink-0"
+        className="flex items-center gap-1 hover:text-text-primary transition-colors shrink-0"
         onClick={() => document.subflows[0] && selectSubflow(document.subflows[0].id)}
       >
         <Home size={12} />
@@ -63,7 +63,7 @@ export default function Breadcrumbs() {
 
       {path.map((crumb, i) => (
         <div key={crumb.id} className="flex items-center gap-1.5 min-w-0">
-          <ChevronRight size={10} className="flex-shrink-0 opacity-50" />
+          <ChevronRight size={10} className="shrink-0 opacity-50" />
           <button
             className={`hover:text-text-primary transition-colors truncate ${
               i === path.length - 1 ? 'text-text-secondary font-medium' : ''

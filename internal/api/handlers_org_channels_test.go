@@ -194,3 +194,52 @@ func TestOrgChannels_DeliveryRefusesInternalTargetAtDialTime(t *testing.T) {
 		t.Errorf("delivery to a loopback target succeeded: %s", rr.Body.String())
 	}
 }
+
+// TestOrgChannels_ListRedactsURLForNonAdmins: for Slack/Teams the webhook URL is the credential, so a plain
+// member (who can list but not manage channels) sees only scheme and host; the admin still sees the full URL
+// the edit form needs.
+func TestOrgChannels_ListRedactsURLForNonAdmins(t *testing.T) {
+	env := newChannelEnv(t)
+	addOrgMember(t, env.rt, env.orgID, "peon", auth.RoleMember)
+	peon := jwtBearer(t, env.rt, "peon", "peon@acme.io")
+	const full = "https://hooks.slack.com/services/T000/B000/XXXXSECRET?token=abc"
+	if err := env.backend.SaveOrgChannel(context.Background(), &storageif.OrgChannel{
+		ID: "ch-1", OrgID: env.orgID, Name: "ops", Kind: "slack", URL: full, Enabled: true,
+	}); err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+
+	listURL := func(bearer string) string {
+		t.Helper()
+		rr := doRequestWithAuth(t, env.rt, http.MethodGet, "/api/orgs/"+env.orgID+"/channels", bearer, nil)
+		checkStatus(t, rr, http.StatusOK)
+		var list []channelOut
+		if err := json.NewDecoder(rr.Body).Decode(&list); err != nil || len(list) != 1 {
+			t.Fatalf("list: %v (%s)", err, rr.Body.String())
+		}
+		return list[0].URL
+	}
+
+	if got := listURL(env.admin); got != full {
+		t.Errorf("admin list URL = %q, want the full URL", got)
+	}
+	if got := listURL(peon); got != "https://hooks.slack.com/…" {
+		t.Errorf("member list URL = %q, want it redacted to scheme and host", got)
+	}
+}
+
+func TestRedactChannelURL(t *testing.T) {
+	cases := map[string]string{
+		"https://hooks.slack.com/services/T/B/SECRET":          "https://hooks.slack.com/…",
+		"https://user:pass@example.com:8443/hook?sig=abc#frag": "https://example.com:8443/…",
+		"https://acme.webhook.office.com/webhookb2/abc/def":    "https://acme.webhook.office.com/…",
+		"not a url":         "…",
+		"":                  "…",
+		"://missing-scheme": "…",
+	}
+	for in, want := range cases {
+		if got := redactChannelURL(in); got != want {
+			t.Errorf("redactChannelURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

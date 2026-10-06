@@ -1,5 +1,6 @@
 import React, {useMemo, useCallback, useEffect, useRef, useState} from 'react'
 import {Virtuoso, type VirtuosoHandle} from 'react-virtuoso'
+import {useTranslation} from 'react-i18next'
 import BlockCard from './BlockCard'
 import BlockConnector from './BlockConnector'
 import BlockCaseSeparator from './BlockCaseSeparator'
@@ -63,6 +64,7 @@ function BlockItemWrapperComponent({
   onShiftClick: (blockId: string) => void
 }) {
   const {block, depth, isLast, collapsed} = item
+  const {t} = useTranslation('flow')
   const selected = useFlowStore(s => s.selectedBlockId === block.id)
   const occupants = remoteSelection.get(block.id)
 
@@ -129,10 +131,10 @@ function BlockItemWrapperComponent({
       // this drop with any keyboard move still in flight.
       runBlockEdit(doc.id, () => flowApi.moveBlockTo(doc.id, draggedId, block.id, position)).catch(err => {
         // Guards (not-a-sibling, stale-file) carry their own guidance.
-        toast.error('Move failed', {description: String(err)})
+        toast.error(t('canvas.moveFailed'), {description: String(err)})
       })
     },
-    [block.id, toast],
+    [block.id, toast, t],
   )
 
   const content = useMemo(() => {
@@ -276,6 +278,7 @@ function areEqual(
 const MemoizedBlockItemWrapper = React.memo(BlockItemWrapperComponent, areEqual)
 
 export default function BlockView({subflowId}: {subflowId?: string} = {}) {
+  const {t} = useTranslation('flow')
   const document = useFlowStore(s => s.document)
   const selectedBlockId = useFlowStore(s => s.selectedBlockId)
   const setVisibleBlockId = useFlowStore(s => s.setVisibleBlockId)
@@ -337,8 +340,10 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
       // contiguity check and rely on the server's refusal.
       const findScope = (blocks: Block[]): Block[] | null => {
         for (let i = 0; i < blocks.length; i++) {
-          if (blocks[i].id === selected[0]) return blocks.filter(editable)
-          const nested = findScope(blocks[i].children)
+          const b = blocks[i]
+          if (!b) continue
+          if (b.id === selected[0]) return blocks.filter(editable)
+          const nested = findScope(b.children)
           if (nested) return nested
         }
         return null
@@ -353,16 +358,23 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
       if (idxs.some(i => i === -1)) return null
       const sorted = [...idxs].sort((x, y) => x - y)
       for (let i = 1; i < sorted.length; i++) {
-        if (sorted[i] !== sorted[i - 1] + 1) return null // non-contiguous
+        if (sorted[i] !== (sorted[i - 1] ?? NaN) + 1) return null // non-contiguous
       }
       const first = sorted[0]
       const last = sorted[sorted.length - 1]
+      if (first === undefined || last === undefined) return null
       if (direction === 'up') {
         if (first === 0) return null
-        return {pivot: scope[first - 1].id, ref: scope[last].id, position: 'after'}
+        const pivot = scope[first - 1]
+        const ref = scope[last]
+        if (!pivot || !ref) return null
+        return {pivot: pivot.id, ref: ref.id, position: 'after'}
       }
       if (last === scope.length - 1) return null
-      return {pivot: scope[last + 1].id, ref: scope[first].id, position: 'before'}
+      const pivotBelow = scope[last + 1]
+      const refBelow = scope[first]
+      if (!pivotBelow || !refBelow) return null
+      return {pivot: pivotBelow.id, ref: refBelow.id, position: 'before'}
     },
     [],
   )
@@ -374,17 +386,16 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
       if (!doc) return
       const args = groupMoveArgs(direction)
       if (!args) {
-        toast.info('Group move needs a contiguous same-scope selection', {
-          description:
-            'Blocks in different containers (or with gaps) can’t move as one — drag or move them individually.',
+        toast.info(t('canvas.groupMoveTitle'), {
+          description: t('canvas.groupMoveBody'),
         })
         return
       }
       runBlockEdit(doc.id, () => flowApi.moveBlockTo(doc.id, args.pivot, args.ref, args.position)).catch(err =>
-        toast.error('Group move failed', {description: String(err)}),
+        toast.error(t('canvas.groupMoveFailed'), {description: String(err)}),
       )
     },
-    [groupMoveArgs, toast],
+    [groupMoveArgs, toast, t],
   )
 
   const selectedCount = useFlowStore(st => st.selectedBlockIds.size)
@@ -450,7 +461,8 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
             ? 0
             : flattened.length - 1
           : Math.max(0, Math.min(flattened.length - 1, curIdx + delta))
-      useFlowStore.getState().selectBlock(flattened[next].block.id)
+      const target = flattened[next]
+      if (target) useFlowStore.getState().selectBlock(target.block.id)
     },
     [flattened, selectedBlockId],
   )
@@ -478,7 +490,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
             ? 0
             : findingBlockIds.length - 1
           : (curIdx + delta + findingBlockIds.length) % findingBlockIds.length
-      useFlowStore.getState().selectBlock(findingBlockIds[next])
+      useFlowStore.getState().selectBlock(findingBlockIds[next] ?? null)
     },
     [flattened, selectedBlockId, findingCounts, report],
   )
@@ -517,8 +529,8 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
         const block = st.selectedBlock()
         if (!block) return
         if (block.rawType !== 'LABEL' && block.rawType !== 'COMMENT') {
-          toast.info('Derived name', {
-            description: "This block's name comes from its action type and properties — use Edit properties instead.",
+          toast.info(t('canvas.derivedNameTitle'), {
+            description: t('canvas.derivedNameBody'),
           })
           return
         }
@@ -537,7 +549,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
         if (!selectedBlockId) return
         const cur = flattened.find(f => f.block.id === selectedBlockId)
         if (cur?.isContainer && !cur.collapsed && cur.block.children.length > 0) {
-          useFlowStore.getState().selectBlock(cur.block.children[0].id)
+          useFlowStore.getState().selectBlock(cur.block.children[0]?.id ?? null)
         }
       },
       'nav.drill.subflow': () => {
@@ -608,8 +620,8 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     return (
       <div className="w-full h-full flex items-center justify-center">
         <EmptyState
-          title={document ? 'Empty subflow' : 'No flow loaded'}
-          description={document ? 'This subflow has no blocks to display' : 'Open a flow file to begin'}
+          title={document ? t('canvas.emptySubflowTitle') : t('canvas.noFlowTitle')}
+          description={document ? t('canvas.emptySubflowBody') : t('canvas.noFlowBody')}
         />
       </div>
     )
@@ -624,30 +636,30 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
           className="flex items-center gap-2 px-3 py-1.5 border-b border-brand-500/30 bg-brand-500/5 text-2xs"
           data-testid="bulk-bar"
         >
-          <span className="font-medium text-text-secondary">{selectedCount} blocks selected</span>
+          <span className="font-medium text-text-secondary">{t('canvas.selectedCount', {count: selectedCount})}</span>
           <button
             onClick={() => handleGroupMove('up')}
             className="text-text-tertiary hover:text-text-secondary px-1.5 py-0.5 rounded hover:bg-surface-3 transition-colors"
           >
-            Move up
+            {t('canvas.moveUp')}
           </button>
           <button
             onClick={() => handleGroupMove('down')}
             className="text-text-tertiary hover:text-text-secondary px-1.5 py-0.5 rounded hover:bg-surface-3 transition-colors"
           >
-            Move down
+            {t('canvas.moveDown')}
           </button>
           <button
             onClick={() => void blockOps.removeBlocks([...useFlowStore.getState().selectedBlockIds])}
             className="text-semantic-error px-1.5 py-0.5 rounded hover:bg-semantic-error/10 transition-colors"
           >
-            Delete
+            {t('canvas.delete')}
           </button>
           <button
             onClick={clearBlockSelection}
             className="ml-auto text-text-tertiary hover:text-text-secondary px-1.5 py-0.5 rounded hover:bg-surface-3 transition-colors"
           >
-            Clear
+            {t('canvas.clear')}
           </button>
         </div>
       )}

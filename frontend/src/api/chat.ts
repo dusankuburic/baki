@@ -1,4 +1,5 @@
-import {request} from './client'
+import {request, requestValidated} from './client'
+import {getSuggestedPromptsSchema} from './schemas'
 import {parseConversationPayload} from '@/lib/chatMessage'
 import type {ChatRequest, ChatMessage, ContextPreview} from '@/types'
 
@@ -99,8 +100,12 @@ export const chatApi = {
   clearConversation: (flowId: string, conversationKey: string): Promise<void> =>
     request('/api/chat/clear', {body: {flowId, provider: conversationKey}}),
 
-  getSuggestedPrompts: (hasBlock: boolean, hasFindings?: boolean): Promise<string[]> =>
-    request('/api/chat/suggested-prompts', {body: {hasBlock, hasFindings: hasFindings ?? false}}),
+  // An empty prompts list arrives as null (Go nil slice from empty settings
+  // lists) — the schema reads it as [].
+  getSuggestedPrompts: async (hasBlock: boolean, hasFindings?: boolean): Promise<string[]> =>
+    requestValidated('/api/chat/suggested-prompts', await getSuggestedPromptsSchema(), {
+      body: {hasBlock, hasFindings: hasFindings ?? false},
+    }),
 
   previewContext: (req: ChatRequest): Promise<ContextPreview> => request('/api/chat/preview-context', {body: req}),
 }

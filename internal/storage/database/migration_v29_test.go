@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -149,7 +148,7 @@ func r4SaveWideFlow(t *testing.T, b *PostgresStorageBackend, id string) (content
 // content and search body are stored lz4-compressed), rolled back (index
 // gone, pglz again, new values stored pglz), re-applied.
 func TestMigration29_UpDownUp(t *testing.T) {
-	b := openMigrationTestDB(t)
+	b, dsn := openIsolatedMigrationDB(t)
 	ctx := context.Background()
 	current, err := b.CurrentSchemaVersion(ctx)
 	if err != nil {
@@ -186,7 +185,7 @@ func TestMigration29_UpDownUp(t *testing.T) {
 	}
 
 	// Up again: boot-time migrate on reconnect.
-	b2, err := New(ctx, DefaultConfig(os.Getenv("DATABASE_URL")))
+	b2, err := New(ctx, DefaultConfig(dsn))
 	if err != nil {
 		t.Fatalf("reconnect (re-apply v29): %v", err)
 	}

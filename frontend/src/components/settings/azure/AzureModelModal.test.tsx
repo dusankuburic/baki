@@ -232,7 +232,7 @@ describe('AzureModelModal: the form', () => {
     fireEvent.change(maxOutput(), {target: {value: '2048'}})
     submit()
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({id: 'new0000000'}), true))
-    expect(api.createAzureModel.mock.calls[0][1]).toStrictEqual({
+    expect(api.createAzureModel.mock.calls[0]![1]).toStrictEqual({
       connectionId: 'default',
       kind: 'chat',
       deployment: 'phi-4-mini',
@@ -256,7 +256,7 @@ describe('AzureModelModal: the form', () => {
 })
 
 describe('AzureModelModal: validation and focus', () => {
-  it('validates on submit, focusing the first invalid field, and checks formats on blur', async () => {
+  it('validates on submit, focusing the first invalid field, and checks formats on blur-sm', async () => {
     renderModal()
     submit()
     expect(deployment()).toHaveFocus()
@@ -366,7 +366,7 @@ describe('AzureModelModal: editing', () => {
     fireEvent.change(screen.getByRole('textbox', {name: 'Description (optional)'}), {target: {value: 'Mine'}})
     submit('Save changes')
     await waitFor(() => expect(api.updateAzureModel).toHaveBeenCalledTimes(1))
-    expect(api.updateAzureModel.mock.calls[0][2]).toMatchObject({
+    expect(api.updateAzureModel.mock.calls[0]![2]).toMatchObject({
       description: 'Mine',
       updatedAt: '2026-09-30T10:00:00.123456Z',
     })
@@ -388,7 +388,7 @@ describe('AzureModelModal: editing', () => {
     fireEvent.change(screen.getByRole('textbox', {name: 'Description (optional)'}), {target: {value: 'Mine again'}})
     submit('Save changes')
     await waitFor(() => expect(api.updateAzureModel).toHaveBeenCalledTimes(2))
-    expect(api.updateAzureModel.mock.calls[1][2]).toMatchObject({
+    expect(api.updateAzureModel.mock.calls[1]![2]).toMatchObject({
       description: 'Mine again',
       updatedAt: '2026-09-30T11:00:00.654321Z',
     })
@@ -411,7 +411,7 @@ describe('AzureModelModal: editing', () => {
     fireEvent.change(screen.getByRole('textbox', {name: 'Description (optional)'}), {target: {value: 'Reviews PRs'}})
     submit('Save changes')
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
-    expect(api.updateAzureModel.mock.calls[0][2]).toMatchObject({kind: 'agent', description: 'Reviews PRs'})
+    expect(api.updateAzureModel.mock.calls[0]![2]).toMatchObject({kind: 'agent', description: 'Reviews PRs'})
   })
 })
 
@@ -492,7 +492,7 @@ describe('AzureModelModal: server errors', () => {
     submit('Save changes')
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
     expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({title: 'Change the knowledge base model?'}))
-    expect(api.updateAzureModel.mock.calls[1][2]).toMatchObject({deployment: 'embed-4', force: true})
+    expect(api.updateAzureModel.mock.calls[1]![2]).toMatchObject({deployment: 'embed-4', force: true})
   })
 
   it('explains a list file written by a newer baki in the form alert', async () => {

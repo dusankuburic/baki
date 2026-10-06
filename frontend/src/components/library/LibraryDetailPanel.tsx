@@ -1,4 +1,6 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useState} from 'react'
+import {useTranslation} from 'react-i18next'
 import {Activity, Calendar, Copy, FileCode, GitBranch, Pencil, Tag, Trash2, User, Users, X} from 'lucide-react'
 import {libraryApi, type LibraryFlow, type LibraryFlowVersion} from '@/api/library'
 import {Button, Spinner, ErrorState} from '@/components/shared'
@@ -49,6 +51,7 @@ export default function LibraryDetailPanel({
   setEditingTags,
   onClose,
 }: Props) {
+  const {t} = useTranslation('library')
   const orgs = useOrgStore(s => s.organisations)
 
   const {
@@ -63,7 +66,7 @@ export default function LibraryDetailPanel({
           versions => ({versions, versionsError: null}),
           (e: unknown) => {
             logger.warn('Library: versions load failed', e)
-            return {versions: [], versionsError: e instanceof Error ? e.message : String(e)}
+            return {versions: [], versionsError: getErrorMessage(e)}
           },
         )
       : Promise.resolve({versions: [], versionsError: null})
@@ -79,7 +82,7 @@ export default function LibraryDetailPanel({
   const versionsError = data?.versionsError ?? null
 
   if (!flowId) {
-    return <div className="p-6 text-center text-sm text-text-tertiary">Select a flow to see its details.</div>
+    return <div className="p-6 text-center text-sm text-text-tertiary">{t('detail.selectPrompt')}</div>
   }
 
   if (loading && !flow) {
@@ -97,12 +100,12 @@ export default function LibraryDetailPanel({
   if (!flow) return null
 
   const orgName = flow.organizationId
-    ? (orgs.find(o => o.id === flow.organizationId)?.name ?? 'Unknown org')
-    : 'Personal'
+    ? (orgs.find(o => o.id === flow.organizationId)?.name ?? t('detail.unknownOrg'))
+    : t('detail.personal')
 
   return (
     <div className="flex flex-col h-full">
-      <header className="flex items-start justify-between gap-2 px-4 pt-4 pb-2 border-b border-border-subtle flex-shrink-0">
+      <header className="flex items-start justify-between gap-2 px-4 pt-4 pb-2 border-b border-border-subtle shrink-0">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-text-primary truncate">{flow.name}</h2>
           {flow.description && <p className="mt-1 text-xs text-text-tertiary line-clamp-3">{flow.description}</p>}
@@ -110,47 +113,55 @@ export default function LibraryDetailPanel({
         <button
           type="button"
           onClick={onClose}
-          className="p-1 text-text-tertiary hover:text-text-primary rounded transition-colors flex-shrink-0"
-          aria-label="Close detail panel"
+          className="p-1 text-text-tertiary hover:text-text-primary rounded transition-colors shrink-0"
+          aria-label={t('detail.closeAria')}
         >
           <X size={14} />
         </button>
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        <Section title="Overview">
-          <Row icon={User} label="Owner" value={flow.ownerDisplayName ?? flow.ownerId} />
-          <Row icon={Users} label="Organisation" value={orgName} />
+        <Section title={t('detail.overview')}>
+          <Row icon={User} label={t('detail.owner')} value={flow.ownerDisplayName ?? flow.ownerId} />
+          <Row icon={Users} label={t('detail.organisation')} value={orgName} />
           <Row
             icon={Calendar}
-            label="Last updated"
+            label={t('detail.lastUpdated')}
             value={<span title={absoluteTime(flow.updatedAt)}>{relativeTime(flow.updatedAt)}</span>}
           />
-          <Row icon={FileCode} label="Blocks / subflows" value={`${flow.blockCount} / ${flow.subflowCount}`} />
-          <Row icon={GitBranch} label="Version" value={`#${flow.version}`} />
+          <Row
+            icon={FileCode}
+            label={t('detail.blocksSubflows')}
+            value={`${flow.blockCount} / ${flow.subflowCount}`}
+          />
+          <Row icon={GitBranch} label={t('detail.version')} value={`#${flow.version}`} />
           <TagRow flow={flow} editing={editingTags} setEditing={setEditingTags} onSave={onSaveTags} />
         </Section>
 
         {flow.healthScore !== undefined && (
-          <Section title="Latest analysis">
+          <Section title={t('detail.latestAnalysis')}>
             <Row
               icon={Activity}
-              label="Health score"
+              label={t('detail.healthScore')}
               value={<span className={healthTier(flow.healthScore).text}>{flow.healthScore}%</span>}
             />
-            <Row icon={Activity} label="Errors" value={String(flow.errorCount ?? 0)} />
-            <Row icon={Activity} label="Warnings" value={String(flow.warningCount ?? 0)} />
+            <Row icon={Activity} label={t('detail.errors')} value={String(flow.errorCount ?? 0)} />
+            <Row icon={Activity} label={t('detail.warnings')} value={String(flow.warningCount ?? 0)} />
           </Section>
         )}
 
         {versioningAvailable() && (
-          <Section title={`Version history${versions.length ? ` (${versions.length})` : ''}`}>
+          <Section
+            title={
+              versions.length ? t('detail.versionHistoryCount', {count: versions.length}) : t('detail.versionHistory')
+            }
+          >
             {versionsError ? (
               <p className="text-xs text-semantic-error" role="alert">
-                Version history unavailable: {versionsError}
+                {t('detail.historyUnavailable', {message: versionsError})}
               </p>
             ) : versions.length === 0 ? (
-              <p className="text-xs text-text-tertiary">No saved versions yet.</p>
+              <p className="text-xs text-text-tertiary">{t('detail.noVersions')}</p>
             ) : (
               <ul className="space-y-1.5">
                 {versions.map(v => (
@@ -175,20 +186,20 @@ export default function LibraryDetailPanel({
           {flow.canEdit && (
             <>
               <Button variant="ghost" size="sm" icon={Pencil} onClick={() => onRename(flow)}>
-                Rename
+                {t('detail.rename')}
               </Button>
               <Button variant="ghost" size="sm" icon={Copy} onClick={() => onDuplicate(flow)}>
-                Duplicate
+                {t('detail.duplicate')}
               </Button>
             </>
           )}
           {flow.canDelete && (
             <Button variant="ghost" size="sm" icon={Trash2} onClick={() => onDelete(flow)}>
-              Delete
+              {t('detail.delete')}
             </Button>
           )}
           <Button variant="primary" size="sm" onClick={() => onOpen(flow)} fullWidth>
-            Load flow
+            {t('detail.load')}
           </Button>
         </div>
       </div>
@@ -208,8 +219,8 @@ function Section({title, children}: {title: string; children: React.ReactNode}) 
 function Row({icon: Icon, label, value}: {icon: typeof Activity; label: string; value: React.ReactNode}) {
   return (
     <div className="flex items-baseline gap-2 text-xs">
-      <Icon size={11} className="text-text-tertiary translate-y-0.5 flex-shrink-0" />
-      <span className="text-text-tertiary w-28 flex-shrink-0">{label}</span>
+      <Icon size={11} className="text-text-tertiary translate-y-0.5 shrink-0" />
+      <span className="text-text-tertiary w-28 shrink-0">{label}</span>
       <span className="text-text-primary truncate">{value}</span>
     </div>
   )
@@ -229,6 +240,7 @@ function TagRow({
   setEditing: (v: boolean) => void
   onSave: (flow: LibraryFlow, tags: string[]) => void
 }) {
+  const {t} = useTranslation('library')
   const [draft, setDraft] = useState('')
   // Seed the draft when edit mode opens (or the underlying tags change), adjusted
   // during render. The composite key reproduces the previous effect's [editing,
@@ -260,10 +272,10 @@ function TagRow({
             }
             if (e.key === 'Escape') setEditing(false)
           }}
-          placeholder="prod, finance, critical — Enter to save"
+          placeholder={t('detail.tagsPlaceholder')}
           autoFocus
-          className="w-full px-2 py-1 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary placeholder:text-text-tertiary/60 outline-none focus:border-brand-500"
-          aria-label="Tags (comma-separated)"
+          className="w-full px-2 py-1 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary placeholder:text-text-tertiary/60 outline-hidden focus:border-brand-500"
+          aria-label={t('detail.tagsAria')}
         />
         <div className="flex gap-2 mt-1">
           <button
@@ -279,10 +291,10 @@ function TagRow({
               setEditing(false)
             }}
           >
-            Save
+            {t('detail.save')}
           </button>
           <button className="text-2xs text-text-tertiary hover:text-text-secondary" onClick={() => setEditing(false)}>
-            Cancel
+            {t('detail.cancel')}
           </button>
         </div>
       </div>
@@ -294,7 +306,7 @@ function TagRow({
     // button stayed at opacity 0 for mouse users.
     <div className="group flex items-start gap-2 pt-1 flex-wrap">
       {(flow.tags ?? []).length === 0 ? (
-        <span className="text-xs text-text-tertiary/60">No tags</span>
+        <span className="text-xs text-text-tertiary/60">{t('detail.noTags')}</span>
       ) : (
         (flow.tags ?? []).map(t => (
           <span key={t} className="px-1.5 py-0.5 rounded bg-brand-500/10 text-brand-300 text-2xs font-medium">
@@ -306,8 +318,8 @@ function TagRow({
         <button
           onClick={() => setEditing(true)}
           className="p-0.5 rounded text-text-tertiary hover:text-text-secondary opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
-          title="Edit tags"
-          aria-label="Edit tags"
+          title={t('detail.editTags')}
+          aria-label={t('detail.editTags')}
         >
           <Tag size={10} />
         </button>

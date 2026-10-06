@@ -51,6 +51,7 @@ export function AiUsageCard({
       table={{
         caption: title,
         filename: 'ai-tokens.csv',
+        rowKey: r => r.date,
         columns: [
           {key: 'date', header: t('analytics.columns.date'), render: r => formatDateLong(r.date)},
           {key: 'tokensIn', header: t('home.tokensIn'), align: 'right'},

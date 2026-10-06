@@ -81,7 +81,7 @@ export default function ModelUnavailableNotice({notice, providerName, onChooseMo
   const canDismiss =
     notice.kind === 'refused' || notice.kind === 'legacyDefault' || (notice.kind === 'removed' && !!notice.fallback)
   const actionClass =
-    'shrink-0 min-h-6 font-medium text-brand-400 hover:text-brand-300 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand-500 rounded'
+    'shrink-0 min-h-6 font-medium text-brand-400 hover:text-brand-300 transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-brand-500 rounded'
 
   return (
     <div
@@ -90,7 +90,7 @@ export default function ModelUnavailableNotice({notice, providerName, onChooseMo
     >
       <AlertTriangle size={12} className="mt-0.5 shrink-0 text-semantic-warning" aria-hidden="true" />
       <div className="flex flex-1 min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5">
-        <p className="flex-1 min-w-[10rem] [overflow-wrap:anywhere]">
+        <p className="flex-1 min-w-40 wrap-anywhere">
           {sentences.map((s, i) => (
             <span key={i}>
               {i > 0 && ' '}

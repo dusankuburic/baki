@@ -88,7 +88,14 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reload elements whenever the displayed subflow changes.
+  // Reload elements whenever the displayed subflow changes. The trigger is
+  // deliberately identity-keyed (subflow id + document id), not subflow
+  // CONTENT: the graph is a structure map, and re-running the dagre layout on
+  // every block edit would thrash it. Label/selection drift after in-place
+  // edits is resolved by switching subflows back and forth; key this on a
+  // content hash instead if that ever becomes a complaint. The disable is the
+  // mount-once/external-system exception: the closures read the latest render
+  // each time the listed ids change.
   useEffect(() => {
     if (!cyRef.current || !subflow) return
     const c = cyRef.current

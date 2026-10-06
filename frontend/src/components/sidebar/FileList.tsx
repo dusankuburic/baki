@@ -121,9 +121,9 @@ export default function FileList({
   return (
     <div className="border-b border-border-subtle">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border-subtle">
-        <FolderOpen size={14} className="text-brand-400 flex-shrink-0" />
+        <FolderOpen size={14} className="text-brand-400 shrink-0" />
         <span className="text-xs font-medium text-text-secondary truncate">{folderName}</span>
-        <span className="text-2xs text-text-tertiary ml-auto flex-shrink-0 tabular-nums">
+        <span className="text-2xs text-text-tertiary ml-auto shrink-0 tabular-nums">
           {files.length} file{files.length !== 1 ? 's' : ''}
         </span>
       </div>
@@ -131,17 +131,17 @@ export default function FileList({
       {files.length > 4 && (
         <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border-subtle">
           <div className="flex items-center gap-1.5 flex-1 min-w-0 h-6 px-2 bg-surface-2 border border-border-subtle rounded">
-            <Search size={11} className="text-text-tertiary flex-shrink-0" />
+            <Search size={11} className="text-text-tertiary shrink-0" />
             <input
               value={filter}
               onChange={e => setFilter(e.target.value)}
               placeholder={t('files.filterPlaceholder')}
-              className="flex-1 min-w-0 bg-transparent text-2xs text-text-primary placeholder:text-text-disabled outline-none"
+              className="flex-1 min-w-0 bg-transparent text-2xs text-text-primary placeholder:text-text-disabled outline-hidden"
             />
           </div>
           <button
             onClick={() => setSortMode(m => (m === 'name' ? 'size' : 'name'))}
-            className="w-6 h-6 flex items-center justify-center rounded text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors duration-fast flex-shrink-0"
+            className="w-6 h-6 flex items-center justify-center rounded text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors duration-fast shrink-0"
             title={
               sortMode === 'name' ? 'Sorted by name — click to sort by size' : 'Sorted by size — click to sort by name'
             }
@@ -153,7 +153,7 @@ export default function FileList({
 
       <div
         ref={listRef}
-        className="max-h-64 overflow-y-auto outline-none"
+        className="max-h-64 overflow-y-auto outline-hidden"
         tabIndex={0}
         onKeyDown={handleKeyDown}
         role="listbox"
@@ -188,10 +188,10 @@ export default function FileList({
               >
                 <FileText
                   size={14}
-                  className={clsx('flex-shrink-0', isSelected ? 'text-brand-400' : 'text-text-tertiary')}
+                  className={clsx('shrink-0', isSelected ? 'text-brand-400' : 'text-text-tertiary')}
                 />
                 <span className="text-sm truncate flex-1">{displayName}</span>
-                <span className="text-2xs text-text-tertiary flex-shrink-0 tabular-nums">{formatSize(file.size)}</span>
+                <span className="text-2xs text-text-tertiary shrink-0 tabular-nums">{formatSize(file.size)}</span>
               </button>
             )
           })

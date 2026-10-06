@@ -1,4 +1,5 @@
 ﻿import {ChevronDown, ChevronRight} from 'lucide-react'
+import {useTranslation} from 'react-i18next'
 import {getBlockColor} from '@/lib/blocks'
 import {useFlowStore} from '@/stores/flowStore'
 import type {Block} from '@/types'
@@ -9,6 +10,7 @@ type BlockCaseSeparatorProps = {
 }
 
 export default function BlockCaseSeparator({block, collapsed}: BlockCaseSeparatorProps) {
+  const {t} = useTranslation('flow')
   const color = getBlockColor('SWITCH')
   const toggleBlockExpand = useFlowStore(s => s.toggleBlockExpand)
   const Chevron = collapsed ? ChevronRight : ChevronDown
@@ -36,22 +38,24 @@ export default function BlockCaseSeparator({block, collapsed}: BlockCaseSeparato
         }}
       />
       <button
-        className="flex items-center justify-center w-4 h-4 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
+        className="flex items-center justify-center w-4 h-4 rounded hover:bg-surface-3 transition-colors shrink-0"
         onClick={e => {
           e.stopPropagation()
           toggleBlockExpand(block.id)
         }}
-        aria-label={collapsed ? 'Expand branch' : 'Collapse branch'}
+        aria-label={collapsed ? t('branches.expand') : t('branches.collapse')}
         aria-expanded={!collapsed}
       >
         <Chevron size={12} style={{color}} />
       </button>
-      <span className="text-2xs font-semibold uppercase tracking-widest flex-shrink-0" style={{color}}>
-        {isDefault ? 'Default' : 'Case'}
+      <span className="text-2xs font-semibold uppercase tracking-widest shrink-0" style={{color}}>
+        {isDefault ? t('branches.default') : t('branches.case')}
       </span>
       {!isDefault && label && <span className="text-2xs text-text-secondary truncate">{label}</span>}
       {collapsed && block.children.length > 0 && (
-        <span className="text-2xs text-text-tertiary ml-auto flex-shrink-0">{block.children.length} items</span>
+        <span className="text-2xs text-text-tertiary ml-auto shrink-0">
+          {t('branches.itemsCount', {count: block.children.length})}
+        </span>
       )}
     </div>
   )

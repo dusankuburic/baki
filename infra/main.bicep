@@ -221,6 +221,16 @@ param probePeriodSeconds int = 10
 @maxValue(10)
 param readinessFailureThreshold int = 6
 
+@description('Startup probe interval in seconds. Liveness and readiness only begin once the startup probe passes, so slow boot-time schema migrations are not mistaken for a hung container.')
+@minValue(1)
+@maxValue(240)
+param startupProbePeriodSeconds int = 30
+
+@description('Consecutive startup-probe failures before the container is restarted. The boot window is about probeInitialDelaySeconds + startupProbePeriodSeconds x this value (5 minutes by default).')
+@minValue(1)
+@maxValue(10)
+param startupFailureThreshold int = 10
+
 @description('Comma-separated email addresses for operational alerts (Action Group recipients). Leave empty to skip alert provisioning — note that skips ALL four alerts.')
 param alertEmails string = ''
 
@@ -611,6 +621,17 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
             { volumeName: 'tmp', mountPath: '/tmp' }
           ]
           probes: [
+            {
+              // Liveness and readiness start only after this passes. /healthz answers once the
+              // listener is up, which is after the boot-time schema migrations: without a startup
+              // probe, a migration longer than the liveness budget (~100 s) got the container
+              // killed mid-step and restarted into the same step.
+              type: 'Startup'
+              httpGet: { path: '/healthz', port: 8080 }
+              initialDelaySeconds: probeInitialDelaySeconds
+              periodSeconds: startupProbePeriodSeconds
+              failureThreshold: startupFailureThreshold
+            }
             {
               // /healthz is an unconditional 200 and deliberately does not
               // touch the database: a slow DB must not restart the container.

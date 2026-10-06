@@ -16,7 +16,7 @@ describe('MessageBubble search highlighting', () => {
     const marks = document.querySelectorAll('mark.chat-search-hit')
     expect(marks).toHaveLength(1)
     // Case-insensitive match keeps the original casing on screen.
-    expect(marks[0].textContent).toBe('Timeout')
+    expect(marks[0]!.textContent).toBe('Timeout')
   })
 
   it('marks matches inside rendered markdown', () => {

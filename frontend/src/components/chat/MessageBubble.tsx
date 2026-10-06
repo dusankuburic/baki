@@ -384,7 +384,7 @@ export function splitOpenFence(content: string): {before: string; lang: string; 
 
 function renderContent(content: string, isUser: boolean, isStreaming?: boolean, highlight?: string) {
   if (isUser) {
-    return <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">{renderTextSegment(content, highlight)}</div>
+    return <div className="whitespace-pre-wrap wrap-anywhere">{renderTextSegment(content, highlight)}</div>
   }
 
   if (isStreaming) {

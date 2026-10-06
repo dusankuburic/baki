@@ -200,6 +200,21 @@ var (
 		},
 		[]string{"location"},
 	)
+	backgroundInflight = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "pad_background_inflight",
+			Help: "Best-effort background tasks running now, by task. A task pinned at its cap means its target (SMTP, webhook, database) is slow.",
+		},
+		[]string{"task"},
+	)
+	backgroundDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "pad_background_task_duration_seconds",
+			Help:    "Run time of best-effort background tasks, by task.",
+			Buckets: []float64{0.01, 0.05, 0.25, 1, 5, 15, 60, 300, 1800},
+		},
+		[]string{"task"},
+	)
 	backgroundDroppedTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_background_dropped_total",
@@ -354,6 +369,8 @@ var registry = func() *prometheus.Registry {
 		panicRecoveredTotal,
 		errorsReportedTotal,
 		usageDroppedTotal,
+		backgroundInflight,
+		backgroundDuration,
 		backgroundDroppedTotal,
 		aiPricingFallbackTotal,
 		ragFallbackCappedTotal,
@@ -682,6 +699,17 @@ func RecordUsageDropped(reason string) {
 // "closed" — both closed sets, never request data.
 func RecordBackgroundDropped(task, reason string) {
 	backgroundDroppedTotal.WithLabelValues(task, reason).Inc()
+}
+
+// RecordBackgroundStarted counts a background task as running; pair with RecordBackgroundFinished.
+func RecordBackgroundStarted(task string) {
+	backgroundInflight.WithLabelValues(task).Inc()
+}
+
+// RecordBackgroundFinished records a background task's end and run time.
+func RecordBackgroundFinished(task string, d time.Duration) {
+	backgroundInflight.WithLabelValues(task).Dec()
+	backgroundDuration.WithLabelValues(task).Observe(d.Seconds())
 }
 
 // BackgroundDroppedCount returns the current pad_background_dropped_total

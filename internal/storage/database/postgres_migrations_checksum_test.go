@@ -2,9 +2,14 @@ package database
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+
+	"pad-analyzer/internal/testutil/pgtest"
 )
 
 // migrationChecksum must be deterministic and sensitive to any SQL change — no
@@ -40,6 +45,39 @@ func openMigrationTestDB(t *testing.T) *PostgresStorageBackend {
 	return b
 }
 
+// openIsolatedMigrationDB opens a private database cloned from a template migrated to this binary's schema, for
+// tests that rewrite schema state (migrate down, tampered checksums, future-version rows): on the shared
+// database those writes raced every other test binary booting against it. The DSN is for tests that boot a
+// second backend against the same schema.
+func openIsolatedMigrationDB(t *testing.T) (*PostgresStorageBackend, string) {
+	t.Helper()
+	dsn := pgtest.NewDatabase(t, migratedTemplate(t))
+	b, err := New(context.Background(), DefaultConfig(dsn))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { b.Close() })
+	return b, dsn
+}
+
+// migratedTemplate is a database migrated to this binary's schema, built once per schema (keyed by the migration
+// checksums) and cloned per test.
+func migratedTemplate(t *testing.T) string {
+	t.Helper()
+	h := sha256.New()
+	for _, m := range migrations {
+		fmt.Fprintf(h, "%d %s\n", m.version, migrationChecksum(m.sql))
+	}
+	return pgtest.Template(t, "mig_"+hex.EncodeToString(h.Sum(nil))[:16], func(dsn string) error {
+		b, err := New(context.Background(), DefaultConfig(dsn))
+		if err != nil {
+			return err
+		}
+		b.Close()
+		return nil
+	})
+}
+
 // After connect, every applied migration must carry the checksum of its current
 // SQL — proving apply-time recording and the on-connect backfill both work.
 func TestMigrate_RecordsChecksums(t *testing.T) {
@@ -60,7 +98,7 @@ func TestMigrate_RecordsChecksums(t *testing.T) {
 // Tampering a recorded checksum (simulating an edited shipped migration) must
 // make the next migrate() fail boot with a drift error.
 func TestMigrate_ChecksumDriftFailsBoot(t *testing.T) {
-	b := openMigrationTestDB(t)
+	b, _ := openIsolatedMigrationDB(t)
 	ctx := context.Background()
 
 	// Snapshot v2's real checksum so we can restore it (the DB is shared).
@@ -91,7 +129,7 @@ func TestMigrate_ChecksumDriftFailsBoot(t *testing.T) {
 // A row with an empty checksum (pre-checksum deployment) must be backfilled with
 // the current checksum on the next migrate(), not treated as drift.
 func TestMigrate_BackfillsEmptyChecksum(t *testing.T) {
-	b := openMigrationTestDB(t)
+	b, _ := openIsolatedMigrationDB(t)
 	ctx := context.Background()
 
 	var original string

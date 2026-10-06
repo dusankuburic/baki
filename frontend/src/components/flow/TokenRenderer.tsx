@@ -1,4 +1,5 @@
 import React from 'react'
+import {useTranslation} from 'react-i18next'
 import {useFlowStore} from '@/stores/flowStore'
 import type {BlockToken, Block, FlowDocument, VariableDecl} from '@/types'
 import clsx from 'clsx'
@@ -65,6 +66,7 @@ function buildVariableIndex(doc: FlowDocument): Map<string, VarInfo> {
 }
 
 export default function TokenRenderer({tokens}: TokenRendererProps) {
+  const {t} = useTranslation('flow')
   const document = useFlowStore(s => s.document)
   const index = variableIndexFor(document)
 
@@ -94,7 +96,7 @@ export default function TokenRenderer({tokens}: TokenRendererProps) {
                     }
                   : undefined
               }
-              title={token.type === 'subflow' ? `Jump to subflow: ${token.target}` : undefined}
+              title={token.type === 'subflow' ? t('token.jumpToSubflow', {name: token.target}) : undefined}
               className={clsx(
                 isInteractive && 'cursor-pointer',
                 token.type === 'subflow' &&
@@ -138,6 +140,7 @@ function LabelToken({token}: {token: BlockToken}) {
 }
 
 function VariableToken({token}: {token: BlockToken}) {
+  const {t} = useTranslation('flow')
   const index = React.useContext(VariableIndexContext)
   const selectedVariable = useUIStore(s => s.selectedVariable)
   const setSelectedVariable = useUIStore(s => s.setSelectedVariable)
@@ -172,11 +175,11 @@ function VariableToken({token}: {token: BlockToken}) {
       {info?.decl && (
         <>
           <div className="flex justify-between gap-4">
-            <span className="text-text-tertiary">Type:</span>
+            <span className="text-text-tertiary">{t('token.typeLabel')}</span>
             <span className="text-text-secondary italic">{info.decl.type || 'Variant'}</span>
           </div>
           <div className="flex justify-between gap-4">
-            <span className="text-text-tertiary">Scope:</span>
+            <span className="text-text-tertiary">{t('token.scopeLabel')}</span>
             <span
               className={clsx(
                 'font-medium',
@@ -189,10 +192,12 @@ function VariableToken({token}: {token: BlockToken}) {
         </>
       )}
       <div className="flex justify-between gap-4">
-        <span className="text-text-tertiary">Usages:</span>
+        <span className="text-text-tertiary">{t('token.usagesLabel')}</span>
         <span className="text-text-primary font-mono">{info?.usageCount ?? 0}</span>
       </div>
-      <div className="text-2xs text-text-disabled mt-1 border-t border-white/5 pt-1 italic">Click to trace lineage</div>
+      <div className="text-2xs text-text-disabled mt-1 border-t border-white/5 pt-1 italic">
+        {t('token.clickToTrace')}
+      </div>
     </div>
   )
 

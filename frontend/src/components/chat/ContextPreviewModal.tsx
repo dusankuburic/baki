@@ -86,7 +86,7 @@ export default function ContextPreviewModal({preview, onClose, onConfirm}: Props
 
         <div>
           <span className="text-xs font-medium text-text-secondary">{t('preview.yourMessage')}</span>
-          <div className="mt-1 text-sm text-text-primary bg-surface-2 rounded-lg p-3 whitespace-pre-wrap break-words">
+          <div className="mt-1 text-sm text-text-primary bg-surface-2 rounded-lg p-3 whitespace-pre-wrap wrap-break-word">
             {preview.userMessage}
           </div>
         </div>

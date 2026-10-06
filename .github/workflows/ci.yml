@@ -73,19 +73,29 @@ jobs:
       #
       # NOSUPERUSER NOBYPASSRLS is the whole point — do not "simplify" this
       # back to the postgres superuser.
+      #
+      # CREATEDB does not bypass RLS. It lets internal/testutil/pgtest give the
+      # tests that rewrite schema state (migrate down, tampered checksums,
+      # future-version rows) a database of their own, cloned from
+      # baki_template; on the shared database those writes raced every other
+      # test binary booting against it.
       - name: Create unprivileged app role
         env:
           PGPASSWORD: postgres
         run: |
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
-            -c "CREATE ROLE baki_app LOGIN PASSWORD 'baki_app' NOSUPERUSER NOBYPASSRLS;" \
-            -c "CREATE DATABASE baki_app OWNER baki_app;"
+            -c "CREATE ROLE baki_app LOGIN PASSWORD 'baki_app' NOSUPERUSER NOBYPASSRLS CREATEDB;" \
+            -c "CREATE DATABASE baki_app OWNER baki_app;" \
+            -c "CREATE DATABASE baki_template OWNER baki_app;"
           # `vector` is not a trusted extension, so the unprivileged role cannot
           # install it — exactly as in production, where a DBA does this once.
           # Without it the app's best-effort CREATE EXTENSION no-ops and the
-          # pgvector path stays dark.
-          psql -h localhost -U postgres -d baki_app -v ON_ERROR_STOP=1 \
-            -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          # pgvector path stays dark. baki_template carries it into every
+          # database pgtest clones from it.
+          for db in baki_app baki_template; do
+            psql -h localhost -U postgres -d "$db" -v ON_ERROR_STOP=1 \
+              -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          done
       - name: Vet
         run: go vet ./... ./core/...
       - name: Test

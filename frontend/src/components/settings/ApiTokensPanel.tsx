@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {Plus, Trash2, Copy, Check, AlertCircle, AlertTriangle} from 'lucide-react'
@@ -70,7 +71,7 @@ export default function ApiTokensPanel() {
       setScopes(DEFAULT_SCOPES)
       load()
     } catch (e) {
-      toast.error(t('tokens.createFailed', {message: e instanceof Error ? e.message : String(e)}))
+      toast.error(t('tokens.createFailed', {message: getErrorMessage(e)}))
     } finally {
       setCreating(false)
     }
@@ -101,7 +102,7 @@ export default function ApiTokensPanel() {
       toast.success(t('tokens.revoked'))
       load()
     } catch (e) {
-      toast.error(t('tokens.revokeFailed', {message: e instanceof Error ? e.message : String(e)}))
+      toast.error(t('tokens.revokeFailed', {message: getErrorMessage(e)}))
     }
   }
 

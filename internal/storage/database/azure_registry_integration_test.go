@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/storage/contract"
 	"pad-analyzer/internal/storage/database"
 	"pad-analyzer/internal/storage/interfaces"
@@ -285,7 +286,7 @@ func TestPostgresAzureRegistry_OwnerLockTransaction(t *testing.T) {
 		if _, err := store.CreateConnection(ctx, owner, pgConn("default", "res")); err != nil {
 			return err
 		}
-		database.RegisterPostCommit(ctx, func() { hookRan = true })
+		txhook.Register(ctx, func(context.Context) { hookRan = true })
 		return boom
 	})
 	if !errors.Is(err, boom) {
@@ -303,7 +304,7 @@ func TestPostgresAzureRegistry_OwnerLockTransaction(t *testing.T) {
 		if _, err := store.CreateConnection(ctx, owner, pgConn("default", "res")); err != nil {
 			return err
 		}
-		database.RegisterPostCommit(ctx, func() {
+		txhook.Register(ctx, func(context.Context) {
 			// Visible from another connection: the write had committed.
 			n, err := store.Counts(context.Background(), owner)
 			ranAfterCommit = err == nil && n.Connections == 1

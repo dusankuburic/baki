@@ -154,7 +154,7 @@ describe('Modal size and frame variants', () => {
       </Modal>,
     )
     const dialog = screen.getByRole('dialog', {name: 'Big'})
-    expect(dialog).toHaveClass('max-w-[75rem]')
+    expect(dialog).toHaveClass('max-w-300')
     expect(dialog).toHaveClass('h-[min(60rem,calc(100vh-3rem))]')
     expect(dialog).toHaveClass('settings-dialog')
   })

@@ -155,6 +155,8 @@ function trapTab(e: KeyboardEvent, container: HTMLElement) {
   }
   const first = tabbable[0]
   const last = tabbable[tabbable.length - 1]
+  // Non-empty (early return above); the guard only satisfies the type.
+  if (!first || !last) return
   const wrapTo = e.shiftKey ? last : first
   if (tabbable.includes(current)) {
     if (current === (e.shiftKey ? first : last)) {

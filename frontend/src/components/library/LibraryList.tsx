@@ -1,5 +1,6 @@
 import {memo} from 'react'
 import clsx from 'clsx'
+import {useTranslation} from 'react-i18next'
 import type {LibraryFlow} from '@/api/library'
 import {relativeTime, absoluteTime} from '@/lib/time'
 import {Spinner} from '@/components/shared'
@@ -19,14 +20,15 @@ interface LibraryListProps {
 // crushed the name to nothing and clipped "Subflows" while both headings
 // still showed.
 function LibraryListImpl({items, selectedId, onSelect, onOpen, openingId}: LibraryListProps) {
+  const {t} = useTranslation('library')
   return (
     <div className="library-list rounded-lg border border-border-default bg-surface-2 overflow-hidden">
       <div className="library-row px-4 py-2 border-b border-border-subtle bg-surface-3 text-2xs font-semibold uppercase tracking-wide text-text-tertiary">
-        <div className="truncate">Name</div>
-        <div className="library-col-owner truncate">Owner</div>
-        <div className="truncate">Updated</div>
-        <div className="text-right">Blocks</div>
-        <div className="library-col-subflows text-right">Subflows</div>
+        <div className="truncate">{t('list.name')}</div>
+        <div className="library-col-owner truncate">{t('list.owner')}</div>
+        <div className="truncate">{t('list.updated')}</div>
+        <div className="text-right">{t('list.blocks')}</div>
+        <div className="library-col-subflows text-right">{t('list.subflows')}</div>
       </div>
       <ul className="divide-y divide-border-subtle">
         {items.map(flow => {
@@ -52,7 +54,7 @@ function LibraryListImpl({items, selectedId, onSelect, onOpen, openingId}: Libra
               }}
               className={clsx(
                 'library-row px-4 py-2.5 text-sm cursor-pointer transition-colors',
-                'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500/60',
+                'focus:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500/60',
                 selected ? 'bg-brand-500/15 text-brand-300' : 'text-text-secondary hover:bg-surface-3',
               )}
             >

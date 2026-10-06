@@ -1,5 +1,6 @@
 import {useMemo, useRef, useState} from 'react'
 import {Virtuoso, type VirtuosoHandle} from 'react-virtuoso'
+import {useTranslation} from 'react-i18next'
 import {useUIStore} from '@/stores/uiStore'
 import {EmptyState} from '@/components/shared'
 import {History, Plus, Minus, FileText, ArrowUp, ArrowDown} from 'lucide-react'
@@ -9,6 +10,7 @@ import {getBlockIcon} from '@/lib/blocks'
 import IconButton from '@/components/shared/IconButton'
 
 export default function RegressionDiffView() {
+  const {t} = useTranslation('flow')
   const diff = useUIStore(s => s.activeDiff)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
@@ -36,11 +38,7 @@ export default function RegressionDiffView() {
   if (!diff) {
     return (
       <div className="flex-1 flex items-center justify-center bg-surface-0">
-        <EmptyState
-          icon={History}
-          title="No comparison active"
-          description="Select a file to compare with the current flow"
-        />
+        <EmptyState icon={History} title={t('diff.emptyTitle')} description={t('diff.emptyBody')} />
       </div>
     )
   }
@@ -51,11 +49,13 @@ export default function RegressionDiffView() {
     let nextIdx: number
     if (direction === 'next') {
       const found = changeIndices.find(idx => idx > currentIndex)
-      nextIdx = found !== undefined ? found : changeIndices[0]
+      const first = changeIndices[0]
+      nextIdx = found ?? first ?? 0
     } else {
       const reversed = [...changeIndices].reverse()
       const found = reversed.find(idx => idx < currentIndex)
-      nextIdx = found !== undefined ? found : changeIndices[changeIndices.length - 1]
+      const last = changeIndices[changeIndices.length - 1]
+      nextIdx = found ?? last ?? 0
     }
 
     setCurrentIndex(nextIdx)
@@ -72,16 +72,19 @@ export default function RegressionDiffView() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 text-xs font-bold text-text-secondary">
             <History size={14} />
-            <span>STRUCTURAL DIFF</span>
+            <span>{t('diff.header')}</span>
           </div>
 
           {changeIndices.length > 0 && (
             <div className="flex items-center gap-1 border-l border-border-subtle pl-4 ml-2">
               <span className="text-2xs text-text-tertiary mr-2 font-medium">
-                {currentIndex !== -1 ? changeIndices.indexOf(currentIndex) + 1 : 0} / {changeIndices.length} CHANGES
+                {t('diff.counter', {
+                  current: currentIndex !== -1 ? changeIndices.indexOf(currentIndex) + 1 : 0,
+                  total: changeIndices.length,
+                })}
               </span>
-              <IconButton icon={ArrowUp} size="sm" label="Previous Change" onClick={() => jumpToChange('prev')} />
-              <IconButton icon={ArrowDown} size="sm" label="Next Change" onClick={() => jumpToChange('next')} />
+              <IconButton icon={ArrowUp} size="sm" label={t('diff.prevChange')} onClick={() => jumpToChange('prev')} />
+              <IconButton icon={ArrowDown} size="sm" label={t('diff.nextChange')} onClick={() => jumpToChange('next')} />
             </div>
           )}
         </div>
@@ -89,7 +92,7 @@ export default function RegressionDiffView() {
           onClick={() => setMainPaneView('block')}
           className="text-2xs font-black uppercase tracking-widest text-brand-500 hover:text-brand-400 transition-colors"
         >
-          Exit Diff Mode
+          {t('diff.exit')}
         </button>
       </div>
 
@@ -101,7 +104,7 @@ export default function RegressionDiffView() {
             return (
               <div className="px-6 py-4 bg-surface-1 border-b border-border-default sticky top-0 z-10 flex items-center gap-3">
                 <FileText size={16} className="text-text-tertiary" />
-                <h3 className="text-sm font-bold text-text-primary">Subflow: {item.data.name}</h3>
+                <h3 className="text-sm font-bold text-text-primary">{t('diff.subflow', {name: item.data.name})}</h3>
                 {item.data.change !== 'none' && (
                   <span
                     className={clsx(
@@ -164,7 +167,7 @@ export default function RegressionDiffView() {
 
                 {item.data.change === 'modified' && (
                   <span className="text-2xs text-semantic-warning font-bold bg-semantic-warning/10 px-1.5 rounded ml-auto">
-                    MODIFIED
+                    {t('diff.modified')}
                   </span>
                 )}
               </div>

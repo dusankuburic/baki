@@ -458,7 +458,16 @@ func (s *LibraryService) CreateLibraryFlow(ctx context.Context, ownerID, orgID s
 	if err := s.storage.SaveFlow(ctx, &doc); err != nil {
 		return nil, err
 	}
+	s.notifyFlowSetChanged(ownerID)
 	return &doc, nil
+}
+
+// notifyFlowSetChanged fires the same owner-scoped hook as FlowService's upload/save paths (it drops the owner's
+// dashboard cache); without it a library create/update/delete showed the old flow set until the cache TTL.
+func (s *LibraryService) notifyFlowSetChanged(ownerID string) {
+	if s.flowCache != nil {
+		s.flowCache.notifyCloudFlowMutation(ownerID)
+	}
 }
 
 // UpdateLibraryFlow saves changes to an existing flow; requires "editor"
@@ -478,6 +487,7 @@ func (s *LibraryService) UpdateLibraryFlow(ctx context.Context, doc *storageif.F
 	if s.flowCache != nil {
 		s.flowCache.InvalidateSearchIndex(doc.ID)
 	}
+	s.notifyFlowSetChanged(doc.OwnerID)
 	return nil
 }
 
@@ -509,5 +519,6 @@ func (s *LibraryService) DeleteLibraryFlow(ctx context.Context, flowID, callerID
 			p.Invalidate(flowID)
 		}
 	}
+	s.notifyFlowSetChanged(doc.OwnerID)
 	return nil
 }

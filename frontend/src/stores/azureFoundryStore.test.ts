@@ -311,7 +311,7 @@ describe('azureFoundryStore: mutations', () => {
     )
     api.updateAzureConnection.mockResolvedValueOnce(conn('default', {name: 'renamed'}))
     await useAzureFoundryStore.getState().updateConnection(USER, 'default', {name: 'renamed', updatedAt: 't'})
-    expect(scope().connections[0].name).toBe('renamed')
+    expect(scope().connections[0]!.name).toBe('renamed')
     expect(scope().models.find(m => m.id === 'gpt4100000')?.connectionName).toBe('renamed')
     expect(scope().models.find(m => m.id === 'other00000')?.connectionName).toBe('res-default')
     expect(api.listAzureModels).toHaveBeenCalledOnce()
@@ -321,7 +321,7 @@ describe('azureFoundryStore: mutations', () => {
     api.listAzureConnections.mockResolvedValueOnce(listing([conn('default', {status: 'needs_credentials'})]))
     api.listAzureModels.mockResolvedValueOnce({models: [model('gpt4100000', {status: 'needs_credentials'})]})
     await useAzureFoundryStore.getState().updateConnection(USER, 'default', {dismissDiscovery: true})
-    await vi.waitFor(() => expect(scope().models[0].status).toBe('needs_credentials'))
+    await vi.waitFor(() => expect(scope().models[0]!.status).toBe('needs_credentials'))
     expect(api.listAzureModels).toHaveBeenCalledTimes(2)
   })
 
@@ -345,7 +345,7 @@ describe('azureFoundryStore: mutations', () => {
     api.updateAzureConnection.mockResolvedValueOnce(conn('default', {suggestDiscovery: false}))
     await useAzureFoundryStore.getState().dismissDiscovery(USER, 'default')
     expect(api.updateAzureConnection).toHaveBeenCalledWith(USER, 'default', {dismissDiscovery: true})
-    expect(scope().connections[0].suggestDiscovery).toBe(false)
+    expect(scope().connections[0]!.suggestDiscovery).toBe(false)
   })
 
   it("removes a resource with its models and discovery, leaving an org's resource of the same id alone", async () => {
@@ -381,8 +381,8 @@ describe('azureFoundryStore: mutations', () => {
       .createModel(USER, {connectionId: 'default', kind: 'chat', deployment: 'GPT-4.1'})
     const s = scope()
     expect(s.models.map(m => m.id)).toEqual(['gpt4100000', 'zzz0000000'])
-    expect(s.connections[0].modelCount).toBe(2)
-    expect(s.discovery.default.data?.deployments[0]).toEqual({
+    expect(s.connections[0]!.modelCount).toBe(2)
+    expect(s.discovery.default!.data!.deployments[0]!).toEqual({
       name: 'gpt-4.1',
       kind: 'chat',
       model: 'gpt-4.1',
@@ -406,10 +406,10 @@ describe('azureFoundryStore: mutations', () => {
     await useAzureFoundryStore.getState().updateModel(ORG, 'kbnew00000', {isKnowledgeEmbedding: true, force: true})
 
     const byId = Object.fromEntries(scope(ORG).models.map(m => [m.id, m]))
-    expect(byId.orga000000.isDefault).toBe(false)
-    expect(byId.orgb000000.isDefault).toBe(true)
-    expect(byId.kbold00000.isKnowledgeEmbedding).toBe(false)
-    expect(byId.kbnew00000.isKnowledgeEmbedding).toBe(true)
+    expect(byId.orga000000!.isDefault).toBe(false)
+    expect(byId.orgb000000!.isDefault).toBe(true)
+    expect(byId.kbold00000!.isKnowledgeEmbedding).toBe(false)
+    expect(byId.kbnew00000!.isKnowledgeEmbedding).toBe(true)
   })
 
   it('asks the knowledge base for a re-index after a change confirmed with force, per scope', async () => {
@@ -476,8 +476,8 @@ describe('azureFoundryStore: mutations', () => {
     api.updateAzureModel.mockResolvedValueOnce({...other, isKnowledgeEmbedding: true})
     await useAzureFoundryStore.getState().updateModel(USER, 'other00000', {isKnowledgeEmbedding: true})
     const byId = Object.fromEntries(scope().models.map(m => [m.id, m]))
-    expect(byId.mine000000.isKnowledgeEmbedding).toBe(false)
-    expect(byId.orgkb00000.isKnowledgeEmbedding).toBe(true)
+    expect(byId.mine000000!.isKnowledgeEmbedding).toBe(false)
+    expect(byId.orgkb00000!.isKnowledgeEmbedding).toBe(true)
   })
 
   it('re-marks only the discovery a change affects, and skips one still without data', async () => {
@@ -524,7 +524,7 @@ describe('azureFoundryStore: mutations', () => {
       ['default', 0],
       ['second0000', 1],
     ])
-    expect(s.discovery.default.data?.deployments[0]).toEqual({
+    expect(s.discovery.default!.data!.deployments[0]!).toEqual({
       name: 'gpt-4.1',
       kind: 'chat',
       model: 'gpt-4.1',
@@ -543,8 +543,8 @@ describe('azureFoundryStore: mutations', () => {
     await useAzureFoundryStore.getState().deleteModel(USER, 'helper0000', {force: true})
     expect(api.deleteAzureModel).toHaveBeenCalledWith(USER, 'helper0000', {force: true})
     expect(scope().models).toEqual([])
-    expect(scope().connections[0].modelCount).toBe(0)
-    expect(scope().discovery.default.data?.agents[0]).toEqual({
+    expect(scope().connections[0]!.modelCount).toBe(0)
+    expect(scope().discovery.default!.data!.agents[0]!).toEqual({
       name: 'helper',
       kind: 'agent',
       model: 'gpt-4o',
@@ -554,7 +554,7 @@ describe('azureFoundryStore: mutations', () => {
     // Removing a model the cache no longer has changes nothing else.
     api.deleteAzureModel.mockResolvedValueOnce({status: 'ok'})
     await useAzureFoundryStore.getState().deleteModel(USER, 'unknown000')
-    expect(scope().connections[0].modelCount).toBe(0)
+    expect(scope().connections[0]!.modelCount).toBe(0)
   })
 
   it('marks the user scope stale after an org change (it lists the shared entries)', async () => {
@@ -769,11 +769,11 @@ describe('azureFoundryStore: discovery', () => {
     const a = store.discover(USER, 'default')
     const b = store.discover(USER, 'default')
     expect(b).toBe(a)
-    expect(scope().discovery.default.status).toBe('loading')
+    expect(scope().discovery.default!.status).toBe('loading')
     expect(scope().busy).toEqual({[azureBusyKey.discover('default')]: true})
     d.resolve(discovery())
     await a
-    expect(scope().discovery.default.status).toBe('ready')
+    expect(scope().discovery.default!.status).toBe('ready')
     expect(scope().busy).toEqual({})
   })
 
@@ -790,7 +790,7 @@ describe('azureFoundryStore: discovery', () => {
       error: 'needs Entra',
       errorCode: 'DISCOVERY_UNAVAILABLE',
     })
-    expect(scope().discovery.default.data?.deployments).toHaveLength(2)
+    expect(scope().discovery.default!.data?.deployments).toHaveLength(2)
 
     api.discoverAzureConnection.mockRejectedValueOnce(new Error('offline'))
     await useAzureFoundryStore
@@ -846,14 +846,14 @@ describe('azureFoundryStore: tests', () => {
     await seed([conn('default'), orgTwin], [model('gpt4100000'), model('zzother000')])
     api.testAzure.mockResolvedValueOnce({ok: true, latencyMs: 120})
     await useAzureFoundryStore.getState().test(USER, {model: {id: 'gpt4100000'}})
-    expect(scope().models[0].lastTest).toEqual({ok: true, latencyMs: 120, at: '2026-09-30T12:00:00.000Z'})
-    expect(scope().models[1].lastTest).toBeUndefined()
+    expect(scope().models[0]!.lastTest).toEqual({ok: true, latencyMs: 120, at: '2026-09-30T12:00:00.000Z'})
+    expect(scope().models[1]!.lastTest).toBeUndefined()
 
     api.testAzure.mockResolvedValueOnce({ok: false, latencyMs: 30, error: 'bad key', code: 'PROVIDER_AUTH'})
     await expect(useAzureFoundryStore.getState().test(USER, {connectionId: 'default'})).resolves.toMatchObject({
       ok: false,
     })
-    expect(scope().connections[0].lastTest).toEqual({
+    expect(scope().connections[0]!.lastTest).toEqual({
       ok: false,
       latencyMs: 30,
       error: 'bad key',

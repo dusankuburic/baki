@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
 import {useState, useCallback, useMemo} from 'react'
 import {authApi, type SessionInfo} from '@/api/auth'
@@ -51,7 +52,7 @@ export function useSessions() {
         setSessions(prev => (prev ?? []).filter(s => s.id !== id))
         return true
       } catch (err) {
-        setActionError(err instanceof Error ? err.message : t('sessions.revokeFailed'))
+        setActionError(getErrorMessage(err, t('sessions.revokeFailed')))
         return false
       } finally {
         setRevokingId(null)
@@ -74,7 +75,7 @@ export function useSessions() {
     setRevokingOthers(true)
     setActionError(null)
     const results = await Promise.allSettled(others.map(s => authApi.revokeSession(s.id)))
-    const revokedIds = new Set(others.filter((_, i) => results[i].status === 'fulfilled').map(s => s.id))
+    const revokedIds = new Set(others.filter((_, i) => results[i]?.status === 'fulfilled').map(s => s.id))
     setSessions(prev => (prev ?? []).filter(s => !revokedIds.has(s.id)))
     if (revokedIds.size < others.length) {
       setActionError(t('sessions.revokeOthersPartial'))

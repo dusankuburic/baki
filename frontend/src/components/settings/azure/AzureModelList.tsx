@@ -201,7 +201,7 @@ export function AzureModelRow({
             </Badge>
           )}
         </div>
-        <p className="mt-0.5 break-words text-xs text-text-tertiary">
+        <p className="mt-0.5 wrap-break-word text-xs text-text-tertiary">
           <span className="font-mono">{entry.deployment}</span>
           {showResource && (
             <>
@@ -218,12 +218,12 @@ export function AzureModelRow({
         </p>
         {statusNote && <p className="mt-0.5 text-xs text-text-secondary">{statusNote}</p>}
         {last && !last.ok && last.error && (
-          <p className="mt-0.5 line-clamp-2 break-words text-2xs text-text-tertiary">{last.error}</p>
+          <p className="mt-0.5 line-clamp-2 wrap-break-word text-2xs text-text-tertiary">{last.error}</p>
         )}
       </div>
 
       <div className="azure-model-facts text-xs text-text-secondary">
-        <span className="azure-model-purpose min-w-0 break-words">
+        <span className="azure-model-purpose min-w-0 wrap-break-word">
           <span className="azure-cell-label">{t('azureModels.models.cellPurpose')}</span> {purposeText}
         </span>
         <span className="azure-model-context">

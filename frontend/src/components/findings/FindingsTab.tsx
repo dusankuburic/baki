@@ -390,7 +390,7 @@ export default function FindingsTab() {
                   value={searchInput}
                   onChange={e => setSearchInput(e.target.value)}
                   placeholder={t('search.placeholder')}
-                  className="w-full bg-surface-2 border border-border-subtle rounded-md pl-7 pr-2 py-1 text-2xs text-text-primary placeholder:text-text-disabled focus:outline-none focus:border-brand-500/50"
+                  className="w-full bg-surface-2 border border-border-subtle rounded-md pl-7 pr-2 py-1 text-2xs text-text-primary placeholder:text-text-disabled focus:outline-hidden focus:border-brand-500/50"
                 />
               </div>
             </div>

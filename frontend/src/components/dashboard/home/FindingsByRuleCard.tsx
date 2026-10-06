@@ -41,6 +41,7 @@ export function FindingsByRuleCard({
       table={{
         caption: title,
         filename: 'findings-by-rule.csv',
+        rowKey: r => r.key,
         columns: [
           {key: 'label', header: t('analytics.columns.rule')},
           {

@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useCallback} from 'react'
 import {useTranslation} from 'react-i18next'
 import {VersionConflictError} from '@/api/client'
@@ -24,7 +25,7 @@ export function useLibraryWriteErrorToast() {
         })
         return
       }
-      toast.error(failedTitle, {description: err instanceof Error ? err.message : t('libraryTab.unknownError')})
+      toast.error(failedTitle, {description: getErrorMessage(err, t('libraryTab.unknownError'))})
     },
     [t, toast],
   )

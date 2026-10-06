@@ -19,7 +19,9 @@ export function decodeJwtPayload(token: string): Record<string, unknown> | null 
   const parts = token.split('.')
   if (parts.length !== 3) return null // not a JWT (e.g. the local-mode static token)
   try {
-    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const segment = parts[1]
+    if (!segment) return null
+    let b64 = segment.replace(/-/g, '+').replace(/_/g, '/')
     switch (b64.length % 4) {
       case 2:
         b64 += '=='

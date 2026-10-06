@@ -36,6 +36,7 @@ export function FindingsByCategoryCard({
       table={{
         caption: title,
         filename: 'findings-by-category.csv',
+        rowKey: r => r.key,
         columns: [
           {key: 'label', header: t('analytics.columns.category')},
           {key: 'value', header: t('analytics.columns.findings'), align: 'right'},

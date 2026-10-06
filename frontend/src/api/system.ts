@@ -1,4 +1,5 @@
-import {request} from './client'
+import {request, requestValidated} from './client'
+import {getAppInfoSchema} from './schemas'
 import type {AppInfo as AppInfoType} from '@/types'
 
 export interface FrontendError {
@@ -11,7 +12,8 @@ export interface FrontendError {
 export const systemApi = {
   logError: (err: FrontendError): Promise<void> => request('/api/system/log-error', {body: err}),
 
-  appInfo: (): Promise<AppInfoType> => request('/api/system/info', {method: 'GET'}),
+  appInfo: async (): Promise<AppInfoType> =>
+    requestValidated('/api/system/info', await getAppInfoSchema(), {method: 'GET'}),
 
   // Public (pre-auth) deployment flags; the login page reads them before any
   // session exists.

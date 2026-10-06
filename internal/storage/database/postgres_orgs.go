@@ -20,7 +20,7 @@ import (
 // ---- Organisation operations ----
 
 func (b *PostgresStorageBackend) SaveOrg(ctx context.Context, org *interfaces.Organisation) error {
-	return b.withTx(ctx, func(tx *sql.Tx) error { return b.upsertOrgInTx(ctx, tx, org) })
+	return b.withTx(ctx, func(_ context.Context, tx *sql.Tx) error { return b.upsertOrgInTx(ctx, tx, org) })
 }
 
 // upsertOrgInTx is SaveOrg's body: an INSERT ... ON CONFLICT upsert — distinct from saveOrgInTx,
@@ -248,7 +248,7 @@ func (b *PostgresStorageBackend) DeleteOrg(ctx context.Context, id string) error
 }
 
 func (b *PostgresStorageBackend) MutateOrg(ctx context.Context, id string, fn func(*interfaces.Organisation) error) error {
-	return b.withTx(ctx, func(tx *sql.Tx) error {
+	return b.withTx(ctx, func(_ context.Context, tx *sql.Tx) error {
 		org, err := b.loadOrgForUpdate(ctx, tx, id)
 		if err != nil {
 			return err
@@ -621,7 +621,7 @@ func (b *PostgresStorageBackend) searchKnowledgeVector(ctx context.Context, orgI
 		return scanKnowledgeHits(rows)
 	}
 	var chunks []interfaces.KnowledgeChunk
-	err := b.withTx(ctx, func(tx *sql.Tx) error {
+	err := b.withTx(ctx, func(_ context.Context, tx *sql.Tx) error {
 		for _, stmt := range []string{
 			`SET LOCAL hnsw.iterative_scan = relaxed_order`,
 			fmt.Sprintf(`SET LOCAL hnsw.max_scan_tuples = %d`, hnswMaxScanTuples),

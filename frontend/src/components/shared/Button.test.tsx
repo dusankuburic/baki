@@ -14,9 +14,9 @@ describe('Button', () => {
     render(<Button icon={Eye}>Preview</Button>)
     const button = screen.getByRole('button', {name: 'Preview'})
     const [first, second] = Array.from(button.children)
-    expect(first.tagName.toLowerCase()).toBe('svg')
-    expect(second.tagName.toLowerCase()).toBe('span')
-    expect(second).toHaveTextContent('Preview')
+    expect(first!.tagName.toLowerCase()).toBe('svg')
+    expect(second!.tagName.toLowerCase()).toBe('span')
+    expect(second!).toHaveTextContent('Preview')
   })
 
   it('greys out a disabled primary button instead of fading the brand fill', () => {

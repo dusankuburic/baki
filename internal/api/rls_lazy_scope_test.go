@@ -7,10 +7,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/platform/txhook"
 	storagedb "pad-analyzer/internal/storage/database"
 	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -35,6 +37,10 @@ type lazyRLSBackend struct {
 	commits   atomic.Int32
 	rollbacks atomic.Int32
 	beginErr  error
+	commitErr error // returned by every COMMIT, to simulate a connection lost at commit time
+
+	usersMu sync.Mutex
+	users   []string // the user of every BeginRLS, in order
 }
 
 func newLazyRLSBackend(t *testing.T) *lazyRLSBackend {
@@ -50,8 +56,11 @@ func newLazyRLSBackend(t *testing.T) *lazyRLSBackend {
 	return b
 }
 
-func (b *lazyRLSBackend) BeginRLS(ctx context.Context, _ string) (*sql.Tx, error) {
+func (b *lazyRLSBackend) BeginRLS(ctx context.Context, userID string) (*sql.Tx, error) {
 	b.begins.Add(1)
+	b.usersMu.Lock()
+	b.users = append(b.users, userID)
+	b.usersMu.Unlock()
 	if b.beginErr != nil {
 		return nil, b.beginErr
 	}
@@ -86,7 +95,7 @@ func (c *countingConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, er
 
 type countingTx struct{ b *lazyRLSBackend }
 
-func (t countingTx) Commit() error   { t.b.commits.Add(1); return nil }
+func (t countingTx) Commit() error   { t.b.commits.Add(1); return t.b.commitErr }
 func (t countingTx) Rollback() error { t.b.rollbacks.Add(1); return nil }
 
 // serveLazyRLS runs handler under rt's RLS middleware for an authenticated,
@@ -118,7 +127,7 @@ func TestRLSMiddleware_LazyScope(t *testing.T) {
 		rt := newTestRouter(b, true)
 		hooked := false
 		rr, p := serveLazyRLS(t, rt, http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
-			storagedb.RegisterPostCommit(r.Context(), func() { hooked = true })
+			txhook.Register(r.Context(), func(context.Context) { hooked = true })
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte("seen"))
 		})
@@ -146,7 +155,7 @@ func TestRLSMiddleware_LazyScope(t *testing.T) {
 		hooked := false
 		rr, p := serveLazyRLS(t, rt, http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
 			beginsInHandler = b.begins.Load()
-			storagedb.RegisterPostCommit(r.Context(), func() { hooked = true })
+			txhook.Register(r.Context(), func(context.Context) { hooked = true })
 			w.WriteHeader(http.StatusCreated)
 		})
 		if p != nil {
@@ -177,7 +186,7 @@ func TestRLSMiddleware_LazyScope(t *testing.T) {
 			}
 			touchStore(t, r)
 			touchStore(t, r) // the second statement joins the same transaction
-			storagedb.RegisterPostCommit(r.Context(), func() {
+			txhook.Register(r.Context(), func(context.Context) {
 				hooked = true
 				hookedBeforeCommit = b.commits.Load() == 0
 			})
@@ -209,7 +218,7 @@ func TestRLSMiddleware_LazyScope(t *testing.T) {
 		hooked := false
 		rr, p := serveLazyRLS(t, rt, http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
 			touchStore(t, r)
-			storagedb.RegisterPostCommit(r.Context(), func() { hooked = true })
+			txhook.Register(r.Context(), func(context.Context) { hooked = true })
 			w.WriteHeader(http.StatusConflict)
 		})
 		if p != nil {
@@ -246,7 +255,7 @@ func TestRLSMiddleware_LazyScope(t *testing.T) {
 		rt := newTestRouter(b, true)
 		hooked := false
 		rr, _ := serveLazyRLS(t, rt, http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
-			storagedb.RegisterPostCommit(r.Context(), func() { hooked = true })
+			txhook.Register(r.Context(), func(context.Context) { hooked = true })
 			w.WriteHeader(http.StatusBadRequest)
 		})
 		if rr.Code != http.StatusBadRequest {

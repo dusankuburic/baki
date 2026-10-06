@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/auth"
-	storagedb "pad-analyzer/internal/storage/database"
+	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
@@ -132,7 +132,7 @@ func TestTriageSet_AssignmentNoticeWaitsForCommit(t *testing.T) {
 		"flowId": "flow1", "findingKey": "r1:b1", "ruleId": "r1", "status": "in_progress", "assigneeId": "bob",
 	})
 	// The registry the RLS middleware installs for a transactional request.
-	ctx, postCommit := storagedb.WithPostCommit(context.Background())
+	ctx, postCommit := txhook.With(context.Background())
 	req := httptest.NewRequest(http.MethodPost, "/api/analysis/triage/set", bytes.NewReader(body)).WithContext(ctx)
 	req.Header.Set("Authorization", jwtBearer(t, rt, "alice", "alice@example.com"))
 	rr := httptest.NewRecorder()
@@ -142,7 +142,7 @@ func TestTriageSet_AssignmentNoticeWaitsForCommit(t *testing.T) {
 	if n := b.recordedAlerts.Load(); n != 0 {
 		t.Fatalf("assignment alert recorded before the commit (%d)", n)
 	}
-	postCommit.Run()
+	postCommit.Commit(nil)
 	waitUntil(t, "assignment alert after commit", func() bool { return b.recordedAlerts.Load() == 1 })
 }
 

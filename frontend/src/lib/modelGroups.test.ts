@@ -114,7 +114,7 @@ describe('groupModels', () => {
     const a = entry('alpha')
     const s = entry('aardvark', {shared: true})
     const [general] = groupModels([s, b, a])
-    expect(general.models).toEqual([a, b, s])
+    expect(general!.models).toEqual([a, b, s])
   })
 
   it('never lists embeddings and keeps catalogue models in listing order', () => {

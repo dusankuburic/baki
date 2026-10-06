@@ -1,4 +1,5 @@
 import React, {useState, useMemo} from 'react'
+import {useTranslation} from 'react-i18next'
 import {Search, Wrench, AlertTriangle, Info, BookOpen} from 'lucide-react'
 import {analysisApi} from '@/api/analysis'
 import {useOrgStore} from '@/stores/orgStore'
@@ -13,6 +14,7 @@ const SEVERITY_ICONS: Record<string, React.ReactNode> = {
 }
 
 export default function RuleReference() {
+  const {t} = useTranslation('analyzer')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<string>('all')
 
@@ -50,17 +52,21 @@ export default function RuleReference() {
   const autoFixableCount = rules?.filter((r: Rule) => r.autoFix).length ?? 0
 
   if (isLoading) return <Spinner />
-  if (error) return <div className="p-8 text-center text-text-secondary">Failed to load rules.</div>
+  if (error) return <div className="p-8 text-center text-text-secondary">{t('reference.loadFailed')}</div>
 
   return (
     <div className="h-full overflow-y-auto p-6 max-w-5xl mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-text-primary flex items-center gap-2">
           <BookOpen className="w-6 h-6" />
-          Rule Reference
+          {t('reference.title')}
         </h1>
         <p className="text-sm text-text-secondary mt-1">
-          {rules?.length ?? 0} rules across {categories.length - 1} categories · {autoFixableCount} with auto-fix
+          {t('reference.summary', {
+            rules: rules?.length ?? 0,
+            categories: categories.length - 1,
+            autoFixable: autoFixableCount,
+          })}
         </p>
       </div>
 
@@ -68,20 +74,20 @@ export default function RuleReference() {
         <div className="flex-1 relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary" />
           <input
-            className="w-full pl-10 pr-4 py-2 rounded-lg bg-surface-2 border border-border-default text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent-blue"
-            placeholder="Search rules..."
+            className="w-full pl-10 pr-4 py-2 rounded-lg bg-surface-2 border border-border-default text-sm text-text-primary placeholder:text-text-tertiary focus:outline-hidden focus:border-accent-blue"
+            placeholder={t('reference.searchPlaceholder')}
             value={query}
             onChange={e => setQuery(e.target.value)}
           />
         </div>
         <select
-          className="px-3 py-2 rounded-lg bg-surface-2 border border-border-default text-sm text-text-primary focus:outline-none focus:border-accent-blue"
+          className="px-3 py-2 rounded-lg bg-surface-2 border border-border-default text-sm text-text-primary focus:outline-hidden focus:border-accent-blue"
           value={filter}
           onChange={e => setFilter(e.target.value)}
         >
           {categories.map(c => (
             <option key={c} value={c}>
-              {c === 'all' ? 'All categories' : c}
+              {c === 'all' ? t('reference.allCategories') : c}
             </option>
           ))}
         </select>
@@ -101,22 +107,24 @@ export default function RuleReference() {
                   {r.autoFix && (
                     <span className="inline-flex items-center gap-1 text-xs text-green-400">
                       <Wrench className="w-3 h-3" />
-                      auto-fix
+                      {t('reference.autofix')}
                     </span>
                   )}
                 </div>
                 <h3 className="text-sm font-medium text-text-primary">{r.name}</h3>
                 <p className="text-xs text-text-secondary mt-1">{r.description}</p>
                 <div className="flex gap-3 mt-2 text-xs text-text-tertiary">
-                  <span>Category: {r.category}</span>
-                  <span>Severity: {r.defaultSeverity}</span>
-                  {r.confidence && <span>Confidence: {r.confidence}</span>}
+                  <span>{t('reference.category', {category: r.category})}</span>
+                  <span>{t('reference.severity', {severity: r.defaultSeverity})}</span>
+                  {r.confidence && <span>{t('reference.confidence', {confidence: r.confidence})}</span>}
                 </div>
               </div>
             </div>
           </div>
         ))}
-        {filtered.length === 0 && <div className="text-center py-12 text-text-secondary">No rules match "{query}"</div>}
+        {filtered.length === 0 && (
+          <div className="text-center py-12 text-text-secondary">{t('reference.noMatches', {query})}</div>
+        )}
       </div>
     </div>
   )

@@ -65,6 +65,9 @@ type PostgresStorageBackend struct {
 	// azureExportConfig supplies the data-subject export's Azure resource
 	// configuration (SetAzureExportConfigSource); nil until DI installs it.
 	azureExportConfig atomic.Pointer[interfaces.AzureExportConfigFunc]
+
+	// sealer encrypts secret columns at rest (EnableFieldEncryption); nil = stored as given.
+	sealer atomic.Pointer[fieldSealer]
 }
 
 // Config holds the connection settings for the PostgreSQL backend.

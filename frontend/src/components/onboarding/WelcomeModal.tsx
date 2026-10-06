@@ -65,7 +65,6 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
   const setDocument = useFlowStore(s => s.setDocument)
   const updateGeneral = useSettingsStore(s => s.updateGeneral)
   const {error: toastError} = useToast()
-  const current = STEPS[step]
   const isLast = step === STEPS.length - 1
 
   // Provider detection (onboarding R1-6): the tour previously never steered
@@ -136,6 +135,12 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
     complete()
   }, [complete])
 
+  // step only ever holds 0..STEPS.length-1 (Next is hidden on the last step,
+  // the dots index the array), so the guard below is unreachable — it just
+  // makes that invariant visible to the type system. Kept after the last hook
+  // so the early return doesn't skip any hook calls.
+  const current = STEPS[step]
+  if (!current) return null
   const Icon = current.icon
 
   return (

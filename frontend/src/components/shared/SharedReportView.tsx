@@ -75,7 +75,9 @@ export default function SharedReportView() {
   }
   const sortedGroups = [...groups.entries()].sort((a, b) => {
     const order: Record<string, number> = {error: 0, warning: 1, info: 2}
-    return (order[a[1][0].severity] ?? 2) - (order[b[1][0].severity] ?? 2)
+    // Group arrays are built by pushing ≥1 finding, so [0] always exists;
+    // the 'info' fallback mirrors the ?? 2 default below.
+    return (order[a[1][0]?.severity ?? 'info'] ?? 2) - (order[b[1][0]?.severity ?? 'info'] ?? 2)
   })
 
   return (
@@ -117,48 +119,51 @@ export default function SharedReportView() {
         {sortedGroups.length === 0 ? (
           <div className="text-center py-12 text-text-tertiary">{t('sharedReport.empty')}</div>
         ) : (
-          sortedGroups.map(([ruleId, groupFindings]) => (
-            <div key={ruleId} className="rounded-lg border border-border-subtle overflow-hidden">
-              <div className={clsx('px-4 py-3 border-l-4', sevColor[groupFindings[0].severity])}>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-sm font-medium">{groupFindings[0].title}</span>
-                  <span className="text-2xs text-text-tertiary tabular-nums">{groupFindings.length}×</span>
-                  <span
-                    className={clsx(
-                      'text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded border',
-                      sevColor[groupFindings[0].severity],
-                    )}
-                  >
-                    {sevLabel[groupFindings[0].severity]}
-                  </span>
-                </div>
-                <p className="text-2xs text-text-secondary">{groupFindings[0].description}</p>
-                {groupFindings[0].suggestion && (
-                  <p className="text-2xs text-emerald-300/70 mt-1">💡 {groupFindings[0].suggestion}</p>
-                )}
-              </div>
-              <div className="divide-y divide-border-subtle">
-                {groupFindings.map(f => (
-                  <div key={f.id} className="px-4 py-2 flex items-center gap-3">
-                    <span className="text-xs font-mono text-text-tertiary">{f.blockId.slice(0, 8)}</span>
-                    {f.category && (
-                      <span className="text-2xs uppercase tracking-wider text-text-disabled">{f.category}</span>
-                    )}
-                    {f.confidence && f.confidence !== 'medium' && (
-                      <span
-                        className={clsx(
-                          'text-2xs uppercase px-1 py-0.5 rounded',
-                          f.confidence === 'low' ? 'text-amber-400' : 'text-emerald-400',
-                        )}
-                      >
-                        {f.confidence}
-                      </span>
-                    )}
+          sortedGroups.map(([ruleId, groupFindings]) => {
+            // Every group was created with at least one finding.
+            const first = groupFindings[0]
+            if (!first) return null
+            return (
+              <div key={ruleId} className="rounded-lg border border-border-subtle overflow-hidden">
+                <div className={clsx('px-4 py-3 border-l-4', sevColor[first.severity])}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm font-medium">{first.title}</span>
+                    <span className="text-2xs text-text-tertiary tabular-nums">{groupFindings.length}×</span>
+                    <span
+                      className={clsx(
+                        'text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded border',
+                        sevColor[first.severity],
+                      )}
+                    >
+                      {sevLabel[first.severity]}
+                    </span>
                   </div>
-                ))}
+                  <p className="text-2xs text-text-secondary">{first.description}</p>
+                  {first.suggestion && <p className="text-2xs text-emerald-300/70 mt-1">💡 {first.suggestion}</p>}
+                </div>
+                <div className="divide-y divide-border-subtle">
+                  {groupFindings.map(f => (
+                    <div key={f.id} className="px-4 py-2 flex items-center gap-3">
+                      <span className="text-xs font-mono text-text-tertiary">{f.blockId.slice(0, 8)}</span>
+                      {f.category && (
+                        <span className="text-2xs uppercase tracking-wider text-text-disabled">{f.category}</span>
+                      )}
+                      {f.confidence && f.confidence !== 'medium' && (
+                        <span
+                          className={clsx(
+                            'text-2xs uppercase px-1 py-0.5 rounded',
+                            f.confidence === 'low' ? 'text-amber-400' : 'text-emerald-400',
+                          )}
+                        >
+                          {f.confidence}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))
+            )
+          })
         )}
       </div>
 

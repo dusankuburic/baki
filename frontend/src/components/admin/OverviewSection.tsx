@@ -117,7 +117,7 @@ function SkeletonTiles({count}: {count: number}) {
         <div
           key={i}
           aria-hidden="true"
-          className="stat-tile h-[5.5rem] rounded-xl border border-border-subtle bg-surface-2 animate-pulse-soft"
+          className="stat-tile h-22 rounded-xl border border-border-subtle bg-surface-2 animate-pulse-soft"
         />
       ))}
     </>

@@ -31,8 +31,17 @@ func (b *PostgresStorageBackend) SaveOrgChannel(ctx context.Context, ch *storage
 	if ch == nil || ch.ID == "" || ch.OrgID == "" {
 		return errors.New("org channel requires id and orgId")
 	}
+	// The URL (for Slack and Teams, the credential) and the signing secret are encrypted at rest (field_crypto.go).
+	url, err := b.sealField("org_channels", "url", ch.ID, ch.URL)
+	if err != nil {
+		return err
+	}
+	secret, err := b.sealField("org_channels", "secret", ch.ID, ch.Secret)
+	if err != nil {
+		return err
+	}
 	var savedID string
-	err := b.query(ctx).QueryRowContext(ctx, `
+	err = b.query(ctx).QueryRowContext(ctx, `
 		INSERT INTO org_channels (id, org_id, name, kind, url, secret, enabled, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (id) DO UPDATE SET
@@ -43,7 +52,7 @@ func (b *PostgresStorageBackend) SaveOrgChannel(ctx context.Context, ch *storage
 			enabled = EXCLUDED.enabled
 		WHERE org_channels.org_id = EXCLUDED.org_id
 		RETURNING id`,
-		ch.ID, ch.OrgID, ch.Name, ch.Kind, ch.URL, ch.Secret, ch.Enabled, ch.CreatedAt,
+		ch.ID, ch.OrgID, ch.Name, ch.Kind, url, secret, ch.Enabled, ch.CreatedAt,
 	).Scan(&savedID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return storageif.ErrNotFound
@@ -77,6 +86,12 @@ func (b *PostgresStorageBackend) ListOrgChannels(ctx context.Context, orgID stri
 	for rows.Next() {
 		var ch storageif.OrgChannel
 		if err := rows.Scan(&ch.ID, &ch.OrgID, &ch.Name, &ch.Kind, &ch.URL, &ch.Secret, &ch.Enabled, &ch.CreatedAt); err != nil {
+			return nil, err
+		}
+		if ch.URL, err = b.openField("org_channels", "url", ch.ID, ch.URL); err != nil {
+			return nil, err
+		}
+		if ch.Secret, err = b.openField("org_channels", "secret", ch.ID, ch.Secret); err != nil {
 			return nil, err
 		}
 		out = append(out, &ch)

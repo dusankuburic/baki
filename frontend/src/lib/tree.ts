@@ -32,6 +32,7 @@ function appendFlatBlocks(blocks: Block[], expandedBlockIds: Set<string>, depth:
   const last = blocks.length - 1
   for (let i = 0; i <= last; i++) {
     const block = blocks[i]
+    if (!block) continue
     const isContainer = CONTAINER_TYPES.has(block.type)
     const collapsed = expandedBlockIds.has(block.id)
     const isStructural = STRUCTURAL_TYPES.has(block.type)

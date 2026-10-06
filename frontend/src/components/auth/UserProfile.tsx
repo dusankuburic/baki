@@ -116,7 +116,7 @@ function ProfileGroup({
   return (
     <section id={id} aria-labelledby={`${id}-title`} className="profile-group">
       <div className="mb-3">
-        <h2 id={`${id}-title`} tabIndex={-1} className="text-base font-semibold text-text-primary outline-none">
+        <h2 id={`${id}-title`} tabIndex={-1} className="text-base font-semibold text-text-primary outline-hidden">
           {title}
         </h2>
         <p className="text-sm text-text-tertiary mt-0.5">{description}</p>
@@ -168,7 +168,7 @@ export const UserProfile: React.FC = () => {
                   onClick={() => jumpTo(group.id)}
                   className={clsx(
                     'profile-nav-item px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-fast',
-                    'focus-visible:ring-2 focus-visible:ring-brand-500/40 focus-visible:outline-none',
+                    'focus-visible:ring-2 focus-visible:ring-brand-500/40 focus-visible:outline-hidden',
                     current
                       ? 'bg-brand-500/10 text-brand-400'
                       : 'text-text-secondary hover:bg-surface-2 hover:text-text-primary',

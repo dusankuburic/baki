@@ -1,7 +1,8 @@
 import {useTranslation} from 'react-i18next'
 import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react'
 import clsx from 'clsx'
-import {Check, ChevronDown, Cloud, Github, HardDrive, Search, Settings, Users} from 'lucide-react'
+import {Check, ChevronDown, Cloud, HardDrive, Search, Settings, Users} from 'lucide-react'
+import {GithubMark} from '@/components/shared'
 import {Badge, Select} from '@/components/shared'
 import {AZURE_SECTION_ANCHOR} from '@/components/settings/azure/registryView'
 import {useAnchoredPosition} from '@/hooks/useAnchoredPosition'
@@ -85,7 +86,7 @@ function statusKey(status: string | undefined): StatusKey | null {
 // the trigger's accessible name).
 function ProviderGlyph({id}: {id: string}) {
   if (id === 'local') return <HardDrive size={12} />
-  if (id === 'github-models' || id === 'copilot') return <Github size={12} />
+  if (id === 'github-models' || id === 'copilot') return <GithubMark size={12} />
   return <Cloud size={12} />
 }
 
@@ -324,7 +325,8 @@ export default function ModelPicker({
     else if (to === 'last') index = options.length - 1
     else if (activeIndex < 0) index = to === 'next' ? 0 : options.length - 1
     else index = Math.min(options.length - 1, Math.max(0, activeIndex + (to === 'next' ? 1 : -1)))
-    setActiveId(options[index].id)
+    const opt = options[index]
+    if (opt) setActiveId(opt.id)
   }
 
   const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -334,7 +336,8 @@ export default function ModelPicker({
       moveActive(e.key === 'ArrowDown' ? 'next' : 'prev')
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      if (activeIndex >= 0) choose(options[activeIndex])
+      const opt = activeIndex >= 0 ? options[activeIndex] : undefined
+      if (opt) choose(opt)
     }
   }
 
@@ -348,12 +351,13 @@ export default function ModelPicker({
       moveActive(e.key === 'Home' ? 'first' : 'last')
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
-      if (activeIndex >= 0) choose(options[activeIndex])
+      const opt = activeIndex >= 0 ? options[activeIndex] : undefined
+      if (opt) choose(opt)
     }
   }
 
   const onListFocus = () => {
-    if (activeIndex < 0 && options.length > 0) setActiveId(options[0].id)
+    if (activeIndex < 0 && options.length > 0) setActiveId(options[0]?.id ?? null)
   }
 
   const onTriggerKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -439,7 +443,7 @@ export default function ModelPicker({
           role="dialog"
           aria-label={t('picker.dialog')}
           tabIndex={-1}
-          className="fixed z-overlay flex flex-col w-[min(22rem,calc(100vw-1rem))] max-h-[min(30rem,80vh)] bg-surface-2 border border-border-default rounded-lg shadow-lg animate-fade-in outline-none"
+          className="fixed z-overlay flex flex-col w-[min(22rem,calc(100vw-1rem))] max-h-[min(30rem,80vh)] bg-surface-2 border border-border-default rounded-lg shadow-lg animate-fade-in outline-hidden"
           style={{top: position.top, left: position.left}}
           onKeyDown={onDialogKeyDown}
           onBlur={onDialogBlur}
@@ -485,7 +489,7 @@ export default function ModelPicker({
                       setActiveId(null)
                     }}
                     onKeyDown={onSearchKeyDown}
-                    className="w-full h-8 pl-7 pr-2 rounded-md bg-surface-1 border border-border-default text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-border-focus"
+                    className="w-full h-8 pl-7 pr-2 rounded-md bg-surface-1 border border-border-default text-xs text-text-primary placeholder:text-text-tertiary outline-hidden focus:border-border-focus"
                   />
                 </div>
               )}
@@ -527,7 +531,7 @@ export default function ModelPicker({
                 aria-activedescendant={activeDescendant}
                 tabIndex={0}
                 className={clsx(
-                  'min-h-0 overflow-y-auto custom-scrollbar py-1 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-brand-500',
+                  'min-h-0 overflow-y-auto custom-scrollbar py-1 outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-brand-500',
                   options.length === 0 && 'hidden',
                 )}
                 onKeyDown={onListKeyDown}
@@ -640,7 +644,7 @@ export default function ModelPicker({
                               <div
                                 id={detailId}
                                 aria-hidden="true"
-                                className="pl-[18px] text-2xs text-text-tertiary line-clamp-2 [overflow-wrap:anywhere]"
+                                className="pl-[18px] text-2xs text-text-tertiary line-clamp-2 wrap-anywhere"
                               >
                                 {detail}
                               </div>

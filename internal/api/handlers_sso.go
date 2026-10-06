@@ -389,6 +389,10 @@ func (h *AuthHandler) handleSSOExchange(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	// SSO sessions are always persistent (the web client treats them as
+	// remembered): set the same HttpOnly refresh cookie login sets, so the web
+	// build can drop its localStorage copy of the token.
+	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt, true)
 
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSSOLogin, "user", user.ID, map[string]string{"provider": h.ssoClient.ProviderName()})
 	// Mirrors handleAuthLogin: the client's LoginResponseSchema requires the

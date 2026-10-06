@@ -21,7 +21,7 @@ export function AdminSection({
     <section id={id} aria-labelledby={`${id}-heading`} className="admin-section">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 id={`${id}-heading`} tabIndex={-1} className="text-base font-semibold text-text-primary outline-none">
+          <h2 id={`${id}-heading`} tabIndex={-1} className="text-base font-semibold text-text-primary outline-hidden">
             {title}
           </h2>
           {description && <p className="mt-0.5 text-xs text-text-tertiary">{description}</p>}

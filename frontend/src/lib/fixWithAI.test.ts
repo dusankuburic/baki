@@ -35,7 +35,7 @@ describe('stageFindingFix', () => {
     stageFindingFix(finding(), 'flow1')
     const st = useChatStore.getState()
     expect(st.threads).toHaveLength(1)
-    const thread = st.threads[0]
+    const thread = st.threads[0]!
     expect(thread.title).toBe('Fix: Hardcoded password')
     expect(thread.contextBlockId).toBe('blk-1')
     expect(thread.useTools).toBe(true)
@@ -53,9 +53,9 @@ describe('stageBlockPrompt', () => {
     stageBlockPrompt('Explain this block', 'blk-9', 'flow1')
     const st = useChatStore.getState()
     expect(st.threads).toHaveLength(1)
-    expect(st.threads[0].contextBlockId).toBe('blk-9')
+    expect(st.threads[0]!.contextBlockId).toBe('blk-9')
     expect(st.stagedPrompt?.text).toBe('Explain this block')
-    expect(st.getMessages(st.threads[0].id)).toHaveLength(0)
+    expect(st.getMessages(st.threads[0]!.id)).toHaveLength(0)
   })
 
   it('reuses the active thread when one exists', () => {
@@ -64,7 +64,7 @@ describe('stageBlockPrompt', () => {
     const st = useChatStore.getState()
     expect(st.threads).toHaveLength(1)
     expect(st.stagedPrompt?.threadId).toBe(id)
-    expect(st.threads[0].contextBlockId).toBe('blk-2')
+    expect(st.threads[0]!.contextBlockId).toBe('blk-2')
   })
 })
 

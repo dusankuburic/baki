@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
 import React, {useState, useCallback} from 'react'
 import clsx from 'clsx'
@@ -53,7 +54,7 @@ export const ChangePasswordSection: React.FC = () => {
         setPostLogoutNotice('password-changed')
         await logout()
       } catch (err) {
-        setSubmitError(err instanceof Error ? err.message : t('password.updateFailed'))
+        setSubmitError(getErrorMessage(err, t('password.updateFailed')))
         setIsSubmitting(false)
       }
     },

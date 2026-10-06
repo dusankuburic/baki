@@ -56,7 +56,8 @@ export default function ChatThreadBar({
     e.preventDefault()
     const delta = e.key === 'ArrowRight' ? 1 : -1
     const nextIndex = (index + delta + threads.length) % threads.length
-    onSelect(threads[nextIndex].id)
+    const nextTab = threads[nextIndex]
+    if (nextTab) onSelect(nextTab.id)
     // Roving focus: move focus WITH the selection, or it stays on the tab
     // that just became tabIndex -1 and the next arrow press goes nowhere.
     requestAnimationFrame(() => {
@@ -70,7 +71,7 @@ export default function ChatThreadBar({
         ref={scrollRef}
         // Overflow was completely invisible under no-scrollbar; the mask fades
         // the edge so there is an affordance that more tabs exist.
-        className="flex-1 flex items-center overflow-x-auto no-scrollbar [mask-image:linear-gradient(to_right,transparent_0,black_8px,black_calc(100%-12px),transparent_100%)]"
+        className="flex-1 flex items-center overflow-x-auto no-scrollbar mask-[linear-gradient(to_right,transparent_0,black_8px,black_calc(100%-12px),transparent_100%)]"
         role="tablist"
         aria-label={t('threads.barAria')}
       >
@@ -158,7 +159,7 @@ function ThreadTab({
       data-active-tab={isActive}
       tabIndex={isActive ? 0 : -1}
       className={clsx(
-        'chat-thread-tab group flex items-center gap-1 px-2 py-1.5 cursor-pointer border-b-2 transition-colors shrink-0 max-w-[120px] min-w-[60px] outline-none focus-visible:ring-1 focus-visible:ring-brand-500',
+        'chat-thread-tab group flex items-center gap-1 px-2 py-1.5 cursor-pointer border-b-2 transition-colors shrink-0 max-w-[120px] min-w-[60px] outline-hidden focus-visible:ring-1 focus-visible:ring-brand-500',
         isActive ? 'border-brand-500 bg-brand-500/5' : 'border-transparent hover:bg-surface-2',
       )}
       onClick={() => !editing && onSelect(thread.id)}
@@ -189,7 +190,7 @@ function ThreadTab({
       {editing ? (
         <input
           ref={inputRef}
-          className="flex-1 min-w-0 bg-surface-2 border border-border-default rounded px-1 py-0 text-2xs text-text-primary outline-none focus:border-brand-500"
+          className="flex-1 min-w-0 bg-surface-2 border border-border-default rounded px-1 py-0 text-2xs text-text-primary outline-hidden focus:border-brand-500"
           value={editValue}
           onChange={e => setEditValue(e.target.value)}
           onBlur={commitEdit}
@@ -218,7 +219,7 @@ function ThreadTab({
           'shrink-0 p-0.5 rounded transition-all duration-fast',
           isActive
             ? 'opacity-60 hover:opacity-100 hover:bg-surface-3'
-            : 'opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-surface-3',
+            : 'opacity-0 group-hover:opacity-60 hover:opacity-100! hover:bg-surface-3',
         )}
         onClick={e => {
           e.stopPropagation()

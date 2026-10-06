@@ -132,7 +132,7 @@ export function ConfirmProvider({children}: {children: React.ReactNode}) {
                   // red-600 ignored the theme; hover rings the button rather
                   // than shading it, so the text never loses contrast.
                   danger
-                    ? 'bg-semantic-error text-[color:var(--error-foreground)] hover:ring-2 hover:ring-semantic-error/40'
+                    ? 'bg-semantic-error text-(--error-foreground) hover:ring-2 hover:ring-semantic-error/40'
                     : 'bg-brand-600 hover:bg-brand-700 text-brand-foreground',
                 )}
               >
@@ -181,7 +181,7 @@ export function ConfirmProvider({children}: {children: React.ReactNode}) {
                     }
                   }}
                   placeholder={state.placeholder}
-                  className="w-full px-3 py-2 rounded-lg bg-surface-2 border border-border-default text-sm text-text-primary focus:outline-none focus:border-brand-500"
+                  className="w-full px-3 py-2 rounded-lg bg-surface-2 border border-border-default text-sm text-text-primary focus:outline-hidden focus:border-brand-500"
                 />
               </div>
             )}

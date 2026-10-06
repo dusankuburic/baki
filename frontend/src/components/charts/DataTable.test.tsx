@@ -21,7 +21,7 @@ beforeEach(() => downloadBlob.mockClear())
 
 describe('DataTable', () => {
   it('renders a captioned table with right-aligned numbers', () => {
-    render(<DataTable caption="Findings by rule" columns={columns} rows={rows} />)
+    render(<DataTable caption="Findings by rule" columns={columns} rows={rows} rowKey={r => r.rule} />)
     const table = screen.getByRole('table', {name: 'Findings by rule'})
     expect(
       within(table)
@@ -32,7 +32,7 @@ describe('DataTable', () => {
   })
 
   it('downloads a CSV with formula-injection cells escaped', () => {
-    render(<DataTable caption="Findings by rule" columns={columns} rows={rows} filename="rules.csv" />)
+    render(<DataTable caption="Findings by rule" columns={columns} rows={rows} filename="rules.csv" rowKey={r => r.rule} />)
     fireEvent.click(screen.getByRole('button', {name: 'Download CSV'}))
     expect(downloadBlob).toHaveBeenCalledTimes(1)
     const [content, mime, filename] = downloadBlob.mock.calls[0] as [string, string, string]
@@ -48,7 +48,7 @@ describe('DataTable', () => {
 
   it('tells the reader when rows are held back on screen', () => {
     const many = Array.from({length: 5}, (_, i) => ({rule: `r${i}`, count: i}))
-    render(<DataTable caption="c" columns={columns} rows={many} maxRows={2} />)
+    render(<DataTable caption="c" columns={columns} rows={many} maxRows={2} rowKey={r => r.rule} />)
     expect(screen.getAllByRole('row')).toHaveLength(3)
     expect(screen.getByText(/Showing 2 of 5 rows/)).toBeInTheDocument()
   })

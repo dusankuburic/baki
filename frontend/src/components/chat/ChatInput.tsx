@@ -362,7 +362,7 @@ export default function ChatInput({
           if (historyIndex === -1) historyDraftRef.current = value
           const next = historyIndex + 1
           setHistoryIndex(next)
-          setValue(history[next])
+          setValue(history[next] ?? '')
           e.preventDefault()
         }
       } else if (e.key === 'ArrowDown' && historyIndex >= 0) {
@@ -370,7 +370,7 @@ export default function ChatInput({
         const next = historyIndex - 1
         setHistoryIndex(next)
         if (next >= 0) {
-          setValue(history[next])
+          setValue(history[next] ?? '')
         } else {
           setValue(historyDraftRef.current ?? '')
           historyDraftRef.current = null
@@ -577,7 +577,7 @@ export default function ChatInput({
 
         {guidance && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 bg-semantic-warning/5 border-b border-border-subtle/50 first:rounded-t-xl text-2xs text-text-secondary">
-            <p className="flex-1 min-w-[10rem]">{guidance.text}</p>
+            <p className="flex-1 min-w-40">{guidance.text}</p>
             <button
               type="button"
               onClick={guidance.onAction}
@@ -609,7 +609,7 @@ export default function ChatInput({
         <textarea
           ref={textareaRef}
           data-chat-composer=""
-          className="w-full bg-transparent border-none outline-none text-sm leading-relaxed text-text-primary placeholder:text-text-tertiary resize-none px-3.5 pt-3 pb-1 min-h-[22px] chat-composer-input scrollbar-none font-sans"
+          className="w-full bg-transparent border-none outline-hidden text-sm leading-relaxed text-text-primary placeholder:text-text-tertiary resize-none px-3.5 pt-3 pb-1 min-h-[22px] chat-composer-input scrollbar-none font-sans"
           aria-label={t('composer.inputAria')}
           placeholder={canQueue ? t('composer.queuePlaceholder') : placeholder || t('composer.placeholder')}
           value={value}

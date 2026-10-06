@@ -76,7 +76,7 @@ describe('useChatThreads server-side history', () => {
     const kept = useChatStore.getState().getMessages(id)
     expect(kept).toHaveLength(COMPACT_KEEP_PAIRS * 2)
     expect(chatApi.saveConversation).toHaveBeenCalledTimes(1)
-    const [flowId, scope, saved] = vi.mocked(chatApi.saveConversation).mock.calls[0]
+    const [flowId, scope, saved] = vi.mocked(chatApi.saveConversation).mock.calls[0]!
     expect(flowId).toBe('flow1')
     expect(scope).toBe(id)
     expect(saved.map(m => m.id)).toEqual(kept.map(m => m.id))
@@ -140,7 +140,7 @@ describe('useChatThreads failure paths', () => {
 
     await act(async () => result.current.handleCompact())
 
-    const saved = vi.mocked(chatApi.saveConversation).mock.calls[0][2]
+    const saved = vi.mocked(chatApi.saveConversation).mock.calls[0]![2]
     expect(saved.some(m => m.finishReason === 'error')).toBe(false)
   })
 })
@@ -156,7 +156,7 @@ describe('compact keeps whole exchanges', () => {
 
     await act(async () => result.current.handleCompact())
 
-    const saved = vi.mocked(chatApi.saveConversation).mock.calls[0][2]
+    const saved = vi.mocked(chatApi.saveConversation).mock.calls[0]![2]
     expect(saved.map(m => m.id)).toEqual(['u1', 'a1', 'u2', 'a2', 'u3', 'a3'])
     expect(
       useChatStore

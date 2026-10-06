@@ -34,7 +34,7 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
         aria-invalid={error ? true : undefined}
         aria-describedby={describedByIds}
         className={clsx(
-          'h-9 w-full rounded-md border bg-surface-2 px-2 text-sm text-text-primary outline-none transition-colors duration-fast',
+          'h-9 w-full rounded-md border bg-surface-2 px-2 text-sm text-text-primary outline-hidden transition-colors duration-fast',
           'disabled:cursor-not-allowed disabled:opacity-60',
           error
             ? 'border-semantic-error focus:border-semantic-error'

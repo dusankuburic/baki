@@ -315,7 +315,7 @@ describe('AITab chat shortcuts', () => {
     useChatStore.setState(s => ({
       streams: {
         t1: {
-          ...s.streams.t1,
+          ...s.streams.t1!,
           fixProposals: [
             {
               proposalId: 'p1',
@@ -339,7 +339,7 @@ describe('AITab chat shortcuts', () => {
     // fix, not "stop everything".
     fireEvent.keyDown(composer, {key: 'Escape'})
 
-    await waitFor(() => expect(useChatStore.getState().streams.t1?.fixProposals[0].status).toBe('declined'))
+    await waitFor(() => expect(useChatStore.getState().streams.t1?.fixProposals[0]!.status).toBe('declined'))
     expect(chatApi.respondFixDecision).toHaveBeenCalledWith('pending', 'p1', false, undefined)
     expect(useChatStore.getState().streams.t1).toBeDefined()
     expect(chatApi.cancelStream).not.toHaveBeenCalled()

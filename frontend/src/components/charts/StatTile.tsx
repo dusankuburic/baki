@@ -81,7 +81,7 @@ export function StatTile({
       className={clsx(
         'stat-tile flex min-w-0 flex-col gap-1 rounded-xl border border-border-subtle bg-surface-2 p-4 text-left',
         onClick &&
-          'cursor-pointer transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40',
+          'cursor-pointer transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40',
         className,
       )}
     >

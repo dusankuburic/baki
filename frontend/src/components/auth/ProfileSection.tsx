@@ -1,3 +1,5 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
+import {logger} from '@/lib/logger'
 import {useTranslation} from 'react-i18next'
 import React, {useState, useCallback} from 'react'
 import {Check, Copy, Pencil, User as UserIcon} from 'lucide-react'
@@ -13,7 +15,8 @@ function isHttpUrl(value: string): boolean {
   try {
     const url = new URL(value)
     return url.protocol === 'https:' || url.protocol === 'http:'
-  } catch {
+  } catch (err) {
+    logger.warn('ProfileSection: avatar URL did not parse as http(s)', err)
     return false
   }
 }
@@ -60,7 +63,7 @@ export const ProfileSection: React.FC<{editing: boolean; onEditingChange: (editi
         toast.success(t('profile.updated'))
         onEditingChange(false)
       } catch (err) {
-        toast.error(t('profile.updateFailed'), {description: err instanceof Error ? err.message : String(err)})
+        toast.error(t('profile.updateFailed'), {description: getErrorMessage(err)})
       } finally {
         setIsSaving(false)
       }

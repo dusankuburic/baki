@@ -1,3 +1,4 @@
+import {getErrorCode} from '@/lib/getErrorMessage'
 import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {Cloud, Info, Plus, X} from 'lucide-react'
@@ -57,7 +58,7 @@ type ConnectionModalState = {mode: ConnectionModalMode; connection: AzureConnect
 type ModelModalState = {entry: AzureModelEntry | null; initial: ModelFormState; reportedWindow?: number}
 
 function isCode(err: unknown, code: string): boolean {
-  return err instanceof ApiError && err.code === code
+  return getErrorCode(err) === code
 }
 
 // AI Accounts → Azure AI Foundry, and an organisation's block in
@@ -344,13 +345,15 @@ export default function AzureFoundryPanel({
     const failures: Record<string, string> = {}
     let added = 0
     for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (!item) continue
       try {
-        const entry = await createModel(scope, discoveryQuickAddInput(items[i], connection.id))
+        const entry = await createModel(scope, discoveryQuickAddInput(item, connection.id))
         added++
         reportFirstChatModel(entry)
       } catch (err) {
         const reason = reasonOf(err)
-        failures[discoveryItemKey(items[i])] = reason
+        failures[discoveryItemKey(item)] = reason
         if (isCode(err, 'TOO_MANY_MODELS')) {
           for (const rest of items.slice(i + 1)) failures[discoveryItemKey(rest)] = reason
           break
@@ -561,7 +564,7 @@ export default function AzureFoundryPanel({
               size="sm"
               variant="secondary"
               icon={Plus}
-              onClick={() => setModelModal({entry: null, initial: emptyModelForm(ownConnections[0].id)})}
+              onClick={() => setModelModal({entry: null, initial: emptyModelForm(ownConnections[0]?.id ?? '')})}
               disabled={limits.models.reached}
               aria-describedby={limits.models.reached ? modelsLimitId : undefined}
             >
@@ -609,7 +612,7 @@ export default function AzureFoundryPanel({
                 description={
                   scope.kind === 'org' ? t('azureModels.empty.orgDescription') : t('azureModels.empty.description')
                 }
-                className="rounded-lg border border-dashed border-border-default !py-8"
+                className="rounded-lg border border-dashed border-border-default py-8!"
                 action={
                   <Button
                     variant="primary"
@@ -688,7 +691,7 @@ function Notice({children}: {children: React.ReactNode}) {
   return (
     <div className="mb-4 flex items-start gap-2 rounded-lg border border-semantic-info/30 bg-semantic-info/10 px-3 py-2 text-xs text-text-secondary">
       <Info size={14} aria-hidden="true" className="mt-0.5 shrink-0 text-semantic-info" />
-      <p className="min-w-0 break-words">{children}</p>
+      <p className="min-w-0 wrap-break-word">{children}</p>
     </div>
   )
 }

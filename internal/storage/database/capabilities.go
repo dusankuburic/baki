@@ -26,6 +26,13 @@ type KeyStoreProvider interface {
 	NewEncryptedKeyStore(secret []byte) (*EncryptedKeyStore, error)
 }
 
+// FieldEncryptor is implemented by storage backends that can encrypt secret
+// columns at rest (field_crypto.go) and seal the rows written before.
+type FieldEncryptor interface {
+	EnableFieldEncryption(secret []byte) error
+	EncryptOrgChannelsAtRest(ctx context.Context) (int, error)
+}
+
 // RLSBeginner is implemented by storage backends that support Postgres
 // row-level-security transactions scoped to a caller.
 type RLSBeginner interface {

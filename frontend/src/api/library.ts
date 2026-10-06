@@ -1,4 +1,10 @@
-import {request} from './client'
+import {request, requestValidated} from './client'
+import {
+  getLibraryFlowSchema,
+  getLibraryFlowsPageSchema,
+  getLibraryFlowVersionSchema,
+  getLoadedFlowDocumentSchema,
+} from './schemas'
 import type {FlowDocument, PagedResponse} from '@/types'
 
 export interface LibraryFlow {
@@ -101,7 +107,7 @@ export interface UpdateLibraryFlowRequest {
 }
 
 export const libraryApi = {
-  list: (filter: LibraryFilter = {}, signal?: AbortSignal): Promise<PagedResponse<LibraryFlow>> => {
+  list: async (filter: LibraryFilter = {}, signal?: AbortSignal): Promise<PagedResponse<LibraryFlow>> => {
     const params = new URLSearchParams()
     if (filter.orgId) params.set('orgId', filter.orgId)
     if (filter.scope) params.set('scope', filter.scope)
@@ -111,7 +117,10 @@ export const libraryApi = {
     if (filter.limit) params.set('limit', String(filter.limit))
     if (filter.offset) params.set('offset', String(filter.offset))
     const qs = params.toString()
-    return request(`/api/library${qs ? '?' + qs : ''}`, {method: 'GET', signal})
+    return requestValidated(`/api/library${qs ? '?' + qs : ''}`, await getLibraryFlowsPageSchema(), {
+      method: 'GET',
+      signal,
+    })
   },
 
   // Org-wide governance portfolio, ranked worst-health-first unless sort says otherwise.
@@ -129,15 +138,19 @@ export const libraryApi = {
   // PREVIOUS version/document, so the edit stayed invisible and the next save
   // 409'd. The content is also the largest body the client fetches (tens of
   // MB for big flows), which the cache would clone on every write and hit.
-  get: (id: string, signal?: AbortSignal): Promise<LibraryFlow> =>
-    request(`/api/library/${id}`, {method: 'GET', noDedup: true, signal}),
+  get: async (id: string, signal?: AbortSignal): Promise<LibraryFlow> =>
+    requestValidated(`/api/library/${id}`, await getLibraryFlowSchema(), {method: 'GET', noDedup: true, signal}),
 
-  getContent: (id: string, signal?: AbortSignal): Promise<FlowDocument> =>
-    request(`/api/library/${id}/content`, {method: 'GET', noDedup: true, signal}),
+  getContent: async (id: string, signal?: AbortSignal): Promise<FlowDocument> =>
+    requestValidated(`/api/library/${id}/content`, await getLoadedFlowDocumentSchema(), {
+      method: 'GET',
+      noDedup: true,
+      signal,
+    }),
 
-  versions: (id: string, limit?: number): Promise<LibraryFlowVersion[]> => {
+  versions: async (id: string, limit?: number): Promise<LibraryFlowVersion[]> => {
     const qs = limit ? `?limit=${limit}` : ''
-    return request(`/api/library/${id}/versions${qs}`, {method: 'GET'})
+    return requestValidated(`/api/library/${id}/versions${qs}`, await getLibraryFlowVersionSchema(), {method: 'GET'})
   },
 
   create: (req: CreateLibraryFlowRequest): Promise<LibraryFlow> => request('/api/library', {body: req}),

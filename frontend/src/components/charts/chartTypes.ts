@@ -5,9 +5,9 @@ import type {ReactNode} from 'react'
 // change without re-rendering (see useChartTheme).
 export interface ChartTheme {
   /** Categorical slots 1–8 in the validated fixed order: assign in sequence, never cycle. */
-  series: readonly string[]
+  series: readonly [string, string, string, string, string, string, string, string]
   /** Ordinal one-hue ramp, light → dark, for ordered categories (funnel stages, tiers). */
-  seq: readonly string[]
+  seq: readonly [string, string, string, string]
   /** Reserved for state: severity and health tiers. Never a series colour. */
   status: {success: string; warning: string; error: string; info: string}
   /** The one series a single-series chart draws. */
@@ -50,4 +50,6 @@ export interface TableSpec<Row> {
   rows: Row[]
   /** Offer a CSV download under this file name. */
   filename?: string
+  /** Stable React key per row, derived from the row's own data (never the index). */
+  rowKey: (row: Row, index: number) => string
 }

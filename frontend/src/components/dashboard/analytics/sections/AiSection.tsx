@@ -103,6 +103,7 @@ export function AiSection({data, refetching}: {data: DashboardAnalyticsData; ref
         table={{
           caption: t('analytics.cards.tokens'),
           filename: 'ai-tokens.csv',
+          rowKey: r => r.date,
           columns: [
             dateCol,
             {key: 'tokensIn', header: t('analytics.columns.tokensIn'), align: 'right'},
@@ -132,6 +133,7 @@ export function AiSection({data, refetching}: {data: DashboardAnalyticsData; ref
         table={{
           caption: t('analytics.cards.cost'),
           filename: 'ai-cost.csv',
+          rowKey: r => r.date,
           columns: [
             dateCol,
             {
@@ -163,6 +165,7 @@ export function AiSection({data, refetching}: {data: DashboardAnalyticsData; ref
         table={{
           caption: t('analytics.cards.byProvider'),
           filename: 'ai-cost-by-provider.csv',
+          rowKey: r => r.key,
           columns: [
             {key: 'label', header: t('analytics.columns.provider')},
             {key: 'tokensIn', header: t('analytics.columns.tokensIn'), align: 'right'},

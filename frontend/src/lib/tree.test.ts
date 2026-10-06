@@ -65,20 +65,20 @@ describe('flattenBlocks', () => {
     expect(result).toHaveLength(3)
     expect(result.map(r => r.block.id)).toEqual(['a', 'b', 'c'])
     expect(result.every(r => r.depth === 0)).toBe(true)
-    expect(result[2].isLast).toBe(true)
-    expect(result[0].isLast).toBe(false)
+    expect(result[2]!.isLast).toBe(true)
+    expect(result[0]!.isLast).toBe(false)
   })
 
   it('marks container blocks correctly', () => {
     const loop = makeBlock('loop1', 'LOOP')
     const result = flattenBlocks([loop], new Set())
-    expect(result[0].isContainer).toBe(true)
+    expect(result[0]!.isContainer).toBe(true)
   })
 
   it('marks non-container blocks correctly', () => {
     const action = makeBlock('a1', 'ACTION')
     const result = flattenBlocks([action], new Set())
-    expect(result[0].isContainer).toBe(false)
+    expect(result[0]!.isContainer).toBe(false)
   })
 
   it('hides children when block id is in expandedBlockIds (collapsed)', () => {
@@ -87,7 +87,7 @@ describe('flattenBlocks', () => {
     // "expandedBlockIds" is inverted naming: having the id means collapsed
     const result = flattenBlocks([loop], new Set(['loop1']))
     expect(result).toHaveLength(1)
-    expect(result[0].collapsed).toBe(true)
+    expect(result[0]!.collapsed).toBe(true)
   })
 
   it('shows children when block id is NOT in expandedBlockIds', () => {
@@ -95,8 +95,8 @@ describe('flattenBlocks', () => {
     const loop = makeBlock('loop1', 'LOOP', [child])
     const result = flattenBlocks([loop], new Set())
     expect(result).toHaveLength(2)
-    expect(result[1].block.id).toBe('child')
-    expect(result[1].depth).toBe(1)
+    expect(result[1]!.block.id).toBe('child')
+    expect(result[1]!.depth).toBe(1)
   })
 
   it('indents nested children correctly', () => {
@@ -146,8 +146,8 @@ describe('flattenTreeRows', () => {
     const doc = makeDoc(sf)
     const result = flattenTreeRows(doc, baseOptions)
     expect(result).toHaveLength(1)
-    expect(result[0].kind).toBe('subflow')
-    expect(result[0].id).toBe('sf1')
+    expect(result[0]!.kind).toBe('subflow')
+    expect(result[0]!.id).toBe('sf1')
   })
 
   it('returns subflow + blocks when subflow is expanded', () => {
@@ -158,9 +158,9 @@ describe('flattenTreeRows', () => {
       expandedSubflowIds: new Set(['sf1']),
     })
     expect(result).toHaveLength(3)
-    expect(result[0].kind).toBe('subflow')
-    expect(result[1].kind).toBe('block')
-    expect(result[2].kind).toBe('block')
+    expect(result[0]!.kind).toBe('subflow')
+    expect(result[1]!.kind).toBe('block')
+    expect(result[2]!.kind).toBe('block')
   })
 
   it('block rows have depth 1', () => {
@@ -170,7 +170,7 @@ describe('flattenTreeRows', () => {
       ...baseOptions,
       expandedSubflowIds: new Set(['sf1']),
     })
-    expect(result[1].depth).toBe(1)
+    expect(result[1]!.depth).toBe(1)
   })
 
   it('filters out blocks not in visibleTypes', () => {
@@ -182,7 +182,7 @@ describe('flattenTreeRows', () => {
       visibleTypes: new Set<Block['type']>(['ACTION']),
     })
     expect(result).toHaveLength(2) // subflow header + 1 visible block
-    expect(result[1].blockType).toBe('ACTION')
+    expect(result[1]!.blockType).toBe('ACTION')
   })
 
   it('search: hides non-matching subflows', () => {
@@ -197,7 +197,7 @@ describe('flattenTreeRows', () => {
       searchQuery: 'alpha',
     })
     expect(result).toHaveLength(1)
-    expect(result[0].id).toBe('sf1')
+    expect(result[0]!.id).toBe('sf1')
   })
 
   it('search: shows subflow when a child block matches', () => {
@@ -280,8 +280,8 @@ describe('flattenTreeRows', () => {
       expandedBlockIds: new Set(['loop1']),
     })
     expect(result).toHaveLength(3) // header + loop + child
-    expect(result[2].id).toBe('child')
-    expect(result[2].depth).toBe(2)
+    expect(result[2]!.id).toBe('child')
+    expect(result[2]!.depth).toBe(2)
   })
 })
 
@@ -301,8 +301,8 @@ describe('flatteners at scale', () => {
     const loop = makeBlock('loop1', 'LOOP', wideChildren())
     const result = flattenBlocks([loop], new Set())
     expect(result).toHaveLength(WIDE + 1)
-    expect(result[WIDE].block.id).toBe(`c${WIDE - 1}`)
-    expect(result[WIDE].depth).toBe(1)
+    expect(result[WIDE]!.block.id).toBe(`c${WIDE - 1}`)
+    expect(result[WIDE]!.depth).toBe(1)
   })
 
   it('flattenTreeRows handles a subflow of 300k blocks', () => {
@@ -313,7 +313,7 @@ describe('flatteners at scale', () => {
       visibleTypes: allTypes,
     })
     expect(rows).toHaveLength(WIDE + 1)
-    expect(rows[WIDE].id).toBe(`c${WIDE - 1}`)
+    expect(rows[WIDE]!.id).toBe(`c${WIDE - 1}`)
   })
 
   it('flattenTreeRows handles 300k children of an expanded block under a search', () => {
@@ -353,7 +353,7 @@ describe('flatteners at scale', () => {
       visibleTypes: allTypes,
     })
     expect(rows.map(r => r.id)).toEqual(['sf1', 'loop1'])
-    expect(rows[1].hasChildren).toBe(true)
+    expect(rows[1]!.hasChildren).toBe(true)
     expect(inner.visits()).toBe(0)
   })
 

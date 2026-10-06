@@ -115,7 +115,9 @@ export function groupModels<M extends GroupableModel>(
     const sorted = [...members].sort((a, b) => compareModelsInGroup(a.model, b.model))
     // Named by the first spelling in the group's own order (personal first),
     // so the name doesn't depend on the order the server listed entries in.
-    customGroups.push({kind: 'custom', key, label: sorted[0].text, models: sorted.map(m => m.model)})
+    // Every group has at least one member (pushed before the map set).
+    const first = sorted[0]
+    if (first) customGroups.push({kind: 'custom', key, label: first.text, models: sorted.map(m => m.model)})
   }
   customGroups.sort((a, b) => compareText(a.label, b.label))
   groups.push(...customGroups)

@@ -5,16 +5,16 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"log/slog"
 	"sync"
 
+	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
 type contextKey string
 
 const rlsTxKey contextKey = "rls_tx"
-
-const postCommitKey contextKey = "post_commit_hooks"
 
 // ErrRLSUnavailable is what every statement sent through a fail-closed RLS scope returns once the scoped
 // transaction could not be started: the request must not fall through to the pool, where the policies
@@ -205,87 +205,69 @@ type rlsFailDriver struct{}
 
 func (rlsFailDriver) Open(string) (driver.Conn, error) { return nil, ErrRLSUnavailable }
 
-// PostCommitRegistry collects work that must run only after the request's RLS transaction commits
-// successfully (e.g. deleting blobs that back a row being removed).
-type PostCommitRegistry struct {
-	mu    sync.Mutex
-	hooks []func()
-}
-
-// WithPostCommit returns a context carrying a fresh registry plus the registry,
-// so the RLS middleware can run the hooks after a successful commit.
-func WithPostCommit(ctx context.Context) (context.Context, *PostCommitRegistry) {
-	reg := &PostCommitRegistry{}
-	return context.WithValue(ctx, postCommitKey, reg), reg
-}
-
-// Run executes and clears the registered hooks. Called by the RLS middleware
-// only after the transaction commits.
-func (r *PostCommitRegistry) Run() {
-	r.mu.Lock()
-	hooks := r.hooks
-	r.hooks = nil
-	r.mu.Unlock()
-	for _, fn := range hooks {
-		fn()
+// RLSHookRunner is the txhook.Runner the RLS middleware commits a request's registry with. Each hook gets base
+// without its cancellation and a fresh lazy row-level-security scope for the same user: committed when the hook
+// returns, rolled back if it panics, and fail-closed if it cannot start. The request's own scope has ended by
+// then (every statement on it fails), and running with no scope at all would reach the pool, where the policies
+// allow every row.
+func RLSHookRunner(base context.Context, b RLSBeginner, userID string) txhook.Runner {
+	return func(fn txhook.Hook) {
+		ctx, scope := WithLazyRLS(context.WithoutCancel(base), b, userID, false)
+		returned := false
+		defer func() {
+			end := scope.Rollback
+			if returned {
+				end = scope.Commit
+			}
+			if err := end(); err != nil {
+				slog.Warn("post-commit hook: ending its RLS scope failed", "err", err)
+			}
+		}()
+		fn(ctx)
+		returned = true
 	}
-}
-
-// hasPostCommit reports whether ctx carries a post-commit registry, i.e. whether RegisterPostCommit would
-// defer fn rather than run it inline. Work only safe AFTER a commit must skip registration when this is
-// false and the caller is inside an uncommitted transaction.
-func hasPostCommit(ctx context.Context) bool {
-	reg, ok := ctx.Value(postCommitKey).(*PostCommitRegistry)
-	return ok && reg != nil
-}
-
-// RegisterPostCommit schedules fn to run after the request's RLS transaction commits. With no registry on
-// the context (autocommit — the surrounding write is already durable) fn runs inline.
-func RegisterPostCommit(ctx context.Context, fn func()) {
-	if reg, ok := ctx.Value(postCommitKey).(*PostCommitRegistry); ok && reg != nil {
-		reg.mu.Lock()
-		reg.hooks = append(reg.hooks, fn)
-		reg.mu.Unlock()
-		return
-	}
-	fn()
 }
 
 // withTx runs fn inside a transaction, JOINING the request's RLS transaction when ctx carries a scope
 // (starting it on this first use) and opening (and committing) its own otherwise. Every write method that
-// opens a transaction must go through this.
+// opens a transaction must go through this. fn gets the context to use inside the transaction: ctx itself
+// when joining, and when withTx opens its own, a context carrying that transaction and a post-commit registry
+// (txhook), committed after the transaction commits and aborted when it rolls back.
 //
 // Calling b.db.BeginTx unconditionally takes a SECOND pooled connection while the RLS middleware still
 // holds the first for the whole request — a self-deadlock (with the default pool of 25, 13 concurrent
 // requests wedge every route). It is a correctness bug too: the inner transaction commits independently
 // (its write survives the middleware's rollback), and the second connection carries no app.current_user_id,
 // so the RLS policies short-circuit to allow-all for exactly the writes that most need them.
-func (b *PostgresStorageBackend) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
+func (b *PostgresStorageBackend) withTx(ctx context.Context, fn func(txCtx context.Context, tx *sql.Tx) error) error {
 	rtx, ok, err := rlsTxFromContext(ctx)
 	if err != nil {
 		return err
 	}
 	if ok {
-		// The middleware owns commit and rollback; joining is all we do.
-		return fn(rtx)
+		// The middleware owns commit, rollback and the post-commit registry; joining is all we do.
+		return fn(ctx, rtx)
 	}
 	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
+	txCtx, hooks := txhook.With(WithRLSTx(ctx, tx))
 	committed := false
 	defer func() {
 		if !committed {
 			_ = tx.Rollback()
+			hooks.Abort()
 		}
 	}()
-	if err := fn(tx); err != nil {
+	if err := fn(txCtx, tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 	committed = true
+	hooks.Commit(txhook.Detached(ctx))
 	return nil
 }
 

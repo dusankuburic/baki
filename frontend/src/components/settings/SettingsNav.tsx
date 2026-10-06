@@ -28,7 +28,7 @@ export default function SettingsNav({
   query: string
   onQueryChange: (query: string) => void
   // Attached to the selected tab so the dialog can focus it on open.
-  selectedTabRef: RefObject<HTMLButtonElement>
+  selectedTabRef: RefObject<HTMLButtonElement | null>
 }) {
   const {t} = useTranslation('settings')
   const version = useSystemStore(s => s.info?.version)
@@ -129,7 +129,7 @@ export default function SettingsNav({
         onClick={() => onSelect(id)}
         className={clsx(
           'settings-nav-item flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-sm font-medium transition-colors duration-fast',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40',
+          'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40',
           selected
             ? 'bg-brand-500/10 text-brand-400'
             : 'text-text-secondary hover:bg-surface-2 hover:text-text-primary',

@@ -19,7 +19,7 @@ export default function Tooltip({content, side = 'top', shortcut, delay = 600, c
   const [position, setPosition] = useState({top: 0, left: 0})
   const wrapperRef = useRef<HTMLSpanElement>(null)
   const tooltipRef = useRef<HTMLDivElement>(null)
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const updatePosition = useCallback(() => {
     if (!wrapperRef.current || !tooltipRef.current) return

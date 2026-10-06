@@ -27,37 +27,37 @@ export interface BadgeToneSpec {
 // badge and a finding chip of the same severity read as one colour.
 export const BADGE_TONES: Record<BadgeTone, BadgeToneSpec> = {
   neutral: {
-    className: 'bg-surface-3 border-border-default text-[color:var(--badge-neutral-fg)]',
+    className: 'bg-surface-3 border-border-default text-(--badge-neutral-fg)',
     fill: '--surface-3',
     fillAlpha: 1,
     fg: '--badge-neutral-fg',
   },
   brand: {
-    className: 'bg-brand-500/15 border-brand-500/30 text-[color:var(--badge-brand-fg)]',
+    className: 'bg-brand-500/15 border-brand-500/30 text-(--badge-brand-fg)',
     fill: '--brand-500',
     fillAlpha: 0.15,
     fg: '--badge-brand-fg',
   },
   info: {
-    className: clsx(severityTone('info').bg, severityTone('info').border, 'text-[color:var(--badge-info-fg)]'),
+    className: clsx(severityTone('info').bg, severityTone('info').border, 'text-(--badge-info-fg)'),
     fill: '--info',
     fillAlpha: 0.15,
     fg: '--badge-info-fg',
   },
   success: {
-    className: 'bg-semantic-success/15 border-semantic-success/30 text-[color:var(--badge-success-fg)]',
+    className: 'bg-semantic-success/15 border-semantic-success/30 text-(--badge-success-fg)',
     fill: '--success',
     fillAlpha: 0.15,
     fg: '--badge-success-fg',
   },
   warning: {
-    className: clsx(severityTone('warning').bg, severityTone('warning').border, 'text-[color:var(--badge-warning-fg)]'),
+    className: clsx(severityTone('warning').bg, severityTone('warning').border, 'text-(--badge-warning-fg)'),
     fill: '--warning',
     fillAlpha: 0.15,
     fg: '--badge-warning-fg',
   },
   error: {
-    className: clsx(severityTone('error').bg, severityTone('error').border, 'text-[color:var(--badge-error-fg)]'),
+    className: clsx(severityTone('error').bg, severityTone('error').border, 'text-(--badge-error-fg)'),
     fill: '--error',
     fillAlpha: 0.15,
     fg: '--badge-error-fg',

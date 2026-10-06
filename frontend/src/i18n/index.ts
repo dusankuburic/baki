@@ -4,6 +4,12 @@ import {en} from './en'
 import {enSettings} from './en.settings'
 import {enDashboard} from './en.dashboard'
 import {enAdmin} from './en.admin'
+import {enInspector} from './en.inspector'
+import {enLibrary} from './en.library'
+import {enFlow} from './en.flow'
+import {enSearch} from './en.search'
+import {enAnalyzer} from './en.analyzer'
+import {enCollaboration} from './en.collaboration'
 
 // Language persistence: the chosen locale survives reloads via localStorage
 // (same key style as pad-theme). Falls back to the browser language when the
@@ -38,10 +44,16 @@ void i18next.use(initReactI18next).init({
       settings: enSettings,
       dashboard: enDashboard,
       admin: enAdmin,
+      inspector: enInspector,
+      library: enLibrary,
+      flow: enFlow,
+      search: enSearch,
+      analyzer: enAnalyzer,
+      collaboration: enCollaboration,
     },
   },
   defaultNS: 'common',
-  ns: ['common', 'shell', 'findings', 'auth', 'chat', 'settings', 'dashboard', 'admin'],
+  ns: ['common', 'shell', 'findings', 'auth', 'chat', 'settings', 'dashboard', 'admin', 'inspector', 'library', 'flow', 'search', 'analyzer', 'collaboration'],
   interpolation: {
     // React already escapes interpolated values; i18next escaping is for
     // non-React targets and would double-encode (&amp; etc.).

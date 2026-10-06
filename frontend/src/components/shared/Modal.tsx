@@ -78,7 +78,7 @@ const sizeClasses: Record<string, string> = {
   md: 'max-w-lg',
   lg: 'max-w-2xl',
   xl: 'max-w-4xl',
-  '2xl': 'max-w-[75rem]',
+  '2xl': 'max-w-300',
 }
 
 // The panel becomes a full-viewport flex column (so the footer sits at the

@@ -44,11 +44,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     // selectSubflow ↔ openInGroup echo (MainPane syncs the focused group's
     // active tab back into the flow store).
     const target = groups[targetIndex]
+    if (!target) return
     if (targetIndex === focusedGroupIndex && target.activeTabId === subflowId && target.tabs.includes(subflowId)) {
       return
     }
     const nextGroups = [...groups]
-    const group = {...nextGroups[targetIndex]}
+    const group = {...target}
 
     if (!group.tabs.includes(subflowId)) {
       if (group.tabs.length >= MAX_TABS_PER_GROUP) {
@@ -66,8 +67,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   closeTab: (groupIndex, subflowId) => {
     const {groups} = get()
+    const existing = groups[groupIndex]
+    if (!existing) return
     const nextGroups = [...groups]
-    const group = {...nextGroups[groupIndex]}
+    const group = {...existing}
     const tabIndex = group.tabs.indexOf(subflowId)
     if (tabIndex === -1) return
 
@@ -97,8 +100,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   closeOtherTabs: (groupIndex, subflowId) => {
     const {groups} = get()
+    const existing = groups[groupIndex]
+    if (!existing) return
     const nextGroups = [...groups]
-    const group = {...nextGroups[groupIndex]}
+    const group = {...existing}
     if (group.tabs.includes(subflowId)) {
       group.tabs = [subflowId]
       group.activeTabId = subflowId
@@ -175,7 +180,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     // Remove from source
     const nextGroups = [...groups]
-    const src = {...nextGroups[fromGroup]}
+    const srcGroup = groups[fromGroup]
+    const destGroup = groups[toGroup]
+    if (!srcGroup || !destGroup) return
+    const src = {...srcGroup}
     src.tabs = src.tabs.filter(id => id !== subflowId)
     if (src.activeTabId === subflowId) {
       src.activeTabId = src.tabs[0] || null
@@ -183,7 +191,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     nextGroups[fromGroup] = src
 
     // Add to dest (same cap/eviction policy as openInGroup)
-    const dest = {...nextGroups[toGroup]}
+    const dest = {...destGroup}
     if (!dest.tabs.includes(subflowId)) {
       dest.tabs =
         dest.tabs.length >= MAX_TABS_PER_GROUP ? [...dest.tabs.slice(1), subflowId] : [...dest.tabs, subflowId]

@@ -10,14 +10,14 @@ describe('computeDiff', () => {
     const diff = computeDiff('a\nb', 'a\nnew\nb')
     const added = diff.filter(d => d.type === 'added')
     expect(added).toHaveLength(1)
-    expect(added[0].text).toBe('new')
+    expect(added[0]!.text).toBe('new')
   })
 
   it('detects a single removed line', () => {
     const diff = computeDiff('a\nold\nb', 'a\nb')
     const removed = diff.filter(d => d.type === 'removed')
     expect(removed).toHaveLength(1)
-    expect(removed[0].text).toBe('old')
+    expect(removed[0]!.text).toBe('old')
   })
 
   it('detects a replaced line (remove + add)', () => {
@@ -26,8 +26,8 @@ describe('computeDiff', () => {
     const added = diff.filter(d => d.type === 'added')
     expect(removed).toHaveLength(1)
     expect(added).toHaveLength(1)
-    expect(removed[0].text).toBe('old')
-    expect(added[0].text).toBe('new')
+    expect(removed[0]!.text).toBe('old')
+    expect(added[0]!.text).toBe('new')
   })
 
   it('trims context to ±3 lines around changes', () => {

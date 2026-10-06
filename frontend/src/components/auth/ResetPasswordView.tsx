@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
 import {useState} from 'react'
 import {Lock, KeyRound, CheckCircle2} from 'lucide-react'
@@ -38,7 +39,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
       await authApi.resetPassword(token, password)
       setDone(true)
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('reset.failed'))
+      setError(getErrorMessage(err, t('reset.failed')))
     } finally {
       setLoading(false)
     }

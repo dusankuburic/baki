@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/storage"
-	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
@@ -1516,7 +1516,7 @@ func (s *AzureModelService) deleteConnection(ctx context.Context, owner storagei
 		return AzureConnectionDeleteResult{}, mapConnectionWriteErr(err)
 	}
 	// After the commit: a rolled-back delete never strands a row without its secret.
-	storagedb.RegisterPostCommit(ctx, func() {
+	txhook.Register(ctx, func(context.Context) {
 		if _, err := s.deleteCredentialIfUnchanged(owner, scope, id, stamp, stamped); err != nil {
 			logger.Warn("azure registry: deleting a removed resource's credential failed (the orphan sweep retries)", "owner", owner.String(), "resource", id, "error", err)
 		}

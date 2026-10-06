@@ -53,6 +53,7 @@ export function TriageCard({data, onDetails, className}: {data: Workflow; onDeta
       table={{
         caption: title,
         filename: 'triage.csv',
+        rowKey: r => r.key,
         columns: [
           {key: 'label', header: t('triage.status')},
           {key: 'value', header: t('triage.findings'), align: 'right'},

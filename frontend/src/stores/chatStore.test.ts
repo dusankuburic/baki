@@ -27,7 +27,7 @@ describe('createThread', () => {
     const state = useChatStore.getState()
     expect(state.activeThreadId).toBe(id)
     expect(state.threads).toHaveLength(1)
-    expect(state.threads[0].flowId).toBe('flow1')
+    expect(state.threads[0]!.flowId).toBe('flow1')
   })
 
   it('returns a unique id each call', () => {
@@ -180,8 +180,8 @@ describe('compactThread', () => {
     useChatStore.getState().compactThread(id, 1)
     const msgs = useChatStore.getState().getMessages(id)
     expect(msgs).toHaveLength(2)
-    expect(msgs[0].id).toBe('m4')
-    expect(msgs[1].id).toBe('m5')
+    expect(msgs[0]!.id).toBe('m4')
+    expect(msgs[1]!.id).toBe('m5')
   })
 })
 
@@ -348,7 +348,7 @@ describe('getFlowThreads / clearFlowThreads', () => {
     useChatStore.getState().clearFlowThreads('flow1')
     const state = useChatStore.getState()
     expect(state.threads).toHaveLength(1)
-    expect(state.threads[0].id).toBe(otherId)
+    expect(state.threads[0]!.id).toBe(otherId)
   })
 
   it('clearFlowThreads updates activeThreadId when active thread is cleared', () => {
@@ -796,7 +796,7 @@ describe('thread model pins', () => {
     st.setThreadModel(id, {provider: 'claude', model: ''})
     expect(useChatStore.getState().threads).toBe(before)
     st.setThreadModel(id, null)
-    expect(threadModelOf(useChatStore.getState().threads[0])).toBeNull()
+    expect(threadModelOf(useChatStore.getState().threads[0]!)).toBeNull()
   })
 
   // C6: a label that is only an id would beat the listing's name for good.
@@ -804,12 +804,12 @@ describe('thread model pins', () => {
     const id = useChatStore.getState().createThread('flow1')
     const st = useChatStore.getState()
     st.setThreadModel(id, {provider: 'azure-foundry', model: 'm/docs000000', modelLabel: 'm/docs000000'})
-    expect(threadModelOf(useChatStore.getState().threads[0])).toEqual({
+    expect(threadModelOf(useChatStore.getState().threads[0]!)).toEqual({
       provider: 'azure-foundry',
       model: 'm/docs000000',
     })
     st.setThreadModel(id, {provider: 'claude', model: 'claude-custom', modelLabel: 'claude-custom'})
-    expect(threadModelOf(useChatStore.getState().threads[0])).toEqual({provider: 'claude', model: 'claude-custom'})
+    expect(threadModelOf(useChatStore.getState().threads[0]!)).toEqual({provider: 'claude', model: 'claude-custom'})
 
     const base = {flowId: 'flow1', title: 't', createdAt: '2026-09-30T00:00:00Z'}
     stored[KEY('flow2')] = JSON.stringify([
@@ -884,7 +884,7 @@ describe('thread model pins', () => {
     useChatStore.getState().endStream(a)
     expect(useChatStore.getState().threads.find(t => t.id === a)?.inFlight).toBeUndefined()
     // …and the stored list says so.
-    const storedThread = (JSON.parse(stored[KEY('flow1')]) as {id: string}[]).find(t => t.id === a)
+    const storedThread = (JSON.parse(stored[KEY('flow1')]!) as {id: string}[]).find(t => t.id === a)
     expect(storedThread).toBeDefined()
     expect(storedThread).not.toHaveProperty('inFlight')
   })

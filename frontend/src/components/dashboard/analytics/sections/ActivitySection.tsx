@@ -36,6 +36,7 @@ export function ActivitySection({data, refetching}: {data: DashboardAnalyticsDat
         table={{
           caption: t('analytics.cards.activityPerDay'),
           filename: 'activity-per-day.csv',
+          rowKey: r => r.date,
           columns: [
             {key: 'date', header: t('analytics.columns.date'), render: r => formatDateLong(r.date)},
             {key: 'count', header: t('analytics.columns.count'), align: 'right'},
@@ -54,6 +55,7 @@ export function ActivitySection({data, refetching}: {data: DashboardAnalyticsDat
         table={{
           caption: t('analytics.cards.activityByAction'),
           filename: 'activity-by-action.csv',
+          rowKey: r => r.key,
           columns: [
             {key: 'label', header: t('analytics.columns.action')},
             {key: 'key', header: t('analytics.columns.actionId')},

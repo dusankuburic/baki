@@ -25,6 +25,12 @@ const I18N_COMPLETE_DIRS = [
   'src/components/dashboard/home',
   'src/components/dashboard/analytics',
   'src/components/admin',
+  'src/components/inspector',
+  'src/components/analyzer',
+  'src/components/search',
+  'src/components/collaboration',
+  'src/components/library',
+  'src/components/flow',
 ]
 
 // Files with no user-facing copy: barrels, pure logic/data, and presentational
@@ -59,6 +65,10 @@ const NO_USER_FACING_COPY = new Set([
   // Pure view logic of AI Accounts' registry (ownership, limits, defaults,
   // duplicates, focus targets): no copy, the components translate.
   'src/components/settings/azure/registryView.ts',
+  // Pure org-panel helpers: role constants and the i18n key lookup, the
+  // org-row name anchor id, and the invite deep-link builder. No copy, the
+  // components translate.
+  'src/components/settings/OrganizationsPanel/helpers.ts',
 
   // --- src/components/shared ---
   // Presentational primitives: every string they render is passed in by the
@@ -88,6 +98,8 @@ const NO_USER_FACING_COPY = new Set([
   // Kbd renders KEYCAP names (Shift, Enter, ⌘). Those mirror what is physically
   // printed on the user's keyboard, so they are deliberately not translated.
   'src/components/shared/Kbd.tsx',
+  // Pure SVG glyph (the GitHub octocat mark lucide v1 dropped); no copy.
+  'src/components/shared/GithubMark.tsx',
 
   // --- src/components/layout & src/components/sidebar ---
   'src/components/layout/index.ts',
@@ -128,8 +140,55 @@ const NO_USER_FACING_COPY = new Set([
   // Icon lookup and id humanising for audit actions; the labels themselves
   // come from the translated table the callers pass in.
   'src/components/dashboard/home/activity.ts',
+
+  // --- src/components/inspector ---
+  'src/components/inspector/index.ts',
+  // Renders only block.type/name taken from the parsed document.
+  'src/components/inspector/DetailsHeader.tsx',
+  // Renders child block names from the document.
+  'src/components/inspector/ChildrenList.tsx',
+  // Section chrome: the title arrives translated from callers.
+  'src/components/inspector/CollapsibleSection.tsx',
+  // Label/value chrome: label and value are passed in pre-translated.
+  'src/components/inspector/StatCard.tsx',
+  // Renders variable names from the document.
+  'src/components/inspector/VariableChips.tsx',
+
+  // --- src/components/search ---
+  'src/components/search/index.ts',
+
+  // --- src/components/library ---
+  // Placeholder pulse shapes only.
+  'src/components/library/LibrarySkeleton.tsx',
+  // Already converted: pulls shell.libraryTab.* keys; no library-ns copy.
+  'src/components/library/useLibraryWriteErrorToast.ts',
+
+  // --- src/components/flow ---
+  // Pure SVG connector geometry.
+  'src/components/flow/BlockConnector.tsx',
+  'src/components/flow/index.ts',
+  // Cytoscape driver: no rendered copy (error text via getErrorMessage);
+  // effect structure is deliberately init-once, recently documented.
+  'src/components/flow/useCytoscapeGraph.ts',
   // Loading shapes with no copy.
   'src/components/dashboard/home/SkeletonDashboard.tsx',
+
+  // --- src/components/chat (post-decomposition modules) ---
+  // The stream engine is a pure state machine: events in, accumulator state
+  // out. Every user-facing string it produces is a machine code the render
+  // layer translates; the facade re-exports only.
+  'src/components/chat/hooks/stream-engine/accumulator.ts',
+  'src/components/chat/hooks/stream-engine/types.ts',
+  'src/components/chat/hooks/useChatStreamEngine.ts',
+  // Extracted AITab modules: pure logic and pass-through chrome. Copy either
+  // arrives translated from callers (context bar labels, prompt templates),
+  // comes from the server (suggested prompts), or is keyed machine state the
+  // components translate (stream footer).
+  'src/components/chat/aitab/SelectionContextBar.tsx',
+  'src/components/chat/aitab/SelectionPromptTemplates.tsx',
+  'src/components/chat/aitab/useMessageSearch.ts',
+  'src/components/chat/aitab/useStreamFooter.tsx',
+  'src/components/chat/aitab/useSuggestedPrompts.ts',
   'src/components/dashboard/analytics/SkeletonAnalytics.tsx',
   // Re-exports the recharts-backed Home cards for HomeDashboard's lazy import.
   'src/components/dashboard/home/HomeChartCards.ts',
@@ -215,7 +274,7 @@ function findRawCopy(src: string): string[] {
 
   // JSX text nodes between tags, e.g. `>Try again<`.
   for (const m of src.matchAll(/>\s*([A-Z][^<>{}\n]{3,})\s*</g)) {
-    const text = m[1].trim()
+    const text = m[1]!.trim()
     if (looksLikeProse(text)) out.push(text)
   }
 
@@ -223,7 +282,7 @@ function findRawCopy(src: string): string[] {
   const attrs = HUMAN_ATTRS.join('|')
   const re = new RegExp(`\\b(?:${attrs})=(?:"([^"]{4,})"|\\{\`([^\`]{4,})\`\\})`, 'g')
   for (const m of src.matchAll(re)) {
-    const text = (m[1] ?? m[2]).trim()
+    const text = (m[1] ?? m[2])!.trim()
     if (text.includes('t(') || text.includes('i18n.')) continue
     if (looksLikeProse(text)) out.push(text)
   }

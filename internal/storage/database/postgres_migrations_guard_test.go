@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 )
@@ -16,7 +15,7 @@ import (
 // Seeds a version row one past the binary's latest, then boots a second
 // backend against the same database. The row is removed on cleanup.
 func TestMigrate_RefusesNewerSchema(t *testing.T) {
-	b := openMigrationTestDB(t)
+	b, dsn := openIsolatedMigrationDB(t)
 	ctx := context.Background()
 
 	latest := migrations[len(migrations)-1].version
@@ -29,7 +28,7 @@ func TestMigrate_RefusesNewerSchema(t *testing.T) {
 		_, _ = b.db.ExecContext(context.Background(), `DELETE FROM schema_migrations WHERE version = $1`, future)
 	})
 
-	b2, err := New(ctx, DefaultConfig(os.Getenv("DATABASE_URL")))
+	b2, err := New(ctx, DefaultConfig(dsn))
 	if err == nil {
 		b2.Close()
 		t.Fatalf("New() booted against schema v%d with a binary that only knows v%d", future, latest)

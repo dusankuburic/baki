@@ -217,7 +217,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment || 'staging' }}
     steps:
+      # Full history: the rollback guard below diffs the migration sources between the serving image's commit
+      # and this one.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
 
       - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # v2
         with:
@@ -238,6 +242,46 @@ jobs:
             --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
           echo "Previously deployed image: ${IMAGE:-<none, first deploy>}"
+
+      # An old binary refuses to start against a newer schema (postgres_migrations.go), so once this release's
+      # migrations have run, putting the previous image back would only crash-loop it. Decide BEFORE deploying
+      # whether this release changes the migration sources relative to the serving image: "false" allows the
+      # automatic rollback below; "true" or "unknown" (first deploy, untagged image, failed lookup) blocks it in
+      # favour of a manual decision. The images carry their short commit SHA as a tag (docker/metadata-action).
+      - name: Check whether this release changes schema migrations
+        id: schema
+        run: |
+          set -uo pipefail
+          PREV_IMAGE="${{ steps.current.outputs.image }}"
+          CHANGED=unknown
+          REASON="no serving image (first deploy)"
+          if [ -n "$PREV_IMAGE" ]; then
+            if [[ "$PREV_IMAGE" == *@sha256:* ]]; then
+              DIGEST="${PREV_IMAGE##*@}"
+              TAGS=$(az acr manifest list-metadata \
+                --registry "${{ secrets.AZURE_CONTAINER_REGISTRY }}" \
+                --name "${{ env.ACR_IMAGE_NAME }}" \
+                --query "[?digest=='${DIGEST}'].tags[]" -o tsv 2>/dev/null || true)
+            else
+              TAGS="${PREV_IMAGE##*:}"
+            fi
+            PREV_SHA=$(printf '%s\n' "$TAGS" | tr -s '\t ' '\n' | grep -E '^[0-9a-f]{7,40}$' | head -n 1 || true)
+            if [ -z "$PREV_SHA" ]; then
+              REASON="no commit tag found for ${PREV_IMAGE}"
+            elif ! git cat-file -e "${PREV_SHA}^{commit}" 2>/dev/null; then
+              REASON="commit ${PREV_SHA} is not in this repository's history"
+            else
+              git diff --quiet "$PREV_SHA" HEAD -- \
+                internal/storage/database/postgres_migrations.go internal/storage/database/migrations
+              case $? in
+                0) CHANGED=false; REASON="no migration changes since ${PREV_SHA}" ;;
+                1) CHANGED=true; REASON="migration sources changed since ${PREV_SHA}" ;;
+                *) REASON="git diff against ${PREV_SHA} failed" ;;
+              esac
+            fi
+          fi
+          echo "migrations_changed=${CHANGED}" >> "$GITHUB_OUTPUT"
+          echo "Schema migrations changed since the serving image: ${CHANGED} (${REASON})"
 
       # Template correctness is gated in CI by the `bicep` job, which compiles
       # every infra/*.bicep and treats warnings as failures. A `what-if` here
@@ -310,9 +354,10 @@ jobs:
             exit 1
           fi
           echo "Probing https://${FQDN}/readyz"
-          # A cold start runs schema migrations before it can answer, so allow
-          # generously more time than the old 50s budget.
-          for i in $(seq 1 24); do
+          # A cold start runs schema migrations before it can answer. Wait at
+          # least as long as the template's startup-probe window (~5 minutes by
+          # default), or a slow but healthy migration reads as a failed deploy.
+          for i in $(seq 1 66); do
             if curl -sf --max-time 10 "https://${FQDN}/readyz" > /dev/null 2>&1; then
               echo "Readiness check passed on attempt $i"
               exit 0
@@ -320,14 +365,15 @@ jobs:
             echo "Attempt $i failed, waiting 5s..."
             sleep 5
           done
-          echo "::error::Readiness check failed after 24 attempts (~2 minutes)"
+          echo "::error::Readiness check failed after 66 attempts (5.5+ minutes)"
           exit 1
 
       # The template runs in Single revision mode, so the new revision is
       # already live by the time the smoke test runs. If it failed, put the
-      # previous image back rather than leaving a broken revision serving.
+      # previous image back rather than leaving a broken revision serving --
+      # but only when this release changed no migrations (see the schema step).
       - name: Roll back on smoke-test failure
-        if: failure() && steps.smoke.outcome == 'failure' && steps.current.outputs.image != ''
+        if: failure() && steps.smoke.outcome == 'failure' && steps.current.outputs.image != '' && steps.schema.outputs.migrations_changed == 'false'
         run: |
           set -euo pipefail
           echo "::warning::Smoke test failed — rolling back to ${{ steps.current.outputs.image }}"
@@ -336,6 +382,14 @@ jobs:
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --image "${{ steps.current.outputs.image }}"
           echo "Rollback issued. The deploy job still fails so the bad build is not treated as shipped."
+
+      # With migrations changed (or unknown) the previous image would refuse the newer schema and crash-loop, so an
+      # automatic rollback would trade a failed revision for an outage. Fail with the manual options instead.
+      - name: Block rollback when the schema may have advanced
+        if: failure() && steps.smoke.outcome == 'failure' && steps.current.outputs.image != '' && steps.schema.outputs.migrations_changed != 'false'
+        run: |
+          echo "::error::Smoke test failed, but NOT rolling back automatically: this release's schema migrations may already have run (migrations_changed=${{ steps.schema.outputs.migrations_changed || 'unknown' }}), and the previous image refuses a newer schema, so it would crash-loop."
+          echo "::error::Fix forward with a new deploy, or roll the schema back first (bakicli migrate down <latest version the previous image knows>) and then redeploy ${{ steps.current.outputs.image }}."
 
       - name: Deployment summary
         if: always()
@@ -348,5 +402,6 @@ jobs:
             echo "| App URL | ${{ steps.deploy.outputs.appUrl || 'n/a' }} |"
             echo "| Image digest | \`${{ needs.build-and-push.outputs.image-digest }}\` |"
             echo "| Previous image | \`${{ steps.current.outputs.image || 'none (first deploy)' }}\` |"
+            echo "| Migrations changed | ${{ steps.schema.outputs.migrations_changed || 'n/a' }} |"
             echo "| Smoke test | ${{ steps.smoke.outcome || 'skipped' }} |"
           } >> "$GITHUB_STEP_SUMMARY"

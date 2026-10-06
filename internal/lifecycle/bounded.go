@@ -2,7 +2,10 @@ package lifecycle
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"pad-analyzer/internal/metrics"
 	"pad-core/logger"
@@ -21,27 +24,87 @@ import (
 // scanner — a background sweep that can afford to slow down — Go never blocks:
 // it is called on request paths, so saturation drops the task instead.
 type Bounded struct {
-	name string
-	sem  chan struct{}
+	name     string
+	sem      chan struct{}
+	inflight atomic.Int64
 
 	mu     sync.Mutex // orders Go's wg.Add against Drain's wg.Wait
 	closed bool
 	wg     sync.WaitGroup
 }
 
-// NewBounded returns a runner allowing at most limit concurrent tasks. name
-// is the task label on pad_background_dropped_total and in logs; it must be a
-// code literal (a closed set), never request data.
+// NewBounded returns a runner allowing at most limit concurrent tasks, registered with the process-wide group
+// that shutdown drains (DrainAll). name is the task label on the pad_background_* metrics, in logs and as the
+// panic location; it must be a code literal (a closed set), never request data.
 func NewBounded(name string, limit int) *Bounded {
+	return defaultGroup.NewBounded(name, limit)
+}
+
+// Group is a set of runners drained together. Production runners join the process-wide group through
+// NewBounded; a test that drains wants a group of its own, so it cannot close another test's runners.
+type Group struct {
+	mu      sync.Mutex
+	runners []*Bounded
+}
+
+var defaultGroup = &Group{}
+
+// NewBounded returns a runner allowing at most limit concurrent tasks, registered with g.
+func (g *Group) NewBounded(name string, limit int) *Bounded {
 	if limit < 1 {
 		limit = 1
 	}
-	return &Bounded{name: name, sem: make(chan struct{}, limit)}
+	b := &Bounded{name: name, sem: make(chan struct{}, limit)}
+	g.mu.Lock()
+	g.runners = append(g.runners, b)
+	g.mu.Unlock()
+	return b
+}
+
+// DrainAll drains every runner created by NewBounded; shutdown calls it once no request can start new work.
+func DrainAll(ctx context.Context) error { return defaultGroup.Drain(ctx) }
+
+// Drain waits until no runner of g has a task running, or ctx ends, and only then closes them all: a task may
+// still hand work to another runner (an alert fan-out enqueues its email), and closing that runner first would
+// drop the hand-off. Returns the first runner's error, i.e. ctx.Err() when tasks were still running.
+func (g *Group) Drain(ctx context.Context) error {
+	g.mu.Lock()
+	runners := append([]*Bounded(nil), g.runners...)
+	g.mu.Unlock()
+
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+quiesce:
+	for !allIdle(runners) {
+		select {
+		case <-ctx.Done():
+			break quiesce
+		case <-tick.C:
+		}
+	}
+	var first error
+	for _, b := range runners {
+		if err := b.Drain(ctx); err != nil && first == nil {
+			first = fmt.Errorf("background %s: %w", b.name, err)
+		}
+	}
+	return first
+}
+
+func allIdle(runners []*Bounded) bool {
+	for _, b := range runners {
+		if b.inflight.Load() > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // Go runs fn in its own goroutine if a slot is free and reports whether it
 // did. It never blocks: when the cap is reached, or once Drain has begun, fn
-// is dropped, logged and counted. A panic in fn is recovered and logged.
+// is dropped, logged and counted. A panic in fn is recovered and reported like
+// every other recovered panic (ERROR log, pad_panics_total, the error sink),
+// with the runner's name as its location.
 func (b *Bounded) Go(fn func()) bool {
 	b.mu.Lock()
 	if b.closed {
@@ -57,16 +120,17 @@ func (b *Bounded) Go(fn func()) bool {
 		return false
 	}
 	b.wg.Add(1)
+	b.inflight.Add(1)
 	b.mu.Unlock()
 
+	metrics.RecordBackgroundStarted(b.name)
+	start := time.Now()
 	go func() {
 		defer b.wg.Done()
 		defer func() { <-b.sem }()
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Warn("background task panicked", "task", b.name, "panic", r)
-			}
-		}()
+		defer b.inflight.Add(-1)
+		defer func() { metrics.RecordBackgroundFinished(b.name, time.Since(start)) }()
+		defer logger.GuardRecover(b.name)
 		fn()
 	}()
 	return true
@@ -92,6 +156,11 @@ func (b *Bounded) Drain(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// Running reports how many of b's tasks are in flight.
+func (b *Bounded) Running() int {
+	return int(b.inflight.Load())
 }
 
 func (b *Bounded) drop(reason string) {

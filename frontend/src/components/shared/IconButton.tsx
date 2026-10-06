@@ -9,7 +9,7 @@ import Tooltip from './Tooltip'
 // move focus back to it.
 type IconButtonProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'children' | 'onClick'> & {
   icon: LucideIcon
-  variant?: 'ghost' | 'solid' | 'outline'
+  variant?: 'ghost' | 'solid' | 'outline-solid'
   size?: 'sm' | 'md' | 'lg'
   label: string
   active?: boolean

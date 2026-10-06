@@ -98,7 +98,7 @@ export default function FixProposalCard({proposal, onRespond}: FixProposalCardPr
       ref={cardRef}
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      className="my-2 rounded-lg border border-brand-500/40 bg-brand-500/5 p-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50"
+      className="my-2 rounded-lg border border-brand-500/40 bg-brand-500/5 p-3 text-left focus:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/50"
       data-testid="fix-proposal-card"
       role="alertdialog"
       aria-label={

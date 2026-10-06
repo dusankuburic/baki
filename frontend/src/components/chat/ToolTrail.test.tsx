@@ -34,7 +34,7 @@ describe('ToolTrail', () => {
   })
 
   it('uses singular "tool" for one call', () => {
-    render(<ToolTrail calls={[calls[0]]} />)
+    render(<ToolTrail calls={[calls[0]!]} />)
     expect(screen.getByText(/Used 1 tool/)).toBeInTheDocument()
     expect(screen.queryByText(/failed/)).not.toBeInTheDocument()
   })

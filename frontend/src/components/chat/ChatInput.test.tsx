@@ -407,7 +407,7 @@ describe("ChatInput keeps the user's text", () => {
     expect(textarea.value).toBe('check the context first')
 
     // Confirmed and sent: now it clears.
-    const onConfirmed = onPreview.mock.calls[0][3] as () => void
+    const onConfirmed = onPreview.mock.calls[0]![3] as () => void
     act(() => onConfirmed())
     expect(textarea.value).toBe('')
   })

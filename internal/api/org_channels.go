@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/notify"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
@@ -29,6 +31,17 @@ type channelOut struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// redactChannelURL keeps only scheme and host. For Slack and Teams the webhook URL IS the credential (anyone
+// holding it can post into the channel), and generic webhooks often carry a token in the path or query, so
+// members who cannot manage channels see where events go, not how to send there.
+func redactChannelURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "…"
+	}
+	return u.Scheme + "://" + u.Host + "/…"
+}
+
 // @Summary      List org notification channels
 // @Tags         org
 // @Param        id path string true "Org ID"
@@ -40,8 +53,18 @@ func (h *OrgHandler) handleChannelList(w http.ResponseWriter, r *http.Request) {
 		render.JSON(w, []channelOut{})
 		return
 	}
-	if h.requireMember(w, r) == nil {
+	org := h.requireMember(w, r)
+	if org == nil {
 		return
+	}
+	// Only admins (the people who can edit the channel anyway) get the full URL; see redactChannelURL.
+	callerID := h.security.CallerID(r)
+	isAdmin := false
+	for _, m := range org.Members {
+		if m.UserID == callerID {
+			isAdmin = m.Role == auth.RoleAdmin
+			break
+		}
 	}
 	channels, err := h.backend.ListOrgChannels(r.Context(), chi.URLParam(r, "id"), false)
 	if err != nil {
@@ -50,7 +73,11 @@ func (h *OrgHandler) handleChannelList(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]channelOut, len(channels))
 	for i, c := range channels {
-		out[i] = channelOut{ID: c.ID, Name: c.Name, Kind: c.Kind, URL: c.URL, Enabled: c.Enabled, CreatedAt: c.CreatedAt}
+		u := c.URL
+		if !isAdmin {
+			u = redactChannelURL(u)
+		}
+		out[i] = channelOut{ID: c.ID, Name: c.Name, Kind: c.Kind, URL: u, Enabled: c.Enabled, CreatedAt: c.CreatedAt}
 	}
 	render.JSON(w, out)
 }

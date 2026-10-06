@@ -13,6 +13,7 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/errreport"
+	"pad-analyzer/internal/lifecycle"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -24,11 +25,19 @@ type ScanNowFunc func(ctx context.Context)
 // goroutine forever. Generous: a full library sweep takes minutes, each flow bounded internally.
 const manualRunTimeout = 30 * time.Minute
 
-// runDetached runs an admin-triggered job on its own goroutine, bounded by manualRunTimeout and
-// guarded against panics — the manual trigger did not recover, so a panic the nightly run survived
-// took the process down when an admin pressed "scan now". location is the pad_panics_total label.
-func runDetached(location, label string, run func(ctx context.Context)) {
-	go func() {
+// adminJobs runs admin-triggered jobs off the request path: capped, and drained (or abandoned at the deadline,
+// each bounded by manualRunTimeout) at shutdown instead of being bare goroutines nobody waits for.
+var adminJobs = lifecycle.NewBounded("admin_job", maxConcurrentAdminJobs)
+
+// maxConcurrentAdminJobs: a second "scan now" while one runs is allowed, a pile-up is not.
+const maxConcurrentAdminJobs = 2
+
+// runDetached runs an admin-triggered job on adminJobs, bounded by manualRunTimeout and guarded against
+// panics — the manual trigger did not recover, so a panic the nightly run survived took the process down when
+// an admin pressed "scan now". location is the pad_panics_total label. It reports false when the job was not
+// started (too many running, or shutting down).
+func runDetached(location, label string, run func(ctx context.Context)) bool {
+	return adminJobs.Go(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), manualRunTimeout)
 		defer cancel()
 		defer func() {
@@ -39,7 +48,7 @@ func runDetached(location, label string, run func(ctx context.Context)) {
 		slog.Info("admin: manual " + label + " triggered")
 		run(ctx)
 		slog.Info("admin: manual " + label + " completed")
-	}()
+	})
 }
 
 type AdminHandler struct {
@@ -412,7 +421,10 @@ func (h *AdminHandler) handleScannerScan(w http.ResponseWriter, r *http.Request)
 		render.Error(w, fmt.Errorf("governance scanner not configured: set PAD_SCAN_INTERVAL"), http.StatusServiceUnavailable)
 		return
 	}
-	runDetached("admin.scan-now", "governance scan", h.scanNow)
+	if !runDetached("admin.scan-now", "governance scan", h.scanNow) {
+		render.ErrorWithCode(w, fmt.Errorf("a governance scan is already running; try again when it finishes"), http.StatusTooManyRequests, "SCAN_ALREADY_RUNNING")
+		return
+	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionScanNow, "scanner", "", nil)
 	render.JSON(w, map[string]bool{"started": true})
 }

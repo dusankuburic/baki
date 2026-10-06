@@ -1,4 +1,5 @@
 import {useEffect, useRef, useMemo} from 'react'
+import {useTranslation} from 'react-i18next'
 import cytoscape from 'cytoscape'
 // @ts-expect-error cytoscape-dagre has no types
 import dagre from 'cytoscape-dagre'
@@ -40,6 +41,7 @@ type Props = {
  * mount/destroy lifecycle and supports pan/zoom + click-to-navigate.
  */
 export default function VariableLineageGraph({events}: Props) {
+  const {t} = useTranslation('inspector')
   const navigateToBlock = useFlowStore(s => s.navigateToBlock)
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
@@ -73,9 +75,9 @@ export default function VariableLineageGraph({events}: Props) {
     const seen = new Set<string>()
     let edgeIdx = 0
     for (let i = 1; i < events.length; i++) {
-      const src = events[i - 1].blockId
-      const tgt = events[i].blockId
-      if (src === tgt) continue
+      const src = events[i - 1]?.blockId
+      const tgt = events[i]?.blockId
+      if (src === undefined || tgt === undefined || src === tgt) continue
       const key = `${src}->${tgt}`
       if (seen.has(key)) continue
       seen.add(key)
@@ -142,7 +144,7 @@ export default function VariableLineageGraph({events}: Props) {
     return (
       <div className="flex flex-col items-center justify-center py-6 opacity-40">
         <Info size={20} className="mb-1.5" />
-        <p className="text-[11px]">No events match the active filters.</p>
+        <p className="text-[11px]">{t('lineage.noMatchingEvents')}</p>
       </div>
     )
   }

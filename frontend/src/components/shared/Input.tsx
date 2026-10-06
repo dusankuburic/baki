@@ -41,19 +41,19 @@ export default function Input({
             : 'border-border-default focus-within:border-border-focus',
         )}
       >
-        {Icon && <Icon size={14} className="text-text-tertiary mr-2 flex-shrink-0" />}
+        {Icon && <Icon size={14} className="text-text-tertiary mr-2 shrink-0" />}
         <input
           id={id ?? fallbackId}
           aria-invalid={error ? true : undefined}
           aria-describedby={describedBy}
-          className="bg-transparent text-sm w-full outline-none text-text-primary placeholder:text-text-disabled"
+          className="bg-transparent text-sm w-full outline-hidden text-text-primary placeholder:text-text-disabled"
           {...rest}
         />
         {TrailingIcon && (
           <button
             type="button"
             onClick={onTrailingClick}
-            className="ml-2 rounded-sm text-text-tertiary hover:text-text-secondary transition-colors duration-fast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+            className="ml-2 rounded-sm text-text-tertiary hover:text-text-secondary transition-colors duration-fast focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40"
             tabIndex={trailingLabel ? 0 : -1}
             aria-label={trailingLabel}
             aria-pressed={trailingLabel ? trailingPressed : undefined}

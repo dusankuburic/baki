@@ -1,4 +1,5 @@
 import {useState} from 'react'
+import {useTranslation} from 'react-i18next'
 import Modal from '@/components/shared/Modal'
 import Input from '@/components/shared/Input'
 import {shortcuts, formatShortcutParts} from '@/lib/shortcuts'
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export default function ShortcutsHelpDialog({isOpen, onClose}: Props) {
+  const {t} = useTranslation('search')
   const [search, setSearch] = useState('')
 
   const filtered = search
@@ -27,11 +29,11 @@ export default function ShortcutsHelpDialog({isOpen, onClose}: Props) {
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Keyboard Shortcuts" size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title={t('shortcuts.title')} size="lg">
       <Input
         value={search}
         onChange={e => setSearch((e.target as HTMLInputElement).value)}
-        placeholder="Search shortcuts..."
+        placeholder={t('shortcuts.searchPlaceholder')}
         className="mb-4"
       />
       <div className="space-y-4 max-h-[50vh] overflow-y-auto">

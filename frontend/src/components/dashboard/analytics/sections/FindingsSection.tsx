@@ -85,7 +85,9 @@ export function FindingsSection({data, refetching}: {data: DashboardAnalyticsDat
     label: t(`confidence.${k}`),
     count: data.findings.byConfidence[k] ?? 0,
     share: confidenceTotal > 0 ? (data.findings.byConfidence[k] ?? 0) / confidenceTotal : 0,
-    color: theme.seq[3 - i],
+    // i ranges over the 3-entry CONFIDENCE tuple, so 3 - i is always 1..3 —
+    // inside seq's 4 slots; muted is an unreachable fallback.
+    color: theme.seq[3 - i] ?? theme.muted,
   }))
   const fix = data.findings.fixability
 
@@ -105,6 +107,7 @@ export function FindingsSection({data, refetching}: {data: DashboardAnalyticsDat
         table={{
           caption: t('analytics.cards.byRule'),
           filename: 'findings-by-rule.csv',
+          rowKey: r => r.key,
           columns: [
             {key: 'key', header: t('analytics.columns.rule')},
             {key: 'name', header: t('analytics.columns.name')},
@@ -147,6 +150,7 @@ export function FindingsSection({data, refetching}: {data: DashboardAnalyticsDat
         table={{
           caption: t('analytics.cards.byCategory'),
           filename: 'findings-by-category.csv',
+          rowKey: r => r.key,
           columns: [
             {key: 'label', header: t('analytics.columns.category')},
             {key: 'errors', header: t('analytics.columns.errors'), align: 'right'},
@@ -177,6 +181,7 @@ export function FindingsSection({data, refetching}: {data: DashboardAnalyticsDat
         table={{
           caption: t('analytics.cards.confidence'),
           filename: 'finding-confidence.csv',
+          rowKey: r => r.key,
           columns: [
             {key: 'label', header: t('analytics.columns.confidence')},
             {key: 'count', header: t('analytics.columns.findings'), align: 'right'},

@@ -7,7 +7,7 @@ import {ComposerChip, ComposerHints, ContextToggle} from './ComposerControls'
 
 interface Props {
   value: string
-  textareaRef: React.RefObject<HTMLTextAreaElement>
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>
   // The composer's own handlers, so the expanded editor is a different SHELL
   // around identical behaviour rather than a second implementation: @-mentions,
   // /commands, Enter-to-send and ArrowUp history all keep working here.
@@ -104,7 +104,7 @@ export default function ExpandedChatInput({
         >
           <textarea
             ref={textareaRef}
-            className="flex-1 min-h-0 w-full bg-transparent px-4 py-3 rounded-t-lg text-base leading-relaxed text-text-primary placeholder:text-text-tertiary resize-none focus:outline-none font-sans custom-scrollbar"
+            className="flex-1 min-h-0 w-full bg-transparent px-4 py-3 rounded-t-lg text-base leading-relaxed text-text-primary placeholder:text-text-tertiary resize-none focus:outline-hidden font-sans custom-scrollbar"
             placeholder={t('compose.placeholder')}
             value={value}
             onChange={onChange}

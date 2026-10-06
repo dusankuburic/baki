@@ -12,6 +12,7 @@ const table = {
     {rule: 'missing-timeout', count: 12},
     {rule: 'unused-variable', count: 3},
   ],
+  rowKey: (r: {rule: string; count: number}) => r.rule,
 }
 
 describe('ChartCard', () => {

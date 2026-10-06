@@ -231,7 +231,7 @@ func (r *PostgresAzureRegistry) write(ctx context.Context, fn func(q DBTX) error
 		return err
 	}
 	if !ok {
-		return r.b.withTx(ctx, func(tx *sql.Tx) error { return fn(tx) })
+		return r.b.withTx(ctx, func(_ context.Context, tx *sql.Tx) error { return fn(tx) })
 	}
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT azure_registry_write`); err != nil {
 		return fmt.Errorf("azure registry: savepoint: %w", err)
@@ -444,37 +444,13 @@ func (r *PostgresAzureRegistry) WithOwnerLock(ctx context.Context, owner interfa
 		return err
 	}
 	key := azureLockKey(owner)
-	if tx, ok, err := rlsTxFromContext(ctx); err != nil {
-		return err
-	} else if ok {
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, key); err != nil {
+	// withTx joins the request's transaction, or opens one whose post-commit hooks run after it commits.
+	return r.b.withTx(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(txCtx, `SELECT pg_advisory_xact_lock($1)`, key); err != nil {
 			return fmt.Errorf("azure registry: owner lock: %w", err)
 		}
-		return fn(ctx)
-	}
-	tx, err := r.b.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("azure registry: owner lock: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, key); err != nil {
-		return fmt.Errorf("azure registry: owner lock: %w", err)
-	}
-	txCtx, postCommit := WithPostCommit(WithRLSTx(ctx, tx))
-	if err := fn(txCtx); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("azure registry: owner lock: commit: %w", err)
-	}
-	committed = true
-	postCommit.Run()
-	return nil
+		return fn(txCtx)
+	})
 }
 
 func (r *PostgresAzureRegistry) ListConnections(ctx context.Context, owner interfaces.AzureOwner) ([]interfaces.AzureConnectionRecord, error) {

@@ -164,6 +164,7 @@ export default function PolicyGatePanel() {
         {policies.map(policy => {
           const isExpanded = expandedId === policy.id
           const enabledCount = policy.rules.filter(r => r.enabled).length
+          const result = results[policy.id]
           return (
             <div key={policy.id} className="border border-border-default rounded-lg overflow-hidden">
               {/* The delete control is a SIBLING of the expand button: a
@@ -202,7 +203,7 @@ export default function PolicyGatePanel() {
                         type="text"
                         value={policy.name}
                         onChange={e => handleUpdate({...policy, name: e.target.value})}
-                        className="mt-1 w-full px-3 py-1.5 text-sm rounded-md border border-border-default bg-surface-1 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                        className="mt-1 w-full px-3 py-1.5 text-sm rounded-md border border-border-default bg-surface-1 focus:outline-hidden focus:ring-1 focus:ring-brand-500"
                       />
                     </label>
                     <label className="block">
@@ -212,7 +213,7 @@ export default function PolicyGatePanel() {
                         value={policy.description || ''}
                         onChange={e => handleUpdate({...policy, description: e.target.value})}
                         placeholder={t('policy.optionalPlaceholder')}
-                        className="mt-1 w-full px-3 py-1.5 text-sm rounded-md border border-border-default bg-surface-1 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                        className="mt-1 w-full px-3 py-1.5 text-sm rounded-md border border-border-default bg-surface-1 focus:outline-hidden focus:ring-1 focus:ring-brand-500"
                       />
                     </label>
                   </div>
@@ -286,7 +287,7 @@ export default function PolicyGatePanel() {
                       </button>
                       {!openFlowId && <span className="text-xs text-text-secondary">{t('policy.evaluateNoFlow')}</span>}
                     </div>
-                    {results[policy.id] && <PolicyResultView result={results[policy.id]} />}
+                    {result && <PolicyResultView result={result} />}
                   </div>
                 </div>
               )}

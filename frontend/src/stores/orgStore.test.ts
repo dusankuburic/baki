@@ -35,7 +35,7 @@ describe('loadOrgs', () => {
     await useOrgStore.getState().loadOrgs()
 
     expect(useOrgStore.getState().organisations).toHaveLength(1)
-    expect(useOrgStore.getState().organisations[0].name).toBe('Acme Corp')
+    expect(useOrgStore.getState().organisations[0]!.name).toBe('Acme Corp')
   })
 
   it('sets error on failure', async () => {
@@ -255,7 +255,7 @@ describe('renameOrg', () => {
     await useOrgStore.getState().renameOrg('org-1', 'Acme Holdings')
 
     expect(mockRequest).toHaveBeenCalledWith('/api/orgs/org-1', {body: {name: 'Acme Holdings'}, method: 'PUT'})
-    expect(useOrgStore.getState().organisations[0].name).toBe('Acme Holdings')
+    expect(useOrgStore.getState().organisations[0]!.name).toBe('Acme Holdings')
     expect(useOrgStore.getState().activeOrgId).toBe('org-1')
   })
 
@@ -264,7 +264,7 @@ describe('renameOrg', () => {
     mockRequest.mockRejectedValue(new Error('forbidden'))
 
     await expect(useOrgStore.getState().renameOrg('org-1', 'Nope')).rejects.toThrow()
-    expect(useOrgStore.getState().organisations[0].name).toBe('Acme Corp')
+    expect(useOrgStore.getState().organisations[0]!.name).toBe('Acme Corp')
     expect(useOrgStore.getState().error).toBe('forbidden')
     expect(useOrgStore.getState().isBusy).toBe(false)
   })

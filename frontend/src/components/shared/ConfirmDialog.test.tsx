@@ -53,7 +53,7 @@ describe('ConfirmDialog', () => {
     const dialog = await screen.findByRole('dialog', {name: 'Remove?'})
     const remove = within(dialog).getByRole('button', {name: 'Remove'})
     expect(remove).toHaveClass('bg-semantic-error')
-    expect(remove.className).toContain('var(--error-foreground)')
+    expect(remove.className).toContain('text-(--error-foreground)')
     expect(remove.className).not.toMatch(/\bbg-red-/)
     expect(remove).toHaveAttribute('type', 'button')
     expect(within(dialog).getByRole('button', {name: 'Cancel'})).toHaveAttribute('type', 'button')

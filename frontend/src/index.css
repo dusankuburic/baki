@@ -1,6 +1,354 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+@custom-variant dark (&:is([data-theme="dark"], [data-theme="midnight"], [data-theme="warm"], [data-theme="tokyo-night"], [data-theme="one-dark"], [data-theme="dracula"], [data-theme="nord"], [data-theme="gruvbox-dark"], [data-theme="catppuccin-mocha"], [data-theme="rose-pine"], [data-theme="rose-pine-moon"], [data-theme="github-dark"], [data-theme="kanagawa"], [data-theme="everforest"]));
+
+/* v3's ringColor.DEFAULT, carried over: a bare ring-* utility takes the brand
+   tint unless an explicit ring-color class overrides it on the element (v4's
+   ring utilities read --tw-ring-color with a currentcolor fallback, so a root
+   default restores the old behaviour exactly). */
+@layer base {
+  :root {
+    --tw-ring-color: color-mix(in srgb, var(--brand-500) 100%, transparent);
+  }
+}
+
+@theme {
+  --color-surface-0: color-mix(
+    in srgb,
+    var(--surface-0) calc(1 * 100%),
+    transparent
+  );
+  --color-surface-1: color-mix(
+    in srgb,
+    var(--surface-1) calc(1 * 100%),
+    transparent
+  );
+  --color-surface-2: color-mix(
+    in srgb,
+    var(--surface-2) calc(1 * 100%),
+    transparent
+  );
+  --color-surface-3: color-mix(
+    in srgb,
+    var(--surface-3) calc(1 * 100%),
+    transparent
+  );
+  --color-surface-4: color-mix(
+    in srgb,
+    var(--surface-4) calc(1 * 100%),
+    transparent
+  );
+  --color-surface-overlay: var(--surface-overlay);
+
+  --color-text-primary: color-mix(
+    in srgb,
+    var(--text-primary) calc(1 * 100%),
+    transparent
+  );
+  --color-text-secondary: color-mix(
+    in srgb,
+    var(--text-secondary) calc(1 * 100%),
+    transparent
+  );
+  --color-text-tertiary: color-mix(
+    in srgb,
+    var(--text-tertiary) calc(1 * 100%),
+    transparent
+  );
+  --color-text-disabled: color-mix(
+    in srgb,
+    var(--text-disabled) calc(1 * 100%),
+    transparent
+  );
+
+  --color-border-subtle: color-mix(
+    in srgb,
+    var(--border-subtle) calc(1 * 100%),
+    transparent
+  );
+  --color-border: color-mix(
+    in srgb,
+    var(--border-default) calc(1 * 100%),
+    transparent
+  );
+  --color-border-default: color-mix(
+    in srgb,
+    var(--border-default) calc(1 * 100%),
+    transparent
+  );
+  --color-border-strong: color-mix(
+    in srgb,
+    var(--border-strong) calc(1 * 100%),
+    transparent
+  );
+  --color-border-focus: color-mix(
+    in srgb,
+    var(--border-focus) calc(1 * 100%),
+    transparent
+  );
+
+  --color-brand-50: color-mix(
+    in srgb,
+    var(--brand-50) calc(1 * 100%),
+    transparent
+  );
+  --color-brand-100: color-mix(
+    in srgb,
+    var(--brand-100) calc(1 * 100%),
+    transparent
+  );
+  --color-brand-300: color-mix(
+    in srgb,
+    var(--brand-300) calc(1 * 100%),
+    transparent
+  );
+  --color-brand-400: color-mix(
+    in srgb,
+    var(--brand-400) calc(1 * 100%),
+    transparent
+  );
+  --color-brand-500: color-mix(
+    in srgb,
+    var(--brand-500) calc(1 * 100%),
+    transparent
+  );
+  --color-brand-600: color-mix(
+    in srgb,
+    var(--brand-600) calc(1 * 100%),
+    transparent
+  );
+  --color-brand-700: color-mix(
+    in srgb,
+    var(--brand-700) calc(1 * 100%),
+    transparent
+  );
+  --color-brand-foreground: color-mix(
+    in srgb,
+    var(--brand-foreground) calc(1 * 100%),
+    transparent
+  );
+
+  --color-block-action: color-mix(
+    in srgb,
+    var(--block-action) calc(1 * 100%),
+    transparent
+  );
+  --color-block-loop: color-mix(
+    in srgb,
+    var(--block-loop) calc(1 * 100%),
+    transparent
+  );
+  --color-block-condition: color-mix(
+    in srgb,
+    var(--block-condition) calc(1 * 100%),
+    transparent
+  );
+  --color-block-subflow: color-mix(
+    in srgb,
+    var(--block-subflow) calc(1 * 100%),
+    transparent
+  );
+  --color-block-error: color-mix(
+    in srgb,
+    var(--block-error) calc(1 * 100%),
+    transparent
+  );
+  --color-block-comment: color-mix(
+    in srgb,
+    var(--block-comment) calc(1 * 100%),
+    transparent
+  );
+  --color-block-variable: color-mix(
+    in srgb,
+    var(--block-variable) calc(1 * 100%),
+    transparent
+  );
+  --color-block-string: color-mix(
+    in srgb,
+    var(--block-string) calc(1 * 100%),
+    transparent
+  );
+  --color-block-wait: color-mix(
+    in srgb,
+    var(--block-wait) calc(1 * 100%),
+    transparent
+  );
+  --color-block-action-bg: color-mix(
+    in srgb,
+    var(--block-action-bg) calc(1 * 100%),
+    transparent
+  );
+  --color-block-loop-bg: color-mix(
+    in srgb,
+    var(--block-loop-bg) calc(1 * 100%),
+    transparent
+  );
+  --color-block-condition-bg: color-mix(
+    in srgb,
+    var(--block-condition-bg) calc(1 * 100%),
+    transparent
+  );
+  --color-block-subflow-bg: color-mix(
+    in srgb,
+    var(--block-subflow-bg) calc(1 * 100%),
+    transparent
+  );
+  --color-block-error-bg: color-mix(
+    in srgb,
+    var(--block-error-bg) calc(1 * 100%),
+    transparent
+  );
+  --color-block-comment-bg: color-mix(
+    in srgb,
+    var(--block-comment-bg) calc(1 * 100%),
+    transparent
+  );
+  --color-block-variable-bg: color-mix(
+    in srgb,
+    var(--block-variable-bg) calc(1 * 100%),
+    transparent
+  );
+  --color-block-string-bg: color-mix(
+    in srgb,
+    var(--block-string-bg) calc(1 * 100%),
+    transparent
+  );
+  --color-block-wait-bg: color-mix(
+    in srgb,
+    var(--block-wait-bg) calc(1 * 100%),
+    transparent
+  );
+
+  --color-semantic-success: color-mix(
+    in srgb,
+    var(--success) calc(1 * 100%),
+    transparent
+  );
+  --color-semantic-warning: color-mix(
+    in srgb,
+    var(--warning) calc(1 * 100%),
+    transparent
+  );
+  --color-semantic-error: color-mix(
+    in srgb,
+    var(--error) calc(1 * 100%),
+    transparent
+  );
+  --color-semantic-info: color-mix(
+    in srgb,
+    var(--info) calc(1 * 100%),
+    transparent
+  );
+
+  --color-viz-1: color-mix(in srgb, var(--viz-1) calc(1 * 100%), transparent);
+  --color-viz-2: color-mix(in srgb, var(--viz-2) calc(1 * 100%), transparent);
+  --color-viz-3: color-mix(in srgb, var(--viz-3) calc(1 * 100%), transparent);
+  --color-viz-4: color-mix(in srgb, var(--viz-4) calc(1 * 100%), transparent);
+  --color-viz-5: color-mix(in srgb, var(--viz-5) calc(1 * 100%), transparent);
+  --color-viz-6: color-mix(in srgb, var(--viz-6) calc(1 * 100%), transparent);
+  --color-viz-7: color-mix(in srgb, var(--viz-7) calc(1 * 100%), transparent);
+  --color-viz-8: color-mix(in srgb, var(--viz-8) calc(1 * 100%), transparent);
+  --color-viz-emphasis: color-mix(
+    in srgb,
+    var(--viz-emphasis) calc(1 * 100%),
+    transparent
+  );
+  --color-viz-muted: color-mix(
+    in srgb,
+    var(--viz-muted) calc(1 * 100%),
+    transparent
+  );
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --text-2xs: 10px;
+  --text-2xs--line-height: 14px;
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-sm: 13px;
+  --text-sm--line-height: 18px;
+  --text-base: 15px;
+  --text-base--line-height: 22px;
+  --text-lg: 17px;
+  --text-lg--line-height: 24px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 28px;
+  --text-2xl--line-height: 36px;
+  --text-2xl--letter-spacing: -0.01em;
+  --text-3xl: 36px;
+  --text-3xl--line-height: 44px;
+  --text-3xl--letter-spacing: -0.02em;
+
+  --spacing-1: var(--space-1);
+  --spacing-2: var(--space-2);
+  --spacing-3: var(--space-3);
+  --spacing-4: var(--space-4);
+  --spacing-5: var(--space-5);
+  --spacing-6: var(--space-6);
+  --spacing-8: var(--space-8);
+  --spacing-10: var(--space-10);
+  --spacing-12: var(--space-12);
+  --spacing-16: var(--space-16);
+  --spacing-0_5: var(--space-0_5);
+  --spacing-1_5: var(--space-1_5);
+  --spacing-2_5: var(--space-2_5);
+  --spacing-3_5: var(--space-3_5);
+
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-2xl: var(--radius-2xl);
+
+  --z-index-base: var(--z-base);
+  --z-index-raised: var(--z-raised);
+  --z-index-overlay: var(--z-overlay);
+  --z-index-sticky: var(--z-sticky);
+  --z-index-modal: var(--z-modal);
+  --z-index-tooltip: var(--z-tooltip);
+  --z-index-toast: var(--z-toast);
+
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-xl: var(--shadow-xl);
+  --shadow-glow: var(--shadow-glow);
+  --shadow-glow-error: var(--shadow-glow-error);
+
+  --ease-out: var(--ease-out);
+  --ease-in-out: var(--ease-in-out);
+  --ease-spring: var(--ease-spring);
+
+  --transition-duration-instant: var(--duration-instant);
+  --transition-duration-fast: var(--duration-fast);
+  --transition-duration-normal: var(--duration-normal);
+  --transition-duration-slow: var(--duration-slow);
+  --transition-duration-slower: var(--duration-slower);
+
+  --backdrop-blur-glass: 16px;
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--border-default);
+  }
+}
 
 /* === FONT FACES === */
 @font-face {

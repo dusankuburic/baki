@@ -56,6 +56,7 @@ export function TriageSection({data, refetching}: {data: DashboardAnalyticsData;
         table={{
           caption: t('analytics.cards.triageStatus'),
           filename: 'triage-status.csv',
+          rowKey: r => r.key,
           columns: [
             {key: 'label', header: t('triage.status')},
             {key: 'value', header: t('triage.findings'), align: 'right'},
@@ -86,6 +87,7 @@ export function TriageSection({data, refetching}: {data: DashboardAnalyticsData;
         table={{
           caption: t('analytics.cards.resolvedPerDay'),
           filename: 'resolved-per-day.csv',
+          rowKey: r => r.date,
           columns: [
             {key: 'date', header: t('analytics.columns.date'), render: r => formatDateLong(r.date)},
             {key: 'count', header: t('triage.resolved'), align: 'right'},

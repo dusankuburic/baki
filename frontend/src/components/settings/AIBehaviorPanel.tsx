@@ -184,7 +184,7 @@ function CustomInstructionsInput() {
 
   return (
     <textarea
-      className="w-full h-24 px-3 py-2 text-sm bg-surface-2 border border-border-default rounded-md text-text-primary placeholder:text-text-tertiary resize-none focus:outline-none focus:ring-1 focus:ring-brand-500"
+      className="w-full h-24 px-3 py-2 text-sm bg-surface-2 border border-border-default rounded-md text-text-primary placeholder:text-text-tertiary resize-none focus:outline-hidden focus:ring-1 focus:ring-brand-500"
       placeholder={t('behavior.customInstructionsPlaceholder')}
       aria-label={t('behavior.customInstructions')}
       value={local}

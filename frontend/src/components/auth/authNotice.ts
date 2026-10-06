@@ -1,3 +1,5 @@
+import {logger} from '@/lib/logger'
+
 // The message a signed-out user needs to see on the sign-in screen after an
 // action that ends their session on purpose: a password change (the server
 // revokes every refresh token, this tab's included) or account deletion.
@@ -11,8 +13,9 @@ export type PostLogoutNotice = 'password-changed' | 'account-deleted'
 export function setPostLogoutNotice(notice: PostLogoutNotice): void {
   try {
     sessionStorage.setItem(KEY, notice)
-  } catch {
+  } catch (err) {
     // Storage unavailable (private mode): the sign-in screen just has no note.
+    logger.warn('setPostLogoutNotice: sessionStorage unavailable', err)
   }
 }
 
@@ -20,7 +23,8 @@ export function readPostLogoutNotice(): PostLogoutNotice | null {
   try {
     const value = sessionStorage.getItem(KEY)
     return value === 'password-changed' || value === 'account-deleted' ? value : null
-  } catch {
+  } catch (err) {
+    logger.warn('readPostLogoutNotice: sessionStorage unavailable', err)
     return null
   }
 }
@@ -28,7 +32,8 @@ export function readPostLogoutNotice(): PostLogoutNotice | null {
 export function clearPostLogoutNotice(): void {
   try {
     sessionStorage.removeItem(KEY)
-  } catch {
+  } catch (err) {
     // Nothing stored, nothing to clear.
+    logger.warn('clearPostLogoutNotice: sessionStorage unavailable', err)
   }
 }

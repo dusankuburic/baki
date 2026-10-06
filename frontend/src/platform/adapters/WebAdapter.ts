@@ -105,6 +105,10 @@ export class WebAdapter implements PlatformAdapter {
         }
 
         const file = files[0]
+        if (!file) {
+          done(null)
+          return
+        }
         const maxBytes = 100 * 1024 * 1024
         if (file.size > maxBytes) {
           logger.warn('File exceeds 100MB limit', {size: file.size})
@@ -187,7 +191,7 @@ export class WebAdapter implements PlatformAdapter {
           .filter(file => file.name.toLowerCase().endsWith('.txt'))
           .map(file => {
             if (!directoryName && file.webkitRelativePath) {
-              directoryName = file.webkitRelativePath.split('/')[0]
+              directoryName = file.webkitRelativePath.split('/')[0] ?? ''
             }
             return new Promise<void>(res => {
               const maxBytes = 100 * 1024 * 1024

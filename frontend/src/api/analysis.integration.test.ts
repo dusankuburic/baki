@@ -123,14 +123,14 @@ describe('AnalysisReport integration: requestValidated → store', () => {
     expect((report as {ruleProfiles?: unknown[]}).ruleProfiles).toHaveLength(2)
 
     // Findings preserve all fields (the FindingSchema also uses passthrough)
-    const f0 = report.findings[0]
+    const f0 = report.findings[0]!
     expect(f0.fingerprint).toBe('hardcoded-credential:b1:ApiKey')
     expect(f0.confidence).toBe('high')
     expect(f0.autoFix).toBe('replace-with-variable')
     expect(f0.autoFixHint).toContain('vault')
     expect(f0.metadata).toEqual({property: 'Value', variable: 'ApiKey'})
 
-    const f1 = report.findings[1]
+    const f1 = report.findings[1]!
     expect(f1.autoFix).toBe('wrap-error-handler')
 
     // Stats preserves all fields (including 'suppressed' via inner passthrough)
@@ -142,8 +142,8 @@ describe('AnalysisReport integration: requestValidated → store', () => {
     const stored = useAnalysisStore.getState().reports.get('flow-abc-123')
     expect(stored).toBeDefined()
     expect(stored!.findings).toHaveLength(2)
-    expect(stored!.findings[0].autoFix).toBe('replace-with-variable')
-    expect(stored!.findings[0].fingerprint).toBe('hardcoded-credential:b1:ApiKey')
+    expect(stored!.findings[0]!.autoFix).toBe('replace-with-variable')
+    expect(stored!.findings[0]!.fingerprint).toBe('hardcoded-credential:b1:ApiKey')
     expect((stored as {metrics?: {healthScore?: number}}).metrics?.healthScore).toBe(73)
     expect((stored as {groups?: unknown[]}).groups).toHaveLength(1)
   })

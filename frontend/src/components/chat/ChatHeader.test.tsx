@@ -133,7 +133,7 @@ describe('ChatHeader', () => {
     renderHeader({
       useTools: false,
       onToggleTools,
-      modelDetail: {...models[0], supportsTools: false},
+      modelDetail: {...models[0]!, supportsTools: false},
     })
     await openOverflow(user)
     // The chat service runs these through the text-marker fallback, so the

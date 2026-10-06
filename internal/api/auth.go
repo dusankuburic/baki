@@ -85,6 +85,11 @@ func (h *AuthHandler) SetProviderService(p *service.ProviderService) {
 type credentials struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	// RememberMe shapes the refresh cookie's lifetime on the web build:
+	// true → persistent (Expires = refresh-token TTL), false → a browser-session
+	// cookie that dies with the browser, mirroring the old sessionStorage model.
+	// The desktop build ignores it (it authenticates with the body token).
+	Remember bool `json:"rememberMe"`
 }
 
 // refreshCookieName: HttpOnly keeps document.cookie/XSS out, SameSite=Lax blocks cross-site
@@ -103,21 +108,27 @@ func isHTTPS(r *http.Request) bool {
 	return false
 }
 
-func setRefreshCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time) {
+// setRefreshCookie sets the HttpOnly refresh cookie. persistent=false omits
+// Expires, making it a browser-session cookie — the web build maps the login
+// form's "remember me" to this; true pins Expires to the token's TTL.
+func setRefreshCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time, persistent bool) {
 	// #nosec G124 -- HttpOnly and SameSite are both set; only Secure is
 	// conditional, and deliberately so. The desktop build serves plain HTTP on
 	// loopback, where a hard Secure:true makes the browser drop the refresh
 	// cookie and breaks login entirely. isHTTPS(r) honours the proxy headers in
 	// cloud mode, where it resolves to true.
-	http.SetCookie(w, &http.Cookie{
+	c := http.Cookie{
 		Name:     refreshCookieName,
 		Value:    token,
 		Path:     "/api/auth",
-		Expires:  expires,
 		HttpOnly: true,
 		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode,
-	})
+	}
+	if persistent {
+		c.Expires = expires
+	}
+	http.SetCookie(w, &c)
 }
 
 func clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
@@ -144,16 +155,17 @@ func (h *AuthHandler) refreshTokenFromRequest(r *http.Request, bodyToken string)
 	return bodyToken
 }
 
-// decodeCredentials returns the normalized email and raw password with two errors for caller policy:
-// err is a malformed body (both 400); register answers emailErr 400, login ignores it — a malformed
+// decodeCredentials returns the normalized email, raw password and the
+// remember-me flag, with two errors for caller policy: err is a malformed body
+// (both 400); register answers emailErr 400, login ignores it — a malformed
 // email yields 401 "invalid credentials" without revealing rules.
-func decodeCredentials(r *http.Request) (email, password string, emailErr error, err error) {
+func decodeCredentials(r *http.Request) (email, password string, remember bool, emailErr error, err error) {
 	var c credentials
 	if err = json.NewDecoder(r.Body).Decode(&c); err != nil {
-		return "", "", nil, err
+		return "", "", false, nil, err
 	}
 	email, emailErr = validateEmail(c.Email)
-	return email, c.Password, emailErr, nil
+	return email, c.Password, c.Remember, emailErr, nil
 }
 
 // @Summary      Register a new user
@@ -178,7 +190,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	metrics.RecordAuthOp("register")
-	email, password, emailErr, err := decodeCredentials(r)
+	email, password, remember, emailErr, err := decodeCredentials(r)
 	if err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
@@ -212,7 +224,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 	}
 	if user.EmailVerified {
 		// No verification round trip pending (bootstrap admin is created verified): issue the session directly.
-		pair, ok := h.issueSession(w, r, user.ID, user.Email, user.Role)
+		pair, ok := h.issueSession(w, r, user.ID, user.Email, user.Role, remember)
 		if !ok {
 			return
 		}
@@ -237,9 +249,10 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// issueSession mints a token pair, persists the refresh token, sets the HttpOnly cookie and records
-// the login audit; on failure it has written the error and returns ok=false.
-func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, userID, email string, role auth.Role) (*auth.TokenPair, bool) {
+// issueSession mints a token pair, persists the refresh token, sets the HttpOnly cookie (persistent
+// per the caller's remember-me flag) and records the login audit; on failure it has written the
+// error and returns ok=false.
+func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, userID, email string, role auth.Role, remember bool) (*auth.TokenPair, bool) {
 	pair, err := h.security.AuthMgr.Issue(userID, email, role)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
@@ -255,7 +268,7 @@ func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, userI
 	}
 
 	// Set the HttpOnly refresh cookie; callers still return the body field for backward compatibility.
-	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt)
+	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt, remember)
 
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLogin, "user", userID, nil)
 	return pair, true
@@ -279,7 +292,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	metrics.RecordAuthOp("login")
 	// Login ignores emailErr and normalizes only (see decodeCredentials): a malformed email returns 401.
-	email, password, _, err := decodeCredentials(r)
+	email, password, remember, _, err := decodeCredentials(r)
 	if err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
@@ -317,7 +330,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	user := result.User
 
-	pair, ok := h.issueSession(w, r, user.ID, user.Email, user.Role)
+	pair, ok := h.issueSession(w, r, user.ID, user.Email, user.Role, remember)
 	if !ok {
 		return
 	}
@@ -351,6 +364,10 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 	metrics.RecordAuthOp("refresh")
 	var req struct {
 		RefreshToken string `json:"refreshToken"`
+		// RememberMe reshapes the rotated cookie (persistent vs browser-session)
+		// for cookie-authenticated web clients; body-token clients may send it
+		// too, but their cookie is unused.
+		RememberMe bool `json:"rememberMe"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -435,8 +452,9 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Rotate the HttpOnly cookie to the newly-issued refresh token.
-	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt)
+	// Rotate the HttpOnly cookie to the newly-issued refresh token, keeping the
+	// session shape the client asked for (persistent vs browser-session).
+	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt, req.RememberMe)
 
 	render.JSON(w, pair)
 }

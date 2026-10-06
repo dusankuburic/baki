@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useState, useEffect, useRef, useCallback} from 'react'
 
 interface UseAsyncResult<T> {
@@ -53,7 +54,7 @@ export function useAsync<T>(fn: (signal: AbortSignal) => Promise<T>, deps: React
         if (cancelled) return
         // An abort (unmount / deps change) is intentional, not an error.
         if (err instanceof DOMException && err.name === 'AbortError') return
-        setError(err instanceof Error ? err.message : String(err))
+        setError(getErrorMessage(err))
         setIsLoading(false)
       })
     return () => {

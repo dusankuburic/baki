@@ -75,7 +75,7 @@ function SharedGroup({
     <div className="rounded-lg border border-border-default bg-surface-1 p-4">
       <div className="flex flex-wrap items-start gap-2">
         <div className="min-w-0 flex-1">
-          <Heading id={headingId} className="break-words text-sm font-semibold text-text-primary">
+          <Heading id={headingId} className="wrap-break-word text-sm font-semibold text-text-primary">
             {t('azureModels.shared.heading', {org: group.orgName})}
           </Heading>
           <p className="mt-0.5 text-xs text-text-tertiary">{t('azureModels.shared.readOnly')}</p>

@@ -57,7 +57,7 @@ describe('resetDerivedStateForFlow', () => {
     expect(useAnalysisStore.getState().findingSearch).toBe('')
     expect(useChatStore.getState().activeThreadId).toBeNull()
     // First subflow opened in editor group 0.
-    expect(useEditorStore.getState().groups[0].activeTabId).toBe('sf1')
+    expect(useEditorStore.getState().groups[0]!.activeTabId).toBe('sf1')
   })
 
   it("keeps the flow's own thread active on a same-flow refresh", () => {
@@ -81,8 +81,8 @@ describe('resetDerivedStateForFlow', () => {
     expect(useAnalysisStore.getState().protectedFlowId).toBeNull()
     expect(useChatStore.getState().activeThreadId).toBeNull()
     const groups = useEditorStore.getState().groups
-    expect(groups[0].tabs).toHaveLength(0)
-    expect(groups[0].activeTabId).toBeNull()
+    expect(groups[0]!.tabs).toHaveLength(0)
+    expect(groups[0]!.activeTabId).toBeNull()
   })
 })
 
@@ -102,7 +102,7 @@ describe('setDocument', () => {
     useFlowStore.getState().setDocument(doc)
     const {navigationHistory, historyIndex} = useFlowStore.getState()
     expect(navigationHistory).toHaveLength(1)
-    expect(navigationHistory[0].subflowId).toBe('sf1')
+    expect(navigationHistory[0]!.subflowId).toBe('sf1')
     expect(historyIndex).toBe(0)
   })
 })
@@ -148,7 +148,7 @@ describe('applyRemoteDocumentUpdate', () => {
 
     // Remote edit removed sf2. The sf2 tab must be pruned.
     useFlowStore.getState().applyRemoteDocumentUpdate(makeDoc(makeSubflow('sf1')))
-    const group = useEditorStore.getState().groups[0]
+    const group = useEditorStore.getState().groups[0]!
     expect(group.tabs).not.toContain('sf2')
   })
 })
@@ -168,14 +168,14 @@ describe('navigation history', () => {
     useFlowStore.getState().selectSubflow('sf2')
     const {navigationHistory, historyIndex} = useFlowStore.getState()
     expect(historyIndex).toBe(1)
-    expect(navigationHistory[1].subflowId).toBe('sf2')
+    expect(navigationHistory[1]!.subflowId).toBe('sf2')
   })
 
   it('selectBlock pushes to history', () => {
     useFlowStore.getState().selectBlock('b1')
     const {navigationHistory, historyIndex} = useFlowStore.getState()
     expect(historyIndex).toBe(1)
-    expect(navigationHistory[1].blockId).toBe('b1')
+    expect(navigationHistory[1]!.blockId).toBe('b1')
   })
 
   it('selectBlock(null) broadcasts the deselect so collaborators clear the stale selection', () => {
@@ -236,7 +236,7 @@ describe('navigation history', () => {
     const {navigationHistory} = useFlowStore.getState()
     // sf1 (init) + b2 = 2 entries; sf2 was cut
     expect(navigationHistory).toHaveLength(2)
-    expect(navigationHistory[1].blockId).toBe('b2')
+    expect(navigationHistory[1]!.blockId).toBe('b2')
   })
 
   it('skipHistory=true does not push to history', () => {

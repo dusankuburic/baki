@@ -118,7 +118,7 @@ describe('conversation round trip', () => {
   it('keeps modelLabel through save → get → save', () => {
     const stored = wire(thread)
     const loaded = parseConversationPayload(stored)
-    expect(loaded[1].modelLabel).toBe('Docs writer')
+    expect(loaded[1]!.modelLabel).toBe('Docs writer')
     expect(wire(loaded)).toEqual(stored)
     expect(loaded).toEqual(thread)
   })
@@ -138,8 +138,8 @@ describe('parseChatMessages', () => {
       {id: 'ok2', role: 'assistant', content: 'b', timestamp: 't2'},
     ])
     expect(result).toHaveLength(2)
-    expect(result[0].id).toBe('ok')
-    expect(result[1].id).toBe('ok2')
+    expect(result[0]!.id).toBe('ok')
+    expect(result[1]!.id).toBe('ok2')
   })
 
   it('returns an empty list for non-array payloads', () => {

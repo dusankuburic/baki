@@ -1,16 +1,24 @@
 import {Search, LayoutGrid, List, RefreshCw} from 'lucide-react'
 import clsx from 'clsx'
+import {useTranslation} from 'react-i18next'
 import Input from '@/components/shared/Input'
 import IconButton from '@/components/shared/IconButton'
 import {useLibraryBrowseStore} from '@/stores/libraryBrowseStore'
 import type {LibrarySort} from '@/api/library'
 
-const SORT_OPTIONS: {value: LibrarySort; label: string}[] = [
-  {value: 'updated_desc', label: 'Recently updated'},
-  {value: 'updated_asc', label: 'Oldest updated'},
-  {value: 'name_asc', label: 'Name A → Z'},
-  {value: 'name_desc', label: 'Name Z → A'},
-  {value: 'blocks_desc', label: 'Most blocks'},
+type SortLabelKey =
+  | 'toolbar.sortUpdatedDesc'
+  | 'toolbar.sortUpdatedAsc'
+  | 'toolbar.sortNameAsc'
+  | 'toolbar.sortNameDesc'
+  | 'toolbar.sortBlocksDesc'
+
+const SORT_OPTIONS: {value: LibrarySort; label: SortLabelKey}[] = [
+  {value: 'updated_desc', label: 'toolbar.sortUpdatedDesc'},
+  {value: 'updated_asc', label: 'toolbar.sortUpdatedAsc'},
+  {value: 'name_asc', label: 'toolbar.sortNameAsc'},
+  {value: 'name_desc', label: 'toolbar.sortNameDesc'},
+  {value: 'blocks_desc', label: 'toolbar.sortBlocksDesc'},
 ]
 
 export default function LibraryToolbar({
@@ -22,6 +30,7 @@ export default function LibraryToolbar({
   isLoading: boolean
   onRefresh: () => void
 }) {
+  const {t} = useTranslation('library')
   const view = useLibraryBrowseStore(s => s.view)
   const setView = useLibraryBrowseStore(s => s.setView)
   const sort = useLibraryBrowseStore(s => s.sort)
@@ -31,35 +40,45 @@ export default function LibraryToolbar({
 
   return (
     // Wraps rather than squeezing the search box to nothing in a narrow pane.
-    <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-border-subtle flex-shrink-0">
+    <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-border-subtle shrink-0">
       <Input
         icon={Search}
-        placeholder="Search flows by name…"
+        placeholder={t('toolbar.searchPlaceholder')}
         value={query}
         onChange={e => setQuery(e.target.value)}
-        className="flex-1 min-w-[10rem] max-w-md"
+        className="flex-1 min-w-40 max-w-md"
       />
       <select
         value={sort}
         onChange={e => setSort(e.target.value as LibrarySort)}
-        className="h-9 px-2 text-sm bg-surface-2 border border-border-default rounded-md text-text-primary focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-        aria-label="Sort flows"
+        className="h-9 px-2 text-sm bg-surface-2 border border-border-default rounded-md text-text-primary focus:outline-hidden focus:ring-2 focus:ring-brand-500/20"
+        aria-label={t('toolbar.sortAria')}
       >
         {SORT_OPTIONS.map(o => (
           <option key={o.value} value={o.value}>
-            {o.label}
+            {t(o.label)}
           </option>
         ))}
       </select>
       <div className="inline-flex rounded-md border border-border-default overflow-hidden">
-        <ViewToggle active={view === 'grid'} onClick={() => setView('grid')} icon={LayoutGrid} label="Grid view" />
-        <ViewToggle active={view === 'list'} onClick={() => setView('list')} icon={List} label="List view" />
+        <ViewToggle
+          active={view === 'grid'}
+          onClick={() => setView('grid')}
+          icon={LayoutGrid}
+          label={t('toolbar.gridView')}
+        />
+        <ViewToggle
+          active={view === 'list'}
+          onClick={() => setView('list')}
+          icon={List}
+          label={t('toolbar.listView')}
+        />
       </div>
       <div className="ml-auto flex items-center gap-1">
         <span className="text-xs text-text-tertiary tabular-nums" aria-live="polite">
-          {isLoading ? 'loading…' : `${total} flow${total === 1 ? '' : 's'}`}
+          {isLoading ? t('toolbar.loading') : t('toolbar.flowsCount', {count: total})}
         </span>
-        <IconButton icon={RefreshCw} size="sm" label="Refresh" onClick={onRefresh} disabled={isLoading} />
+        <IconButton icon={RefreshCw} size="sm" label={t('toolbar.refresh')} onClick={onRefresh} disabled={isLoading} />
       </div>
     </div>
   )

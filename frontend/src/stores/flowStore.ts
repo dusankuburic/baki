@@ -270,6 +270,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const {navigationHistory, historyIndex, selectBlock, selectSubflow} = get()
     if (historyIndex <= 0) return
     const entry = navigationHistory[historyIndex - 1]
+    if (!entry) return
     set({historyIndex: historyIndex - 1})
     if (entry.blockId) {
       selectBlock(entry.blockId, true)
@@ -282,6 +283,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const {navigationHistory, historyIndex, selectBlock, selectSubflow} = get()
     if (historyIndex >= navigationHistory.length - 1) return
     const entry = navigationHistory[historyIndex + 1]
+    if (!entry) return
     set({historyIndex: historyIndex + 1})
     if (entry.blockId) {
       selectBlock(entry.blockId, true)

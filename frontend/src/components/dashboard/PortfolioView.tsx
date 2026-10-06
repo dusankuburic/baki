@@ -186,7 +186,7 @@ export default function PortfolioView() {
           <select
             value={sort}
             onChange={e => setSort(e.target.value as PortfolioSort)}
-            className="h-8 px-2 text-xs bg-surface-1 border border-border-default rounded-lg text-text-secondary focus:outline-none focus:ring-2 focus:ring-brand-500/20 shrink-0 ml-auto"
+            className="h-8 px-2 text-xs bg-surface-1 border border-border-default rounded-lg text-text-secondary focus:outline-hidden focus:ring-2 focus:ring-brand-500/20 shrink-0 ml-auto"
             aria-label="Sort flows"
           >
             {SORT_OPTIONS.map(o => (
@@ -308,7 +308,7 @@ export default function PortfolioView() {
                     >
                       {e.flowName || e.flowId}
                     </td>
-                    <td className="px-4 py-2 text-text-tertiary truncate max-w-[12rem]">
+                    <td className="px-4 py-2 text-text-tertiary truncate max-w-48">
                       {e.ownerName || e.ownerId || '—'}
                     </td>
                     <td

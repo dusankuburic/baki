@@ -53,6 +53,7 @@ export function HealthDistributionCard({
       table={{
         caption: heading,
         filename: 'health-distribution.csv',
+        rowKey: r => r.band,
         columns: [
           {key: 'band', header: t('analytics.columns.band')},
           {key: 'count', header: t('analytics.columns.flows'), align: 'right'},

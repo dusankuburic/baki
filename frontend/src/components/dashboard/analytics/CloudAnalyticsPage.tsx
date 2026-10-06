@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useCallback, useEffect, useMemo, useRef} from 'react'
 import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
@@ -85,7 +86,7 @@ export default function CloudAnalyticsPage() {
       } catch (e) {
         if (!isDocLoadCurrent(gen)) return
         toastRef.current.error(t('home.openFailed'), {
-          description: e instanceof Error ? e.message : t('common.unknownError'),
+          description: getErrorMessage(e, t('common.unknownError')),
         })
       }
     },
@@ -177,22 +178,27 @@ export default function CloudAnalyticsPage() {
         ) : (
           <div className="analytics-body">
             <nav className="analytics-nav" aria-label={t('analytics.nav')}>
-              {SECTION_IDS.map((id, i) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => jumpTo(id)}
-                  aria-current={active === id ? 'location' : undefined}
-                  className={clsx(
-                    'analytics-nav-item rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors duration-fast',
-                    active === id
-                      ? 'bg-brand-500/10 text-brand-400'
-                      : 'text-text-secondary hover:bg-surface-2 hover:text-text-primary',
-                  )}
-                >
-                  {t(`analytics.sections.${SECTION_KEYS[i]}`)}
-                </button>
-              ))}
+              {SECTION_IDS.map((id, i) => {
+                // SECTION_KEYS parallels SECTION_IDS (same order, same length,
+                // defined adjacently above); the id fallback is unreachable.
+                const key = SECTION_KEYS[i]
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => jumpTo(id)}
+                    aria-current={active === id ? 'location' : undefined}
+                    className={clsx(
+                      'analytics-nav-item rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors duration-fast',
+                      active === id
+                        ? 'bg-brand-500/10 text-brand-400'
+                        : 'text-text-secondary hover:bg-surface-2 hover:text-text-primary',
+                    )}
+                  >
+                    {key ? t(`analytics.sections.${key}`) : id}
+                  </button>
+                )
+              })}
             </nav>
             <div className="analytics-content">
               <OverviewSection data={data} />

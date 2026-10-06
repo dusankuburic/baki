@@ -3,6 +3,8 @@ package database
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"log/slog"
 	"time"
 )
 
@@ -40,6 +42,12 @@ func (b *PostgresStorageBackend) TryGlobalLock(ctx context.Context, key int64) (
 func releaseAdvisoryLock(conn *sql.Conn, key int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, _ = conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, key)
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, key); err != nil {
+		// The lock is still held by this session. Pooling the connection would park the lock there and silently
+		// stall the job on every replica until the connection is recycled, so discard it (as releaseMigrationLock
+		// does): closing the session releases the lock.
+		slog.Warn("advisory unlock failed; discarding connection", "key", key, "err", err)
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
 	_ = conn.Close()
 }

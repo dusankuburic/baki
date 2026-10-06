@@ -1,4 +1,6 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useRef, useEffect, useState} from 'react'
+import {useTranslation} from 'react-i18next'
 import cytoscape from 'cytoscape'
 // @ts-expect-error cytoscape-dagre has no types
 import dagre from 'cytoscape-dagre'
@@ -68,12 +70,6 @@ function buildStyle(): cytoscape.StylesheetJson {
 // unchanged, and the fields are optional so an older backend still renders.
 type RelatedRulesResponse = DependencyAnalysis & {editorial?: boolean; description?: string}
 
-// EDITORIAL_NOTE is the fallback help text when the backend does not send
-// `description`; it says the same thing the backend does.
-const EDITORIAL_NOTE =
-  'Hand-maintained editorial map of rules whose findings are worth reviewing together. ' +
-  'It is not derived from the analyzer and has no effect on evaluation order or results.'
-
 // RuleDependencyView renders the analyzer's "related rules" map
 // (GET /api/analysis/dependencies): a hand-maintained, editorial list of rule
 // pairs whose findings are worth reviewing together, drawn as a graph. Rules
@@ -82,6 +78,7 @@ const EDITORIAL_NOTE =
 // A cycle in the map is a map-authoring error, not an analyzer fault. Static:
 // not flow-specific.
 export default function RuleDependencyView() {
+  const {t} = useTranslation('analyzer')
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
   const [loading, setLoading] = useState(true)
@@ -142,7 +139,7 @@ export default function RuleDependencyView() {
       if (cyRef.current && cyRef.current === inst) renderGraph(dep)
     } catch (err) {
       if (cyRef.current === inst) {
-        setError(err instanceof Error ? err.message : String(err))
+        setError(getErrorMessage(err))
         logger.warn('related rules view: load failed', err)
       }
     } finally {
@@ -204,21 +201,24 @@ export default function RuleDependencyView() {
         <div className="flex items-center gap-2 pointer-events-auto">
           <button
             onClick={() => setMainPaneView('dashboard')}
-            className="text-xs px-2 py-1 rounded-lg bg-surface-2/80 border border-border-subtle text-text-secondary hover:text-text-primary backdrop-blur transition-colors"
+            className="text-xs px-2 py-1 rounded-lg bg-surface-2/80 border border-border-subtle text-text-secondary hover:text-text-primary backdrop-blur-sm transition-colors"
           >
-            ← Back
+            {t('dependencies.back')}
           </button>
-          <h2 className="text-sm font-semibold text-text-primary">Related rules</h2>
+          <h2 className="text-sm font-semibold text-text-primary">{t('dependencies.title')}</h2>
           {data && (
             <span className="text-2xs text-text-tertiary font-mono">
-              {(data.dependencies ?? []).length} links · {(data.topoOrder ?? []).length} rules
+              {t('dependencies.summary', {
+                links: (data.dependencies ?? []).length,
+                rules: (data.topoOrder ?? []).length,
+              })}
             </span>
           )}
         </div>
         <button
           onClick={load}
-          title="Refresh"
-          className="pointer-events-auto p-1.5 rounded-lg bg-surface-2/80 border border-border-subtle text-text-tertiary hover:text-text-primary backdrop-blur transition-colors"
+          title={t('dependencies.refresh')}
+          className="pointer-events-auto p-1.5 rounded-lg bg-surface-2/80 border border-border-subtle text-text-tertiary hover:text-text-primary backdrop-blur-sm transition-colors"
         >
           <RefreshCw size={13} />
         </button>
@@ -226,11 +226,11 @@ export default function RuleDependencyView() {
 
       {/* Provenance: this is an editorial map, not an analyzer-derived graph. */}
       <p className="absolute top-11 left-3 right-3 text-2xs text-text-tertiary pointer-events-none">
-        {data?.description || EDITORIAL_NOTE}
+        {data?.description || t('dependencies.editorialNote')}
       </p>
 
       {loading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-surface-1/60 backdrop-blur-sm">
+        <div className="absolute inset-0 flex items-center justify-center bg-surface-1/60 backdrop-blur-xs">
           <Loader2 size={20} className="animate-spin text-brand-400" />
         </div>
       )}
@@ -246,7 +246,7 @@ export default function RuleDependencyView() {
         <div className="absolute top-16 left-3 right-3 flex items-start gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400 pointer-events-none">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
           <div>
-            <span className="font-semibold">Circular reference in the related-rules map:</span>{' '}
+            <span className="font-semibold">{t('dependencies.cycleWarning')}</span>{' '}
             {(data?.cycles ?? []).map((c, i) => (
               <span key={i} className="font-mono">
                 {c.join(' → ')}
@@ -259,7 +259,7 @@ export default function RuleDependencyView() {
 
       {/* Side panel: selected node's relationships */}
       {selected && data && (
-        <div className="absolute bottom-3 left-3 w-72 max-w-[80%] p-3 rounded-lg bg-surface-2/90 border border-border-subtle backdrop-blur text-xs">
+        <div className="absolute bottom-3 left-3 w-72 max-w-[80%] p-3 rounded-lg bg-surface-2/90 border border-border-subtle backdrop-blur-sm text-xs">
           <div className="flex items-center justify-between mb-2">
             <span className="font-mono font-semibold text-text-primary">{selected}</span>
             <button
@@ -273,7 +273,7 @@ export default function RuleDependencyView() {
             </button>
           </div>
           {selectedDeps.length === 0 ? (
-            <p className="text-text-tertiary">No related rules listed.</p>
+            <p className="text-text-tertiary">{t('dependencies.noRelated')}</p>
           ) : (
             <ul className="space-y-1">
               {selectedDeps.map((d, i) => (
@@ -290,12 +290,12 @@ export default function RuleDependencyView() {
       )}
 
       {/* Legend */}
-      <div className="absolute bottom-3 right-3 flex flex-col gap-1 text-2xs text-text-tertiary bg-surface-2/80 border border-border-subtle rounded-lg px-2.5 py-2 backdrop-blur pointer-events-none">
+      <div className="absolute bottom-3 right-3 flex flex-col gap-1 text-2xs text-text-tertiary bg-surface-2/80 border border-border-subtle rounded-lg px-2.5 py-2 backdrop-blur-sm pointer-events-none">
         <div className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm border-2 border-red-500" /> in a cycle
+          <span className="w-3 h-3 rounded-sm border-2 border-red-500" /> {t('dependencies.legendInCycle')}
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm border border-border-strong" /> rule
+          <span className="w-3 h-3 rounded-sm border border-border-strong" /> {t('dependencies.legendRule')}
         </div>
       </div>
     </div>

@@ -110,7 +110,9 @@ export function todayISO(now = new Date()): string {
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
 
 function dayNumber(day: string): number {
-  const [y, m, d] = day.split('-').map(Number)
+  // Callers validate day against DAY_RE (YYYY-MM-DD) first, so the three
+  // components always exist; the fallbacks only satisfy the index-access type.
+  const [y = 0, m = 0, d = 0] = day.split('-').map(Number)
   return Date.UTC(y, m - 1, d) / 86_400_000
 }
 

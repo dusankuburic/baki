@@ -1,3 +1,4 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useCallback, useId, useMemo, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {Button, FormField, Input, SegmentedControl, formFieldIds, useConfirm} from '@/components/shared'
@@ -52,7 +53,7 @@ function effective(form: ConnectionFormState): ConnectionFormState {
 }
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : ''
+  return getErrorMessage(err, '')
 }
 
 // The Resource modal (lg, full screen below 640 px): endpoint, name,

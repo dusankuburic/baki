@@ -40,6 +40,7 @@ export function HealthTrendCard({
       table={{
         caption: title,
         filename: 'health-trend.csv',
+        rowKey: r => r.date,
         columns: [
           {key: 'date', header: t('analytics.columns.date'), render: r => formatDateLong(r.date)},
           {

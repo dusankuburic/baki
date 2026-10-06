@@ -17,7 +17,7 @@ export const COMPACT_KEEP_PAIRS = 3
 export function lastExchanges(messages: readonly ChatMessage[], pairs: number): ChatMessage[] {
   let seen = 0
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user' && ++seen === pairs) return messages.slice(i)
+    if (messages[i]?.role === 'user' && ++seen === pairs) return messages.slice(i)
   }
   return [...messages]
 }

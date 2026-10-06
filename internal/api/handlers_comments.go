@@ -15,7 +15,7 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
-	storagedb "pad-analyzer/internal/storage/database"
+	"pad-analyzer/internal/platform/txhook"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
@@ -114,7 +114,7 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 	// the response is complete.
 	actorEmail := claimsEmail(r.Context())
 	flowName := flow.Name
-	storagedb.RegisterPostCommit(r.Context(), func() {
+	txhook.Register(r.Context(), func(context.Context) {
 		fanOut := func() {
 			h.fanOutComment(req.FlowID, req.FindingKey, flowName, userID, actorEmail, req.Body, comment.ID)
 		}

@@ -76,7 +76,7 @@ describe('suppression', () => {
     useAnalysisStore.getState().suppressMany([f1(), f2(), f3()], 'bulk')
     // One HTTP call for the whole batch, not one per finding.
     expect(analysisApi.setFindingStatusBatch).toHaveBeenCalledTimes(1)
-    const items = vi.mocked(analysisApi.setFindingStatusBatch).mock.calls[0][0]
+    const items = vi.mocked(analysisApi.setFindingStatusBatch).mock.calls[0]![0]
     expect(items).toHaveLength(3)
     expect(items.every(i => i.status === 'suppressed')).toBe(true)
   })
@@ -413,7 +413,7 @@ describe('triageFindingsBatch (U4.4)', () => {
     expect(st.triageMap.get(findingKey(f1()))?.assigneeId).toBe('me')
     expect(st.triageMap.get(findingKey(f2()))?.status).toBe('in_progress')
     expect(vi.mocked(analysisApi.setFindingStatusBatch)).toHaveBeenCalledTimes(1)
-    const items = vi.mocked(analysisApi.setFindingStatusBatch).mock.calls[0][0]
+    const items = vi.mocked(analysisApi.setFindingStatusBatch).mock.calls[0]![0]
     expect(items).toHaveLength(2)
     expect(items.every(i => i.assigneeId === 'me' && i.status === 'in_progress')).toBe(true)
   })

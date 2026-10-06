@@ -286,7 +286,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
         }}
       />
       {selectedFindingIds.size > 0 && (
-        <div className="absolute bottom-0 left-0 right-0 bg-surface-2/95 backdrop-blur border-t border-border-subtle px-4 py-2 flex items-center justify-between z-30 shadow-lg">
+        <div className="absolute bottom-0 left-0 right-0 bg-surface-2/95 backdrop-blur-sm border-t border-border-subtle px-4 py-2 flex items-center justify-between z-30 shadow-lg">
           <span className="text-2xs text-text-secondary font-medium">
             {t('selection.selectedCount', {count: selectedFindingIds.size})}
           </span>

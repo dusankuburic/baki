@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {ScatterChart, Scatter, XAxis, YAxis, ZAxis, Tooltip, CartesianGrid, Cell} from 'recharts'
 import {Zap, Target, Wrench, Clock} from 'lucide-react'
 import {
@@ -21,7 +22,9 @@ import type {Finding, SubflowMetrics} from '@/types'
 // cognitive) flags a deceptively simple-looking subflow that's a pain to
 // maintain. Pure report data: no extra fetch.
 export function ComplexityScatter({subflows}: {subflows: SubflowMetrics[]}) {
-  const t = useChartTheme()
+  const {t} = useTranslation('inspector')
+  // The chart theme (renamed away from `t`, which useTranslation owns).
+  const theme = useChartTheme()
   const reduced = useReducedMotion()
   const data = subflows.map(s => ({
     name: s.subflowName,
@@ -33,49 +36,44 @@ export function ComplexityScatter({subflows}: {subflows: SubflowMetrics[]}) {
   if (subflows.length === 0) return null
 
   // Colour is state, not identity: cognitive load bands on the status tokens.
-  const pointColor = (cog: number) => (cog > 30 ? t.status.error : cog > 15 ? t.status.warning : t.status.success)
+  const pointColor = (cog: number) =>
+    cog > 30 ? theme.status.error : cog > 15 ? theme.status.warning : theme.status.success
   const legend = [
-    {key: 'low', label: 'Cognitive ≤ 15', color: t.status.success, shape: 'dot' as const},
-    {key: 'mid', label: 'Cognitive 16–30', color: t.status.warning, shape: 'dot' as const},
-    {key: 'high', label: 'Cognitive > 30', color: t.status.error, shape: 'dot' as const},
+    {key: 'low', label: t('scatter.legendLow'), color: theme.status.success, shape: 'dot' as const},
+    {key: 'mid', label: t('scatter.legendMid'), color: theme.status.warning, shape: 'dot' as const},
+    {key: 'high', label: t('scatter.legendHigh'), color: theme.status.error, shape: 'dot' as const},
   ]
 
   return (
     <div>
-      <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Complexity Map</h3>
-      <p className="text-2xs text-text-tertiary mb-2">
-        Cyclomatic vs cognitive per subflow · bubble = nesting depth. Top-left = deceptively hard to read.
-      </p>
-      <div
-        role="group"
-        aria-roledescription="chart"
-        aria-label="Scatter plot of subflows by cyclomatic and cognitive complexity; bubble size shows nesting depth"
-      >
+      <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">{t('scatter.title')}</h3>
+      <p className="text-2xs text-text-tertiary mb-2">{t('scatter.description')}</p>
+      <div role="group" aria-roledescription="chart" aria-label={t('scatter.aria')}>
         <ChartFigure height={232}>
           <ScatterChart margin={{...CHART_MARGIN, bottom: 16}}>
-            <CartesianGrid {...gridProps(t)} vertical />
+            <CartesianGrid {...gridProps(theme)} vertical />
             <XAxis
               type="number"
               dataKey="cyclo"
-              name="Cyclomatic"
-              axisLine={{stroke: t.axis}}
+              name={t('scatter.cyclomaticAxis')}
+              axisLine={{stroke: theme.axis}}
               tickLine={false}
-              tick={tickStyle(t)}
+              tick={tickStyle(theme)}
               tickMargin={8}
               allowDecimals={false}
-              label={{value: 'Cyclomatic', position: 'insideBottom', offset: -12, fill: t.tick, fontSize: 10}}
+              label={{value: t('scatter.cyclomaticAxis'), position: 'insideBottom', offset: -12, fill: theme.tick, fontSize: 10}}
             />
-            <YAxis type="number" dataKey="cog" name="Cognitive" {...yAxisNumber(t, v => String(v))} />
-            <ZAxis type="number" dataKey="depth" range={[40, 320]} name="Depth" />
+            <YAxis type="number" dataKey="cog" name={t('scatter.cognitiveAxis')} {...yAxisNumber(theme, v => String(v))} />
+            <ZAxis type="number" dataKey="depth" range={[40, 320]} name={t('scatter.depthAxis')} />
             <Tooltip
-              cursor={cursorLine(t)}
+              cursor={cursorLine(theme)}
               content={
-                <ChartTooltip theme={t} labelFormatter={(_label, payload) => String(payload[0]?.payload?.name ?? '')} />
+                <ChartTooltip theme={theme} labelFormatter={(_label, payload) => String(payload[0]?.payload?.name ?? '')} />
               }
             />
             <Scatter data={data} isAnimationActive={!reduced}>
               {data.map((d, i) => (
-                <Cell key={i} fill={pointColor(d.cog)} fillOpacity={0.8} stroke={t.surface} strokeWidth={2} />
+                <Cell key={i} fill={pointColor(d.cog)} fillOpacity={0.8} stroke={theme.surface} strokeWidth={2} />
               ))}
             </Scatter>
           </ScatterChart>
@@ -91,6 +89,8 @@ export function ComplexityScatter({subflows}: {subflows: SubflowMetrics[]}) {
 // the "what should I fix first?" view — Quick Wins (auto-fixable errors) are
 // the highest-leverage work. Pure report data: no extra fetch.
 export function ImpactEffortMatrix({findings}: {findings: Finding[]}) {
+  const {t} = useTranslation('inspector')
+
   if (findings.length === 0) return null
 
   let quickWins = 0 // auto-fixable + error
@@ -109,32 +109,32 @@ export function ImpactEffortMatrix({findings}: {findings: Finding[]}) {
   const quadrants = [
     {
       icon: Zap,
-      label: 'Quick Wins',
-      desc: 'Auto-fixable errors',
+      label: t('matrix.quickWins'),
+      desc: t('matrix.quickWinsDesc'),
       count: quickWins,
       tone: 'text-semantic-success',
       ring: 'border-semantic-success/30 bg-semantic-success/5',
     },
     {
       icon: Target,
-      label: 'Strategic',
-      desc: 'Manual errors',
+      label: t('matrix.strategic'),
+      desc: t('matrix.strategicDesc'),
       count: strategic,
       tone: 'text-semantic-error',
       ring: 'border-semantic-error/30 bg-semantic-error/5',
     },
     {
       icon: Wrench,
-      label: 'Easy Cleanup',
-      desc: 'Auto-fixable lower sev',
+      label: t('matrix.easyCleanup'),
+      desc: t('matrix.easyCleanupDesc'),
       count: easyCleanup,
       tone: 'text-brand-400',
       ring: 'border-brand-500/30 bg-brand-500/5',
     },
     {
       icon: Clock,
-      label: 'Backlog',
-      desc: 'Manual lower sev',
+      label: t('matrix.backlog'),
+      desc: t('matrix.backlogDesc'),
       count: backlog,
       tone: 'text-text-tertiary',
       ring: 'border-border-subtle bg-surface-0',
@@ -143,8 +143,8 @@ export function ImpactEffortMatrix({findings}: {findings: Finding[]}) {
 
   return (
     <div>
-      <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Impact × Effort</h3>
-      <p className="text-2xs text-text-tertiary mb-2">Where to focus: Quick Wins are the highest-leverage fixes.</p>
+      <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">{t('matrix.title')}</h3>
+      <p className="text-2xs text-text-tertiary mb-2">{t('matrix.description')}</p>
       <div className="grid grid-cols-2 gap-2">
         {quadrants.map(q => (
           <div key={q.label} className={`p-3 rounded-lg border ${q.ring}`}>

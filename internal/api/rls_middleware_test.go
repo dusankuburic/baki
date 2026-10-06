@@ -152,33 +152,33 @@ func (c *controlWriter) SetWriteDeadline(d time.Time) error { c.writeDeadline = 
 func (c *controlWriter) SetReadDeadline(d time.Time) error  { c.readDeadline = d; return nil }
 func (c *controlWriter) EnableFullDuplex() error            { c.fullDuplex = true; return nil }
 
-// TestStatusRecorder_ResponseControllerReachesInnerWriter: the RLS
-// statusRecorder had no Unwrap, so http.ResponseController stopped at it and
+// TestTxResponseWriter_ResponseControllerReachesInnerWriter: the RLS
+// response wrapper had no Unwrap, so http.ResponseController stopped at it and
 // every deadline / full-duplex call returned http.ErrNotSupported even though
 // the writer underneath supports them — an RLS-wrapped streaming handler
 // could not lift the server's WriteTimeout. The controls must pass through,
 // and the recorder must still see the status written afterwards (it decides
 // commit vs rollback).
-func TestStatusRecorder_ResponseControllerReachesInnerWriter(t *testing.T) {
+func TestTxResponseWriter_ResponseControllerReachesInnerWriter(t *testing.T) {
 	inner := &controlWriter{ResponseRecorder: httptest.NewRecorder()}
-	rec := &statusRecorder{ResponseWriter: inner, status: http.StatusOK}
+	rec := newTxResponseWriter(inner, func(int) bool { return true })
 	rc := http.NewResponseController(rec)
 
 	deadline := time.Now().Add(time.Minute)
 	if err := rc.SetWriteDeadline(deadline); err != nil {
-		t.Fatalf("SetWriteDeadline through statusRecorder: %v (ErrNotSupported = the controller cannot unwrap it)", err)
+		t.Fatalf("SetWriteDeadline through the RLS response writer: %v (ErrNotSupported = the controller cannot unwrap it)", err)
 	}
 	if !inner.writeDeadline.Equal(deadline) {
 		t.Errorf("inner write deadline = %v, want %v", inner.writeDeadline, deadline)
 	}
 	if err := rc.SetReadDeadline(deadline); err != nil {
-		t.Fatalf("SetReadDeadline through statusRecorder: %v", err)
+		t.Fatalf("SetReadDeadline through the RLS response writer: %v", err)
 	}
 	if !inner.readDeadline.Equal(deadline) {
 		t.Errorf("inner read deadline = %v, want %v", inner.readDeadline, deadline)
 	}
 	if err := rc.EnableFullDuplex(); err != nil {
-		t.Fatalf("EnableFullDuplex through statusRecorder: %v", err)
+		t.Fatalf("EnableFullDuplex through the RLS response writer: %v", err)
 	}
 	if !inner.fullDuplex {
 		t.Error("EnableFullDuplex did not reach the inner writer")
@@ -189,7 +189,7 @@ func TestStatusRecorder_ResponseControllerReachesInnerWriter(t *testing.T) {
 		t.Errorf("status after controller calls: recorder %d, inner %d, want %d", rec.status, inner.Code, http.StatusConflict)
 	}
 	if err := rc.Flush(); err != nil {
-		t.Fatalf("Flush through statusRecorder: %v", err)
+		t.Fatalf("Flush through the RLS response writer: %v", err)
 	}
 	if !inner.Flushed {
 		t.Error("Flush did not reach the inner writer")
@@ -198,7 +198,7 @@ func TestStatusRecorder_ResponseControllerReachesInnerWriter(t *testing.T) {
 	// The same through net/http's real writer, which is what the RLS
 	// middleware wraps in production.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		rec := newTxResponseWriter(w, func(int) bool { return true })
 		if err := http.NewResponseController(rec).SetWriteDeadline(time.Now().Add(time.Minute)); err != nil {
 			http.Error(rec, err.Error(), http.StatusInternalServerError)
 			return
@@ -213,6 +213,6 @@ func TestStatusRecorder_ResponseControllerReachesInnerWriter(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
-		t.Errorf("real server: SetWriteDeadline through statusRecorder failed: %d %s", resp.StatusCode, body)
+		t.Errorf("real server: SetWriteDeadline through the RLS response writer failed: %d %s", resp.StatusCode, body)
 	}
 }

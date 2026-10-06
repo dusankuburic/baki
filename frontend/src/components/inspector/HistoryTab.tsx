@@ -1,4 +1,6 @@
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import React, {useState} from 'react'
+import {useTranslation} from 'react-i18next'
 import {History, Plus, Tag, RotateCcw, GitCompare} from 'lucide-react'
 import {versionsApi, type FlowVersion} from '@/api/admin'
 import {libraryApi} from '@/api'
@@ -11,6 +13,7 @@ import {useAsync} from '@/hooks/useAsync'
 import type {FlowDiff} from '@/types'
 
 export const HistoryTab: React.FC = () => {
+  const {t} = useTranslation('inspector')
   const document = useFlowStore(s => s.document)
   const setDocument = useFlowStore(s => s.setDocument)
   const setActiveDiff = useUIStore(s => s.setActiveDiff)
@@ -38,7 +41,7 @@ export const HistoryTab: React.FC = () => {
   // Clear stale results on a fetch error (matches the previous behavior of
   // resetting to [] on catch) rather than showing a stale list under an error.
   const versions = fetchError ? [] : (data ?? [])
-  const error = saveError ?? (fetchError ? 'Failed to load versions' : null)
+  const error = saveError ?? (fetchError ? t('errors.loadVersionsFailed') : null)
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -50,7 +53,7 @@ export const HistoryTab: React.FC = () => {
       setComment('')
       fetchVersions()
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Failed to save version')
+      setSaveError(getErrorMessage(err, t('errors.saveVersionFailed')))
     } finally {
       setIsSaving(false)
     }
@@ -69,7 +72,7 @@ export const HistoryTab: React.FC = () => {
         setMainPaneView('diff')
       }
     } catch (err) {
-      toast.error('Comparison failed', {description: err instanceof Error ? err.message : undefined})
+      toast.error(t('toasts.comparisonFailed'), {description: err instanceof Error ? err.message : undefined})
     } finally {
       setBusyVersion(null)
     }
@@ -82,10 +85,10 @@ export const HistoryTab: React.FC = () => {
   const handleRestore = async (v: FlowVersion) => {
     if (!document?.id || busyVersion !== null) return
     const ok = await confirm({
-      title: 'Restore flow',
-      message: `Restore flow to v${v.version}? This overwrites the current content (recoverable from history).`,
+      title: t('restore.title'),
+      message: t('restore.message', {version: v.version}),
       danger: true,
-      confirmLabel: 'Restore',
+      confirmLabel: t('restore.confirm'),
     })
     if (!ok) return
     setBusyVersion(v.version)
@@ -95,9 +98,9 @@ export const HistoryTab: React.FC = () => {
       const refreshed = await libraryApi.getContent(document.id)
       setDocument(refreshed)
       fetchVersions()
-      toast.success('Flow restored', {description: `Reverted to v${v.version}.`})
+      toast.success(t('toasts.restored'), {description: t('toasts.revertedTo', {version: v.version})})
     } catch (err) {
-      toast.error('Restore failed', {description: err instanceof Error ? err.message : undefined})
+      toast.error(t('toasts.restoreFailed'), {description: err instanceof Error ? err.message : undefined})
     } finally {
       setBusyVersion(null)
     }
@@ -107,7 +110,7 @@ export const HistoryTab: React.FC = () => {
     return (
       <div className="p-8 text-center text-text-tertiary">
         <History size={32} className="mx-auto mb-2 opacity-20" />
-        <p className="text-sm">Open a flow to view version history.</p>
+        <p className="text-sm">{t('history.emptyNoFlow')}</p>
       </div>
     )
   }
@@ -117,29 +120,29 @@ export const HistoryTab: React.FC = () => {
       <div className="p-4 border-b border-border-subtle bg-surface-2/50">
         <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-3 flex items-center gap-1.5">
           <Plus size={13} />
-          Save Snapshot
+          {t('history.saveHeading')}
         </h3>
         <form onSubmit={handleSave} className="flex gap-2">
           <input
             type="text"
-            placeholder="Optional comment…"
+            placeholder={t('history.commentPlaceholder')}
             value={comment}
             onChange={e => setComment(e.target.value)}
-            className="flex-1 bg-surface-0 border border-border-default rounded-md px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/50"
+            className="flex-1 bg-surface-0 border border-border-default rounded-md px-3 py-1.5 text-xs focus:outline-hidden focus:ring-2 focus:ring-brand-500/50"
           />
           <button
             type="submit"
             disabled={isSaving}
             className="px-3 py-1.5 bg-brand-600 text-brand-foreground rounded-md text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 transition-colors"
           >
-            {isSaving ? 'Saving…' : 'Save'}
+            {isSaving ? t('history.saving') : t('history.save')}
           </button>
         </form>
         {error && <p className="text-2xs text-red-500 mt-1">{error}</p>}
       </div>
 
       <div className="flex-1 p-4">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-3">Version History</h3>
+        <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-3">{t('history.heading')}</h3>
         {isLoading ? (
           <div className="flex justify-center p-8">
             <Spinner size={20} />
@@ -150,10 +153,7 @@ export const HistoryTab: React.FC = () => {
           ) : (
             // Versions are created by Save Snapshot above (and library saves) —
             // not by analysis, as this copy used to claim.
-            <EmptyState
-              title="No history yet"
-              description="Save a snapshot above to record the first version of this flow."
-            />
+            <EmptyState title={t('history.emptyTitle')} description={t('history.emptyDescription')} />
           )
         ) : (
           <div className="space-y-2">
@@ -170,20 +170,22 @@ export const HistoryTab: React.FC = () => {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-xs text-text-primary truncate">
-                      {v.comment || <span className="text-text-tertiary italic">No comment</span>}
+                      {v.comment || <span className="text-text-tertiary italic">{t('history.noComment')}</span>}
                     </p>
                     <p className="text-2xs text-text-tertiary mt-0.5">
                       <span title={absoluteTime(v.createdAt)}>{relativeTime(v.createdAt)}</span>
                       {v.metadata?.blockCount != null && (
-                        <span className="ml-2 text-text-tertiary">{v.metadata.blockCount} blocks</span>
+                        <span className="ml-2 text-text-tertiary">
+                          {t('history.blockCount', {count: v.metadata.blockCount})}
+                        </span>
                       )}
                     </p>
                   </div>
                   <div className="flex flex-col gap-1 shrink-0">
                     <button
                       type="button"
-                      title={`Compare v${v.version} with current`}
-                      aria-label={`Compare v${v.version} with current`}
+                      title={t('history.compareTitle', {version: v.version})}
+                      aria-label={t('history.compareTitle', {version: v.version})}
                       disabled={busy}
                       onClick={() => handleCompare(v)}
                       className="p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-surface-0 disabled:opacity-40 transition-colors"
@@ -192,8 +194,8 @@ export const HistoryTab: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      title={`Restore flow to v${v.version}`}
-                      aria-label={`Restore flow to v${v.version}`}
+                      title={t('history.restoreTitle', {version: v.version})}
+                      aria-label={t('history.restoreTitle', {version: v.version})}
                       disabled={busy}
                       onClick={() => handleRestore(v)}
                       className="p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-surface-0 disabled:opacity-40 transition-colors"

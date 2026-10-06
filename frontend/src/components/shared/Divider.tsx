@@ -9,7 +9,7 @@ export default function Divider({orientation = 'horizontal', className}: Divider
   return (
     <div
       className={clsx(
-        'bg-border-subtle flex-shrink-0',
+        'bg-border-subtle shrink-0',
         orientation === 'horizontal' ? 'h-px w-full' : 'w-px h-full',
         className,
       )}

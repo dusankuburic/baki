@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -211,7 +210,7 @@ func assertV27Applied(t *testing.T, b *PostgresStorageBackend, applied bool) {
 // restored, v27's indexes gone), re-applied — and the re-apply backfills a
 // flow written while the side table was absent.
 func TestMigration27_UpDownUp(t *testing.T) {
-	b := openMigrationTestDB(t)
+	b, dsn := openIsolatedMigrationDB(t)
 	ctx := context.Background()
 	current, err := b.CurrentSchemaVersion(ctx)
 	if err != nil {
@@ -259,7 +258,7 @@ func TestMigration27_UpDownUp(t *testing.T) {
 	t.Cleanup(func() { _, _ = b.db.ExecContext(ctx, `DELETE FROM flows WHERE id = $1`, flowID) })
 
 	// Up again: boot-time migrate on reconnect.
-	b2, err := New(ctx, DefaultConfig(os.Getenv("DATABASE_URL")))
+	b2, err := New(ctx, DefaultConfig(dsn))
 	if err != nil {
 		t.Fatalf("reconnect (re-apply v27): %v", err)
 	}

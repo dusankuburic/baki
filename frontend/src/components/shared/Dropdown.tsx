@@ -28,7 +28,7 @@ type DropdownItem =
   | {type: 'group'; label: string; items: DropdownItem[]}
 
 type DropdownProps = {
-  trigger: React.ReactElement
+  trigger: React.ReactElement<Record<string, unknown>>
   items: DropdownItem[]
   side?: 'top' | 'bottom' | 'left' | 'right'
   align?: 'start' | 'center' | 'end'
@@ -119,20 +119,24 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
         e.preventDefault()
         setActiveIndex(prev => {
           const idx = selectable.findIndex(i => i._index === prev)
-          return idx < selectable.length - 1 ? selectable[idx + 1]._index : selectable[0]._index
+          const next = idx < selectable.length - 1 ? selectable[idx + 1] : selectable[0]
+          return next ? next._index : prev
         })
       } else if (e.key === 'ArrowUp') {
         e.preventDefault()
         setActiveIndex(prev => {
           const idx = selectable.findIndex(i => i._index === prev)
-          return idx > 0 ? selectable[idx - 1]._index : selectable[selectable.length - 1]._index
+          const next = idx > 0 ? selectable[idx - 1] : selectable[selectable.length - 1]
+          return next ? next._index : prev
         })
       } else if (e.key === 'Home') {
         e.preventDefault()
-        if (selectable.length) setActiveIndex(selectable[0]._index)
+        const first = selectable[0]
+        if (first) setActiveIndex(first._index)
       } else if (e.key === 'End') {
         e.preventDefault()
-        if (selectable.length) setActiveIndex(selectable[selectable.length - 1]._index)
+        const last = selectable[selectable.length - 1]
+        if (last) setActiveIndex(last._index)
       } else if (e.key === 'Enter' && activeIndex >= 0) {
         // Resolve by _index rather than array position: they coincide now, but
         // an identity lookup cannot silently drift again.
@@ -276,7 +280,7 @@ function renderItems(
         aria-disabled={unavailable || undefined}
         aria-describedby={reasonId}
       >
-        {Icon && <Icon size={16} className="mr-2 text-text-tertiary flex-shrink-0" />}
+        {Icon && <Icon size={16} className="mr-2 text-text-tertiary shrink-0" />}
         <span className="flex-1">
           {item.label}
           {/* aria-hidden keeps the reason out of the item's NAME; the

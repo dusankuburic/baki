@@ -75,10 +75,10 @@ describe('ActiveSessionsSection', () => {
     expect(rows[0]).toHaveTextContent('This device')
     expect(rows[0]).toHaveTextContent(/Signed in 2 hours ago from 10\.0\.0\.1/)
     expect(rows[0]).toHaveTextContent(/Expires in 22 hours/)
-    expect(within(rows[0]).queryByRole('button')).toBeNull()
+    expect(within(rows[0]!).queryByRole('button')).toBeNull()
     expect(rows[1]).toHaveTextContent('Safari on iOS')
     expect(rows[1]).toHaveTextContent(/Signed in 5 hours agoExpires/)
-    expect(within(rows[1]).getByRole('button', {name: 'Sign out Safari on iOS'})).toBeInTheDocument()
+    expect(within(rows[1]!).getByRole('button', {name: 'Sign out Safari on iOS'})).toBeInTheDocument()
     expect(rows[4]).toHaveTextContent('Unknown device')
   })
 

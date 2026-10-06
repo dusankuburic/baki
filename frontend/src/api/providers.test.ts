@@ -42,6 +42,44 @@ async function load() {
 const USER = {kind: 'user'} as const
 const ORG = {kind: 'org', orgId: 'org 1'} as const
 
+// A resource as the Go AzureConnectionView marshals it (every field is sent;
+// only orgId/orgName/statusReason/credentialUpdatedAt/sharedBy are omitempty).
+const aConn = (over: Record<string, unknown> = {}) => ({
+  id: 'default',
+  name: 'my-res',
+  shared: false,
+  legacy: false,
+  config: {endpoint: 'https://contoso.openai.azure.com', authMode: 'api_key', hasSecret: true},
+  status: 'ready',
+  canDiscover: false,
+  supportsAgents: false,
+  suggestDiscovery: false,
+  modelCount: 0,
+  lastTest: null,
+  updatedAt: '2026-01-01T00:00:00Z',
+  ...over,
+})
+
+// A model as the Go AzureModelView marshals it.
+const aModel = (over: Record<string, unknown> = {}) => ({
+  id: 'bbbbbbbbbb',
+  modelId: 'm/bbbbbbbbbb',
+  connectionId: 'default',
+  connectionName: 'my-res',
+  kind: 'chat',
+  deployment: 'gpt-4.1',
+  target: 'gpt-4.1',
+  displayName: 'GPT-4.1',
+  purpose: 'general',
+  isDefault: false,
+  isKnowledgeEmbedding: false,
+  shared: false,
+  status: 'ready',
+  lastTest: null,
+  updatedAt: '2026-01-01T00:00:00Z',
+  ...over,
+})
+
 afterEach(() => {
   vi.restoreAllMocks()
   vi.resetModules()
@@ -61,7 +99,7 @@ describe('azurePath', () => {
 
 describe('providersApi Azure registry: connections', () => {
   it('lists with a GET that bypasses the micro-cache and reads the envelope', async () => {
-    const conn = {id: 'default', name: 'my-res'}
+    const conn = aConn()
     const spy = respond({
       connections: [conn],
       registryState: 'recovered',
@@ -83,8 +121,8 @@ describe('providersApi Azure registry: connections', () => {
     expect(spy).toHaveBeenCalledTimes(2)
   })
 
-  it('reads a null list (an empty Go slice) and a bare envelope as empty with defaults', async () => {
-    respond({connections: null})
+  it('reads a null connections slice (an empty Go list) as empty', async () => {
+    respond({connections: null, registryState: 'ok', limits: {connections: 10, models: 50}, knowledgeEmbeddingEnabled: false})
     const {api} = await load()
     await expect(api.listAzureConnections(ORG)).resolves.toEqual({
       connections: [],
@@ -94,15 +132,22 @@ describe('providersApi Azure registry: connections', () => {
     })
   })
 
-  it("keeps a recovered list file's backup path, and drops an empty one", async () => {
-    respond({connections: [], registryState: 'recovered', recoveredCopyPath: '/cfg/azure-models.json.bad'})
+  it("keeps a recovered list file's backup path, and an absent one stays absent", async () => {
+    respond({
+      connections: [],
+      registryState: 'recovered',
+      limits: {connections: 10, models: 50},
+      knowledgeEmbeddingEnabled: false,
+      recoveredCopyPath: '/cfg/azure-models.json.bad',
+    })
     const {api} = await load()
     await expect(api.listAzureConnections(USER)).resolves.toMatchObject({
       registryState: 'recovered',
       recoveredCopyPath: '/cfg/azure-models.json.bad',
     })
     vi.restoreAllMocks()
-    respond({connections: [], registryState: 'recovered', recoveredCopyPath: ''})
+    // The backend marshals recoveredCopyPath omitempty: absent when there is none.
+    respond({connections: [], registryState: 'recovered', limits: {connections: 10, models: 50}, knowledgeEmbeddingEnabled: false})
     await expect(api.listAzureConnections(USER)).resolves.not.toHaveProperty('recoveredCopyPath')
   })
 
@@ -136,15 +181,15 @@ describe('providersApi Azure registry: connections', () => {
   })
 
   it('reads one connection in the enveloped and the bare form', async () => {
-    respond({connection: {id: 'default', name: 'a'}})
+    respond({connection: aConn({name: 'a'})})
     let {api} = await load()
-    await expect(api.getAzureConnection(USER, 'default')).resolves.toEqual({id: 'default', name: 'a'})
+    await expect(api.getAzureConnection(USER, 'default')).resolves.toEqual(aConn({name: 'a'}))
 
     vi.restoreAllMocks()
     vi.resetModules()
-    const spy = respond({id: 'default', name: 'b'})
+    const spy = respond(aConn({name: 'b'}))
     ;({api} = await load())
-    await expect(api.getAzureConnection(USER, 'default')).resolves.toEqual({id: 'default', name: 'b'})
+    await expect(api.getAzureConnection(USER, 'default')).resolves.toEqual(aConn({name: 'b'}))
     expect(call(spy).method).toBe('GET')
   })
 
@@ -169,10 +214,10 @@ describe('providersApi Azure registry: connections', () => {
     expect(call(spy, 2).path).toBe('/api/providers/azure-foundry/connections/abc0123456')
   })
 
-  it('discovers with a POST, filling missing kinds and null lists and keeping an Azure refusal', async () => {
+  it('discovers with a POST, reading null lists as empty and keeping an Azure refusal', async () => {
     const spy = respond({
       deployments: [
-        {name: 'gpt-4.1', model: 'gpt-4.1', alreadyAdded: true, modelId: 'm/aaaaaaaaaa'},
+        {name: 'gpt-4.1', kind: 'chat', model: 'gpt-4.1', alreadyAdded: true, modelId: 'm/aaaaaaaaaa'},
         {name: 'embed', kind: 'embedding', model: 'text-embedding-3-large', alreadyAdded: false},
       ],
       agents: null,
@@ -198,14 +243,15 @@ describe('providersApi Azure registry: connections', () => {
     })
   })
 
-  it('gives agents the agent kind, an unknown model as empty, and leaves out an absent error', async () => {
+  it('keeps an unknown model as empty and leaves out an absent error', async () => {
     respond({
       deployments: [],
       agents: [
-        {name: 'helper', model: 'gpt-4o', alreadyAdded: false},
+        {name: 'helper', kind: 'agent', model: 'gpt-4o', alreadyAdded: false},
         {
           name: 'flow',
           kind: 'agent',
+          model: '',
           deployment: 'router',
           workflow: true,
           alreadyAdded: true,
@@ -242,17 +288,15 @@ describe('providersApi Azure registry: models and test', () => {
     expect(call(spy)).toEqual({path: '/api/providers/azure-foundry/models', method: 'GET', body: undefined})
   })
 
-  it("passes the user scope's server default through, and leaves out an absent or empty one", async () => {
-    const model = {id: 'bbbbbbbbbb', modelId: 'm/bbbbbbbbbb'}
+  it("passes the user scope's server default through, and leaves out an absent one", async () => {
+    const model = aModel()
     respond({models: [model], serverDefault: 'm/bbbbbbbbbb'})
     const {api} = await load()
     await expect(api.listAzureModels(USER)).resolves.toEqual({models: [model], serverDefault: 'm/bbbbbbbbbb'})
     vi.restoreAllMocks()
-    respond({models: [model], serverDefault: null})
+    // serverDefault is omitempty on the backend: absent when there is none.
+    respond({models: [model]})
     await expect(api.listAzureModels(ORG)).resolves.toEqual({models: [model]})
-    vi.restoreAllMocks()
-    respond({models: [model], serverDefault: ''})
-    await expect(api.listAzureModels(USER)).resolves.toEqual({models: [model]})
   })
 
   it('creates, updates and deletes models on their routes', async () => {

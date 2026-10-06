@@ -57,6 +57,9 @@ export default function AIPromptsPanel() {
 function reorder(arr: string[], from: number, to: number): string[] {
   const next = [...arr]
   const [item] = next.splice(from, 1)
+  // Callers range-check `from` (the drop handler); an out-of-range index is
+  // a no-op rather than an undefined entry saved as null.
+  if (item === undefined) return arr
   next.splice(to, 0, item)
   return next
 }
@@ -165,7 +168,7 @@ function PromptList({
             />
             <input
               type="text"
-              className="flex-1 bg-transparent border border-transparent hover:border-border-default focus:border-brand-500 focus:bg-surface-1 rounded px-2 py-1 text-sm text-text-primary outline-none transition-colors"
+              className="flex-1 bg-transparent border border-transparent hover:border-border-default focus:border-brand-500 focus:bg-surface-1 rounded px-2 py-1 text-sm text-text-primary outline-hidden transition-colors"
               value={item}
               onChange={e => handleEdit(i, e.target.value)}
             />
@@ -182,7 +185,7 @@ function PromptList({
         <form onSubmit={handleAdd} className="flex items-center gap-2 p-1 pl-7 mt-2">
           <input
             type="text"
-            className="flex-1 bg-surface-3 border border-border-default rounded px-2 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500 placeholder:text-text-tertiary"
+            className="flex-1 bg-surface-3 border border-border-default rounded px-2 py-1.5 text-sm text-text-primary outline-hidden focus:border-brand-500 placeholder:text-text-tertiary"
             placeholder={t('prompts.addPlaceholder')}
             aria-label={t('prompts.addAria')}
             value={newItemText}

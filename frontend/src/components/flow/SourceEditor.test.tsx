@@ -146,7 +146,7 @@ describe('SourceEditor line gutter', () => {
     const numbers = gutterNumbers()
     expect(numbers.length).toBeGreaterThanOrEqual(40)
     expect(numbers.length).toBeLessThanOrEqual(100)
-    expect(numbers[0].textContent).toBe('1')
+    expect(numbers[0]!.textContent).toBe('1')
     expect(screen.queryByText('30000')).toBeNull()
     // The spacers keep the gutter's scroll height equal to 30k lines.
     const gutter = screen.getByTestId('line-gutter')

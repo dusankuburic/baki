@@ -132,7 +132,7 @@ describe('ChatThreadBar accessibility', () => {
       />,
     )
     const tabs = screen.getAllByRole('tab')
-    fireEvent.keyDown(tabs[1], {key: 'ArrowRight'})
+    fireEvent.keyDown(tabs[1]!, {key: 'ArrowRight'})
     expect(onSelect).toHaveBeenCalledWith('t1')
   })
 })

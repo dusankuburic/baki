@@ -1,4 +1,12 @@
-import {request} from './client'
+import {request, requestValidated} from './client'
+import {
+  getLoadedFlowDocumentSchema,
+  getRecentFilesSchema,
+  getSearchResultsSchema,
+  getSnapshotsListSchema,
+  getSourceFilesSchema,
+  getSourceMetaSchema,
+} from './schemas'
 import type {FlowDocument, RecentFile, SearchQuery, SearchResults, SourceFileInfo} from '@/types'
 
 // Bulk flow uploads and folder loads can involve parsing many/large files
@@ -18,6 +26,10 @@ export interface ShareInfo {
 }
 
 export const flowApi = {
+  // load-path / load-folder are reads that answer the parsed document; the
+  // envelope check (id, name, subflows) is the same one the flow:loaded
+  // re-fetch uses. The mutation POSTs (upload / apply-fix / save-source) are
+  // deliberately NOT validated — see the report on each below.
   openFlowFile: async (): Promise<FlowDocument | null> => {
     const adapter = createAdapter()
     const result = await adapter.fileOpen({
@@ -33,7 +45,11 @@ export const flowApi = {
       try {
         const data = JSON.parse(result)
         if (data && data.__is_web_upload__) {
-          return request('/api/flow/upload', {body: data, method: 'POST', timeoutMs: BULK_LOAD_TIMEOUT_MS})
+          return requestValidated('/api/flow/upload', await getLoadedFlowDocumentSchema(), {
+            body: data,
+            method: 'POST',
+            timeoutMs: BULK_LOAD_TIMEOUT_MS,
+          })
         }
       } catch {
         // Not a JSON string, must be a path
@@ -41,7 +57,7 @@ export const flowApi = {
     }
 
     const finalPath = Array.isArray(result) ? result[0] : result
-    return request('/api/flow/load-path', {body: {path: finalPath}})
+    return requestValidated('/api/flow/load-path', await getLoadedFlowDocumentSchema(), {body: {path: finalPath}})
   },
 
   openFlowFolder: async (): Promise<FlowDocument | null> => {
@@ -54,41 +70,59 @@ export const flowApi = {
       try {
         const data = JSON.parse(result)
         if (data && data.__is_web_upload__) {
-          return request('/api/flow/upload', {body: data, method: 'POST', timeoutMs: BULK_LOAD_TIMEOUT_MS})
+          return requestValidated('/api/flow/upload', await getLoadedFlowDocumentSchema(), {
+            body: data,
+            method: 'POST',
+            timeoutMs: BULK_LOAD_TIMEOUT_MS,
+          })
         }
       } catch {
         // Not a JSON string, must be a path
       }
     }
 
-    return request('/api/flow/load-folder', {body: {path: result}, method: 'POST', timeoutMs: BULK_LOAD_TIMEOUT_MS})
+    return requestValidated('/api/flow/load-folder', await getLoadedFlowDocumentSchema(), {
+      body: {path: result},
+      method: 'POST',
+      timeoutMs: BULK_LOAD_TIMEOUT_MS,
+    })
   },
 
-  loadFlowFromPath: (path: string): Promise<FlowDocument | null> => request('/api/flow/load-path', {body: {path}}),
+  loadFlowFromPath: async (path: string): Promise<FlowDocument | null> =>
+    requestValidated('/api/flow/load-path', await getLoadedFlowDocumentSchema(), {body: {path}}),
 
-  loadFlowFolder: (path: string): Promise<FlowDocument | null> =>
-    request('/api/flow/load-folder', {body: {path}, method: 'POST', timeoutMs: BULK_LOAD_TIMEOUT_MS}),
+  loadFlowFolder: async (path: string): Promise<FlowDocument | null> =>
+    requestValidated('/api/flow/load-folder', await getLoadedFlowDocumentSchema(), {
+      body: {path},
+      method: 'POST',
+      timeoutMs: BULK_LOAD_TIMEOUT_MS,
+    }),
 
   uploadFlow: (name: string, files: Record<string, string>): Promise<FlowDocument | null> =>
     request('/api/flow/upload', {body: {name, files}, method: 'POST', timeoutMs: BULK_LOAD_TIMEOUT_MS}),
 
-  recentFiles: (): Promise<RecentFile[]> => request('/api/flow/recent', {method: 'GET'}),
+  // The recent list is `null` on the wire when empty (Go nil slice); the
+  // schema reads that as [].
+  recentFiles: async (): Promise<RecentFile[]> =>
+    requestValidated('/api/flow/recent', await getRecentFilesSchema(), {method: 'GET'}),
 
   removeRecentFile: (path: string): Promise<void> => request('/api/flow/remove-recent', {body: {path}}),
 
   clearRecentFiles: (): Promise<void> => request('/api/flow/clear-recent'),
 
-  searchFlow: (flowId: string, query: SearchQuery): Promise<SearchResults> =>
-    request('/api/flow/search', {body: {id: flowId, query}}),
+  searchFlow: async (flowId: string, query: SearchQuery): Promise<SearchResults> =>
+    requestValidated('/api/flow/search', await getSearchResultsSchema(), {body: {id: flowId, query}}),
 
   // searchLibrary runs the query across every flow the caller can access
   // (cross-flow / org-wide search); each hit carries flowId/flowName so the UI
   // can group results by flow.
-  searchLibrary: (query: SearchQuery): Promise<SearchResults> => request('/api/flow/search-library', {body: {query}}),
+  searchLibrary: async (query: SearchQuery): Promise<SearchResults> =>
+    requestValidated('/api/flow/search-library', await getSearchResultsSchema(), {body: {query}}),
 
   revealInFileManager: (path: string): Promise<void> => request('/api/flow/reveal', {body: {path}}),
 
-  getSourceFiles: (): Promise<SourceFileInfo[]> => request('/api/flow/source-files', {method: 'GET'}),
+  getSourceFiles: async (): Promise<SourceFileInfo[]> =>
+    requestValidated('/api/flow/source-files', await getSourceFilesSchema(), {method: 'GET'}),
 
   // suppressInSource writes a `# pad-ignore[ruleId]` directive into the flow's
   // source file before the given block and returns the RE-PARSED document
@@ -147,10 +181,10 @@ export const flowApi = {
   // noDedup: the newest entry is captured right before each mutation as its
   // undo target, and consecutive edits (held move key) land within the 5 s
   // micro-cache window — a cached list named the wrong snapshot.
-  listSnapshots: (
+  listSnapshots: async (
     flowId: string,
   ): Promise<{snapshots: {id: string; label: string; createdAt: string; bytes: number}[]}> =>
-    request(`/api/flow/snapshots${flowId ? '?flowId=' + encodeURIComponent(flowId) : ''}`, {
+    requestValidated(`/api/flow/snapshots${flowId ? '?flowId=' + encodeURIComponent(flowId) : ''}`, await getSnapshotsListSchema(), {
       method: 'GET',
       noDedup: true,
     }),
@@ -209,8 +243,10 @@ export const flowApi = {
 
   // getSourceMeta returns the cheap change-detection signal (size + mtime;
   // folder flows aggregate members) the desktop watcher polls.
-  getSourceMeta: (flowId: string): Promise<{size: number; modTime: string; files: number}> =>
-    request(`/api/flow/source-meta${flowId ? '?flowId=' + encodeURIComponent(flowId) : ''}`, {method: 'GET'}),
+  getSourceMeta: async (flowId: string): Promise<{size: number; modTime: string; files: number}> =>
+    requestValidated(`/api/flow/source-meta${flowId ? '?flowId=' + encodeURIComponent(flowId) : ''}`, await getSourceMetaSchema(), {
+      method: 'GET',
+    }),
 
   // getSource returns the raw PAD source text (desktop: file; cloud: stored).
   // `file` selects the member of a desktop FOLDER flow (bare filename; the

@@ -1,5 +1,6 @@
 import React, {useCallback, useEffect, useMemo, useState} from 'react'
 import clsx from 'clsx'
+import {useTranslation} from 'react-i18next'
 import {
   ChevronDown,
   ChevronRight,
@@ -62,6 +63,7 @@ export default React.memo(function BlockCard({
   onShiftClick,
   onDoubleClick,
 }: BlockCardProps) {
+  const {t} = useTranslation('flow')
   const [hovered, setHovered] = useState(false)
   const toast = useToast()
   const Icon = getBlockIcon(block.type) as LucideIcon
@@ -161,23 +163,23 @@ export default React.memo(function BlockCard({
 
   const contextItems: ContextMenuItem[] = [
     {
-      label: 'Explain with AI',
+      label: t('card.explainWithAi'),
       icon: Brain,
-      onClick: () => triggerAI('Explain this block for me. What does it do in the context of the flow?'),
+      onClick: () => triggerAI(t('card.explainPrompt')),
     },
   ]
 
   if (hasFindings) {
     contextItems.push({
-      label: 'Fix with AI',
+      label: t('card.fixWithAi'),
       icon: Sparkles,
-      onClick: () => triggerAI('I have some findings for this block. Can you suggest how to fix them?'),
+      onClick: () => triggerAI(t('card.fixPrompt')),
     })
   }
 
   if ((block.rawType === 'LABEL' || block.rawType === 'COMMENT') && !readOnly) {
     contextItems.push({
-      label: 'Rename',
+      label: t('card.rename'),
       icon: PencilLine,
       onClick: () => useFlowStore.getState().setRenamingBlock(block.id),
       shortcut: 'f2',
@@ -186,7 +188,7 @@ export default React.memo(function BlockCard({
 
   contextItems.push(
     {
-      label: 'Copy as Markdown',
+      label: t('card.copyAsMarkdown'),
       icon: FileText,
       onClick: () => {
         let md = `### ${block.name} (${block.rawType})\n\n`
@@ -201,17 +203,17 @@ export default React.memo(function BlockCard({
           md += `\n**Variables:** ${block.variables.join(', ')}\n`
         }
         writeClipboard(md)
-          .then(() => toast.success('Copied as Markdown'))
-          .catch(() => toast.error('Copy failed'))
+          .then(() => toast.success(t('card.copiedAsMarkdown')))
+          .catch(() => toast.error(t('card.copyFailed')))
       },
     },
     {
-      label: 'Copy Block ID',
+      label: t('card.copyBlockId'),
       icon: Copy,
       onClick: () => {
         writeClipboard(block.id)
-          .then(() => toast.success('Copied block ID'))
-          .catch(() => toast.error('Copy failed'))
+          .then(() => toast.success(t('card.copiedBlockId')))
+          .catch(() => toast.error(t('card.copyFailed')))
       },
     },
     // Read-only flows (view-only shares) hide direct mutations instead of
@@ -220,30 +222,30 @@ export default React.memo(function BlockCard({
       ? []
       : [
           {
-            label: 'Edit properties…',
+            label: t('card.editProperties'),
             icon: PencilLine,
             onClick: () => setEditingProps(true),
           },
           {
-            label: 'Move up',
+            label: t('card.moveUp'),
             icon: ArrowUp,
             onClick: () => void ops.moveBlock(block.id, 'up'),
             shortcut: 'alt+up',
           },
           {
-            label: 'Move down',
+            label: t('card.moveDown'),
             icon: ArrowDown,
             onClick: () => void ops.moveBlock(block.id, 'down'),
             shortcut: 'alt+down',
           },
           {
-            label: 'Duplicate block',
+            label: t('card.duplicateBlock'),
             icon: CopyPlus,
             onClick: () => void ops.duplicateBlock(block.id),
             shortcut: 'mod+d',
           },
           {
-            label: 'Delete block',
+            label: t('card.deleteBlock'),
             icon: Trash2,
             variant: 'danger' as const,
             onClick: () => void ops.removeBlock(block.id, block.name, block.children.length),
@@ -251,7 +253,7 @@ export default React.memo(function BlockCard({
           },
         ]),
     {
-      label: 'Find Usages',
+      label: t('card.findUsages'),
       icon: Search,
       onClick: () => {
         const query =
@@ -267,12 +269,14 @@ export default React.memo(function BlockCard({
   )
 
   if (block.properties?._output) {
+    // Hoisted so the guard's narrowing survives into the async handler below.
+    const outputVar = block.properties._output
     contextItems.push({
-      label: `Trace %${block.properties._output}%`,
+      label: t('card.traceVariable', {name: outputVar}),
       icon: Clock,
       onClick: async () => {
         try {
-          const h = await analysisApi.getVariableLineage(block.properties._output)
+          const h = await analysisApi.getVariableLineage(outputVar)
           useAnalysisStore.getState().setVariableLineage(h)
           useUIStore.getState().setInspectorTab('details')
           if (useUIStore.getState().inspectorCollapsed) {
@@ -291,7 +295,7 @@ export default React.memo(function BlockCard({
       role="button"
       tabIndex={0}
       aria-pressed={selected}
-      aria-label={`${block.rawType}: ${block.name}`}
+      aria-label={t('card.blockAria', {type: block.rawType, name: block.name})}
       onKeyDown={e => {
         if (e.key !== 'Enter' && e.key !== ' ') return
         e.preventDefault()
@@ -305,7 +309,7 @@ export default React.memo(function BlockCard({
       className={clsx(
         'relative rounded-lg cursor-pointer transition-all duration-fast overflow-visible',
         'border max-w-[450px] w-full',
-        'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60',
+        'focus:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/60',
         selected
           ? 'bg-surface-2 border-brand-500/50 shadow-glow scale-[1.01] animate-jump-pulse'
           : inGroupSelection
@@ -342,30 +346,32 @@ export default React.memo(function BlockCard({
       <div className="flex items-center gap-2">
         {isContainer ? (
           <button
-            className="flex items-center justify-center w-4 h-4 rounded hover:bg-surface-3 transition-colors text-text-tertiary flex-shrink-0"
+            className="flex items-center justify-center w-4 h-4 rounded hover:bg-surface-3 transition-colors text-text-tertiary shrink-0"
             onClick={e => {
               e.stopPropagation()
               toggleBlockExpand(block.id)
             }}
-            aria-label={collapsed ? 'Expand block' : 'Collapse block'}
+            aria-label={collapsed ? t('card.expand') : t('card.collapse')}
             aria-expanded={!collapsed}
           >
             <Chevron size={14} />
           </button>
         ) : (
-          <span className="flex items-center justify-center w-4 h-4 flex-shrink-0">
+          <span className="flex items-center justify-center w-4 h-4 shrink-0">
             <Icon size={14} style={{color}} aria-hidden="true" />
           </span>
         )}
         <span className="flex items-center gap-1.5 min-w-0">
-          {isContainer && <Icon size={12} style={{color}} className="opacity-70 flex-shrink-0" aria-hidden="true" />}
+          {isContainer && <Icon size={12} style={{color}} className="opacity-70 shrink-0" aria-hidden="true" />}
           <span className="text-sm font-medium uppercase tracking-wider truncate" style={{color}}>
             {resolveTypeLabel(block.type, block.name, block.rawType)}
           </span>
         </span>
-        <span className="text-xs text-text-tertiary flex-shrink-0">L{block.lineNumber}</span>
+        <span className="text-xs text-text-tertiary shrink-0">L{block.lineNumber}</span>
         {collapsed && block.children.length > 0 && (
-          <span className="text-xs text-text-tertiary flex-shrink-0">· {block.children.length} items</span>
+          <span className="text-xs text-text-tertiary shrink-0">
+            · {t('card.itemsCount', {count: block.children.length})}
+          </span>
         )}
         {!collapsed && block.properties && Object.keys(block.properties).length > 0 && (
           // V1.4: the count hints at config the card doesn't show — hovering
@@ -385,27 +391,27 @@ export default React.memo(function BlockCard({
                     </div>
                   ))}
                 {Object.keys(block.properties).filter(k => !k.startsWith('_')).length > 12 && (
-                  <div className="text-text-tertiary">…more in Details</div>
+                  <div className="text-text-tertiary">{t('card.moreInDetails')}</div>
                 )}
               </div>
             }
           >
-            <span className="text-xs text-text-tertiary flex-shrink-0 cursor-help" data-testid="props-hint">
-              · {Object.keys(block.properties).length} props
+            <span className="text-xs text-text-tertiary shrink-0 cursor-help" data-testid="props-hint">
+              · {t('card.propsCount', {count: Object.keys(block.properties).length})}
             </span>
           </Tooltip>
         )}
 
         <span className="ml-auto flex items-center gap-2 min-w-0">
           {isCallBlock && hovered && (
-            <span className="flex items-center gap-1 text-2xs text-text-disabled opacity-60 flex-shrink-0">
+            <span className="flex items-center gap-1 text-2xs text-text-disabled opacity-60 shrink-0">
               <ExternalLink size={10} />
-              <span>Ctrl+Click</span>
+              <span>{t('card.ctrlClick')}</span>
             </span>
           )}
           {remoteOccupants && remoteOccupants.length > 0 && (
             <span
-              className="flex items-center -space-x-1.5 flex-shrink-0"
+              className="flex items-center -space-x-1.5 shrink-0"
               title={remoteOccupants.map(u => u.displayName).join(', ')}
             >
               {remoteOccupants.slice(0, 3).map(u => (
@@ -427,8 +433,8 @@ export default React.memo(function BlockCard({
           )}
           {findingCount > 0 && (
             <span
-              className="flex items-center justify-center min-w-4 h-4 px-1 text-2xs font-bold leading-none rounded-full border text-text-primary flex-shrink-0"
-              title={`${findingCount} ${findingSeverity} finding${findingCount > 1 ? 's' : ''}`}
+              className="flex items-center justify-center min-w-4 h-4 px-1 text-2xs font-bold leading-none rounded-full border text-text-primary shrink-0"
+              title={t('card.findingsTitle', {count: findingCount, severity: findingSeverity})}
               style={{
                 backgroundColor: `var(--${findingSeverity}-bg)`,
                 borderColor: `var(--${findingSeverity})`,
@@ -456,14 +462,14 @@ export default React.memo(function BlockCard({
             }
           }}
           onBlur={() => useFlowStore.getState().setRenamingBlock(null)}
-          className="w-full text-[15px] font-medium text-text-primary bg-surface-1 border border-brand-500/50 rounded px-1.5 py-0.5 outline-none"
-          aria-label="Rename block"
+          className="w-full text-[15px] font-medium text-text-primary bg-surface-1 border border-brand-500/50 rounded px-1.5 py-0.5 outline-hidden"
+          aria-label={t('card.renameInputAria')}
           data-testid="rename-input"
         />
       ) : (
         <div
           className="text-[15px] font-medium text-text-primary truncate"
-          title={canRename ? `${displayName} (double-click to rename)` : displayName}
+          title={canRename ? t('card.renameHint', {name: displayName}) : displayName}
           onDoubleClick={e => {
             if (!canRename || readOnly) return
             e.stopPropagation()

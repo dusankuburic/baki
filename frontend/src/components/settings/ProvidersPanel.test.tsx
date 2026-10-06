@@ -112,7 +112,7 @@ describe('ProvidersPanel', () => {
 
     const headings = SECTION_NAMES.map(name => screen.getByRole('heading', {level: 3, name}))
     for (let i = 1; i < headings.length; i++) {
-      const follows = headings[i - 1].compareDocumentPosition(headings[i]) & Node.DOCUMENT_POSITION_FOLLOWING
+      const follows = headings[i - 1]!.compareDocumentPosition(headings[i]!) & Node.DOCUMENT_POSITION_FOLLOWING
       expect(follows, `${SECTION_NAMES[i]} follows ${SECTION_NAMES[i - 1]}`).toBeTruthy()
     }
     // The Azure heading is the "Manage models…" deep link's anchor.

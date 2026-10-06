@@ -216,7 +216,7 @@ export default function AzureConnectionGroup({
             {testLine}
           </p>
           {last && !last.ok && last.error && !testing && (
-            <p className="mt-0.5 break-words text-2xs text-text-tertiary">{last.error}</p>
+            <p className="mt-0.5 wrap-break-word text-2xs text-text-tertiary">{last.error}</p>
           )}
           {scope.kind === 'org' && (
             <p className="mt-0.5 text-xs text-text-tertiary">
@@ -321,7 +321,7 @@ function Callout({
       <div className="min-w-0 flex-1 space-y-1 text-xs text-text-secondary">
         <p className="text-sm font-medium text-text-primary">{title}</p>
         <p>{body}</p>
-        {reason && <p className="break-words">{reason}</p>}
+        {reason && <p className="wrap-break-word">{reason}</p>}
         {children && <div className="flex flex-wrap gap-2 pt-1">{children}</div>}
       </div>
     </div>

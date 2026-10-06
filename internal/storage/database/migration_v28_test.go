@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -164,7 +163,7 @@ func assertV28Applied(t *testing.T, b *PostgresStorageBackend, applied bool) {
 // re-applied — and the re-apply backfills the org of a chunk written while
 // the column was absent.
 func TestMigration28_UpDownUp(t *testing.T) {
-	b := openMigrationTestDB(t)
+	b, dsn := openIsolatedMigrationDB(t)
 	ctx := context.Background()
 	current, err := b.CurrentSchemaVersion(ctx)
 	if err != nil {
@@ -207,7 +206,7 @@ func TestMigration28_UpDownUp(t *testing.T) {
 	}
 
 	// Up again: boot-time migrate on reconnect.
-	b2, err := New(ctx, DefaultConfig(os.Getenv("DATABASE_URL")))
+	b2, err := New(ctx, DefaultConfig(dsn))
 	if err != nil {
 		t.Fatalf("reconnect (re-apply v28): %v", err)
 	}

@@ -102,7 +102,7 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
                 <AlertTriangle size={28} className="text-red-400" />
               </div>
               <div className="text-xl font-medium text-text-secondary mb-2">{t('mainPane.loadFailedTitle')}</div>
-              <div className="text-sm text-red-400/90 max-w-md text-center break-words">{parseError}</div>
+              <div className="text-sm text-red-400/90 max-w-md text-center wrap-break-word">{parseError}</div>
               <div className="text-sm text-text-tertiary mt-2">{t('mainPane.loadFailedHint')}</div>
             </>
           ) : (
@@ -298,7 +298,7 @@ const GroupTabStrip = memo(function GroupTabStrip({
 
   return (
     <div
-      className={`group-header flex items-center border-b flex-shrink-0 overflow-hidden ${
+      className={`group-header flex items-center border-b shrink-0 overflow-hidden ${
         isFocused ? 'border-brand-500/30 bg-surface-0' : 'border-border-default bg-surface-1'
       }`}
     >
@@ -343,7 +343,7 @@ const GroupTabStrip = memo(function GroupTabStrip({
                   e.dataTransfer.effectAllowed = 'move'
                 }}
                 onContextMenu={handleContextMenu}
-                className={`group/tab flex items-center gap-1 px-2.5 h-8 text-xs border-r border-border-subtle whitespace-nowrap transition-colors flex-shrink-0 ${
+                className={`group/tab flex items-center gap-1 px-2.5 h-8 text-xs border-r border-border-subtle whitespace-nowrap transition-colors shrink-0 ${
                   isActive && isFocused
                     ? 'bg-surface-0 text-text-primary font-medium border-t-2 border-t-brand-500'
                     : isActive
@@ -362,7 +362,7 @@ const GroupTabStrip = memo(function GroupTabStrip({
                   {sf.sourceFile ? sf.sourceFile.replace(/\.txt$/i, '') : sf.name}
                 </span>
                 <span
-                  className="inline-flex items-center justify-center w-4 h-4 rounded hover:bg-surface-3 opacity-0 group-hover/tab:opacity-100 transition-opacity flex-shrink-0"
+                  className="inline-flex items-center justify-center w-4 h-4 rounded hover:bg-surface-3 opacity-0 group-hover/tab:opacity-100 transition-opacity shrink-0"
                   onMouseDown={e => e.stopPropagation()}
                   onClick={e => {
                     e.stopPropagation()
@@ -381,7 +381,7 @@ const GroupTabStrip = memo(function GroupTabStrip({
       </div>
       {totalGroups > 1 && (
         <button
-          className="flex items-center justify-center w-6 h-8 text-text-tertiary hover:text-text-secondary hover:bg-surface-2 transition-colors flex-shrink-0"
+          className="flex items-center justify-center w-6 h-8 text-text-tertiary hover:text-text-secondary hover:bg-surface-2 transition-colors shrink-0"
           onClick={e => {
             e.stopPropagation()
             onCloseGroup()

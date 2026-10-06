@@ -36,15 +36,7 @@ func (c *Claims) TokenScoped() bool { return len(c.Scopes) > 0 }
 // AllowsScope reports whether the claims permit the given scope. Unscoped
 // claims allow everything.
 func (c *Claims) AllowsScope(scope string) bool {
-	if !c.TokenScoped() {
-		return true
-	}
-	for _, s := range c.Scopes {
-		if s == scope {
-			return true
-		}
-	}
-	return false
+	return !c.TokenScoped() || HasScope(c.Scopes, scope)
 }
 
 // RefreshClaims are the claims stored in a refresh token.

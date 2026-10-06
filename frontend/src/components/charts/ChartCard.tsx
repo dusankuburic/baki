@@ -57,7 +57,15 @@ export function ChartCard<Row extends object>({
   } else if (state === 'empty') {
     body = <ChartPlaceholder message={emptyMessage ?? t('common.noData')} />
   } else if (showTable && table) {
-    body = <DataTable caption={table.caption} columns={table.columns} rows={table.rows} filename={table.filename} />
+    body = (
+      <DataTable
+        caption={table.caption}
+        columns={table.columns}
+        rows={table.rows}
+        filename={table.filename}
+        rowKey={table.rowKey}
+      />
+    )
   } else {
     body = (
       <div role="group" aria-roledescription={t('common.chartRole')} aria-label={label ?? title} className="min-w-0">
@@ -115,7 +123,7 @@ export function ChartCard<Row extends object>({
 // An honest empty state inside a card instead of a zeroed chart.
 export function ChartPlaceholder({message, className}: {message: string; className?: string}) {
   return (
-    <div className={clsx('flex h-full min-h-[6rem] w-full items-center justify-center text-center', className)}>
+    <div className={clsx('flex h-full min-h-24 w-full items-center justify-center text-center', className)}>
       <p className="max-w-[80%] text-sm text-text-tertiary">{message}</p>
     </div>
   )

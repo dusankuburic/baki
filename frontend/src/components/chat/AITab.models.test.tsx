@@ -11,7 +11,7 @@ import {useChatStore, threadModelOf, type ChatThread} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {ToastProvider} from '@/components/shared/Toast'
 import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
-import type {ModelDetail, ProviderInfo} from '@/types'
+import type {ModelDetail, ProviderInfo, ChatMessage} from '@/types'
 import type {ReactNode} from 'react'
 
 // Per-thread model memory in the chat panel: the header's picker, the model
@@ -236,7 +236,7 @@ describe('AITab per-thread model', () => {
     expect(screen.queryByRole('dialog', {name: 'Choose a model for this chat'})).toBeNull()
 
     await user.click(within(notice() as HTMLElement).getByRole('button', {name: 'Dismiss'}))
-    expect(threadModelOf(useChatStore.getState().threads[0])).toEqual({
+    expect(threadModelOf(useChatStore.getState().threads[0]!)).toEqual({
       provider: 'azure-foundry',
       model: GPT.id,
       modelLabel: 'GPT-4.1',
@@ -282,7 +282,7 @@ describe('AITab per-thread model', () => {
     await user.type(composer, 'Document this flow{Enter}')
 
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].model).toBe(DOCS.id)
+    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].model).toBe(DOCS.id)
     // The text is back in the composer; no orphan question, no error bubble.
     await waitFor(() => expect(composer).toHaveValue('Document this flow'))
     expect(useChatStore.getState().getMessages(T1)).toHaveLength(0)
@@ -323,7 +323,7 @@ describe('AITab per-thread model', () => {
       await waitFor(() => expect(picker()).toHaveAccessibleName(/GPT-4\.1/))
       await user.click(picker())
       await user.click(screen.getByRole('option', {name: /^Docs writer/}))
-      expect(threadModelOf(useChatStore.getState().threads[0])).toMatchObject({model: DOCS.id})
+      expect(threadModelOf(useChatStore.getState().threads[0]!)).toMatchObject({model: DOCS.id})
       expect(picker()).toHaveAccessibleName(/Docs writer/)
       expect(updateProvider).not.toHaveBeenCalled()
       expect(useSettingsStore.getState().settings.ai.providers['azure-foundry'].defaultModel).toBe('')
@@ -374,7 +374,7 @@ describe('AITab per-thread model: review fixes', () => {
     const composer = screen.getByRole('textbox', {name: 'Message the assistant'})
     await user.type(composer, 'next{Enter}')
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].model).toBe(GPT.id)
+    expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].model).toBe(GPT.id)
 
     // The stand-in's reply lands (what the done commit appends).
     act(() => {
@@ -565,12 +565,14 @@ describe('AITab per-thread model: review fixes', () => {
   it("an inactive legacy thread's tab tooltip names its own model", async () => {
     const T2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
     seed({provider: 'azure-foundry', model: GPT.id, modelLabel: 'GPT-4.1'})
+    const t2History: ChatMessage[] = [
+      legacyHistory[0]!,
+      {...legacyHistory[1]!, model: DOCS.id, modelLabel: 'Docs writer'},
+    ]
+    const t2Entry: [string, ChatMessage[]] = [T2, t2History]
     useChatStore.setState(s => ({
       threads: [...s.threads, thread(T2, 'Earlier docs')],
-      conversations: new Map([
-        ...s.conversations,
-        [T2, [legacyHistory[0], {...legacyHistory[1], model: DOCS.id, modelLabel: 'Docs writer'}]],
-      ]),
+      conversations: new Map([...s.conversations, t2Entry]),
     }))
     renderPanel()
     await waitFor(() => expect(screen.getByTitle('Earlier docs — Docs writer · Documentation')).toBeInTheDocument())
