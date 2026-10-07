@@ -61,7 +61,7 @@ func TestAccountDelete_RunsUserDeletedHook(t *testing.T) {
 
 	var mu sync.Mutex
 	var scopes []string
-	rt.handlers.Auth.OnUserDeleted(func(scope string) {
+	moduleOf[*AuthHandler](t, rt).accounts.OnUserDeleted(func(scope string) {
 		mu.Lock()
 		scopes = append(scopes, scope)
 		mu.Unlock()

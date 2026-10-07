@@ -5,6 +5,7 @@ import {ToastProvider} from '@/components/shared/Toast'
 import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
+import {unknownValue} from '@/testing/testHelpers'
 import type {Finding, AnalysisReport, FlowDocument} from '@/types'
 
 const analyzeFlow = vi.fn()
@@ -257,6 +258,23 @@ describe('FindingsTab', () => {
 
     fireEvent.click(layersBtn)
     await waitFor(() => expect(screen.queryByText(/Grouped/)).not.toBeInTheDocument())
+  })
+
+  // A triage status a newer server added arrives unvalidated, as sent: the
+  // finding stays in view (it filters as open) under a neutral chip, and its
+  // menu offers no reassignment, which would have to repeat that status.
+  it('keeps a finding of a triage status this app does not know in view, under a neutral chip', async () => {
+    const {analysisApi} = await import('@/api')
+    vi.mocked(analysisApi.listFindingStatuses).mockResolvedValueOnce([
+      {flowId: 'flow-1', findingKey: 'unhandled-error:b2', status: unknownValue('needs_review'), updatedAt: ''},
+    ])
+    await renderTab()
+    expect(await screen.findByText('Other status')).toBeInTheDocument()
+    expect(screen.getByText('Unhandled error')).toBeInTheDocument()
+    expect(screen.queryByText(/triage\.status\./)).toBeNull()
+    // Narrowing the status filter to "open" still shows it: it filters as open.
+    useAnalysisStore.setState({statusFilter: new Set(['open'])})
+    await waitFor(() => expect(screen.getByText('Unhandled error')).toBeInTheDocument())
   })
 
   it('shows empty state when no findings', async () => {

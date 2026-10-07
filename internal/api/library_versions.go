@@ -8,8 +8,11 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
+	"pad-analyzer/internal/capability"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
 	"pad-core/parser"
@@ -67,18 +70,11 @@ func (h *LibraryHandler) handleListFlowVersions(w http.ResponseWriter, r *http.R
 	}
 
 	id := chi.URLParam(r, "id")
-	userID := h.security.CallerID(r)
-
-	if err := h.libSvc.CheckFlowAccessForUser(r.Context(), id, userID, "viewer"); err != nil {
-		render.Error(w, err, 0)
-		return
-	}
-
 	limit, ok := parseIntParam(w, r.URL.Query().Get("limit"), "limit", 0)
 	if !ok {
 		return
 	}
-	versions, err := h.backend.ListFlowVersions(r.Context(), id, limit)
+	versions, err := h.libSvc.ListFlowVersions(r.Context(), id, limit)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -95,21 +91,16 @@ func (h *LibraryHandler) handleListFlowVersions(w http.ResponseWriter, r *http.R
 // @Success      201 {object} map[string]interface{} "Created"
 // @Router       /api/library/{id}/versions [post]
 func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("versioning requires cloud storage"), http.StatusServiceUnavailable)
-		return
-	}
-
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
 
-	doc, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
+	doc, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
 
-	if err := h.libSvc.CanWrite(r.Context(), doc, userID); err != nil {
+	if err := h.libSvc.CanWrite(r.Context(), doc); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -127,22 +118,12 @@ func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// The backend assigns v.Version atomically (Postgres: FOR UPDATE + MAX+1);
-	// a read-then-write here would just race.
-	v := &storageif.FlowVersion{
-		ID:        uuid.NewString(),
-		FlowID:    id,
-		Comment:   req.Comment,
-		Content:   doc.Content,
-		Metadata:  doc.Metadata,
-		CreatedBy: userID,
-		CreatedAt: time.Now().UTC(),
-	}
-	if err := h.backend.SaveFlowVersion(r.Context(), v); err != nil {
+	v, err := h.libSvc.SaveFlowVersion(r.Context(), id, doc, req.Comment, userID)
+	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowVersion, "flow", id, map[string]string{"version": strconv.Itoa(v.Version)})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowVersion, ResourceType: "flow", ResourceID: id, OrgID: doc.OrganizationID, Meta: map[string]string{"version": strconv.Itoa(v.Version)}})
 	render.JSONStatus(w, http.StatusCreated, toFlowVersionView(v))
 }
 
@@ -156,17 +137,6 @@ func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Re
 // @Router       /api/library/{id}/versions/{vn} [get]
 func (h *LibraryHandler) handleGetFlowVersion(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	userID := h.security.CallerID(r)
-
-	if err := h.libSvc.CheckFlowAccessForUser(r.Context(), id, userID, "viewer"); err != nil {
-		render.Error(w, err, 0)
-		return
-	}
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("versioning requires cloud storage"), http.StatusServiceUnavailable)
-		return
-	}
-
 	vn, ok := parseIntParam(w, chi.URLParam(r, "vn"), "version", 0)
 	if !ok {
 		return
@@ -175,7 +145,7 @@ func (h *LibraryHandler) handleGetFlowVersion(w http.ResponseWriter, r *http.Req
 		render.Error(w, fmt.Errorf("invalid version: must be a positive integer"), http.StatusBadRequest)
 		return
 	}
-	v, err := h.backend.LoadFlowVersion(r.Context(), id, vn)
+	v, err := h.libSvc.LoadFlowVersion(r.Context(), id, vn)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -195,19 +165,15 @@ func (h *LibraryHandler) handleGetFlowVersion(w http.ResponseWriter, r *http.Req
 // @Success      200 {object} map[string]interface{} "Restored"
 // @Router       /api/library/{id}/versions/{vn}/restore [post]
 func (h *LibraryHandler) handleRestoreFlowVersion(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("versioning requires cloud storage"), http.StatusServiceUnavailable)
-		return
-	}
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
 
-	doc, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
+	doc, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	if err := h.libSvc.CanWrite(r.Context(), doc, userID); err != nil {
+	if err := h.libSvc.CanWrite(r.Context(), doc); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -220,7 +186,7 @@ func (h *LibraryHandler) handleRestoreFlowVersion(w http.ResponseWriter, r *http
 		render.Error(w, fmt.Errorf("invalid version: must be a positive integer"), http.StatusBadRequest)
 		return
 	}
-	historical, err := h.backend.LoadFlowVersion(r.Context(), id, vn)
+	historical, err := h.libSvc.LoadFlowVersion(r.Context(), id, vn)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -233,11 +199,11 @@ func (h *LibraryHandler) handleRestoreFlowVersion(w http.ResponseWriter, r *http
 	// SaveFlow's OCC guards against a concurrent edit; UpdateLibraryFlow
 	// re-checks editor access and invalidates the cached search index.
 	doc.Content = historical.Content
-	if err := h.libSvc.UpdateLibraryFlow(r.Context(), doc, userID); err != nil {
+	if err := h.libSvc.UpdateLibraryFlow(r.Context(), doc); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowRestore, "flow", id, map[string]string{"restored_from": strconv.Itoa(vn), "version": strconv.Itoa(doc.Version)})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowRestore, ResourceType: "flow", ResourceID: id, OrgID: doc.OrganizationID, Meta: map[string]string{"restored_from": strconv.Itoa(vn), "version": strconv.Itoa(doc.Version)}})
 	render.JSON(w, h.toLibraryFlow(r.Context(), doc, userID, h.libSvc.ResolveOwnerName(r.Context(), doc.OwnerID)))
 }
 
@@ -252,14 +218,8 @@ func (h *LibraryHandler) handleRestoreFlowVersion(w http.ResponseWriter, r *http
 // @Success      200 {object} map[string]interface{} "Diff"
 // @Router       /api/library/{id}/versions/{vn}/diff [get]
 func (h *LibraryHandler) handleDiffFlowVersion(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("versioning requires cloud storage"), http.StatusServiceUnavailable)
-		return
-	}
 	id := chi.URLParam(r, "id")
-	userID := h.security.CallerID(r)
-
-	current, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
+	current, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -273,7 +233,7 @@ func (h *LibraryHandler) handleDiffFlowVersion(w http.ResponseWriter, r *http.Re
 		render.Error(w, fmt.Errorf("invalid version: must be a positive integer"), http.StatusBadRequest)
 		return
 	}
-	historical, err := h.backend.LoadFlowVersion(r.Context(), id, vn)
+	historical, err := h.libSvc.LoadFlowVersion(r.Context(), id, vn)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -309,13 +269,20 @@ func unmarshalFlowContent(content json.RawMessage) (*models.FlowDocument, error)
 	return &doc, nil
 }
 
-// registerVersionRoutes wires the library flow-version sub-routes.
-func (h *LibraryHandler) registerVersionRoutes(r chi.Router) {
-	r.Route("/versions", func(r chi.Router) {
-		r.Get("/", h.handleListFlowVersions)
-		r.Post("/", h.handleSaveFlowVersion)
-		r.Get("/{vn}", h.handleGetFlowVersion)
-		r.Post("/{vn}/restore", h.handleRestoreFlowVersion)
-		r.Get("/{vn}/diff", h.handleDiffFlowVersion)
+// registerVersionRoutes wires the library flow-version sub-routes. Reading a
+// version, and the two-blob diff, stream stored blobs after the authz check,
+// outside the request transaction; save and restore keep it for atomicity.
+// Listing and reading a version need FlowRead on the flow in the path, checked
+// before the handler runs; save, restore and diff authorize the flow they load.
+// Versions live in the server-side store: without one the list is empty and
+// the rest answer 503.
+func (h *LibraryHandler) registerVersionRoutes(rb *route.Builder) {
+	read := requireLibraryFlow(h.libSvc, service.FlowRead, "id")
+	rb.Route("/versions", func(rb *route.Builder) {
+		rb.With(read).Get("/", h.handleListFlowVersions)
+		rb.Post("/", h.handleSaveFlowVersion, route.Needs(capability.ServerStore), route.Idempotent())
+		rb.With(read).Get("/{vn}", h.handleGetFlowVersion, route.NoTx(), route.Needs(capability.ServerStore))
+		rb.Post("/{vn}/restore", h.handleRestoreFlowVersion, route.Needs(capability.ServerStore))
+		rb.Get("/{vn}/diff", h.handleDiffFlowVersion, route.NoTx(), route.Needs(capability.ServerStore))
 	})
 }

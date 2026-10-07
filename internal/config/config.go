@@ -10,6 +10,19 @@ const (
 	ModeCloud DeploymentMode = "cloud"
 )
 
+// RoutePolicyMode says which route policy decides each request (PAD_ROUTE_POLICY; ADR 0006).
+type RoutePolicyMode string
+
+const (
+	// RoutePolicyLegacy: the middleware's path tables decide; the declared policies are not consulted.
+	RoutePolicyLegacy RoutePolicyMode = "legacy"
+	// RoutePolicyShadow: the path tables decide, and the policy declared on the route is computed alongside;
+	// every disagreement is counted (pad_route_policy_mismatch_total) and logged once. The default.
+	RoutePolicyShadow RoutePolicyMode = "shadow"
+	// RoutePolicyDeclarative: the declared policy decides; the path tables are not consulted.
+	RoutePolicyDeclarative RoutePolicyMode = "declarative"
+)
+
 // StorageBackend indicates which storage implementation to use
 type StorageBackend string
 
@@ -192,6 +205,10 @@ type ServerConfig struct {
 	// CustomRulesPath is the path to a JSON file of user-defined analyzer
 	// rules (see core/analyzer/custom_rules.go); empty = none. PAD_CUSTOM_RULES.
 	CustomRulesPath string
+	// RoutePolicy says whether the legacy path tables or the policies declared
+	// on the routes decide auth, scopes, rate limits, the RLS transaction and
+	// deadlines (PAD_ROUTE_POLICY; default shadow).
+	RoutePolicy RoutePolicyMode
 }
 
 // StorageConfig holds storage backend settings
@@ -366,8 +383,9 @@ func Default() *Config {
 		Mode:    ModeLocal,
 		Runtime: DefaultRuntimeConfig(),
 		Server: ServerConfig{
-			Host: "localhost",
-			Port: 0, // 0 = OS-assigned ephemeral port
+			Host:        "localhost",
+			Port:        0, // 0 = OS-assigned ephemeral port
+			RoutePolicy: RoutePolicyShadow,
 		},
 		Storage: StorageConfig{
 			Backend: StorageLocal,

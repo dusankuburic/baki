@@ -64,24 +64,23 @@ type modelCacheEntry struct {
 	expiresAt    time.Time
 }
 
-func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory, secrets KeyStore) *ProviderService {
+// NewProviderService builds the provider service. orgKeys holds organisations' shared credentials (nil leaves
+// the org methods reporting ErrOrgKeyStoreUnavailable); azure is the Azure AI Foundry model registry the
+// single-document routes act on as resource "default" (nil keeps the single document).
+func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory, secrets KeyStore, orgKeys OrgKeyStore, azure *AzureModelService) *ProviderService {
 	return &ProviderService{
 		auth:        auth,
 		copilotAuth: copilotAuth,
 		factory:     factory,
 		secrets:     secrets,
+		orgKeys:     orgKeys,
+		azure:       azure,
 		modelCache:  make(map[string]modelCacheEntry),
 
 		invalidatedKeys:  make(map[string]invalidation),
 		invalidatedScope: make(map[string]invalidation),
 	}
 }
-
-// SetOrgKeyStore enables organisation-shared credentials; set once at boot — nil leaves org methods reporting ErrOrgKeyStoreUnavailable.
-func (s *ProviderService) SetOrgKeyStore(store OrgKeyStore) { s.orgKeys = store }
-
-// SetAzureModels wires the Azure AI Foundry model registry; set once at boot, before requests are served.
-func (s *ProviderService) SetAzureModels(azure *AzureModelService) { s.azure = azure }
 
 // AzureModels is the wired Azure AI Foundry model registry (nil without one).
 func (s *ProviderService) AzureModels() *AzureModelService { return s.azure }

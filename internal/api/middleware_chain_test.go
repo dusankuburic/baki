@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 	"net/url"
-	"strings"
 	"testing"
 )
 
@@ -152,41 +151,6 @@ func TestPathAliases_ReachTheSameHandler(t *testing.T) {
 		}
 		if got := doRequestWithAuth(t, rt, http.MethodGet, p, "", nil).Code; got != wantAnon {
 			t.Errorf("anon GET %s = %d, want %d (same as %s)", p, got, wantAnon, base)
-		}
-	}
-}
-
-// TestStaticRoutePatterns_CoversRealRoutes guards the other failure mode of the
-// bounded metrics label: if the walk silently produced an empty or tiny set,
-// every real route would collapse to "/api/other" and the HTTP metrics would
-// quietly go blind. Nothing else would fail.
-func TestStaticRoutePatterns_CoversRealRoutes(t *testing.T) {
-	got := staticRoutePatterns(newJWTTestRouter(t).mux)
-
-	if len(got) < 100 {
-		t.Fatalf("staticRoutePatterns returned %d routes, want >=100 — the walk is probably broken", len(got))
-	}
-	// A spread across the route groups, including the buckets rate limiting
-	// cares about.
-	for _, want := range []string{
-		"/api/auth/login",
-		"/api/auth/me",
-		"/api/chat/stream",
-		"/api/flow/upload",
-		"/api/system/settings",
-		"/api/admin/users/list",
-		"/healthz",
-		"/readyz",
-	} {
-		if _, ok := got[want]; !ok {
-			t.Errorf("expected %q in the static route set", want)
-		}
-	}
-	// Dynamic patterns must NOT be in the set — they are collapsed by
-	// normalizeRoute instead, and a literal "{id}" would never match a path.
-	for k := range got {
-		if strings.ContainsAny(k, "{*") {
-			t.Errorf("dynamic pattern %q leaked into the static route set", k)
 		}
 	}
 }

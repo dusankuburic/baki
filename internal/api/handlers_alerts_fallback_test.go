@@ -31,7 +31,7 @@ func TestAddComment_AlertsSurviveSaturatedPool(t *testing.T) {
 	// Drain the alert pool: from here on every Go returns false.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := rt.handlers.Analysis.alerts.Drain(ctx); err != nil {
+	if err := moduleOf[*AnalysisHandler](t, rt).alerts.Drain(ctx); err != nil {
 		t.Fatalf("drain alerts: %v", err)
 	}
 

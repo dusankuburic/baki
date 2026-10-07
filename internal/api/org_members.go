@@ -9,6 +9,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/lifecycle"
@@ -38,42 +40,28 @@ const (
 
 // disableLentCredential disables the org's shared Azure credentials userID lent when userID stops
 // being an admin of orgID; registry rows stay (needs_credentials). Best effort: failures are logged.
-func disableLentCredential(r *http.Request, backend storageif.StorageBackend, trustedProxies []string, providers *service.ProviderService, orgID, userID, reason string) bool {
+func disableLentCredential(r *http.Request, rec *audit.Recorder, providers *service.ProviderService, orgID, userID, reason string) bool {
 	if providers == nil || !providers.OrgKeysAvailable() {
 		return false
 	}
 	keys, err := providers.DisableOrgAzureCredentialsSavedBy(orgID, userID)
 	if err != nil {
-		logger.Warn("org: disabling a departed admin's shared credentials failed", "org", orgID, "error", err)
+		logger.FromContext(r.Context()).Warn("org: disabling a departed admin's shared credentials failed", "org", orgID, "error", err)
 		return false
 	}
 	for _, key := range keys {
-		auditLentCredentialDisabled(r, backend, trustedProxies, orgID, key, userID, reason)
+		auditLentCredentialDisabled(r, rec, orgID, key, userID, reason)
 	}
 	return len(keys) > 0
 }
 
-// disableLentCredentials is disableLentCredential for every org userID lent to (account erasure).
-func disableLentCredentials(r *http.Request, backend storageif.StorageBackend, trustedProxies []string, providers *service.ProviderService, userID, reason string) {
-	if providers == nil || !providers.OrgKeysAvailable() {
-		return
-	}
-	refs, err := providers.DisableOrgAzureCredentialsLentBy(userID)
-	if err != nil {
-		logger.Warn("account: disabling the user's shared org credentials failed", "error", err)
-	}
-	for _, ref := range refs {
-		auditLentCredentialDisabled(r, backend, trustedProxies, ref.OrgID, ref.Provider, userID, reason)
-	}
-}
-
 // auditLentCredentialDisabled records one disabled credential; meta carries the user id because the reason names only the relationship.
-func auditLentCredentialDisabled(r *http.Request, backend storageif.StorageBackend, trustedProxies []string, orgID, key, userID, reason string) {
+func auditLentCredentialDisabled(r *http.Request, rec *audit.Recorder, orgID, key, userID, reason string) {
 	meta := map[string]string{"op": "disable", "provider": key, "reason": reason, "user": userID}
 	if connID, ok := ai.ParseAzureConnectionKey(key); ok {
 		meta["connectionId"] = connID
 	}
-	logAudit(r.Context(), backend, r, trustedProxies, AuditActionKeysSave, "org", orgID, meta)
+	rec.Record(r.Context(), orgAuditEntry(audit.ActionKeysSave, orgID, meta))
 }
 
 // @Summary      List org members
@@ -84,7 +72,7 @@ func auditLentCredentialDisabled(r *http.Request, backend storageif.StorageBacke
 // @Router       /api/orgs/{id}/members [get]
 func (h *OrgHandler) handleOrgMemberList(w http.ResponseWriter, r *http.Request) {
 	// The membership check already loaded the org with its roster.
-	org := h.requireMember(w, r)
+	org := h.authorizeOrg(w, r, service.OrgRead)
 	if org == nil {
 		return
 	}
@@ -107,15 +95,13 @@ func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Reques
 	id := chi.URLParam(r, "id")
 	userID := chi.URLParam(r, "userId")
 
-	callerID := h.security.CallerID(r)
-	_, adminErr := h.orgSvc.GetAndCheckAdmin(r.Context(), id, callerID)
-	if adminErr != nil {
-		if !errors.Is(adminErr, collaboration.ErrNotOrgAdmin) {
-			render.Error(w, adminErr, http.StatusNotFound)
-			return
-		}
-		if callerID != userID {
-			render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
+	// Admins remove anyone, and a member may leave: only a plain role refusal lets a caller remove themselves, never
+	// a token without the scope or an organisation that cannot be read.
+	actor := auth.ActorFromContext(r.Context())
+	if _, err := h.authz.AuthorizeOrg(r.Context(), actor, service.OrgAdmin, id); err != nil {
+		leaving := actor != nil && actor.UserID == userID
+		if !leaving || !errors.Is(err, service.ErrPermissionDenied) || errors.Is(err, service.ErrScopeDenied) {
+			orgDenied(w, err, service.OrgAdmin)
 			return
 		}
 	}
@@ -128,9 +114,9 @@ func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgMemberRemove, "org", id, map[string]string{"targetUser": userID})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgMemberRemove, id, map[string]string{"targetUser": userID}))
 	// A removed admin who lent the shared credential takes it along.
-	disabled := disableLentCredential(r, h.backend, h.security.TrustedProxies, h.providers, id, userID, lenderReasonRemoved)
+	disabled := disableLentCredential(r, h.audit, h.providers, id, userID, lenderReasonRemoved)
 	render.JSON(w, orgMemberMutationResponse{Status: "ok", SharedCredentialDisabled: disabled})
 }
 
@@ -142,6 +128,7 @@ func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Reques
 // @Router       /api/orgs/{id}/invites [get]
 func (h *OrgHandler) handleOrgInviteList(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	// Kept on the role check: Can's OrgAdmin would demand the write scope, refusing the read-only tokens this GET admits.
 	if !h.requireAdminRole(w, r) {
 		return
 	}
@@ -166,7 +153,7 @@ func (h *OrgHandler) handleOrgInviteList(w http.ResponseWriter, r *http.Request)
 func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
-	org := h.requireAdmin(w, r)
+	org := h.authorizeOrg(w, r, service.OrgAdmin) // its name goes into the invite email
 	if org == nil {
 		return
 	}
@@ -202,7 +189,7 @@ func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgInviteCreate, "org", id, map[string]string{"email": email, "role": string(role)})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgInviteCreate, id, map[string]string{"email": email, "role": string(role)}))
 
 	// Best-effort invite email: after the commit (a rolled-back invite must not be mailed) and off the request
 	// path. SendOrgInvite is up to a 30 s SMTP round trip, and post-commit hooks run before the response is
@@ -210,14 +197,15 @@ func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Reques
 	// response stand even when the mail is dropped.
 	if h.email != nil {
 		orgName := org.Name
-		txhook.Register(r.Context(), func(context.Context) {
+		txhook.Register(r.Context(), func(ctx context.Context) {
+			log := logger.FromContext(ctx) // the sender keeps the request's log attributes, not its context
 			send := func() {
 				if err := h.email.SendOrgInvite(context.Background(), email, orgName, token); err != nil {
-					logger.Error("sending org invite email failed", "error", err, "org", id, "email", email)
+					log.Error("sending org invite email failed", "error", err, "org", id, "email", email)
 				}
 			}
 			if !orgInviteEmails.Go(send) {
-				logger.Warn("org invite email not sent: the mail queue is full or shutting down", "org", id)
+				log.Warn("org invite email not sent: the mail queue is full or shutting down", "org", id)
 			}
 		})
 	}
@@ -238,7 +226,7 @@ func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Reques
 func (h *OrgHandler) handleOrgInviteRevoke(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	inviteID := chi.URLParam(r, "inviteId")
-	if !h.requireAdminRole(w, r) {
+	if h.authorizeOrg(w, r, service.OrgAdmin) == nil {
 		return
 	}
 
@@ -251,7 +239,7 @@ func (h *OrgHandler) handleOrgInviteRevoke(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgInviteRevoke, "org", id, map[string]string{"inviteId": inviteID})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgInviteRevoke, id, map[string]string{"inviteId": inviteID}))
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -274,7 +262,7 @@ func (h *OrgHandler) handleInviteAccept(w http.ResponseWriter, r *http.Request) 
 	// verification; an unverified account must not accept the victim's invites.
 	emailVerified := false
 	if h.backend != nil && userID != "" {
-		if u, err := h.backend.LoadUserByID(r.Context(), userID); err == nil && u != nil {
+		if u, err := h.users.Load(r.Context(), userID); err == nil && u != nil {
 			emailVerified = u.EmailVerified
 		}
 	}
@@ -292,7 +280,7 @@ func (h *OrgHandler) handleInviteAccept(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgInviteAccept, "org", org.ID, nil)
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgInviteAccept, org.ID, nil))
 	render.JSON(w, org)
 }
 
@@ -315,7 +303,7 @@ func (h *OrgHandler) handleOrgMemberRoleUpdate(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if !h.requireAdminRole(w, r) {
+	if h.authorizeOrg(w, r, service.OrgAdmin) == nil {
 		return
 	}
 	role := auth.Role(req.Role)
@@ -327,27 +315,27 @@ func (h *OrgHandler) handleOrgMemberRoleUpdate(w http.ResponseWriter, r *http.Re
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgMemberRole, "org", id, map[string]string{"targetUser": userID, "role": req.Role})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgMemberRole, id, map[string]string{"targetUser": userID, "role": req.Role}))
 	disabled := false
 	if role != auth.RoleAdmin {
 		// A demoted admin can no longer manage the credential they lent.
-		disabled = disableLentCredential(r, h.backend, h.security.TrustedProxies, h.providers, id, userID, lenderReasonDemoted)
+		disabled = disableLentCredential(r, h.audit, h.providers, id, userID, lenderReasonDemoted)
 	}
 	render.JSON(w, orgMemberMutationResponse{Status: "ok", SharedCredentialDisabled: disabled})
 }
 
 // registerMemberRoutes wires the org members and invites sub-routes.
-func (h *OrgHandler) registerMemberRoutes(r chi.Router) {
-	r.Route("/members", func(r chi.Router) {
-		r.Get("/", h.handleOrgMemberList)
-		r.Route("/{userId}", func(r chi.Router) {
-			r.Delete("/", h.handleOrgMemberRemove)
-			r.Put("/role", h.handleOrgMemberRoleUpdate)
+func (h *OrgHandler) registerMemberRoutes(rb *route.Builder) {
+	rb.Route("/members", func(rb *route.Builder) {
+		rb.Get("/", h.handleOrgMemberList)
+		rb.Route("/{userId}", func(rb *route.Builder) {
+			rb.Delete("/", h.handleOrgMemberRemove)
+			rb.Put("/role", h.handleOrgMemberRoleUpdate)
 		})
 	})
-	r.Route("/invites", func(r chi.Router) {
-		r.Get("/", h.handleOrgInviteList)
-		r.Post("/", h.handleOrgInviteCreate)
-		r.Delete("/{inviteId}", h.handleOrgInviteRevoke)
+	rb.Route("/invites", func(rb *route.Builder) {
+		rb.Get("/", h.handleOrgInviteList)
+		rb.Post("/", h.handleOrgInviteCreate, route.Idempotent())
+		rb.Delete("/{inviteId}", h.handleOrgInviteRevoke)
 	})
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	storagedb "pad-analyzer/internal/storage/database"
@@ -59,11 +60,14 @@ func (p *routeProbe) lastRoutePath() string {
 	return s
 }
 
-// mountProbes adds the probe routes to rt's mux: a protected {id} route under a prefix no policy special-cases, and one under /api/admin/ (the admin capability for scoped PATs); chi accepts routes after Use.
-func mountProbes(rt *Router) (plain, admin *routeProbe) {
+// mountProbes adds the probe routes to rt: a protected {id} route under a prefix no policy special-cases, and one under /api/admin/ (the admin capability for scoped PATs), each declaring the policy the legacy tables give its path.
+func mountProbes(t *testing.T, rt *Router) (plain, admin *routeProbe) {
+	t.Helper()
 	plain, admin = &routeProbe{}, &routeProbe{}
-	rt.mux.Handle("/api/probe/{id}", plain)
-	rt.mux.Handle("/api/admin/probe/{id}", admin)
+	mountTestRoutes(t, rt, func(rb *route.Builder) {
+		rb.Handle("/api/probe/{id}", plain)
+		rb.Handle("/api/admin/probe/{id}", admin, route.Scopes(auth.ScopeAdmin))
+	})
 	return plain, admin
 }
 
@@ -96,7 +100,7 @@ func serve(h http.Handler, method, target, authHeader string) *httptest.Response
 // A request whose RawPath cleans to a public (or non-/api) path but that chi dispatches to a protected route is authenticated for the protected route: 401 without credentials, and the handler never runs.
 func TestJWTAuth_EncodedPathAuthenticatesTheDispatchedRoute(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	probe, _ := mountProbes(rt)
+	probe, _ := mountProbes(t, rt)
 	h := fullChain(t, rt, nil)
 
 	for _, target := range []string{
@@ -132,7 +136,7 @@ func TestJWTAuth_EncodedPathAuthenticatesTheDispatchedRoute(t *testing.T) {
 // Legitimate ids with an escaped "/" (the SPA encodes every path segment; frontend/src/api/providers.ts azurePath) keep routing to their handler — verbatim, as chi hands them over — and keep authenticating.
 func TestJWTAuth_EncodedSlashInIDStillRoutes(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	probe, _ := mountProbes(rt)
+	probe, _ := mountProbes(t, rt)
 	h := fullChain(t, rt, nil)
 	bearer := jwtBearer(t, rt, "u-1", "u1@example.com")
 
@@ -171,7 +175,7 @@ func TestJWTAuth_EncodedSlashInIDStillRoutes(t *testing.T) {
 // The access token may ride in the query string only to the SSE route, judged on the route chi dispatches on. auth.ExtractToken read the cleaned, decoded Path, so ?token= authenticated any route whose RawPath cleaned to /api/events.
 func TestJWTAuth_QueryTokenOnlyOnTheDispatchedSSERoute(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	probe, _ := mountProbes(rt)
+	probe, _ := mountProbes(t, rt)
 	h := fullChain(t, rt, nil)
 	token := strings.TrimPrefix(jwtBearer(t, rt, "u-1", "u1@example.com"), "Bearer ")
 
@@ -222,7 +226,7 @@ func TestJWTAuth_PublicRoutesStayPublic(t *testing.T) {
 // A scoped PAT's capabilities are checked against the route chi dispatches on: a write-only token must not reach /api/admin/ through a RawPath that cleans to a write route, nor a read-only token mutate through one that cleans to the read-level /api/auth/me.
 func TestAPIToken_ScopeCheckedOnTheDispatchedRoute(t *testing.T) {
 	rt, _ := newLibraryTestRouter(t)
-	probe, adminProbe := mountProbes(rt)
+	probe, adminProbe := mountProbes(t, rt)
 	writer := "Bearer " + mintToken(t, rt, "ci-admin", "ci-admin@example.com", auth.RoleAdmin, nil, auth.ScopeWrite)
 	reader := "Bearer " + mintToken(t, rt, "ci-reader", "ci-reader@example.com", auth.RoleMember, nil, auth.ScopeRead)
 
@@ -282,7 +286,7 @@ func TestRLSMiddleware_DecidesOnTheDispatchedRoute(t *testing.T) {
 	}
 	backend := &rlsProbeBackend{StorageBackend: fs}
 	rt := newTestRouter(backend, true)
-	probe, _ := mountProbes(rt)
+	probe, _ := mountProbes(t, rt)
 	h := fullChain(t, rt, nil)
 	bearer := jwtBearer(t, rt, "u-1", "u1@example.com")
 
@@ -339,7 +343,7 @@ func TestRLSMiddleware_DecidesOnTheDispatchedRoute(t *testing.T) {
 func TestRateLimit_ClassifiesTheDispatchedRoute(t *testing.T) {
 	newChain := func(t *testing.T, generalBurst, chatBurst float64) (http.Handler, string) {
 		rt := newJWTTestRouter(t)
-		mountProbes(rt)
+		mountProbes(t, rt)
 		h := fullChain(t, rt, func(c *config.Config) {
 			c.Mode = config.ModeCloud
 			c.Runtime.RateLimitGeneralRPS = 0.001
@@ -428,10 +432,10 @@ func TestRateLimit_ClassifiesTheDispatchedRoute(t *testing.T) {
 	})
 }
 
-// inboundRoutePath (rate limiting, before the Router normalizes the request) and routePath (inside the mux, after it) name the same path for every spelling that reaches a handler.
-func TestInboundRoutePath_MatchesRoutePathInsideTheMux(t *testing.T) {
+// route.DispatchPath (the outer layers, before the Router normalizes the request) and routePath (inside the mux, after it) name the same path for every spelling that reaches a handler.
+func TestDispatchPath_MatchesRoutePathInsideTheMux(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	probe, _ := mountProbes(rt)
+	probe, _ := mountProbes(t, rt)
 	bearer := jwtBearer(t, rt, "u-1", "u1@example.com")
 	for _, target := range []string{
 		"/api/probe/x",
@@ -444,7 +448,7 @@ func TestInboundRoutePath_MatchesRoutePathInsideTheMux(t *testing.T) {
 		"/api/probe/a!b",   // not the default encoding (%21): RawPath set
 		"/api/probe/%61b",  // a needless escape: RawPath set
 	} {
-		want := inboundRoutePath(mustParseRequestURL(t, target))
+		want := route.DispatchPath(mustParseRequestURL(t, target))
 		before := probe.hits.Load()
 		rr := doRequestWithAuth(t, rt, http.MethodGet, target, bearer, nil)
 		if rr.Code != http.StatusOK || probe.hits.Load() != before+1 {
@@ -452,7 +456,7 @@ func TestInboundRoutePath_MatchesRoutePathInsideTheMux(t *testing.T) {
 			continue
 		}
 		if got := probe.lastRoutePath(); got != want {
-			t.Errorf("GET %s: routePath inside the mux = %q, inboundRoutePath = %q", target, got, want)
+			t.Errorf("GET %s: routePath inside the mux = %q, route.DispatchPath = %q", target, got, want)
 		}
 	}
 }

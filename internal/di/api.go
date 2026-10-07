@@ -25,8 +25,14 @@ type authzFlowChecker struct {
 	authz *service.AuthzService
 }
 
+// socketActor is who a socket acts as: the user its ticket named. Tickets
+// carry no token scopes yet (R7, Phase 4c), so Can sees an unscoped user.
+func socketActor(userID string) *auth.Actor {
+	return &auth.Actor{Kind: auth.ActorUser, UserID: userID}
+}
+
 func (c *authzFlowChecker) CheckAccess(ctx context.Context, flowID, userID string) error {
-	err := c.authz.CheckFlowAccessByID(ctx, flowID, userID, "viewer")
+	err := c.authz.Can(ctx, socketActor(userID), service.FlowRead, service.FlowByID(flowID))
 	switch {
 	case err == nil:
 		return nil
@@ -44,7 +50,7 @@ func (c *authzFlowChecker) CheckAccess(ctx context.Context, flowID, userID strin
 // gated lower (at "viewer"), so this is what keeps a read-only collaborator
 // from sending block mutations over the socket.
 func (c *authzFlowChecker) CanEdit(ctx context.Context, flowID, userID string) bool {
-	return c.authz.CheckFlowAccessByID(ctx, flowID, userID, "editor") == nil
+	return c.authz.Can(ctx, socketActor(userID), service.FlowEdit, service.FlowByID(flowID)) == nil
 }
 
 func ProvideFlowAccessChecker(authz *service.AuthzService, backend storageif.StorageBackend) wshub.FlowAccessChecker {
@@ -87,40 +93,30 @@ func ProvideSecurityConfig(cfg *config.Config, authMgr *auth.Manager, backend st
 	}
 }
 
-func ProvideHandlers(
-	sys *api.SystemHandler,
-	flow *api.FlowHandler,
-	lib *api.LibraryHandler,
-	chat *api.ChatHandler,
-	analysis *api.AnalysisHandler,
-	dashboard *api.DashboardHandler,
-	export *api.ExportHandler,
-	authH *api.AuthHandler,
-	admin *api.AdminHandler,
-	provider *api.ProviderHandler,
-	org *api.OrgHandler,
-	sharing *api.SharingHandler,
-) api.Handlers {
-	return api.Handlers{
-		Sys:       sys,
-		Flow:      flow,
-		Library:   lib,
-		Chat:      chat,
-		Analysis:  analysis,
-		Dashboard: dashboard,
-		Export:    export,
-		Auth:      authH,
-		Admin:     admin,
-		Provider:  provider,
-		Org:       org,
-		Sharing:   sharing,
-	}
+// routeModule contributes handler H to the router's "routes" group as an api.Module; H stays injectable as
+// its concrete type.
+func routeModule[H api.Module]() any {
+	return fx.Annotate(func(h H) api.Module { return h }, fx.ResultTags(`group:"routes"`))
 }
 
 var APIModule = fx.Options(
+	// Each handler also joins the router's "routes" group; NewRouter mounts whatever the group holds.
+	fx.Provide(
+		routeModule[*api.SystemHandler](),
+		routeModule[*api.FlowHandler](),
+		routeModule[*api.LibraryHandler](),
+		routeModule[*api.ChatHandler](),
+		routeModule[*api.AnalysisHandler](),
+		routeModule[*api.DashboardHandler](),
+		routeModule[*api.ExportHandler](),
+		routeModule[*api.AuthHandler](),
+		routeModule[*api.AdminHandler](),
+		routeModule[*api.ProviderHandler](),
+		routeModule[*api.OrgHandler](),
+		routeModule[*api.SharingHandler](),
+	),
 	fx.Provide(
 		ProvideSecurityConfig,
-		ProvideHandlers,
 		ProvideFlowAccessChecker,
 		api.NewEventManager,
 		// Adapter: *redis.Client (nil when PAD_REDIS_URL is unset) →

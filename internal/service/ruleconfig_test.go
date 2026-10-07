@@ -12,7 +12,7 @@ import (
 // (not the built-in default), and UpdateRuleConfig must not erase configured
 // Options when a client sends only {enabled, severity}.
 func TestRuleConfig_ToggleDoesNotWipeOverrides(t *testing.T) {
-	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil)
+	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil, AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("NewAnalysisService: %v", err)
 	}

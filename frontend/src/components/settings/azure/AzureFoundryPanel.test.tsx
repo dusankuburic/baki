@@ -10,6 +10,7 @@ import {useSystemStore} from '@/stores/systemStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useOrgStore, type Organisation} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
+import {unknownValue} from '@/testing/testHelpers'
 import type {AppInfo, AzureConnection, AzureConnectionsListing, AzureModelEntry, AzureScope} from '@/types'
 
 const confirmMock = vi.hoisted(() => vi.fn())
@@ -521,6 +522,56 @@ describe('AzureFoundryPanel: states', () => {
     expect(
       screen.getByText('Unavailable: agents need Microsoft Entra ID and a project endpoint on their resource'),
     ).toBeInTheDocument()
+  })
+
+  // Tolerant wire enums: what a newer server added renders under a neutral
+  // label, and nothing that would have to send it back is offered.
+  it('renders a resource and models a newer server describes with values this app does not know', async () => {
+    seed(
+      [
+        conn('default', {
+          status: unknownValue('suspended'),
+          statusReason: 'Paused by your Azure administrator.',
+          config: {
+            endpoint: 'https://my-res.openai.azure.com',
+            authMode: unknownValue('managed_identity'),
+            hasSecret: false,
+          },
+        }),
+      ],
+      [
+        gpt,
+        model('voice00000', {
+          kind: unknownValue('realtime'),
+          deployment: 'gpt-realtime',
+          displayName: 'Voice',
+          purpose: unknownValue('translation'),
+          status: unknownValue('suspended'),
+        }),
+      ],
+      {registryState: unknownValue('migrating')},
+    )
+    renderPanel()
+    expect(await screen.findByText('This resource is unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Paused by your Azure administrator.')).toBeInTheDocument()
+    expect(screen.getByText('Other sign-in')).toBeInTheDocument()
+
+    const rows = within(screen.getByRole('list', {name: 'Models of my-res'})).getAllByRole('listitem')
+    const voice = rows.find(r => r.textContent?.includes('Voice'))!
+    expect(within(voice).getByText('Other')).toBeInTheDocument()
+    expect(voice).toHaveTextContent('Purpose: translation')
+    expect(voice).toHaveTextContent('Unavailable right now')
+    const edit = within(voice).getByRole('button', {name: 'Edit Voice'})
+    expect(edit).toBeDisabled()
+    expect(edit).toHaveAttribute('title', "This version of the app can't edit this kind of model.")
+    // Not a chat kind this app knows: no "Make default" for it.
+    fireEvent.click(within(voice).getByRole('button', {name: 'More actions for Voice'}))
+    expect(screen.queryByRole('menuitem', {name: 'Make default'})).toBeNull()
+    expect(screen.getByRole('menuitem', {name: 'Remove'})).toBeInTheDocument()
+    // The known model beside it is untouched.
+    expect(
+      within(rows.find(r => r.textContent?.includes('GPT-4.1'))!).getByRole('button', {name: 'Edit GPT-4.1'}),
+    ).toBeEnabled()
   })
 })
 

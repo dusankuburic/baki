@@ -303,7 +303,7 @@ func TestSystemServiceAndAnalysisAgreeOnDeploymentSettings(t *testing.T) {
 
 	b := &countingBackend{}
 	provider := NewBackendSettingsProvider(context.Background(), b)
-	sys := NewSystemService(provider, nil, newTargetingNotifier(), b, "cloud")
+	sys := NewSystemService(provider, nil, newTargetingNotifier(), b, "cloud", nil)
 
 	updated := *models.DefaultSettings()
 	updated.AI.DailyBudget = 100

@@ -3,6 +3,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -84,6 +85,12 @@ type FakeBackend struct {
 	// Orgs backs SaveOrg/LoadOrg (id -> org). Lazily initialized; LoadOrg of
 	// an unseeded id is ErrNotFound, as before.
 	Orgs map[string]*interfaces.Organisation
+	// idem backs the IdempotencyStore (fake_idempotency.go).
+	idem fakeIdempotency
+	// auditEvents keeps every saved audit row (the audit pool and detached writes save concurrently, hence
+	// auditMu); read via SavedAuditEvents.
+	auditEvents []*interfaces.AuditEvent
+	auditMu     sync.Mutex
 
 	// Read counters for what one governance sweep costs (scanner tests):
 	// each is incremented on every call and never reset; atomic, since
@@ -316,6 +323,7 @@ func (m *FakeBackend) userSlice() []*interfaces.User {
 }
 
 func (m *FakeBackend) DeleteUser(_ context.Context, id string) error {
+	m.idem.deleteUser(id)
 	if m.Users == nil {
 		m.Users = make(map[string]*interfaces.User)
 	}
@@ -340,7 +348,7 @@ func (m *FakeBackend) ExportUserData(_ context.Context, id string) (*interfaces.
 }
 
 func (m *FakeBackend) PurgeExpiredData(_ context.Context, _ int) (*interfaces.PurgeResult, error) {
-	return &interfaces.PurgeResult{}, nil
+	return &interfaces.PurgeResult{IdempotencyKeys: m.idem.purge()}, nil
 }
 func (m *FakeBackend) UpdateUserPassword(_ context.Context, _, _ string) error { return nil }
 func (m *FakeBackend) UpdateUserProfile(_ context.Context, _, _, _ string) error {
@@ -899,11 +907,59 @@ func (m *FakeBackend) InvalidateUserTokens(_ context.Context, userID string, pur
 }
 
 // ---- Audit log ----
-func (m *FakeBackend) SaveAuditEvent(_ context.Context, _ *interfaces.AuditEvent) error {
+
+// SaveAuditEvent keeps a copy of the row.
+func (m *FakeBackend) SaveAuditEvent(_ context.Context, e *interfaces.AuditEvent) error {
+	cp := *e
+	cp.Meta = maps.Clone(e.Meta)
+	m.auditMu.Lock()
+	m.auditEvents = append(m.auditEvents, &cp)
+	m.auditMu.Unlock()
 	return nil
 }
-func (m *FakeBackend) ListAuditEvents(_ context.Context, _ interfaces.AuditFilter) ([]*interfaces.AuditEvent, error) {
-	return []*interfaces.AuditEvent{}, nil
+
+// SavedAuditEvents returns copies of the saved audit rows in arrival order.
+func (m *FakeBackend) SavedAuditEvents() []*interfaces.AuditEvent {
+	m.auditMu.Lock()
+	defer m.auditMu.Unlock()
+	out := make([]*interfaces.AuditEvent, len(m.auditEvents))
+	for i, e := range m.auditEvents {
+		cp := *e
+		cp.Meta = maps.Clone(e.Meta)
+		out[i] = &cp
+	}
+	return out
+}
+
+// ListAuditEvents mirrors the Postgres list: the filters, newest first with the id breaking ties, and the page
+// bounds (limit <= 0 is 100, capped at 500).
+func (m *FakeBackend) ListAuditEvents(_ context.Context, f interfaces.AuditFilter) ([]*interfaces.AuditEvent, error) {
+	limit := f.Limit
+	switch {
+	case limit <= 0:
+		limit = 100
+	case limit > 500:
+		limit = 500
+	}
+	out := []*interfaces.AuditEvent{}
+	for _, e := range m.SavedAuditEvents() {
+		subject := f.IncludeSubject && e.ResourceType == "user" && e.ResourceID == f.UserID
+		if f.UserID != "" && e.UserID != f.UserID && !subject {
+			continue
+		}
+		if (f.Action != "" && e.Action != f.Action) || (f.Since != nil && e.CreatedAt.Before(*f.Since)) {
+			continue
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
+	offset := min(max(f.Offset, 0), len(out))
+	return out[offset:min(offset+limit, len(out))], nil
 }
 
 // ---- Flow versioning ----

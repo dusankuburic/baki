@@ -14,13 +14,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/sso"
-	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
 
@@ -33,29 +34,16 @@ type SSOClient interface {
 }
 
 // IdentityStore is the optional storage capability for SSO identity links, implemented by the
-// Postgres backend (same optional-capability pattern as RefreshTokenStore).
-type IdentityStore interface {
-	SaveIdentityLink(ctx context.Context, link *storageif.IdentityLink) error
-	LoadIdentityLink(ctx context.Context, provider, subject string) (*storageif.IdentityLink, error)
-	ListIdentityLinks(ctx context.Context, userID string) ([]*storageif.IdentityLink, error)
-	DeleteIdentityLink(ctx context.Context, userID, provider string) error
-}
+// Postgres backend; the service.IdentityService owns it.
+type IdentityStore = service.IdentityLinkStore
 
 // ssoFlowCookie carries the per-login CSRF state, OIDC nonce and PKCE verifier between the /start
-// redirect and the /callback. HttpOnly — the SPA never sees it.
+// redirect and the /callback, signed (auth.Manager.IssueSSOFlow) so the browser holding it cannot
+// change its link target. HttpOnly — the SPA never sees it.
 const ssoFlowCookie = "pad_sso_flow"
 
-type ssoFlowState struct {
-	State    string `json:"s"`
-	Nonce    string `json:"n"`
-	Verifier string `json:"v"`
-	// LinkUserID marks a "link this IdP identity to my existing account" round trip started from
-	// account settings by an authenticated user (handleSSOLinkStart); the callback then links.
-	LinkUserID string `json:"l,omitempty"`
-}
-
 func (h *AuthHandler) ssoEnabled() bool {
-	return h.security.JWTEnabled && h.ssoClient != nil && h.identityStore != nil && h.backend != nil
+	return h.security.JWTEnabled && h.ssoClient != nil && h.identity.Available() && h.backend != nil
 }
 
 // handleSSOInfo tells the SPA whether to render the SSO login button.
@@ -106,7 +94,7 @@ func (h *AuthHandler) beginSSOFlow(w http.ResponseWriter, r *http.Request, linkU
 		render.Error(w, fmt.Errorf("failed to initialize login: %w", err), http.StatusInternalServerError)
 		return "", false
 	}
-	flow := ssoFlowState{
+	flow := auth.SSOFlow{
 		State:      toks[0],
 		Nonce:      toks[1],
 		Verifier:   toks[2] + toks[3],
@@ -117,15 +105,19 @@ func (h *AuthHandler) beginSSOFlow(w http.ResponseWriter, r *http.Request, linkU
 		render.Error(w, err, http.StatusBadGateway)
 		return "", false
 	}
+	signed, err := h.security.AuthMgr.IssueSSOFlow(flow)
+	if err != nil {
+		render.Error(w, fmt.Errorf("failed to initialize login: %w", err), http.StatusInternalServerError)
+		return "", false
+	}
 
-	payload, _ := json.Marshal(flow)
 	// #nosec G124 -- HttpOnly+SameSite are always set; Secure is set whenever the
 	// request is TLS (it can't be unconditional for local HTTP dev).
 	http.SetCookie(w, &http.Cookie{
 		Name:     ssoFlowCookie,
-		Value:    base64.RawURLEncoding.EncodeToString(payload),
+		Value:    signed,
 		Path:     "/api/auth/sso",
-		MaxAge:   600,
+		MaxAge:   int(auth.SSOFlowTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   requestIsTLS(r),
 		SameSite: http.SameSiteLaxMode,
@@ -161,26 +153,6 @@ func (h *AuthHandler) handleSSOLinkStart(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, map[string]string{"url": authURL})
 }
 
-// linkSSOIdentity attaches ident to userID: an identity already linked to a different account is
-// refused (one external identity maps to exactly one local user); re-linking the same one is a no-op.
-func (h *AuthHandler) linkSSOIdentity(ctx context.Context, userID string, ident *sso.Identity) error {
-	provider := h.ssoClient.ProviderName()
-	if existing, err := h.identityStore.LoadIdentityLink(ctx, provider, ident.Subject); err == nil {
-		if existing.UserID == userID {
-			return nil
-		}
-		return fmt.Errorf("this %s identity is already linked to another account", provider)
-	} else if !errors.Is(err, storageif.ErrNotFound) {
-		return err
-	}
-	return h.identityStore.SaveIdentityLink(ctx, &storageif.IdentityLink{
-		Provider: provider,
-		Subject:  ident.Subject,
-		UserID:   userID,
-		Email:    strings.ToLower(ident.Email),
-	})
-}
-
 // identityLinkView is the client-facing shape of a link: the opaque IdP
 // subject stays server-side.
 type identityLinkView struct {
@@ -201,11 +173,11 @@ func (h *AuthHandler) handleSSOLinks(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
-	if h.identityStore == nil {
+	if !h.identity.Available() {
 		render.JSON(w, []identityLinkView{})
 		return
 	}
-	links, err := h.identityStore.ListIdentityLinks(r.Context(), userID)
+	links, err := h.identity.Links(r.Context(), userID)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -233,25 +205,20 @@ func (h *AuthHandler) handleSSOUnlink(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
-	if h.identityStore == nil || h.backend == nil {
+	if !h.identity.Available() || h.backend == nil {
 		render.Error(w, fmt.Errorf("SSO is not configured"), http.StatusNotFound)
 		return
 	}
-	user, err := h.backend.LoadUserByID(r.Context(), userID)
-	if err != nil {
-		render.Error(w, err, 0)
-		return
-	}
-	if user.Password == "" {
-		render.Error(w, fmt.Errorf("set a password first — this identity is currently the only way to sign in"), http.StatusConflict)
-		return
-	}
 	provider := chi.URLParam(r, "provider")
-	if err := h.identityStore.DeleteIdentityLink(r.Context(), userID, provider); err != nil {
+	if err := h.identity.Unlink(r.Context(), userID, provider); err != nil {
+		if errors.Is(err, service.ErrUnlinkOnlySignIn) {
+			render.Error(w, err, http.StatusConflict)
+			return
+		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSSOUnlink, "user", userID, map[string]string{"provider": provider})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionSSOUnlink, ResourceType: "user", ResourceID: userID, Meta: map[string]string{"provider": provider}})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -286,7 +253,7 @@ func (h *AuthHandler) handleSSOCallback(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	flow, err := readSSOFlowCookie(r)
+	flow, err := h.readSSOFlowCookie(r)
 	if err != nil {
 		redirectSSOError(w, r, "login session expired or missing — try again")
 		return
@@ -310,23 +277,24 @@ func (h *AuthHandler) handleSSOCallback(w http.ResponseWriter, r *http.Request) 
 	if flow.LinkUserID != "" {
 		// Account-link round trip (handleSSOLinkStart): the caller proved the local account at
 		// start and has now proved control of the IdP identity — attach, do not log in.
-		if err := h.linkSSOIdentity(r.Context(), flow.LinkUserID, ident); err != nil {
-			logger.Warn("sso: identity link failed", "err", err)
+		if err := h.identity.Link(r.Context(), h.ssoClient.ProviderName(), flow.LinkUserID, ident); err != nil {
+			logger.FromContext(r.Context()).Warn("sso: identity link failed", "err", err)
 			redirectSSOError(w, r, "could not link this identity — it may already belong to another account")
 			return
 		}
-		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSSOLink, "user", flow.LinkUserID, map[string]string{"provider": h.ssoClient.ProviderName()})
+		h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionSSOLink, ResourceType: "user", ResourceID: flow.LinkUserID, Meta: map[string]string{"provider": h.ssoClient.ProviderName()}})
 		http.Redirect(w, r, "/#ssoLinked="+url.QueryEscape(h.ssoClient.ProviderName()), http.StatusFound)
 		return
 	}
 
-	user, err := h.resolveSSOUser(r.Context(), ident)
+	user, err := h.identity.ResolveSSOUser(r.Context(), h.ssoClient.ProviderName(), ident)
 	if err != nil {
 		// B1.8: backend/driver error text must not ride a browser redirect.
-		logger.Warn("sso: user resolution failed", "err", err)
+		logger.FromContext(r.Context()).Warn("sso: user resolution failed", "err", err)
 		redirectSSOError(w, r, "account resolution failed")
 		return
 	}
+	recordUser(r, user.ID, user.Email, user.Role)
 
 	ticket, err := h.security.AuthMgr.IssueSSOTicket(user.ID, user.Email, user.Role)
 	if err != nil {
@@ -371,20 +339,21 @@ func (h *AuthHandler) handleSSOExchange(w http.ResponseWriter, r *http.Request) 
 
 	// Re-load the user so the issued pair reflects the current role/email even
 	// if they changed between callback and exchange.
-	user, err := h.backend.LoadUserByID(r.Context(), claims.UserID)
+	user, err := h.authSvc.User(r.Context(), claims.UserID)
 	if err != nil {
 		render.Error(w, fmt.Errorf("user not found"), http.StatusUnauthorized)
 		return
 	}
+	recordUser(r, user.ID, user.Email, user.Role)
 
 	pair, err := h.security.AuthMgr.Issue(user.ID, user.Email, user.Role)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	if h.tokenStore != nil {
+	if h.sessions.Enabled() {
 		ua, ip := r.UserAgent(), middleware.ClientIP(r, h.security.TrustedProxies)
-		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, user.ID, pair.RefreshExpiresAt, ua, ip); err != nil {
+		if err := h.sessions.Record(r.Context(), pair.RefreshID, user.ID, pair.RefreshExpiresAt, ua, ip); err != nil {
 			render.Error(w, err, http.StatusInternalServerError)
 			return
 		}
@@ -394,7 +363,7 @@ func (h *AuthHandler) handleSSOExchange(w http.ResponseWriter, r *http.Request) 
 	// build can drop its localStorage copy of the token.
 	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt, true)
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSSOLogin, "user", user.ID, map[string]string{"provider": h.ssoClient.ProviderName()})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionSSOLogin, ResourceType: "user", ResourceID: user.ID, Meta: map[string]string{"provider": h.ssoClient.ProviderName()}})
 	// Mirrors handleAuthLogin: the client's LoginResponseSchema requires the
 	// `user` object alongside the tokens.
 	render.JSON(w, map[string]any{
@@ -411,101 +380,14 @@ func (h *AuthHandler) handleSSOExchange(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// resolveSSOUser maps a verified IdP identity to a local user: an existing link wins; else an
-// account with the same verified email is linked; else a new account is JIT-provisioned with no
-// usable password. Linking and provisioning both require the IdP to assert the email as verified —
-// auto-linking on an unverified email would let an attacker who controls a sloppy IdP account take
-// over the matching local account.
-func (h *AuthHandler) resolveSSOUser(ctx context.Context, ident *sso.Identity) (*storageif.User, error) {
-	provider := h.ssoClient.ProviderName()
-	ident.Email = strings.ToLower(ident.Email)
-
-	if link, err := h.identityStore.LoadIdentityLink(ctx, provider, ident.Subject); err == nil {
-		return h.backend.LoadUserByID(ctx, link.UserID)
-	} else if !errors.Is(err, storageif.ErrNotFound) {
-		return nil, fmt.Errorf("login failed — try again")
-	}
-
-	if ident.Email == "" || !ident.EmailVerified {
-		return nil, fmt.Errorf("your identity provider did not assert a verified email address")
-	}
-
-	newLink := &storageif.IdentityLink{
-		Provider: provider,
-		Subject:  ident.Subject,
-		Email:    ident.Email,
-	}
-
-	if existing, err := h.backend.LoadUserByEmail(ctx, ident.Email); err == nil {
-		newLink.UserID = existing.ID
-
-		// Security: an unverified local account (e.g. an open-registration "shadow" with a
-		// password an attacker knows) is a pre-account-takeover risk. Linking it to a verified
-		// SSO identity takes ownership: clear the password hash so the shadow's password can no
-		// longer log in, forcing the account onto the IdP.
-		if !existing.EmailVerified {
-			existing.EmailVerified = true
-			existing.Password = "" // Strip the insecure password hash
-			if err := h.backend.SaveUser(ctx, existing); err != nil {
-				return nil, fmt.Errorf("failed to harden account — try again")
-			}
-			// Outstanding reset/verify tokens must go too: an attacker who created the shadow could
-			// have a reset link that would re-arm a known password after the owner takes over via SSO.
-			if err := h.backend.InvalidateUserTokens(ctx, existing.ID,
-				storageif.TokenPurposePasswordReset, storageif.TokenPurposeEmailVerify); err != nil {
-				logger.Error("failed to invalidate outstanding reset/verify tokens during SSO account hardening", "error", err, "userID", existing.ID)
-			}
-			logger.Info("account takeover prevented: cleared password on unverified account linked to verified SSO identity", "userID", existing.ID, "email", redactEmail(ident.Email))
-		} else {
-			// Already verified: do NOT auto-link a new IdP identity — an attacker controlling an
-			// IdP that asserts the victim's email as verified could SSO straight into the account.
-			// The owner must add the provider from account settings.
-			return nil, fmt.Errorf("an account with this email already exists — link %s from your account settings", provider)
-		}
-
-		if err := h.identityStore.SaveIdentityLink(ctx, newLink); err != nil {
-			return nil, fmt.Errorf("failed to link account — try again")
-		}
-		return existing, nil
-	}
-
-	user := &storageif.User{
-		ID:    uuid.NewString(),
-		Email: ident.Email,
-		// No usable password: SSO-only account. bcrypt comparison against an
-		// empty hash always fails, so password login is naturally impossible.
-		Password:      "",
-		EmailVerified: true, // IdP asserted verification
-		Role:          auth.RoleMember,
-		DisplayName:   ident.DisplayName,
-	}
-	if err := h.backend.CreateUser(ctx, user); err != nil {
-		return nil, fmt.Errorf("failed to create account — try again")
-	}
-	newLink.UserID = user.ID
-	if err := h.identityStore.SaveIdentityLink(ctx, newLink); err != nil {
-		return nil, fmt.Errorf("failed to link account — try again")
-	}
-	return user, nil
-}
-
-func readSSOFlowCookie(r *http.Request) (*ssoFlowState, error) {
+// readSSOFlowCookie returns the flow /start signed into the cookie; a cookie that is missing, expired or not
+// signed by this deployment is refused.
+func (h *AuthHandler) readSSOFlowCookie(r *http.Request) (*auth.SSOFlow, error) {
 	c, err := r.Cookie(ssoFlowCookie)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(c.Value)
-	if err != nil {
-		return nil, err
-	}
-	var flow ssoFlowState
-	if err := json.Unmarshal(raw, &flow); err != nil {
-		return nil, err
-	}
-	if flow.State == "" || flow.Nonce == "" || flow.Verifier == "" {
-		return nil, errors.New("incomplete sso flow state")
-	}
-	return &flow, nil
+	return h.security.AuthMgr.VerifySSOFlow(c.Value)
 }
 
 // redirectSSOError sends the browser back to the SPA with a human-readable error in the URL
@@ -546,16 +428,20 @@ func randomTokens(n int) ([]string, error) {
 
 // registerSSORoutes wires the OIDC SSO sub-routes: the login round trip plus
 // authenticated account linking.
-func (h *AuthHandler) registerSSORoutes(r chi.Router) {
-	r.Route("/sso", func(r chi.Router) {
-		r.Get("/info", h.handleSSOInfo)
-		r.Get("/start", h.handleSSOStart)
-		r.Get("/callback", h.handleSSOCallback)
-		r.Post("/exchange", h.handleSSOExchange)
+func (h *AuthHandler) registerSSORoutes(rb *route.Builder) {
+	rb.Route("/sso", func(rb *route.Builder) {
+		// The login round trip, before the browser has any token. exchange
+		// carries its own single-use ticket and rides the auth bucket.
+		rb.Group(func(rb *route.Builder) {
+			rb.Get("/info", h.handleSSOInfo)
+			rb.Get("/start", h.handleSSOStart)
+			rb.Get("/callback", h.handleSSOCallback)
+			rb.Post("/exchange", h.handleSSOExchange, route.RateLimit(route.RateAuth))
+		}, route.Public())
 		// Account linking (authenticated): start a link round trip, list
 		// and remove the caller's linked identities.
-		r.Post("/link/start", h.handleSSOLinkStart)
-		r.Get("/links", h.handleSSOLinks)
-		r.Delete("/links/{provider}", h.handleSSOUnlink)
+		rb.Post("/link/start", h.handleSSOLinkStart)
+		rb.Get("/links", h.handleSSOLinks)
+		rb.Delete("/links/{provider}", h.handleSSOUnlink)
 	})
 }

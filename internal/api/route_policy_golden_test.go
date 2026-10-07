@@ -16,31 +16,91 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"pad-analyzer/internal/api/middleware"
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/testutil"
 )
 
-var updateRoutePolicy = flag.Bool("update-route-policy", false, "rewrite testdata/route_policy.golden")
+var (
+	updateRoutePolicy         = flag.Bool("update-route-policy", false, "rewrite testdata/route_policy.golden")
+	updateRoutePolicyDeclared = flag.Bool("update-route-policy-declared", false, "rewrite testdata/route_policy_declared.golden")
+)
 
 // TestRoutePolicy_Golden records, for every registered route plus adversarial spellings of it and paths that are
 // no route at all, what each legacy policy classifier decides: whether jwtAuth authenticates the request, the
-// minimal scope sets a scoped token needs, the rate-limit bucket, the RLS mode, the deadline class, the metrics
-// label, and the route chi dispatches to. Every value comes from the function the middleware itself calls, on the
-// URL as that layer sees it (outer layers: as received; inside the mux: after path.Clean and the /api/v1 alias).
+// minimal scope sets a scoped token needs, the rate-limit bucket, the RLS mode, the deadline class, and the route
+// chi dispatches to; plus the metrics label, which in every mode is the resolved policy's (Phase 1a). Every value
+// comes from the function the middleware itself calls, on the URL as that layer sees it (outer layers: as
+// received; inside the mux: after path.Clean and the /api/v1 alias).
 //
-// Phase 1a (docs/architecture/backend-refactoring-proposal.md) moves this policy onto the routes; its resolver
-// must reproduce this file before any legacy table is deleted. Refresh only for an intended policy change:
+// The legacy classifiers stay until one release after the flip to declarative (ADR 0006); the declared policy is
+// recorded beside it in route_policy_declared.golden. Refresh only for an intended policy change:
 // go test ./internal/api/ -run TestRoutePolicy_Golden -update-route-policy
 func TestRoutePolicy_Golden(t *testing.T) {
 	rt := newTestRouter(testutil.NewFakeBackend(), true)
-	known := staticRoutePatterns(rt.mux)
 
 	var b strings.Builder
 	for _, req := range policyRequests(t, rt) {
-		b.WriteString(describePolicy(rt, known, req.method, req.target))
-		b.WriteByte('\n')
+		fmt.Fprintf(&b, "%s %s | %s\n", req.method, req.target, legacyDecisionsOf(rt, req.method, req.target))
 	}
 	compareGolden(t, filepath.Join("testdata", "route_policy.golden"), b.String(), *updateRoutePolicy, "-update-route-policy")
+}
+
+// TestRoutePolicyDeclared_Golden records, for the same requests, the policy the resolver gives each (the declared
+// one): the kind (a route, a 405, no route) and pattern, who may call it (none, self or jwt), the minimal scope
+// sets a scoped token needs, the rate-limit bucket, the request transaction, the deadline class, the metrics label,
+// and a 405's Allow list. Where it differs from route_policy.golden on a 405, OPTIONS or no-route line, the
+// difference is deliberate and reviewed here; on a route it must not differ (TestRoutePolicy_DeclaredMatchesLegacy).
+// Refresh only for an intended policy change:
+// go test ./internal/api/ -run TestRoutePolicyDeclared_Golden -update-route-policy-declared
+func TestRoutePolicyDeclared_Golden(t *testing.T) {
+	rt := newTestRouter(testutil.NewFakeBackend(), true)
+
+	var b strings.Builder
+	for _, req := range policyRequests(t, rt) {
+		fmt.Fprintf(&b, "%s %s | %s\n", req.method, req.target, declaredDecisionsOf(rt, req.method, req.target))
+	}
+	compareGolden(t, filepath.Join("testdata", "route_policy_declared.golden"), b.String(), *updateRoutePolicyDeclared, "-update-route-policy-declared")
+}
+
+// TestRoutePolicy_DeclaredMatchesLegacy: for every request that resolves to a route, the declared policy decides
+// exactly what the legacy classifiers decide (the metrics label excepted, which is now the pattern), and names the
+// route chi dispatches to. This is what makes the flip to declarative a no-op for routes.
+func TestRoutePolicy_DeclaredMatchesLegacy(t *testing.T) {
+	rt := newTestRouter(testutil.NewFakeBackend(), true)
+	compared := 0
+	for _, req := range policyRequests(t, rt) {
+		d := declaredDecisionsOf(rt, req.method, req.target)
+		if d.kind != route.KindEndpoint.String() {
+			continue
+		}
+		compared++
+		l := legacyDecisionsOf(rt, req.method, req.target)
+		legacyAuth := l.auth
+		declaredAuth := d.auth
+		if declaredAuth == route.AuthSelf.String() {
+			declaredAuth = route.AuthNone.String()
+		}
+		rls := "none"
+		if d.auth == route.AuthRequired.String() {
+			rls = map[string]string{"tx": "tx", "none": "exempt"}[d.tx]
+		}
+		for _, c := range []struct{ name, legacy, declared string }{
+			{"route", route.NormalizePattern(l.route), d.pattern},
+			{"auth", legacyAuth, declaredAuth},
+			{"scopes", l.scopes, d.scopes},
+			{"ratelimit", l.ratelimit, d.ratelimit},
+			{"rls", l.rls, rls},
+			{"deadline", l.timeout, d.deadline},
+		} {
+			if c.legacy != c.declared {
+				t.Errorf("%s %s: %s legacy %q, declared %q", req.method, req.target, c.name, c.legacy, c.declared)
+			}
+		}
+	}
+	if compared < 4*len(rt.routes.Policies()) {
+		t.Fatalf("compared %d route requests; policyRequests or the resolver is broken", compared)
+	}
 }
 
 type policyRequest struct{ method, target string }
@@ -111,8 +171,16 @@ func policyRequests(t *testing.T, rt *Router) []policyRequest {
 	return out
 }
 
-// describePolicy renders one golden line for method + target.
-func describePolicy(rt *Router, known map[string]struct{}, method, target string) string {
+// legacyDecisions is what the legacy classifiers decide for one request, as route_policy.golden records it.
+type legacyDecisions struct{ route, auth, scopes, ratelimit, rls, timeout, metric string }
+
+func (d legacyDecisions) String() string {
+	return fmt.Sprintf("route=%s auth=%s scopes=%s ratelimit=%s rls=%s timeout=%s metric=%s",
+		d.route, d.auth, d.scopes, d.ratelimit, d.rls, d.timeout, d.metric)
+}
+
+// legacyDecisionsOf runs the legacy classifiers on method + target.
+func legacyDecisionsOf(rt *Router, method, target string) legacyDecisions {
 	r := httptest.NewRequest(method, target, nil)
 
 	// Outer layers, before the mux (middleware_chain.go): the URL as received.
@@ -121,7 +189,7 @@ func describePolicy(rt *Router, known map[string]struct{}, method, target string
 		bucket = "none"
 	}
 	deadline := middleware.TimeoutClass(r)
-	label := middleware.RouteLabel(r.URL, known)
+	label := rt.resolver.Resolve(method, r.URL).Label // what Metrics records, in every mode
 
 	// Inside the mux: Router.ServeHTTP cleans Path, the alias middleware rewrites the URL, then jwtAuth and
 	// rlsMiddleware judge routePath.
@@ -132,24 +200,60 @@ func describePolicy(rt *Router, known map[string]struct{}, method, target string
 	in.URL = &u
 	p := routePath(in)
 
-	authn, scopes, rls := "jwt", minimalScopeSets(method, p), "tx"
+	authn, scopes, rls := "jwt", minimalScopeSets(func(set []string) bool { return auth.RouteAllowed(method, p, set) }), "tx"
 	switch {
 	case !strings.HasPrefix(p, "/api/") || publicRoutes[p]:
 		authn, scopes, rls = "none", "-", "none"
 	case rlsExemptPath(p):
 		rls = "exempt"
 	}
-	route := rt.mux.Find(chi.NewRouteContext(), method, p)
-	if route == "" {
-		route = "-"
+	dispatched := rt.mux.Find(chi.NewRouteContext(), method, p)
+	if dispatched == "" {
+		dispatched = "-"
 	}
-	return fmt.Sprintf("%s %s | route=%s auth=%s scopes=%s ratelimit=%s rls=%s timeout=%s metric=%s",
-		method, target, route, authn, scopes, bucket, rls, deadline, label)
+	return legacyDecisions{dispatched, authn, scopes, bucket, rls, deadline, label}
 }
 
-// minimalScopeSets lists the smallest scope sets with which a scoped token may make the request ("any" when no
-// scope is needed, "deny" when none suffices), e.g. "chat+write" for approving a chat fix.
-func minimalScopeSets(method, p string) string {
+// declaredDecisions is the policy the resolver gives one request, as route_policy_declared.golden records it.
+type declaredDecisions struct{ kind, pattern, auth, scopes, ratelimit, tx, deadline, label, allow string }
+
+func (d declaredDecisions) String() string {
+	s := fmt.Sprintf("kind=%s pattern=%s auth=%s scopes=%s ratelimit=%s tx=%s deadline=%s label=%s",
+		d.kind, d.pattern, d.auth, d.scopes, d.ratelimit, d.tx, d.deadline, d.label)
+	if d.allow != "" {
+		s += " allow=" + d.allow
+	}
+	return s
+}
+
+// declaredDecisionsOf resolves method + target as the outer layer does, before the router touches the URL.
+func declaredDecisionsOf(rt *Router, method, target string) declaredDecisions {
+	p := rt.resolver.Resolve(method, httptest.NewRequest(method, target, nil).URL)
+	d := declaredDecisions{
+		kind: p.Kind.String(), pattern: p.Pattern, auth: p.Access.String(), scopes: "-", ratelimit: p.RateLimit,
+		tx: p.Tx.String(), deadline: p.Deadline.String(), label: p.Label,
+	}
+	if d.pattern == "" {
+		d.pattern = "-"
+	}
+	if d.ratelimit == "" {
+		d.ratelimit = route.RateGeneral
+	}
+	if p.Access == route.AuthRequired {
+		d.scopes = minimalScopeSets(p.AllowsToken)
+	}
+	if p.Kind == route.KindMethodNotAllowed {
+		d.allow = strings.Join(p.Allowed, ",")
+		if d.allow == "" {
+			d.allow = "-"
+		}
+	}
+	return d
+}
+
+// minimalScopeSets lists the smallest scope sets with which a scoped token may make a request allowed accepts
+// ("any" when no scope is needed, "deny" when none suffices), e.g. "chat+write" for approving a chat fix.
+func minimalScopeSets(allowed func(scopes []string) bool) string {
 	all := auth.ValidTokenScopes
 	var minimal [][]string
 	for size := 0; size <= len(all); size++ {
@@ -160,7 +264,7 @@ func minimalScopeSets(method, p string) string {
 					set = append(set, s)
 				}
 			}
-			if len(set) != size || !auth.RouteAllowed(method, p, set) {
+			if len(set) != size || !allowed(set) {
 				continue
 			}
 			redundant := false

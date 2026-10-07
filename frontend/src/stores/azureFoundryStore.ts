@@ -24,6 +24,7 @@ import type {
   AzureScope,
   AzureTestInput,
   AzureTestResult,
+  Tolerant,
 } from '@/types'
 
 // The Azure AI Foundry model registry (resources — "connections" in the API
@@ -81,7 +82,7 @@ export interface AzureScopeState {
   connections: AzureConnection[]
   /** Sorted in the registry's display order (compareRegistryModels). */
   models: AzureModelEntry[]
-  registryState: AzureRegistryState
+  registryState: Tolerant<AzureRegistryState>
   /** With registryState 'recovered': where the unreadable list file was kept, when the server says. */
   recoveredCopyPath: string | null
   limits: AzureRegistryLimits
@@ -269,7 +270,7 @@ function recount(connections: AzureConnection[], models: AzureModelEntry[]): Azu
 // Discovery marks a deployment added when the resource holds an entry of any
 // non-agent kind with its name, and an agent when it holds an agent entry of
 // that name (names compared case-insensitively) — the server's rule.
-function discoveryKey(kind: AzureModelKind, name: string): string {
+function discoveryKey(kind: Tolerant<AzureModelKind>, name: string): string {
   return `${kind === 'agent' ? 'agent' : 'deployment'}\u0000${name.toLowerCase()}`
 }
 

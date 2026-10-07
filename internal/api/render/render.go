@@ -1,10 +1,12 @@
 package render
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"net/http"
 
+	"pad-analyzer/internal/platform/apperr"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
@@ -78,11 +80,12 @@ func statusCode(status int) string {
 	}
 }
 
-// Error writes a structured JSON error response. Pass code=0 to auto-map
-// domain errors (ErrNotFound → 404, ErrPermissionDenied → 403, etc.).
+// Error writes a structured JSON error response. An *apperr.Error in err's chain decides the status, the code and
+// the details itself, whatever code says. For any other error, pass code=0 to auto-map domain errors
+// (ErrNotFound → 404, ErrPermissionDenied → 403, etc.).
 func Error(w http.ResponseWriter, err error, code int) {
-	code = errorStatus(err, code)
-	writeError(w, err, code, statusCode(code))
+	code, machineCode, details := resolve(err, code)
+	writeErrorWithDetails(w, err, code, machineCode, details)
 }
 
 // ErrorUnlogged writes exactly the response Error would — same status mapping, machine code and
@@ -91,11 +94,21 @@ func Error(w http.ResponseWriter, err error, code int) {
 // at will: the unconfigured CI webhook once answered each call with a 503 AND an ERROR line, so
 // anyone could flood the error log and its alerting. The caller owns reporting, once per process.
 func ErrorUnlogged(w http.ResponseWriter, err error, code int) {
-	code = errorStatus(err, code)
-	writeErrorBody(w, err, code, statusCode(code), nil)
+	code, machineCode, details := resolve(err, code)
+	writeErrorBody(w, err, code, machineCode, details)
 }
 
-// errorStatus resolves the status Error and ErrorUnlogged write: code=0 means 500, and a 500 is
+// resolve returns the status, machine code and details that Error and ErrorUnlogged write: an *apperr.Error's
+// own, otherwise the status errorStatus resolves and that status's code.
+func resolve(err error, code int) (int, string, map[string]any) {
+	if ae, ok := apperr.As(err); ok {
+		return ae.Kind.Status(), cmp.Or(ae.Code, ae.Kind.Code()), ae.Details
+	}
+	code = errorStatus(err, code)
+	return code, statusCode(code), nil
+}
+
+// errorStatus resolves the status of an error that is not an *apperr.Error: code=0 means 500, and a 500 is
 // narrowed to the status a known domain error implies.
 func errorStatus(err error, code int) int {
 	if code == 0 {
@@ -157,12 +170,17 @@ func writeErrorWithDetails(w http.ResponseWriter, err error, code int, machineCo
 // through it so the wire shape (and the 5xx masking) is defined in one place.
 func writeErrorBody(w http.ResponseWriter, err error, code int, machineCode string, details map[string]any) {
 	msg := err.Error()
+	// An *apperr.Error's message is the one meant for the caller; its cause and any wrapping context are for
+	// the logs.
+	if ae, ok := apperr.As(err); ok {
+		msg = cmp.Or(ae.Message, ae.Kind.String())
+	}
 	if code >= 500 {
 		msg = "internal server error"
 	}
 
-	// X-Request-ID is stamped by the access-log middleware before the handler runs, so it is
-	// already present in the response header here.
+	// X-Request-ID is stamped by middleware.RequestInfo (AccessLog when that did not run) before the
+	// handler runs, so it is already present in the response header here.
 	reqID := w.Header().Get("X-Request-ID")
 
 	w.Header().Set("Content-Type", "application/json")

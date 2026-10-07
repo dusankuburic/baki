@@ -29,7 +29,7 @@ func TestParseFlowSort(t *testing.T) {
 }
 
 func TestLibraryService_LocalMode_ListReturnsEmpty(t *testing.T) {
-	svc := NewLibraryService(nil, nil, nil) // local mode
+	svc := NewLibraryService(nil, nil, nil, nil) // local mode
 	docs, err := svc.ListLibraryFlows(context.Background(), "user1", "", ScopeAll, "", "", 10, 0)
 	if err != nil {
 		t.Fatalf("ListLibraryFlows: %v", err)
@@ -40,7 +40,7 @@ func TestLibraryService_LocalMode_ListReturnsEmpty(t *testing.T) {
 }
 
 func TestLibraryService_LocalMode_CountReturnsZero(t *testing.T) {
-	svc := NewLibraryService(nil, nil, nil)
+	svc := NewLibraryService(nil, nil, nil, nil)
 	count, err := svc.CountLibraryFlows(context.Background(), "user1", "", ScopeAll, "")
 	if err != nil {
 		t.Fatalf("CountLibraryFlows: %v", err)
@@ -51,7 +51,7 @@ func TestLibraryService_LocalMode_CountReturnsZero(t *testing.T) {
 }
 
 func TestLibraryService_LocalMode_FlowHealthReturnsNil(t *testing.T) {
-	svc := NewLibraryService(nil, nil, nil)
+	svc := NewLibraryService(nil, nil, nil, nil)
 	h, err := svc.FlowHealth(context.Background(), "flow1")
 	if err != nil {
 		t.Fatalf("FlowHealth: %v", err)
@@ -62,7 +62,7 @@ func TestLibraryService_LocalMode_FlowHealthReturnsNil(t *testing.T) {
 }
 
 func TestLibraryService_LocalMode_PermissionsAllTrue(t *testing.T) {
-	svc := NewLibraryService(nil, nil, nil)
+	svc := NewLibraryService(nil, nil, nil, nil)
 	doc := &storageif.FlowDocument{ID: "f1"}
 	canEdit, canDelete, canShare := svc.FlowPermissions(context.Background(), doc, "user1")
 	if !canEdit || !canDelete || !canShare {
@@ -71,7 +71,7 @@ func TestLibraryService_LocalMode_PermissionsAllTrue(t *testing.T) {
 }
 
 func TestLibraryService_LocalMode_BatchPermissionsAllTrue(t *testing.T) {
-	svc := NewLibraryService(nil, nil, nil)
+	svc := NewLibraryService(nil, nil, nil, nil)
 	docs := []*storageif.FlowDocument{{ID: "f1"}, {ID: "f2"}}
 	perms := svc.BatchFlowPermissions(context.Background(), docs, "user1")
 	if len(perms) != 2 {
@@ -85,18 +85,18 @@ func TestLibraryService_LocalMode_BatchPermissionsAllTrue(t *testing.T) {
 }
 
 func TestLibraryService_LocalMode_CanReadCanWrite(t *testing.T) {
-	svc := NewLibraryService(nil, nil, nil)
+	svc := NewLibraryService(nil, nil, nil, nil)
 	doc := &storageif.FlowDocument{ID: "f1"}
-	if !svc.CanRead(context.Background(), doc, "user1") {
+	if !svc.CanRead(context.Background(), doc) {
 		t.Error("expected CanRead=true in local mode")
 	}
-	if err := svc.CanWrite(context.Background(), doc, "user1"); err != nil {
+	if err := svc.CanWrite(context.Background(), doc); err != nil {
 		t.Errorf("expected CanWrite=nil in local mode, got %v", err)
 	}
 }
 
 func TestResolveOwnerName_NilStorage(t *testing.T) {
-	svc := NewLibraryService(nil, nil, nil)
+	svc := NewLibraryService(nil, nil, nil, nil)
 	if name := svc.ResolveOwnerName(context.Background(), "user1"); name != "" {
 		t.Errorf("expected empty name for nil storage, got %q", name)
 	}
@@ -104,14 +104,14 @@ func TestResolveOwnerName_NilStorage(t *testing.T) {
 
 func TestResolveOwnerName_EmptyID(t *testing.T) {
 	backend := &testutil.FakeBackend{}
-	svc := NewLibraryService(backend, nil, nil)
+	svc := NewLibraryService(backend, nil, nil, nil)
 	if name := svc.ResolveOwnerName(context.Background(), ""); name != "" {
 		t.Errorf("expected empty name for empty ID, got %q", name)
 	}
 }
 
 func TestResolveOwnerNames_NilStorage(t *testing.T) {
-	svc := NewLibraryService(nil, nil, nil)
+	svc := NewLibraryService(nil, nil, nil, nil)
 	names := svc.ResolveOwnerNames(context.Background(), []string{"u1", "u2"})
 	if len(names) != 0 {
 		t.Errorf("expected empty map for nil storage, got %v", names)
@@ -120,7 +120,7 @@ func TestResolveOwnerNames_NilStorage(t *testing.T) {
 
 func TestResolveOwnerNames_EmptyInput(t *testing.T) {
 	backend := &testutil.FakeBackend{}
-	svc := NewLibraryService(backend, nil, nil)
+	svc := NewLibraryService(backend, nil, nil, nil)
 	names := svc.ResolveOwnerNames(context.Background(), nil)
 	if len(names) != 0 {
 		t.Errorf("expected empty map for empty input, got %v", names)

@@ -137,6 +137,7 @@ type PurgeResult struct {
 	TokenBlacklist      int `json:"tokenBlacklist"`
 	ShareTokens         int `json:"shareTokens"`
 	GovAlerts           int `json:"govAlerts"`
+	IdempotencyKeys     int `json:"idempotencyKeys"`
 }
 
 // FlowStore covers flow document CRUD/listing; depend on it rather than the full StorageBackend when that is all you need.
@@ -210,7 +211,7 @@ type UserStore interface {
 	DeleteUser(ctx context.Context, userID string) error
 	// ExportUserData assembles the data-subject export; ErrNotFound if the user does not exist.
 	ExportUserData(ctx context.Context, userID string) (*UserDataExport, error)
-	// PurgeExpiredData removes retention-elapsed rows (expired tokens/invites, audit_events older than auditRetentionDays — 0 keeps audit forever); returns removal counts.
+	// PurgeExpiredData removes retention-elapsed rows (expired tokens/invites/idempotency keys, audit_events older than auditRetentionDays — 0 keeps audit forever); returns removal counts.
 	PurgeExpiredData(ctx context.Context, auditRetentionDays int) (*PurgeResult, error)
 }
 
@@ -1002,6 +1003,14 @@ type AuditEvent struct {
 	IP           string
 	Meta         map[string]string
 	CreatedAt    time.Time
+	// Columns of v33, empty on older rows (stored as NULL). OrgID is the organisation the action belongs to;
+	// ActorKind is auth.ActorKind's name ("user", "token", "system"), with TokenID for a token and ActorJob for a
+	// background job; UserAgent is the request's, bounded.
+	OrgID     string
+	ActorKind string
+	TokenID   string
+	ActorJob  string
+	UserAgent string
 }
 
 // AuditFilter controls which audit events are returned.

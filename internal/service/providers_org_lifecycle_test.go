@@ -206,7 +206,7 @@ func (s *unreadableOrgStore) GetOrg(orgID, provider string) (string, error) {
 func TestGetOrgAzureFoundryConfig_Unreadable(t *testing.T) {
 	svc := newProviderServiceWithFakeSecrets(t, testutil.NewFakeSecretStore())
 	store := &unreadableOrgStore{FakeOrgSecretStore: testutil.NewFakeOrgSecretStore()}
-	svc.SetOrgKeyStore(store)
+	svc.orgKeys = store
 
 	if pub, err := svc.GetOrgAzureFoundryConfig("org-1"); err != nil || pub.Configured {
 		t.Fatalf("missing document: %+v, %v; want unconfigured", pub, err)
@@ -351,20 +351,20 @@ func TestPrepareOrgDeletionAndAccountErasure_DropCaches(t *testing.T) {
 	}
 }
 
-// R-4: the chat service's budget rule is what the knowledge base consults.
+// R-4: the chat service's budget gate (AIBudget) is what the knowledge base consults.
 func TestChatService_CheckBudget(t *testing.T) {
 	backend := testutil.NewFakeBackend()
 	backend.DailyUsage = 5
 	svc := &ChatService{settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 5}}}, backend: backend}
-	if err := svc.CheckBudget(context.Background(), "u1", "org-1"); !errors.Is(err, ErrAIBudgetExceeded) {
+	if err := svc.aiBudget().CheckBudget(context.Background(), "u1", "org-1"); !errors.Is(err, ErrAIBudgetExceeded) {
 		t.Errorf("spent budget: %v, want ErrAIBudgetExceeded", err)
 	}
 	backend.DailyUsage = 1
-	if err := svc.CheckBudget(context.Background(), "u1", "org-1"); err != nil {
+	if err := svc.aiBudget().CheckBudget(context.Background(), "u1", "org-1"); err != nil {
 		t.Errorf("budget left: %v", err)
 	}
 	backend.UsageErr = errors.New("db down")
-	if err := svc.CheckBudget(context.Background(), "u1", "org-1"); !errors.Is(err, ErrAIBudgetUnavailable) {
+	if err := svc.aiBudget().CheckBudget(context.Background(), "u1", "org-1"); !errors.Is(err, ErrAIBudgetUnavailable) {
 		t.Errorf("unreadable spend: %v, want ErrAIBudgetUnavailable (fail closed)", err)
 	}
 }
@@ -382,7 +382,7 @@ func TestSaveOrgAzureFoundryConfig_ReplacesUnreadable(t *testing.T) {
 		keys := testutil.NewFakeOrgSecretStore()
 		store := &unreadableOrgStore{FakeOrgSecretStore: keys}
 		svc := newOrgProviderService(t, testutil.NewFakeSecretStore(), keys)
-		svc.SetOrgKeyStore(store)
+		svc.orgKeys = store
 		if _, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-a", "", doc); err != nil {
 			t.Fatal(err)
 		}
@@ -418,7 +418,7 @@ func TestSaveOrgAzureFoundryConfig_ReplacesUnreadable(t *testing.T) {
 		keys := testutil.NewFakeOrgSecretStore()
 		store := &unreadableOrgStore{FakeOrgSecretStore: keys}
 		svc := newOrgProviderService(t, testutil.NewFakeSecretStore(), keys)
-		svc.SetOrgKeyStore(store)
+		svc.orgKeys = store
 		_ = store.SaveOrg("org-1", "azure-foundry", `{"endpoint":`, "admin-a")
 
 		at, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-b", "", doc)
@@ -435,7 +435,7 @@ func TestSaveOrgAzureFoundryConfig_ReplacesUnreadable(t *testing.T) {
 		keys := testutil.NewFakeOrgSecretStore()
 		store := &unreadableOrgStore{FakeOrgSecretStore: keys}
 		svc := newOrgProviderService(t, testutil.NewFakeSecretStore(), keys)
-		svc.SetOrgKeyStore(store)
+		svc.orgKeys = store
 		if _, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-a", "", doc); err != nil {
 			t.Fatal(err)
 		}

@@ -554,7 +554,7 @@ func TestDynamicModels_InvalidateDuringFetchSkipsTheWrite(t *testing.T) {
 func TestDeleteApiKey_InvalidatesTheProviderListing(t *testing.T) {
 	secrets := testutil.NewFakeSecretStore()
 	_ = secrets.Save("u1", "azure-foundry", "doc")
-	sys := NewSystemService(nil, secrets, nil, nil, "")
+	sys := NewSystemService(nil, secrets, nil, nil, "", nil)
 	svc := newProviderServiceWithFakeSecrets(t, secrets)
 	svc.modelCache["u1\x00azure-foundry"] = modelCacheEntry{models: []ai.ModelInfo{{ID: "old"}}, expiresAt: time.Now().Add(time.Hour)}
 	gen := svc.modelGen

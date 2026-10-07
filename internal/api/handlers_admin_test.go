@@ -286,7 +286,7 @@ func TestScannerScan_Unconfigured_Returns503(t *testing.T) {
 func TestScannerScan_Configured_TriggersAndReturnsStarted(t *testing.T) {
 	triggered := make(chan struct{}, 1)
 	rt := newJWTTestRouter(t)
-	rt.handlers.Admin.scanNow = func(context.Context) {
+	moduleOf[*AdminHandler](t, rt).scanNow = func(context.Context) {
 		triggered <- struct{}{}
 	}
 	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)

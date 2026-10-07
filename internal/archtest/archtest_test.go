@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -148,6 +149,16 @@ func TestArch_ServiceDoesNotImportAPI(t *testing.T) {
 	}
 }
 
+// TestArch_AuditDoesNotImportAPI: the audit trail records for handlers, services and background jobs alike, so it
+// must not depend on the HTTP layer (it reads the request through internal/platform/reqinfo).
+func TestArch_AuditDoesNotImportAPI(t *testing.T) {
+	for _, f := range sourceFiles(t) {
+		if strings.HasPrefix(f.path, "internal/audit/") && imports(f.ast, "pad-analyzer/internal/api") {
+			t.Errorf("%s imports internal/api", f.path)
+		}
+	}
+}
+
 // TestArch_TransactionsOpenedOnlyWhereAllowed: a transaction opened beside the request's RLS transaction takes a
 // second pooled connection and runs without app.current_user_id (RLS allow-all). New writes go through withTx.
 func TestArch_TransactionsOpenedOnlyWhereAllowed(t *testing.T) {
@@ -193,7 +204,123 @@ func TestArch_HandlerStorageCallsRatchet(t *testing.T) {
 }
 
 // handlerBackendCallAllowance is the number of direct storage calls left in internal/api.
-const handlerBackendCallAllowance = 85
+const handlerBackendCallAllowance = 0
+
+// TestArch_RoutesUseTheTypedAdapter: new endpoints are built with api.JSON or api.Query, which give them a typed
+// request, Validate, apperr errors and flow authorization (docs/architecture/api-conventions.md). The routes still
+// registered with a hand-written handler are pinned per file. They move over when they are touched, and a new file
+// starts at zero.
+func TestArch_RoutesUseTheTypedAdapter(t *testing.T) {
+	got := map[string]int{}
+	for _, f := range sourceFiles(t) {
+		if path.Dir(f.path) != "internal/api" {
+			continue
+		}
+		n := 0
+		ast.Inspect(f.ast, func(node ast.Node) bool {
+			if call, ok := node.(*ast.CallExpr); ok {
+				if h := routeHandler(call); h != nil && !builtByAdapter(h) {
+					n++
+				}
+			}
+			return true
+		})
+		if n > 0 {
+			got[f.path] = n
+		}
+	}
+	checkRatchet(t, "routes with a hand-written handler", got, handWrittenRoutes)
+}
+
+// handWrittenRoutes is the number of route registrations per file whose handler is not built by api.JSON or
+// api.Query. routes_chi.go's are the router's own (Swagger UI, WebSocket, metrics, pprof, SSE) and stay.
+var handWrittenRoutes = map[string]int{
+	"internal/api/analysis.go":              8,
+	"internal/api/analysis_findings.go":     9,
+	"internal/api/analysis_rules.go":        5,
+	"internal/api/auth.go":                  16,
+	"internal/api/flow.go":                  12,
+	"internal/api/flow_blocks.go":           7,
+	"internal/api/flow_fixes.go":            3,
+	"internal/api/flow_source.go":           6,
+	"internal/api/handlers_admin.go":        8,
+	"internal/api/handlers_apitoken.go":     3,
+	"internal/api/handlers_chat.go":         10,
+	"internal/api/handlers_comments.go":     6,
+	"internal/api/handlers_dashboard.go":    2,
+	"internal/api/handlers_export.go":       5,
+	"internal/api/handlers_governance.go":   5,
+	"internal/api/handlers_orgrules.go":     4,
+	"internal/api/handlers_policy.go":       6,
+	"internal/api/handlers_providers.go":    12,
+	"internal/api/handlers_sharing.go":      4,
+	"internal/api/handlers_sso.go":          7,
+	"internal/api/handlers_suppressions.go": 1,
+	"internal/api/handlers_system.go":       15,
+	"internal/api/handlers_triage.go":       8,
+	"internal/api/library.go":               7,
+	"internal/api/library_versions.go":      5,
+	"internal/api/org.go":                   5,
+	"internal/api/org_azure.go":             15,
+	"internal/api/org_channels.go":          4,
+	"internal/api/org_knowledge.go":         4,
+	"internal/api/org_members.go":           6,
+	"internal/api/providers_azure.go":       14,
+	"internal/api/routes_chi.go":            6,
+}
+
+// routeHandler returns the handler argument of a route registration and nil for any other call. A registration is
+// rb.Get, Post, Put, Patch, Delete or Handle with a literal "/…" pattern, or rb.Method(method, "/…", handler).
+func routeHandler(call *ast.CallExpr) ast.Expr {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+	at := 0
+	switch sel.Sel.Name {
+	case "Get", "Post", "Put", "Patch", "Delete", "Handle":
+	case "Method":
+		at = 1
+	default:
+		return nil
+	}
+	if len(call.Args) < at+2 {
+		return nil
+	}
+	lit, ok := call.Args[at].(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return nil
+	}
+	if pattern, err := strconv.Unquote(lit.Value); err != nil || !strings.HasPrefix(pattern, "/") {
+		return nil
+	}
+	return call.Args[at+1]
+}
+
+// builtByAdapter reports whether handler is a call of api.JSON or api.Query, with or without type arguments.
+func builtByAdapter(handler ast.Expr) bool {
+	call, ok := handler.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	fun := call.Fun
+	switch f := fun.(type) {
+	case *ast.IndexExpr:
+		fun = f.X
+	case *ast.IndexListExpr:
+		fun = f.X
+	}
+	var name string
+	switch f := fun.(type) {
+	case *ast.Ident:
+		name = f.Name
+	case *ast.SelectorExpr:
+		if pkg, ok := f.X.(*ast.Ident); ok && pkg.Name == "api" {
+			name = f.Sel.Name
+		}
+	}
+	return name == "JSON" || name == "Query"
+}
 
 // TestArch_EnvReadsOnlyInConfig: configuration is read in internal/config, so it is validated once and visible in
 // one place. Exempt: the CLI, test tooling, and the standard OTEL_* variables read by telemetry.

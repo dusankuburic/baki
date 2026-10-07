@@ -3,8 +3,9 @@ package api
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/service"
 )
 
 // handleSuppressionInventory lists the inline `# pad-ignore` directives in a
@@ -31,7 +32,7 @@ func (h *AnalysisHandler) handleSuppressionInventory(w http.ResponseWriter, r *h
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "viewer")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowRead)
 	if !ok {
 		return
 	}
@@ -43,7 +44,9 @@ func (h *AnalysisHandler) handleSuppressionInventory(w http.ResponseWriter, r *h
 	render.JSON(w, entries)
 }
 
-// registerSuppressionRoutes wires the suppression-inventory sub-route.
-func (h *AnalysisHandler) registerSuppressionRoutes(r chi.Router) {
-	r.Post("/suppressions", h.handleSuppressionInventory)
+// registerSuppressionRoutes wires the suppression-inventory sub-route. It
+// parses the flow and runs every rule to find the stale pad-ignore
+// directives: outside the request transaction.
+func (h *AnalysisHandler) registerSuppressionRoutes(rb *route.Builder) {
+	rb.Post("/suppressions", h.handleSuppressionInventory, route.NoTx())
 }

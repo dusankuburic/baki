@@ -1,4 +1,5 @@
 import {describe, it, expect} from 'vitest'
+import {unknownValue} from '@/testing/testHelpers'
 import {
   legacyDefaultRewrite,
   providerNewChatDefault,
@@ -194,6 +195,21 @@ describe('resolveThreadModel: fallbacks', () => {
   it('never selects an embedding entry, even when a pin names one', () => {
     const sel = resolveThreadModel(input({pin: {provider: 'azure-foundry', model: embed.id}}))
     expect(sel).toMatchObject({model: gpt.id, reason: 'fallbackRemoved'})
+  })
+
+  it('never starts or falls back on a kind a newer server added', () => {
+    const voice: SelectableModel = {id: 'm/voice00000', displayName: 'Voice', kind: 'realtime'}
+    const sel = resolveThreadModel(input({providers: [azure([voice, gpt], {defaultModel: voice.id}), claude]}))
+    expect(sel).toMatchObject({provider: 'azure-foundry', model: gpt.id, reason: 'serverDefault'})
+  })
+
+  it('reports a status a newer server added as the cause, so the notice falls back to its generic copy', () => {
+    const odd: SelectableModel = {...docs, status: unknownValue('suspended'), statusReason: 'Paused by the admin'}
+    const sel = resolveThreadModel(
+      input({pin: {provider: 'azure-foundry', model: docs.id}, providers: [azure([gpt, odd]), claude]}),
+    )
+    expect(sel).toMatchObject({model: gpt.id, reason: 'fallbackUnavailable'})
+    expect(sel.notice).toMatchObject({kind: 'unavailable', cause: 'suspended', statusReason: 'Paused by the admin'})
   })
 
   it('removes a local model the local server stopped serving', () => {

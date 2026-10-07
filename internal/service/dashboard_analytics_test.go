@@ -201,8 +201,8 @@ func TestBuildAnalytics_CarryForwardTrend(t *testing.T) {
 		{FlowID: "A", Day: dayOf(q, 1), HealthScore: 80, Errors: 2, TotalFindings: 2, Runs: 1, ByRule: map[string]int{"r1": 2}},
 		{FlowID: "B", Day: dayOf(q, 3), HealthScore: 60, Warnings: 1, TotalFindings: 1, Runs: 2, ByRule: map[string]int{"r2": 1}},
 	}}
-	svc := NewDashboardService(be, nil, nil)
-	svc.SetScopeResolver(&stubScope{ids: []string{"A", "B"}})
+	svc := NewDashboardService(be, nil, nil, nil)
+	svc.scope = &stubScope{ids: []string{"A", "B"}}
 
 	out, err := svc.BuildAnalytics(context.Background(), "user-1", AnalyticsCaller{}, q)
 	if err != nil {
@@ -258,8 +258,8 @@ func TestBuildAnalytics_BaselineFeedsPreviousPeriodAndMovers(t *testing.T) {
 	be := newAnaStub()
 	be.snaps = []storageif.AnalysisSnapshotRow{snap("A", 80, 0, 0, 0, map[string]int{})}
 	be.hist = &storageif.AnalysisHistoryRows{Baseline: []storageif.AnalysisHistoryRow{{FlowID: "A", HealthScore: 50, Runs: 1, ByRule: map[string]int{}}}}
-	svc := NewDashboardService(be, nil, nil)
-	svc.SetScopeResolver(&stubScope{ids: []string{"A"}})
+	svc := NewDashboardService(be, nil, nil, nil)
+	svc.scope = &stubScope{ids: []string{"A"}}
 
 	out, err := svc.BuildAnalytics(context.Background(), "user-1", AnalyticsCaller{}, q)
 	if err != nil {
@@ -301,8 +301,8 @@ func TestBuildAnalytics_PastWindowReadsAsOfItsLastDay(t *testing.T) {
 	be := newAnaStub()
 	be.snaps = []storageif.AnalysisSnapshotRow{snap("A", 90, 0, 0, 0, map[string]int{})}
 	be.hist = &storageif.AnalysisHistoryRows{InWindow: []storageif.AnalysisHistoryRow{{FlowID: "A", Day: dayOf(q, 1), HealthScore: 40, Runs: 1, ByRule: map[string]int{}}}}
-	svc := NewDashboardService(be, nil, nil)
-	svc.SetScopeResolver(&stubScope{ids: []string{"A"}})
+	svc := NewDashboardService(be, nil, nil, nil)
+	svc.scope = &stubScope{ids: []string{"A"}}
 
 	out, err := svc.BuildAnalytics(context.Background(), "user-1", AnalyticsCaller{}, q)
 	if err != nil {
@@ -328,8 +328,8 @@ func TestBuildAnalytics_DerivedFiltersAndFacets(t *testing.T) {
 	a.ByConfidence = map[string]int{"high": 3, "low": 1}
 	a.AutoFixable = 2
 	be.snaps = []storageif.AnalysisSnapshotRow{a}
-	svc := NewDashboardService(be, &AnalysisService{}, nil)
-	svc.SetScopeResolver(&stubScope{ids: []string{"A"}})
+	svc := NewDashboardService(be, &AnalysisService{}, nil, nil)
+	svc.scope = &stubScope{ids: []string{"A"}}
 	ctx := context.Background()
 
 	raw, err := svc.BuildAnalytics(ctx, "user-1", AnalyticsCaller{}, q)
@@ -437,8 +437,8 @@ func TestBuildAnalytics_FlowsFilterIntersectsScope(t *testing.T) {
 	q.Flows = []string{"C", "ghost"}
 	be := newAnaStub()
 	be.snaps = []storageif.AnalysisSnapshotRow{snap("A", 90, 0, 0, 0, map[string]int{}), snap("B", 80, 0, 0, 0, map[string]int{}), snap("C", 70, 0, 0, 0, map[string]int{})}
-	svc := NewDashboardService(be, nil, nil)
-	svc.SetScopeResolver(&stubScope{ids: []string{"A", "B", "C"}})
+	svc := NewDashboardService(be, nil, nil, nil)
+	svc.scope = &stubScope{ids: []string{"A", "B", "C"}}
 
 	out, err := svc.BuildAnalytics(context.Background(), "user-1", AnalyticsCaller{}, q)
 	if err != nil {
@@ -466,8 +466,8 @@ func TestBuildAnalytics_ScopeErrorPropagatesUncached(t *testing.T) {
 	q := anaQuery(30)
 	q.Scope, q.OrgID = "org", "acme"
 	scope := &stubScope{err: ErrPermissionDenied}
-	svc := NewDashboardService(newAnaStub(), nil, nil)
-	svc.SetScopeResolver(scope)
+	svc := NewDashboardService(newAnaStub(), nil, nil, nil)
+	svc.scope = scope
 
 	for i := 0; i < 2; i++ {
 		_, err := svc.BuildAnalytics(context.Background(), "user-1", AnalyticsCaller{}, q)
@@ -488,8 +488,8 @@ func TestBuildAnalytics_PartialSections(t *testing.T) {
 	be := newAnaStub()
 	be.fail["trend"] = errors.New("history timed out")
 	be.fail["ai"] = errors.New("usage timed out")
-	svc := NewDashboardService(be, nil, nil)
-	svc.SetScopeResolver(&stubScope{ids: []string{"A"}})
+	svc := NewDashboardService(be, nil, nil, nil)
+	svc.scope = &stubScope{ids: []string{"A"}}
 
 	out, err := svc.BuildAnalytics(context.Background(), "user-1", AnalyticsCaller{}, q)
 	if err != nil {
@@ -506,8 +506,8 @@ func TestBuildAnalytics_PartialSections(t *testing.T) {
 func TestBuildAnalytics_CacheAndInvalidation(t *testing.T) {
 	q := anaQuery(30)
 	scope := &stubScope{ids: []string{"A"}}
-	svc := NewDashboardService(newAnaStub(), nil, nil)
-	svc.SetScopeResolver(scope)
+	svc := NewDashboardService(newAnaStub(), nil, nil, nil)
+	svc.scope = scope
 	ctx := context.Background()
 	call := func(user string, q AnalyticsQuery) {
 		t.Helper()
@@ -582,8 +582,8 @@ func TestBuildAnalytics_SectionsAndScoping(t *testing.T) {
 		ByAction: []storageif.ActionCountRow{{Action: "flow.upload", Count: 4}},
 	}
 	be.security = &storageif.SecurityRows{FailedLogins24h: 2, LockedAccounts: 3, LockedRead: true}
-	svc := NewDashboardService(be, &AnalysisService{}, nil)
-	svc.SetScopeResolver(&stubScope{ids: []string{"A"}})
+	svc := NewDashboardService(be, &AnalysisService{}, nil, nil)
+	svc.scope = &stubScope{ids: []string{"A"}}
 	ctx := context.Background()
 
 	out, err := svc.BuildAnalytics(ctx, "user-1", AnalyticsCaller{Email: "me@example.com"}, q)
@@ -636,7 +636,7 @@ func TestBuildAnalytics_SectionsAndScoping(t *testing.T) {
 	// Usage scoping follows the flow scope: personal → the caller's calls,
 	// org → that org's, all with orgs → both.
 	scoped := &stubScope{ids: []string{"A"}, orgIDs: []string{"org-1"}}
-	svc.SetScopeResolver(scoped)
+	svc.scope = scoped
 	svc.InvalidateDashboardCache("")
 	qo := q
 	qo.Scope, qo.OrgID = "org", "org-1"
@@ -664,8 +664,8 @@ func TestBuildAnalytics_SectionsAndScoping(t *testing.T) {
 
 func TestBuildAnalytics_EmptyIsSerialisable(t *testing.T) {
 	q := anaQuery(7)
-	svc := NewDashboardService(newAnaStub(), nil, nil)
-	svc.SetScopeResolver(&stubScope{})
+	svc := NewDashboardService(newAnaStub(), nil, nil, nil)
+	svc.scope = &stubScope{}
 
 	out, err := svc.BuildAnalytics(context.Background(), "user-1", AnalyticsCaller{}, q)
 	if err != nil {
@@ -696,14 +696,14 @@ func TestBuildAnalytics_EmptyIsSerialisable(t *testing.T) {
 
 func TestBuildAnalytics_NeedsCloudBackendAndResolver(t *testing.T) {
 	q := anaQuery(7)
-	local := NewDashboardService(nil, nil, nil)
+	local := NewDashboardService(nil, nil, nil, nil)
 	if local.CloudMode() {
 		t.Error("nil backend is local mode")
 	}
 	if _, err := local.BuildAnalytics(context.Background(), "u", AnalyticsCaller{}, q); err == nil {
 		t.Error("local mode must refuse analytics")
 	}
-	cloud := NewDashboardService(newAnaStub(), nil, nil)
+	cloud := NewDashboardService(newAnaStub(), nil, nil, nil)
 	if !cloud.CloudMode() {
 		t.Error("a backend means cloud mode")
 	}
@@ -718,7 +718,7 @@ func TestBuildAnalytics_NeedsCloudBackendAndResolver(t *testing.T) {
 // keep the map at ≤ cap (expired-first sweep, then nearest-to-expiry
 // eviction), and the most recently inserted key must still be resident.
 func TestAnaCachePut_BoundedByEntryCap(t *testing.T) {
-	svc := NewDashboardService(newAnaStub(), nil, nil)
+	svc := NewDashboardService(newAnaStub(), nil, nil, nil)
 
 	const extra = 50
 	for i := 0; i < anaCacheMaxEntries+extra; i++ {

@@ -9,43 +9,35 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/platform/reqinfo"
 	"pad-core/logger"
 )
 
-// requestIDKey is the private context key for the per-request ID.
+// requestIDCtxKey carries the request ID AccessLog stamps when no RequestInfo layer runs outside it.
 type requestIDCtxKey struct{}
 
-// RequestIDHeader is the HTTP header used to convey the per-request ID between the load balancer / reverse proxy and this service, and between the service
-// and its clients. The middleware accepts whatever the proxy stamped (so trace context is preserved) and generates a new UUIDv4 only when the header is absent.
-const RequestIDHeader = "X-Request-ID"
-
-// RequestIDFromContext returns the request ID stamped on ctx by the access
-// log middleware. Empty string if the middleware wasn't applied.
-func RequestIDFromContext(ctx context.Context) string {
-	if v, ok := ctx.Value(requestIDCtxKey{}).(string); ok {
-		return v
-	}
-	return ""
-}
-
-// AccessLog wraps h with request-ID propagation and a one-line structured log per request. The ID comes from the X-Request-ID header if present (reverse-proxy correlation) or a fresh UUIDv4, and is echoed back in the response header.
-// Logging runs after the handler returns, so the line carries the final status, bytes and latency; SSE/WebSocket upgrades still get an entry when the goroutine eventually exits.
+// AccessLog writes one structured line per request. It runs after the handler returns, so the line carries the
+// final status, bytes and latency, and the user the request acted as, which authentication further in records on
+// the request's reqinfo.Info (a context value set in there never reaches this layer). SSE/WebSocket upgrades
+// still get an entry when the goroutine eventually exits.
+// The request ID and client IP are the Info's (RequestInfo). Used on its own, without an Info, AccessLog stamps
+// and echoes the ID itself.
 func AccessLog(trustedProxies []string) func(http.Handler) http.Handler {
 	// Parsed once: ClientIP re-parses every CIDR per call.
 	proxies := parseProxySet(trustedProxies)
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			reqID := strings.TrimSpace(r.Header.Get(RequestIDHeader))
-			if reqID == "" || len(reqID) > 128 {
-				reqID = uuid.NewString()
+			info := reqinfo.From(r.Context())
+			var reqID string
+			if info != nil {
+				reqID = info.ID
+			} else {
+				reqID = requestID(r)
+				w.Header().Set(RequestIDHeader, reqID)
+				r = r.WithContext(context.WithValue(r.Context(), requestIDCtxKey{}, reqID))
 			}
-			w.Header().Set(RequestIDHeader, reqID)
-
-			ctx := context.WithValue(r.Context(), requestIDCtxKey{}, reqID)
-			r = r.WithContext(ctx)
 
 			sr := NewResponseRecorder(w)
 
@@ -57,9 +49,17 @@ func AccessLog(trustedProxies []string) func(http.Handler) http.Handler {
 			h.ServeHTTP(maybeHijackable(sr), r)
 			latency := time.Since(start)
 
-			var userID string
-			if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
-				userID = claims.UserID
+			var userID, remoteIP string
+			if info != nil {
+				if a := info.Actor(); a != nil {
+					userID = a.UserID
+				}
+				remoteIP = info.ClientIP
+			} else {
+				if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+					userID = claims.UserID
+				}
+				remoteIP = proxies.clientIP(r)
 			}
 
 			level := levelFor(p, sr.status)
@@ -71,7 +71,7 @@ func AccessLog(trustedProxies []string) func(http.Handler) http.Handler {
 				"bytes", sr.bytes,
 				"latency_ms", latency.Milliseconds(),
 				"user_id", userID,
-				"remote_ip", proxies.clientIP(r),
+				"remote_ip", remoteIP,
 			}
 			// trace_id lets an operator pivot from a trace (App Insights / any OTLP backend) to
 			// this request's log lines and back; otelhttp is outermost, so the span is on the ctx.

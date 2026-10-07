@@ -125,6 +125,129 @@ jobs:
       - name: Build CLI
         run: go build -o bakicli ./cmd/bakicli
 
+  previous-release-boot:
+    # The rollback promise of docs/adr/0002: a binary boots on a newer schema exactly when every newer step is
+    # marked `-- baki:compat expand`, so rolling the image back after an expand-only release needs no schema
+    # rollback. This proves it with real binaries rather than trusting the markers.
+    # scripts/ci/previous-release-boot.sh (it runs locally too, see docs/architecture/safety-nets.md) boots the
+    # previous release on an empty database, this revision on top of it (the deploy), then the previous release
+    # again (the rollback), which must answer /readyz. A newer step marked breaking fails the job, and so does one
+    # marked expand that the previous release cannot boot on.
+    #
+    # The previous release is the pull request's base commit, or for a push the commit the branch pointed at
+    # before it: deploy.yml ships every master push, so that is normally the image its rollback restores. The
+    # image actually serving is known only to Azure (deploy.yml's rollback guard asks it, with credentials CI does
+    # not have), and no git tag marks releases. With no previous commit (a new branch or tag, a manual run), one that
+    # cannot be fetched (force-pushed away) or one that does not build (so it was never deployed), there is
+    # nothing to check, and the job says so.
+    name: Previous Release Boots on New Schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Resolve the previous release
+        id: previous
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request) sha="$BASE_SHA" ;;
+            push) sha="$BEFORE_SHA" ;;
+            *) sha="" ;;
+          esac
+          # A push that creates a branch or a tag reports an all-zero "before".
+          if [ -z "${sha//0/}" ]; then
+            echo "::notice::No previous release for this ${EVENT_NAME} event (a new branch or tag, or a manual run): nothing to check."
+            sha=""
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        if: steps.previous.outputs.sha != ''
+        with:
+          path: new
+          persist-credentials: false
+      # continue-on-error: a force push's "before" may be gone from the remote. The next step says so.
+      - name: Check out the previous release
+        id: checkout-previous
+        if: steps.previous.outputs.sha != ''
+        continue-on-error: true
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ steps.previous.outputs.sha }}
+          path: previous
+          persist-credentials: false
+      - name: Report an unreachable previous release
+        if: steps.previous.outputs.sha != '' && steps.checkout-previous.outcome != 'success'
+        env:
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+        run: |
+          echo "::warning::Could not fetch the previous release ${PREVIOUS_SHA} (force-pushed away?): nothing to check."
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        if: steps.checkout-previous.outcome == 'success'
+        with:
+          go-version-file: new/go.mod
+          cache: true
+          cache-dependency-path: |
+            new/go.sum
+            previous/go.sum
+      # Built like the go-build job's server: static (CGO off), trimmed and stripped. `.` rather than main.go, so a
+      # revision whose main package spans several files still builds.
+      - name: Build both backends
+        id: build
+        if: steps.checkout-previous.outcome == 'success'
+        env:
+          CGO_ENABLED: "0"
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          (cd new && go build -trimpath -ldflags="-s -w" -o ../bin/new .)
+          if (cd previous && go build -trimpath -ldflags="-s -w" -o ../bin/previous .); then
+            echo "previous=built" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::The previous release ${PREVIOUS_SHA} does not build, so it was never deployed: nothing to check."
+          fi
+      # The same unprivileged role as go-test (NOSUPERUSER NOBYPASSRLS, owning its database, with the vector
+      # extension a superuser installs), so the binaries boot as production's do. No CREATEDB: nothing clones here.
+      - name: Create the app role and an empty database
+        if: steps.build.outputs.previous == 'built'
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE baki_app LOGIN PASSWORD 'baki_app' NOSUPERUSER NOBYPASSRLS;" \
+            -c "CREATE DATABASE baki_boot OWNER baki_app;"
+          psql -h localhost -U postgres -d baki_boot -v ON_ERROR_STOP=1 \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;"
+      # `bash` explicitly: a script committed from a Windows checkout may lack the executable bit.
+      - name: Boot the previous release on this revision's schema
+        if: steps.build.outputs.previous == 'built'
+        env:
+          BOOT_DATABASE_URL: "postgres://baki_app:baki_app@localhost:5432/baki_boot?sslmode=disable"
+          BOOT_LOG_DIR: ${{ runner.temp }}/previous-release-boot
+        run: bash new/scripts/ci/previous-release-boot.sh bin/previous bin/new
+      - name: Upload the boot logs
+        if: failure() && steps.build.outputs.previous == 'built'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: previous-release-boot-logs
+          path: ${{ runner.temp }}/previous-release-boot/
+          retention-days: 7
+
   go-lint:
     name: Go Lint
     runs-on: ubuntu-latest

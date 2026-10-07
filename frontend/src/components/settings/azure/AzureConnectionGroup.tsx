@@ -5,7 +5,14 @@ import {azureBusyKey} from '@/stores/azureFoundryStore'
 import type {PurposeLabelOf} from '@/lib/modelPurpose'
 import {formatDateTime} from '@/lib/format'
 import {absoluteTime, relativeTimeText} from '@/lib/time'
-import type {AzureConnection, AzureDiscoveryItem, AzureModelEntry, AzureScope} from '@/types'
+import {
+  AZURE_STATUSES,
+  isKnown,
+  type AzureConnection,
+  type AzureDiscoveryItem,
+  type AzureModelEntry,
+  type AzureScope,
+} from '@/types'
 import AzureModelList, {type ModelRowActions} from './AzureModelList'
 import AzureDiscoverySuggestions, {type QuickAddResult} from './AzureDiscoverySuggestions'
 import {azureHost} from './connectionForm'
@@ -77,6 +84,8 @@ export default function AzureConnectionGroup({
   const host = azureHost(connection.config.endpoint) || connection.config.endpoint.trim()
   const last = connection.lastTest ?? null
   const needsCredentials = connection.status === 'needs_credentials' || connection.status === 'unreadable'
+  // A status or sign-in method a newer server added gets a neutral label.
+  const unknownStatus = !isKnown(AZURE_STATUSES, connection.status)
   const authLabel =
     connection.config.authMode === 'entra'
       ? t('azureModels.connection.authEntra')
@@ -84,7 +93,9 @@ export default function AzureConnectionGroup({
         ? t('azureModels.connection.authCli')
         : connection.config.authMode === 'api_key'
           ? t('azureModels.connection.authApiKey')
-          : null
+          : connection.config.authMode
+            ? t('azureModels.connection.authOther')
+            : null
 
   const menu: DropdownItem[] = [
     {
@@ -184,6 +195,12 @@ export default function AzureConnectionGroup({
         </Button>
       )}
     </Callout>
+  ) : unknownStatus ? (
+    <Callout
+      title={t('azureModels.status.unknownTitle')}
+      body={t('azureModels.status.unknown')}
+      reason={connection.statusReason}
+    />
   ) : null
 
   // Discovery signs in to the project: pointless (and a failure) until the

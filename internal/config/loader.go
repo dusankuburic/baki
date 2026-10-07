@@ -159,6 +159,9 @@ var envBindings = []envBinding{
 	boolEnv("PAD_BEHIND_PROXY", func(c *Config, b bool) { c.Server.BehindProxy = b }),
 	boolEnv("PAD_PPROF_ENABLED", func(c *Config, b bool) { c.Server.PprofEnabled = b }),
 	boolEnv("PAD_LOCAL_CONFIG_ENDPOINT", func(c *Config, b bool) { c.Server.LocalConfigEndpoint = b }),
+	strEnv("PAD_ROUTE_POLICY", func(c *Config, v string) {
+		c.Server.RoutePolicy = RoutePolicyMode(strings.ToLower(strings.TrimSpace(v)))
+	}),
 
 	// Governance
 	durEnv("PAD_SCAN_INTERVAL", func(c *Config, d string) { c.Governance.ScanInterval = d }),
@@ -510,7 +513,17 @@ func Validate(cfg *Config) error {
 	if err := validateEmbeddingProvider(cfg.Storage.EmbeddingProvider); err != nil {
 		return err
 	}
-	return nil
+	return validateRoutePolicy(cfg.Server.RoutePolicy)
+}
+
+// validateRoutePolicy fails closed on an unknown PAD_ROUTE_POLICY: a typo must not
+// silently pick a mode, least of all when flipping to declarative.
+func validateRoutePolicy(m RoutePolicyMode) error {
+	switch m {
+	case RoutePolicyLegacy, RoutePolicyShadow, RoutePolicyDeclarative:
+		return nil
+	}
+	return fmt.Errorf("config: PAD_ROUTE_POLICY=%q is not one of %s, %s, %s", m, RoutePolicyLegacy, RoutePolicyShadow, RoutePolicyDeclarative)
 }
 
 // validateEmbeddingProvider fails closed on an unknown PAD_EMBEDDING_PROVIDER:

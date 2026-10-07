@@ -37,10 +37,6 @@ type SystemService struct {
 	azure *AzureModelService
 }
 
-// SetAzureModels wires the Azure AI Foundry model registry. Set once at
-// boot, before requests are served.
-func (s *SystemService) SetAzureModels(azure *AzureModelService) { s.azure = azure }
-
 // OnApiKeyChanged registers the hook SaveApiKey and DeleteApiKey run after a
 // successful write (post-construction wiring, like the dashboard and chat cache
 // hooks): the provider service's cached live listing for that provider — a removed
@@ -51,8 +47,10 @@ func (s *SystemService) OnApiKeyChanged(fn func(scope, provider string)) {
 	s.onKeyChanged = fn
 }
 
-func NewSystemService(settings SettingsProvider, secrets KeyStore, notifier EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode) *SystemService {
-	return &SystemService{settings: settings, secrets: secrets, notifier: notifier, backend: backend, mode: mode}
+// NewSystemService builds the system service; azure is the Azure AI Foundry model registry /api/keys acts on for
+// azure-foundry (nil keeps the single document).
+func NewSystemService(settings SettingsProvider, secrets KeyStore, notifier EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode, azure *AzureModelService) *SystemService {
+	return &SystemService{settings: settings, secrets: secrets, notifier: notifier, backend: backend, mode: mode, azure: azure}
 }
 
 // B5: the settings methods thread the caller's context.Context through to the storage

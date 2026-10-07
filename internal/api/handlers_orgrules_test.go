@@ -160,7 +160,7 @@ func TestOrgSettings_InvalidatesRuleProfile(t *testing.T) {
 	rt, admin, orgID := env.rt, env.admin, env.orgID
 
 	resolver := service.NewRuleProfileResolver(env.backend, &stubSettingsProvider{s: models.DefaultSettings()}, nil)
-	rt.handlers.Sys.ruleProfiles = resolver
+	moduleOf[*SystemHandler](t, rt).ruleProfiles = resolver
 
 	ctx := context.Background()
 	// Warm the cache for this org.

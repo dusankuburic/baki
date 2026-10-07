@@ -22,11 +22,11 @@ func TestGetRulesFor_OrgScoped(t *testing.T) {
 	deployment := deploymentSettings(map[string]models.RuleConfig{
 		"deep-nesting": {Enabled: true, Severity: "info"},
 	})
-	svc, err := NewAnalysisService(nil, deployment, analyzer.NewHistoryStore(""))
+	svc, err := NewAnalysisService(nil, deployment, analyzer.NewHistoryStore(""), AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("NewAnalysisService: %v", err)
 	}
-	svc.SetRuleProfileResolver(NewRuleProfileResolver(b, deployment, nil))
+	svc.profiles = NewRuleProfileResolver(b, deployment, nil)
 	ctx := context.Background()
 
 	has := func(rules []models.Rule, id string) bool {

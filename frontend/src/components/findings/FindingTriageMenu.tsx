@@ -11,7 +11,7 @@ import {triageTone} from '@/lib/severityTone'
 import Avatar from '@/components/shared/Avatar'
 import {isTauri} from '@/platform/guards'
 import {useSuppressReasonPrompt} from './hooks/useSuppressReasonPrompt'
-import type {Finding, TriageStatus} from '@/types'
+import {TRIAGE_STATUSES, isKnown, type Finding, type Tolerant, type TriageStatus} from '@/types'
 
 // Order only — labels resolve through findings:triage.status.<status>, whose
 // keys mirror the TriageStatus union.
@@ -38,7 +38,10 @@ export default function FindingTriageMenu({finding}: Props) {
   // Select only the single triage entry this card needs — selecting the whole
   // triageMap would re-render every FindingCard on any triage change (O(N)).
   const triage = useAnalysisStore(s => s.triageMap.get(findingKey(finding)))
-  const triageStatus: TriageStatus = triage?.status ?? 'open'
+  const triageStatus: Tolerant<TriageStatus> = triage?.status ?? 'open'
+  // A status a newer server added: a neutral chip, and no reassignment (that
+  // request repeats the status, and this bundle sends only the ones it knows).
+  const knownStatus = isKnown(TRIAGE_STATUSES, triageStatus)
   const organisations = useOrgStore(s => s.organisations)
   const currentUser = useAuthStore(s => s.user)
   const isDesktop = isTauri()
@@ -117,7 +120,7 @@ export default function FindingTriageMenu({finding}: Props) {
               .join('\n') || undefined
           }
         >
-          {t(`triage.status.${triageStatus}`)}
+          {knownStatus ? t(`triage.status.${triageStatus}`) : t('triage.status.other')}
           {/* Desktop triage is process memory (the store persists only in
               cloud mode): say so on the chip, which otherwise looks saved. */}
           {isDesktop && (
@@ -183,7 +186,7 @@ export default function FindingTriageMenu({finding}: Props) {
 
             {/* Assignment lives behind a divider + submenu. Cloud-only: desktop
                 mode has no notion of other users, so the picker is hidden. */}
-            {!isDesktop && assignees.length > 0 && (
+            {!isDesktop && knownStatus && assignees.length > 0 && (
               <>
                 <div className="my-0.5 border-t border-border-subtle" />
                 {/* Hover PEEKS into the submenu; only click/outside/Esc close

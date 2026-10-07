@@ -68,7 +68,7 @@ func (b *orgBackend) LoadOrg(_ context.Context, _ string) (*storageif.Organisati
 
 func newOrgSystemService(t *testing.T, backend storageif.StorageBackend, n EventNotifier) *SystemService {
 	t.Helper()
-	return NewSystemService(newTestSettingsStore(t), nil, n, backend, config.ModeCloud)
+	return NewSystemService(newTestSettingsStore(t), nil, n, backend, config.ModeCloud, nil)
 }
 
 // TestUpdateOrgSettings_NotifiesOnlyOrgMembers is the tenant-boundary gate.

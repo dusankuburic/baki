@@ -1,13 +1,15 @@
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
-import type {
-  AnalysisReport,
-  Severity,
-  Finding,
-  VariableHistory,
-  FindingStatus,
-  FlowBaseline,
-  TriageStatus,
+import {
+  TRIAGE_STATUSES,
+  isKnown,
+  type AnalysisReport,
+  type Severity,
+  type Finding,
+  type VariableHistory,
+  type FindingStatus,
+  type FlowBaseline,
+  type TriageStatus,
 } from '@/types'
 import {toggleSetMember} from '@/lib/collections'
 import {analysisApi} from '@/api'
@@ -433,6 +435,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   // Assign (or unassign) a finding without changing its triage status. The
   // backend persists assigneeId alongside the status, so we re-send the current
   // status with the new owner. Cloud-only (desktop triage is in-memory).
+  // A finding whose stored status this bundle does not know is left as it is
+  // when the patch keeps the status: requests send known statuses only.
   triageFindingsBatch: (findings, patch) => {
     if (findings.length === 0) return
     const flowId = useFlowStore.getState().document?.id ?? ''
@@ -443,6 +447,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
         const key = findingKey(f)
         const existing = triageMap.get(key)
         const status = patch.status ?? existing?.status ?? 'in_progress'
+        if (!isKnown(TRIAGE_STATUSES, status)) continue
         const assigneeId = patch.assigneeId === undefined ? existing?.assigneeId : patch.assigneeId || undefined
         if (status === 'open' && !assigneeId) {
           triageMap.delete(key)
@@ -460,37 +465,39 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       return {triageMap}
     })
     if (!isTauri()) {
-      analysisApi
-        .setFindingStatusBatch(
-          findings.map((f, i) => {
-            // Index into prev directly: indexOf(f) is O(n²) AND wrong
-            // when the same object reference appears twice.
-            const existing = prev[i]
-            const status = patch.status ?? existing?.status ?? 'in_progress'
-            const assigneeId = patch.assigneeId === undefined ? existing?.assigneeId : patch.assigneeId || undefined
-            return {findingKey: findingKey(f), ruleId: f.ruleId, status, assigneeId}
-          }),
-        )
-        .catch(err => {
-          logger.warn('Failed to persist bulk triage', err)
-          // Roll back: restore each entry's prior shape (or absence).
-          set(state => {
-            const triageMap = new Map(state.triageMap)
-            findings.forEach((f, i) => {
-              const key = findingKey(f)
-              const before = prev[i]
-              if (before) triageMap.set(key, before)
-              else triageMap.delete(key)
-            })
-            return {triageMap}
+      const items = findings.flatMap((f, i) => {
+        // Index into prev directly: indexOf(f) is O(n²) AND wrong
+        // when the same object reference appears twice.
+        const existing = prev[i]
+        const status = patch.status ?? existing?.status ?? 'in_progress'
+        if (!isKnown(TRIAGE_STATUSES, status)) return []
+        const assigneeId = patch.assigneeId === undefined ? existing?.assigneeId : patch.assigneeId || undefined
+        return [{findingKey: findingKey(f), ruleId: f.ruleId, status, assigneeId}]
+      })
+      if (items.length === 0) return
+      analysisApi.setFindingStatusBatch(items).catch(err => {
+        logger.warn('Failed to persist bulk triage', err)
+        // Roll back: restore each entry's prior shape (or absence).
+        set(state => {
+          const triageMap = new Map(state.triageMap)
+          findings.forEach((f, i) => {
+            const key = findingKey(f)
+            const before = prev[i]
+            if (before) triageMap.set(key, before)
+            else triageMap.delete(key)
           })
+          return {triageMap}
         })
+      })
     }
   },
 
   assignFinding: (finding, assigneeId) => {
     const key = findingKey(finding)
-    const status: TriageStatus = get().triageMap.get(key)?.status ?? 'open'
+    const status = get().triageMap.get(key)?.status ?? 'open'
+    // The request repeats the status, and a status this bundle does not know
+    // cannot be sent (the triage menu offers no assignment then).
+    if (!isKnown(TRIAGE_STATUSES, status)) return
     set(state => {
       const triageMap = new Map(state.triageMap)
       if (status === 'open' && !assigneeId) {

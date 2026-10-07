@@ -3,20 +3,19 @@ package api
 import (
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 	"time"
 
 	"pad-analyzer/internal/api/middleware"
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/config"
 	"pad-core/logger"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
-// BuildHandler assembles the FULL request-handling stack in this one place (the chi-internal layers live in routes_chi.go's registerRoutes). Resolved order, outermost/first-to-run first: 1 otelhttp; 2 Recovery; 3 RequestTimeout; 4 Compress; 5 AccessLog; 6 Metrics; 6b Recovery again INSIDE 5-6 so a panicking handler is still logged and counted as a 500; 7 rate limiting (cloud only, per-group buckets dispatched by rateLimitGroup; local mode skips it) applied inside the Router via registerRoutes r.Use(); then 8 securityHeaders, 9 corsHeaders, 10 jwtAuth, 11 rlsMiddleware, 12 the matched handler.
+// BuildHandler assembles the FULL request-handling stack in this one place (the chi-internal layers live in routes_chi.go's registerRoutes). Resolved order, outermost/first-to-run first: 1 otelhttp; 2 Recovery; 3 RequestInfo (the request's id, addresses and the actor authentication records later); 4 the route-policy resolution (resolvePolicy: it records the policy every layer below decides on, and never rewrites the URL); 5 RequestTimeout; 6 Compress; 7 AccessLog; 8 Metrics; 8b Recovery again INSIDE 7-8 so a panicking handler is still logged and counted as a 500; 9 rate limiting (cloud only, the bucket from rateLimitBucketOf; local mode skips it); then, inside the Router via registerRoutes r.Use(), 10 securityHeaders, 11 corsHeaders, 12 the /api/v1 alias, 13 jwtAuth, 14 the per-user limit, 15 rlsMiddleware, 16 idempotency (route.Idempotent creates, inside the request transaction), 17 the matched handler behind its policy guard.
 // Returns the wrapped handler plus the rate limiters so the caller can bind a listener and stop the limiters on shutdown.
 func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client) (http.Handler, []*middleware.RateLimiter) {
 	var routerWithLimits http.Handler = router
@@ -43,7 +42,7 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 		router.SetPerUserLimiter(perUserRl)
 		rateLimiters = append(rateLimiters, perUserRl)
 
-		// rateLimitersByGroup maps the rateLimitGroup classifier to its limiter
+		// rateLimitersByGroup maps a bucket (rateLimitBucketOf) to its limiter
 		// so the per-request dispatch is a single lookup.
 		rateLimitersByGroup := map[string]*middleware.RateLimiter{
 			"general":  generalRl,
@@ -54,7 +53,7 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 		}
 
 		routerWithLimits = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			group := rateLimitBucket(r.Method, r.URL)
+			group := router.rateLimitBucketOf(r)
 			if group == "" {
 				router.ServeHTTP(w, r)
 				return
@@ -74,13 +73,16 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 
 	handler := otelhttp.NewHandler(
 		middleware.Recovery(
-			middleware.RequestTimeout(timeoutDur)(
-				middleware.Compress(
-					middleware.AccessLog(cfg.Server.TrustedProxies)(
-						middleware.Metrics(
-							// Inner Recovery, INSIDE AccessLog and Metrics: with only the outer one, a handler panic unwound past both — no access-log line, no 5xx metric. The outer stays as the guard for the middleware layers themselves.
-							middleware.Recovery(routerWithLimits),
-							staticRoutePatterns(router.mux),
+			middleware.RequestInfo(cfg.Server.TrustedProxies)(
+				router.resolvePolicy(
+					middleware.RequestTimeout(timeoutDur, router.policyMode)(
+						middleware.Compress(
+							middleware.AccessLog(cfg.Server.TrustedProxies)(
+								middleware.Metrics(
+									// Inner Recovery, INSIDE AccessLog and Metrics: with only the outer one, a handler panic unwound past both — no access-log line, no 5xx metric. The outer stays as the guard for the middleware layers themselves.
+									middleware.Recovery(routerWithLimits),
+								),
+							),
 						),
 					),
 				),
@@ -127,34 +129,21 @@ var expensiveGetPaths = map[string]struct{}{
 	"/shared": {},
 }
 
-// canonicalRequestPath returns the path the router will ACTUALLY dispatch on — the single definition of that normalization, shared by registerRoutes's version-alias middleware and by rateLimitGroup, which runs OUTSIDE the mux and so before r.URL.Path is normalized.
-// That ordering was a rate-limit bypass: POST /api/v1/auth/login and POST /api/auth/./login both reached the login handler but classified "general" — a 12x brute-force amplification. Mirrors the router: path.Clean, then the /api/v1 alias strip ("/api/v1foo" is distinct and left alone). Decoded r.URL.Path only — chi dispatches on RawPath when set, see routePath.
-func canonicalRequestPath(p string) string {
-	return stripVersionAlias(path.Clean(p))
-}
-
-// stripVersionAlias is the /api/v1 → /api half of canonicalRequestPath on its own: the alias applied to r.URL.RawPath, which chi routes verbatim and which must not be cleaned (path.Clean cannot tell "%2F" from a separator).
-func stripVersionAlias(p string) string {
-	if rest := strings.TrimPrefix(p, "/api/v1/"); rest != p {
-		return "/api/" + rest
-	}
-	if p == "/api/v1" {
-		return "/api"
-	}
-	return p
-}
-
-// applyVersionAlias rewrites u to the path chi dispatches on (the router's alias middleware): canonicalRequestPath
-// on Path, the alias strip alone on RawPath, which chi routes on when set (an escaped "/" in an id must survive).
+// applyVersionAlias rewrites u to the path chi dispatches on (the router's alias middleware): route.CanonicalPath on
+// Path, the alias strip alone on RawPath, which chi routes on when set (an escaped "/" in an id must survive).
 func applyVersionAlias(u *url.URL) {
-	u.Path = canonicalRequestPath(u.Path)
+	u.Path = route.CanonicalPath(u.Path)
 	if u.RawPath != "" {
-		u.RawPath = stripVersionAlias(u.RawPath)
+		u.RawPath = route.StripVersionAlias(u.RawPath)
 	}
 }
 
-// routePath is the path chi dispatches r on, and so the only path a policy decision inside the mux may use (jwtAuth's public routes, rlsMiddleware's exemptions): RawPath verbatim when set, Path otherwise.
-// Deciding on the cleaned, decoded Path instead let the two disagree — /api/system/settings/org/..%2F..%2Fhealth decodes and cleans to the public /api/health, so jwtAuth let it through anonymous while chi ran the protected route. publicRoutes matches exactly on this path, so it fails closed.
+// routePath is the path chi dispatches r on once inside the mux, after applyVersionAlias (route.DispatchPath names
+// it before): RawPath verbatim when set, Path otherwise. The legacy decisions inside the mux (jwtAuth's public
+// routes, rlsMiddleware's exemptions) are judged on it. Deciding on the cleaned, decoded Path instead let the two
+// disagree: /api/system/settings/org/..%2F..%2Fhealth decodes and cleans to the public /api/health, so jwtAuth let
+// it through anonymous while chi ran the protected route. publicRoutes matches exactly on this path, so it fails
+// closed.
 func routePath(r *http.Request) string {
 	if r.URL.RawPath != "" {
 		return r.URL.RawPath
@@ -165,31 +154,25 @@ func routePath(r *http.Request) string {
 	return r.URL.Path
 }
 
-// inboundRoutePath predicts routePath for a request that has not reached the Router yet (layer 7): path.Clean plus the alias on Path, only the alias on RawPath (see stripVersionAlias).
-func inboundRoutePath(u *url.URL) string {
-	if u.RawPath != "" {
-		return stripVersionAlias(u.RawPath)
-	}
-	return canonicalRequestPath(u.Path)
-}
-
-// rateLimitBucket is the limiter group BuildHandler charges a request to, "" when it is not rate limited.
+// rateLimitBucket is the legacy limiter group of a request, "" when it is not rate limited.
 // /assets/* reads are exempt: content-hashed and immutable, and one SPA load fetches dozens in a burst — counting
-// them made an ordinary reload 429 its own lazy chunks. Matched on BOTH the dispatch path (inboundRoutePath) and
+// them made an ordinary reload 429 its own lazy chunks. Matched on BOTH the dispatch path (route.DispatchPath) and
 // the decoded one (the NotFound fallback serves the decoded, cleaned path).
 func rateLimitBucket(method string, u *url.URL) string {
 	if method == http.MethodGet || method == http.MethodHead {
-		if strings.HasPrefix(inboundRoutePath(u), "/assets/") && strings.HasPrefix(canonicalRequestPath(u.Path), "/assets/") {
+		if strings.HasPrefix(route.DispatchPath(u), "/assets/") && strings.HasPrefix(route.CanonicalPath(u.Path), "/assets/") {
 			return ""
 		}
 	}
 	return rateLimitGroup(method, u)
 }
 
-// rateLimitGroup classifies a request into its rate-limit group; pure (no I/O) so the policy is
-// unit-testable. Classifies the dispatch path (inboundRoutePath), not the raw URL — see the above.
+// rateLimitGroup classifies a request into its legacy rate-limit group; pure (no I/O) so the policy is
+// unit-testable. It classifies the dispatch path (route.DispatchPath), not the raw URL: rate limiting runs outside
+// the mux, before its path.Clean and alias strip, and on the raw string POST /api/v1/auth/login and
+// /api/auth/./login read as "general", a 12x brute-force amplification.
 func rateLimitGroup(method string, u *url.URL) string {
-	path := inboundRoutePath(u)
+	path := route.DispatchPath(u)
 	if _, ok := authRateLimitPaths[path]; ok {
 		return rlGroupAuth
 	}
@@ -252,23 +235,4 @@ func isOrgProviderTestPath(path string) bool {
 	}
 	orgID, tail, ok := strings.Cut(rest, "/")
 	return ok && orgID != "" && tail == "providers/azure-foundry/test"
-}
-
-// staticRoutePatterns returns the route patterns without dynamic segments from the router's own chi tree — it bounds the Prometheus "route" label (middleware.Metrics), and deriving it live means the set cannot drift from the routes.
-func staticRoutePatterns(mux *chi.Mux) map[string]struct{} {
-	out := make(map[string]struct{}, 192)
-	// Walk only errors if the walk function does; ours never does.
-	_ = chi.Walk(mux, func(_ string, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		if strings.ContainsAny(route, "{*") {
-			return nil // dynamic — handled by an explicit collapse, or routeOther
-		}
-		// chi reports nested subrouter patterns with a trailing slash ("/api/orgs/" for a group's
-		// own index); requests arrive path.Clean'd, which strips it.
-		if route != "/" {
-			route = strings.TrimSuffix(route, "/")
-		}
-		out[route] = struct{}{}
-		return nil
-	})
-	return out
 }

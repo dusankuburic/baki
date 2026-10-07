@@ -1,4 +1,5 @@
-import type {AzureStatus} from '@/types'
+import type {AzureStatus, Tolerant} from '@/types'
+import {isPickerModel} from './modelGroups'
 import {findModel, hasAlias, isRegistryModelId, storableModelLabel} from './modelIds'
 
 // Which model a chat thread uses — the pure half of per-thread model memory.
@@ -42,7 +43,7 @@ export interface SelectableModel {
   id: string
   displayName?: string
   kind?: string
-  status?: AzureStatus
+  status?: Tolerant<AzureStatus>
   statusReason?: string
   aliases?: readonly string[] | null
   shared?: boolean
@@ -107,8 +108,11 @@ export interface ModelTarget {
   label: string
 }
 
-/** Why an unavailable model can't be used: its entry's status, or its provider isn't configured here. */
-export type UnavailableCause = Exclude<AzureStatus, 'ready'> | 'provider'
+/**
+ * Why an unavailable model can't be used: its entry's status (possibly one
+ * this bundle does not know), or its provider isn't configured here.
+ */
+export type UnavailableCause = Exclude<Tolerant<AzureStatus>, 'ready'> | 'provider'
 
 /** What ModelUnavailableNotice shows. */
 export interface ModelNoticeData {
@@ -142,8 +146,9 @@ function isUsable(model: SelectableModel): boolean {
   return !model.status || model.status === 'ready'
 }
 
+// What the chat may start or fall back on: the picker's models.
 function selectable(provider: SelectableProvider): SelectableModel[] {
-  return provider.models.filter(m => m.kind !== 'embedding')
+  return provider.models.filter(isPickerModel)
 }
 
 function labelOf(model: SelectableModel): string {

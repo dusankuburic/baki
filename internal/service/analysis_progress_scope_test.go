@@ -54,7 +54,7 @@ func newProgressScopeService(t *testing.T, rec *progressRecorder) *AnalysisServi
 	t.Helper()
 	analyzer.DefaultCache.Clear()
 	t.Cleanup(analyzer.DefaultCache.Clear)
-	svc, err := NewAnalysisService(rec, nilSettings{}, nil)
+	svc, err := NewAnalysisService(rec, nilSettings{}, nil, AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("NewAnalysisService: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestAnalyzeFlow_NeverBroadcastsProgressWhenAuthEnabled(t *testing.T) {
 		}
 	}
 
-	svc.SetAuthEnabled(true)
+	svc.authEnabled = true
 	if _, err := svc.AnalyzeFlow(context.Background(), progressDoc()); err != nil {
 		t.Fatal(err)
 	}

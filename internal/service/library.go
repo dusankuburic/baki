@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
@@ -18,46 +20,61 @@ type LibraryService struct {
 	mode      config.DeploymentMode
 	flowCache *FlowService // Needed to invalidate search index when flow is updated/deleted
 	authz     *AuthzService
+	// scopes resolves what a library scope covers; the analytics dashboard lists through the same resolver.
+	scopes *FlowScopeResolver
 }
 
-func NewLibraryService(storage storageif.StorageBackend, flowCache *FlowService, authz *AuthzService) *LibraryService {
+// NewLibraryService builds the library service; a nil scopes builds a resolver over the same storage and authz
+// (it holds no state, so sharing DI's instance is wiring, not behaviour).
+func NewLibraryService(storage storageif.StorageBackend, flowCache *FlowService, authz *AuthzService, scopes *FlowScopeResolver) *LibraryService {
 	mode := config.ModeLocal
 	if storage != nil {
 		mode = config.ModeCloud
 	}
-	return &LibraryService{storage: storage, mode: mode, flowCache: flowCache, authz: authz}
+	if scopes == nil {
+		scopes = NewFlowScopeResolver(storage, authz)
+	}
+	return &LibraryService{storage: storage, mode: mode, flowCache: flowCache, authz: authz, scopes: scopes}
 }
 
-// CanRead reports whether userID may read the flow. All policy lives in
-// AuthzService — owner, org membership, and collaborator grants all count.
-func (s *LibraryService) CanRead(ctx context.Context, doc *storageif.FlowDocument, userID string) bool {
+// authorize decides action on doc, a flow as storage holds it, for the actor ctx carries (AuthzService.Can, which
+// also applies the action's API-token scope rule). The stored header decides, so no second read is made. All
+// policy lives in AuthzService — owner, org membership, and collaborator grants all count. Cloud mode only.
+func (s *LibraryService) authorize(ctx context.Context, action Action, doc *storageif.FlowDocument) error {
+	return s.authz.Can(ctx, auth.ActorFromContext(ctx), action, FlowHeader(doc))
+}
+
+// CanRead reports whether the caller (the actor ctx carries) may read the flow: FlowRead.
+func (s *LibraryService) CanRead(ctx context.Context, doc *storageif.FlowDocument) bool {
 	if s.mode == config.ModeLocal {
 		return true
 	}
-	return s.authz.CheckFlowAccess(ctx, doc.ID, doc.OwnerID, doc.OrganizationID, userID, "viewer") == nil
+	return s.authorize(ctx, FlowRead, doc) == nil
 }
 
-// CanWrite returns nil if userID has at least "editor" access, else
-// ErrPermissionDenied — a write gate beyond the initial read check.
-func (s *LibraryService) CanWrite(ctx context.Context, doc *storageif.FlowDocument, userID string) error {
+// CanWrite returns nil if the caller may edit the flow (FlowEdit), else why not — a write gate beyond the initial
+// read check.
+func (s *LibraryService) CanWrite(ctx context.Context, doc *storageif.FlowDocument) error {
 	if s.mode == config.ModeLocal {
 		return nil
 	}
-	return s.authz.CheckFlowAccess(ctx, doc.ID, doc.OwnerID, doc.OrganizationID, userID, "editor")
+	return s.authorize(ctx, FlowEdit, doc)
 }
 
-func (s *LibraryService) CanShareFlow(ctx context.Context, doc *storageif.FlowDocument, userID string) bool {
+// CanShareFlow reports whether the caller may manage who has access to the flow: FlowShare.
+func (s *LibraryService) CanShareFlow(ctx context.Context, doc *storageif.FlowDocument) bool {
 	if s.mode == config.ModeLocal {
 		return true
 	}
-	return s.authz.CheckFlowAccess(ctx, doc.ID, doc.OwnerID, doc.OrganizationID, userID, "admin") == nil
+	return s.authorize(ctx, FlowShare, doc) == nil
 }
 
-func (s *LibraryService) CanDeleteFlow(ctx context.Context, doc *storageif.FlowDocument, userID string) bool {
+// CanDeleteFlow reports whether the caller may delete the flow: FlowDelete.
+func (s *LibraryService) CanDeleteFlow(ctx context.Context, doc *storageif.FlowDocument) bool {
 	if s.mode == config.ModeLocal {
 		return true
 	}
-	return s.authz.CanDeleteFlow(ctx, doc.OwnerID, doc.OrganizationID, userID)
+	return s.authorize(ctx, FlowDelete, doc) == nil
 }
 
 // FlowPermissions returns the caller's edit/delete/share flags for one flow in
@@ -140,140 +157,6 @@ func ParseFlowSort(s string) storageif.FlowSort {
 	}
 }
 
-// buildLibraryFilter centralises scope/org resolution so List and Count cannot
-// drift; scope=all without orgID also returns the caller's folded membership list.
-func (s *LibraryService) buildLibraryFilter(ctx context.Context, userID, orgID string, scope LibraryScope, query string, sort storageif.FlowSort, limit, offset int) (storageif.FlowFilter, []storageif.OrgMembership, error) {
-	filter := storageif.FlowFilter{
-		UserID:       userID,
-		Query:        query,
-		Limit:        limit,
-		Offset:       offset,
-		SortBy:       sort,
-		MetadataOnly: true,
-	}
-	if orgID != "" {
-		if err := s.authz.RequireOrgMember(ctx, orgID, userID); err != nil {
-			return filter, nil, err
-		}
-		filter.OrganizationID = orgID
-		return filter, nil, nil
-	}
-	switch scope {
-	case ScopeMine:
-		// userID only — no org widening, no collaborator inclusion via OR-org
-		// (collaborator subquery still fires from the UserID branch).
-		return filter, nil, nil
-	case ScopeShared:
-		filter.SharedOnly = true
-		return filter, nil, nil
-	case "", ScopeAll:
-		// Widen org scope to every org the user belongs to; the storage
-		// membership list is authoritative — never bound from user input.
-		ms, err := s.memberOrgs(ctx, userID)
-		if err != nil {
-			return filter, nil, err
-		}
-		ids := make([]string, 0, len(ms))
-		for _, m := range ms {
-			ids = append(ids, m.OrgID)
-		}
-		filter.OrganizationIDs = ids
-		return filter, ms, nil
-	default:
-		return filter, nil, nil
-	}
-}
-
-// memberOrgs lists the orgs userID belongs to with the role in each (the
-// roster-free list when the backend has one). Never nil — empty means "no orgs".
-func (s *LibraryService) memberOrgs(ctx context.Context, userID string) ([]storageif.OrgMembership, error) {
-	if l, ok := s.storage.(storageif.OrgMembershipLister); ok {
-		ms, err := l.ListOrgMembershipsForUser(ctx, userID)
-		if err != nil {
-			return nil, err
-		}
-		if ms == nil {
-			ms = []storageif.OrgMembership{}
-		}
-		return ms, nil
-	}
-	orgs, err := s.storage.ListOrgsForUser(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	ms := make([]storageif.OrgMembership, 0, len(orgs))
-	for _, o := range orgs {
-		m := storageif.OrgMembership{OrgID: o.ID, OrgName: o.Name}
-		for _, om := range o.Members {
-			if om.UserID == userID {
-				m.Role = om.Role
-				break
-			}
-		}
-		ms = append(ms, m)
-	}
-	return ms, nil
-}
-
-// ScopeFlowIDs resolves the flow ids the caller may see under a scope, paged
-// in 500s up to limit; result two lists the widening org ids (org-keyed analytics).
-func (s *LibraryService) ScopeFlowIDs(ctx context.Context, userID, orgID string, scope LibraryScope, limit int) (ids []string, orgIDs []string, err error) {
-	defer logger.Guard("LibraryService.ScopeFlowIDs", &err)
-	ids, orgIDs = []string{}, []string{}
-	if s.mode == config.ModeLocal || s.storage == nil {
-		return ids, orgIDs, nil
-	}
-	if limit <= 0 {
-		limit = 5000
-	}
-	const page = 500
-	// The scope (membership check, org list) is resolved ONCE for the walk;
-	// it used to be rebuilt — membership queries included — for every page.
-	filter, _, ferr := s.buildLibraryFilter(ctx, userID, orgID, scope, "", storageif.FlowSortIDAsc, page, 0)
-	if ferr != nil {
-		return nil, nil, ferr
-	}
-	if filter.OrganizationID != "" {
-		orgIDs = []string{filter.OrganizationID}
-	} else if len(filter.OrganizationIDs) > 0 {
-		orgIDs = append(orgIDs, filter.OrganizationIDs...)
-	}
-	// Keyset paging on the id order: each page starts after the last id seen
-	// (AfterID); a backend without AfterID repeats page one — detected, OFFSET takes over.
-	keyset := true
-	seen := make(map[string]struct{})
-	for len(ids) < limit {
-		if keyset && len(ids) > 0 {
-			filter.AfterID = ids[len(ids)-1]
-		}
-		if !keyset {
-			filter.AfterID = ""
-			filter.Offset = len(ids)
-		}
-		docs, lerr := s.storage.ListFlows(ctx, filter)
-		if lerr != nil {
-			return nil, nil, lerr
-		}
-		if keyset && filter.AfterID != "" && len(docs) > 0 {
-			if _, dup := seen[docs[0].ID]; dup {
-				keyset = false
-				continue
-			}
-		}
-		for _, d := range docs {
-			ids = append(ids, d.ID)
-			seen[d.ID] = struct{}{}
-			if len(ids) >= limit {
-				break
-			}
-		}
-		if len(docs) < page {
-			break
-		}
-	}
-	return ids, orgIDs, nil
-}
-
 // ListLibraryFlows returns the flows visible to the caller; an orgID requires
 // membership (else enumeration by guessing). Scopes: all / mine / shared.
 func (s *LibraryService) ListLibraryFlows(ctx context.Context, userID, orgID string, scope LibraryScope, query, sort string, limit, offset int) (docs []*storageif.FlowDocument, err error) {
@@ -287,7 +170,7 @@ func (s *LibraryService) ListLibraryFlowsWithTagFilter(ctx context.Context, user
 	if s.mode == config.ModeLocal {
 		return []*storageif.FlowDocument{}, nil
 	}
-	filter, _, err := s.buildLibraryFilter(ctx, userID, orgID, scope, query, ParseFlowSort(sort), limit, offset)
+	filter, _, err := s.scopes.filter(ctx, userID, orgID, scope, query, ParseFlowSort(sort), limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +195,7 @@ func (s *LibraryService) ListLibraryFlowsPage(ctx context.Context, userID, orgID
 	if s.mode == config.ModeLocal {
 		return &LibraryPage{Docs: []*storageif.FlowDocument{}}, nil
 	}
-	filter, memberships, err := s.buildLibraryFilter(ctx, userID, orgID, scope, query, ParseFlowSort(sort), limit, offset)
+	filter, memberships, err := s.scopes.filter(ctx, userID, orgID, scope, query, ParseFlowSort(sort), limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +245,7 @@ func (s *LibraryService) CountLibraryFlowsWithTagFilter(ctx context.Context, use
 	if s.mode == config.ModeLocal {
 		return 0, nil
 	}
-	filter, _, err := s.buildLibraryFilter(ctx, userID, orgID, scope, query, storageif.FlowSortUpdatedDesc, 0, 0)
+	filter, _, err := s.scopes.filter(ctx, userID, orgID, scope, query, storageif.FlowSortUpdatedDesc, 0, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -380,16 +263,17 @@ func (s *LibraryService) FlowHealth(ctx context.Context, flowID string) (h *stor
 	return s.storage.LoadFlowHealth(ctx, flowID)
 }
 
-// CheckFlowAccessForUser verifies access WITHOUT loading the flow's content —
-// perm-only endpoints skip the blob the full load would pay to discard.
-func (s *LibraryService) CheckFlowAccessForUser(ctx context.Context, flowID, userID, minPerm string) error {
+// CheckFlowPermission reports whether the caller (the actor ctx carries) may perform action on the flow
+// (AuthzService.Can) WITHOUT loading its content — perm-only endpoints skip the blob the full load would pay to
+// discard.
+func (s *LibraryService) CheckFlowPermission(ctx context.Context, flowID string, action Action) error {
 	if s.mode == config.ModeLocal || s.storage == nil {
 		return nil
 	}
 	if s.authz == nil {
 		return ErrPermissionDenied
 	}
-	return s.authz.CheckFlowAccessByID(ctx, flowID, userID, minPerm)
+	return s.authz.Can(ctx, auth.ActorFromContext(ctx), action, FlowByID(flowID))
 }
 
 // GetLibraryFlow loads a single flow by ID without an access check.
@@ -407,7 +291,7 @@ func (s *LibraryService) GetLibraryFlow(ctx context.Context, flowID string) (doc
 
 // GetLibraryFlowMetaForUser is GetLibraryFlowForUser reading only the header —
 // no content, no blob (Content nil, Source empty); same read authorization.
-func (s *LibraryService) GetLibraryFlowMetaForUser(ctx context.Context, flowID, userID string) (doc *storageif.FlowDocument, err error) {
+func (s *LibraryService) GetLibraryFlowMetaForUser(ctx context.Context, flowID string) (doc *storageif.FlowDocument, err error) {
 	defer logger.Guard("LibraryService.GetLibraryFlowMetaForUser", &err)
 	if s.mode == config.ModeLocal {
 		return nil, storageif.ErrNotFound
@@ -416,35 +300,36 @@ func (s *LibraryService) GetLibraryFlowMetaForUser(ctx context.Context, flowID, 
 	if err != nil {
 		return nil, err
 	}
-	if !s.CanRead(ctx, doc, userID) {
-		return nil, ErrPermissionDenied
+	if err := s.authorize(ctx, FlowRead, doc); err != nil {
+		return nil, err
 	}
 	return doc, nil
 }
 
-// GetLibraryFlowForUser loads a flow and returns ErrPermissionDenied without
-// read access — the handler form of GetLibraryFlow + CanRead.
-func (s *LibraryService) GetLibraryFlowForUser(ctx context.Context, flowID, userID string) (doc *storageif.FlowDocument, err error) {
+// GetLibraryFlowForUser loads a flow the caller (the actor ctx carries) may
+// read, else Can's refusal — the handler form of GetLibraryFlow + CanRead.
+func (s *LibraryService) GetLibraryFlowForUser(ctx context.Context, flowID string) (doc *storageif.FlowDocument, err error) {
 	defer logger.Guard("LibraryService.GetLibraryFlowForUser", &err)
 	doc, err = s.GetLibraryFlow(ctx, flowID)
 	if err != nil {
 		return nil, err
 	}
-	if !s.CanRead(ctx, doc, userID) {
-		return nil, ErrPermissionDenied
+	if err := s.authorize(ctx, FlowRead, doc); err != nil {
+		return nil, err
 	}
 	return doc, nil
 }
 
 // CreateLibraryFlow persists a new flow owned by ownerID; an org flow requires
-// org role at least member (viewers/guests/non-members may not write).
+// the caller to create content in the org (OrgWrite: admins and members, not
+// viewers, guests or non-members).
 func (s *LibraryService) CreateLibraryFlow(ctx context.Context, ownerID, orgID string, doc storageif.FlowDocument) (saved *storageif.FlowDocument, err error) {
 	defer logger.Guard("LibraryService.CreateLibraryFlow", &err)
 	if s.mode == config.ModeLocal {
 		return nil, fmt.Errorf("cloud storage not available in local mode")
 	}
 	if orgID != "" {
-		if err := s.authz.RequireOrgWriter(ctx, orgID, ownerID); err != nil {
+		if err := s.authz.Can(ctx, auth.ActorFromContext(ctx), OrgWrite, OrgByID(orgID)); err != nil {
 			return nil, err
 		}
 	}
@@ -470,14 +355,15 @@ func (s *LibraryService) notifyFlowSetChanged(ownerID string) {
 	}
 }
 
-// UpdateLibraryFlow saves changes to an existing flow; requires "editor"
-// access. Flows with an empty OwnerID are unclaimed and read-only.
-func (s *LibraryService) UpdateLibraryFlow(ctx context.Context, doc *storageif.FlowDocument, callerID string) (err error) {
+// UpdateLibraryFlow saves changes to an existing flow, doc as loaded from
+// storage (its owner and organisation decide); the caller must be allowed
+// FlowEdit. Flows with an empty OwnerID are unclaimed and read-only.
+func (s *LibraryService) UpdateLibraryFlow(ctx context.Context, doc *storageif.FlowDocument) (err error) {
 	defer logger.Guard("LibraryService.UpdateLibraryFlow", &err)
 	if s.mode == config.ModeLocal {
 		return fmt.Errorf("cloud storage not available in local mode")
 	}
-	if err := s.authz.CheckFlowAccess(ctx, doc.ID, doc.OwnerID, doc.OrganizationID, callerID, "editor"); err != nil {
+	if err := s.authorize(ctx, FlowEdit, doc); err != nil {
 		return err
 	}
 	if err := s.storage.SaveFlow(ctx, doc); err != nil {
@@ -491,24 +377,25 @@ func (s *LibraryService) UpdateLibraryFlow(ctx context.Context, doc *storageif.F
 	return nil
 }
 
-// DeleteLibraryFlow removes a flow — narrower than "admin": only the owner or
-// an org admin may destroy. ErrNotFound in local mode.
-func (s *LibraryService) DeleteLibraryFlow(ctx context.Context, flowID, callerID string) (err error) {
+// DeleteLibraryFlow removes a flow — FlowDelete, narrower than FlowShare: only
+// the owner or an org admin may destroy — and returns the header it decided on
+// (the audit row takes the flow's organisation from it). ErrNotFound in local mode.
+func (s *LibraryService) DeleteLibraryFlow(ctx context.Context, flowID string) (deleted *storageif.FlowDocument, err error) {
 	defer logger.Guard("LibraryService.DeleteLibraryFlow", &err)
 	if s.mode == config.ModeLocal {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	// Header only: the decision needs owner/org; the old full load downloaded
 	// content just to discard it (and refused when the blob was missing).
 	doc, err := s.storage.LoadFlowHeader(ctx, flowID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !s.authz.CanDeleteFlow(ctx, doc.OwnerID, doc.OrganizationID, callerID) {
-		return ErrPermissionDenied
+	if err := s.authorize(ctx, FlowDelete, doc); err != nil {
+		return nil, err
 	}
 	if err := s.storage.DeleteFlow(ctx, flowID); err != nil {
-		return err
+		return nil, err
 	}
 	analyzer.DefaultCache.Invalidate(flowID)
 	if s.flowCache != nil {
@@ -520,5 +407,36 @@ func (s *LibraryService) DeleteLibraryFlow(ctx context.Context, flowID, callerID
 		}
 	}
 	s.notifyFlowSetChanged(doc.OwnerID)
-	return nil
+	return doc, nil
+}
+
+// ListFlowVersions returns up to limit of the flow's stored versions (limit <= 0 = all); the caller owns read
+// authorization.
+func (s *LibraryService) ListFlowVersions(ctx context.Context, flowID string, limit int) ([]*storageif.FlowVersion, error) {
+	return s.storage.ListFlowVersions(ctx, flowID, limit)
+}
+
+// LoadFlowVersion reads one stored version, ErrNotFound when it does not exist; the caller owns authorization.
+func (s *LibraryService) LoadFlowVersion(ctx context.Context, flowID string, version int) (*storageif.FlowVersion, error) {
+	return s.storage.LoadFlowVersion(ctx, flowID, version)
+}
+
+// SaveFlowVersion snapshots doc, the flow flowID as loaded, as a new version by userID and returns it with the
+// number the store assigned; the caller owns the write check (CanWrite).
+func (s *LibraryService) SaveFlowVersion(ctx context.Context, flowID string, doc *storageif.FlowDocument, comment, userID string) (*storageif.FlowVersion, error) {
+	// The backend assigns v.Version atomically (Postgres: FOR UPDATE + MAX+1);
+	// a read-then-write here would just race.
+	v := &storageif.FlowVersion{
+		ID:        uuid.NewString(),
+		FlowID:    flowID,
+		Comment:   comment,
+		Content:   doc.Content,
+		Metadata:  doc.Metadata,
+		CreatedBy: userID,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := s.storage.SaveFlowVersion(ctx, v); err != nil {
+		return nil, err
+	}
+	return v, nil
 }

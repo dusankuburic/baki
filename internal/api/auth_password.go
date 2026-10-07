@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
@@ -48,7 +49,7 @@ func (h *AuthHandler) handleAuthResendVerification(w http.ResponseWriter, r *htt
 		return
 	}
 	if user != nil {
-		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionRegister, "user", user.ID, map[string]string{"step": "verification_resent"})
+		h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionRegister, ResourceType: "user", ResourceID: user.ID, Meta: map[string]string{"step": "verification_resent"}})
 	}
 	render.JSON(w, ok)
 }
@@ -101,15 +102,15 @@ func (h *AuthHandler) handleAuthChangePassword(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if h.tokenStore != nil {
-		if err := h.tokenStore.RevokeUserRefreshTokens(r.Context(), claims.UserID); err != nil {
-			logger.Error("failed to revoke user refresh tokens after password change", "error", err, "userID", claims.UserID)
+	if h.sessions.Enabled() {
+		if err := h.sessions.RevokeAll(r.Context(), claims.UserID); err != nil {
+			logger.FromContext(r.Context()).Error("failed to revoke user refresh tokens after password change", "error", err, "userID", claims.UserID)
 			render.Error(w, fmt.Errorf("password changed but failed to invalidate other sessions"), http.StatusInternalServerError)
 			return
 		}
 	}
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionPasswordChange, "user", claims.UserID, nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionPasswordChange, ResourceType: "user", ResourceID: claims.UserID})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -153,7 +154,7 @@ func (h *AuthHandler) handleAuthForgotPassword(w http.ResponseWriter, r *http.Re
 		render.JSON(w, ok) // unknown email — respond identically
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionPasswordChange, "user", user.ID, map[string]string{"step": "reset_requested"})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionPasswordChange, ResourceType: "user", ResourceID: user.ID, Meta: map[string]string{"step": "reset_requested"}})
 	render.JSON(w, ok)
 }
 
@@ -202,12 +203,12 @@ func (h *AuthHandler) handleAuthResetPassword(w http.ResponseWriter, r *http.Req
 		}
 		return
 	}
-	if h.tokenStore != nil {
-		if err := h.tokenStore.RevokeUserRefreshTokens(r.Context(), userID); err != nil {
-			logger.Error("failed to revoke sessions after password reset", "error", err, "userID", userID)
+	if h.sessions.Enabled() {
+		if err := h.sessions.RevokeAll(r.Context(), userID); err != nil {
+			logger.FromContext(r.Context()).Error("failed to revoke sessions after password reset", "error", err, "userID", userID)
 		}
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionPasswordChange, "user", userID, map[string]string{"step": "reset_completed"})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionPasswordChange, ResourceType: "user", ResourceID: userID, Meta: map[string]string{"step": "reset_completed"}})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

@@ -1,4 +1,4 @@
-import type {Severity, TriageStatus} from '@/types'
+import {TRIAGE_STATUSES, isKnown, type Severity, type Tolerant, type TriageStatus} from '@/types'
 
 // severityTone is THE single source (U2.1) mapping finding severity → tone
 // classes, backed by SEMANTIC design tokens so findings follow the theme
@@ -86,8 +86,9 @@ const triageTones: Record<TriageStatus, Tone> = {
   },
 }
 
-export function triageTone(status: TriageStatus): Tone {
-  return triageTones[status] ?? triageTones.open
+// A status this bundle does not know takes the neutral 'open' tone.
+export function triageTone(status: Tolerant<TriageStatus>): Tone {
+  return isKnown(TRIAGE_STATUSES, status) ? triageTones[status] : triageTones.open
 }
 
 // The shared "this action writes/changes something good" affordance

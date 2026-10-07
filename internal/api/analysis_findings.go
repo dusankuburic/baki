@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/service"
 	"pad-core/analyzer"
 	"pad-core/models"
 )
@@ -33,8 +34,7 @@ func (h *AnalysisHandler) handleGetVariableLineage(w http.ResponseWriter, r *htt
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -68,8 +68,7 @@ func (h *AnalysisHandler) handleGetExecutionGraph(w http.ResponseWriter, r *http
 		flowID = req.FlowID
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), flowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), flowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -101,8 +100,7 @@ func (h *AnalysisHandler) handleGetDataFlow(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -140,8 +138,7 @@ func (h *AnalysisHandler) handleDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -182,8 +179,7 @@ func (h *AnalysisHandler) handleGetHistory(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -224,8 +220,7 @@ func (h *AnalysisHandler) handleDeduplicate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -264,8 +259,7 @@ func (h *AnalysisHandler) handleRelatedFindings(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -299,13 +293,12 @@ func (h *AnalysisHandler) handleCompareFlows(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	docA, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowAID, userID, "viewer")
+	docA, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowAID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	docB, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowBID, userID, "viewer")
+	docB, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowBID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -316,15 +309,16 @@ func (h *AnalysisHandler) handleCompareFlows(w http.ResponseWriter, r *http.Requ
 }
 
 // registerFindingRoutes wires the analysis findings-introspection sub-routes
-// (lineage, graphs, dataflow, diff/history, dedupe, related, compare).
-func (h *AnalysisHandler) registerFindingRoutes(r chi.Router) {
-	r.Post("/lineage", h.handleGetVariableLineage)
-	r.Post("/graph", h.handleGetExecutionGraph)
-	r.Post("/dataflow", h.handleGetDataFlow)
-	r.Post("/diff", h.handleDiff)
-	r.Post("/history", h.handleGetHistory)
-	r.Get("/dependencies", h.handleGetDependencies)
-	r.Post("/deduplicate", h.handleDeduplicate)
-	r.Post("/related", h.handleRelatedFindings)
-	r.Post("/compare", h.handleCompareFlows)
+// (lineage, graphs, dataflow, diff/history, dedupe, related, compare). The
+// analyses burn seconds of CPU per flow: outside the request transaction.
+func (h *AnalysisHandler) registerFindingRoutes(rb *route.Builder) {
+	rb.Post("/lineage", h.handleGetVariableLineage, route.NoTx())
+	rb.Post("/graph", h.handleGetExecutionGraph, route.NoTx())
+	rb.Post("/dataflow", h.handleGetDataFlow, route.NoTx())
+	rb.Post("/diff", h.handleDiff, route.NoTx())
+	rb.Post("/history", h.handleGetHistory)
+	rb.Get("/dependencies", h.handleGetDependencies, route.RateLimit(route.RateGeneral))
+	rb.Post("/deduplicate", h.handleDeduplicate, route.NoTx())
+	rb.Post("/related", h.handleRelatedFindings, route.NoTx())
+	rb.Post("/compare", h.handleCompareFlows, route.NoTx())
 }

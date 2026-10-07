@@ -12,6 +12,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	mailer "pad-analyzer/internal/mail"
@@ -112,8 +113,7 @@ type testAzureModelsDeps struct {
 
 // newTestAzureModels builds the Azure AI Foundry model registry service the
 // way di.ProvideAzureModelService does, on a fake registry store; the caller
-// wires it with SetAzureModels on the ProviderService (and SystemService), as
-// DI does.
+// passes it to NewProviderService (and NewSystemService), as DI does.
 func newTestAzureModels(d testAzureModelsDeps) (*service.AzureModelService, *testutil.FakeAzureRegistry) {
 	reg := d.Registry
 	if reg == nil {
@@ -156,13 +156,14 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	cfg := config.Default()
 	cfg.Auth.Enabled = jwtEnabled
 	cfg.Auth.Secret = testToken
+	routePolicyFromEnv(cfg)
 	for _, fn := range tweak {
 		fn(cfg)
 	}
 
 	notifier := &mockNotifier{}
 	settings, _ := storage.NewSettingsStore()
-	sysSvc := service.NewSystemService(settings, storage.NewKeyringSecretStore(), notifier, backend, cfg.Mode)
+	sysSvc := service.NewSystemService(settings, storage.NewKeyringSecretStore(), notifier, backend, cfg.Mode, nil)
 	docProv := service.DocumentProvider(service.NewLocalDocumentProvider())
 	if jwtEnabled {
 		docProv = service.NewCloudDocumentProvider(backend)
@@ -180,8 +181,9 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	authzSvc := service.NewAuthzService(backend, orgSvc)
 
 	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, authzSvc, nil)
-	libSvc := service.NewLibraryService(backend, flowSvc, authzSvc)
-	analysisSvc, err := service.NewAnalysisService(notifier, settings, nil)
+	scopes := service.NewFlowScopeResolver(backend, authzSvc)
+	libSvc := service.NewLibraryService(backend, flowSvc, authzSvc, scopes)
+	analysisSvc, err := service.NewAnalysisService(notifier, settings, nil, service.AnalysisOptions{})
 	if err != nil {
 		// NewAnalysisService keeps an error return for the DI signature but
 		// never fails; this helper isn't t-aware, so panic is acceptable.
@@ -196,11 +198,11 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	if dirErr != nil {
 		panic("test conversation dir: " + dirErr.Error())
 	}
-	chatSvc := service.NewChatService(notifier, chatDir, flowSvc, analysisSvc, settings, factory, backend, config.ModeLocal)
+	chatSvc := service.NewChatService(notifier, chatDir, flowSvc, analysisSvc, settings, factory, backend, config.ModeLocal, service.ChatOptions{})
 
 	ghAuth := ai.NewGitHubAuth()
 	cpAuth := ai.NewCopilotAuth()
-	providerSvc := service.NewProviderService(ghAuth, cpAuth, factory, storage.NewKeyringSecretStore())
+	providerSvc := service.NewProviderService(ghAuth, cpAuth, factory, storage.NewKeyringSecretStore(), nil, nil)
 
 	security := &SecurityConfig{
 		JWTEnabled:     jwtEnabled,
@@ -215,29 +217,68 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 
 	eventManager := NewEventManager(make(chan struct{}))
 
-	dashboardSvc := service.NewDashboardService(backend, analysisSvc, flowSvc)
-	dashboardSvc.SetScopeResolver(libSvc)
+	dashboardSvc := service.NewDashboardService(backend, analysisSvc, flowSvc, scopes)
 	authSvc := service.NewAuthService(backend, mailer.NewService(config.EmailConfig{}, config.ModeLocal))
-	handlers := Handlers{
-		Sys:       NewSystemHandler(sysSvc, security, backend, nil, nil),
-		Flow:      NewFlowHandler(flowSvc, docProv, backend, security),
-		Library:   NewLibraryHandler(libSvc, backend, security),
-		Chat:      NewChatHandler(chatSvc, flowSvc, security),
-		Analysis:  NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security, service.NewWebhookNotifier(nil), mailer.NewService(config.EmailConfig{}, config.ModeLocal), ""),
-		Dashboard: NewDashboardHandler(dashboardSvc, security),
-		Export:    NewExportHandler(exportSvc, flowSvc, analysisSvc, security),
+	triageSvc := service.NewTriageService(backend, backend, backend)
+	shareSvc := service.NewShareTokenService(backend, backend)
+	// Never started, as before boot: every row is a detached write to the backend.
+	auditRec := testAuditRecorder(backend)
+	modules := []Module{
+		NewSystemHandler(sysSvc, security, auditRec, nil, nil, authzSvc, service.NewHealthService(backend)),
+		NewFlowHandler(flowSvc, docProv, backend, security, shareSvc, auditRec),
+		NewLibraryHandler(libSvc, backend, security, auditRec),
+		NewChatHandler(chatSvc, flowSvc, security, auditRec),
+		NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security, service.NewWebhookNotifier(nil), mailer.NewService(config.EmailConfig{}, config.ModeLocal), "", service.NewPolicyService(backend), service.NewGovernanceAlertService(backend), triageSvc, service.NewCommentService(backend, triageSvc), shareSvc, auditRec),
+		NewDashboardHandler(dashboardSvc, security),
+		NewExportHandler(exportSvc, flowSvc, analysisSvc, security, auditRec),
 		// Cloud/JWT mode always runs with a refresh-token store in production
 		// (main.go wires one whenever auth is enabled); mirror that here so the
 		// refresh handler's replay/rotation path is exercised, and a nil store
 		// (which the handler now rejects as a misconfiguration) isn't relied on.
-		Auth:     NewAuthHandler(newMockTokenStore(), backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{}, config.ModeLocal), authSvc),
-		Admin:    NewAdminHandler(backend, security, NewMigrationRunner(nil), nil),
-		Provider: NewProviderHandler(providerSvc, security, backend),
-		Org:      NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), nil, providerSvc),
-		Sharing:  NewSharingHandler(backend, flowSvc, security),
+		NewAuthHandler(service.NewSessionService(newMockTokenStore()), backend, security, ssoClient, service.NewIdentityService(backend, identityStore), mailer.NewService(config.EmailConfig{}, config.ModeLocal), authSvc, service.NewAccountLifecycleService(backend, nil), service.NewAPITokenService(backend), auditRec),
+		NewAdminHandler(auditRec, security, NewMigrationRunner(nil), nil, authzSvc, service.NewUserAdminService(backend)),
+		NewProviderHandler(providerSvc, security, auditRec),
+		NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(backend, backend, nil), providerSvc, authzSvc, service.NewChannelService(backend), service.NewUserDirectory(backend), auditRec),
+		NewSharingHandler(backend, flowSvc, service.NewCollaboratorService(backend), security, auditRec),
 	}
 
-	return NewRouter(noopLifecycle{}, security, eventManager, handlers, cfg, make(chan struct{}), nil, nil)
+	rt, err := NewRouter(RouterParams{Lifecycle: noopLifecycle{}, Security: security, Events: eventManager, Modules: modules, Config: cfg, ShutdownCh: make(chan struct{})})
+	if err != nil {
+		panic("NewRouter: " + err.Error())
+	}
+	rt.caps = testCaps(jwtEnabled, backend)
+	return rt
+}
+
+// testCaps is what a test router's deployment offers, from what the test wired rather than from config: the
+// server-side store whenever a backend is wired (the filesystem backend stands in for Postgres here), accounts
+// with JWT auth, row-level security with both.
+func testCaps(jwtEnabled bool, backend storageif.StorageBackend) capability.Set {
+	profile, caps := capability.Desktop, []capability.Capability(nil)
+	if backend != nil {
+		profile, caps = capability.LocalDB, append(caps, capability.ServerStore)
+	}
+	if jwtEnabled {
+		profile, caps = capability.Cloud, append(caps, capability.Accounts)
+		if backend != nil {
+			caps = append(caps, capability.RowLevelSecurity)
+		}
+	}
+	return capability.NewSet(profile, caps...)
+}
+
+// moduleOf returns rt's module of type M (a handler such as *AnalysisHandler), so a test can reach into the
+// handler the router serves.
+func moduleOf[M Module](t testing.TB, rt *Router) M {
+	t.Helper()
+	for _, m := range rt.modules {
+		if h, ok := m.(M); ok {
+			return h
+		}
+	}
+	var none M
+	t.Fatalf("router has no %T module", none)
+	return none
 }
 
 func newJWTTestRouter(t *testing.T) *Router {

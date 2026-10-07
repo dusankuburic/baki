@@ -25,7 +25,7 @@ func newFastRetryProviderService(t *testing.T, secrets *testutil.FakeSecretStore
 	}
 	rt := &config.RuntimeConfig{RetryMaxAttempts: 3, RetryBaseDelay: "1ms", CircuitBreakerFailures: 100, CircuitBreakerOpenDur: "1s"}
 	factory := ai.NewProviderFactory(getKey, ai.NewCopilotAuth(), nil, rt)
-	return NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
+	return NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets, nil, nil)
 }
 
 // D-14: an Entra ID + project document that names no deployment relies on
@@ -327,7 +327,7 @@ func TestInvalidate_PrunesStaleMarksWithoutAnInsert(t *testing.T) {
 func TestSaveApiKey_InvalidatesTheProviderListing(t *testing.T) {
 	secrets := testutil.NewFakeSecretStore()
 	_ = secrets.Save("u1", "openai", "k1")
-	sys := NewSystemService(nil, secrets, nil, nil, "")
+	sys := NewSystemService(nil, secrets, nil, nil, "", nil)
 	svc := newProviderServiceWithFakeSecrets(t, secrets)
 	svc.modelCache["u1\x00openai"] = modelCacheEntry{models: []ai.ModelInfo{{ID: "old"}}, expiresAt: time.Now().Add(time.Hour)}
 	gen := svc.modelGen
@@ -358,7 +358,7 @@ func TestDeleteApiKey_ForgetsAzureCredential(t *testing.T) {
 	for _, doc := range []string{raw, "not-a-document"} {
 		secrets := testutil.NewFakeSecretStore()
 		_ = secrets.Save("u1", "azure-foundry", doc)
-		sys := NewSystemService(nil, secrets, nil, nil, "")
+		sys := NewSystemService(nil, secrets, nil, nil, "", nil)
 		var hooked []string
 		sys.OnApiKeyChanged(func(scope, provider string) {
 			if has, _ := secrets.Has(scope, provider); has {

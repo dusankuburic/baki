@@ -126,7 +126,7 @@ func TestAssemblePortfolio_Empty(t *testing.T) {
 // receiver) and surface as a 500 from GET /api/library/portfolio. Local mode
 // must return an empty portfolio instead.
 func TestBuildPortfolio_LocalModeIsEmpty(t *testing.T) {
-	svc := NewLibraryService(nil, nil, nil)
+	svc := NewLibraryService(nil, nil, nil, nil)
 	p, err := svc.BuildPortfolio(context.Background(), "user-1", "", PortfolioSortRisk, 0)
 	if err != nil {
 		t.Fatalf("BuildPortfolio in local mode: %v", err)

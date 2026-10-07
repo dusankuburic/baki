@@ -53,7 +53,7 @@ func TestApplyFix_ChatOnlyTokenRefusedBeforePrompt(t *testing.T) {
 	doc := fixTestDoc()
 	svc, _ := newFixTestService(doc, failingApplyHook(t))
 	rec := &fixEventRecorder{}
-	ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, nil, nil)
+	ap := svc.newFixApplier(doc, "stream-1", rec.emit, nil, nil)
 	ctx := scopedCtx(auth.ScopeChat)
 
 	out, err := ap.ApplyFixWithApproval(ctx, fixTestProposal())
@@ -79,10 +79,10 @@ func TestApplyApprovedFix_RechecksWriteScope(t *testing.T) {
 	svc, _ := newFixTestService(doc, failingApplyHook(t))
 	ctx := scopedCtx(auth.ScopeChat)
 
-	if _, _, err := svc.applyApprovedFix(ctx, "user-1", doc, fixTestProposal()); !errors.Is(err, ErrPermissionDenied) {
+	if _, _, err := svc.applyApprovedFix(ctx, doc, fixTestProposal()); !errors.Is(err, ErrPermissionDenied) {
 		t.Errorf("applyApprovedFix err = %v, want ErrPermissionDenied", err)
 	}
-	if _, _, err := svc.applyApprovedFixes(ctx, "user-1", doc, []ai.FixProposal{fixTestProposal()}); !errors.Is(err, ErrPermissionDenied) {
+	if _, _, err := svc.applyApprovedFixes(ctx, doc, []ai.FixProposal{fixTestProposal()}); !errors.Is(err, ErrPermissionDenied) {
 		t.Errorf("applyApprovedFixes err = %v, want ErrPermissionDenied", err)
 	}
 }

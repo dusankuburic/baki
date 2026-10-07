@@ -251,8 +251,8 @@ func TestAzureModels_LegacySavesUndoTheDocumentOnAFailedSync(t *testing.T) {
 	ctx := context.Background()
 	e := newAzureModelsEnv(t)
 	providers := newProviderServiceWithFakeSecrets(t, e.secrets)
-	providers.SetOrgKeyStore(e.orgKeys)
-	providers.SetAzureModels(e.svc)
+	providers.orgKeys = e.orgKeys
+	providers.azure = e.svc
 	doc := func(key, chat string, more ...string) ai.AzureFoundryConfig {
 		return ai.AzureFoundryConfig{Endpoint: "https://" + azureTestHost, Auth: ai.AzureFoundryAuth{Mode: "api_key", Key: key}, ChatDeployment: chat, Deployments: more}
 	}

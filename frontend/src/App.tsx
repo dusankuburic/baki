@@ -42,6 +42,7 @@ import StatusBar from './components/layout/StatusBar'
 import PaneDivider from './components/layout/PaneDivider'
 import WelcomeModal from './components/onboarding/WelcomeModal'
 import BackendCrashBanner from './components/layout/BackendCrashBanner'
+import ReloadBanner from './components/layout/ReloadBanner'
 // By path, not through the components/chat barrel (which would pull
 // react-markdown into the entry chunk).
 import ChatStreamProvider from './components/chat/ChatStreamProvider'
@@ -191,6 +192,7 @@ function AppInner() {
         onDrop={handleDrop}
       >
         <TitleBar />
+        <ReloadBanner />
         <div className="flex flex-1 overflow-hidden print:overflow-visible">
           {/* Desktop sidebar (inline pane) */}
           {isDesktop && !sidebarCollapsed && (

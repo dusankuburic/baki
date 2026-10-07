@@ -25,7 +25,7 @@ func TestDashboardService_BuildHome_ConcurrentCacheHitRaceFree(t *testing.T) {
 		FakeBackend: testutil.NewFakeBackend(),
 		data:        &storageif.DashboardData{ByCategory: map[string]int{}},
 	}
-	svc := NewDashboardService(backend, &AnalysisService{}, nil)
+	svc := NewDashboardService(backend, &AnalysisService{}, nil, nil)
 
 	// Prime the per-user cache so subsequent calls take the cache-hit path.
 	if !svc.BuildHome(context.Background(), "user-1").IsCloud {
@@ -101,7 +101,7 @@ func TestDashboardService_BuildHome_CloudMapping(t *testing.T) {
 			TokenUsage: []storageif.DailyTokens{{Date: "2026-06-01", TokensIn: 100, TokensOut: 50}},
 		},
 	}
-	svc := NewDashboardService(backend, nil, nil)
+	svc := NewDashboardService(backend, nil, nil, nil)
 
 	home := svc.BuildHome(context.Background(), "user-1")
 
@@ -144,7 +144,7 @@ func TestDashboardService_BuildHome_CloudMapping(t *testing.T) {
 // In local mode (nil backend) BuildHome must still return a valid, non-nil
 // payload so the frontend's length checks and chart mappers don't hit nulls.
 func TestDashboardService_BuildHome_LocalEmptyIsSafe(t *testing.T) {
-	svc := NewDashboardService(nil, nil, nil)
+	svc := NewDashboardService(nil, nil, nil, nil)
 
 	home := svc.BuildHome(context.Background(), "user-1")
 
@@ -163,7 +163,7 @@ func TestDashboardService_BuildHome_LocalEmptyIsSafe(t *testing.T) {
 // computed from the findings slice, plus the correct severity counts.
 func TestDashboardService_RecordAnalysis_CloudPersistsByRuleAndCategory(t *testing.T) {
 	backend := &stubDashBackend{FakeBackend: testutil.NewFakeBackend()}
-	svc := NewDashboardService(backend, nil, nil)
+	svc := NewDashboardService(backend, nil, nil, nil)
 
 	report := &models.AnalysisReport{
 		Stats: models.AnalysisStats{Errors: 2, Warnings: 3, Info: 1},
@@ -198,7 +198,7 @@ func TestDashboardService_BuildHome_CloudAdvancedEmptyIsSafe(t *testing.T) {
 			ByCategory: map[string]int{},
 		},
 	}
-	svc := NewDashboardService(backend, nil, nil)
+	svc := NewDashboardService(backend, nil, nil, nil)
 
 	home := svc.BuildHome(context.Background(), "user-1")
 
@@ -247,7 +247,7 @@ func TestDashboardService_BuildHome_CloudAdvancedMapping(t *testing.T) {
 			Security: storageif.DashboardSecurity{Available: true, FailedLogins24h: 3, CredentialFindings: 2},
 		},
 	}
-	svc := NewDashboardService(backend, nil, nil)
+	svc := NewDashboardService(backend, nil, nil, nil)
 
 	home := svc.BuildHome(context.Background(), "user-1")
 
@@ -276,7 +276,7 @@ func TestDashboardService_BuildHome_CloudAdvancedMapping(t *testing.T) {
 	degraded := &stubDashBackend{FakeBackend: testutil.NewFakeBackend(), adv: &storageif.DashboardAdvancedData{
 		Security: storageif.DashboardSecurity{Available: false},
 	}}
-	if home := NewDashboardService(degraded, nil, nil).BuildHome(context.Background(), "user-2"); home.Security.Available {
+	if home := NewDashboardService(degraded, nil, nil, nil).BuildHome(context.Background(), "user-2"); home.Security.Available {
 		t.Errorf("Security must be unavailable when the backend could not read its counts: got %+v", home.Security)
 	}
 }
@@ -291,7 +291,7 @@ func TestDashboardService_BuildHome_AdvancedFailureMarksSecurityUnavailable(t *t
 		data:        &storageif.DashboardData{TotalFlows: 2, HealthCount: 1, AvgHealth: 90, ByCategory: map[string]int{}},
 		advErr:      errors.New("advanced query timed out"),
 	}
-	svc := NewDashboardService(backend, nil, nil)
+	svc := NewDashboardService(backend, nil, nil, nil)
 
 	home := svc.BuildHome(context.Background(), "user-1")
 
@@ -331,7 +331,7 @@ func TestDashboardService_BuildLocal_DeduplicatesFlows(t *testing.T) {
 	t.Cleanup(func() { analyzer.DefaultCache.Invalidate("dup-flow") })
 
 	analysisSvc := &AnalysisService{}
-	svc := NewDashboardService(nil, analysisSvc, nil)
+	svc := NewDashboardService(nil, analysisSvc, nil, nil)
 
 	home := svc.BuildHome(context.Background(), "user-1")
 
@@ -374,7 +374,7 @@ func TestDashboardService_BuildHome_CloudV3Analytics(t *testing.T) {
 		},
 	}
 	analysisSvc := &AnalysisService{}
-	svc := NewDashboardService(backend, analysisSvc, nil)
+	svc := NewDashboardService(backend, analysisSvc, nil, nil)
 
 	home := svc.BuildHome(context.Background(), "user-1")
 
@@ -429,7 +429,7 @@ func TestDashboardService_BuildHome_CloudWorkflow(t *testing.T) {
 			},
 		},
 	}
-	svc := NewDashboardService(backend, &AnalysisService{}, nil)
+	svc := NewDashboardService(backend, &AnalysisService{}, nil, nil)
 
 	home := svc.BuildHome(context.Background(), "user-1")
 
@@ -455,7 +455,7 @@ func TestDashboardService_BuildHome_CloudWorkflowEmpty(t *testing.T) {
 		data:        &storageif.DashboardData{ByCategory: map[string]int{}},
 		adv:         &storageif.DashboardAdvancedData{},
 	}
-	svc := NewDashboardService(backend, &AnalysisService{}, nil)
+	svc := NewDashboardService(backend, &AnalysisService{}, nil, nil)
 
 	home := svc.BuildHome(context.Background(), "user-1")
 
@@ -497,7 +497,7 @@ func TestDashboardService_BuildLocal_V3Analytics(t *testing.T) {
 		analyzer.DefaultCache.Invalidate("local-2")
 	})
 
-	svc := NewDashboardService(nil, &AnalysisService{}, nil)
+	svc := NewDashboardService(nil, &AnalysisService{}, nil, nil)
 	home := svc.BuildHome(context.Background(), "user-1")
 
 	// Confidence: 1 high + 1 medium + 1 low.
@@ -543,7 +543,7 @@ func TestDashboardService_BuildLocal_ReloadedFileCountsOnce(t *testing.T) {
 	analyzer.CachedAnalysis(mkDoc("reload-uuid-2"), analyzer.AllRules(), nil, nil)
 	t.Cleanup(analyzer.DefaultCache.Clear)
 
-	svc := NewDashboardService(nil, &AnalysisService{}, nil)
+	svc := NewDashboardService(nil, &AnalysisService{}, nil, nil)
 	home := svc.BuildHome(context.Background(), "user-1")
 
 	if home.Overview.TotalFlows != 1 {

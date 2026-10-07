@@ -557,7 +557,7 @@ func collectEvents() (func(string, map[string]interface{}), *[]string) {
 // $0 usage instead of dereferencing nil.
 func TestDailyUsage_NilBackendDoesNotPanic(t *testing.T) {
 	svc := &ChatService{} // backend is nil, as in local mode
-	usage, err := svc.dailyUsage(context.Background(), "user-1", "org-1")
+	usage, err := svc.aiBudget().dailyUsage(context.Background(), "user-1", "org-1")
 	if err != nil {
 		t.Fatalf("dailyUsage with nil backend returned error: %v", err)
 	}

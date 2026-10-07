@@ -44,7 +44,7 @@ func TestWSTicket_IssuedForAuthenticatedUser(t *testing.T) {
 func TestWSTicket_PATClaimsWithNilExpiresAt_DoesNotPanic(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	// Reuse the router's configured AuthMgr; handleWSTicket only needs security.
-	h := NewAuthHandler(nil, nil, rt.security, nil, nil, nil, nil)
+	h := NewAuthHandler(nil, nil, rt.security, nil, nil, nil, nil, nil, nil, nil)
 
 	// PAT-style claims: exactly what verifyAPIToken returns — ExpiresAt is nil.
 	patClaims := &auth.Claims{UserID: "ci-bot", Email: "bot@example.com", Role: auth.RoleAdmin}

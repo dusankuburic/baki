@@ -1,5 +1,10 @@
 // Analyzer outputs — findings, metrics, batch results, diffs, rule definitions.
 
+import type {Tolerant} from './tolerant'
+
+// Closed on purpose, unlike the tolerant wire enums: the backend validates it
+// at its boundary (core/models Severity.Valid), consumers rank over it, and
+// the client sends it back (rule configs, policy gates, custom rules).
 export type Severity = 'error' | 'warning' | 'info'
 
 // Rule certainty about a finding: 'high' (deterministic, e.g. a regex secret
@@ -33,7 +38,8 @@ export interface Finding {
 }
 
 // Triage lifecycle for a finding. Mirrors the backend's validTriageStatuses.
-export type TriageStatus = 'open' | 'acknowledged' | 'in_progress' | 'resolved' | 'suppressed'
+export const TRIAGE_STATUSES = ['open', 'acknowledged', 'in_progress', 'resolved', 'suppressed'] as const
+export type TriageStatus = (typeof TRIAGE_STATUSES)[number]
 
 // Persisted, team-shared triage state for one finding, keyed by its stable
 // fingerprint (findingKey == Finding.fingerprint == ruleId:blockId).
@@ -41,7 +47,12 @@ export interface FindingStatus {
   flowId: string
   findingKey: string
   ruleId?: string
-  status: TriageStatus
+  /**
+   * A status this bundle does not know shows under a neutral label, filters
+   * as open, and the finding cannot be reassigned here (the request repeats
+   * the status, and requests send only known values).
+   */
+  status: Tolerant<TriageStatus>
   justification?: string
   assigneeId?: string
   updatedBy?: string

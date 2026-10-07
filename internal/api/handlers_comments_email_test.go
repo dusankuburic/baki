@@ -67,7 +67,7 @@ func TestNotifyFindingComment_FlowNameGatedOnAssigneeAccess(t *testing.T) {
 				t.Fatalf("seed status: %v", err)
 			}
 			rt := newTestRouter(backend, true)
-			h := rt.handlers.Analysis
+			h := moduleOf[*AnalysisHandler](t, rt)
 			sink := &captureSend{}
 			h.email = mailer.NewServiceWithMailer(sink, "")
 

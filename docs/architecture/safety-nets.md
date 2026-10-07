@@ -3,10 +3,12 @@
 These tests exist so the refactoring phases can change structure without changing behaviour. A behaviour
 change then has to be deliberate, and it shows up as a reviewable diff.
 
-## Route policy golden: `internal/api/testdata/route_policy.golden`
+## Route policy goldens: `internal/api/testdata/route_policy*.golden`
 
-`TestRoutePolicy_Golden` records, for every registered route and the spellings that have caused bypasses
-before (`/api/v1` alias, trailing slash, dot segment, encoded `/`, HEAD/OPTIONS, non-route paths):
+Both goldens cover the same requests: every registered route, in the spellings that have caused bypasses before
+(`/api/v1` alias, trailing slash, dot segment, encoded `/`, HEAD/OPTIONS), plus paths that are no route.
+
+`TestRoutePolicy_Golden` (`route_policy.golden`) records what the legacy path tables decide:
 
 - the route chi dispatches to;
 - whether `jwtAuth` authenticates the request;
@@ -14,13 +16,38 @@ before (`/api/v1` alias, trailing slash, dot segment, encoded `/`, HEAD/OPTIONS,
 - the rate-limit bucket;
 - the RLS mode;
 - the deadline class;
-- the metrics label.
+- the metrics label (the resolved policy's label, in every mode).
 
-Each value comes from the function the middleware itself calls. Refresh it only for an intended change:
+`TestRoutePolicyDeclared_Golden` (`route_policy_declared.golden`) records the policy the resolver gives each
+request (ADR 0006):
+
+- whether it is a route, a 405 or no route, and its pattern;
+- who may call it: `none`, `self` or `jwt`;
+- the minimal scope sets;
+- the bucket, the transaction, the deadline class and the label;
+- a 405's `Allow` list.
+
+`TestRoutePolicy_DeclaredMatchesLegacy` fails when a request that resolves to a route decides anything
+differently from the legacy tables (the label excepted). On 405, OPTIONS and no-route lines the two differ by
+design, and those differences are reviewed in the declared golden.
+
+Each value comes from the function the middleware itself calls. Refresh only for an intended change:
 
 ```
 go test ./internal/api/ -run TestRoutePolicy_Golden -update-route-policy
+go test ./internal/api/ -run TestRoutePolicyDeclared_Golden -update-route-policy-declared
 ```
+
+The test routers run in the `PAD_ROUTE_POLICY` mode named by `BAKI_TEST_ROUTE_POLICY` (default `shadow`), so the
+whole API suite runs under the declared policy with:
+
+```
+BAKI_TEST_ROUTE_POLICY=declarative go test ./internal/api/...
+```
+
+At boot, `finishRoutes` resolves a sample path of every route and refuses to start unless each resolves to the
+route's own policy. Tests that add routes after construction do it with `mountTestRoutes`, which declares their
+policy the same way.
 
 ## Authorization matrix: `internal/api/testdata/authz_matrix.golden`
 
@@ -33,10 +60,46 @@ an org outsider, a global admin and scoped API tokens, and records each status. 
 This pins every shipped step's checksum, so an edited migration fails CI instead of failing boot at deploy time.
 After adding a step, refresh with `-update-migration-checksums`.
 
+## Previous release on the new schema: the `previous-release-boot` CI job
+
+A binary boots on a newer schema only when every newer step is marked `-- baki:compat expand`
+([ADR 0002](../adr/0002-migration-compatibility-and-rollback.md)), and that is what lets an image rollback skip
+the schema rollback. This job checks the promise with real binaries. `scripts/ci/previous-release-boot.sh` boots
+the previous release on an empty database, then this revision on the same database (the deploy), then the
+previous release again (the rollback), which must answer `/readyz` within two minutes.
+
+- The previous release is the pull request's base commit, or for a push the commit the branch pointed at before.
+- A newer step marked `breaking` fails the job, and so does a step marked `expand` that the previous release
+  cannot boot on. Since `deploy.yml` gates on this workflow, a deliberately breaking step also stops the
+  automatic deploy of its push. A manual `deploy.yml` run has no previous commit to compare with, so that is the
+  way to ship one.
+- The job passes and says why when there is nothing to check: no previous commit (a new branch or tag, a manual
+  run), a previous commit that cannot be fetched or does not build, or one that predates the compat guard
+  (Phase 0a) while the schema has moved past it, since such a binary refuses every newer schema.
+
+To run it locally, put `psql` and `curl` on `PATH` and give it an empty throwaway database (recreate it before
+every run):
+
+```
+docker run -d --rm --name baki-bootdb -e POSTGRES_PASSWORD=postgres -p 127.0.0.1:55433:5432 pgvector/pgvector:pg16
+docker exec baki-bootdb psql -U postgres -c "CREATE ROLE baki_app LOGIN PASSWORD 'baki_app' NOSUPERUSER NOBYPASSRLS;" -c "CREATE DATABASE baki_boot OWNER baki_app;"
+docker exec baki-bootdb psql -U postgres -d baki_boot -c "CREATE EXTENSION vector;"
+mkdir -p /tmp/baki-previous && git archive HEAD~1 | tar -x -C /tmp/baki-previous
+(cd /tmp/baki-previous && CGO_ENABLED=0 go build -o /tmp/baki-previous.bin .) && CGO_ENABLED=0 go build -o /tmp/baki-new.bin .
+BOOT_DATABASE_URL="postgres://baki_app:baki_app@127.0.0.1:55433/baki_boot?sslmode=disable" bash scripts/ci/previous-release-boot.sh /tmp/baki-previous.bin /tmp/baki-new.bin
+```
+
 ## Architecture ratchets: `internal/archtest`
 
 These tests pin today's exceptions to the layering and convention rules in [README.md](README.md). They fail
 when an exception grows and when it shrinks, so each pinned number can only go down.
+
+## DI setters: `internal/di/setters_test.go`
+
+`TestDISetters_Listed` lists every post-construction `Set*`/`On*` call in `internal/di` with its reason (see
+[di-wiring.md](di-wiring.md)). It fails on an unlisted setter and on a listed one that is gone.
+`TestServiceModule_BuildsInEveryMode` builds the services in the desktop, local+db and cloud shapes, running
+the constructors that `TestAppGraph`'s type check skips.
 
 ## Fake backend contract: `internal/testutil/fakebackend_contract_test.go`
 

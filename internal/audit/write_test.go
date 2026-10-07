@@ -1,4 +1,4 @@
-package api
+package audit
 
 import (
 	"context"
@@ -6,14 +6,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"pad-analyzer/internal/metrics"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// fakeAuditWriter records SaveAuditEvent calls and can be made to fail.
-type fakeAuditWriter struct {
+// fakeWriter records SaveAuditEvent calls and can be made to fail.
+type fakeWriter struct {
 	mu        sync.Mutex
 	saved     []*storageif.AuditEvent
 	err       error // returned for every call when non-nil
@@ -21,13 +20,13 @@ type fakeAuditWriter struct {
 	calls     atomic.Int32
 }
 
-func (f *fakeAuditWriter) SaveAuditEvent(_ context.Context, e *storageif.AuditEvent) error {
+func (f *fakeWriter) SaveAuditEvent(_ context.Context, e *storageif.AuditEvent) error {
 	n := f.calls.Add(1)
 	// failFirst > 0 ⇒ the first call fails, subsequent ones succeed (tests retry).
-	if int32(f.failFirst.Load()) > 0 && n == 1 {
+	if f.failFirst.Load() > 0 && n == 1 {
 		return f.err
 	}
-	if f.err != nil && int32(f.failFirst.Load()) == 0 {
+	if f.err != nil && f.failFirst.Load() == 0 {
 		return f.err
 	}
 	f.mu.Lock()
@@ -36,9 +35,19 @@ func (f *fakeAuditWriter) SaveAuditEvent(_ context.Context, e *storageif.AuditEv
 	return nil
 }
 
-func (f *fakeAuditWriter) count() int { return int(f.calls.Load()) }
+func (f *fakeWriter) ListAuditEvents(context.Context, storageif.AuditFilter) ([]*storageif.AuditEvent, error) {
+	return nil, nil
+}
 
-// fakeBatchSink implements auditBatchSink; records the batch and can fail.
+func (f *fakeWriter) count() int { return int(f.calls.Load()) }
+
+func (f *fakeWriter) savedEvents() []*storageif.AuditEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*storageif.AuditEvent(nil), f.saved...)
+}
+
+// fakeBatchSink implements batchSink; records the batch and can fail.
 type fakeBatchSink struct {
 	mu    sync.Mutex
 	batch []*storageif.AuditEvent
@@ -51,10 +60,8 @@ func (f *fakeBatchSink) SaveAuditEvents(_ context.Context, events []*storageif.A
 	if f.err != nil {
 		return f.err
 	}
-	cp := make([]*storageif.AuditEvent, len(events))
-	copy(cp, events)
 	f.mu.Lock()
-	f.batch = append(f.batch, cp...)
+	f.batch = append(f.batch, events...)
 	f.mu.Unlock()
 	return nil
 }
@@ -67,12 +74,11 @@ func events(n int) []*storageif.AuditEvent {
 	return out
 }
 
-// writeAuditBatch must use the batch sink in one call when available, and never
-// touch SaveAuditEvent.
-func TestWriteAuditBatch_UsesBatchSink(t *testing.T) {
-	w := &fakeAuditWriter{}
+// writeBatch must use the batch sink in one call when available, and never touch SaveAuditEvent.
+func TestWriteBatch_UsesBatchSink(t *testing.T) {
+	w := &fakeWriter{}
 	s := &fakeBatchSink{}
-	writeAuditBatch(w, s, events(3))
+	writeBatch(w, s, events(3))
 
 	if s.calls.Load() != 1 {
 		t.Errorf("batch sink calls = %d, want 1", s.calls.Load())
@@ -86,38 +92,36 @@ func TestWriteAuditBatch_UsesBatchSink(t *testing.T) {
 }
 
 // Without a batch sink, events are written one-by-one.
-func TestWriteAuditBatch_PerEventWhenNoSink(t *testing.T) {
-	w := &fakeAuditWriter{}
-	writeAuditBatch(w, nil, events(3))
+func TestWriteBatch_PerEventWhenNoSink(t *testing.T) {
+	w := &fakeWriter{}
+	writeBatch(w, nil, events(3))
 
 	if w.count() != 3 {
 		t.Errorf("SaveAuditEvent calls = %d, want 3", w.count())
 	}
 }
 
-// A failing batch falls back to per-event writes so one bad batch doesn't lose
-// the whole window.
-func TestWriteAuditBatch_BatchFailsFallsBackToPerEvent(t *testing.T) {
-	w := &fakeAuditWriter{}
+// A failing batch falls back to per-event writes so one bad batch doesn't lose the whole window.
+func TestWriteBatch_BatchFailsFallsBackToPerEvent(t *testing.T) {
+	w := &fakeWriter{}
 	s := &fakeBatchSink{err: errors.New("batch insert failed")}
-	writeAuditBatch(w, s, events(2))
+	writeBatch(w, s, events(2))
 
 	if s.calls.Load() == 0 {
 		t.Error("expected the batch sink to be attempted first")
 	}
-	// Per-event fallback path taken after batch fails.
 	if w.count() != 2 {
 		t.Errorf("per-event SaveAuditEvent calls = %d, want 2 (fallback)", w.count())
 	}
 }
 
 // A transient single failure is recovered by the retry (no metric bump).
-func TestWriteOneAuditEvent_RetryRecovers(t *testing.T) {
-	w := &fakeAuditWriter{err: errors.New("transient")}
+func TestWriteOne_RetryRecovers(t *testing.T) {
+	w := &fakeWriter{err: errors.New("transient")}
 	w.failFirst.Store(1) // first SaveAuditEvent fails, retry succeeds
 
 	before := metrics.AuditDroppedCount("write_failed")
-	writeOneAuditEvent(w, events(1)[0])
+	writeOne(w, events(1)[0])
 
 	if w.count() != 2 {
 		t.Errorf("expected 2 attempts (1 fail + 1 retry), got %d", w.count())
@@ -128,11 +132,11 @@ func TestWriteOneAuditEvent_RetryRecovers(t *testing.T) {
 }
 
 // A persistent failure diverts to the fallback sink and bumps the metric.
-func TestWriteOneAuditEvent_PersistentFailureBumpsMetric(t *testing.T) {
-	w := &fakeAuditWriter{err: errors.New("db down")} // every call fails
+func TestWriteOne_PersistentFailureBumpsMetric(t *testing.T) {
+	w := &fakeWriter{err: errors.New("db down")} // every call fails
 
 	before := metrics.AuditDroppedCount("write_failed")
-	writeOneAuditEvent(w, events(1)[0])
+	writeOne(w, events(1)[0])
 
 	if w.count() != 2 {
 		t.Errorf("expected 2 attempts (initial + 1 retry), got %d", w.count())
@@ -142,29 +146,24 @@ func TestWriteOneAuditEvent_PersistentFailureBumpsMetric(t *testing.T) {
 	}
 }
 
-// Avoid unused-import noise if time isn't otherwise referenced in this file's
-// compiled test binary path (time is used implicitly via retry delays).
-var _ = time.Second
-
-// panicAuditWriter panics on every SaveAuditEvent, simulating a driver-level
-// fault inside the write path.
-type panicAuditWriter struct {
+// panicWriter panics on every SaveAuditEvent, simulating a driver-level fault inside the write path.
+type panicWriter struct {
 	calls atomic.Int32
 }
 
-func (p *panicAuditWriter) SaveAuditEvent(_ context.Context, _ *storageif.AuditEvent) error {
+func (p *panicWriter) SaveAuditEvent(context.Context, *storageif.AuditEvent) error {
 	p.calls.Add(1)
 	panic("driver boom")
 }
 
-// salvageAuditBatch must isolate every event with its own panic guard: none are
-// lost, each is diverted to the log fallback sink (metered as salvage_failed),
-// and the salvage loop itself returns normally instead of double-panicking.
-func TestSalvageAuditBatch_PanicIsolation(t *testing.T) {
-	w := &panicAuditWriter{}
+// salvageBatch must isolate every event with its own panic guard: none are lost, each is diverted to the log
+// fallback sink (metered as salvage_failed), and the salvage loop itself returns normally instead of
+// double-panicking.
+func TestSalvageBatch_PanicIsolation(t *testing.T) {
+	w := &panicWriter{}
 	before := metrics.AuditDroppedCount("salvage_failed")
 
-	salvageAuditBatch(w, events(3))
+	salvageBatch(w, events(3))
 
 	if w.calls.Load() != 3 {
 		t.Errorf("SaveAuditEvent attempted %d times, want 3 (each event isolated)", w.calls.Load())
@@ -174,9 +173,9 @@ func TestSalvageAuditBatch_PanicIsolation(t *testing.T) {
 	}
 }
 
-// The fallback sink writes to container logs, which are far more broadly
-// readable than the audit table — raw email/IP/meta must never appear there.
-func TestAuditFallback_Redaction(t *testing.T) {
+// The fallback sink writes to container logs, which are far more broadly readable than the audit table — raw
+// email/IP/meta must never appear there.
+func TestFallback_Redaction(t *testing.T) {
 	for in, want := range map[string]string{
 		"dusan@example.com": "d***@example.com",
 		"a@b.co":            "a***@b.co",
@@ -184,8 +183,8 @@ func TestAuditFallback_Redaction(t *testing.T) {
 		"@lead.com":         "***",
 		"":                  "",
 	} {
-		if got := redactEmail(in); got != want {
-			t.Errorf("redactEmail(%q) = %q, want %q", in, got, want)
+		if got := RedactEmail(in); got != want {
+			t.Errorf("RedactEmail(%q) = %q, want %q", in, got, want)
 		}
 	}
 	for in, want := range map[string]string{

@@ -7,9 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -44,7 +45,7 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("blockId and fixType are required"), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit)
 	if !ok {
 		return
 	}
@@ -91,7 +92,7 @@ func (h *FlowHandler) handlePreviewFix(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("blockId and fixType are required"), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit)
 	if !ok {
 		return
 	}
@@ -128,7 +129,7 @@ func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request
 		render.Error(w, fmt.Errorf("flowId is required"), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit)
 	if !ok {
 		return
 	}
@@ -163,9 +164,10 @@ func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request
 	render.JSON(w, resp)
 }
 
-// registerFixRoutes wires the /api/flow fix-application sub-routes.
-func (h *FlowHandler) registerFixRoutes(r chi.Router) {
-	r.Post("/apply-fix", h.handleApplyFix)
-	r.Post("/apply-fix-batch", h.handleApplyFixBatch)
-	r.Post("/preview-fix", h.handlePreviewFix)
+// registerFixRoutes wires the /api/flow fix-application sub-routes. Each resolves the flow, then loops
+// parse+analyze+patch over sources of up to 10 MB: outside the request transaction.
+func (h *FlowHandler) registerFixRoutes(rb *route.Builder) {
+	rb.Post("/apply-fix", h.handleApplyFix, route.NoTx())
+	rb.Post("/apply-fix-batch", h.handleApplyFixBatch, route.NoTx())
+	rb.Post("/preview-fix", h.handlePreviewFix, route.NoTx())
 }

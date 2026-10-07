@@ -12,9 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
@@ -74,8 +73,7 @@ func newOrgProvidersFixture(t *testing.T, withOrgStore bool) *orgProvidersFixtur
 		v, _ := secrets.Get(scope, provider)
 		return v, nil
 	}, nil, nil, nil)
-	svc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
-	f := &orgProvidersFixture{orgID: org.ID, orgSvc: orgSvc, secrets: secrets, orgKeys: orgKeys, svc: svc,
+	f := &orgProvidersFixture{orgID: org.ID, orgSvc: orgSvc, secrets: secrets, orgKeys: orgKeys,
 		backend: &namedUsersBackend{FakeBackend: testutil.NewFakeBackend()}, factory: factory, registry: testutil.NewFakeAzureRegistry()}
 	if withOrgStore {
 		factory.SetOrgKeyLookup(orgKeys.OrgKeyLookup)
@@ -86,18 +84,15 @@ func newOrgProvidersFixture(t *testing.T, withOrgStore bool) *orgProvidersFixtur
 	return f
 }
 
-// useOrgStore (re)wires the organisation credential store — nil for none —
-// into the provider service and its model registry (rebuilt on the same
-// registry rows), as DI wires one store into both.
+// useOrgStore builds the provider service and its model registry (on the
+// fixture's registry rows) with the organisation credential store — nil for
+// none — as DI wires one store into both.
 func (f *orgProvidersFixture) useOrgStore(store service.OrgKeyStore) {
-	if store != nil {
-		f.svc.SetOrgKeyStore(store)
-	}
 	azure, _ := newTestAzureModels(testAzureModelsDeps{
 		Registry: f.registry, Secrets: f.secrets, OrgKeys: store, Factory: f.factory,
 		Orgs: f.orgSvc, Users: f.backend.(service.AzureUserDirectory), PerUser: true,
 	})
-	f.svc.SetAzureModels(azure)
+	f.svc = service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), f.factory, f.secrets, store, azure)
 }
 
 // orgModels lists the organisation's registry models (the service directly,
@@ -125,15 +120,8 @@ func (f *orgProvidersFixture) orgModelDeployments(t *testing.T) []string {
 // router serves the org credential routes as caller.
 func (f *orgProvidersFixture) router(caller string) http.Handler {
 	security := &SecurityConfig{LocalUserID: caller, OrgSvc: f.orgSvc}
-	h := NewOrgHandler(f.orgSvc, f.backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), nil, f.svc)
-	r := chi.NewRouter()
-	r.Route("/api/orgs/{id}/providers/azure-foundry", func(r chi.Router) {
-		r.Get("/config", h.handleOrgAzureFoundryConfigGet)
-		r.Post("/config", h.handleOrgAzureFoundryConfigSave)
-		r.Delete("/config", h.handleOrgAzureFoundryConfigDelete)
-		r.Post("/test", h.handleOrgAzureFoundryTest)
-	})
-	return r
+	h := NewOrgHandler(f.orgSvc, f.backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(f.backend, f.backend, nil), f.svc, service.NewAuthzService(f.backend, f.orgSvc), service.NewChannelService(f.backend), service.NewUserDirectory(f.backend), testAuditRecorder(f.backend))
+	return mountedAs(h, caller)
 }
 
 func (f *orgProvidersFixture) do(t *testing.T, caller, method, path string, body any) *httptest.ResponseRecorder {
@@ -185,8 +173,8 @@ func TestOrgAzureFoundryConfig_Authz(t *testing.T) {
 	})
 
 	t.Run("unknown org", func(t *testing.T) {
-		// requireMember answers 403 for an org the caller is not in (it does
-		// not exist, so nobody is); requireAdmin reports it as 404.
+		// canOrg answers a member action on an org the caller is not in with 403 (it
+		// does not exist, so nobody is); for OrgAdmin it answers 404.
 		checkStatus(t, f.do(t, "u-admin", http.MethodGet, "/api/orgs/nope/providers/azure-foundry/config", nil), http.StatusForbidden)
 		checkStatus(t, f.do(t, "u-admin", http.MethodPost, "/api/orgs/nope/providers/azure-foundry/config", orgAzureBody), http.StatusNotFound)
 	})
@@ -201,13 +189,7 @@ func TestOrgAzureFoundryConfig_Authz(t *testing.T) {
 	})
 
 	t.Run("admin saves with an audit row", func(t *testing.T) {
-		prevCh := auditCh
-		auditCh = make(chan *storageif.AuditEvent, 1)
-		auditClosed.Store(false)
-		t.Cleanup(func() {
-			auditCh = prevCh
-			auditClosed.Store(false)
-		})
+		auditCh := captureAuditEvents(t, 1)
 		rr := f.do(t, "u-admin", http.MethodPost, path, map[string]any{
 			"endpoint":       "https://unit-test.invalid",
 			"auth":           map[string]any{"mode": " API_KEY ", "key": "org-secret-key"},
@@ -216,7 +198,7 @@ func TestOrgAzureFoundryConfig_Authz(t *testing.T) {
 		checkStatus(t, rr, http.StatusOK)
 		select {
 		case ev := <-auditCh:
-			if ev.Action != AuditActionKeysSave || ev.ResourceType != "org" || ev.ResourceID != f.orgID ||
+			if ev.Action != audit.ActionKeysSave || ev.ResourceType != "org" || ev.ResourceID != f.orgID ||
 				ev.Meta["op"] != "save" || ev.Meta["provider"] != ai.AzureFoundryProviderID || ev.Meta["authMode"] != "api_key" {
 				t.Errorf("audit event = %+v (meta %v)", ev, ev.Meta)
 			}
@@ -299,13 +281,7 @@ func TestOrgAzureFoundryConfig_Authz(t *testing.T) {
 	})
 
 	t.Run("admin deletes with an audit row", func(t *testing.T) {
-		prevCh := auditCh
-		auditCh = make(chan *storageif.AuditEvent, 1)
-		auditClosed.Store(false)
-		t.Cleanup(func() {
-			auditCh = prevCh
-			auditClosed.Store(false)
-		})
+		auditCh := captureAuditEvents(t, 1)
 		rr := f.do(t, "u-admin", http.MethodDelete, path, nil)
 		checkStatus(t, rr, http.StatusOK)
 		if got := azureDecode(t, rr); got["status"] != "ok" {
@@ -313,7 +289,7 @@ func TestOrgAzureFoundryConfig_Authz(t *testing.T) {
 		}
 		select {
 		case ev := <-auditCh:
-			if ev.Action != AuditActionKeysSave || ev.ResourceID != f.orgID || ev.Meta["op"] != "delete" {
+			if ev.Action != audit.ActionKeysSave || ev.ResourceID != f.orgID || ev.Meta["op"] != "delete" {
 				t.Errorf("audit event = %+v (meta %v)", ev, ev.Meta)
 			}
 		case <-time.After(2 * time.Second):
@@ -362,7 +338,7 @@ func TestOrgAzureFoundryConfig_NoOrgKeystore(t *testing.T) {
 		}
 	}
 	// A nil provider service (older test fixtures) degrades the same way.
-	h := NewOrgHandler(f.orgSvc, nil, nil, &SecurityConfig{LocalUserID: "u-admin"}, mailer.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
+	h := NewOrgHandler(f.orgSvc, nil, nil, &SecurityConfig{LocalUserID: "u-admin"}, mailer.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(nil, nil, nil), nil, service.NewAuthzService(nil, f.orgSvc), service.NewChannelService(nil), service.NewUserDirectory(nil), nil)
 	rr := httptest.NewRecorder()
 	h.handleOrgAzureFoundryConfigGet(rr, httptest.NewRequest(http.MethodGet, path, nil))
 	checkStatus(t, rr, http.StatusNotFound)

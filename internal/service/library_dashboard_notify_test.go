@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"slices"
 	"testing"
 
@@ -17,18 +16,18 @@ func TestLibraryMutations_NotifyOwnerDashboard(t *testing.T) {
 	flows := NewFlowService(&testutil.CountingNotifier{}, nil, NewCloudDocumentProvider(backend), backend, authz, nil)
 	var notified []string
 	flows.SetCloudFlowMutationHook(func(ownerID string) { notified = append(notified, ownerID) })
-	lib := NewLibraryService(backend, flows, authz)
-	ctx := context.Background()
+	lib := NewLibraryService(backend, flows, authz, nil)
+	ctx := actorCtx("u1")
 
 	saved, err := lib.CreateLibraryFlow(ctx, "u1", "", storageif.FlowDocument{Name: "New flow"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	saved.Name = "Renamed"
-	if err := lib.UpdateLibraryFlow(ctx, saved, "u1"); err != nil {
+	if err := lib.UpdateLibraryFlow(ctx, saved); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if err := lib.DeleteLibraryFlow(ctx, saved.ID, "u1"); err != nil {
+	if _, err := lib.DeleteLibraryFlow(ctx, saved.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 

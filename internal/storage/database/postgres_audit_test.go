@@ -34,7 +34,7 @@ func makeAuditEvents(n int, userID string) []*interfaces.AuditEvent {
 }
 
 // The Postgres wire protocol caps a statement at 65535 bind parameters. At
-// auditInsertCols params/row a single INSERT must stay under 65535/9 ≈ 7281
+// auditInsertCols params/row a single INSERT must stay under 65535/14 ≈ 4681
 // rows — SaveAuditEvents chunks larger batches to respect that ceiling.
 func TestChunkAuditEvents_RespectsParamCeiling(t *testing.T) {
 	cases := []struct {
@@ -43,10 +43,10 @@ func TestChunkAuditEvents_RespectsParamCeiling(t *testing.T) {
 	}{
 		{0, 1},    // empty → single (empty) batch
 		{1, 1},    // under one batch
-		{5000, 1}, // exactly one batch
-		{5001, 2},
-		{8000, 2},  // the regression case: > 7281 rows
-		{12345, 3}, // ceil(12345/5000)
+		{4000, 1}, // exactly one batch
+		{4001, 2},
+		{8000, 2},  // the regression case: > 4681 rows
+		{12345, 4}, // ceil(12345/4000)
 	}
 	for _, tc := range cases {
 		batches := chunkAuditEvents(makeAuditEvents(tc.n, "u"), auditInsertBatchRows)
@@ -71,7 +71,7 @@ func TestChunkAuditEvents_RespectsParamCeiling(t *testing.T) {
 }
 
 func TestBuildAuditInsert_ParamCount(t *testing.T) {
-	const n = 5000
+	const n = 4000
 	query, args := buildAuditInsert(makeAuditEvents(n, "u"))
 	if len(args) != n*auditInsertCols {
 		t.Errorf("args = %d, want %d", len(args), n*auditInsertCols)
@@ -81,7 +81,7 @@ func TestBuildAuditInsert_ParamCount(t *testing.T) {
 		t.Errorf("placeholder groups: got %d separators, want %d", got, n-1)
 	}
 	// Highest placeholder index must be exactly n*cols and under the ceiling.
-	last := fmt.Sprintf("$%d)", n*auditInsertCols)
+	last := fmt.Sprintf("NULLIF($%d,''))", n*auditInsertCols)
 	if !strings.HasSuffix(query, last) {
 		t.Errorf("query should end with %q", last)
 	}
@@ -108,7 +108,7 @@ func TestSaveAuditEvents_LargeBatch(t *testing.T) {
 
 	// Unique per run so leftover rows from an interrupted run can't collide.
 	userID := "audit-large-batch-" + time.Now().Format("150405.000000000")
-	// > 7281 rows: a single INSERT would overflow the bind-param ceiling.
+	// > 4681 rows: a single INSERT would overflow the bind-param ceiling.
 	const n = 8000
 	t.Cleanup(func() {
 		_, _ = b.db.ExecContext(context.Background(), `DELETE FROM audit_events WHERE user_id = $1`, userID)

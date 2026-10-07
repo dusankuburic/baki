@@ -2,14 +2,14 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/lifecycle"
 	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/service"
@@ -23,8 +23,14 @@ type AnalysisHandler struct {
 	analysisSvc *service.AnalysisService
 	flowSvc     *service.FlowService
 	dashboard   *service.DashboardService
+	triage      *service.TriageService
+	comments    *service.CommentService
+	shares      *service.ShareTokenService
 	security    *SecurityConfig
 	backend     storageif.StorageBackend
+	audit       *audit.Recorder
+	policies    *service.PolicyService
+	governance  *service.GovernanceAlertService
 	// email sends finding-assignment notifications; nil-safe (the log-only
 	// mailer is always non-nil even without SMTP).
 	email *mailer.Service
@@ -56,13 +62,19 @@ const maxConcurrentFindingAlerts = 64
 // (pad_background_dropped_total) and the next fresh analyze retries it.
 const maxConcurrentAnalysisRecords = 32
 
-func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, dashboard *service.DashboardService, backend storageif.StorageBackend, security *SecurityConfig, webhook *service.WebhookNotifier, email *mailer.Service, ciSecret CIWebhookSecret) *AnalysisHandler {
+func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, dashboard *service.DashboardService, backend storageif.StorageBackend, security *SecurityConfig, webhook *service.WebhookNotifier, email *mailer.Service, ciSecret CIWebhookSecret, policies *service.PolicyService, governance *service.GovernanceAlertService, triage *service.TriageService, comments *service.CommentService, shares *service.ShareTokenService, recorder *audit.Recorder) *AnalysisHandler {
 	return &AnalysisHandler{
 		analysisSvc: analysisSvc,
 		flowSvc:     flowSvc,
 		dashboard:   dashboard,
+		triage:      triage,
+		comments:    comments,
+		shares:      shares,
 		security:    security,
 		backend:     backend,
+		audit:       recorder,
+		policies:    policies,
+		governance:  governance,
 		webhook:     webhook,
 		email:       email,
 		ciSecret:    ciSecret,
@@ -125,8 +137,7 @@ func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -145,7 +156,7 @@ func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Reque
 		// Webhook notification (best-effort, async via PAD_WEBHOOK_URL).
 		h.webhook.NotifyAnalysis(doc.Name, res)
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowAnalyze, "flow", req.FlowID, nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowAnalyze, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID})
 	render.JSON(w, res)
 }
 
@@ -318,8 +329,7 @@ func (h *AnalysisHandler) handleExportSARIF(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -336,7 +346,7 @@ func (h *AnalysisHandler) handleExportSARIF(w http.ResponseWriter, r *http.Reque
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowExport, "flow", req.FlowID, map[string]string{"format": "sarif"})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowExport, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"format": "sarif"}})
 	w.Header().Set("Content-Type", "application/sarif+json")
 	w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.sarif"`)
 	fmt.Fprintf(w, "%s\n", out)
@@ -359,8 +369,7 @@ func (h *AnalysisHandler) handleExportJUnit(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -377,7 +386,7 @@ func (h *AnalysisHandler) handleExportJUnit(w http.ResponseWriter, r *http.Reque
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowExport, "flow", req.FlowID, map[string]string{"format": "junit"})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowExport, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"format": "junit"}})
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.xml"`)
 	fmt.Fprintf(w, "%s\n", out)
@@ -400,44 +409,46 @@ func (h *AnalysisHandler) handleGetDashboard(w http.ResponseWriter, r *http.Requ
 }
 
 // LookupSharedFlowHeader resolves a share token to its flow's header for the
-// unauthenticated /shared shell. Token hashing and the storage lookups live
-// here so callers outside the handler (the router's static serving) do not
-// reach into its fields; nil means the token is unknown or the handler is not
-// fully wired. The header, not the resolved document: only the flow's name is
-// injected on this route, and resolving the full document per hit of a leaked
-// link was the most expensive thing a stranger could make the server do.
+// unauthenticated /shared shell, so callers outside the handler (the router's
+// static serving) do not reach into its fields; nil means the token is unknown
+// or the handler is not fully wired. The header, not the resolved document:
+// only the flow's name is injected on this route, and resolving the full
+// document per hit of a leaked link was the most expensive thing a stranger
+// could make the server do.
 func (h *AnalysisHandler) LookupSharedFlowHeader(ctx context.Context, token string) *storageif.FlowDocument {
-	if h == nil || h.backend == nil || h.flowSvc == nil || token == "" {
+	if h == nil || h.backend == nil || h.flowSvc == nil || h.shares == nil || token == "" {
 		return nil
 	}
-	hash := sha256.Sum256([]byte(token))
-	st, err := h.backend.GetShareTokenByHash(ctx, hex.EncodeToString(hash[:]))
-	if err != nil || st == nil {
-		return nil
-	}
-	doc, err := h.backend.LoadFlowHeader(ctx, st.FlowID)
-	if err != nil || doc == nil {
-		return nil
-	}
-	return doc
+	return h.shares.SharedFlowHeader(ctx, token)
 }
 
-// registerRoutes wires the /api/analysis group: analyze/batch/exports here;
+// Mount registers the /api/analysis group (analyze/batch/exports here;
 // findings-introspection, rules, suppressions, triage, policy and comment
-// sub-groups live with their handlers.
-func (h *AnalysisHandler) registerRoutes(r chi.Router) {
-	r.Route("/api/analysis", func(r chi.Router) {
-		r.Post("/analyze", h.handleAnalyzeFlow)
-		r.Post("/analyze-raw", h.handleAnalyzeRaw)
-		r.Post("/batch", h.handleBatchAnalyze)
-		r.Post("/export/sarif", h.handleExportSARIF)
-		r.Post("/export/junit", h.handleExportJUnit)
-		r.Get("/dashboard", h.handleGetDashboard)
-		h.registerFindingRoutes(r)
-		h.registerAnalysisRuleRoutes(r)
-		h.registerSuppressionRoutes(r)
-		h.registerTriageRoutes(r)
-		h.registerPolicyRoutes(r)
-		h.registerCommentRoutes(r)
-	})
+// sub-groups live with their handlers), the governance alerts inbox, the
+// share-link report and the inbound CI webhook.
+func (h *AnalysisHandler) Mount(rb *route.Builder) {
+	// Unauthenticated (?token=...), and each first hit of a leaked link pays a
+	// full analyzer walk: the analysis bucket. Share links live in the
+	// server-side store.
+	rb.Get("/api/shared", h.handleViewShared, route.Public(), route.RateLimit(route.RateAnalysis), route.Needs(capability.ServerStore))
+	rb.Post("/api/integrations/ci", h.handleCIWebhook, route.SelfAuthenticated()) // HMAC (X-Baki-Signature)
+
+	// Every POST in the tree rides the analysis bucket; the reads stay on general.
+	rb.Route("/api/analysis", func(rb *route.Builder) {
+		// Seconds of parse/analyze/export CPU (analyze-raw persists nothing,
+		// batch is desktop-only): outside the request transaction.
+		rb.Post("/analyze", h.handleAnalyzeFlow, route.NoTx())
+		rb.Post("/analyze-raw", h.handleAnalyzeRaw, route.NoTx())
+		rb.Post("/batch", h.handleBatchAnalyze, route.NoTx())
+		rb.Post("/export/sarif", h.handleExportSARIF, route.NoTx())
+		rb.Post("/export/junit", h.handleExportJUnit, route.NoTx())
+		rb.Get("/dashboard", h.handleGetDashboard, route.RateLimit(route.RateGeneral))
+		h.registerFindingRoutes(rb)
+		h.registerAnalysisRuleRoutes(rb)
+		h.registerSuppressionRoutes(rb)
+		h.registerTriageRoutes(rb)
+		h.registerPolicyRoutes(rb)
+		h.registerCommentRoutes(rb)
+	}, route.RateLimit(route.RateAnalysis))
+	h.registerGovernanceRoutes(rb)
 }

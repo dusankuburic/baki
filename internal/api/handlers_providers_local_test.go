@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
-	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
 
@@ -45,8 +45,8 @@ func newLocalHarness(t *testing.T) *localHarness {
 		v, _ := secrets.Get(scope, provider)
 		return v, nil
 	}, nil, nil, nil)
-	svc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
-	sys := service.NewSystemService(storage.NewInMemorySettingsStore(), secrets, nil, nil, "local")
+	svc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets, nil, nil)
+	sys := service.NewSystemService(storage.NewInMemorySettingsStore(), secrets, nil, nil, "local", nil)
 	sys.OnApiKeyChanged(svc.InvalidateModels)
 	return &localHarness{h: NewProviderHandler(svc, &SecurityConfig{}, nil), svc: svc, sys: sys, secrets: secrets}
 }
@@ -238,15 +238,9 @@ func TestLocalConfigGet_RefusedUnderCloudPolicy(t *testing.T) {
 // (a token count), nothing else.
 func TestLocalConfigSave_AuditMeta(t *testing.T) {
 	setLocalModelsPolicy(t, egress.AllowLoopback)
-	prevCh := auditCh
-	auditCh = make(chan *storageif.AuditEvent, 2)
-	auditClosed.Store(false)
-	t.Cleanup(func() {
-		auditCh = prevCh
-		auditClosed.Store(false)
-	})
+	auditCh := captureAuditEvents(t, 2)
 	l := newLocalHarness(t)
-	l.h.backend = testutil.NewFakeBackend()
+	l.h.audit = testAuditRecorder(testutil.NewFakeBackend())
 	for body, want := range map[string]map[string]string{
 		`{"baseUrl":"http://127.0.0.1:11434/v1","contextWindow":16384}`: {"op": "save", "baseUrlHost": "127.0.0.1:11434", "contextWindow": "16384"},
 		`{"baseUrl":"http://127.0.0.1:11434"}`:                          {"op": "save", "baseUrlHost": "127.0.0.1:11434"},
@@ -254,7 +248,7 @@ func TestLocalConfigSave_AuditMeta(t *testing.T) {
 		checkStatus(t, l.post(t, body), http.StatusOK)
 		select {
 		case ev := <-auditCh:
-			if ev.Action != AuditActionKeysSave || ev.ResourceID != ai.LocalProviderID || len(ev.Meta) != len(want) {
+			if ev.Action != audit.ActionKeysSave || ev.ResourceID != ai.LocalProviderID || len(ev.Meta) != len(want) {
 				t.Errorf("%s: audit event = %+v (meta %v)", body, ev, ev.Meta)
 			}
 			for k, v := range want {

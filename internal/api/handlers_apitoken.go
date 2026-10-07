@@ -9,7 +9,10 @@ import (
 	"github.com/google/uuid"
 
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -31,10 +34,6 @@ const (
 // @Failure      401 {object} map[string]string "Unauthorized"
 // @Router       /api/auth/tokens [post]
 func (h *AuthHandler) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("API tokens require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
 	userID := h.security.CallerID(r)
 	if userID == "" {
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
@@ -85,12 +84,12 @@ func (h *AuthHandler) handleCreateAPIToken(w http.ResponseWriter, r *http.Reques
 	exp := tok.CreatedAt.AddDate(0, 0, days)
 	tok.ExpiresAt = &exp
 
-	if err := h.backend.CreateAPIToken(r.Context(), tok); err != nil {
+	if err := h.apiTokens.Create(r.Context(), tok); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionTokenCreate, "api_token", tok.ID,
-		map[string]string{"name": tok.Name})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionTokenCreate, ResourceType: "api_token", ResourceID: tok.ID,
+		Meta: map[string]string{"name": tok.Name}})
 
 	// The raw token is shown exactly once here; afterwards only its hash exists.
 	render.JSON(w, map[string]any{
@@ -110,23 +109,16 @@ func (h *AuthHandler) handleCreateAPIToken(w http.ResponseWriter, r *http.Reques
 // @Failure      401 {object} object "Unauthorized"
 // @Router       /api/auth/tokens [get]
 func (h *AuthHandler) handleListAPITokens(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("API tokens require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
 	userID := h.security.CallerID(r)
 	if userID == "" {
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
 
-	tokens, err := h.backend.ListAPITokens(r.Context(), userID)
+	tokens, err := h.apiTokens.List(r.Context(), userID)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
-	}
-	if tokens == nil {
-		tokens = []*storageif.APIToken{}
 	}
 	// APIToken.TokenHash is json:"-", so the hash is never serialized here.
 	render.JSON(w, tokens)
@@ -140,10 +132,6 @@ func (h *AuthHandler) handleListAPITokens(w http.ResponseWriter, r *http.Request
 // @Failure      401 {object} map[string]string "Unauthorized"
 // @Router       /api/auth/tokens/{id} [delete]
 func (h *AuthHandler) handleDeleteAPIToken(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("API tokens require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
 	userID := h.security.CallerID(r)
 	if userID == "" {
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
@@ -155,7 +143,7 @@ func (h *AuthHandler) handleDeleteAPIToken(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := h.backend.DeleteAPIToken(r.Context(), userID, id); err != nil {
+	if err := h.apiTokens.Delete(r.Context(), userID, id); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -168,7 +156,7 @@ func (h *AuthHandler) handleDeleteAPIToken(w http.ResponseWriter, r *http.Reques
 	if h.security.AuthMgr != nil {
 		h.security.AuthMgr.RevokeJTI(auth.PATJTI(id), patRevokeBlacklistTTL)
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionTokenRevoke, "api_token", id, nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionTokenRevoke, ResourceType: "api_token", ResourceID: id})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -179,9 +167,11 @@ func (h *AuthHandler) handleDeleteAPIToken(w http.ResponseWriter, r *http.Reques
 const patRevokeBlacklistTTL = 10 * time.Minute
 
 // registerTokenRoutes wires the machine API-token (PAT) sub-routes for
-// headless/CI access (cloud mode).
-func (h *AuthHandler) registerTokenRoutes(r chi.Router) {
-	r.Get("/tokens", h.handleListAPITokens)
-	r.Post("/tokens", h.handleCreateAPIToken)
-	r.Delete("/tokens/{id}", h.handleDeleteAPIToken)
+// headless/CI access; the tokens live in the server store.
+func (h *AuthHandler) registerTokenRoutes(rb *route.Builder) {
+	rb.Group(func(rb *route.Builder) {
+		rb.Get("/tokens", h.handleListAPITokens)
+		rb.Post("/tokens", h.handleCreateAPIToken, route.Idempotent())
+		rb.Delete("/tokens/{id}", h.handleDeleteAPIToken)
+	}, route.Needs(capability.ServerStore))
 }

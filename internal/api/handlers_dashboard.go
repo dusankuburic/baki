@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/service"
 	"pad-core/models"
@@ -133,8 +133,10 @@ func displayFromEmail(email string) string {
 	return email
 }
 
-// registerRoutes wires the welcome-dashboard BFF routes.
-func (h *DashboardHandler) registerRoutes(r chi.Router) {
-	r.Get("/api/dashboard/home", h.handleHome)
-	r.Get("/api/dashboard/analytics", h.handleAnalytics)
+// Mount registers the welcome-dashboard BFF routes. Each runs concurrent
+// reads with their own owner predicates, outside the request transaction: on
+// one shared transaction a cancelled sibling poisoned the connection.
+func (h *DashboardHandler) Mount(rb *route.Builder) {
+	rb.Get("/api/dashboard/home", h.handleHome, route.NoTx())
+	rb.Get("/api/dashboard/analytics", h.handleAnalytics, route.NoTx())
 }

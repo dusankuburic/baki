@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/service"
 	"pad-core/models"
@@ -16,14 +17,15 @@ type ChatHandler struct {
 	chatSvc *service.ChatService
 	flowSvc *service.FlowService
 	common  *SecurityConfig
+	audit   *audit.Recorder
 }
 
 // maxChatMessageBodyBytes bounds bodies carrying user-authored chat content: a turn with inline
 // attachments needs no more (large flow content is pulled server-side); tighter than the global 10 MiB cap.
 const maxChatMessageBodyBytes = 1 << 20 // 1 MiB
 
-func NewChatHandler(chatSvc *service.ChatService, flowSvc *service.FlowService, common *SecurityConfig) *ChatHandler {
-	return &ChatHandler{chatSvc: chatSvc, flowSvc: flowSvc, common: common}
+func NewChatHandler(chatSvc *service.ChatService, flowSvc *service.FlowService, common *SecurityConfig, recorder *audit.Recorder) *ChatHandler {
+	return &ChatHandler{chatSvc: chatSvc, flowSvc: flowSvc, common: common, audit: recorder}
 }
 
 // @Summary      Stream chat message
@@ -44,7 +46,7 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.common, req.FlowID, "viewer")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.common, req.FlowID, service.ChatUse)
 	if !ok {
 		return
 	}
@@ -65,7 +67,7 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 	}
 	// The paid LLM turn is audited on accept so cost-amplification has a
 	// non-repudiation record (no-op in local mode).
-	logAudit(r.Context(), h.common.Backend, r, h.common.TrustedProxies, AuditActionChatStream, "flow", req.FlowID, map[string]string{"streamId": id})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionChatStream, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"streamId": id}})
 	render.JSON(w, id)
 }
 
@@ -274,7 +276,7 @@ func (h *ChatHandler) handleGetConversation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	flowID, ok := resolveFlowID(w, r, h.flowSvc, h.common, req.FlowID, "viewer")
+	flowID, ok := resolveFlowID(w, r, h.flowSvc, h.common, req.FlowID, service.ChatUse)
 	if !ok {
 		return
 	}
@@ -303,6 +305,7 @@ func (h *ChatHandler) handleGetConversation(w http.ResponseWriter, r *http.Reque
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/chat/save [post]
 func (h *ChatHandler) handleSaveConversation(w http.ResponseWriter, r *http.Request) {
+	// Kept on the role check, not Can's InstanceWrite: that would demand the write scope of a chat token.
 	if !h.common.RequireRole(w, r, auth.RoleMember) {
 		return
 	}
@@ -316,7 +319,8 @@ func (h *ChatHandler) handleSaveConversation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	flowID, ok := resolveFlowID(w, r, h.flowSvc, h.common, req.FlowID, "editor")
+	// Kept on the editor role check, not Can's FlowEdit: that would demand the write scope of a chat token.
+	flowID, ok := resolveFlowIDByRole(w, r, h.flowSvc, h.common, req.FlowID, "editor")
 	if !ok {
 		return
 	}
@@ -352,7 +356,8 @@ func (h *ChatHandler) handleClearConversation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	flowID, ok := resolveFlowID(w, r, h.flowSvc, h.common, req.FlowID, "editor")
+	// Kept on the editor role check, not Can's FlowEdit: that would demand the write scope of a chat token.
+	flowID, ok := resolveFlowIDByRole(w, r, h.flowSvc, h.common, req.FlowID, "editor")
 	if !ok {
 		return
 	}
@@ -380,7 +385,7 @@ func (h *ChatHandler) handlePreviewContext(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.common, req.FlowID, "viewer")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.common, req.FlowID, service.ChatUse)
 	if !ok {
 		return
 	}
@@ -422,18 +427,21 @@ func (h *ChatHandler) handleGetSuggestedPrompts(w http.ResponseWriter, r *http.R
 	render.JSON(w, prompts)
 }
 
-// registerRoutes wires the /api/chat group.
-func (h *ChatHandler) registerRoutes(r chi.Router) {
-	r.Route("/api/chat", func(r chi.Router) {
-		r.Post("/stream", h.handleStreamChatMessage)
-		r.Post("/begin", h.handleBeginStream)
-		r.Post("/cancel", h.handleCancelStream)
-		r.Post("/fix-decision", h.handleFixDecision)
-		r.Post("/resume", h.handleResumeStream)
-		r.Post("/get", h.handleGetConversation)
-		r.Post("/save", h.handleSaveConversation)
-		r.Post("/clear", h.handleClearConversation)
-		r.Post("/preview-context", h.handlePreviewContext)
-		r.Post("/suggested-prompts", h.handleGetSuggestedPrompts)
-	})
+// Mount registers the /api/chat group: the chat scope for scoped tokens, and
+// no request transaction (a stream would pin a pooled connection for its
+// lifetime).
+func (h *ChatHandler) Mount(rb *route.Builder) {
+	rb.Route("/api/chat", func(rb *route.Builder) {
+		rb.Post("/stream", h.handleStreamChatMessage, route.RateLimit(route.RateChat), route.Streaming())
+		rb.Post("/begin", h.handleBeginStream)
+		rb.Post("/cancel", h.handleCancelStream)
+		// Approving a fix proposal edits the flow: write on top of chat.
+		rb.Post("/fix-decision", h.handleFixDecision, route.Scopes(auth.ScopeChat, auth.ScopeWrite))
+		rb.Post("/resume", h.handleResumeStream)
+		rb.Post("/get", h.handleGetConversation)
+		rb.Post("/save", h.handleSaveConversation)
+		rb.Post("/clear", h.handleClearConversation)
+		rb.Post("/preview-context", h.handlePreviewContext)
+		rb.Post("/suggested-prompts", h.handleGetSuggestedPrompts)
+	}, route.Scopes(auth.ScopeChat), route.NoTx())
 }

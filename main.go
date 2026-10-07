@@ -11,7 +11,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -27,6 +26,8 @@ import (
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/api"
+	"pad-analyzer/internal/api/middleware"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
@@ -90,6 +91,7 @@ func appOptions() []fx.Option {
 			provideMigrationRunner,
 			provideScanNowFunc,
 			provideKeyStore,
+			audit.Provide,
 		),
 		di.ServiceModule,
 		di.APIModule,
@@ -97,11 +99,13 @@ func appOptions() []fx.Option {
 		fx.Invoke(
 			initLogger,
 			initTelemetry,
-			initAuditPool,
+			initAuditTrail,
 			initScanner,
 			initRetentionPurge,
 			initFieldEncryption,
 			startServer,
+			// After startServer: its stop hook cancels the backfill before the server's drains the runners.
+			audit.ScheduleOrgBackfill,
 		),
 	}
 }
@@ -424,7 +428,7 @@ func runRetentionSweep(ctx context.Context, backend storageif.StorageBackend, au
 		logger.Warn("retention purge incomplete", "err", err,
 			"audit_events", res.AuditEvents, "flow_analysis_history", res.FlowAnalysisHistory,
 			"usage_metrics", res.UsageMetrics, "token_blacklist", res.TokenBlacklist,
-			"gov_alerts", res.GovAlerts)
+			"gov_alerts", res.GovAlerts, "idempotency_keys", res.IdempotencyKeys)
 		padmetrics.RecordBackgroundLoopTick("retention_purge")
 		return
 	}
@@ -434,7 +438,8 @@ func runRetentionSweep(ctx context.Context, backend storageif.StorageBackend, au
 		"audit_events", res.AuditEvents,
 		"flow_analysis_history", res.FlowAnalysisHistory,
 		"usage_metrics", res.UsageMetrics, "token_blacklist", res.TokenBlacklist,
-		"share_tokens", res.ShareTokens, "gov_alerts", res.GovAlerts)
+		"share_tokens", res.ShareTokens, "gov_alerts", res.GovAlerts,
+		"idempotency_keys", res.IdempotencyKeys)
 	padmetrics.RecordBackgroundLoopTick("retention_purge")
 }
 
@@ -514,6 +519,9 @@ func initLogger(cfg *config.Config) {
 	logger.SetPanicHook(func(operation string, r any, stack []byte) {
 		errreport.CapturePanic(context.Background(), operation, r, stack, errreport.Attrs{"operation": operation})
 	})
+	// logger.FromContext lines on the request path carry the request_id, user_id and trace_id keys of the
+	// request's access-log line.
+	logger.SetContextAttrs(middleware.LogAttrs)
 }
 
 func initTelemetry(lc fx.Lifecycle, cfg *config.Config) {
@@ -705,22 +713,9 @@ func provideKeyStore(cfg *config.Config, backend storageif.StorageBackend) (serv
 	return ks, nil
 }
 
-func initAuditPool(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) {
-	// Enable the on-disk spill queue unless explicitly disabled: a burst that
-	// overflows the in-memory pool is replayed instead of diverted to logs.
-	if cfg.Governance.AuditSpillDir != "off" {
-		if err := api.SetAuditSpillConfig(cfg.Governance.AuditSpillDir, 0); err != nil {
-			slog.Warn("audit spill queue disabled (using log fallback only)", "error", err)
-		}
-	}
-	api.InitAuditPool(backend)
-	lc.Append(fx.Hook{
-		OnStop: func(ctx context.Context) error {
-			api.ShutdownAuditPool()
-			return nil
-		},
-	})
-}
+// initAuditTrail constructs the audit recorder early, so its pool starts before the hooks registered after it
+// and drains after the HTTP server's stop hook (and the background work it drains), which still records.
+func initAuditTrail(*audit.Recorder) {}
 
 // startServer builds the full middleware stack (api.BuildHandler — see
 // internal/api/middleware_chain.go for the layer order), binds a listener, and

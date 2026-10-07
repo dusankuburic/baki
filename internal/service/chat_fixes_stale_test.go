@@ -79,7 +79,7 @@ func TestRunToolLoop_SecondFixAfterDocRefresh(t *testing.T) {
 
 	rec := &fixEventRecorder{}
 	var tctx ai.ToolContext
-	ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, nil, func(freshDoc *models.FlowDocument) {
+	ap := svc.newFixApplier(doc, "stream-1", rec.emit, nil, func(freshDoc *models.FlowDocument) {
 		tctx.RealDoc = freshDoc
 		if sd, err := scrubber.ScrubDocument(freshDoc); err == nil {
 			tctx.Doc = sd

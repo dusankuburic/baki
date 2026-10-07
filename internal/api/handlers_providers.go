@@ -10,23 +10,22 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/service"
-	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 type ProviderHandler struct {
 	providerSvc *service.ProviderService
 	security    *SecurityConfig
-	// backend receives the audit rows for configuration changes (nil on the
-	// desktop, where logAudit is a no-op).
-	backend storageif.StorageBackend
+	// audit receives the rows for configuration changes (records nothing on the desktop).
+	audit *audit.Recorder
 }
 
-func NewProviderHandler(providerSvc *service.ProviderService, security *SecurityConfig, backend storageif.StorageBackend) *ProviderHandler {
-	return &ProviderHandler{providerSvc: providerSvc, security: security, backend: backend}
+func NewProviderHandler(providerSvc *service.ProviderService, security *SecurityConfig, recorder *audit.Recorder) *ProviderHandler {
+	return &ProviderHandler{providerSvc: providerSvc, security: security, audit: recorder}
 }
 
 // @Summary      List AI providers
@@ -273,7 +272,7 @@ func (h *ProviderHandler) handleSaveAzureFoundryConfig(w http.ResponseWriter, r 
 			// The save failed after the new document went in and the previous one could not be put back: the change stands.
 			meta := azureConfigAuditMeta(req, !req.HasSecret())
 			meta["outcome"] = "failed_after_credential_change"
-			logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", ai.AzureFoundryProviderID, meta)
+			h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionKeysSave, ResourceType: "provider", ResourceID: ai.AzureFoundryProviderID, Meta: meta})
 		}
 		// A settings code (400), and — the save writes the registry's
 		// resource "default" and its models too — the registry's own refusals.
@@ -282,8 +281,8 @@ func (h *ProviderHandler) handleSaveAzureFoundryConfig(w http.ResponseWriter, r 
 	}
 	// A saved document always holds a secret, so one the request omitted was
 	// carried over from the stored document.
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", ai.AzureFoundryProviderID,
-		azureConfigAuditMeta(req, !req.HasSecret()))
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionKeysSave, ResourceType: "provider", ResourceID: ai.AzureFoundryProviderID,
+		Meta: azureConfigAuditMeta(req, !req.HasSecret())})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -360,7 +359,7 @@ func (h *ProviderHandler) handleSaveLocalConfig(w http.ResponseWriter, r *http.R
 	if cfg.ContextWindow != 0 {
 		meta["contextWindow"] = strconv.Itoa(cfg.ContextWindow)
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", ai.LocalProviderID, meta)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionKeysSave, ResourceType: "provider", ResourceID: ai.LocalProviderID, Meta: meta})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -414,31 +413,34 @@ func auditURLHost(raw string) string {
 	return strings.ToLower(u.Host)
 }
 
-// registerRoutes wires the /api/providers group: provider listing/testing and
+// Mount registers the /api/providers group: provider listing/testing and
 // OAuth device flows here; the Azure Foundry registry and local-model config
-// sub-groups live with their handlers.
-func (h *ProviderHandler) registerRoutes(r chi.Router) {
-	r.Route("/api/providers", func(r chi.Router) {
-		r.Get("/list", h.handleListProviders)
-		r.Post("/test", h.handleTestProviderConnection)
-		r.Route("/github", func(r chi.Router) {
-			r.Post("/start", h.handleStartGitHubAuth)
-			r.Post("/poll", h.handlePollGitHubAuth)
-			r.Post("/revoke", h.handleRevokeGitHubAuth)
-			r.Get("/user", h.handleGetGitHubUser)
+// sub-groups live with their handlers. Routes that dial out while the handler
+// runs (live model listings, the billed connection test, the device-flow
+// steps) touch no RLS-scoped table and run outside the request transaction.
+func (h *ProviderHandler) Mount(rb *route.Builder) {
+	rb.Route("/api/providers", func(rb *route.Builder) {
+		rb.Get("/list", h.handleListProviders, route.NoTx())
+		// Up to three billed completions per call: the chat bucket.
+		rb.Post("/test", h.handleTestProviderConnection, route.RateLimit(route.RateChat), route.NoTx())
+		rb.Route("/github", func(rb *route.Builder) {
+			rb.Post("/start", h.handleStartGitHubAuth, route.NoTx())
+			rb.Post("/poll", h.handlePollGitHubAuth, route.NoTx())
+			rb.Post("/revoke", h.handleRevokeGitHubAuth)
+			rb.Get("/user", h.handleGetGitHubUser, route.NoTx())
 		})
-		r.Route("/copilot", func(r chi.Router) {
-			r.Post("/start", h.handleStartCopilotAuth)
-			r.Post("/poll", h.handlePollCopilotAuth)
-			r.Post("/revoke", h.handleRevokeCopilotAuth)
-			r.Get("/user", h.handleGetCopilotUser)
+		rb.Route("/copilot", func(rb *route.Builder) {
+			rb.Post("/start", h.handleStartCopilotAuth, route.NoTx())
+			rb.Post("/poll", h.handlePollCopilotAuth, route.NoTx())
+			rb.Post("/revoke", h.handleRevokeCopilotAuth)
+			rb.Get("/user", h.handleGetCopilotUser, route.NoTx())
 		})
-		h.registerAzureFoundryRoutes(r)
+		h.registerAzureFoundryRoutes(rb)
 		// Local models (Foundry Local / Ollama / LM Studio): a loopback base
 		// URL document, desktop only. has/delete use /api/keys.
-		r.Route("/local", func(r chi.Router) {
-			r.Get("/config", h.handleGetLocalConfig)
-			r.Post("/config", h.handleSaveLocalConfig)
+		rb.Route("/local", func(rb *route.Builder) {
+			rb.Get("/config", h.handleGetLocalConfig)
+			rb.Post("/config", h.handleSaveLocalConfig)
 		})
 	})
 }

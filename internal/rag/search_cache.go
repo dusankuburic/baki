@@ -52,7 +52,7 @@ func (s *KnowledgeService) caches() *searchCaches {
 }
 
 // InvalidateCorpus drops the org's cached chunk count: call it whenever chunks are added or removed outside
-// AddDocument/ReindexOrg (which invalidate themselves) — a document delete. Until re-read the org counts as non-empty.
+// AddDocument/ReindexOrg/DeleteDocument (which invalidate themselves). Until re-read the org counts as non-empty.
 func (s *KnowledgeService) InvalidateCorpus(orgID string) {
 	c := s.caches()
 	c.mu.Lock()

@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"pad-core/logger"
 )
 
 // writeError emits the API-standard error envelope ({code,message,requestId}).
@@ -146,7 +147,7 @@ func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, chec
 				writeError(w, http.StatusForbidden, "forbidden")
 				return
 			default:
-				slog.Error("websocket: flow access check failed", "flowId", flowID, "error", err)
+				logger.FromContext(r.Context()).Error("websocket: flow access check failed", "flowId", flowID, "error", err)
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
 			}

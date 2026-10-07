@@ -133,6 +133,8 @@ export const enSettings = {
       authApiKey: 'API key',
       authEntra: 'Entra ID',
       authCli: 'Azure CLI',
+      // A sign-in method a newer server added, which this version of the app does not know.
+      authOther: 'Other sign-in',
       sharedBy: 'Shared by {{name}}',
       sharedByOrg: 'Shared by your organisation',
       updated: 'updated {{date}}',
@@ -158,6 +160,10 @@ export const enSettings = {
       rowNeedsCredentials: "Unavailable until the resource's credentials are entered again",
       rowInvalidConfig: "Unavailable until the resource's settings are fixed",
       rowUnsupported: 'Unavailable: agents need Microsoft Entra ID and a project endpoint on their resource',
+      // A status a newer server added, which this version of the app does not know.
+      unknownTitle: 'This resource is unavailable',
+      unknown: 'Its models are unavailable in the chat meanwhile.',
+      rowUnknown: 'Unavailable right now',
     },
     models: {
       listLabel: 'Models of {{name}}',
@@ -198,6 +204,7 @@ export const enSettings = {
       badgeSharedSr: 'Shared by {{org}}',
       badgeKindSr: 'Kind: {{kind}}',
       resourceLine: 'on {{name}}',
+      editUnknownKind: "This version of the app can't edit this kind of model.",
     },
     modelModal: {
       titleAdd: 'Add model',
@@ -652,6 +659,8 @@ export const enSettings = {
     kindTeamsHint: 'Microsoft Teams incoming webhook connector',
     kindSlack: 'Slack',
     kindSlackHint: 'Slack / Discord / Mattermost incoming webhook',
+    // A kind a newer server added: it can be tested and removed here, not paused or edited.
+    unknownKind: "This version of the app can't change this kind of channel.",
     removed: 'Removed "{{name}}"',
     removeFailed: 'Failed to remove channel',
     testSent: 'Test event delivered',

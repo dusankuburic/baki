@@ -215,6 +215,25 @@ describe('useProviderSetup listing', () => {
     expect(result.current.providers[0]!.models.find(m => m.id === 'opus')?.supportsTools).toBe(false)
   })
 
+  // Tolerant wire enums: a newer server's provider, auth type, kind or status
+  // renders the rest of the listing; what the chat cannot use is left out.
+  it('leaves out a provider a newer server added, and keeps a kind or status it added so it reads as unusable', async () => {
+    const voice = {...GPT, id: 'm/voice00000', displayName: 'Voice', kind: 'realtime', aliases: undefined}
+    const paused = {...DOCS, status: 'suspended'}
+    listing(
+      {...CLAUDE, authType: 'workload_identity'},
+      azure([GPT, voice as unknown as ModelDetail, paused as unknown as ModelDetail]),
+      {...CLAUDE, id: 'mistral', name: 'Mistral'},
+    )
+    const {result} = renderHook(() => useProviderSetup())
+    await waitFor(() => expect(result.current.listingLoaded).toBe(true))
+    expect(result.current.providers.map(p => p.id)).toEqual(['claude', 'azure-foundry'])
+    expect(result.current.providers[0]!.authType).toBe('workload_identity')
+    const models = result.current.providers.find(p => p.id === 'azure-foundry')!.models
+    expect(models.find(m => m.id === 'm/voice00000')).toMatchObject({kind: 'realtime'})
+    expect(models.find(m => m.id === DOCS.id)).toMatchObject({status: 'suspended'})
+  })
+
   // The server sends it (ProviderInfo.suggestDiscovery, omitted when false).
   it("passes the picker's Review prompt flag through, and only a true one", async () => {
     listing(CLAUDE, azure([GPT], {suggestDiscovery: true}))

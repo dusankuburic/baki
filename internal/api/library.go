@@ -11,7 +11,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
-	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
@@ -26,17 +27,26 @@ type LibraryHandler struct {
 	libSvc   *service.LibraryService
 	security *SecurityConfig
 	backend  storageif.StorageBackend
+	audit    *audit.Recorder
 	notifier FlowNotifier
 }
 
-func NewLibraryHandler(libSvc *service.LibraryService, backend storageif.StorageBackend, security *SecurityConfig) *LibraryHandler {
-	return &LibraryHandler{libSvc: libSvc, security: security, backend: backend}
+func NewLibraryHandler(libSvc *service.LibraryService, backend storageif.StorageBackend, security *SecurityConfig, recorder *audit.Recorder) *LibraryHandler {
+	return &LibraryHandler{libSvc: libSvc, security: security, backend: backend, audit: recorder}
 }
 
 // SetFlowNotifier wires the WebSocket hub: library saves broadcast a
 // flow.changed event to connected viewers.
 func (h *LibraryHandler) SetFlowNotifier(n FlowNotifier) {
 	h.notifier = n
+}
+
+// flowOrgID is the organisation of a flow header already in hand, for its audit row ("" without one).
+func flowOrgID(f *storageif.FlowDocument) string {
+	if f == nil {
+		return ""
+	}
+	return f.OrganizationID
 }
 
 type libraryFlow struct {
@@ -195,7 +205,7 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/library [post]
 func (h *LibraryHandler) handleLibraryCreate(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleMember) {
+	if !requireInstancePerm(w, r, h.security, service.InstanceWrite) {
 		return
 	}
 
@@ -226,7 +236,7 @@ func (h *LibraryHandler) handleLibraryCreate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if req.OrgID != "" {
-		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowSave, "flow", saved.ID, map[string]string{"orgId": req.OrgID})
+		h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowSave, ResourceType: "flow", ResourceID: saved.ID, OrgID: saved.OrganizationID, Meta: map[string]string{"orgId": req.OrgID}})
 	}
 	render.JSONStatus(w, http.StatusCreated, h.toLibraryFlow(r.Context(), saved, userID, h.libSvc.ResolveOwnerName(r.Context(), saved.OwnerID)))
 }
@@ -250,7 +260,7 @@ func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request
 
 	// Metadata only: the detail panel never renders the content, so this reads
 	// the header instead of the whole document.
-	doc, err := h.libSvc.GetLibraryFlowMetaForUser(ctx, id, userID)
+	doc, err := h.libSvc.GetLibraryFlowMetaForUser(ctx, id)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -279,14 +289,13 @@ func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request
 // @Router       /api/library/{id}/content [get]
 func (h *LibraryHandler) handleLibraryGetContent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	userID := h.security.CallerID(r)
 	ctx := service.WithFlowAuthzMemo(r.Context())
 
 	// Header first: the ETag is the flow's version, so a client holding current content gets a 304
 	// without the content read or its compression (brotli was two thirds of CPU under a 40-user read
 	// mix). Authorization still happens before the cached body is confirmed; one (flow, version)'s
 	// content is the same for every reader.
-	meta, err := h.libSvc.GetLibraryFlowMetaForUser(ctx, id, userID)
+	meta, err := h.libSvc.GetLibraryFlowMetaForUser(ctx, id)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -299,7 +308,7 @@ func (h *LibraryHandler) handleLibraryGetContent(w http.ResponseWriter, r *http.
 		return
 	}
 
-	doc, err := h.libSvc.GetLibraryFlowForUser(ctx, id, userID)
+	doc, err := h.libSvc.GetLibraryFlowForUser(ctx, id)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -354,13 +363,13 @@ func etagMatches(ifNoneMatch, etag string) bool {
 // @Router       /api/library/{id} [delete]
 func (h *LibraryHandler) handleLibraryDelete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	userID := h.security.CallerID(r)
 
-	if err := h.libSvc.DeleteLibraryFlow(r.Context(), id, userID); err != nil {
+	deleted, err := h.libSvc.DeleteLibraryFlow(r.Context(), id)
+	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowDelete, "flow", id, nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowDelete, ResourceType: "flow", ResourceID: id, OrgID: flowOrgID(deleted)})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -387,7 +396,7 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 	// Read-gate before the write-gate: callers without read access get a 403 without learning the
 	// flow's name. A full load, not the header — a header would blank the content of a name-only
 	// update since SaveFlow rewrites every column.
-	existing, err := h.libSvc.GetLibraryFlowForUser(ctx, id, userID)
+	existing, err := h.libSvc.GetLibraryFlowForUser(ctx, id)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -420,7 +429,7 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 	}
 	existing.Version = req.Version
 
-	if err := h.libSvc.UpdateLibraryFlow(ctx, existing, userID); err != nil {
+	if err := h.libSvc.UpdateLibraryFlow(ctx, existing); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -430,19 +439,20 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, h.toLibraryFlow(ctx, existing, userID, h.libSvc.ResolveOwnerName(ctx, existing.OwnerID)))
 }
 
-// registerRoutes wires the /api/library group: library CRUD here; version
+// Mount registers the /api/library group: library CRUD here; version
 // history and the portfolio view live with their handlers.
-func (h *LibraryHandler) registerRoutes(r chi.Router) {
-	r.Route("/api/library", func(r chi.Router) {
-		r.Get("/", h.handleLibraryList)
-		r.Post("/", h.handleLibraryCreate)
-		r.Get("/portfolio", h.handlePortfolio)
-		r.Route("/{id}", func(r chi.Router) {
-			r.Get("/", h.handleLibraryGet)
-			r.Put("/", h.handleLibraryUpdate)
-			r.Delete("/", h.handleLibraryDelete)
-			r.Get("/content", h.handleLibraryGetContent)
-			h.registerVersionRoutes(r)
+func (h *LibraryHandler) Mount(rb *route.Builder) {
+	rb.Route("/api/library", func(rb *route.Builder) {
+		rb.Get("/", h.handleLibraryList)
+		rb.Post("/", h.handleLibraryCreate, route.Idempotent())
+		rb.Get("/portfolio", h.handlePortfolio)
+		rb.Route("/{id}", func(rb *route.Builder) {
+			rb.Get("/", h.handleLibraryGet)
+			rb.Put("/", h.handleLibraryUpdate)
+			rb.Delete("/", h.handleLibraryDelete)
+			// Streams the stored blob after the authz check: outside the request transaction.
+			rb.Get("/content", h.handleLibraryGetContent, route.NoTx())
+			h.registerVersionRoutes(rb)
 		})
 	})
 }

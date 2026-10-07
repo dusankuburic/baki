@@ -91,7 +91,7 @@ func TestApplyFixWithApproval_PanicInApplyEndsTheKeepalive(t *testing.T) {
 	})
 	rec := &fixEventRecorder{}
 	var touches int32
-	ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, func() { atomic.AddInt32(&touches, 1) }, nil)
+	ap := svc.newFixApplier(doc, "stream-1", rec.emit, func() { atomic.AddInt32(&touches, 1) }, nil)
 	prop := fixTestProposal()
 
 	// Approve as soon as the proposal is registered (same shape as the other
@@ -139,7 +139,7 @@ func TestApplyFixesWithApproval_NilAnalysisCacheIsGraceful(t *testing.T) {
 		analysisCache: nil, // the missing-cache wiring under test
 	}
 	rec := &fixEventRecorder{}
-	ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, nil, nil)
+	ap := svc.newFixApplier(doc, "stream-1", rec.emit, nil, nil)
 	props := []ai.FixProposal{fixTestProposal()}
 
 	go func() {

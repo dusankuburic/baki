@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
+	"pad-analyzer/internal/capability"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -15,17 +17,8 @@ import (
 // RLS-scoped to flows the caller can see, so no per-flow authz gate is needed
 // (the storage query is filtered by RLS to the caller's visible flows).
 //
-// Like triage, this is a cloud/backend feature; in pure-local mode (backend ==
-// nil) these return 503.
-
-// governanceAvailable reports whether the alerts inbox is backed by a store.
-func (h *AnalysisHandler) governanceAvailable(w http.ResponseWriter) bool {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("governance alerts require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return false
-	}
-	return true
-}
+// Like triage, this needs the server-side store; without one (desktop) these
+// return 503 (registerGovernanceRoutes).
 
 // handleListGovernanceAlerts — GET /api/governance/alerts
 // Returns visible alerts newest-first. ?includeDismissed=true surfaces dismissed
@@ -37,9 +30,6 @@ func (h *AnalysisHandler) governanceAvailable(w http.ResponseWriter) bool {
 // @Success      200 {object} map[string]interface{} "Alerts"
 // @Router       /api/governance/alerts [get]
 func (h *AnalysisHandler) handleListGovernanceAlerts(w http.ResponseWriter, r *http.Request) {
-	if !h.governanceAvailable(w) {
-		return
-	}
 	limit, ok := clampListLimit(w, r.URL.Query().Get("limit"))
 	if !ok {
 		return
@@ -57,7 +47,7 @@ func (h *AnalysisHandler) handleListGovernanceAlerts(w http.ResponseWriter, r *h
 		// user's personal alerts.
 		UserID: h.security.CallerID(r),
 	}
-	alerts, err := h.backend.ListGovernanceAlerts(r.Context(), filter)
+	alerts, err := h.governance.List(r.Context(), filter)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -77,10 +67,7 @@ func (h *AnalysisHandler) handleListGovernanceAlerts(w http.ResponseWriter, r *h
 // @Success      200 {object} map[string]interface{} "Count"
 // @Router       /api/governance/alerts/unread-count [get]
 func (h *AnalysisHandler) handleUnreadGovernanceAlertCount(w http.ResponseWriter, r *http.Request) {
-	if !h.governanceAvailable(w) {
-		return
-	}
-	n, err := h.backend.UnreadGovernanceAlertCountFor(r.Context(), h.security.CallerID(r))
+	n, err := h.governance.UnreadCount(r.Context(), h.security.CallerID(r))
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -101,10 +88,7 @@ func (h *AnalysisHandler) handleUnreadGovernanceAlertCount(w http.ResponseWriter
 // @Failure      500 {object} map[string]string "Error"
 // @Router       /api/governance/alerts/read-all [post]
 func (h *AnalysisHandler) handleMarkAllGovernanceAlertsRead(w http.ResponseWriter, r *http.Request) {
-	if !h.governanceAvailable(w) {
-		return
-	}
-	if err := h.backend.MarkAllGovernanceAlertsRead(r.Context(), h.security.CallerID(r)); err != nil {
+	if err := h.governance.MarkAllRead(r.Context(), h.security.CallerID(r)); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -123,9 +107,6 @@ func (h *AnalysisHandler) handleMarkAllGovernanceAlertsRead(w http.ResponseWrite
 // @Failure      500 {object} map[string]string "Error"
 // @Router       /api/governance/alerts/dismiss [post]
 func (h *AnalysisHandler) handleDismissGovernanceAlert(w http.ResponseWriter, r *http.Request) {
-	if !h.governanceAvailable(w) {
-		return
-	}
 	var req struct {
 		ID string `json:"id"`
 	}
@@ -136,11 +117,11 @@ func (h *AnalysisHandler) handleDismissGovernanceAlert(w http.ResponseWriter, r 
 		render.Error(w, fmt.Errorf("id is required"), http.StatusBadRequest)
 		return
 	}
-	if err := h.backend.DismissGovernanceAlert(r.Context(), h.security.CallerID(r), req.ID); err != nil {
+	if err := h.governance.Dismiss(r.Context(), h.security.CallerID(r), req.ID); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionAlertDismiss, "alert", req.ID, nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionAlertDismiss, ResourceType: "alert", ResourceID: req.ID})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -153,26 +134,23 @@ func (h *AnalysisHandler) handleDismissGovernanceAlert(w http.ResponseWriter, r 
 // @Success      200 {object} map[string]interface{} "Cleared"
 // @Router       /api/governance/alerts [delete]
 func (h *AnalysisHandler) handleClearGovernanceAlerts(w http.ResponseWriter, r *http.Request) {
-	if !h.governanceAvailable(w) {
-		return
-	}
-	if err := h.backend.ClearGovernanceAlerts(r.Context(), h.security.CallerID(r)); err != nil {
+	if err := h.governance.Clear(r.Context(), h.security.CallerID(r)); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionAlertClear, "alert", "", nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionAlertClear, ResourceType: "alert"})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
 // registerGovernanceRoutes wires the governance alerts inbox (notifications
 // bell): scanner-written drift/regression alerts, RLS-scoped to the caller's
 // visible flows. All read/write (no jwtAuth bypass needed).
-func (h *AnalysisHandler) registerGovernanceRoutes(r chi.Router) {
-	r.Route("/api/governance", func(r chi.Router) {
-		r.Get("/alerts", h.handleListGovernanceAlerts)
-		r.Get("/alerts/unread-count", h.handleUnreadGovernanceAlertCount)
-		r.Post("/alerts/read-all", h.handleMarkAllGovernanceAlertsRead)
-		r.Post("/alerts/dismiss", h.handleDismissGovernanceAlert)
-		r.Delete("/alerts", h.handleClearGovernanceAlerts)
-	})
+func (h *AnalysisHandler) registerGovernanceRoutes(rb *route.Builder) {
+	rb.Route("/api/governance", func(rb *route.Builder) {
+		rb.Get("/alerts", h.handleListGovernanceAlerts)
+		rb.Get("/alerts/unread-count", h.handleUnreadGovernanceAlertCount)
+		rb.Post("/alerts/read-all", h.handleMarkAllGovernanceAlertsRead)
+		rb.Post("/alerts/dismiss", h.handleDismissGovernanceAlert)
+		rb.Delete("/alerts", h.handleClearGovernanceAlerts)
+	}, route.Needs(capability.ServerStore))
 }

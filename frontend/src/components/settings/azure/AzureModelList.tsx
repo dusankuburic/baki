@@ -5,7 +5,7 @@ import {Badge, Button, Dropdown, IconButton, type DropdownItem} from '@/componen
 import {modelKindLabelKey, purposeLabelKey, resolvePurpose, type PurposeLabelOf} from '@/lib/modelPurpose'
 import {formatContextWindow} from '@/lib/format'
 import {absoluteTime, relativeTimeText} from '@/lib/time'
-import type {AzureModelEntry, AzureStatus} from '@/types'
+import {AZURE_MODEL_KINDS, AZURE_STATUSES, isKnown, type AzureModelEntry, type AzureStatus} from '@/types'
 import {focusKey, isChatKind} from './registryView'
 
 /** What a row offers; a row without any is read-only. */
@@ -73,11 +73,16 @@ export function AzureModelRow({
   const purpose = resolvePurpose(entry, labelOf)
   const purposeText = purpose.kind === 'preset' ? t(purposeLabelKey(purpose.preset), {ns: 'common'}) : purpose.text
   const kindText = t(modelKindLabelKey(entry.kind), {ns: 'common'})
+  // A kind or status a newer server added: listed under a neutral label, and
+  // not editable here (the form could not show the kind, nor send it back).
+  const knownKind = isKnown(AZURE_MODEL_KINDS, entry.kind)
+  const knownStatus = isKnown(AZURE_STATUSES, entry.status)
   const contextWindow = entry.kind === 'embedding' ? undefined : (entry.contextWindow ?? entry.reportedContextWindow)
   const last = entry.lastTest ?? null
-  const unavailable = TEST_UNAVAILABLE[entry.status]
-  const statusNote =
-    entry.status === 'needs_credentials' || entry.status === 'unreadable'
+  const unavailable = isKnown(AZURE_STATUSES, entry.status) ? TEST_UNAVAILABLE[entry.status] : undefined
+  const statusNote = !knownStatus
+    ? entry.statusReason || t('azureModels.status.rowUnknown')
+    : entry.status === 'needs_credentials' || entry.status === 'unreadable'
       ? t('azureModels.status.rowNeedsCredentials')
       : entry.status === 'invalid_config'
         ? t('azureModels.status.rowInvalidConfig')
@@ -280,7 +285,8 @@ export function AzureModelRow({
               onClick={() => actions.onEdit?.(entry)}
               aria-label={t('azureModels.model.editAria', {name})}
               data-focus={focusKey.modelEdit(entry.id)}
-              disabled={busy}
+              disabled={busy || !knownKind}
+              title={knownKind ? undefined : t('azureModels.model.editUnknownKind')}
             >
               {t('azureModels.model.edit')}
             </Button>

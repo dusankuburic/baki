@@ -2,6 +2,7 @@ import {describe, it, expect, vi} from 'vitest'
 import {render, screen} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import i18next from '@/i18n'
+import {unknownValue} from '@/testing/testHelpers'
 import ModelUnavailableNotice, {modelNoticeSentences, type ModelNoticeView} from './ModelUnavailableNotice'
 
 const DOCS = {provider: 'azure-foundry', model: 'm/docs000000', label: 'Docs writer'}
@@ -68,6 +69,10 @@ describe('ModelUnavailableNotice', () => {
     expect(sentence({kind: 'refused', wanted, fallback: null})).toBe(
       "“Docs writer” isn't available any more. Choose another model to send your message.",
     )
+    // A status a newer server added: the generic sentence, never a raw key.
+    const unknown = sentence({kind: 'unavailable', wanted, fallback: null, cause: unknownValue('suspended')})
+    expect(unknown).toContain('Docs writer')
+    expect(unknown).not.toMatch(/modelNotice|suspended/)
   })
 
   it('a saved default that names nothing: says what new chats use, offers Manage models… and Dismiss', async () => {

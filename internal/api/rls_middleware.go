@@ -105,7 +105,7 @@ func rlsExemptPath(path string) bool {
 		return true
 	}
 	// The org admin's shared-credential test dials upstream up to 15 s like /api/providers/test;
-	// its org lookups are Go-layer authz (requireAdmin) and the credential uses the keystore's connection.
+	// its org lookups are Go-layer authz (canOrg, OrgAdmin) and the credential uses the keystore's connection.
 	if isOrgProviderTestPath(path) {
 		return true
 	}
@@ -119,7 +119,7 @@ func rlsExemptPath(path string) bool {
 	if isKnowledgeEmbedPath(path) {
 		return true
 	}
-	// The org notification-channel test dials the webhook for up to 15 s; requireAdmin is its
+	// The org notification-channel test dials the webhook for up to 15 s; requireOrg(OrgAdmin) is its
 	// access control and ListOrgChannels carries an explicit org_id predicate.
 	if isOrgChannelTestPath(path) {
 		return true
@@ -157,9 +157,10 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Exemptions are judged on the path chi dispatches on (routePath): a RawPath such as /api/library/..%2Fchat%2Fx decodes and cleans to the exempt /api/chat/x
+		// The route policy decides (wantsTx); the legacy exemptions are judged on the path chi dispatches on
+		// (routePath): a RawPath such as /api/library/..%2Fchat%2Fx decodes and cleans to the exempt /api/chat/x
 		// while chi runs a transactional library route.
-		if p := routePath(r); !strings.HasPrefix(p, "/api/") || publicRoutes[p] || rlsExemptPath(p) {
+		if !rt.wantsTx(r) {
 			next.ServeHTTP(w, r)
 			return
 		}

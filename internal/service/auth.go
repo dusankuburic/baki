@@ -288,3 +288,13 @@ func (s *AuthService) VerifyEmail(ctx context.Context, token string) (userID str
 	}
 	return userID, nil
 }
+
+// User loads an account by ID; ErrNotFound when it does not exist.
+func (s *AuthService) User(ctx context.Context, userID string) (*storageif.User, error) {
+	return s.backend.LoadUserByID(ctx, userID)
+}
+
+// UpdateProfile sets the user's display name and avatar URL; an empty value clears it.
+func (s *AuthService) UpdateProfile(ctx context.Context, userID, displayName, avatarURL string) error {
+	return s.backend.UpdateUserProfile(ctx, userID, displayName, avatarURL)
+}

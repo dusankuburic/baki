@@ -1,5 +1,6 @@
 import {describe, it, expect} from 'vitest'
 import i18next from '@/i18n'
+import {unknownValue} from '@/testing/testHelpers'
 import {
   DEFAULT_PURPOSE,
   PURPOSE_CUSTOM_MAX_LENGTH,
@@ -42,6 +43,11 @@ describe('purpose presets', () => {
       const key = modelKindLabelKey(k)
       expect(i18next.t(key, {ns: 'common'})).not.toBe(key)
     }
+  })
+
+  it('labels a kind a newer server added neutrally, not with its raw key', () => {
+    expect(modelKindLabelKey(unknownValue('realtime'))).toBe('models.kind.other')
+    expect(i18next.t(modelKindLabelKey(unknownValue('realtime')), {ns: 'common'})).toBe('Other')
   })
 })
 

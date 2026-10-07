@@ -91,6 +91,7 @@ func TestRunToolLoop_AzureStreamReservesNothing(t *testing.T) {
 	}
 	ctl := &streamCtl{ownerID: "user-1", orgID: "org-1"}
 	svc.activeStreams.Store("azure", ctl)
+	svc.aiBudget().hold(ctl)
 	ctx := context.Background()
 
 	var seenInflight float64

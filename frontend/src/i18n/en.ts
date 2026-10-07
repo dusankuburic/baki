@@ -88,6 +88,8 @@ export const common = {
       claude: 'Claude',
       agent: 'Agent',
       embedding: 'Embedding',
+      // A kind a newer server added, which this version of the app does not know.
+      other: 'Other',
     },
   },
 }
@@ -147,6 +149,12 @@ export const shell = {
   },
   inspector: {
     panelAria: 'Inspector panel',
+  },
+  // The server was updated while this tab stayed open (ReloadBanner).
+  newVersion: {
+    message: 'A new version of the app is available.',
+    reload: 'Reload',
+    dismiss: 'Dismiss',
   },
   backendCrash: {
     titleTerminated: 'The analysis backend stopped',
@@ -459,6 +467,8 @@ export const findings = {
       in_progress: 'In Progress',
       resolved: 'Resolved',
       suppressed: 'Suppressed',
+      // A status a newer server added, which this version of the app does not know.
+      other: 'Other status',
     },
     actions: {
       setStatus: 'Set triage status',

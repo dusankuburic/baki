@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -50,8 +51,8 @@ func TestExportMarkdown_CloudModeIgnoresPath(t *testing.T) {
 
 	// Resolve the domain doc the same way the export handler does, then prime
 	// its analysis report so the export handler has something to render.
-	exp := rt.handlers.Export
-	domainDoc, err := exp.flowSvc.GetAuthorized(context.Background(), flowID, "alice", "viewer")
+	exp := moduleOf[*ExportHandler](t, rt)
+	domainDoc, err := exp.flowSvc.GetAuthorized(userActorCtx("alice"), flowID, service.FlowRead)
 	if err != nil {
 		t.Fatalf("resolve seed flow: %v", err)
 	}

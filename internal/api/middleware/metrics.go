@@ -2,12 +2,14 @@ package middleware
 
 import (
 	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
+	"sync"
 	"time"
 
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/platform/reqinfo"
+	"pad-core/logger"
 )
 
 // MetricsHandler exposes the Prometheus /metrics endpoint; in production it should be reachable
@@ -19,12 +21,10 @@ func MetricsHandler() http.Handler { return metrics.Handler() }
 func RecordRateLimitExceeded(group string) { metrics.RecordRateLimitExceeded(group) }
 
 // Metrics wraps h to record http_requests_total and http_request_duration_seconds. Apply it inside AccessLog so the status label reflects the final response.
-// knownRoutes is the set of registered STATIC route patterns bounding the "route" label: an unknown /api/ path is reported as routeOther, not verbatim — pass it from the router's own route tree, never a hand-maintained list. nil is fail-closed (everything unrecognized becomes routeOther), the safe direction for cardinality.
-func Metrics(h http.Handler, knownRoutes map[string]struct{}) http.Handler {
+// The route label is the label of the policy resolved for the request at the outermost layer (RouteLabel), taken before the handler runs: the matched pattern of a route, one of a few fixed labels otherwise. It is bounded whatever the path, and it does not depend on whether the router got to rewrite the URL (a 429 is labelled like the request it refused).
+func Metrics(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Label on the canonical dispatch path, taken before the handler runs: this layer sits outside the mux, and r.URL.Path only became canonical if the router rewrote it — a request refused earlier (429) was labelled on the raw path (/api/v1/library/x as routeOther instead of /api/library/:id).
-		// Canonicalizing AFTER the handler would not do either (the router already applied the /api/v1 strip once; a second pass labels /api/v1/v1/... as a route the request never reached). Not dispatchPath: its RawPath branch keeps the escaped, uncleaned spelling, which the collapses below do not match.
-		route := RouteLabel(r.URL, knownRoutes)
+		route := RouteLabel(r)
 		sr := NewResponseRecorder(w)
 		start := time.Now()
 		h.ServeHTTP(maybeHijackable(sr), r)
@@ -35,9 +35,20 @@ func Metrics(h http.Handler, knownRoutes map[string]struct{}) http.Handler {
 	})
 }
 
-// RouteLabel is the bounded route label Metrics records for u. Exported for the route-policy golden in package api.
-func RouteLabel(u *url.URL, knownRoutes map[string]struct{}) string {
-	return normalizeRoute(canonicalPath(u.Path), knownRoutes)
+// RouteLabel is the route label Metrics records for r: the label of the policy resolved for it (the pattern, e.g.
+// /api/library/{id}; /api/other, / or /static/* when no route matches), "unresolved" outside the router's chain.
+func RouteLabel(r *http.Request) string {
+	p, _ := RequestPolicy(r)
+	return p.Label
+}
+
+// RequestPolicy returns the route policy resolved for r at the outermost layer, and false when none was (a layer
+// running outside the router's chain), with the fail-closed route.Unresolved in its place.
+func RequestPolicy(r *http.Request) (*route.Policy, bool) {
+	if info := reqinfo.From(r.Context()); info != nil && info.Policy != nil {
+		return info.Policy, true
+	}
+	return route.Unresolved, false
 }
 
 // methodOther is the bounded catch-all for any request method outside the
@@ -55,98 +66,38 @@ func normalizeMethod(m string) string {
 	return methodOther
 }
 
-// routeOther is the bounded catch-all for any /api/ path that is neither a
-// registered static route nor one of the explicit dynamic collapses.
-const routeOther = "/api/other"
+// The decisions shadow mode compares between the declared route policy and the legacy path tables: the decision
+// label of pad_route_policy_mismatch_total.
+const (
+	DecisionAuth      = "auth"      // jwtAuth authenticates the request
+	DecisionScope     = "scope"     // a scoped API token may call the route
+	DecisionRateLimit = "ratelimit" // the rate-limit bucket
+	DecisionTx        = "tx"        // the per-request RLS transaction
+	DecisionDeadline  = "deadline"  // the deadline class
+)
 
-// normalizeRoute strips per-resource identifiers from URL paths so the Prometheus label set has bounded cardinality (one time-series per unique label
-// combination — a naive path-per-flow-id label blows up the series count linearly with flows). Adding a case for a new dynamic route is an OPTIMIZATION, not a requirement: an uncased one collapses to routeOther, bounded but coarse.
-func normalizeRoute(path string, known map[string]struct{}) string {
-	switch {
-	case strings.HasPrefix(path, "/api/library/"):
-		return "/api/library/:id"
-	case strings.HasPrefix(path, "/api/flows/") && strings.Contains(path, "/collaborators"):
-		return "/api/flows/:id/collaborators"
-	case strings.HasPrefix(path, "/api/admin/users/") && strings.HasSuffix(path, "/role"):
-		return "/api/admin/users/:id/role"
-	// The four families below used to fall through to the verbatim /api/ case, so each per-request identifier minted its own time series. /api/invites/ was
-	// the worst: the path segment is the emailed single-use invite CREDENTIAL, so every accept wrote a live secret into a scraped, retained Prometheus label.
-	case strings.HasPrefix(path, "/api/auth/sessions/"):
-		return "/api/auth/sessions/:id"
-	case strings.HasPrefix(path, "/api/auth/tokens/"):
-		return "/api/auth/tokens/:id"
-	case strings.HasPrefix(path, "/api/invites/"):
-		return "/api/invites/:token/accept"
-	case strings.HasPrefix(path, "/api/system/settings/org/"):
-		return "/api/system/settings/org/:id"
-	case strings.HasPrefix(path, azureRegistryPrefix):
-		// The Azure AI Foundry registry: its per-resource and per-model routes collapse to their patterns; anything else under it is no route (the static ones map to themselves).
-		if route, ok := azureRegistryRoute(strings.TrimPrefix(path, azureRegistryPrefix)); ok {
-			return "/api/providers/azure-foundry" + route
-		}
-		return routeOther
-	case strings.HasPrefix(path, "/api/orgs/"):
-		// /api/orgs/:orgId or /api/orgs/:orgId/members[/:userId]
-		switch {
-		case strings.Contains(path, "/members/"):
-			return "/api/orgs/:id/members/:userId"
-		case strings.HasSuffix(path, "/members"):
-			return "/api/orgs/:id/members"
-		}
-		// An organisation's Azure AI Foundry registry: the same fixed set of
-		// patterns as the caller's own.
-		if orgID, tail, ok := strings.Cut(strings.TrimPrefix(path, "/api/orgs/"), "/providers/azure-foundry/"); ok && orgID != "" && !strings.Contains(orgID, "/") {
-			if route, ok := azureRegistryRoute(tail); ok {
-				return "/api/orgs/:id/providers/azure-foundry" + route
-			}
-		}
-		return "/api/orgs/:id"
-	case strings.HasPrefix(path, "/swagger/"):
-		return "/swagger/*"
-	case path == "/healthz", path == "/readyz", path == "/api/health", path == "/metrics":
-		return path
-	case path == "/ws":
-		// Not under /api/, so without this case it falls through to /static/* — and the Metrics layer observes the handler's whole lifetime, putting every
-		// socket's open-to-close duration (minutes to hours) in the asset histogram.
-		return path
-	case strings.HasPrefix(path, "/api/"):
-		// Only REGISTERED static routes are reported verbatim — returning every /api/ path unchanged handed an unauthenticated caller a cardinality bomb:
-		// this layer runs outside the mux and before auth, so GET /api/<random> minted a fresh series per request, 404s included, until the process ran out of memory.
-		if _, ok := known[path]; ok {
-			return path
-		}
-		return routeOther
+// mismatchLogged holds the (route, decision) pairs already logged: one WARN line each per process, however often
+// the disagreement recurs; the counter has the rate.
+var mismatchLogged sync.Map
+
+// ReportPolicyMismatch records that the policy declared on r's route (p) decides differently from the legacy path
+// tables: it counts pad_route_policy_mismatch_total{route,decision} and logs the first occurrence of each pair.
+func ReportPolicyMismatch(r *http.Request, p *route.Policy, decision, legacy, declared string) {
+	metrics.RecordRoutePolicyMismatch(p.Label, decision)
+	if _, seen := mismatchLogged.LoadOrStore(p.Label+"\x00"+decision, struct{}{}); seen {
+		return
 	}
-	if path == "/" || path == "" {
-		return "/"
-	}
-	return "/static/*"
+	logger.Warn("route policy: the declared policy disagrees with the legacy path tables (logged once per route and decision)",
+		"route", p.Label, "decision", decision, "legacy", legacy, "declared", declared,
+		"method", r.Method, "path", redactPath(canonicalPath(r.URL.Path)))
 }
 
-// azureRegistryPrefix starts a caller's own Azure AI Foundry registry routes.
-const azureRegistryPrefix = "/api/providers/azure-foundry/"
-
-// azureRegistryRoute collapses the rest of an Azure AI Foundry registry path to its route pattern —
-// one of a fixed set, so the label stays bounded whatever the ids; false for a non-route path.
-func azureRegistryRoute(tail string) (string, bool) {
-	segs := strings.Split(tail, "/")
-	switch len(segs) {
-	case 1:
-		switch segs[0] {
-		case "config", "connections", "models", "test":
-			return "/" + segs[0], true
-		}
-	case 2:
-		switch {
-		case segs[0] == "connections" && segs[1] != "":
-			return "/connections/:id", true
-		case segs[0] == "models" && segs[1] != "":
-			return "/models/:id", true
-		}
-	case 3:
-		if segs[0] == "connections" && segs[1] != "" && segs[2] == "discover" {
-			return "/connections/:id/discover", true
-		}
-	}
-	return "", false
+// ReportGuardMismatch records a request chi dispatched to a route (or 404/405 fallback) other than the one whose
+// policy the outer layer resolved and the middleware applied: a resolver bug, logged at ERROR every time and
+// counted in pad_route_policy_guard_mismatch_total{route}, where route is what chi dispatched to.
+func ReportGuardMismatch(r *http.Request, resolved *route.Policy, dispatched string) {
+	metrics.RecordRouteGuardMismatch(dispatched)
+	logger.Error("route policy: chi dispatched the request elsewhere than the route its policy was resolved for",
+		"method", r.Method, "path", redactPath(canonicalPath(r.URL.Path)),
+		"resolved", resolved.Label, "resolved_kind", resolved.Kind, "dispatched", dispatched)
 }

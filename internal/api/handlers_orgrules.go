@@ -9,6 +9,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
+	"pad-analyzer/internal/capability"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
 )
@@ -47,15 +51,7 @@ func toOrgRuleOut(r *storageif.OrgCustomRule) orgCustomRuleOut {
 // @Success      200 {array} object "Rules"
 // @Router       /api/orgs/{id}/rules [get]
 func (h *OrgHandler) handleOrgRuleList(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("org custom rules require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
-	org := h.requireMember(w, r)
-	if org == nil {
-		return
-	}
-	rules, err := h.backend.ListOrgCustomRules(r.Context(), org.ID, false)
+	rules, err := h.orgRules.List(r.Context(), chi.URLParam(r, "id"), false)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -75,14 +71,7 @@ func (h *OrgHandler) handleOrgRuleList(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} object "Rule"
 // @Router       /api/orgs/{id}/rules [post]
 func (h *OrgHandler) handleOrgRuleSave(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("org custom rules require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
-	org := h.requireAdmin(w, r)
-	if org == nil {
-		return
-	}
+	orgID := chi.URLParam(r, "id")
 	var req struct {
 		ID      string                    `json:"id"`
 		Config  analyzer.CustomRuleConfig `json:"config"`
@@ -116,16 +105,14 @@ func (h *OrgHandler) handleOrgRuleSave(w http.ResponseWriter, r *http.Request) {
 		enabled = *req.Enabled
 	}
 	rule := &storageif.OrgCustomRule{
-		ID: id, OrgID: org.ID, RuleID: req.Config.ID,
+		ID: id, OrgID: orgID, RuleID: req.Config.ID,
 		Config: raw, Enabled: enabled,
 	}
-	if err := h.backend.SaveOrgCustomRule(r.Context(), rule); err != nil {
+	if err := h.orgRules.Save(r.Context(), rule); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	h.invalidateRuleProfile(org.ID)
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgRuleSave, "org", org.ID,
-		map[string]string{"ruleId": req.Config.ID})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgRuleSave, orgID, map[string]string{"ruleId": req.Config.ID}))
 	render.JSON(w, toOrgRuleOut(rule))
 }
 
@@ -137,31 +124,13 @@ func (h *OrgHandler) handleOrgRuleSave(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} map[string]string "Deleted"
 // @Router       /api/orgs/{id}/rules/{ruleId} [delete]
 func (h *OrgHandler) handleOrgRuleDelete(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("org custom rules require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
-	org := h.requireAdmin(w, r)
-	if org == nil {
-		return
-	}
-	if err := h.backend.DeleteOrgCustomRule(r.Context(), org.ID, chi.URLParam(r, "ruleId")); err != nil {
+	orgID := chi.URLParam(r, "id")
+	if err := h.orgRules.Delete(r.Context(), orgID, chi.URLParam(r, "ruleId")); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	h.invalidateRuleProfile(org.ID)
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgRuleDelete, "org", org.ID,
-		map[string]string{"ruleId": chi.URLParam(r, "ruleId")})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgRuleDelete, orgID, map[string]string{"ruleId": chi.URLParam(r, "ruleId")}))
 	render.JSON(w, map[string]string{"status": "ok"})
-}
-
-// invalidateRuleProfile drops the org's cached rule profile so the next analysis re-resolves;
-// without it a rule change waits out the resolver's TTL — long enough for an admin to save a rule,
-// re-run analysis, and conclude it does not work.
-func (h *OrgHandler) invalidateRuleProfile(orgID string) {
-	if h.ruleProfiles != nil {
-		h.ruleProfiles.Invalidate(orgID)
-	}
 }
 
 // orgRuleExport is a `.bakirc.json`-shaped document: the org's per-rule profile plus its custom
@@ -192,20 +161,10 @@ type orgRuleExportConf struct {
 // @Success      200 {object} object "Config"
 // @Router       /api/orgs/{id}/rules/export [get]
 func (h *OrgHandler) handleOrgRuleExport(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("org custom rules require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
-	// Member, not admin: a CI pipeline runs as a service account that needs to READ the
-	// configuration it gates on, and reading a rule set discloses nothing a member cannot see.
-	org := h.requireMember(w, r)
-	if org == nil {
-		return
-	}
-
+	orgID := chi.URLParam(r, "id")
 	out := orgRuleExport{}
 
-	if settings, err := h.backend.LoadOrgSettings(r.Context(), org.ID); err != nil {
+	if settings, err := h.orgRules.OrgSettings(r.Context(), orgID); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	} else if settings != nil && len(settings.Analysis.Rules) > 0 {
@@ -218,7 +177,7 @@ func (h *OrgHandler) handleOrgRuleExport(w http.ResponseWriter, r *http.Request)
 
 	// enabledOnly: a paused rule must not gate CI. This mirrors what the
 	// analysis path compiles, so the export and the server agree.
-	rules, err := h.backend.ListOrgCustomRules(r.Context(), org.ID, true)
+	rules, err := h.orgRules.List(r.Context(), orgID, true)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -238,13 +197,17 @@ func (h *OrgHandler) handleOrgRuleExport(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, out)
 }
 
-// registerRuleRoutes wires the per-org custom analyzer rules sub-routes.
-func (h *OrgHandler) registerRuleRoutes(r chi.Router) {
+// registerRuleRoutes wires the per-org custom analyzer rules sub-routes, which live in the server store.
+func (h *OrgHandler) registerRuleRoutes(rb *route.Builder) {
 	// Per-org custom analyzer rules. Reads: member. Writes: admin.
-	r.Route("/rules", func(r chi.Router) {
-		r.Get("/", h.handleOrgRuleList)
-		r.Get("/export", h.handleOrgRuleExport)
-		r.Post("/", h.handleOrgRuleSave)
-		r.Delete("/{ruleId}", h.handleOrgRuleDelete)
-	})
+	rb.Route("/rules", func(rb *route.Builder) {
+		// Member, not admin, for the export too: a CI pipeline runs as a service account that needs to READ
+		// the configuration it gates on, and reading a rule set discloses nothing a member cannot see.
+		read := rb.With(h.requireOrg(service.OrgRead))
+		read.Get("/", h.handleOrgRuleList)
+		read.Get("/export", h.handleOrgRuleExport)
+		admin := rb.With(h.requireOrg(service.OrgAdmin))
+		admin.Post("/", h.handleOrgRuleSave, route.Idempotent())
+		admin.Delete("/{ruleId}", h.handleOrgRuleDelete)
+	}, route.Needs(capability.ServerStore))
 }

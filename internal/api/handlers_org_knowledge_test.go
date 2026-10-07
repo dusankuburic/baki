@@ -13,48 +13,37 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/mail"
 	"pad-analyzer/internal/rag"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
 
-// newNilBackendOrgHandler builds an OrgHandler whose backend is nil (local mode) but whose knowledge service is non-nil — the exact configuration that
-// previously nil-panicked in handleKnowledgeList/handleKnowledgeDelete (the handlers dereferenced h.backend after only checking the non-nil service).
-func newNilBackendOrgHandler() *OrgHandler {
-	security := &SecurityConfig{}
-	orgSvc := collaboration.NewOrgService(nil) // unused — the guards return before reaching it
-	return NewOrgHandler(orgSvc, nil /*backend*/, rag.NewKnowledgeService(nil, nil, nil), security, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
-}
-
-// Regression (H8/Track 6): the Knowledge Base handlers must return 503 when the storage backend is nil (local mode) instead of nil-panicking on h.backend.
+// Regression (H8/Track 6): the Knowledge Base routes must return 503 when the storage backend is nil (local mode) instead of nil-panicking on h.backend.
 // The latent bug: the service is constructed non-nil even with a nil store, so the h.knowledge == nil guard did not protect the h.backend dereference.
+// The routes now declare the server store (route.Needs), so the router answers before any handler runs, knowledge service wired or not.
 func TestKnowledgeHandlers_NilBackend_Returns503NotPanic(t *testing.T) {
-	h := newNilBackendOrgHandler()
+	rt := newTestRouter(nil, false)
+	moduleOf[*OrgHandler](t, rt).knowledge = rag.NewKnowledgeService(nil, nil, nil)
 
 	cases := []struct {
-		name    string
-		handler http.HandlerFunc
-		method  string
-		target  string
+		name, method, target string
 	}{
-		{"list", h.handleKnowledgeList, http.MethodGet, "/api/orgs/org-1/knowledge"},
-		{"upload", h.handleKnowledgeUpload, http.MethodPost, "/api/orgs/org-1/knowledge/upload"},
-		{"reindex", h.handleKnowledgeReindex, http.MethodPost, "/api/orgs/org-1/knowledge/reindex"},
-		{"delete", h.handleKnowledgeDelete, http.MethodDelete, "/api/orgs/org-1/knowledge/doc-1"},
+		{"list", http.MethodGet, "/api/orgs/org-1/knowledge"},
+		{"upload", http.MethodPost, "/api/orgs/org-1/knowledge/upload"},
+		{"reindex", http.MethodPost, "/api/orgs/org-1/knowledge/reindex"},
+		{"delete", http.MethodDelete, "/api/orgs/org-1/knowledge/doc-1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rr := httptest.NewRecorder()
-			r := httptest.NewRequest(tc.method, tc.target, nil)
 			// Must not panic; must return 503.
-			tc.handler(rr, r)
+			rr := doRequest(t, rt, tc.method, tc.target, nil)
 			if rr.Code != http.StatusServiceUnavailable {
 				t.Errorf("%s: status = %d, want 503 (nil backend should be a clean 503, not a panic)", tc.name, rr.Code)
 			}
@@ -120,11 +109,8 @@ func newKnowledgeGuardRouter(t *testing.T, callerVec []float32) (http.Handler, *
 		{ID: "c2", DocID: "doc-1", Content: "name flows by team", Embedding: []float32{1, 0}},
 	})
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(directionEmbedder{vec: callerVec}))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
-	r := chi.NewRouter()
-	r.Post("/api/orgs/{id}/knowledge/upload", h.handleKnowledgeUpload)
-	r.Post("/api/orgs/{id}/knowledge/reindex", h.handleKnowledgeReindex)
-	return r, store, org.ID
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	return mountedAs(h, "u-admin"), store, org.ID
 }
 
 func postJSON(t *testing.T, h http.Handler, path, body string) *httptest.ResponseRecorder {
@@ -197,9 +183,8 @@ func TestKnowledgeUpload_AzureWithoutEmbeddingDeployment400(t *testing.T) {
 	}
 	store := &testutil.FakeBackend{}
 	knowledge := rag.NewKnowledgeService(store, factory, nil, rag.WithEmbeddingProvider("azure-foundry"))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
-	r := chi.NewRouter()
-	r.Post("/api/orgs/{id}/knowledge/upload", h.handleKnowledgeUpload)
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	r := mountedAs(h, "u-admin")
 
 	rr := postJSON(t, r, "/api/orgs/"+org.ID+"/knowledge/upload", `{"filename":"a.md","content":"a guideline"}`)
 	if rr.Code != http.StatusBadRequest || errorCode(t, rr) != "EMBEDDING_NOT_CONFIGURED" {
@@ -227,9 +212,8 @@ func TestKnowledgeUpload_AzureRegistryFailureIs503Masked(t *testing.T) {
 		store := &testutil.FakeBackend{}
 		knowledge := rag.NewKnowledgeService(store, ai.NewProviderFactory(nil, nil, nil, nil), nil,
 			rag.WithEmbeddingProvider("azure-foundry"), rag.WithAzureEmbedder(failingAzureEmbedderSource{err: cause}))
-		h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
-		r := chi.NewRouter()
-		r.Post("/api/orgs/{id}/knowledge/upload", h.handleKnowledgeUpload)
+		h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+		r := mountedAs(h, "u-admin")
 		rr := postJSON(t, r, "/api/orgs/"+org.ID+"/knowledge/upload", `{"filename":"a.md","content":"a guideline"}`)
 		if rr.Code != http.StatusServiceUnavailable || errorCode(t, rr) != "EMBEDDING_PROVIDER_UNAVAILABLE" {
 			t.Errorf("%v: status = %d, body = %s; want 503 EMBEDDING_PROVIDER_UNAVAILABLE", cause, rr.Code, rr.Body.String())
@@ -282,11 +266,8 @@ func newKnowledgeErrorRouter(t *testing.T, embedErr error) (http.Handler, string
 	}
 	store := &testutil.FakeBackend{}
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(failingEmbedder{err: embedErr}))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
-	r := chi.NewRouter()
-	r.Post("/api/orgs/{id}/knowledge/upload", h.handleKnowledgeUpload)
-	r.Post("/api/orgs/{id}/knowledge/reindex", h.handleKnowledgeReindex)
-	return r, org.ID
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	return mountedAs(h, "u-admin"), org.ID
 }
 
 // errorEnvelope decodes the standard error body.
@@ -442,12 +423,6 @@ func (a *auditRecordingBackend) lastEvent(t *testing.T, action string) *storagei
 // TestKnowledgeReindex_TruncatedSurfacesInBodyAndAudit: a corpus beyond the per-request ceiling answers {"truncated":true} (the panel tells the admin to
 // re-run) and the audit row records it alongside force.
 func TestKnowledgeReindex_TruncatedSurfacesInBodyAndAudit(t *testing.T) {
-	// Route the audit rows to the backend directly (no pool in tests, but a
-	// neighbour may have installed one).
-	prevCh := auditCh
-	auditCh = nil
-	t.Cleanup(func() { auditCh = prevCh })
-
 	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
 	org, err := orgSvc.Create(bgCtx(), "Acme", "u-admin")
 	if err != nil {
@@ -464,9 +439,8 @@ func TestKnowledgeReindex_TruncatedSurfacesInBodyAndAudit(t *testing.T) {
 	}
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", chunks)
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(directionEmbedder{vec: []float32{0, 1}}))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
-	r := chi.NewRouter()
-	r.Post("/api/orgs/{id}/knowledge/reindex", h.handleKnowledgeReindex)
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	r := mountedAs(h, "u-admin")
 
 	rr := postJSON(t, r, "/api/orgs/"+org.ID+"/knowledge/reindex", `{"force":true}`)
 	if rr.Code != http.StatusOK {
@@ -479,7 +453,7 @@ func TestKnowledgeReindex_TruncatedSurfacesInBodyAndAudit(t *testing.T) {
 	if body["truncated"] != true || body["chunks"] != float64(ceiling) || body["docs"] != float64(docs) {
 		t.Errorf("body = %s, want truncated=true chunks=%d docs=%d", rr.Body.String(), ceiling, docs)
 	}
-	ev := store.lastEvent(t, AuditActionKnowledgeReindex)
+	ev := store.lastEvent(t, audit.ActionKnowledgeReindex)
 	if ev.Meta["truncated"] != "true" || ev.Meta["force"] != "true" {
 		t.Errorf("audit meta = %v, want truncated=true and force=true", ev.Meta)
 	}

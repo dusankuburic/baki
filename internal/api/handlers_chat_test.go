@@ -152,7 +152,7 @@ func TestChatGet_NullMessagesAnswerAnEmptyList(t *testing.T) {
 	tok := jwtBearer(t, rt, "alice", "alice@example.com")
 	key := "11111111-1111-4111-8111-111111111111"
 	dir := t.TempDir()
-	rt.handlers.Chat.chatSvc = service.NewChatService(&mockNotifier{}, dir, nil, nil, nil, nil, nil, config.ModeLocal)
+	moduleOf[*ChatHandler](t, rt).chatSvc = service.NewChatService(&mockNotifier{}, dir, nil, nil, nil, nil, nil, config.ModeLocal, service.ChatOptions{})
 	path := filepath.Join(dir, "conversations", key, "flow-a.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatal(err)

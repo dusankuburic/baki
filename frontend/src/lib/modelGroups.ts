@@ -1,4 +1,4 @@
-import type {ModelPurposePreset} from '@/types'
+import {CHAT_MODEL_KINDS, isKnown, type ModelPurposePreset} from '@/types'
 import {PURPOSE_PRESETS, purposeRank, resolvePurpose, type PurposeLabelOf} from './modelPurpose'
 import {isRegistryModelId} from './modelIds'
 
@@ -7,7 +7,8 @@ import {isRegistryModelId} from './modelIds'
 // case-insensitive text across personal and shared entries, named by the
 // first spelling), then a plain "Models" group holding everything without a
 // purpose — a catalogue provider's models, which keep the order the server
-// lists them in. Embedding entries are never offered.
+// lists them in. Embedding entries are never offered, nor are entries of a
+// kind this bundle does not know.
 
 /** The fields grouping reads; ModelDetail fits. */
 export interface GroupableModel {
@@ -27,9 +28,13 @@ export type ModelGroup<M extends GroupableModel = GroupableModel> =
   /** Models without a purpose (catalogue providers). */
   | {kind: 'plain'; key: 'models'; models: M[]}
 
-/** Whether the picker offers the model at all: embedding entries never. */
+/**
+ * Whether the chat offers the model at all: a catalogue model (no kind) or a
+ * chat kind — never an embedding entry, nor a kind a newer server added,
+ * which this bundle cannot tell is one the chat can use.
+ */
 export function isPickerModel(model: Pick<GroupableModel, 'kind'>): boolean {
-  return model.kind !== 'embedding'
+  return !model.kind || isKnown(CHAT_MODEL_KINDS, model.kind)
 }
 
 /** A registry entry — it has a kind or a purpose, or an "m/" id — rather than a catalogue model. */

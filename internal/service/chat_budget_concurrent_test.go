@@ -19,8 +19,8 @@ func TestEnforceBudget_ConcurrentStreamsShareTheBudget(t *testing.T) {
 	a.setInflight(0.6)
 	b := &streamCtl{ownerID: "user-2", orgID: "org-1"}
 	b.setInflight(0.6)
-	svc.activeStreams.Store("a", a)
-	svc.activeStreams.Store("b", b)
+	svc.aiBudget().hold(a)
+	svc.aiBudget().hold(b)
 	ctx := context.Background()
 
 	// A third org member: $0 persisted, but $1.20 already committed by the
@@ -44,7 +44,7 @@ func TestEnforceBudget_ConcurrentStreamsShareTheBudget(t *testing.T) {
 	a.setInflight(0.5)
 	c := &streamCtl{ownerID: "user-1", orgID: ""}
 	c.setInflight(0.5)
-	svc.activeStreams.Store("c", c)
+	svc.aiBudget().hold(c)
 	if err := svc.enforceBudget(ctx, "user-1", "", 0, nil); err == nil {
 		t.Fatal("two of user-1's own streams at $1.00 in flight must trip the personal budget")
 	}
@@ -58,7 +58,7 @@ func TestEnforceBudget_PerUserSubLimitCountsConcurrent(t *testing.T) {
 	}
 	other := &streamCtl{ownerID: "user-1", orgID: "org-1"}
 	other.setInflight(0.9)
-	svc.activeStreams.Store("o", other)
+	svc.aiBudget().hold(other)
 	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0.2, nil); err == nil {
 		t.Fatal("user-1 has $0.90 in flight elsewhere; $0.20 more must trip the $1 per-user limit")
 	}

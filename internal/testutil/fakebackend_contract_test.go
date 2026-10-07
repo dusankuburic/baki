@@ -36,3 +36,8 @@ var knownFakeDivergences = []contract.Option{
 	contract.KnownDivergence("SaveFlow_stale_version_returns_ErrVersionConflict",
 		"SaveFlow has no optimistic version check"),
 }
+
+// TestFakeBackend_AuditContract holds the fake's audit log to the contract Postgres meets.
+func TestFakeBackend_AuditContract(t *testing.T) {
+	contract.RunAuditSuite(t, testutil.NewFakeBackend())
+}

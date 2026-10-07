@@ -20,6 +20,7 @@ import (
 	"weak"
 
 	"golang.org/x/sync/singleflight"
+	"pad-analyzer/internal/auth"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
 	"pad-core/cache"
@@ -185,36 +186,57 @@ func (s *FlowService) releasePatchLock(path string, l *patchFileLock) {
 	}
 }
 
-// GetAuthorized loads a flow after verifying minPerm access ("viewer"/"editor"/"admin"); the authz decision is HEADER-FIRST so a denied caller costs one indexed query, not a blob download.
-func (s *FlowService) GetAuthorized(ctx context.Context, flowID, userID, minPerm string) (*models.FlowDocument, error) {
+// GetAuthorized loads a flow once the actor ctx carries (auth.ActorFromContext) may perform action on it
+// (AuthzService.AuthorizeFlow, which also applies the action's API-token scope rule). The decision is HEADER-FIRST,
+// so a denied caller costs one indexed query, not a blob download. Cloud storage without an authorizer is a wiring
+// error and fails closed.
+func (s *FlowService) GetAuthorized(ctx context.Context, flowID string, action Action) (*models.FlowDocument, error) {
 	if s.storage == nil { // Local mode
 		return s.docProvider.ResolveDoc(ctx, flowID)
 	}
-
-	if s.authz != nil {
-		header, err := s.authz.AuthorizeFlowHeader(ctx, flowID, userID, minPerm)
-		if err != nil {
-			return nil, err
-		}
-		// One header read serves both the authz check and the doc cache's version check.
-		if hr, ok := s.docProvider.(headerDocResolver); ok {
-			return hr.ResolveDocWithHeader(ctx, flowID, header)
-		}
+	if s.authz == nil {
+		return nil, ErrPermissionDenied
 	}
-
-	doc, err := s.docProvider.ResolveDoc(ctx, flowID)
+	header, err := s.authz.AuthorizeFlow(ctx, auth.ActorFromContext(ctx), action, flowID)
 	if err != nil {
 		return nil, err
 	}
-	return doc, nil
+	return s.resolveAuthorized(ctx, flowID, header)
+}
+
+// GetAuthorizedByRole is GetAuthorized decided by userID's role on the flow alone (minPerm "viewer", "editor" or
+// "admin"), without the token-scope rule Can adds. Only for the routes kept on their role check, where that rule
+// would refuse a token the route admits today.
+func (s *FlowService) GetAuthorizedByRole(ctx context.Context, flowID, userID, minPerm string) (*models.FlowDocument, error) {
+	if s.storage == nil { // Local mode
+		return s.docProvider.ResolveDoc(ctx, flowID)
+	}
+	if s.authz == nil {
+		return nil, ErrPermissionDenied
+	}
+	header, err := s.authz.AuthorizeFlowHeader(ctx, flowID, userID, minPerm)
+	if err != nil {
+		return nil, err
+	}
+	return s.resolveAuthorized(ctx, flowID, header)
+}
+
+// resolveAuthorized resolves the document of an authorized flow: one header read serves both the authz check and
+// the doc cache's version check.
+func (s *FlowService) resolveAuthorized(ctx context.Context, flowID string, header *storageif.FlowDocument) (*models.FlowDocument, error) {
+	if hr, ok := s.docProvider.(headerDocResolver); ok {
+		return hr.ResolveDocWithHeader(ctx, flowID, header)
+	}
+	return s.docProvider.ResolveDoc(ctx, flowID)
 }
 
 type headerDocResolver interface {
 	ResolveDocWithHeader(ctx context.Context, id string, header *storageif.FlowDocument) (*models.FlowDocument, error)
 }
 
-// GetAuthorizedHeader verifies access like GetAuthorized but returns only the header (no content/source) for write-gating callers; local mode stands the in-memory document in.
-func (s *FlowService) GetAuthorizedHeader(ctx context.Context, flowID, userID, minPerm string) (*storageif.FlowDocument, error) {
+// GetAuthorizedHeader authorizes like GetAuthorized but returns only the header (no content/source) for
+// write-gating callers; local mode stands the in-memory document in.
+func (s *FlowService) GetAuthorizedHeader(ctx context.Context, flowID string, action Action) (*storageif.FlowDocument, error) {
 	if s.storage == nil { // Local mode
 		doc, err := s.docProvider.ResolveDoc(ctx, flowID)
 		if err != nil {
@@ -226,11 +248,24 @@ func (s *FlowService) GetAuthorizedHeader(ctx context.Context, flowID, userID, m
 		// Cloud storage without an authorizer is a wiring error; fail closed like CheckFlowPermission.
 		return nil, ErrPermissionDenied
 	}
-	return s.authz.AuthorizeFlowHeader(ctx, flowID, userID, minPerm)
+	return s.authz.AuthorizeFlow(ctx, auth.ActorFromContext(ctx), action, flowID)
 }
 
-// CheckFlowPermission verifies access WITHOUT resolving document content — perm-only handlers skip the blob download; local mode always allows.
-func (s *FlowService) CheckFlowPermission(ctx context.Context, flowID, userID, minPerm string) error {
+// CheckFlowPermission reports whether the actor ctx carries may perform action on the flow (AuthzService.Can),
+// WITHOUT resolving document content — perm-only handlers skip the blob download; local mode always allows.
+func (s *FlowService) CheckFlowPermission(ctx context.Context, flowID string, action Action) error {
+	if s.storage == nil { // Local mode
+		return nil
+	}
+	if s.authz == nil {
+		return ErrPermissionDenied
+	}
+	return s.authz.Can(ctx, auth.ActorFromContext(ctx), action, FlowByID(flowID))
+}
+
+// CheckFlowRole is CheckFlowPermission decided by userID's role on the flow alone (minPerm), without Can's
+// token-scope rule: only for the routes kept on their role check (GetAuthorizedByRole).
+func (s *FlowService) CheckFlowRole(ctx context.Context, flowID, userID, minPerm string) error {
 	if s.storage == nil { // Local mode
 		return nil
 	}
@@ -1480,4 +1515,10 @@ func parseErrorCount(source, fileName string) int {
 		return 1 << 30
 	}
 	return analyzer.CountParseErrors(doc)
+}
+
+// UpdateFlowTags replaces the stored flow's tags (normalized by the store) without a content round-trip or a version
+// bump; storage's ErrNotFound when the flow is gone. The caller owns the edit check.
+func (s *FlowService) UpdateFlowTags(ctx context.Context, flowID string, tags []string) error {
+	return s.storage.UpdateFlowTags(ctx, flowID, tags)
 }

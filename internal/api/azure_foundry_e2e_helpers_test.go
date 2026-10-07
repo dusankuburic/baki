@@ -341,6 +341,7 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	cfg := config.Default()
 	cfg.Auth.Enabled = true
 	cfg.Auth.Secret = testToken
+	routePolicyFromEnv(cfg)
 
 	shutdown := make(chan struct{})
 	events := NewEventManager(shutdown)
@@ -352,8 +353,9 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	authzSvc := service.NewAuthzService(fs, orgSvc)
 	docProv := service.NewCloudDocumentProvider(fs)
 	flowSvc := service.NewFlowService(events, settings, docProv, fs, authzSvc, nil)
-	libSvc := service.NewLibraryService(fs, flowSvc, authzSvc)
-	analysisSvc, err := service.NewAnalysisService(events, settings, nil)
+	scopes := service.NewFlowScopeResolver(fs, authzSvc)
+	libSvc := service.NewLibraryService(fs, flowSvc, authzSvc, scopes)
+	analysisSvc, err := service.NewAnalysisService(events, settings, nil, service.AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("analysis service: %v", err)
 	}
@@ -364,10 +366,6 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 		return v, nil
 	}, nil, nil, nil)
 	factory.SetOrgKeyLookup(orgKeys.OrgKeyLookup)
-	chatSvc := service.NewChatService(events, t.TempDir(), flowSvc, analysisSvc, settings, factory, fs, config.ModeCloud)
-	providerSvc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
-	providerSvc.SetOrgKeyStore(orgKeys)
-	sysSvc := service.NewSystemService(settings, secrets, events, fs, config.ModeCloud)
 	// The Azure AI Foundry model registry (Part 9) as di.ProvideAzureModelService builds it in cloud mode — one registry per user and per organisation (the Postgres store's owners, kept in memory here), the backend for the caller's settings, organisation membership, corpus counts and user names — wired into the same three services.
 	azure := service.NewAzureModelService(service.AzureModelServiceDeps{
 		Registry:      storage.NewMemoryAzureRegistry(),
@@ -381,9 +379,9 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 		Users:         fs,
 		PerUserOwners: true,
 	})
-	providerSvc.SetAzureModels(azure)
-	sysSvc.SetAzureModels(azure)
-	chatSvc.SetAzureModels(azure)
+	chatSvc := service.NewChatService(events, t.TempDir(), flowSvc, analysisSvc, settings, factory, fs, config.ModeCloud, service.ChatOptions{Azure: azure})
+	providerSvc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets, orgKeys, azure)
+	sysSvc := service.NewSystemService(settings, secrets, events, fs, config.ModeCloud, azure)
 
 	security := &SecurityConfig{
 		JWTEnabled:     true,
@@ -396,23 +394,30 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 		TrustedProxies: cfg.Server.TrustedProxies,
 	}
 	mail := mailer.NewService(config.EmailConfig{}, config.ModeLocal)
-	dashboardSvc := service.NewDashboardService(fs, analysisSvc, flowSvc)
-	dashboardSvc.SetScopeResolver(libSvc)
-	handlers := Handlers{
-		Sys:       NewSystemHandler(sysSvc, security, fs, nil, nil),
-		Flow:      NewFlowHandler(flowSvc, docProv, fs, security),
-		Library:   NewLibraryHandler(libSvc, fs, security),
-		Chat:      NewChatHandler(chatSvc, flowSvc, security),
-		Analysis:  NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, fs, security, service.NewWebhookNotifier(nil), mail, ""),
-		Dashboard: NewDashboardHandler(dashboardSvc, security),
-		Export:    NewExportHandler(exportSvc, flowSvc, analysisSvc, security),
-		Auth:      NewAuthHandler(newMockTokenStore(), fs, security, nil, nil, mail, service.NewAuthService(fs, mail)),
-		Admin:     NewAdminHandler(fs, security, NewMigrationRunner(nil), nil),
-		Provider:  NewProviderHandler(providerSvc, security, fs),
-		Org:       NewOrgHandler(orgSvc, fs, nil, security, mail, nil, providerSvc),
-		Sharing:   NewSharingHandler(fs, flowSvc, security),
+	dashboardSvc := service.NewDashboardService(fs, analysisSvc, flowSvc, scopes)
+	triageSvc := service.NewTriageService(fs, fs, fs)
+	shareSvc := service.NewShareTokenService(fs, fs)
+	// Never started, as before boot: every row is a detached write to the backend.
+	auditRec := testAuditRecorder(fs)
+	modules := []Module{
+		NewSystemHandler(sysSvc, security, auditRec, nil, nil, authzSvc, service.NewHealthService(fs)),
+		NewFlowHandler(flowSvc, docProv, fs, security, shareSvc, auditRec),
+		NewLibraryHandler(libSvc, fs, security, auditRec),
+		NewChatHandler(chatSvc, flowSvc, security, auditRec),
+		NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, fs, security, service.NewWebhookNotifier(nil), mail, "", service.NewPolicyService(fs), service.NewGovernanceAlertService(fs), triageSvc, service.NewCommentService(fs, triageSvc), shareSvc, auditRec),
+		NewDashboardHandler(dashboardSvc, security),
+		NewExportHandler(exportSvc, flowSvc, analysisSvc, security, auditRec),
+		NewAuthHandler(service.NewSessionService(newMockTokenStore()), fs, security, nil, service.NewIdentityService(fs, nil), mail, service.NewAuthService(fs, mail), service.NewAccountLifecycleService(fs, nil), service.NewAPITokenService(fs), auditRec),
+		NewAdminHandler(auditRec, security, NewMigrationRunner(nil), nil, authzSvc, service.NewUserAdminService(fs)),
+		NewProviderHandler(providerSvc, security, auditRec),
+		NewOrgHandler(orgSvc, fs, nil, security, mail, service.NewOrgRuleService(fs, fs, nil), providerSvc, authzSvc, service.NewChannelService(fs), service.NewUserDirectory(fs), auditRec),
+		NewSharingHandler(fs, flowSvc, service.NewCollaboratorService(fs), security, auditRec),
 	}
-	rt := NewRouter(noopLifecycle{}, security, events, handlers, cfg, shutdown, nil, nil)
+	rt, err := NewRouter(RouterParams{Lifecycle: noopLifecycle{}, Security: security, Events: events, Modules: modules, Config: cfg, ShutdownCh: shutdown})
+	if err != nil {
+		t.Fatalf("router: %v", err)
+	}
+	rt.caps = testCaps(true, fs)
 	api := httptest.NewServer(rt)
 	t.Cleanup(func() {
 		close(shutdown) // ends the SSE handlers before the server waits on them

@@ -217,10 +217,10 @@ func (w noRangesWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 // serveSharedShell serves index.html with per-share metadata injected when the /shared route carries a resolvable token. Returns false when injection isn't possible (no token, storage miss, read error) so the caller falls through to the plain shell.
 func (rt *Router) serveSharedShell(w http.ResponseWriter, r *http.Request, indexPath string) bool {
 	token := r.URL.Query().Get("token")
-	if token == "" {
+	if token == "" || rt.shares == nil {
 		return false
 	}
-	doc := rt.handlers.Analysis.LookupSharedFlowHeader(r.Context(), token)
+	doc := rt.shares.LookupSharedFlowHeader(r.Context(), token)
 	if doc == nil {
 		return false
 	}

@@ -1,4 +1,5 @@
 import {describe, it, expect} from 'vitest'
+import {unknownValue} from '@/testing/testHelpers'
 import {severityTone, triageTone, successActionTone} from './severityTone'
 
 // The single source of severity/status tone classes (U2.1): semantic tokens
@@ -40,6 +41,10 @@ describe('triageTone', () => {
     for (const st of ['open', 'acknowledged', 'in_progress', 'resolved', 'suppressed'] as const) {
       expect(triageTone(st).bar).toBeTruthy()
     }
+  })
+
+  it('a status a newer server added takes the neutral open tone', () => {
+    expect(triageTone(unknownValue('needs_review'))).toEqual(triageTone('open'))
   })
 })
 

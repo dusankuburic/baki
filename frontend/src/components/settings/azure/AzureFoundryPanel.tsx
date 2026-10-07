@@ -475,8 +475,11 @@ export default function AzureFoundryPanel({
   }
 
   const rowActions: ModelRowActions = {
-    onEdit: entry =>
-      setModelModal({entry, initial: modelFormFromEntry(entry), reportedWindow: entry.reportedContextWindow}),
+    onEdit: entry => {
+      // Null for a kind this version of the app does not know; its row offers no Edit.
+      const initial = modelFormFromEntry(entry)
+      if (initial) setModelModal({entry, initial, reportedWindow: entry.reportedContextWindow})
+    },
     onTest: entry => void testModel(entry),
     ...(scope.kind === 'org'
       ? {onMakeOrgDefault: (entry: AzureModelEntry) => void makeOrgDefault(entry)}

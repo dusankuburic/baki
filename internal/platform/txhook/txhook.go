@@ -75,7 +75,7 @@ func Register(ctx context.Context, fn Hook) {
 		runHook(runner, fn)
 	default:
 		r.mu.Unlock()
-		logger.Warn("post-commit work dropped: its transaction already rolled back")
+		logger.FromContext(ctx).Warn("post-commit work dropped: its transaction already rolled back")
 	}
 }
 

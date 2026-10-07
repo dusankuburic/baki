@@ -1,13 +1,15 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
@@ -15,11 +17,13 @@ import (
 type SharingHandler struct {
 	backend  storageif.StorageBackend
 	flowSvc  *service.FlowService
+	collabs  *service.CollaboratorService
 	security *SecurityConfig
+	audit    *audit.Recorder
 }
 
-func NewSharingHandler(backend storageif.StorageBackend, flowSvc *service.FlowService, security *SecurityConfig) *SharingHandler {
-	return &SharingHandler{backend: backend, flowSvc: flowSvc, security: security}
+func NewSharingHandler(backend storageif.StorageBackend, flowSvc *service.FlowService, collabs *service.CollaboratorService, security *SecurityConfig, recorder *audit.Recorder) *SharingHandler {
+	return &SharingHandler{backend: backend, flowSvc: flowSvc, collabs: collabs, security: security, audit: recorder}
 }
 
 // @Summary      List flow collaborators
@@ -35,9 +39,6 @@ func NewSharingHandler(backend storageif.StorageBackend, flowSvc *service.FlowSe
 // @Router       /api/flows/{flowId}/collaborators [get]
 func (h *SharingHandler) handleCollaboratorList(w http.ResponseWriter, r *http.Request) {
 	flowID := chi.URLParam(r, "flowId")
-	if !requireFlowPerm(w, r, h.flowSvc, h.security, flowID, "viewer") {
-		return
-	}
 	limit, ok := clampListLimit(w, r.URL.Query().Get("limit"))
 	if !ok {
 		return
@@ -46,7 +47,7 @@ func (h *SharingHandler) handleCollaboratorList(w http.ResponseWriter, r *http.R
 		render.JSON(w, []storageif.Collaborator{})
 		return
 	}
-	collabs, err := h.backend.ListCollaborators(r.Context(), flowID, limit)
+	collabs, err := h.collabs.List(r.Context(), flowID, limit)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -70,11 +71,6 @@ func (h *SharingHandler) handleCollaboratorList(w http.ResponseWriter, r *http.R
 // @Router       /api/flows/{flowId}/collaborators [post]
 func (h *SharingHandler) handleCollaboratorAdd(w http.ResponseWriter, r *http.Request) {
 	flowID := chi.URLParam(r, "flowId")
-	// Sharing is managed by anyone with the "admin" rank on the flow: the
-	// owner, an org admin, or a collaborator granted the admin tier.
-	if !requireFlowPerm(w, r, h.flowSvc, h.security, flowID, "admin") {
-		return
-	}
 	var req struct {
 		Email      string `json:"email"`
 		UserID     string `json:"userId"`
@@ -84,22 +80,11 @@ func (h *SharingHandler) handleCollaboratorAdd(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("storage not available"), http.StatusServiceUnavailable)
-		return
-	}
-
-	var u *storageif.User
-	var err error
-	if req.UserID != "" {
-		u, err = h.backend.LoadUserByID(r.Context(), req.UserID)
-	} else if req.Email != "" {
-		u, err = h.backend.LoadUserByEmail(r.Context(), req.Email)
-	} else {
+	if req.UserID == "" && req.Email == "" {
 		render.Error(w, fmt.Errorf("userId or email is required"), http.StatusBadRequest)
 		return
 	}
-
+	u, err := h.collabs.ResolveUser(r.Context(), req.UserID, req.Email)
 	if err != nil {
 		// Anti-enumeration: return the same 200 "ok" response as a successful
 		// add rather than 404 "user not found". A 404 let an admin probe whether
@@ -119,22 +104,16 @@ func (h *SharingHandler) handleCollaboratorAdd(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	collab := &storageif.Collaborator{
-		UserID:     u.ID,
-		Email:      u.Email,
-		Permission: perm,
-		GrantedAt:  time.Now().UTC(),
-	}
-
-	if err := h.backend.AddCollaborator(r.Context(), flowID, collab); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "duplicate") || strings.Contains(strings.ToLower(err.Error()), "already") {
-			render.Error(w, fmt.Errorf("user is already a collaborator"), http.StatusConflict)
+	collab, err := h.collabs.Add(r.Context(), flowID, u, perm)
+	if err != nil {
+		if errors.Is(err, service.ErrAlreadyCollaborator) {
+			render.Error(w, err, http.StatusConflict)
 			return
 		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowShare, "flow", flowID, map[string]string{"targetUser": u.ID, "permission": perm})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowShare, ResourceType: "flow", ResourceID: flowID, Meta: map[string]string{"targetUser": u.ID, "permission": perm}})
 	render.JSON(w, collab)
 }
 
@@ -156,9 +135,6 @@ func (h *SharingHandler) handleCollaboratorAdd(w http.ResponseWriter, r *http.Re
 func (h *SharingHandler) handleCollaboratorUpdate(w http.ResponseWriter, r *http.Request) {
 	flowID := chi.URLParam(r, "flowId")
 	userID := chi.URLParam(r, "userId")
-	if !requireFlowPerm(w, r, h.flowSvc, h.security, flowID, "admin") {
-		return
-	}
 	var req struct {
 		Permission string `json:"permission"`
 	}
@@ -171,16 +147,11 @@ func (h *SharingHandler) handleCollaboratorUpdate(w http.ResponseWriter, r *http
 		return
 	}
 
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("storage not available"), http.StatusServiceUnavailable)
-		return
-	}
-
-	if err := h.backend.UpdateCollaborator(r.Context(), flowID, userID, req.Permission); err != nil {
+	if err := h.collabs.Update(r.Context(), flowID, userID, req.Permission); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowShare, "flow", flowID, map[string]string{"targetUser": userID, "permission": req.Permission, "action": "update"})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowShare, ResourceType: "flow", ResourceID: flowID, Meta: map[string]string{"targetUser": userID, "permission": req.Permission, "action": "update"}})
 	render.JSON(w, map[string]string{"permission": req.Permission})
 }
 
@@ -199,40 +170,42 @@ func (h *SharingHandler) handleCollaboratorUpdate(w http.ResponseWriter, r *http
 func (h *SharingHandler) handleCollaboratorRemove(w http.ResponseWriter, r *http.Request) {
 	flowID := chi.URLParam(r, "flowId")
 	userID := chi.URLParam(r, "userId")
-	// A removal is allowed if the caller has the "admin" rank on the flow
-	// (owner, org admin, or admin-tier collaborator) OR is removing themselves.
-	// The admin check must be side-effect-free here: a response-writing helper
-	// combined with the self-removal branch proceeding would double-write the
-	// response (corrupting it while the row is still deleted).
+	// A removal is allowed if the caller may manage the flow's sharing
+	// (FlowShare: owner, org admin, or admin-tier collaborator) OR is removing
+	// themselves, so it is decided here rather than by requireFlow on the route.
+	// The FlowShare check must be side-effect-free here: a response-writing
+	// helper combined with the self-removal branch proceeding would double-write
+	// the response (corrupting it while the row is still deleted).
 	canManage := true
 	if h.security.JWTEnabled {
-		err := h.flowSvc.CheckFlowPermission(r.Context(), flowID, h.security.CallerID(r), "admin")
-		canManage = err == nil
+		canManage = h.flowSvc.CheckFlowPermission(r.Context(), flowID, service.FlowShare) == nil
 	}
 	if !canManage && h.security.CallerID(r) != userID {
 		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
 		return
 	}
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("storage not available"), http.StatusServiceUnavailable)
-		return
-	}
-	if err := h.backend.RemoveCollaborator(r.Context(), flowID, userID); err != nil {
+	if err := h.collabs.Remove(r.Context(), flowID, userID); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowShare, "flow", flowID, map[string]string{"targetUser": userID, "action": "remove"})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowShare, ResourceType: "flow", ResourceID: flowID, Meta: map[string]string{"targetUser": userID, "action": "remove"}})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// registerRoutes wires the flow-collaborator sub-routes.
-func (h *SharingHandler) registerRoutes(r chi.Router) {
-	r.Route("/api/flows/{flowId}/collaborators", func(r chi.Router) {
-		r.Get("/", h.handleCollaboratorList)
-		r.Post("/", h.handleCollaboratorAdd)
-		r.Route("/{userId}", func(r chi.Router) {
-			r.Delete("/", h.handleCollaboratorRemove)
-			r.Put("/", h.handleCollaboratorUpdate)
+// Mount registers the flow-collaborator sub-routes. The flow in the path is
+// authorized before the handler runs: reading the list needs FlowRead,
+// changing it FlowShare (the owner, an org admin, or a collaborator granted
+// the admin tier). A removal decides for itself, because anyone may remove
+// themselves. Without the server-side store the list is empty and the
+// changes answer 503.
+func (h *SharingHandler) Mount(rb *route.Builder) {
+	share := requireFlow(h.flowSvc, h.security, service.FlowShare, "flowId")
+	rb.Route("/api/flows/{flowId}/collaborators", func(rb *route.Builder) {
+		rb.With(requireFlow(h.flowSvc, h.security, service.FlowRead, "flowId")).Get("/", h.handleCollaboratorList)
+		rb.With(share).Post("/", h.handleCollaboratorAdd, route.Needs(capability.ServerStore), route.Idempotent())
+		rb.Route("/{userId}", func(rb *route.Builder) {
+			rb.Delete("/", h.handleCollaboratorRemove, route.Needs(capability.ServerStore))
+			rb.With(share).Put("/", h.handleCollaboratorUpdate, route.Needs(capability.ServerStore))
 		})
 	})
 }

@@ -33,9 +33,9 @@ func TestListProviders_AzureFoundryFromTheRegistry(t *testing.T) {
 	ctx := context.Background()
 	e := newAzureModelsEnv(t)
 	e.orgs.add("org-1", "Contoso", map[string]auth.Role{"admin": auth.RoleAdmin, "member": auth.RoleMember, "u1": auth.RoleMember})
-	svc := NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), e.factory, e.secrets)
-	svc.SetOrgKeyStore(e.orgKeys)
-	svc.SetAzureModels(e.svc)
+	svc := NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), e.factory, e.secrets, nil, nil)
+	svc.orgKeys = e.orgKeys
+	svc.azure = e.svc
 	rt, _ := configureAzureWithFake(t, http.StatusOK, `{}`)
 
 	c := e.mustConn(t, azmUser, "contoso-prod", azmKeyConfig("k"))

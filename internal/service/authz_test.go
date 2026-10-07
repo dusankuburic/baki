@@ -196,25 +196,28 @@ func TestAuthz_OrgRequirements(t *testing.T) {
 	orgID := seedAuthzOrg(t, orgSvc)
 	ctx := context.Background()
 
-	if err := authz.RequireOrgMember(ctx, orgID, "carol"); err != nil {
+	user := func(id string) *auth.Actor { return &auth.Actor{Kind: auth.ActorUser, UserID: id} }
+	org := OrgByID(orgID)
+
+	if err := authz.Can(ctx, user("carol"), OrgRead, org); err != nil {
 		t.Errorf("viewer is a member: %v", err)
 	}
-	if err := authz.RequireOrgMember(ctx, orgID, "mallory"); err == nil {
+	if err := authz.Can(ctx, user("mallory"), OrgRead, org); err == nil {
 		t.Error("stranger is not a member")
 	}
-	if err := authz.RequireOrgAdmin(ctx, orgID, "alice"); err != nil {
+	if err := authz.Can(ctx, user("alice"), OrgAdmin, org); err != nil {
 		t.Errorf("alice is admin: %v", err)
 	}
-	if err := authz.RequireOrgAdmin(ctx, orgID, "bob"); err == nil {
+	if err := authz.Can(ctx, user("bob"), OrgAdmin, org); err == nil {
 		t.Error("bob is not admin")
 	}
-	if err := authz.RequireOrgWriter(ctx, orgID, "bob"); err != nil {
+	if err := authz.Can(ctx, user("bob"), OrgWrite, org); err != nil {
 		t.Errorf("member is a writer: %v", err)
 	}
-	if err := authz.RequireOrgWriter(ctx, orgID, "carol"); err == nil {
+	if err := authz.Can(ctx, user("carol"), OrgWrite, org); err == nil {
 		t.Error("viewer is not a writer")
 	}
-	if err := authz.RequireOrgWriter(ctx, orgID, "mallory"); err == nil {
+	if err := authz.Can(ctx, user("mallory"), OrgWrite, org); err == nil {
 		t.Error("stranger is not a writer")
 	}
 }
@@ -232,13 +235,10 @@ func TestAuthz_LocalModeAllowsEverything(t *testing.T) {
 	if !authz.CanDeleteFlow(ctx, "someone-else", "", "me") {
 		t.Error("local mode should allow delete")
 	}
-	if err := authz.RequireOrgMember(ctx, "org", "me"); err != nil {
-		t.Errorf("local mode should allow org member: %v", err)
-	}
-	if err := authz.RequireOrgAdmin(ctx, "org", "me"); err != nil {
-		t.Errorf("local mode should allow org admin: %v", err)
-	}
-	if err := authz.RequireOrgWriter(ctx, "org", "me"); err != nil {
-		t.Errorf("local mode should allow org writer: %v", err)
+	me := &auth.Actor{Kind: auth.ActorUser, UserID: "me"}
+	for _, action := range []Action{OrgRead, OrgAdmin, OrgWrite} {
+		if err := authz.Can(ctx, me, action, OrgByID("org")); err != nil {
+			t.Errorf("local mode should allow %v: %v", action, err)
+		}
 	}
 }

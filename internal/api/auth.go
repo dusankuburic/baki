@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,10 +12,12 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
@@ -25,61 +26,31 @@ import (
 )
 
 // RefreshTokenStore tracks issued refresh tokens so they can be rotated and
-// revoked (cloud mode).
-type RefreshTokenStore interface {
-	// userAgent and ip are captured from the issuing request so the session
-	// can later be shown with a friendly device label.
-	StoreRefreshToken(ctx context.Context, jti, userID string, expiresAt time.Time, userAgent, ip string) error
-	IsRefreshTokenValid(ctx context.Context, jti string) (bool, error)
-	RevokeRefreshToken(ctx context.Context, jti string) error
-	// VerifyAndRevokeRefreshToken atomically verifies and revokes a refresh token
-	// in a single atomic operation. Returns the token info if successful,
-	// or ErrTokenAlreadyRevoked if the token was already revoked/invalid.
-	// This eliminates the race window between VerifyRefresh and RevokeRefreshToken.
-	VerifyAndRevokeRefreshToken(ctx context.Context, jti string) (*storageif.RefreshTokenInfo, error)
-	RevokeUserRefreshTokens(ctx context.Context, userID string) error
-	// ListUserRefreshTokens returns active sessions for a user, for display in
-	// profile/session-management UIs.
-	ListUserRefreshTokens(ctx context.Context, userID string) ([]storageif.RefreshTokenInfo, error)
-	// RevokeRefreshTokenForUser revokes a single session, scoped to userID so a
-	// user cannot revoke another user's session.
-	RevokeRefreshTokenForUser(ctx context.Context, jti, userID string) error
-}
+// revoked (cloud mode); the service.SessionService owns it.
+type RefreshTokenStore = service.RefreshTokenStore
 
 type AuthHandler struct {
-	tokenStore RefreshTokenStore
-	backend    storageif.StorageBackend
-	security   *SecurityConfig
-	// ssoClient and identityStore are nil unless OIDC SSO is configured
+	// sessions owns the refresh tokens; not Enabled without a token store.
+	sessions *service.SessionService
+	backend  storageif.StorageBackend
+	security *SecurityConfig
+	// ssoClient is nil and identity not Available unless OIDC SSO is configured
 	// (cloud mode with PAD_SSO_* set and a Postgres backend).
-	ssoClient     SSOClient
-	identityStore IdentityStore
+	ssoClient SSOClient
+	identity  *service.IdentityService
 	// email sends transactional mail; always non-nil (log-only when SMTP unset).
 	email *mailer.Service
 	// authSvc owns credential verification (bcrypt timing/lockout); see internal/service/auth.go.
 	authSvc *service.AuthService
-	// onUserDeleted runs after handleAuthDeleteAccount erased the user (wired to
-	// ProviderService.InvalidateScope): the SQL cascade does not reach the
-	// in-process caches.
-	onUserDeleted func(scope string)
-	// providers releases, on account erasure, process state the SQL cascade does not
-	// reach: the user's own Azure credential and every org credential they lent as
-	// an admin. nil = none (bare tests, desktop).
-	providers *service.ProviderService
+	// accounts owns account erasure and the data-subject export.
+	accounts *service.AccountLifecycleService
+	// apiTokens owns the machine API tokens.
+	apiTokens *service.APITokenService
+	audit     *audit.Recorder
 }
 
-func NewAuthHandler(tokenStore RefreshTokenStore, backend storageif.StorageBackend, security *SecurityConfig, ssoClient SSOClient, identityStore IdentityStore, email *mailer.Service, authSvc *service.AuthService) *AuthHandler {
-	return &AuthHandler{tokenStore: tokenStore, backend: backend, security: security, ssoClient: ssoClient, identityStore: identityStore, email: email, authSvc: authSvc}
-}
-
-// OnUserDeleted registers the post-erasure hook; set once at boot in di.
-func (h *AuthHandler) OnUserDeleted(fn func(scope string)) {
-	h.onUserDeleted = fn
-}
-
-// SetProviderService wires the provider service account erasure releases credentials through; set once at boot.
-func (h *AuthHandler) SetProviderService(p *service.ProviderService) {
-	h.providers = p
+func NewAuthHandler(sessions *service.SessionService, backend storageif.StorageBackend, security *SecurityConfig, ssoClient SSOClient, identity *service.IdentityService, email *mailer.Service, authSvc *service.AuthService, accounts *service.AccountLifecycleService, apiTokens *service.APITokenService, recorder *audit.Recorder) *AuthHandler {
+	return &AuthHandler{sessions: sessions, backend: backend, security: security, ssoClient: ssoClient, identity: identity, email: email, authSvc: authSvc, accounts: accounts, apiTokens: apiTokens, audit: recorder}
 }
 
 type credentials struct {
@@ -216,7 +187,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionRegister, "user", user.ID, nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionRegister, ResourceType: "user", ResourceID: user.ID})
 	userJSON := map[string]any{
 		"id":    user.ID,
 		"email": user.Email,
@@ -249,19 +220,20 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// issueSession mints a token pair, persists the refresh token, sets the HttpOnly cookie (persistent
-// per the caller's remember-me flag) and records the login audit; on failure it has written the
-// error and returns ok=false.
+// issueSession signs the user in: it records them as the request's actor, mints a token pair, persists the
+// refresh token, sets the HttpOnly cookie (persistent per the caller's remember-me flag) and records the
+// login audit; on failure it has written the error and returns ok=false.
 func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, userID, email string, role auth.Role, remember bool) (*auth.TokenPair, bool) {
+	recordUser(r, userID, email, role)
 	pair, err := h.security.AuthMgr.Issue(userID, email, role)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return nil, false
 	}
 
-	if h.tokenStore != nil {
+	if h.sessions.Enabled() {
 		ua, ip := r.UserAgent(), middleware.ClientIP(r, h.security.TrustedProxies)
-		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, userID, pair.RefreshExpiresAt, ua, ip); err != nil {
+		if err := h.sessions.Record(r.Context(), pair.RefreshID, userID, pair.RefreshExpiresAt, ua, ip); err != nil {
 			render.Error(w, err, http.StatusInternalServerError)
 			return nil, false
 		}
@@ -270,7 +242,7 @@ func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, userI
 	// Set the HttpOnly refresh cookie; callers still return the body field for backward compatibility.
 	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt, remember)
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLogin, "user", userID, nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionLogin, ResourceType: "user", ResourceID: userID})
 	return pair, true
 }
 
@@ -308,22 +280,22 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	result := h.authSvc.Authenticate(r.Context(), email, password)
 	switch result.Outcome {
 	case service.LoginUserNotFound:
-		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLoginFailure, "email", email, map[string]string{"reason": "user_not_found"})
+		h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionLoginFailure, ResourceType: "email", ResourceID: email, Meta: map[string]string{"reason": "user_not_found"}})
 		render.Error(w, fmt.Errorf("invalid credentials"), http.StatusUnauthorized)
 		return
 	case service.LoginAccountLocked:
-		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLoginFailure, "user", result.User.ID, map[string]string{"reason": "locked"})
+		h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionLoginFailure, ResourceType: "user", ResourceID: result.User.ID, Meta: map[string]string{"reason": "locked"}})
 		render.Error(w, fmt.Errorf("account temporarily locked; please try again later"), http.StatusForbidden)
 		return
 	case service.LoginInvalidPassword:
 		if result.AccountJustLocked {
-			logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionAccountLock, "user", result.User.ID, nil)
+			h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionAccountLock, ResourceType: "user", ResourceID: result.User.ID})
 		}
-		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLoginFailure, "user", result.User.ID, map[string]string{"reason": "invalid_password"})
+		h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionLoginFailure, ResourceType: "user", ResourceID: result.User.ID, Meta: map[string]string{"reason": "invalid_password"}})
 		render.Error(w, fmt.Errorf("invalid credentials"), http.StatusUnauthorized)
 		return
 	case service.LoginEmailNotVerified:
-		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLoginFailure, "user", result.User.ID, map[string]string{"reason": "email_not_verified"})
+		h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionLoginFailure, ResourceType: "user", ResourceID: result.User.ID, Meta: map[string]string{"reason": "email_not_verified"}})
 		// Machine-readable code so the login page can offer "resend the link".
 		render.ErrorWithCode(w, fmt.Errorf("email not verified — check your inbox for a verification link"), http.StatusForbidden, "email_not_verified")
 		return
@@ -382,54 +354,39 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if h.tokenStore == nil {
+	if !h.sessions.Enabled() {
 		// In JWT mode a nil token store is a misconfiguration: the replay and rotation safeguards all
 		// depend on it — fail closed, else a stolen refresh token replays indefinitely.
 		if h.security.JWTEnabled {
-			logger.Error("refresh requested in JWT mode without a token store (misconfiguration); rejecting",
+			logger.FromContext(r.Context()).Error("refresh requested in JWT mode without a token store (misconfiguration); rejecting",
 				"user_id", claims.UserID, "token_id", claims.ID)
 			render.Error(w, fmt.Errorf("session management unavailable — please contact an administrator"), http.StatusUnauthorized)
 			return
 		}
-	} else {
-		// Atomic verify-and-revoke: of two concurrent requests with the same
-		// jti only one succeeds (UPDATE...RETURNING is atomic at the DB).
-		info, err := h.tokenStore.VerifyAndRevokeRefreshToken(r.Context(), claims.ID)
-		if err != nil {
-			if errors.Is(err, storageif.ErrTokenAlreadyRevoked) {
-				logger.Warn("detected refresh token replay: revoking all sessions", "userID", claims.UserID, "tokenID", claims.ID)
-				if err := h.tokenStore.RevokeUserRefreshTokens(r.Context(), claims.UserID); err != nil {
-					logger.Error("failed to revoke all sessions after replay detection", "error", err, "userID", claims.UserID)
-				}
-				render.Error(w, fmt.Errorf("session compromised — please log in again"), http.StatusUnauthorized)
-				return
-			}
-			logger.Error("failed to verify-and-revoke refresh token", "error", err, "tokenID", claims.ID)
-			render.Error(w, fmt.Errorf("failed to process token refresh"), http.StatusInternalServerError)
-			return
-		}
-		// A1.3: a forged token must not rotate another user's refresh token.
-		if info.UserID != claims.UserID {
-			logger.Warn("refresh token user mismatch", "claimsUserID", claims.UserID, "dbUserID", info.UserID, "tokenID", claims.ID)
+	} else if err := h.sessions.Rotate(r.Context(), claims.UserID, claims.ID); err != nil {
+		// Rotate is an atomic verify-and-revoke: of two concurrent requests with the same jti only one succeeds.
+		if errors.Is(err, service.ErrSessionReplayed) || errors.Is(err, service.ErrSessionUserMismatch) {
 			render.Error(w, fmt.Errorf("session compromised — please log in again"), http.StatusUnauthorized)
 			return
 		}
+		render.Error(w, fmt.Errorf("failed to process token refresh"), http.StatusInternalServerError)
+		return
 	}
 
 	// Reload the user so the new token reflects the CURRENT role and email, not the refresh-token claims.
 	issueRole := claims.Role
 	issueEmail := claims.Email
 	if h.backend != nil {
-		user, err := h.backend.LoadUserByID(r.Context(), claims.UserID)
+		user, err := h.authSvc.User(r.Context(), claims.UserID)
 		if err != nil {
 			// A1.2: fail closed — a deleted user must not refresh from stale claims.
-			logger.Warn("refresh for deleted/missing user", "userID", claims.UserID, "error", err)
+			logger.FromContext(r.Context()).Warn("refresh for deleted/missing user", "userID", claims.UserID, "error", err)
 			render.Error(w, fmt.Errorf("account not found — please log in again"), http.StatusUnauthorized)
 			return
 		}
 		// A1.1: Locked accounts must not be able to refresh their way back in.
 		if user.LockedUntil != nil && time.Now().UTC().Before(*user.LockedUntil) {
-			logger.Warn("refresh blocked for locked user", "userID", claims.UserID)
+			logger.FromContext(r.Context()).Warn("refresh blocked for locked user", "userID", claims.UserID)
 			render.Error(w, fmt.Errorf("account is temporarily locked"), http.StatusUnauthorized)
 			return
 		}
@@ -437,16 +394,17 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 		issueEmail = user.Email
 	}
 
+	recordUser(r, claims.UserID, issueEmail, issueRole)
 	pair, err := h.security.AuthMgr.Issue(claims.UserID, issueEmail, issueRole)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 
-	if h.tokenStore != nil {
+	if h.sessions.Enabled() {
 		ua, ip := r.UserAgent(), middleware.ClientIP(r, h.security.TrustedProxies)
-		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, claims.UserID, pair.RefreshExpiresAt, ua, ip); err != nil {
-			logger.Error("failed to store new refresh token", "error", err, "userID", claims.UserID)
+		if err := h.sessions.Record(r.Context(), pair.RefreshID, claims.UserID, pair.RefreshExpiresAt, ua, ip); err != nil {
+			logger.FromContext(r.Context()).Error("failed to store new refresh token", "error", err, "userID", claims.UserID)
 			render.Error(w, fmt.Errorf("failed to store token"), http.StatusInternalServerError)
 			return
 		}
@@ -487,7 +445,7 @@ func (h *AuthHandler) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		"role":  string(claims.Role),
 	}
 	if h.backend != nil {
-		if user, err := h.backend.LoadUserByID(r.Context(), claims.UserID); err == nil {
+		if user, err := h.authSvc.User(r.Context(), claims.UserID); err == nil {
 			resp["displayName"] = user.DisplayName
 			resp["avatarUrl"] = user.AvatarURL
 			resp["createdAt"] = user.CreatedAt.UTC().Format(time.RFC3339)
@@ -541,7 +499,7 @@ func (h *AuthHandler) handleAuthUpdateProfile(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if err := h.backend.UpdateUserProfile(r.Context(), claims.UserID, req.DisplayName, req.AvatarURL); err != nil {
+	if err := h.authSvc.UpdateProfile(r.Context(), claims.UserID, req.DisplayName, req.AvatarURL); err != nil {
 		if errors.Is(err, storageif.ErrNotFound) {
 			render.Error(w, err, http.StatusNotFound)
 			return
@@ -550,7 +508,7 @@ func (h *AuthHandler) handleAuthUpdateProfile(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionProfileUpdate, "user", claims.UserID, nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionProfileUpdate, ResourceType: "user", ResourceID: claims.UserID})
 	render.JSON(w, map[string]string{
 		"id":          claims.UserID,
 		"email":       claims.Email,
@@ -572,15 +530,15 @@ func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		RefreshToken string `json:"refreshToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		logger.Warn("logout: failed to decode body, proceeding without refresh token revocation", "error", err)
+		logger.FromContext(r.Context()).Warn("logout: failed to decode body, proceeding without refresh token revocation", "error", err)
 	}
 
 	refreshTok := h.refreshTokenFromRequest(r, req.RefreshToken)
-	if refreshTok != "" && h.tokenStore != nil {
+	if refreshTok != "" && h.sessions.Enabled() {
 		claims, err := h.security.AuthMgr.VerifyRefresh(refreshTok)
 		if err == nil {
-			if err := h.tokenStore.RevokeRefreshToken(r.Context(), claims.ID); err != nil {
-				logger.Error("failed to revoke refresh token during logout", "error", err, "tokenID", claims.ID)
+			if err := h.sessions.Revoke(r.Context(), claims.ID); err != nil {
+				logger.FromContext(r.Context()).Error("failed to revoke refresh token during logout", "error", err, "tokenID", claims.ID)
 			}
 		}
 	}
@@ -593,7 +551,7 @@ func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLogout, "", "", nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionLogout})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -644,29 +602,41 @@ func validatePasswordStrength(pw string) error {
 	return nil
 }
 
-// registerRoutes wires /api/auth (register/login/refresh, profile, password,
+// Mount registers /api/auth (register/login/refresh, profile, password,
 // sessions, account, tokens, SSO) and the WebSocket ticket route. Password,
-// account, token and SSO sub-groups live with their handlers.
-func (h *AuthHandler) registerRoutes(r chi.Router) {
-	r.Route("/api/auth", func(r chi.Router) {
-		r.Post("/register", h.handleAuthRegister)
-		r.Post("/login", h.handleAuthLogin)
-		r.Post("/refresh", h.handleAuthRefresh)
-		r.Post("/forgot-password", h.handleAuthForgotPassword)
-		r.Post("/reset-password", h.handleAuthResetPassword)
-		r.Post("/verify-email", h.handleAuthVerifyEmail)
-		r.Post("/resend-verification", h.handleAuthResendVerification)
-		r.Get("/me", h.handleAuthMe)
-		r.Put("/profile", h.handleAuthUpdateProfile)
-		r.Post("/logout", h.handleAuthLogout)
-		r.Post("/change-password", h.handleAuthChangePassword)
-		r.Get("/sessions", h.handleAuthSessions)
-		r.Delete("/sessions/{id}", h.handleAuthSessionRevoke)
+// account, token and SSO sub-groups live with their handlers. Scoped tokens
+// never manage credentials or identity: a read-scoped token minting itself a
+// full-access one would be an escalation.
+func (h *AuthHandler) Mount(rb *route.Builder) {
+	rb.Route("/api/auth", func(rb *route.Builder) {
+		// Sign-in and recovery come before any session. They take credentials or
+		// one-time tokens (bcrypt, email), so they ride the tighter auth bucket.
+		rb.Group(func(rb *route.Builder) {
+			rb.Post("/register", h.handleAuthRegister)
+			rb.Post("/login", h.handleAuthLogin)
+			rb.Post("/refresh", h.handleAuthRefresh)
+			rb.Post("/forgot-password", h.handleAuthForgotPassword)
+			rb.Post("/reset-password", h.handleAuthResetPassword)
+			rb.Post("/verify-email", h.handleAuthVerifyEmail)
+			rb.Post("/resend-verification", h.handleAuthResendVerification)
+		}, route.Public(), route.RateLimit(route.RateAuth))
+		// Identity self-check: CI validates its token with it, and it reveals
+		// nothing beyond the caller.
+		rb.Get("/me", h.handleAuthMe, route.Scopes(auth.ScopeRead))
+		rb.Put("/profile", h.handleAuthUpdateProfile)
+		// Works on an expired session: it revokes whatever tokens the request carries.
+		rb.Post("/logout", h.handleAuthLogout, route.Public())
+		rb.Post("/change-password", h.handleAuthChangePassword, route.RateLimit(route.RateAuth))
+		rb.Get("/sessions", h.handleAuthSessions)
+		rb.Delete("/sessions/{id}", h.handleAuthSessionRevoke)
 		// Self-service account erasure (GDPR) + data-subject export.
-		r.Delete("/account", h.handleAuthDeleteAccount)
-		r.Get("/account/export", h.handleAuthExportAccount)
-		h.registerTokenRoutes(r)
-		h.registerSSORoutes(r)
-	})
-	r.Post("/api/ws-ticket", h.handleWSTicket)
+		rb.Group(func(rb *route.Builder) {
+			rb.Delete("/account", h.handleAuthDeleteAccount)
+			rb.Get("/account/export", h.handleAuthExportAccount)
+		}, route.Needs(capability.ServerStore))
+		h.registerTokenRoutes(rb)
+		h.registerSSORoutes(rb)
+	}, route.DenyTokens())
+	// The ticket is the entry to live updates: read-level.
+	rb.Post("/api/ws-ticket", h.handleWSTicket, route.Scopes(auth.ScopeRead))
 }

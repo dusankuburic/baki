@@ -54,13 +54,11 @@ export interface LegacyDefaultNotice {
 const EMPTY_PROVIDERS: ProviderOption[] = []
 const EMPTY_MODELS: ModelDetail[] = []
 
-const MODEL_KINDS: ReadonlySet<string> = new Set(['chat', 'claude', 'agent', 'embedding'])
-
 // toModelDetail copies a listed model field by field — the listing is
 // untrusted input, and a field left out here never reaches the picker (the
-// registry fields were once dropped exactly that way). An unknown status is
-// kept: a newer server's status for an entry it cannot serve must not read
-// as usable.
+// registry fields were once dropped exactly that way). An unknown kind or
+// status is kept: a newer server's entry this client cannot place must not
+// read as a usable chat model (lib/modelGroups isPickerModel leaves it out).
 function toModelDetail(m: ModelDetail): ModelDetail {
   const out: ModelDetail = {
     id: m.id || '',
@@ -72,7 +70,7 @@ function toModelDetail(m: ModelDetail): ModelDetail {
   // Drives the header's "no native tools" hint; dropping it here meant the
   // hint never showed.
   if (typeof m.supportsTools === 'boolean') out.supportsTools = m.supportsTools
-  if (typeof m.kind === 'string' && MODEL_KINDS.has(m.kind)) out.kind = m.kind
+  if (typeof m.kind === 'string' && m.kind) out.kind = m.kind
   if (typeof m.purpose === 'string' && m.purpose) out.purpose = m.purpose
   if (typeof m.purposeCustom === 'string' && m.purposeCustom) out.purposeCustom = m.purposeCustom
   if (typeof m.description === 'string' && m.description) out.description = m.description
@@ -209,7 +207,9 @@ export function useProviderSetup() {
       .listProviders(listOrgId, bypassCache ? {noDedup: true} : undefined)
       .then((ps: ProviderInfo[]) => {
         if (cancelled) return
-        const list = (ps || []).map(toProviderOption)
+        // A provider a newer server added is left out: a turn can only go
+        // to a provider this bundle knows (its settings, its stream).
+        const list = (ps || []).filter(p => isProviderId(p.id)).map(toProviderOption)
         setListing({scope: listOrgId ?? '', epoch, providers: list})
         setFailedEpoch(null)
         setConfigured(list.some(p => p.configured))

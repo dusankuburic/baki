@@ -1,6 +1,7 @@
 import {render, type RenderOptions} from '@testing-library/react'
 import {type ReactElement} from 'react'
 import {vi} from 'vitest'
+import type {UnknownEnumValue} from '@/types'
 
 /**
  * Render a component with no extra providers.
@@ -56,4 +57,13 @@ export function mockFetch<T>(payload: T, status = 200) {
  */
 export function mockFetchError(message = 'Network error') {
   return vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error(message))
+}
+
+// ---------------------------------------------------------------------------
+// Wire enums
+// ---------------------------------------------------------------------------
+
+/** A wire enum value a newer server added, typed as the tolerant parse types it (types/tolerant.ts). */
+export function unknownValue(raw: string): UnknownEnumValue {
+  return raw as UnknownEnumValue
 }

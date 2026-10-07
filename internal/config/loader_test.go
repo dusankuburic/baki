@@ -558,3 +558,31 @@ func TestLoadFromEnvRaw_CloudDefaultsToInfoLogLevel(t *testing.T) {
 		t.Errorf("local default log level = %q, want debug", cfg.Log.Level)
 	}
 }
+
+// TestRoutePolicy_DefaultEnvAndValidation: PAD_ROUTE_POLICY defaults to shadow,
+// is read case-insensitively, and an unknown value refuses to boot rather than
+// silently picking a mode (least of all when flipping to declarative).
+func TestRoutePolicy_DefaultEnvAndValidation(t *testing.T) {
+	if got := Default().Server.RoutePolicy; got != RoutePolicyShadow {
+		t.Errorf("default route policy = %q, want %q", got, RoutePolicyShadow)
+	}
+	t.Setenv("PAD_ROUTE_POLICY", " Declarative ")
+	cfg, err := LoadFromEnvRaw()
+	if err != nil {
+		t.Fatalf("LoadFromEnvRaw: %v", err)
+	}
+	if cfg.Server.RoutePolicy != RoutePolicyDeclarative {
+		t.Errorf("PAD_ROUTE_POLICY read as %q, want %q", cfg.Server.RoutePolicy, RoutePolicyDeclarative)
+	}
+	if err := Validate(cfg); err != nil {
+		t.Errorf("declarative must validate: %v", err)
+	}
+	for _, bad := range []RoutePolicyMode{"", "declaritive", "on"} {
+		cfg := Default()
+		cfg.Server.RoutePolicy = bad
+		err := Validate(cfg)
+		if err == nil || !strings.Contains(err.Error(), "PAD_ROUTE_POLICY") {
+			t.Errorf("route policy %q: Validate = %v, want an error naming PAD_ROUTE_POLICY", bad, err)
+		}
+	}
+}

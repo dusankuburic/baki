@@ -1,11 +1,14 @@
-import type {
-  AzureConnection,
-  AzureDiscovery,
-  AzureDiscoveryItem,
-  AzureModelEntry,
-  AzureModelKind,
-  AzureRegistryLimits,
-  AzureScope,
+import {
+  CHAT_MODEL_KINDS,
+  isKnown,
+  type AzureConnection,
+  type AzureDiscovery,
+  type AzureDiscoveryItem,
+  type AzureModelEntry,
+  type AzureModelKind,
+  type AzureRegistryLimits,
+  type AzureScope,
+  type Tolerant,
 } from '@/types'
 
 // The AI Accounts registry view's pure half: which items a scope owns, the
@@ -41,9 +44,9 @@ export function isOwnItem(scope: AzureScope, item: Owned): boolean {
   return scope.kind === 'org' || !item.shared
 }
 
-/** Kinds the chat can talk to (an embedding model only embeds). */
-export function isChatKind(kind: AzureModelKind): boolean {
-  return kind !== 'embedding'
+/** Kinds the chat can talk to: an embedding model only embeds, and a kind this bundle does not know is not offered. */
+export function isChatKind(kind: Tolerant<AzureModelKind>): boolean {
+  return isKnown(CHAT_MODEL_KINDS, kind)
 }
 
 /** One organisation's shared resources and models (user scope, "Shared with you"). */
@@ -125,8 +128,9 @@ export function effectiveDefaultModelId(
 
 // The namespace a deployment name is unique in on one resource: a chat and a
 // Claude deployment share one (they are the same deployment on two routes),
-// embeddings and agents have their own — the server's unique index.
-function nameSpace(kind: AzureModelKind): string {
+// embeddings and agents have their own — the server's unique index. A kind
+// this bundle does not know is its own, so it never reads as a duplicate.
+function nameSpace(kind: Tolerant<AzureModelKind>): string {
   return kind === 'claude' ? 'chat' : kind
 }
 

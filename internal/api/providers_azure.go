@@ -14,8 +14,9 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/service"
-	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 // --- The Azure AI Foundry model registry ---
@@ -35,10 +36,9 @@ const azureCodeRegistryUnavailable = "AZURE_REGISTRY_UNAVAILABLE"
 var errAzureRegistryUnavailable = errors.New("the Azure AI Foundry model registry is not available in this deployment")
 
 type azureRegistryCall struct {
-	svc     *service.AzureModelService
-	scope   service.AzureScope
-	backend storageif.StorageBackend
-	proxies []string
+	svc   *service.AzureModelService
+	scope service.AzureScope
+	rec   *audit.Recorder
 }
 
 func azureModelsOf(p *service.ProviderService) *service.AzureModelService {
@@ -59,10 +59,9 @@ func (h *ProviderHandler) azureRegistry(w http.ResponseWriter, r *http.Request) 
 		return azureRegistryCall{}, false
 	}
 	return azureRegistryCall{
-		svc:     svc,
-		scope:   service.AzureScope{Scope: h.security.KeyScope(r)},
-		backend: h.backend,
-		proxies: h.security.TrustedProxies,
+		svc:   svc,
+		scope: service.AzureScope{Scope: h.security.KeyScope(r)},
+		rec:   h.audit,
 	}, true
 }
 
@@ -148,7 +147,7 @@ func (c azureRegistryCall) audit(r *http.Request, action, resourceType, resource
 	if c.scope.IsOrg() {
 		resourceType, resourceID = "org", c.scope.OrgID
 	}
-	logAudit(r.Context(), c.backend, r, c.proxies, action, resourceType, resourceID, meta)
+	c.rec.Record(r.Context(), audit.Entry{Action: action, ResourceType: resourceType, ResourceID: resourceID, OrgID: c.scope.OrgID, Meta: meta})
 }
 
 func modelAuditMeta(op string, v service.AzureModelView) map[string]string {
@@ -209,7 +208,7 @@ func (c azureRegistryCall) createConnection(w http.ResponseWriter, r *http.Reque
 		renderAzureRegistryError(w, err)
 		return
 	}
-	c.audit(r, AuditActionAzureConnectionSave, "azure_connection", v.ID,
+	c.audit(r, audit.ActionAzureConnectionSave, "azure_connection", v.ID,
 		map[string]string{"op": "create", "connectionId": v.ID, "authMode": v.Config.AuthMode})
 	render.JSONStatus(w, http.StatusCreated, service.AzureConnectionEnvelope{Connection: v})
 }
@@ -238,7 +237,7 @@ func (c azureRegistryCall) updateConnection(w http.ResponseWriter, r *http.Reque
 				draft.Normalize()
 				meta["authMode"] = draft.Auth.Mode
 			}
-			c.audit(r, AuditActionAzureConnectionSave, "azure_connection", id, meta)
+			c.audit(r, audit.ActionAzureConnectionSave, "azure_connection", id, meta)
 		}
 		renderAzureRegistryError(w, err)
 		return
@@ -258,7 +257,7 @@ func (c azureRegistryCall) updateConnection(w http.ResponseWriter, r *http.Reque
 	if in.Force {
 		meta["force"] = "true"
 	}
-	c.audit(r, AuditActionAzureConnectionSave, "azure_connection", v.ID, meta)
+	c.audit(r, audit.ActionAzureConnectionSave, "azure_connection", v.ID, meta)
 	render.JSON(w, service.AzureConnectionEnvelope{Connection: v})
 }
 
@@ -277,7 +276,7 @@ func (c azureRegistryCall) deleteConnection(w http.ResponseWriter, r *http.Reque
 		renderAzureRegistryError(w, err)
 		return
 	}
-	c.audit(r, AuditActionAzureConnectionDelete, "azure_connection", id, map[string]string{
+	c.audit(r, audit.ActionAzureConnectionDelete, "azure_connection", id, map[string]string{
 		"op":                        "delete",
 		"connectionId":              id,
 		"deletedModels":             strconv.Itoa(res.DeletedModels),
@@ -314,7 +313,7 @@ func (c azureRegistryCall) createModel(w http.ResponseWriter, r *http.Request) {
 		renderAzureRegistryError(w, err)
 		return
 	}
-	c.audit(r, AuditActionAzureModelSave, "azure_model", v.ID, modelAuditMeta("create", v))
+	c.audit(r, audit.ActionAzureModelSave, "azure_model", v.ID, modelAuditMeta("create", v))
 	render.JSONStatus(w, http.StatusCreated, service.AzureModelEnvelope{Model: v})
 }
 
@@ -341,7 +340,7 @@ func (c azureRegistryCall) updateModel(w http.ResponseWriter, r *http.Request) {
 	if in.Force {
 		meta["force"] = "true"
 	}
-	c.audit(r, AuditActionAzureModelSave, "azure_model", v.ID, meta)
+	c.audit(r, audit.ActionAzureModelSave, "azure_model", v.ID, meta)
 	render.JSON(w, service.AzureModelEnvelope{Model: v})
 }
 
@@ -359,7 +358,7 @@ func (c azureRegistryCall) deleteModel(w http.ResponseWriter, r *http.Request) {
 	if force {
 		meta["force"] = "true"
 	}
-	c.audit(r, AuditActionAzureModelDelete, "azure_model", id, meta)
+	c.audit(r, audit.ActionAzureModelDelete, "azure_model", id, meta)
 	render.JSON(w, statusResponse{Status: "ok"})
 }
 
@@ -371,7 +370,7 @@ func (c azureRegistryCall) test(w http.ResponseWriter, r *http.Request, in servi
 		return
 	}
 	if c.scope.IsOrg() {
-		logAudit(r.Context(), c.backend, r, c.proxies, AuditActionProvidersTest, "org", c.scope.OrgID, azureTestAuditMeta(in, res))
+		c.rec.Record(r.Context(), audit.Entry{Action: audit.ActionProvidersTest, ResourceType: "org", ResourceID: c.scope.OrgID, OrgID: c.scope.OrgID, Meta: azureTestAuditMeta(in, res)})
 	}
 	render.JSON(w, res)
 }
@@ -586,25 +585,25 @@ func (h *ProviderHandler) handleAzureTest(w http.ResponseWriter, r *http.Request
 
 // registerAzureFoundryRoutes wires the caller's own /api/providers/azure-foundry
 // registry: resources ("connections": an endpoint + credential document each)
-// and the models registered on them. /test and
-// /connections/{connectionId}/discover dial Azure (own rate buckets, outside
-// the RLS transaction: azureOutboundRoute). /config is the deprecated
-// single-document form; has/delete use /api/keys.
-func (h *ProviderHandler) registerAzureFoundryRoutes(r chi.Router) {
-	r.Route("/azure-foundry", func(r chi.Router) {
-		r.Get("/config", h.handleGetAzureFoundryConfig)
-		r.Post("/config", h.handleSaveAzureFoundryConfig)
-		r.Get("/connections", h.handleAzureConnectionList)
-		r.Post("/connections", h.handleAzureConnectionCreate)
-		r.Get("/connections/{connectionId}", h.handleAzureConnectionGet)
-		r.Put("/connections/{connectionId}", h.handleAzureConnectionUpdate)
-		r.Delete("/connections/{connectionId}", h.handleAzureConnectionDelete)
-		r.Post("/connections/{connectionId}/discover", h.handleAzureConnectionDiscover)
-		r.Get("/models", h.handleAzureModelList)
-		r.Post("/models", h.handleAzureModelCreate)
-		r.Get("/models/{modelId}", h.handleAzureModelGet)
-		r.Put("/models/{modelId}", h.handleAzureModelUpdate)
-		r.Delete("/models/{modelId}", h.handleAzureModelDelete)
-		r.Post("/test", h.handleAzureTest)
+// and the models registered on them. /test (one billed model call: the chat
+// bucket) and /connections/{connectionId}/discover (the project listings: the
+// analysis bucket) dial Azure for up to 30 s, outside the RLS transaction.
+// /config is the deprecated single-document form; has/delete use /api/keys.
+func (h *ProviderHandler) registerAzureFoundryRoutes(rb *route.Builder) {
+	rb.Route("/azure-foundry", func(rb *route.Builder) {
+		rb.Get("/config", h.handleGetAzureFoundryConfig)
+		rb.Post("/config", h.handleSaveAzureFoundryConfig)
+		rb.Get("/connections", h.handleAzureConnectionList)
+		rb.Post("/connections", h.handleAzureConnectionCreate, route.Idempotent())
+		rb.Get("/connections/{connectionId}", h.handleAzureConnectionGet)
+		rb.Put("/connections/{connectionId}", h.handleAzureConnectionUpdate)
+		rb.Delete("/connections/{connectionId}", h.handleAzureConnectionDelete)
+		rb.Post("/connections/{connectionId}/discover", h.handleAzureConnectionDiscover, route.RateLimit(route.RateAnalysis), route.NoTx())
+		rb.Get("/models", h.handleAzureModelList)
+		rb.Post("/models", h.handleAzureModelCreate, route.Idempotent())
+		rb.Get("/models/{modelId}", h.handleAzureModelGet)
+		rb.Put("/models/{modelId}", h.handleAzureModelUpdate)
+		rb.Delete("/models/{modelId}", h.handleAzureModelDelete)
+		rb.Post("/test", h.handleAzureTest, route.RateLimit(route.RateChat), route.NoTx())
 	})
 }

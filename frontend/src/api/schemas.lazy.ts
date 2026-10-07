@@ -1,16 +1,28 @@
 import {z} from 'zod'
-import type {
-  AnalysisReport,
-  AppSettings,
-  AzureConnection,
-  AzureModelsListing,
-  DashboardAnalyticsData,
-  DashboardHomeData,
-  FlowDocument,
-  PagedResponse,
-  ProviderInfo,
+import {
+  AUTH_TYPES,
+  AZURE_AUTH_MODES,
+  AZURE_MODEL_KINDS,
+  AZURE_REGISTRY_STATES,
+  AZURE_STATUSES,
+  PROVIDER_IDS,
+  isKnown,
+  type AnalysisReport,
+  type AppSettings,
+  type AzureConnection,
+  type AzureModelKind,
+  type AzureModelsListing,
+  type DashboardAnalyticsData,
+  type DashboardHomeData,
+  type FlowDocument,
+  type PagedResponse,
+  type ProviderInfo,
+  type Tolerant,
+  type UnknownEnumValue,
 } from '@/types'
+import {PURPOSE_PRESETS} from '@/lib/modelPurpose'
 import type {AdminUser} from './admin'
+import type {GovernanceAlertSeverity, GovernanceAlertType} from './governance'
 import type {LibraryFlow} from './library'
 
 // A Go server serialises a nil slice (or map) as null — an empty list on the
@@ -19,6 +31,15 @@ import type {LibraryFlow} from './library'
 // legitimately-empty list validates instead of throwing ResponseValidationError.
 function nilAsEmpty<T extends z.ZodTypeAny>(item: T) {
   return z.array(item).nullish().transform(v => v ?? [])
+}
+
+// A wire enum the backend may grow (types/tolerant.ts): a known value keeps
+// its literal type, and any other string parses as itself, typed
+// UnknownEnumValue, instead of failing the whole response. z.enum stays only
+// where an unknown value must not be guessed at: the roles, which gate the UI,
+// and Finding.severity, which the backend closes itself and the client ranks.
+function tolerantEnum<T extends string>(values: readonly T[]) {
+  return z.string().transform((v): Tolerant<T> => (isKnown(values, v) ? v : (v as UnknownEnumValue)))
 }
 
 // This module — and therefore zod — is ONLY reachable through the dynamic
@@ -32,6 +53,8 @@ export function buildSchemas() {
   const AuthUserSchema = z.object({
     id: z.string(),
     email: z.string(),
+    // Closed: a role this bundle does not know is refused, never guessed
+    // into a privilege; a new role ships with the bundle that knows it.
     role: z.enum(['admin', 'member', 'viewer', 'guest']),
     displayName: z.string().optional(),
     avatarUrl: z.string().optional(),
@@ -293,19 +316,19 @@ export function buildSchemas() {
   const LibraryFlowVersionsSchema = z.array(LibraryFlowVersionSchema)
 
   // ── Governance alerts ─────────────────────────────────────────────────────
-  // Mirrors storageif.GovernanceAlert. `type`/`severity` are the closed sets
-  // the UI branches on (same philosophy as the auth role enum): a new value
-  // must arrive together with the frontend that renders it.
+  // Mirrors storageif.GovernanceAlert. `type`/`severity` are tolerant: the
+  // server writes the title and message, so an alert of a newer type still
+  // reads, and one such row must not empty the whole inbox.
   const GovernanceAlertSchema = z
     .object({
       id: z.string(),
       flowId: z.string(),
       flowName: z.string().optional(),
       orgId: z.string().optional(),
-      type: z.enum(['drift', 'health_regression', 'finding_assigned', 'comment_added']),
+      type: tolerantEnum<GovernanceAlertType>(['drift', 'health_regression', 'finding_assigned', 'comment_added']),
       title: z.string(),
       message: z.string().optional(),
-      severity: z.enum(['error', 'warning']),
+      severity: tolerantEnum<GovernanceAlertSeverity>(['error', 'warning']),
       newErrors: z.number().optional(),
       newWarnings: z.number().optional(),
       healthScore: z.number().optional(),
@@ -324,11 +347,12 @@ export function buildSchemas() {
   const UnreadCountSchema = z.object({count: z.number()}).passthrough()
 
   // ── Providers ─────────────────────────────────────────────────────────────
-  // Mirrors models.ProviderInfo/ModelDetail (core/models/chat.go). `id` is
-  // deliberately NOT a z.enum: the backend may add a provider before the
-  // client's PROVIDERS catalogue learns it, and that must degrade to one
-  // oddly-typed entry — a strict enum would fail the whole list and blank the
-  // chat picker. The cast bridges id: string → ProviderID.
+  // Mirrors models.ProviderInfo/ModelDetail (core/models/chat.go). The ids,
+  // kinds and statuses are tolerant: the backend may add a provider (or a
+  // model kind) before the client's PROVIDERS catalogue learns it, and that
+  // must degrade to one entry the chat leaves out — a strict enum would fail
+  // the whole list and blank the chat picker.
+  const ModelPurposeSchema = tolerantEnum([...PURPOSE_PRESETS, 'custom'])
   const ModelDetailSchema = z
     .object({
       id: z.string(),
@@ -337,8 +361,8 @@ export function buildSchemas() {
       inputCostPerM: z.number(),
       outputCostPerM: z.number(),
       supportsTools: z.boolean(),
-      kind: z.enum(['chat', 'claude', 'agent', 'embedding']).optional(),
-      purpose: z.string().optional(),
+      kind: tolerantEnum(AZURE_MODEL_KINDS).optional(),
+      purpose: ModelPurposeSchema.optional(),
       purposeCustom: z.string().optional(),
       description: z.string().optional(),
       shared: z.boolean().optional(),
@@ -346,7 +370,7 @@ export function buildSchemas() {
       orgName: z.string().optional(),
       connectionId: z.string().optional(),
       connectionName: z.string().optional(),
-      status: z.enum(['ready', 'needs_credentials', 'unreadable', 'invalid_config', 'unsupported']).optional(),
+      status: tolerantEnum(AZURE_STATUSES).optional(),
       statusReason: z.string().optional(),
       aliases: z.array(z.string()).optional(),
       isDefault: z.boolean().optional(),
@@ -356,9 +380,9 @@ export function buildSchemas() {
 
   const ProviderInfoSchema = z
     .object({
-      id: z.string(),
+      id: tolerantEnum(PROVIDER_IDS),
       name: z.string(),
-      authType: z.enum(['api_key', 'oauth']),
+      authType: tolerantEnum(AUTH_TYPES),
       contextLimit: z.number(),
       // Catalogue/live/registry listings all send a non-nil models slice, but
       // the registry path assembles it lazily — tolerate null.
@@ -377,7 +401,7 @@ export function buildSchemas() {
   const GitHubUserSchema = z.object({login: z.string(), name: z.string()}).passthrough()
   const GitHubUserOrNullSchema = z.union([GitHubUserSchema, z.null()])
 
-  const AzureStatusSchema = z.enum(['ready', 'needs_credentials', 'unreadable', 'invalid_config', 'unsupported'])
+  const AzureStatusSchema = tolerantEnum(AZURE_STATUSES)
 
   const AzureLastTestSchema = z
     .object({
@@ -400,7 +424,7 @@ export function buildSchemas() {
         .object({
           endpoint: z.string(),
           // '' when the stored credential document is missing/unreadable.
-          authMode: z.union([z.enum(['api_key', 'entra', 'entra_cli']), z.literal('')]),
+          authMode: tolerantEnum([...AZURE_AUTH_MODES, '']),
           hasSecret: z.boolean(),
           tenantId: z.string().optional(),
           clientId: z.string().optional(),
@@ -425,7 +449,7 @@ export function buildSchemas() {
   const AzureConnectionsListingSchema = z
     .object({
       connections: nilAsEmpty(AzureConnectionSchema),
-      registryState: z.enum(['ok', 'read_only', 'recovered']),
+      registryState: tolerantEnum(AZURE_REGISTRY_STATES),
       limits: z.object({connections: z.number(), models: z.number()}).passthrough(),
       knowledgeEmbeddingEnabled: z.boolean(),
       recoveredCopyPath: z.string().optional(),
@@ -445,13 +469,13 @@ export function buildSchemas() {
       modelId: z.string(),
       connectionId: z.string(),
       connectionName: z.string(),
-      kind: z.enum(['chat', 'claude', 'agent', 'embedding']),
+      kind: tolerantEnum(AZURE_MODEL_KINDS),
       deployment: z.string(),
       target: z.string(),
       displayName: z.string(),
       // Purpose is a preset key or 'custom'; the server may learn a new preset
       // first — a strict enum would fail the whole listing.
-      purpose: z.string(),
+      purpose: ModelPurposeSchema,
       purposeCustom: z.string().optional(),
       description: z.string().optional(),
       contextWindow: z.number().optional(),
@@ -469,8 +493,7 @@ export function buildSchemas() {
     })
     .passthrough()
 
-  // GET /models (AzureModelsListing). `purpose` is the preset|'custom' union
-  // the server may extend first — validated as a string, bridged by the cast.
+  // GET /models (AzureModelsListing).
   const AzureModelsListingSchema = z
     .object({
       models: nilAsEmpty(AzureModelEntrySchema),
@@ -484,7 +507,7 @@ export function buildSchemas() {
   const AzureDiscoveryItemSchema = z
     .object({
       name: z.string(),
-      kind: z.enum(['chat', 'claude', 'agent', 'embedding']),
+      kind: tolerantEnum(AZURE_MODEL_KINDS),
       model: z.string(),
       contextWindow: z.number().optional(),
       alreadyAdded: z.boolean(),
@@ -494,10 +517,17 @@ export function buildSchemas() {
     })
     .passthrough()
 
+  // Suggestions to add: one of a kind this bundle does not know could not be
+  // added from here (the create request takes known kinds only), so it is
+  // left out rather than offered.
+  const knownKind = <I extends {kind: Tolerant<AzureModelKind>}>(item: I): item is I & {kind: AzureModelKind} =>
+    isKnown(AZURE_MODEL_KINDS, item.kind)
+  const AzureDiscoveryItemsSchema = nilAsEmpty(AzureDiscoveryItemSchema).transform(items => items.filter(knownKind))
+
   const AzureDiscoverySchema = z
     .object({
-      deployments: nilAsEmpty(AzureDiscoveryItemSchema),
-      agents: nilAsEmpty(AzureDiscoveryItemSchema),
+      deployments: AzureDiscoveryItemsSchema,
+      agents: AzureDiscoveryItemsSchema,
       warnings: nilAsEmpty(z.string()),
       error: z.string().optional(),
       code: z.string().optional(),

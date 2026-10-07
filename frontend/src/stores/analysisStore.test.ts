@@ -1,5 +1,6 @@
 import {describe, it, expect, beforeEach, vi} from 'vitest'
 import {useAnalysisStore, findingKey, findingsByBlockOf, MAX_RETAINED_FINDINGS} from './analysisStore'
+import {unknownValue} from '@/testing/testHelpers'
 import type {Finding, AnalysisReport} from '@/types'
 
 // Suppression persists via the triage API in cloud mode (jsdom reports !isTauri).
@@ -28,6 +29,16 @@ function makeFinding(id: string, over: Partial<Finding> = {}): Finding {
     category: 'Style',
     ...over,
   } as Finding
+}
+
+// A stored triage status a newer server added, as the listing hands it over.
+function seedUnknownStatus(f: Finding) {
+  const key = findingKey(f)
+  useAnalysisStore.setState({
+    triageMap: new Map([
+      [key, {flowId: 'flow-1', findingKey: key, status: unknownValue('needs_review'), updatedAt: ''}],
+    ]),
+  })
 }
 
 // The findings filters read suppressedKeys directly, so that set is what
@@ -367,6 +378,15 @@ describe('finding assignment', () => {
     expect(useAnalysisStore.getState().triageMap.get(key)?.assigneeId).toBe('user-2')
   })
 
+  it('assignFinding leaves a finding of a status a newer server added as it is: it cannot repeat that status', () => {
+    seedUnknownStatus(f())
+    useAnalysisStore.getState().assignFinding(f(), 'user-7')
+    const entry = useAnalysisStore.getState().triageMap.get(findingKey(f()))
+    expect(entry?.status).toBe('needs_review')
+    expect(entry).not.toHaveProperty('assigneeId')
+    expect(analysisApi.setFindingStatus).not.toHaveBeenCalled()
+  })
+
   it('assignFinding(null) unassigns', () => {
     useAnalysisStore.getState().setFindingTriage(f(), 'in_progress')
     useAnalysisStore.getState().assignFinding(f(), 'user-2')
@@ -416,6 +436,28 @@ describe('triageFindingsBatch (U4.4)', () => {
     const items = vi.mocked(analysisApi.setFindingStatusBatch).mock.calls[0]![0]
     expect(items).toHaveLength(2)
     expect(items.every(i => i.assigneeId === 'me' && i.status === 'in_progress')).toBe(true)
+  })
+
+  // A status a newer server added cannot be repeated by this bundle: a patch
+  // that keeps the status leaves that finding as it is; one that sets a status
+  // applies to it like to any other.
+  it('leaves a finding of an unknown status alone unless the patch sets the status', () => {
+    seedUnknownStatus(f1())
+    vi.mocked(analysisApi.setFindingStatusBatch).mockClear()
+    useAnalysisStore.getState().triageFindingsBatch([f1(), f2()], {assigneeId: 'me'})
+    const kept = useAnalysisStore.getState().triageMap.get(findingKey(f1()))
+    expect(kept?.status).toBe('needs_review')
+    expect(kept).not.toHaveProperty('assigneeId')
+    expect(useAnalysisStore.getState().triageMap.get(findingKey(f2()))?.assigneeId).toBe('me')
+    const items = vi.mocked(analysisApi.setFindingStatusBatch).mock.calls[0]![0]
+    expect(items.map(i => i.findingKey)).toEqual([findingKey(f2())])
+
+    vi.mocked(analysisApi.setFindingStatusBatch).mockClear()
+    useAnalysisStore.getState().triageFindingsBatch([f1()], {assigneeId: 'me'})
+    expect(analysisApi.setFindingStatusBatch).not.toHaveBeenCalled()
+
+    useAnalysisStore.getState().triageFindingsBatch([f1()], {status: 'resolved'})
+    expect(useAnalysisStore.getState().triageMap.get(findingKey(f1()))?.status).toBe('resolved')
   })
 
   it('rolls back the optimistic update when the batch fails', async () => {

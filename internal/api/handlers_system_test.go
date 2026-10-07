@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/testutil"
 )
 
@@ -94,7 +95,7 @@ func TestReadinessProbe_503AfterNConsecutiveRedisFailures(t *testing.T) {
 	// Use FakeBackend (always-healthy Ping) so the backend check passes and we
 	// isolate the Redis check failure path.
 	h := &SystemHandler{
-		backend:     testutil.NewFakeBackend(),
+		health:      service.NewHealthService(testutil.NewFakeBackend()),
 		redisPinger: failingRedisPinger{err: errors.New("redis: connection refused")},
 	}
 	for i := 1; i <= readinessFailureThreshold; i++ {

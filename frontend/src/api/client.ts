@@ -1,6 +1,7 @@
 import {createAdapter} from '@/platform/adapters'
 import {logger} from '@/lib/logger'
 import {decodeJwtPayload} from '@/lib/jwt'
+import {noteServerVersion, serverVersionOf} from '@/lib/buildVersion'
 // Type-only: keeps zod out of the eager module graph (schemas build lazily).
 import type {z} from 'zod'
 
@@ -193,7 +194,7 @@ async function doFetch(
   const onExternalAbort = () => controller.abort(signal?.reason)
   signal?.addEventListener('abort', onExternalAbort, {once: true})
   try {
-    return await fetch(`${cfg.apiUrl}${path}`, {
+    const response = await fetch(`${cfg.apiUrl}${path}`, {
       method,
       headers: {
         'Content-Type': 'application/json',
@@ -202,6 +203,9 @@ async function doFetch(
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     })
+    // Whatever the status: any answer names the build the server runs.
+    noteServerVersion(serverVersionOf(response))
+    return response
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
       if (!timedOut) throw err
@@ -687,6 +691,9 @@ async function connectEvents(): Promise<void> {
       headers: {Authorization: `Bearer ${token}`, Accept: 'text/event-stream'},
       signal: controller.signal,
     })
+    // A deploy drops the stream: the reconnect is often the first request an
+    // idle tab makes to the new build.
+    noteServerVersion(serverVersionOf(response))
 
     if (response.status === 401 && refreshCallback) {
       try {

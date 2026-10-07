@@ -386,7 +386,7 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout)); err != nil {
-			logger.Warn("SSE: per-write deadlines unsupported by this connection; stalled clients cannot be reaped by write timeout", "err", err)
+			logger.FromContext(r.Context()).Warn("SSE: per-write deadlines unsupported by this connection; stalled clients cannot be reaped by write timeout", "err", err)
 			deadlineOK = false
 		}
 	}

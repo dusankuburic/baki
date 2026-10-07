@@ -76,8 +76,17 @@ func (b *PostgresStorageBackend) deleteUserInTx(ctx context.Context, tx *sql.Tx,
 	}
 
 	// Anonymize PII on surviving rows. The events/versions are kept for
-	// forensic integrity; only personal data is stripped.
-	if _, err = tx.ExecContext(ctx, `UPDATE audit_events SET email = '', ip = '', user_id = '' WHERE user_id = $1`, userID); err != nil {
+	// forensic integrity; only personal data is stripped (the user agent and the token too: with the IP they
+	// identify the person as well as the user id did). The user's pre-auth rows (login, register, password
+	// reset: no user_id, the user as their resource) lose the user agent they carry since v33; their other
+	// columns stay as they always have. One statement, so erasure keeps its statement count.
+	if _, err = tx.ExecContext(ctx, `UPDATE audit_events SET
+		email      = CASE WHEN user_id = $1 THEN '' ELSE email END,
+		ip         = CASE WHEN user_id = $1 THEN '' ELSE ip END,
+		token_id   = CASE WHEN user_id = $1 THEN NULL ELSE token_id END,
+		user_agent = NULL,
+		user_id    = CASE WHEN user_id = $1 THEN '' ELSE user_id END
+		WHERE user_id = $1 OR (resource_type = 'user' AND resource_id = $1)`, userID); err != nil {
 		return nil, fmt.Errorf("anonymize audit_events: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE flow_versions SET created_by = '' WHERE created_by = $1`, userID); err != nil {
@@ -485,7 +494,7 @@ func (b *PostgresStorageBackend) purgeBatched(ctx context.Context, table, cond s
 // PurgeExpiredData removes stale rows whose retention has elapsed — intended for a periodic background job
 // (single-replica). auditRetentionDays <= 0 keeps audit_events indefinitely (only expired tokens/invites purge).
 // The tables that grow without bound (audit_events, flow_analysis_history, usage_metrics, gov_alerts,
-// token_blacklist) are purged in batches of purgeBatchSize rows per statement: a single unbatched DELETE over a
+// token_blacklist, idempotency_keys) are purged in batches of purgeBatchSize rows per statement: a single unbatched DELETE over a
 // large backlog timed out on every tick and never shrank it. Each table is swept independently — an error is
 // recorded and the remaining tables still run; the result carries every table's count, the error joins all failures.
 func (b *PostgresStorageBackend) PurgeExpiredData(ctx context.Context, auditRetentionDays int) (*interfaces.PurgeResult, error) {
@@ -527,9 +536,14 @@ func (b *PostgresStorageBackend) PurgeExpiredData(ctx context.Context, auditRete
 		args        []any
 		dest        *int
 	}
-	// Expired blacklist entries are pure dead weight, so purge them unconditionally — previously only a
-	// per-process goroutine did this, and it could die or be absent on some replicas, growing the table unbounded.
-	growth := []batched{{"token_blacklist", `expires_at < NOW()`, nil, &out.TokenBlacklist}}
+	growth := []batched{
+		// Expired blacklist entries are pure dead weight, so purge them unconditionally — previously only a
+		// per-process goroutine did this, and it could die or be absent on some replicas, growing the table unbounded.
+		{"token_blacklist", `expires_at < NOW()`, nil, &out.TokenBlacklist},
+		// An Idempotency-Key answers retries for interfaces.IdempotencyKeyRetention; after that its stored
+		// response (sealed, possibly a credential) is dead weight too.
+		{"idempotency_keys", `expires_at < NOW()`, nil, &out.IdempotencyKeys},
+	}
 	if auditRetentionDays > 0 {
 		window := []any{auditRetentionDays}
 		growth = append(growth,

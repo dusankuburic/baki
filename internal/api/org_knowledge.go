@@ -15,6 +15,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -37,12 +40,6 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
 		return
 	}
-	if !h.knowledgeBackendAvailable(w) {
-		return
-	}
-	if h.requireMember(w, r) == nil {
-		return
-	}
 	limit, ok := clampListLimit(w, r.URL.Query().Get("limit"))
 	if !ok {
 		return
@@ -52,7 +49,7 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	docs, err := h.backend.ListKnowledgeDocuments(r.Context(), chi.URLParam(r, "id"), limit, offset)
+	docs, err := h.knowledge.ListDocuments(r.Context(), chi.URLParam(r, "id"), limit, offset)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -78,12 +75,6 @@ func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Reques
 		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
 		return
 	}
-	if !h.knowledgeBackendAvailable(w) {
-		return
-	}
-	if !h.requireAdminRole(w, r) {
-		return
-	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxKnowledgeUploadBodyBytes)
 	var req struct {
@@ -106,7 +97,7 @@ func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKnowledgeUpload, "org", chi.URLParam(r, "id"), map[string]string{"filename": req.Filename})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionKnowledgeUpload, chi.URLParam(r, "id"), map[string]string{"filename": req.Filename}))
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -122,20 +113,12 @@ func (h *OrgHandler) handleKnowledgeDelete(w http.ResponseWriter, r *http.Reques
 		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
 		return
 	}
-	if !h.knowledgeBackendAvailable(w) {
-		return
-	}
 	docID := chi.URLParam(r, "docId")
-	if !h.requireAdminRole(w, r) {
-		return
-	}
-	if err := h.backend.DeleteKnowledgeDocument(r.Context(), h.security.CallerID(r), chi.URLParam(r, "id"), docID); err != nil {
+	if err := h.knowledge.DeleteDocument(r.Context(), h.security.CallerID(r), chi.URLParam(r, "id"), docID); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// Re-check the org's chunk count next chat turn, not the cached "non-empty".
-	h.knowledge.InvalidateCorpus(chi.URLParam(r, "id"))
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKnowledgeDelete, "org", chi.URLParam(r, "id"), map[string]string{"docId": docID})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionKnowledgeDelete, chi.URLParam(r, "id"), map[string]string{"docId": docID}))
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -275,12 +258,6 @@ func (h *OrgHandler) handleKnowledgeReindex(w http.ResponseWriter, r *http.Reque
 		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
 		return
 	}
-	if !h.knowledgeBackendAvailable(w) {
-		return
-	}
-	if !h.requireAdminRole(w, r) {
-		return
-	}
 	var body io.Reader
 	if r.Body != nil {
 		body = http.MaxBytesReader(w, r.Body, maxKnowledgeReindexBodyBytes)
@@ -304,8 +281,8 @@ func (h *OrgHandler) handleKnowledgeReindex(w http.ResponseWriter, r *http.Reque
 			if !renderKnowledgeEmbeddingErrorDetails(w, werr, details) {
 				render.ErrorWithCodeAndDetails(w, werr, http.StatusInternalServerError, "INTERNAL_ERROR", details)
 			}
-			logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKnowledgeReindex, "org", chi.URLParam(r, "id"),
-				map[string]string{"truncated": "true", "failed": "true"})
+			h.audit.Record(r.Context(), orgAuditEntry(audit.ActionKnowledgeReindex, chi.URLParam(r, "id"),
+				map[string]string{"truncated": "true", "failed": "true"}))
 			return
 		}
 		if renderKnowledgeEmbeddingError(w, werr) {
@@ -327,16 +304,21 @@ func (h *OrgHandler) handleKnowledgeReindex(w http.ResponseWriter, r *http.Reque
 			details["truncated"] = "true"
 		}
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKnowledgeReindex, "org", chi.URLParam(r, "id"), details)
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionKnowledgeReindex, chi.URLParam(r, "id"), details))
 	render.JSON(w, res)
 }
 
-// registerKnowledgeRoutes wires the org knowledge-base sub-routes.
-func (h *OrgHandler) registerKnowledgeRoutes(r chi.Router) {
-	r.Route("/knowledge", func(r chi.Router) {
-		r.Get("/", h.handleKnowledgeList)
-		r.Post("/upload", h.handleKnowledgeUpload)
-		r.Post("/reindex", h.handleKnowledgeReindex)
-		r.Delete("/{docId}", h.handleKnowledgeDelete)
-	})
+// registerKnowledgeRoutes wires the org knowledge-base sub-routes, which live in the server store. Members read,
+// admins write.
+func (h *OrgHandler) registerKnowledgeRoutes(rb *route.Builder) {
+	rb.Route("/knowledge", func(rb *route.Builder) {
+		rb.With(h.requireOrg(service.OrgRead)).Get("/", h.handleKnowledgeList)
+		admin := rb.With(h.requireOrg(service.OrgAdmin))
+		// Both walk the embedding provider for minutes and commit page by page,
+		// each write in a short RLS transaction of its own: the bulk deadline,
+		// no request transaction.
+		admin.Post("/upload", h.handleKnowledgeUpload, route.NoTx(), route.Bulk())
+		admin.Post("/reindex", h.handleKnowledgeReindex, route.NoTx(), route.Bulk())
+		admin.Delete("/{docId}", h.handleKnowledgeDelete)
+	}, route.Needs(capability.ServerStore))
 }

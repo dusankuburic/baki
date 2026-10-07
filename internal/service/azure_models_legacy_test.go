@@ -253,10 +253,10 @@ func TestAzureModels_DeprecatedAdapters(t *testing.T) {
 	e := newAzureModelsEnv(t)
 	ctx := context.Background()
 	providers := newProviderServiceWithFakeSecrets(t, e.secrets)
-	providers.SetOrgKeyStore(e.orgKeys)
-	providers.SetAzureModels(e.svc)
-	system := NewSystemService(nil, e.secrets, nil, nil, "")
-	system.SetAzureModels(e.svc)
+	providers.orgKeys = e.orgKeys
+	providers.azure = e.svc
+	system := NewSystemService(nil, e.secrets, nil, nil, "", nil)
+	system.azure = e.svc
 	owner := storageif.AzureUserOwner("u1")
 
 	cfg := ai.AzureFoundryConfig{Endpoint: "https://" + azureTestHost, Auth: ai.AzureFoundryAuth{Mode: "api_key", Key: "k1"}, ChatDeployment: "chat1", Deployments: []string{"gpt-4o"}}
@@ -339,8 +339,8 @@ func TestAzureModels_DeprecatedAdapters(t *testing.T) {
 func TestAzureModels_DeprecatedOrgAdapters(t *testing.T) {
 	e := newAzureModelsEnv(t)
 	providers := newProviderServiceWithFakeSecrets(t, e.secrets)
-	providers.SetOrgKeyStore(e.orgKeys)
-	providers.SetAzureModels(e.svc)
+	providers.orgKeys = e.orgKeys
+	providers.azure = e.svc
 	owner := storageif.AzureOrgOwner("org-1")
 	doc := ai.AzureFoundryConfig{Endpoint: "https://" + azureTestHost, Auth: ai.AzureFoundryAuth{Mode: "api_key", Key: "k"}, ChatDeployment: "c1", Deployments: []string{"c2"}}
 	at, err := providers.SaveOrgAzureFoundryConfig("org-1", "admin-a", "", doc)
@@ -381,7 +381,7 @@ func TestAzureModels_DeprecatedOrgAdapters(t *testing.T) {
 func TestAzureModels_DeprecatedConnectionTest(t *testing.T) {
 	e := newAzureModelsEnv(t)
 	providers := newProviderServiceWithFakeSecrets(t, e.secrets)
-	providers.SetAzureModels(e.svc)
+	providers.azure = e.svc
 	res, err := providers.TestProviderConnection(context.Background(), "u1", "azure-foundry")
 	if err != nil || res.Ok || !strings.Contains(res.Error, "no Azure AI Foundry resource") {
 		t.Fatalf("none = %+v, %v", res, err)

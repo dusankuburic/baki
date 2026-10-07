@@ -21,6 +21,11 @@ func TestPostgres_Contract(t *testing.T) {
 	contract.RunSuite(t, b)
 }
 
+// TestPostgres_AuditContract runs the audit-log contract (v33's organisation and actor columns included).
+func TestPostgres_AuditContract(t *testing.T) {
+	contract.RunAuditSuite(t, openTestDB(t))
+}
+
 // openTestDB connects using DATABASE_URL env var and skips if not set.
 func openTestDB(t *testing.T) *database.PostgresStorageBackend {
 	t.Helper()

@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/service"
 )
 
@@ -15,10 +16,11 @@ type ExportHandler struct {
 	flowSvc     *service.FlowService
 	analysisSvc *service.AnalysisService
 	security    *SecurityConfig
+	audit       *audit.Recorder
 }
 
-func NewExportHandler(exportSvc *service.ExportService, flowSvc *service.FlowService, analysisSvc *service.AnalysisService, security *SecurityConfig) *ExportHandler {
-	return &ExportHandler{exportSvc: exportSvc, flowSvc: flowSvc, analysisSvc: analysisSvc, security: security}
+func NewExportHandler(exportSvc *service.ExportService, flowSvc *service.FlowService, analysisSvc *service.AnalysisService, security *SecurityConfig, recorder *audit.Recorder) *ExportHandler {
+	return &ExportHandler{exportSvc: exportSvc, flowSvc: flowSvc, analysisSvc: analysisSvc, security: security, audit: recorder}
 }
 
 // @Summary      Compare current flow with another
@@ -45,8 +47,7 @@ func (h *ExportHandler) handleCompareCurrentWith(w http.ResponseWriter, r *http.
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -79,8 +80,7 @@ func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -109,7 +109,7 @@ func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Requ
 	}
 	// Return base64 under `data`, mirroring PDF, so the web download path
 	// (data:...;base64,res.data in export.ts) works consistently.
-	logAudit(r.Context(), h.security.Backend, r, h.security.TrustedProxies, AuditActionFlowExport, "flow", req.FlowID, map[string]string{"format": "markdown"})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowExport, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"format": "markdown"}})
 	render.JSON(w, map[string]any{
 		"status": "ok",
 		"data":   base64.StdEncoding.EncodeToString(content),
@@ -133,8 +133,7 @@ func (h *ExportHandler) handleExportHTML(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -156,7 +155,7 @@ func (h *ExportHandler) handleExportHTML(w http.ResponseWriter, r *http.Request)
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.security.Backend, r, h.security.TrustedProxies, AuditActionFlowExport, "flow", req.FlowID, map[string]string{"format": "html"})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowExport, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"format": "html"}})
 	render.JSON(w, map[string]any{
 		"status": "ok",
 		"data":   base64.StdEncoding.EncodeToString(content),
@@ -217,8 +216,7 @@ func (h *ExportHandler) handleExportPDF(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -240,20 +238,22 @@ func (h *ExportHandler) handleExportPDF(w http.ResponseWriter, r *http.Request) 
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.security.Backend, r, h.security.TrustedProxies, AuditActionFlowExport, "flow", req.FlowID, map[string]string{"format": "pdf"})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowExport, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"format": "pdf"}})
 	render.JSON(w, map[string]any{
 		"status": "ok",
 		"data":   base64.StdEncoding.EncodeToString(content),
 	})
 }
 
-// registerRoutes wires the /api/export group.
-func (h *ExportHandler) registerRoutes(r chi.Router) {
-	r.Route("/api/export", func(r chi.Router) {
-		r.Post("/compare", h.handleCompareCurrentWith)
-		r.Post("/markdown", h.handleExportMarkdown)
-		r.Post("/html", h.handleExportHTML)
-		r.Post("/pdf", h.handleExportPDF)
-		r.Post("/save", h.handleSaveClientExport)
+// Mount registers the /api/export group. The document exports render for
+// seconds after one authorized read, outside the request transaction; the
+// desktop-only compare and save keep it.
+func (h *ExportHandler) Mount(rb *route.Builder) {
+	rb.Route("/api/export", func(rb *route.Builder) {
+		rb.Post("/compare", h.handleCompareCurrentWith)
+		rb.Post("/markdown", h.handleExportMarkdown, route.NoTx())
+		rb.Post("/html", h.handleExportHTML, route.NoTx())
+		rb.Post("/pdf", h.handleExportPDF, route.NoTx())
+		rb.Post("/save", h.handleSaveClientExport)
 	})
 }

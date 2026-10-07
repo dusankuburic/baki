@@ -68,6 +68,15 @@ func TestSwagger_AuthGatedInCloudMode(t *testing.T) {
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("cloud mode /swagger/index.html without auth: got %d, want 401", rr.Code)
 	}
+	// The bearer is verified, not just present: any Authorization header used to unlock the schema.
+	rr = doRequestWithAuth(t, cloud, http.MethodGet, "/swagger/index.html", "Bearer not-a-token", nil)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("cloud mode /swagger/index.html with a bogus bearer: got %d, want 401", rr.Code)
+	}
+	rr = doRequestWithAuth(t, cloud, http.MethodGet, "/swagger/index.html", jwtBearer(t, cloud, "u1", "u1@example.com"), nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("cloud mode /swagger/index.html with a session: got %d, want 200", rr.Code)
+	}
 
 	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
 	if err != nil {

@@ -176,23 +176,6 @@ func (s *OrgService) MemberRole(ctx context.Context, orgID, userID string) (auth
 	return m.Role, nil
 }
 
-// GetAsMember loads the organisation and verifies that userID is a member
-// (any role), returning the organisation on success: one roster load serves
-// both the membership check and the organisation the caller then renders.
-// The load error when it does not exist, ErrMemberNotFound when not in it.
-// The member-only routes (api requireMember) used to answer the same
-// question with two loads: IsMember, then Get.
-func (s *OrgService) GetAsMember(ctx context.Context, orgID, userID string) (*interfaces.Organisation, error) {
-	org, err := s.store.LoadOrg(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	if _, m := findMember(org, userID); m == nil {
-		return nil, ErrMemberNotFound
-	}
-	return org, nil
-}
-
 // ListMembers returns all members of the given organisation.
 func (s *OrgService) ListMembers(ctx context.Context, orgID string) ([]interfaces.OrgMember, error) {
 	org, err := s.store.LoadOrg(ctx, orgID)
@@ -200,23 +183,6 @@ func (s *OrgService) ListMembers(ctx context.Context, orgID string) ([]interface
 		return nil, err
 	}
 	return org.Members, nil
-}
-
-// GetAndCheckAdmin loads the organisation and verifies that userID is an admin member.
-// Returns the organisation on success, or an error if the org doesn't exist or the
-// user is not an admin. It still loads the roster: several callers render the org
-// with its members, so a point lookup first would only add a round trip on the
-// common success path.
-func (s *OrgService) GetAndCheckAdmin(ctx context.Context, orgID, userID string) (*interfaces.Organisation, error) {
-	org, err := s.store.LoadOrg(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	_, m := findMember(org, userID)
-	if m == nil || m.Role != auth.RoleAdmin {
-		return nil, ErrNotOrgAdmin
-	}
-	return org, nil
 }
 
 // IsAdmin reports whether userID is an administrator of orgID.

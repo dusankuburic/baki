@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"testing"
 
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/config"
 )
 
@@ -18,9 +19,11 @@ import (
 func TestPerUserRateLimit_IsEnforcedThroughBuildHandler(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	var served int
-	rt.mux.Post("/api/probe/write", func(w http.ResponseWriter, _ *http.Request) {
-		served++
-		w.WriteHeader(http.StatusNoContent)
+	mountTestRoutes(t, rt, func(rb *route.Builder) {
+		rb.Post("/api/probe/write", func(w http.ResponseWriter, _ *http.Request) {
+			served++
+			w.WriteHeader(http.StatusNoContent)
+		})
 	})
 
 	const burst = 3
@@ -49,7 +52,9 @@ func TestPerUserRateLimit_IsEnforcedThroughBuildHandler(t *testing.T) {
 	}
 
 	// Reads are never subject to the per-user bucket, exhausted or not.
-	rt.mux.Get("/api/probe/read", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mountTestRoutes(t, rt, func(rb *route.Builder) {
+		rb.Get("/api/probe/read", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	})
 	if rr := serve(h, http.MethodGet, "/api/probe/read", bearer); rr.Code != http.StatusNoContent {
 		t.Errorf("read after the write bucket is exhausted: got %d, want 204", rr.Code)
 	}
@@ -59,7 +64,9 @@ func TestPerUserRateLimit_IsEnforcedThroughBuildHandler(t *testing.T) {
 // be a pure pass-through: the same burst of writes all succeed.
 func TestPerUserRateLimit_LocalModeIsPassthroughThroughBuildHandler(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	rt.mux.Post("/api/probe/write", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mountTestRoutes(t, rt, func(rb *route.Builder) {
+		rb.Post("/api/probe/write", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	})
 	h := fullChain(t, rt, func(cfg *config.Config) {
 		cfg.Runtime.RateLimitPerUserBurst = 1
 	})

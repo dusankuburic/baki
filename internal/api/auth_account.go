@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
@@ -35,10 +35,6 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
-		return
-	}
 	var req struct {
 		ConfirmEmail string `json:"confirmEmail"`
 	}
@@ -50,24 +46,14 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Read before the erasure cascades the provider keys away: the Azure document names the credential to release.
-	var releaseOwn func()
-	if h.providers != nil {
-		releaseOwn = h.providers.PrepareAccountErasure(h.security.KeyScope(r))
-	}
-
-	if err := h.backend.DeleteUser(r.Context(), claims.UserID); err != nil {
+	// The account service prepares (reads what the cascade removes), deletes, and finalizes (releases the user's
+	// own credential, disables the org credentials they lent as an admin, drops the in-process caches); each
+	// disabled credential is audited here.
+	if err := h.accounts.DeleteAccount(r.Context(), claims.UserID, h.security.KeyScope(r), func(ref storageif.OrgKeyRef) {
+		auditLentCredentialDisabled(r, h.audit, ref.OrgID, ref.Provider, claims.UserID, lenderReasonAccountDeleted)
+	}); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
-	}
-	if releaseOwn != nil {
-		releaseOwn()
-	}
-	// An org credential the user lent as an admin does not cascade with the account (org_provider_keys is org-keyed): disable it.
-	disableLentCredentials(r, h.backend, h.security.TrustedProxies, h.providers, claims.UserID, lenderReasonAccountDeleted)
-
-	if h.onUserDeleted != nil {
-		h.onUserDeleted(h.security.KeyScope(r))
 	}
 
 	if tokenStr := auth.ExtractToken(r); tokenStr != "" {
@@ -76,7 +62,7 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionAccountDelete, "user", claims.UserID, nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionAccountDelete, ResourceType: "user", ResourceID: claims.UserID})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -92,22 +78,18 @@ func (h *AuthHandler) handleAuthExportAccount(w http.ResponseWriter, r *http.Req
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
-		return
-	}
 	filename := fmt.Sprintf("baki-account-export-%s.json", claims.UserID)
 
 	// When the backend can stream, build the export into a temp file: peak memory is one page of flows
 	// and nothing reaches the client until the whole export succeeded (a mid-stream error stays a clean 4xx/5xx).
-	if streamer, ok := h.backend.(userDataStreamer); ok {
-		if h.exportAccountStreamed(w, r, streamer, claims.UserID, filename) {
-			logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionDataExport, "user", claims.UserID, nil)
+	if h.accounts.StreamsExport() {
+		if h.exportAccountStreamed(w, r, claims.UserID, filename) {
+			h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionDataExport, ResourceType: "user", ResourceID: claims.UserID})
 		}
 		return
 	}
 
-	export, err := h.backend.ExportUserData(r.Context(), claims.UserID)
+	export, err := h.accounts.Export(r.Context(), claims.UserID)
 	if err != nil {
 		if errors.Is(err, storageif.ErrNotFound) {
 			render.Error(w, err, http.StatusNotFound)
@@ -116,21 +98,15 @@ func (h *AuthHandler) handleAuthExportAccount(w http.ResponseWriter, r *http.Req
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionDataExport, "user", claims.UserID, nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionDataExport, ResourceType: "user", ResourceID: claims.UserID})
 
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	render.JSON(w, export)
 }
 
-// userDataStreamer is implemented by backends that can stream a data-subject
-// export incrementally; backends without it use the buffered path.
-type userDataStreamer interface {
-	ExportUserDataTo(ctx context.Context, userID string, w io.Writer) error
-}
-
 // exportAccountStreamed builds the export into a temp file and forwards it
 // only on success; true means the response was written (log the audit event).
-func (h *AuthHandler) exportAccountStreamed(w http.ResponseWriter, r *http.Request, streamer userDataStreamer, userID, filename string) bool {
+func (h *AuthHandler) exportAccountStreamed(w http.ResponseWriter, r *http.Request, userID, filename string) bool {
 	tmp, err := os.CreateTemp("", "baki-export-*.json")
 	if err != nil {
 		render.Error(w, fmt.Errorf("export: create temp file: %w", err), http.StatusInternalServerError)
@@ -142,7 +118,7 @@ func (h *AuthHandler) exportAccountStreamed(w http.ResponseWriter, r *http.Reque
 	defer func() { _ = os.Remove(tmp.Name()) }()
 	defer func() { _ = tmp.Close() }()
 
-	if err := streamer.ExportUserDataTo(r.Context(), userID, tmp); err != nil {
+	if err := h.accounts.StreamExport(r.Context(), userID, tmp); err != nil {
 		if errors.Is(err, storageif.ErrNotFound) {
 			render.Error(w, err, http.StatusNotFound)
 			return false
@@ -158,8 +134,9 @@ func (h *AuthHandler) exportAccountStreamed(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	if _, err := io.Copy(w, tmp); err != nil {
-		// Headers/body may be partly written; the connection is the only signal left — log and stop.
-		logger.Warn("export: failed streaming temp file to client", "user_id", userID, "error", err)
+		// Headers/body may be partly written; the connection is the only signal left — log and stop. The
+		// request's logger carries the caller's user_id.
+		logger.FromContext(r.Context()).Warn("export: failed streaming temp file to client", "error", err)
 		return false
 	}
 	return true
@@ -180,18 +157,15 @@ func (h *AuthHandler) handleAuthSessions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if h.tokenStore == nil {
+	if !h.sessions.Enabled() {
 		render.JSON(w, []storageif.RefreshTokenInfo{})
 		return
 	}
 
-	sessions, err := h.tokenStore.ListUserRefreshTokens(r.Context(), claims.UserID)
+	sessions, err := h.sessions.List(r.Context(), claims.UserID)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
-	}
-	if sessions == nil {
-		sessions = []storageif.RefreshTokenInfo{}
 	}
 	render.JSON(w, sessions)
 }
@@ -210,13 +184,13 @@ func (h *AuthHandler) handleAuthSessionRevoke(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if h.tokenStore == nil {
+	if !h.sessions.Enabled() {
 		render.Error(w, fmt.Errorf("session management not available"), http.StatusServiceUnavailable)
 		return
 	}
 
 	id := chi.URLParam(r, "id")
-	if err := h.tokenStore.RevokeRefreshTokenForUser(r.Context(), id, claims.UserID); err != nil {
+	if err := h.sessions.RevokeForUser(r.Context(), id, claims.UserID); err != nil {
 		if errors.Is(err, storageif.ErrNotFound) {
 			render.Error(w, err, http.StatusNotFound)
 			return
@@ -225,7 +199,7 @@ func (h *AuthHandler) handleAuthSessionRevoke(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSessionRevoke, "session", id, nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionSessionRevoke, ResourceType: "session", ResourceID: id})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

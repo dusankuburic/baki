@@ -31,13 +31,17 @@ func Recovery(h http.Handler) http.Handler {
 // canonicalised before redaction, as in AccessLog: a panic below the router
 // sees the path it cleaned, but one before it (in the rate limiter) sees the
 // raw spelling, where /api/v1/invites/{token} or /api//invites/{token} would
-// slip past redactPath's prefix match.
+// slip past redactPath's prefix match. The request id is the one the access
+// line carries, a generated one included; the outermost Recovery, which runs
+// before RequestInfo, falls back to the inbound header.
 func AttrsFromRequest(r *http.Request) errreport.Attrs {
 	attrs := errreport.Attrs{
 		"method": r.Method,
 		"path":   redactPath(canonicalPath(r.URL.Path)),
 	}
-	if rid := r.Header.Get("X-Request-Id"); rid != "" {
+	if rid := RequestIDFromContext(r.Context()); rid != "" {
+		attrs["request_id"] = rid
+	} else if rid := r.Header.Get(RequestIDHeader); rid != "" {
 		attrs["request_id"] = rid
 	}
 	return attrs

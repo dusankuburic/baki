@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	mailer "pad-analyzer/internal/mail"
@@ -24,12 +26,18 @@ type OrgHandler struct {
 	knowledge *rag.KnowledgeService
 	security  *SecurityConfig
 	email     *mailer.Service
-	// ruleProfiles is invalidated when org custom rules change so the next
-	// analysis re-resolves; nil in local mode.
-	ruleProfiles *service.RuleProfileResolver
+	// orgRules owns the org's custom analyzer rules (and drops its cached
+	// rule profile when they change).
+	orgRules *service.OrgRuleService
+	channels *service.ChannelService
+	// users names members and reads an invitee's email verification.
+	users *service.UserDirectory
 	// providers serves org-shared credentials; routes answer
 	// ORG_KEYSTORE_UNAVAILABLE without an org secret store.
 	providers *service.ProviderService
+	// authz decides every org route's access (org_access.go).
+	authz *service.AuthzService
+	audit *audit.Recorder
 
 	// notifyPolicy: strict whenever JWTEnabled (multi-user) so a tenant
 	// cannot aim a webhook at the server's own network; desktop allows loopback.
@@ -46,26 +54,28 @@ func channelPolicy(security *SecurityConfig) notify.TargetPolicy {
 	return notify.AllowLoopbackTargets
 }
 
-func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, knowledge *rag.KnowledgeService, security *SecurityConfig, email *mailer.Service, ruleProfiles *service.RuleProfileResolver, providers *service.ProviderService) *OrgHandler {
+func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, knowledge *rag.KnowledgeService, security *SecurityConfig, email *mailer.Service, orgRules *service.OrgRuleService, providers *service.ProviderService, authz *service.AuthzService, channels *service.ChannelService, users *service.UserDirectory, recorder *audit.Recorder) *OrgHandler {
 	return &OrgHandler{
 		orgSvc:        orgSvc,
 		backend:       backend,
 		knowledge:     knowledge,
 		security:      security,
 		email:         email,
-		ruleProfiles:  ruleProfiles,
+		orgRules:      orgRules,
+		channels:      channels,
+		users:         users,
 		providers:     providers,
+		authz:         authz,
+		audit:         recorder,
 		notifyPolicy:  channelPolicy(security),
 		channelClient: notify.NewChannelClient(channelPolicy(security)),
 	}
 }
 
-func (h *OrgHandler) knowledgeBackendAvailable(w http.ResponseWriter) bool {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("knowledge base requires a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return false
-	}
-	return true
+// orgAuditEntry is the audit entry of an action on organisation orgID: the organisation is both the resource and
+// the row's organisation.
+func orgAuditEntry(action, orgID string, meta map[string]string) audit.Entry {
+	return audit.Entry{Action: action, ResourceType: "org", ResourceID: orgID, OrgID: orgID, Meta: meta}
 }
 
 func (h *OrgHandler) orgProviderKeysAvailable(w http.ResponseWriter) bool {
@@ -84,7 +94,7 @@ func (h *OrgHandler) memberLabel(ctx context.Context, userID string) string {
 	if userID == "" || h.backend == nil {
 		return userID
 	}
-	u, err := h.backend.LoadUserByID(ctx, userID)
+	u, err := h.users.Load(ctx, userID)
 	if err != nil || u == nil {
 		return userID
 	}
@@ -97,18 +107,9 @@ func (h *OrgHandler) memberLabel(ctx context.Context, userID string) string {
 	return userID
 }
 
-// requireMember checks membership in the org in "id"; non-member and unknown org both get 403 (no existence oracle).
-func (h *OrgHandler) requireMember(w http.ResponseWriter, r *http.Request) *storageif.Organisation {
-	id := chi.URLParam(r, "id")
-	org, err := h.orgSvc.GetAsMember(r.Context(), id, h.security.CallerID(r))
-	if err != nil {
-		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
-		return nil
-	}
-	return org
-}
-
-// requireAdminRole is requireAdmin needing only the decision: reads the membership row, not the org with its whole roster.
+// requireAdminRole checks that the caller is an admin of the org in "id" on their membership row alone, without the
+// token scopes AuthzService.Can adds: 403 for a refusal, 404 for an unknown organisation. Only GET invites still uses
+// it (handleOrgInviteList); every other org route goes through org_access.go.
 func (h *OrgHandler) requireAdminRole(w http.ResponseWriter, r *http.Request) bool {
 	id := chi.URLParam(r, "id")
 	role, err := h.orgSvc.MemberRole(r.Context(), id, h.security.CallerID(r))
@@ -124,20 +125,6 @@ func (h *OrgHandler) requireAdminRole(w http.ResponseWriter, r *http.Request) bo
 		return false
 	}
 	return true
-}
-
-func (h *OrgHandler) requireAdmin(w http.ResponseWriter, r *http.Request) *storageif.Organisation {
-	id := chi.URLParam(r, "id")
-	org, err := h.orgSvc.GetAndCheckAdmin(r.Context(), id, h.security.CallerID(r))
-	if err != nil {
-		if errors.Is(err, collaboration.ErrNotOrgAdmin) {
-			render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
-			return nil
-		}
-		render.Error(w, err, http.StatusNotFound)
-		return nil
-	}
-	return org
 }
 
 // @Summary      List user's organizations
@@ -184,7 +171,7 @@ func (h *OrgHandler) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgCreate, "org", org.ID, map[string]string{"name": org.Name})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgCreate, org.ID, map[string]string{"name": org.Name}))
 	render.JSON(w, org)
 }
 
@@ -203,7 +190,7 @@ func (h *OrgHandler) handleOrgUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.requireAdminRole(w, r) {
+	if h.authorizeOrg(w, r, service.OrgAdmin) == nil {
 		return
 	}
 	// Create refuses an empty name; rename must too.
@@ -217,7 +204,7 @@ func (h *OrgHandler) handleOrgUpdate(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, 0)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgUpdate, "org", updated.ID, map[string]string{"name": updated.Name})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgUpdate, updated.ID, map[string]string{"name": updated.Name}))
 	render.JSON(w, updated)
 }
 
@@ -232,7 +219,7 @@ func (h *OrgHandler) handleOrgUpdate(w http.ResponseWriter, r *http.Request) {
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/orgs/{id} [delete]
 func (h *OrgHandler) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
-	if !h.requireAdminRole(w, r) {
+	if h.authorizeOrg(w, r, service.OrgAdmin) == nil {
 		return
 	}
 	// The shared credential's row cascades with the org; the cached state is read now, released after the delete.
@@ -245,28 +232,28 @@ func (h *OrgHandler) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	release()
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgDelete, "org", chi.URLParam(r, "id"), nil)
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgDelete, chi.URLParam(r, "id"), nil))
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// registerRoutes wires /api/orgs (org CRUD here; members/invites, rules,
+// Mount registers /api/orgs (org CRUD here; members/invites, rules,
 // channels, knowledge and the org Azure registry live with their handlers)
 // and the invite-accept route.
-func (h *OrgHandler) registerRoutes(r chi.Router) {
-	r.Route("/api/orgs", func(r chi.Router) {
-		r.Get("/", h.handleOrgList)
-		r.Post("/", h.handleOrgCreate)
-		r.Route("/{id}", func(r chi.Router) {
-			r.Put("/", h.handleOrgUpdate)
-			r.Delete("/", h.handleOrgDelete)
-			h.registerMemberRoutes(r)
-			h.registerRuleRoutes(r)
-			h.registerChannelRoutes(r)
-			h.registerKnowledgeRoutes(r)
-			h.registerOrgAzureRoutes(r)
+func (h *OrgHandler) Mount(rb *route.Builder) {
+	rb.Route("/api/orgs", func(rb *route.Builder) {
+		rb.Get("/", h.handleOrgList)
+		rb.Post("/", h.handleOrgCreate, route.Idempotent())
+		rb.Route("/{id}", func(rb *route.Builder) {
+			rb.Put("/", h.handleOrgUpdate)
+			rb.Delete("/", h.handleOrgDelete)
+			h.registerMemberRoutes(rb)
+			h.registerRuleRoutes(rb)
+			h.registerChannelRoutes(rb)
+			h.registerKnowledgeRoutes(rb)
+			h.registerOrgAzureRoutes(rb)
 		})
 	})
-	r.Route("/api/invites", func(r chi.Router) {
-		r.Post("/{token}/accept", h.handleInviteAccept)
+	rb.Route("/api/invites", func(rb *route.Builder) {
+		rb.Post("/{token}/accept", h.handleInviteAccept)
 	})
 }

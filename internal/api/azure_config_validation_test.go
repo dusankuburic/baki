@@ -9,13 +9,14 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
 
 // newAzureProviderHandlerWithBackend is newAzureProviderHandler with an
-// audit backend (nil for none), so logAudit records the save.
+// audit backend (nil for none), so its audit recorder records the save.
 func newAzureProviderHandlerWithBackend(t *testing.T, backend storageif.StorageBackend) (*ProviderHandler, *testutil.FakeSecretStore) {
 	t.Helper()
 	secrets := testutil.NewFakeSecretStore()
@@ -23,10 +24,9 @@ func newAzureProviderHandlerWithBackend(t *testing.T, backend storageif.StorageB
 		v, _ := secrets.Get(scope, provider)
 		return v, nil
 	}, nil, nil, nil)
-	svc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
 	azure, _ := newTestAzureModels(testAzureModelsDeps{Secrets: secrets, Factory: factory})
-	svc.SetAzureModels(azure)
-	return NewProviderHandler(svc, &SecurityConfig{}, backend), secrets
+	svc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets, nil, azure)
+	return NewProviderHandler(svc, &SecurityConfig{}, testAuditRecorder(backend)), secrets
 }
 
 // D-52: the stored document is parsed strictly, so a misspelled field must
@@ -85,13 +85,7 @@ func TestAzureFoundryConfigRoutes_StrictDecodeAndProjectHost(t *testing.T) {
 // audit#11: the audit row carries the normalised auth mode, not the
 // client's case/whitespace variant.
 func TestSaveAzureFoundryConfig_AuditsNormalisedAuthMode(t *testing.T) {
-	prevCh := auditCh
-	auditCh = make(chan *storageif.AuditEvent, 1)
-	auditClosed.Store(false)
-	t.Cleanup(func() {
-		auditCh = prevCh
-		auditClosed.Store(false)
-	})
+	auditCh := captureAuditEvents(t, 1)
 	h, _ := newAzureProviderHandlerWithBackend(t, testutil.NewFakeBackend())
 	rr := azureConfigRequest(t, h, http.MethodPost, map[string]any{
 		"endpoint": "https://my-res.openai.azure.com",
@@ -101,7 +95,7 @@ func TestSaveAzureFoundryConfig_AuditsNormalisedAuthMode(t *testing.T) {
 	checkStatus(t, rr, http.StatusOK)
 	select {
 	case ev := <-auditCh:
-		if ev.Action != AuditActionKeysSave || ev.ResourceID != ai.AzureFoundryProviderID || ev.Meta["authMode"] != "entra" || ev.Meta["op"] != "save" {
+		if ev.Action != audit.ActionKeysSave || ev.ResourceID != ai.AzureFoundryProviderID || ev.Meta["authMode"] != "entra" || ev.Meta["op"] != "save" {
 			t.Errorf("audit event = %+v (meta %v), want authMode entra", ev, ev.Meta)
 		}
 	case <-time.After(2 * time.Second):

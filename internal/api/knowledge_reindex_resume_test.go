@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/mail"
@@ -30,10 +29,6 @@ import (
 // remainder and answers without a cursor; each request writes its own audit
 // row, the resumed one marked "resumed".
 func TestKnowledgeReindex_CursorRoundTrip(t *testing.T) {
-	prevCh := auditCh
-	auditCh = nil
-	t.Cleanup(func() { auditCh = prevCh })
-
 	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
 	org, err := orgSvc.Create(bgCtx(), "Acme", "u-admin")
 	if err != nil {
@@ -50,9 +45,8 @@ func TestKnowledgeReindex_CursorRoundTrip(t *testing.T) {
 	}
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", chunks)
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(directionEmbedder{vec: []float32{0, 1}}))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
-	r := chi.NewRouter()
-	r.Post("/api/orgs/{id}/knowledge/reindex", h.handleKnowledgeReindex)
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	r := mountedAs(h, "u-admin")
 	path := "/api/orgs/" + org.ID + "/knowledge/reindex"
 
 	// First request: the model differs, so it takes force.
@@ -94,7 +88,7 @@ func TestKnowledgeReindex_CursorRoundTrip(t *testing.T) {
 		}
 	}
 
-	store.lastEvent(t, AuditActionKnowledgeReindex)
+	store.lastEvent(t, audit.ActionKnowledgeReindex)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		store.mu.Lock()
@@ -182,10 +176,8 @@ func TestKnowledge_DeadlineIs504(t *testing.T) {
 	_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", []storageif.KnowledgeChunk{{ID: "c1", DocID: "doc-1", Content: "retry every call", Embedding: []float32{1, 0}}})
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(deadlineEmbedder{}))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
-	r := chi.NewRouter()
-	r.Post("/api/orgs/{id}/knowledge/upload", h.handleKnowledgeUpload)
-	r.Post("/api/orgs/{id}/knowledge/reindex", h.handleKnowledgeReindex)
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	r := mountedAs(h, "u-admin")
 
 	for _, route := range []struct{ path, body string }{
 		{"/api/orgs/" + org.ID + "/knowledge/reindex", `{"force":true}`},
@@ -287,10 +279,6 @@ func (r *rateLimitOnCallEmbedder) Embed(_ context.Context, text []string) ([][]f
 // committed pages' resume cursor in the error envelope's details and audits
 // the partial run, so the client resumes instead of restarting from zero.
 func TestKnowledgeReindex_FailedPageCarriesResumeCursor(t *testing.T) {
-	prevCh := auditCh
-	auditCh = nil
-	t.Cleanup(func() { auditCh = prevCh })
-
 	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
 	org, err := orgSvc.Create(bgCtx(), "Acme", "u-admin")
 	if err != nil {
@@ -307,9 +295,8 @@ func TestKnowledgeReindex_FailedPageCarriesResumeCursor(t *testing.T) {
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", chunks)
 	emb := &rateLimitOnCallEmbedder{failAt: 6}
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(emb))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
-	r := chi.NewRouter()
-	r.Post("/api/orgs/{id}/knowledge/reindex", h.handleKnowledgeReindex)
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	r := mountedAs(h, "u-admin")
 
 	rr := postJSON(t, r, "/api/orgs/"+org.ID+"/knowledge/reindex", `{"force":true}`)
 	if rr.Code != http.StatusTooManyRequests || errorCode(t, rr) != "EMBEDDING_RATE_LIMITED" {
@@ -336,7 +323,7 @@ func TestKnowledgeReindex_FailedPageCarriesResumeCursor(t *testing.T) {
 		t.Errorf("details = %s, want 500 committed chunks and a cursor at c-000499", env.Details)
 	}
 	// The partial run is audited as a failed, truncated request.
-	if ev := store.lastEvent(t, AuditActionKnowledgeReindex); ev.Meta["truncated"] != "true" || ev.Meta["failed"] != "true" {
+	if ev := store.lastEvent(t, audit.ActionKnowledgeReindex); ev.Meta["truncated"] != "true" || ev.Meta["failed"] != "true" {
 		t.Errorf("partial audit meta = %v, want truncated+failed", ev.Meta)
 	}
 

@@ -44,7 +44,7 @@ func TestRecheckBudget_LoopReadsUsageOnce(t *testing.T) {
 		t.Fatalf("GetDailyUsage called %d times for 5 loop iterations, want 1", got)
 	}
 	// Outside the loop there is no memo: a fresh check reads the store again.
-	if err := svc.CheckBudget(ctx, "user-1", "org-1"); err != nil {
+	if err := svc.aiBudget().CheckBudget(ctx, "user-1", "org-1"); err != nil {
 		t.Fatalf("CheckBudget: %v", err)
 	}
 	if got := store.reads.Load(); got != 2 {
@@ -52,7 +52,7 @@ func TestRecheckBudget_LoopReadsUsageOnce(t *testing.T) {
 	}
 	// And a store mutation is visible immediately to that fresh path.
 	store.DailyUsage = 50
-	if err := svc.CheckBudget(ctx, "user-1", "org-1"); err == nil {
+	if err := svc.aiBudget().CheckBudget(ctx, "user-1", "org-1"); err == nil {
 		store.reads.Load() // keep the counter meaningful in failure output
 		t.Fatal("CheckBudget must see a just-written over-budget spend")
 	}

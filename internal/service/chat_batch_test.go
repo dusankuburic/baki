@@ -68,7 +68,7 @@ func TestApplyFixes_BatchEndToEnd(t *testing.T) {
 	}
 
 	rec := &batchEventRecorder{}
-	ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, nil, nil)
+	ap := svc.newFixApplier(doc, "stream-1", rec.emit, nil, nil)
 
 	// Approve the batch as soon as its decision key registers.
 	go func() {
@@ -171,7 +171,7 @@ func TestApplyFixes_DeclinedAndTimeout(t *testing.T) {
 			return d, nil
 		})
 		rec := &batchEventRecorder{}
-		ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, nil, nil)
+		ap := svc.newFixApplier(doc, "stream-1", rec.emit, nil, nil)
 		go func() {
 			for i := 0; i < 1000; i++ {
 				approved := false
@@ -200,7 +200,7 @@ func TestApplyFixes_DeclinedAndTimeout(t *testing.T) {
 		svc, _ := newFixTestService(multiFixDoc(), nil)
 		svc.fixDecisionWait = 30 * time.Millisecond
 		rec := &batchEventRecorder{}
-		ap := svc.newFixApplier("user-1", multiFixDoc(), "stream-1", rec.emit, nil, nil)
+		ap := svc.newFixApplier(multiFixDoc(), "stream-1", rec.emit, nil, nil)
 		out, err := ap.ApplyFixesWithApproval(context.Background(), []ai.FixProposal{fixTestProposal()})
 		if err != nil || !strings.Contains(out, "did not respond") {
 			t.Fatalf("timeout: out=%q err=%v", out, err)
@@ -225,7 +225,7 @@ func TestApplyFixes_PartialFailure(t *testing.T) {
 	}
 	svc, _ := newFixTestService(doc, hook)
 	rec := &batchEventRecorder{}
-	ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, nil, nil)
+	ap := svc.newFixApplier(doc, "stream-1", rec.emit, nil, nil)
 	props := []ai.FixProposal{
 		{ProposalID: "p1", RuleID: "unhandled-error", FixType: "wrap-error-handler", BlockID: "b1", BlockLabel: "Call API", Fingerprint: realFingerprintFor(t, svc, doc, "unhandled-error", "b1")},
 		{ProposalID: "p2", RuleID: "unhandled-error", FixType: "wrap-error-handler", BlockID: "b2", BlockLabel: "Sync API", Fingerprint: realFingerprintFor(t, svc, doc, "unhandled-error", "b2")},
@@ -281,7 +281,7 @@ func TestRunToolLoop_ApplyFixesEndToEnd(t *testing.T) {
 	svc, _ := newFixTestService(doc, hook)
 
 	rec := &fixEventRecorder{}
-	ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, nil, nil)
+	ap := svc.newFixApplier(doc, "stream-1", rec.emit, nil, nil)
 	tctx := ai.ToolContext{Ctx: context.Background(), Doc: doc, RealDoc: doc, Analysis: svc.analysisCache, Fixes: ap}
 
 	prov := &recordingProvider{FakeProvider: testutil.FakeProvider{Tools: true, Turns: []testutil.FakeTurn{
@@ -349,7 +349,7 @@ func TestChatFixBatch_PerItemOptOut(t *testing.T) {
 	svc, _ := newFixTestService(doc, nil)
 	svc.fixDecisionWait = 5 * time.Second
 	rec := &batchEventRecorder{}
-	ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, nil, nil)
+	ap := svc.newFixApplier(doc, "stream-1", rec.emit, nil, nil)
 
 	props := []ai.FixProposal{
 		{ProposalID: "p1", RuleID: "unhandled-error", FixType: "wrap-error-handler", BlockID: "b1", BlockLabel: "Call API", Fingerprint: realFingerprintFor(t, svc, doc, "unhandled-error", "b1")},
@@ -391,7 +391,7 @@ func TestChatFixBatch_AllDeselectedDeclines(t *testing.T) {
 	svc, _ := newFixTestService(doc, nil)
 	svc.fixDecisionWait = 5 * time.Second
 	rec := &batchEventRecorder{}
-	ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, nil, nil)
+	ap := svc.newFixApplier(doc, "stream-1", rec.emit, nil, nil)
 
 	props := []ai.FixProposal{
 		{ProposalID: "p1", RuleID: "unhandled-error", FixType: "wrap-error-handler", BlockID: "b1", BlockLabel: "Call API", Fingerprint: realFingerprintFor(t, svc, doc, "unhandled-error", "b1")},

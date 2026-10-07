@@ -6,9 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -41,7 +42,7 @@ func (h *FlowHandler) handleSuppressInSource(w http.ResponseWriter, r *http.Requ
 		render.Error(w, fmt.Errorf("blockId is required"), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit)
 	if !ok {
 		return
 	}
@@ -65,7 +66,8 @@ func (h *FlowHandler) handleSuppressInSource(w http.ResponseWriter, r *http.Requ
 // @Success      200 {object} map[string]interface{} "Snapshots"
 // @Router       /api/flow/snapshots [get]
 func (h *FlowHandler) handleListSourceSnapshots(w http.ResponseWriter, r *http.Request) {
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, r.URL.Query().Get("flowId"), "editor")
+	// Kept on the editor role check, not Can's FlowEdit: that would demand the write scope of a read token on this GET.
+	doc, ok := resolveFlowByRole(w, r, h.flowSvc, h.security, r.URL.Query().Get("flowId"), "editor")
 	if !ok {
 		return
 	}
@@ -92,7 +94,7 @@ func (h *FlowHandler) handleRestoreSourceSnapshot(w http.ResponseWriter, r *http
 		render.Error(w, fmt.Errorf("snapshotId is required"), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit)
 	if !ok {
 		return
 	}
@@ -114,7 +116,7 @@ func (h *FlowHandler) handleRestoreSourceSnapshot(w http.ResponseWriter, r *http
 // @Success      200 {object} map[string]interface{} "Meta"
 // @Router       /api/flow/source-meta [get]
 func (h *FlowHandler) handleGetSourceMeta(w http.ResponseWriter, r *http.Request) {
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, r.URL.Query().Get("flowId"), "viewer")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, r.URL.Query().Get("flowId"), service.FlowRead)
 	if !ok {
 		return
 	}
@@ -136,7 +138,7 @@ func (h *FlowHandler) handleGetSourceMeta(w http.ResponseWriter, r *http.Request
 // @Router       /api/flow/source [get]
 func (h *FlowHandler) handleGetSource(w http.ResponseWriter, r *http.Request) {
 	flowID := r.URL.Query().Get("flowId")
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, flowID, "viewer")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, flowID, service.FlowRead)
 	if !ok {
 		return
 	}
@@ -173,7 +175,7 @@ func (h *FlowHandler) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("flowId is required"), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit)
 	if !ok {
 		return
 	}
@@ -195,11 +197,12 @@ func (h *FlowHandler) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 
 // registerSourceRoutes wires the /api/flow source, suppression and snapshot
 // sub-routes.
-func (h *FlowHandler) registerSourceRoutes(r chi.Router) {
-	r.Post("/suppress-in-source", h.handleSuppressInSource)
-	r.Get("/snapshots", h.handleListSourceSnapshots)
-	r.Post("/snapshots/restore", h.handleRestoreSourceSnapshot)
-	r.Get("/source", h.handleGetSource)
-	r.Get("/source-meta", h.handleGetSourceMeta)
-	r.Post("/save-source", h.handleSaveSource)
+func (h *FlowHandler) registerSourceRoutes(rb *route.Builder) {
+	// Both rewrite and re-parse the whole source (up to 10 MB): outside the request transaction.
+	rb.Post("/suppress-in-source", h.handleSuppressInSource, route.NoTx())
+	rb.Get("/snapshots", h.handleListSourceSnapshots)
+	rb.Post("/snapshots/restore", h.handleRestoreSourceSnapshot)
+	rb.Get("/source", h.handleGetSource)
+	rb.Get("/source-meta", h.handleGetSourceMeta)
+	rb.Post("/save-source", h.handleSaveSource, route.NoTx())
 }

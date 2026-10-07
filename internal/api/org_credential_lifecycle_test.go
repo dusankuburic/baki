@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	mailer "pad-analyzer/internal/mail"
@@ -27,15 +26,7 @@ import (
 // captureAudit routes audit events to a fresh buffered channel for the test.
 func captureAudit(t *testing.T) chan *storageif.AuditEvent {
 	t.Helper()
-	prevCh := auditCh
-	ch := make(chan *storageif.AuditEvent, 32)
-	auditCh = ch
-	auditClosed.Store(false)
-	t.Cleanup(func() {
-		auditCh = prevCh
-		auditClosed.Store(false)
-	})
-	return ch
+	return captureAuditEvents(t, 32)
 }
 
 // awaitAudit returns the first captured event matching match, failing the
@@ -73,7 +64,7 @@ func noAudit(t *testing.T, ch chan *storageif.AuditEvent, match func(*storageif.
 
 func isDisableAudit(orgID, reason string) func(*storageif.AuditEvent) bool {
 	return func(ev *storageif.AuditEvent) bool {
-		return ev.Action == AuditActionKeysSave && ev.ResourceType == "org" && ev.ResourceID == orgID &&
+		return ev.Action == audit.ActionKeysSave && ev.ResourceType == "org" && ev.ResourceID == orgID &&
 			ev.Meta["op"] == "disable" && ev.Meta["provider"] == ai.AzureFoundryProviderID && ev.Meta["reason"] == reason
 	}
 }
@@ -82,16 +73,8 @@ func isDisableAudit(orgID, reason string) func(*storageif.AuditEvent) bool {
 // hooks ride on, as caller.
 func (f *orgProvidersFixture) orgRouter(caller string, knowledge *rag.KnowledgeService) http.Handler {
 	security := &SecurityConfig{LocalUserID: caller, OrgSvc: f.orgSvc}
-	h := NewOrgHandler(f.orgSvc, f.backend, knowledge, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), nil, f.svc)
-	r := chi.NewRouter()
-	r.Route("/api/orgs/{id}", func(r chi.Router) {
-		r.Delete("/", h.handleOrgDelete)
-		r.Delete("/members/{userId}", h.handleOrgMemberRemove)
-		r.Put("/members/{userId}/role", h.handleOrgMemberRoleUpdate)
-		r.Post("/knowledge/upload", h.handleKnowledgeUpload)
-		r.Post("/knowledge/reindex", h.handleKnowledgeReindex)
-	})
-	return r
+	h := NewOrgHandler(f.orgSvc, f.backend, knowledge, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(f.backend, f.backend, nil), f.svc, service.NewAuthzService(f.backend, f.orgSvc), service.NewChannelService(f.backend), service.NewUserDirectory(f.backend), testAuditRecorder(f.backend))
+	return mountedAs(h, caller)
 }
 
 func (f *orgProvidersFixture) doOrg(t *testing.T, caller, method, path string, body any, knowledge *rag.KnowledgeService) *httptest.ResponseRecorder {
@@ -209,10 +192,8 @@ func TestAccountDelete_DisablesLentOrgCredentials(t *testing.T) {
 	secrets := testutil.NewFakeSecretStore()
 	orgKeys := testutil.NewFakeOrgSecretStore()
 	factory := ai.NewProviderFactory(func(string, string) (string, error) { return "", nil }, nil, nil, nil)
-	svc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
-	svc.SetOrgKeyStore(orgKeys)
 	azure, _ := newTestAzureModels(testAzureModelsDeps{Secrets: secrets, OrgKeys: orgKeys, Factory: factory, PerUser: true})
-	svc.SetAzureModels(azure)
+	svc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets, orgKeys, azure)
 	doc := `{"endpoint":"https://unit-test.invalid","auth":{"mode":"api_key","key":"k"},"chatDeployment":"c"}`
 	resource := `{"endpoint":"https://unit-test.invalid","auth":{"mode":"api_key","key":"k2"}}`
 	const secondKey = ai.AzureFoundryProviderID + "/abcdefghij"
@@ -221,7 +202,7 @@ func TestAccountDelete_DisablesLentOrgCredentials(t *testing.T) {
 	_ = orgKeys.SaveOrg("org-other", ai.AzureFoundryProviderID, doc, "u2")
 	_ = orgKeys.SaveOrg("org-other", secondKey, resource, "u1")
 	_ = secrets.Save("u1", ai.AzureFoundryProviderID, doc)
-	rt.handlers.Auth.SetProviderService(svc)
+	moduleOf[*AuthHandler](t, rt).accounts.SetProviderService(svc)
 	ch := captureAudit(t)
 
 	rr := doRequestWithAuth(t, rt, http.MethodDelete, "/api/auth/account", bearer, map[string]string{"confirmEmail": "alice@example.com"})
@@ -238,7 +219,7 @@ func TestAccountDelete_DisablesLentOrgCredentials(t *testing.T) {
 	want := map[string]bool{"org-lent " + ai.AzureFoundryProviderID: true, "org-lent " + secondKey: true, "org-other " + secondKey: true}
 	for len(want) > 0 {
 		ev := awaitAudit(t, ch, func(ev *storageif.AuditEvent) bool {
-			return ev.Action == AuditActionKeysSave && ev.Meta["op"] == "disable" && ev.Meta["reason"] == lenderReasonAccountDeleted
+			return ev.Action == audit.ActionKeysSave && ev.Meta["op"] == "disable" && ev.Meta["reason"] == lenderReasonAccountDeleted
 		})
 		k := ev.ResourceID + " " + ev.Meta["provider"]
 		if !want[k] {
@@ -283,7 +264,7 @@ func TestOrgLenderLosesAdmin_DisablesEachLentKey(t *testing.T) {
 	seen := map[string]map[string]string{}
 	for len(seen) < 2 {
 		ev := awaitAudit(t, ch, func(ev *storageif.AuditEvent) bool {
-			return ev.Action == AuditActionKeysSave && ev.Meta["op"] == "disable"
+			return ev.Action == audit.ActionKeysSave && ev.Meta["op"] == "disable"
 		})
 		if ev.ResourceType != "org" || ev.ResourceID != f.orgID || ev.Meta["reason"] != lenderReasonDemoted || ev.Meta["user"] != "u-admin2" {
 			t.Errorf("disable row = %+v (meta %v)", ev, ev.Meta)
@@ -362,7 +343,7 @@ func TestOrgAzureFoundryTest_AuditedChatBucketRLSExempt(t *testing.T) {
 	ch := captureAudit(t)
 	rr := f.do(t, "u-admin", http.MethodPost, "/api/orgs/"+f.orgID+"/providers/azure-foundry/test", nil)
 	checkStatus(t, rr, http.StatusOK)
-	ev := awaitAudit(t, ch, func(ev *storageif.AuditEvent) bool { return ev.Action == AuditActionProvidersTest })
+	ev := awaitAudit(t, ch, func(ev *storageif.AuditEvent) bool { return ev.Action == audit.ActionProvidersTest })
 	if ev.ResourceType != "org" || ev.ResourceID != f.orgID || ev.Meta["provider"] != ai.AzureFoundryProviderID || ev.Meta["ok"] != "false" {
 		t.Errorf("audit event = %+v (meta %v)", ev, ev.Meta)
 	}
@@ -411,11 +392,11 @@ func TestListProviders_OrgIdOnlyForAdminsAndMembers(t *testing.T) {
 	}
 }
 
-// budgetRefusal is a rag.BudgetChecker refusing with the chat service's
-// budget sentinel.
+// budgetRefusal is a rag.BudgetChecker refusing with the AI budget's
+// sentinel.
 type budgetRefusal struct{ err error }
 
-func (b budgetRefusal) CheckBudget(context.Context, string, string) error { return b.err }
+func (b *budgetRefusal) CheckBudget(context.Context, string, string) error { return b.err }
 
 // R-4: knowledge upload and re-index over the daily budget are 429
 // BUDGET_EXCEEDED; an unreadable spend is 503 BUDGET_UNAVAILABLE. The run
@@ -423,8 +404,8 @@ func (b budgetRefusal) CheckBudget(context.Context, string, string) error { retu
 // is consulted (an Azure AI Foundry embedder is never gated).
 func TestKnowledge_BudgetRendered(t *testing.T) {
 	f := newOrgProvidersFixture(t, true)
-	ks := rag.NewKnowledgeService(testutil.NewFakeBackend(), nil, nil, rag.WithEmbedder(&testutil.FakeProvider{}))
-	ks.SetBudgetChecker(budgetRefusal{err: fmt.Errorf("refused: %w", service.ErrAIBudgetExceeded)})
+	budget := &budgetRefusal{err: fmt.Errorf("refused: %w", service.ErrAIBudgetExceeded)}
+	ks := rag.NewKnowledgeService(testutil.NewFakeBackend(), nil, nil, rag.WithEmbedder(&testutil.FakeProvider{}), rag.WithBudgetChecker(budget))
 	rr := f.doOrg(t, "u-admin", http.MethodPost, "/api/orgs/"+f.orgID+"/knowledge/upload", map[string]string{"filename": "a.md", "content": "text"}, ks)
 	checkStatus(t, rr, http.StatusTooManyRequests)
 	if got := azureDecode(t, rr); got["code"] != "BUDGET_EXCEEDED" {
@@ -433,7 +414,7 @@ func TestKnowledge_BudgetRendered(t *testing.T) {
 	rr = f.doOrg(t, "u-admin", http.MethodPost, "/api/orgs/"+f.orgID+"/knowledge/reindex", nil, ks)
 	checkStatus(t, rr, http.StatusTooManyRequests)
 
-	ks.SetBudgetChecker(budgetRefusal{err: fmt.Errorf("refused: %w", service.ErrAIBudgetUnavailable)})
+	budget.err = fmt.Errorf("refused: %w", service.ErrAIBudgetUnavailable)
 	rr = f.doOrg(t, "u-admin", http.MethodPost, "/api/orgs/"+f.orgID+"/knowledge/upload", map[string]string{"filename": "a.md", "content": "text"}, ks)
 	checkStatus(t, rr, http.StatusServiceUnavailable)
 	if got := azureDecode(t, rr); got["code"] != "BUDGET_UNAVAILABLE" {

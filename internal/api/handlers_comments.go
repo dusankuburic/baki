@@ -2,20 +2,19 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/txhook"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
@@ -47,12 +46,11 @@ func (h *AnalysisHandler) handleListComments(w http.ResponseWriter, r *http.Requ
 		render.Error(w, fmt.Errorf("flowId and findingKey are required"), http.StatusBadRequest)
 		return
 	}
-	userID := h.security.CallerID(r)
-	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "viewer"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, service.FlowRead); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	comments, err := h.backend.ListFindingComments(r.Context(), req.FlowID, req.FindingKey)
+	comments, err := h.comments.List(r.Context(), req.FlowID, req.FindingKey)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -72,10 +70,6 @@ func (h *AnalysisHandler) handleListComments(w http.ResponseWriter, r *http.Requ
 // @Failure      503 {object} object "Service Unavailable (cloud mode required)"
 // @Router       /api/analysis/comments/add [post]
 func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("finding comments require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
 	var req struct {
 		FlowID     string `json:"flowId"`
 		FindingKey string `json:"findingKey"`
@@ -91,7 +85,7 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 	userID := h.security.CallerID(r)
 	// Header, not the resolved document: the write needs the editor check and
 	// the flow's name (for the alerts and the email), never its content.
-	flow, err := h.flowSvc.GetAuthorizedHeader(r.Context(), req.FlowID, userID, "editor")
+	flow, err := h.flowSvc.GetAuthorizedHeader(r.Context(), req.FlowID, service.FlowEdit)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -102,7 +96,7 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 		AuthorID:   userID,
 		Body:       req.Body,
 	}
-	if err := h.backend.AddFindingComment(r.Context(), comment); err != nil {
+	if err := h.comments.Add(r.Context(), comment); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -125,7 +119,7 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 		}
 	})
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionCommentAdd, "flow", req.FlowID, map[string]string{"findingKey": req.FindingKey, "commentId": comment.ID})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionCommentAdd, ResourceType: "flow", ResourceID: req.FlowID, OrgID: flow.OrganizationID, Meta: map[string]string{"findingKey": req.FindingKey, "commentId": comment.ID}})
 	render.JSON(w, comment)
 }
 
@@ -152,7 +146,7 @@ func (h *AnalysisHandler) fanOutComment(flowID, findingKey, flowName, actorID, a
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
 	defer cancel()
-	actorName := h.callerDisplayName(ctx, actorID, actorEmail)
+	actorName := h.comments.AuthorName(ctx, actorID, actorEmail)
 	h.recordCommentAlerts(ctx, flowID, findingKey, flowName, actorID, actorName, commentID)
 	h.emails.Go(func() {
 		ectx, ecancel := context.WithTimeout(context.Background(), bestEffortTimeout)
@@ -164,28 +158,7 @@ func (h *AnalysisHandler) fanOutComment(flowID, findingKey, flowName, actorID, a
 // recordCommentAlerts delivers targeted comment_added alerts to the finding's assignee and everyone
 // who previously commented (deduped, actor excluded). Names resolve best-effort.
 func (h *AnalysisHandler) recordCommentAlerts(ctx context.Context, flowID, findingKey, flowName, actorID, actorName, commentID string) {
-	targets := map[string]bool{}
-	// Assignee: one primary-key row when the backend offers it (storageif.FindingStatusGetter, as
-	// priorAssignee uses); the fallback lists the whole flow's statuses for the single row.
-	if g, ok := h.backend.(storageif.FindingStatusGetter); ok {
-		if st, err := g.GetFindingStatus(ctx, flowID, findingKey); err == nil && st != nil && st.AssigneeID != "" {
-			targets[st.AssigneeID] = true
-		}
-	} else if statuses, err := h.backend.ListFindingStatuses(ctx, flowID); err == nil {
-		for _, st := range statuses {
-			if st.FindingKey == findingKey && st.AssigneeID != "" {
-				targets[st.AssigneeID] = true
-			}
-		}
-	}
-	// Prior commenters.
-	if prior, err := h.backend.ListFindingComments(ctx, flowID, findingKey); err == nil {
-		for _, c := range prior {
-			if c.AuthorID != "" && c.ID != commentID {
-				targets[c.AuthorID] = true
-			}
-		}
-	}
+	targets := h.comments.AlertTargets(ctx, flowID, findingKey, commentID)
 	if len(targets) == 0 {
 		return
 	}
@@ -230,26 +203,9 @@ func (h *AnalysisHandler) notifyFindingComment(ctx context.Context, flowID, find
 		return
 	}
 
-	// Find the assignee: one primary-key row when the backend offers it, else the flow's statuses.
-	assigneeID := ""
-	if g, ok := h.backend.(storageif.FindingStatusGetter); ok {
-		if st, err := g.GetFindingStatus(ctx, flowID, findingKey); err == nil && st != nil {
-			assigneeID = st.AssigneeID
-		}
-	} else if statuses, err := h.backend.ListFindingStatuses(ctx, flowID); err == nil {
-		for _, st := range statuses {
-			if st.FindingKey == findingKey {
-				assigneeID = st.AssigneeID
-				break
-			}
-		}
-	}
-	if assigneeID == "" || assigneeID == commenterID {
-		return // no assignee, or the commenter IS the assignee
-	}
-
-	assignee, err := h.backend.LoadUserByID(ctx, assigneeID)
-	if err != nil || assignee == nil || assignee.Email == "" {
+	// nil: no assignee, the commenter IS the assignee, or no address to write to.
+	assignee := h.comments.AssigneeToNotify(ctx, flowID, findingKey, commenterID)
+	if assignee == nil {
 		return
 	}
 	assigneeName := assignee.DisplayName
@@ -257,8 +213,9 @@ func (h *AnalysisHandler) notifyFindingComment(ctx context.Context, flowID, find
 		assigneeName = assignee.Email
 	}
 	// The flow name arrives resolved through the ACTOR's access; the email only names the flow when
-	// the assignee can read it themselves (an editor may assign a non-collaborator).
-	if h.flowSvc != nil && h.flowSvc.CheckFlowPermission(ctx, flowID, assigneeID, "viewer") != nil {
+	// the assignee can read it themselves (an editor may assign a non-collaborator). Decided for the
+	// assignee as a signed-in user: their stored role, no token scopes.
+	if h.flowSvc != nil && h.flowSvc.CheckFlowPermission(auth.WithActor(ctx, assigneeActor(assignee)), flowID, service.FlowRead) != nil {
 		flowName = ""
 	}
 
@@ -266,8 +223,18 @@ func (h *AnalysisHandler) notifyFindingComment(ctx context.Context, flowID, find
 	findingTitle := h.ruleDisplayName(ruleIDFromFindingKey(findingKey))
 
 	if err := h.email.SendFindingComment(ctx, assignee.Email, assigneeName, commenterName, flowName, findingTitle, body); err != nil {
-		logger.Warn("failed to send finding-comment notification", "assignee", assigneeID, "error", err)
+		logger.Warn("failed to send finding-comment notification", "assignee", assignee.ID, "error", err)
 	}
+}
+
+// assigneeActor is who a notification's flow check decides for: the assignee as a signed-in user with their stored
+// role (a plain member when it is unset), never the caller and never a token.
+func assigneeActor(u *storageif.User) *auth.Actor {
+	role := u.Role
+	if role == "" {
+		role = auth.RoleMember
+	}
+	return &auth.Actor{Kind: auth.ActorUser, UserID: u.ID, Email: u.Email, Role: role}
 }
 
 // @Summary      Delete a comment
@@ -279,10 +246,6 @@ func (h *AnalysisHandler) notifyFindingComment(ctx context.Context, flowID, find
 // @Failure      503 {object} object "Service Unavailable (cloud mode required)"
 // @Router       /api/analysis/comments/delete [post]
 func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("finding comments require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
 	var req struct {
 		FlowID    string `json:"flowId"`
 		CommentID string `json:"commentId"`
@@ -291,24 +254,25 @@ func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Req
 		return
 	}
 	userID := h.security.CallerID(r)
-	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, service.FlowEdit); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
 	// Editors may delete only their own comments; flow admins (owner, org admin, admin-tier
-	// collaborator) may moderate any. Author-scoped delete first — the common case; the second
-	// flow-authz resolve is paid only when moderating someone else's comment.
-	err := h.backend.DeleteFindingComment(r.Context(), req.FlowID, req.CommentID, userID)
+	// collaborator: FlowShare) may moderate any. Author-scoped delete first — the common case; the
+	// second flow-authz resolve is paid only when moderating someone else's comment, and it can only
+	// grant: its refusal leaves the author-scoped error standing.
+	err := h.comments.Delete(r.Context(), req.FlowID, req.CommentID, userID)
 	if errors.Is(err, storageif.ErrNotCommentAuthor) {
-		if adminErr := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "admin"); adminErr == nil {
-			err = h.backend.DeleteFindingComment(r.Context(), req.FlowID, req.CommentID, "")
+		if adminErr := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, service.FlowShare); adminErr == nil {
+			err = h.comments.Delete(r.Context(), req.FlowID, req.CommentID, "")
 		}
 	}
 	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionCommentDelete, "flow", req.FlowID, map[string]string{"commentId": req.CommentID})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionCommentDelete, ResourceType: "flow", ResourceID: req.FlowID, Meta: map[string]string{"commentId": req.CommentID}})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -323,10 +287,6 @@ func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Req
 // @Failure      503 {object} object "Service Unavailable (cloud mode required)"
 // @Router       /api/flow/share/create [post]
 func (h *FlowHandler) handleCreateShare(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("share links require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
 	var req struct {
 		FlowID string `json:"flowId"`
 	}
@@ -334,37 +294,20 @@ func (h *FlowHandler) handleCreateShare(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	userID := h.security.CallerID(r)
-	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, service.FlowEdit); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
 
-	// Generate a random token (32 bytes → 64 hex chars)
-	rawBytes := make([]byte, 32)
-	if _, err := rand.Read(rawBytes); err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-	rawToken := hex.EncodeToString(rawBytes)
-	hash := sha256.Sum256([]byte(rawToken))
-	tokenHash := hex.EncodeToString(hash[:])
-
-	t := &storageif.ShareToken{
-		FlowID:    req.FlowID,
-		TokenHash: tokenHash,
-		CreatedBy: userID,
-	}
-	// Default 30-day expiry so stale links don't grant permanent access.
-	expiry := time.Now().AddDate(0, 0, 30)
-	t.ExpiresAt = &expiry
-	if err := h.backend.CreateShareToken(r.Context(), t); err != nil {
+	t, rawToken, err := h.shares.Create(r.Context(), req.FlowID, userID)
+	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 	metrics.RecordFlowOp("share_create")
 	// A public, unauthenticated link to the report: the one action a reviewer
 	// of the audit trail most needs to see.
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionShareLinkCreate, "flow", req.FlowID, map[string]string{"tokenId": t.ID})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionShareLinkCreate, ResourceType: "flow", ResourceID: req.FlowID, Meta: map[string]string{"tokenId": t.ID}})
 	// Return the raw token (shown once, never again) along with the expiry so
 	// the UI can tell the user when the link stops working.
 	render.JSON(w, map[string]any{
@@ -394,15 +337,14 @@ func (h *FlowHandler) handleListShares(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	userID := h.security.CallerID(r)
 	// Require editor (not viewer): share-token metadata (IDs, creator, expiry) is need-to-know for
 	// owners/editors — create/revoke already require editor, so list must too, else a viewer could
 	// enumerate active share links on a flow.
-	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, service.FlowEdit); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	tokens, err := h.backend.ListShareTokens(r.Context(), req.FlowID)
+	tokens, err := h.shares.List(r.Context(), req.FlowID)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -422,10 +364,6 @@ func (h *FlowHandler) handleListShares(w http.ResponseWriter, r *http.Request) {
 // @Failure      503 {object} object "Service Unavailable (cloud mode required)"
 // @Router       /api/flow/share/revoke [post]
 func (h *FlowHandler) handleRevokeShare(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("share links require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
 	var req struct {
 		FlowID  string `json:"flowId"`
 		TokenID string `json:"tokenId"`
@@ -433,16 +371,15 @@ func (h *FlowHandler) handleRevokeShare(w http.ResponseWriter, r *http.Request) 
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	userID := h.security.CallerID(r)
-	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, service.FlowEdit); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	if err := h.backend.RevokeShareToken(r.Context(), req.FlowID, req.TokenID); err != nil {
+	if err := h.shares.Revoke(r.Context(), req.FlowID, req.TokenID); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionShareLinkRevoke, "flow", req.FlowID, map[string]string{"tokenId": req.TokenID})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionShareLinkRevoke, ResourceType: "flow", ResourceID: req.FlowID, Meta: map[string]string{"tokenId": req.TokenID}})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -458,19 +395,12 @@ func (h *FlowHandler) handleRevokeShare(w http.ResponseWriter, r *http.Request) 
 // @Failure      404 {object} map[string]string "Not found"
 // @Router       /api/shared [get]
 func (h *AnalysisHandler) handleViewShared(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("share links are not available"), http.StatusServiceUnavailable)
-		return
-	}
 	token := r.URL.Query().Get("token")
 	if token == "" {
 		render.Error(w, fmt.Errorf("token is required"), http.StatusBadRequest)
 		return
 	}
-	hash := sha256.Sum256([]byte(token))
-	tokenHash := hex.EncodeToString(hash[:])
-
-	st, err := h.backend.GetShareTokenByHash(r.Context(), tokenHash)
+	st, err := h.shares.Resolve(r.Context(), token)
 	if err != nil {
 		render.Error(w, fmt.Errorf("invalid or expired link"), http.StatusNotFound)
 		return
@@ -494,17 +424,19 @@ func (h *AnalysisHandler) handleViewShared(w http.ResponseWriter, r *http.Reques
 }
 
 // registerShareRoutes wires the /api/flow share-link sub-routes (read-only
-// public report links).
-func (h *FlowHandler) registerShareRoutes(r chi.Router) {
-	r.Post("/share/create", h.handleCreateShare)
-	r.Post("/share/list", h.handleListShares)
-	r.Post("/share/revoke", h.handleRevokeShare)
+// public report links). Links live in the server-side store; without one the
+// list is empty and the writes answer 503.
+func (h *FlowHandler) registerShareRoutes(rb *route.Builder) {
+	rb.Post("/share/create", h.handleCreateShare, route.Needs(capability.ServerStore), route.Idempotent())
+	rb.Post("/share/list", h.handleListShares)
+	rb.Post("/share/revoke", h.handleRevokeShare, route.Needs(capability.ServerStore))
 }
 
 // registerCommentRoutes wires the finding-comment sub-routes (team-shared
-// review threads).
-func (h *AnalysisHandler) registerCommentRoutes(r chi.Router) {
-	r.Post("/comments/list", h.handleListComments)
-	r.Post("/comments/add", h.handleAddComment)
-	r.Post("/comments/delete", h.handleDeleteComment)
+// review threads). Comments live in the server-side store; without one the
+// list is empty and the writes answer 503.
+func (h *AnalysisHandler) registerCommentRoutes(rb *route.Builder) {
+	rb.Post("/comments/list", h.handleListComments)
+	rb.Post("/comments/add", h.handleAddComment, route.Needs(capability.ServerStore), route.Idempotent())
+	rb.Post("/comments/delete", h.handleDeleteComment, route.Needs(capability.ServerStore))
 }

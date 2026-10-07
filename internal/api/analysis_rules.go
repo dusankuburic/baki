@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/service"
 	"pad-core/analyzer"
 	"pad-core/models"
 )
@@ -106,6 +107,7 @@ func (h *AnalysisHandler) handleValidateCustomRules(w http.ResponseWriter, r *ht
 func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Request) {
 	// System admin, not member: this writes the DEPLOYMENT-WIDE settings singleton — any org member
 	// could otherwise change analysis for every tenant. Per-org configuration lives at /api/orgs/{id}/rules.
+	// Kept on the role check, not Can's InstanceAdmin: that would demand the admin scope of a write token.
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
 	}
@@ -143,7 +145,7 @@ func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Re
 // @Failure      400 {object} map[string]string "Bad Request"
 // @Router       /api/analysis/custom-rules/test [post]
 func (h *AnalysisHandler) handleTestCustomRule(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleMember) {
+	if !requireInstancePerm(w, r, h.security, service.InstanceWrite) {
 		return
 	}
 	var req struct {
@@ -162,7 +164,7 @@ func (h *AnalysisHandler) handleTestCustomRule(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, h.security.CallerID(r), "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -192,6 +194,7 @@ func (h *AnalysisHandler) handleTestCustomRule(w http.ResponseWriter, r *http.Re
 // @Router       /api/analysis/rule/config [post]
 func (h *AnalysisHandler) handleUpdateRuleConfig(w http.ResponseWriter, r *http.Request) {
 	// System admin — same reasoning as handleSetRuleEnabled: deployment-wide settings singleton.
+	// Kept on the role check, not Can's InstanceAdmin: that would demand the admin scope of a write token.
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
 	}
@@ -220,10 +223,10 @@ func (h *AnalysisHandler) handleUpdateRuleConfig(w http.ResponseWriter, r *http.
 
 // registerAnalysisRuleRoutes wires the analyzer-rule and custom-rule
 // configuration sub-routes.
-func (h *AnalysisHandler) registerAnalysisRuleRoutes(r chi.Router) {
-	r.Get("/rules", h.handleGetRules)
-	r.Post("/custom-rules/validate", h.handleValidateCustomRules)
-	r.Post("/custom-rules/test", h.handleTestCustomRule)
-	r.Post("/rule/enabled", h.handleSetRuleEnabled)
-	r.Post("/rule/config", h.handleUpdateRuleConfig)
+func (h *AnalysisHandler) registerAnalysisRuleRoutes(rb *route.Builder) {
+	rb.Get("/rules", h.handleGetRules, route.RateLimit(route.RateGeneral))
+	rb.Post("/custom-rules/validate", h.handleValidateCustomRules)
+	rb.Post("/custom-rules/test", h.handleTestCustomRule)
+	rb.Post("/rule/enabled", h.handleSetRuleEnabled)
+	rb.Post("/rule/config", h.handleUpdateRuleConfig)
 }

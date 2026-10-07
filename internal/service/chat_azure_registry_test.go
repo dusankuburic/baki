@@ -69,7 +69,7 @@ func newAzChatEnv(t *testing.T) *azChatEnv {
 		backend:       e.backend,
 		chatCtxCache:  newChatContextCache(),
 	}
-	e.chat.SetAzureModels(e.svc)
+	e.chat.azure = e.svc
 	return e
 }
 

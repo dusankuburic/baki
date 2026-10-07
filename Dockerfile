@@ -23,6 +23,15 @@ RUN cp -a dist dist-nomaps && find dist-nomaps -name '*.map' -delete
 # every asset on every request (26 ms of CPU for the main chunk with brotli).
 # Run on the map-stripped copy, after the strip, so no map gets a sibling.
 RUN node scripts/precompress.mjs dist-nomaps
+# The bundle's build version, the same VERSION the backend stage stamps: the
+# app offers a reload when the server's X-Baki-Version differs (a tab left open
+# across a deploy). Written into index.html's baki-version meta last, not into
+# the JS: VERSION changes on every commit, and in a chunk it would rename every
+# chunk and miss the build and precompress layers on a backend-only deploy
+# (index.html is not precompressed). Same default as the backend's, so an
+# unstamped build matches itself.
+ARG VERSION=0.1.0
+RUN sed -i "s|__BAKI_VERSION__|${VERSION}|" dist-nomaps/index.html
 
 # Stage 2: Build the backend
 FROM golang:1.25-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS backend-builder

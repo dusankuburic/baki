@@ -1,4 +1,11 @@
-import type {AzureModelKind, ModelPurpose, ModelPurposePreset} from '@/types'
+import {
+  AZURE_MODEL_KINDS,
+  isKnown,
+  type AzureModelKind,
+  type ModelPurpose,
+  type ModelPurposePreset,
+  type Tolerant,
+} from '@/types'
 import {common} from '@/i18n/en'
 
 // What a registry model is for. A purpose is stored as a preset key or as
@@ -43,10 +50,10 @@ export function purposeLabelKey(purpose: ModelPurpose): PurposeLabelKey {
   return `models.purpose.${purpose}`
 }
 
-/** `common` namespace key of a kind's label. */
-export type ModelKindLabelKey = `models.kind.${AzureModelKind}`
-export function modelKindLabelKey(kind: AzureModelKind): ModelKindLabelKey {
-  return `models.kind.${kind}`
+/** `common` namespace key of a kind's label; a kind this bundle does not know reads as "Other". */
+export type ModelKindLabelKey = `models.kind.${AzureModelKind | 'other'}`
+export function modelKindLabelKey(kind: Tolerant<AzureModelKind>): ModelKindLabelKey {
+  return isKnown(AZURE_MODEL_KINDS, kind) ? `models.kind.${kind}` : 'models.kind.other'
 }
 
 /**

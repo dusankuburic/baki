@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"pad-core/analyzer"
 	"pad-core/models"
 
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
+	"pad-analyzer/internal/capability"
+	"pad-analyzer/internal/service"
 )
 
 // handleEvaluatePolicy analyzes a flow and gates the result against a policy
@@ -32,8 +35,7 @@ func (h *AnalysisHandler) handleEvaluatePolicy(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -48,14 +50,6 @@ func (h *AnalysisHandler) handleEvaluatePolicy(w http.ResponseWriter, r *http.Re
 	render.JSON(w, analyzer.EvaluatePolicy(report, req.Policy))
 }
 
-func (h *AnalysisHandler) policyAvailable(w http.ResponseWriter) bool {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("policies require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return false
-	}
-	return true
-}
-
 // @Summary      Save a named policy for an organization
 // @Tags         policy
 // @Produce      json
@@ -65,9 +59,6 @@ func (h *AnalysisHandler) policyAvailable(w http.ResponseWriter) bool {
 // @Failure      503 {object} object "Service Unavailable (cloud mode required)"
 // @Router       /api/analysis/policy/save [post]
 func (h *AnalysisHandler) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
-	if !h.policyAvailable(w) {
-		return
-	}
 	var p models.Policy
 	if !decodeBody(w, r, &p) {
 		return
@@ -81,11 +72,11 @@ func (h *AnalysisHandler) handleSavePolicy(w http.ResponseWriter, r *http.Reques
 	if !requireOrgAdmin(w, r, h.security, p.OrgID) {
 		return
 	}
-	if err := h.backend.SavePolicy(r.Context(), &p); err != nil {
+	if err := h.policies.Save(r.Context(), &p); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionPolicySave, "policy", p.ID, map[string]string{"orgId": p.OrgID, "name": p.Name})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionPolicySave, ResourceType: "policy", ResourceID: p.ID, OrgID: p.OrgID, Meta: map[string]string{"orgId": p.OrgID, "name": p.Name}})
 	render.JSON(w, p)
 }
 
@@ -98,9 +89,6 @@ func (h *AnalysisHandler) handleSavePolicy(w http.ResponseWriter, r *http.Reques
 // @Failure      503 {object} object "Service Unavailable (cloud mode required)"
 // @Router       /api/analysis/policy/list [post]
 func (h *AnalysisHandler) handleListPolicies(w http.ResponseWriter, r *http.Request) {
-	if !h.policyAvailable(w) {
-		return
-	}
 	var req struct {
 		OrgID string `json:"orgId"`
 	}
@@ -111,7 +99,7 @@ func (h *AnalysisHandler) handleListPolicies(w http.ResponseWriter, r *http.Requ
 	if !requireOrgMember(w, r, h.security, req.OrgID) {
 		return
 	}
-	policies, err := h.backend.ListPolicies(r.Context(), req.OrgID)
+	policies, err := h.policies.List(r.Context(), req.OrgID)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -128,9 +116,6 @@ func (h *AnalysisHandler) handleListPolicies(w http.ResponseWriter, r *http.Requ
 // @Failure      503 {object} object "Service Unavailable (cloud mode required)"
 // @Router       /api/analysis/policy/get [post]
 func (h *AnalysisHandler) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
-	if !h.policyAvailable(w) {
-		return
-	}
 	var req struct {
 		OrgID string `json:"orgId"`
 		ID    string `json:"id"`
@@ -141,7 +126,7 @@ func (h *AnalysisHandler) handleGetPolicy(w http.ResponseWriter, r *http.Request
 	if !requireOrgMember(w, r, h.security, req.OrgID) {
 		return
 	}
-	p, err := h.backend.GetPolicy(r.Context(), req.OrgID, req.ID)
+	p, err := h.policies.Get(r.Context(), req.OrgID, req.ID)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -158,9 +143,6 @@ func (h *AnalysisHandler) handleGetPolicy(w http.ResponseWriter, r *http.Request
 // @Failure      503 {object} object "Service Unavailable (cloud mode required)"
 // @Router       /api/analysis/policy/delete [post]
 func (h *AnalysisHandler) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
-	if !h.policyAvailable(w) {
-		return
-	}
 	var req struct {
 		OrgID string `json:"orgId"`
 		ID    string `json:"id"`
@@ -173,11 +155,11 @@ func (h *AnalysisHandler) handleDeletePolicy(w http.ResponseWriter, r *http.Requ
 	if !requireOrgAdmin(w, r, h.security, req.OrgID) {
 		return
 	}
-	if err := h.backend.DeletePolicy(r.Context(), req.OrgID, req.ID); err != nil {
+	if err := h.policies.Delete(r.Context(), req.OrgID, req.ID); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionPolicyDelete, "policy", req.ID, map[string]string{"orgId": req.OrgID})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionPolicyDelete, ResourceType: "policy", ResourceID: req.ID, OrgID: req.OrgID, Meta: map[string]string{"orgId": req.OrgID}})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -193,9 +175,6 @@ func (h *AnalysisHandler) handleDeletePolicy(w http.ResponseWriter, r *http.Requ
 // @Failure      503 {object} object "Service Unavailable (cloud mode required)"
 // @Router       /api/analysis/policy/evaluate-by-id [post]
 func (h *AnalysisHandler) handleEvaluatePolicyByID(w http.ResponseWriter, r *http.Request) {
-	if !h.policyAvailable(w) {
-		return
-	}
 	var req struct {
 		FlowID string `json:"flowId"`
 		OrgID  string `json:"orgId"`
@@ -207,14 +186,13 @@ func (h *AnalysisHandler) handleEvaluatePolicyByID(w http.ResponseWriter, r *htt
 	if !requireOrgMember(w, r, h.security, req.OrgID) {
 		return
 	}
-	policy, err := h.backend.GetPolicy(r.Context(), req.OrgID, req.ID)
+	policy, err := h.policies.Get(r.Context(), req.OrgID, req.ID)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -228,12 +206,14 @@ func (h *AnalysisHandler) handleEvaluatePolicyByID(w http.ResponseWriter, r *htt
 }
 
 // registerPolicyRoutes wires the policy-gate sub-routes (evaluate inline or
-// a persisted named policy; cloud mode for persistence).
-func (h *AnalysisHandler) registerPolicyRoutes(r chi.Router) {
-	r.Post("/policy/evaluate", h.handleEvaluatePolicy)           // gate a flow against an inline policy
-	r.Post("/policy/save", h.handleSavePolicy)                   // persist a named policy (cloud)
-	r.Post("/policy/list", h.handleListPolicies)                 // list org's policies (cloud)
-	r.Post("/policy/get", h.handleGetPolicy)                     // get a single policy (cloud)
-	r.Post("/policy/delete", h.handleDeletePolicy)               // delete a policy (cloud)
-	r.Post("/policy/evaluate-by-id", h.handleEvaluatePolicyByID) // gate a flow against a persisted policy
+// a persisted named policy; persistence needs the server-side store).
+func (h *AnalysisHandler) registerPolicyRoutes(rb *route.Builder) {
+	rb.Post("/policy/evaluate", h.handleEvaluatePolicy) // gate a flow against an inline policy
+	rb.Group(func(rb *route.Builder) {
+		rb.Post("/policy/save", h.handleSavePolicy)                   // persist a named policy
+		rb.Post("/policy/list", h.handleListPolicies)                 // list org's policies
+		rb.Post("/policy/get", h.handleGetPolicy)                     // get a single policy
+		rb.Post("/policy/delete", h.handleDeletePolicy)               // delete a policy
+		rb.Post("/policy/evaluate-by-id", h.handleEvaluatePolicyByID) // gate a flow against a persisted policy
+	}, route.Needs(capability.ServerStore))
 }

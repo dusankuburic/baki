@@ -55,7 +55,7 @@ func TestHandleGetRules_UninitializedAppReturnsJSON(t *testing.T) {
 // silently disabling all finding-assignment/comment email notifications.
 func TestNewAnalysisHandler_EmailWired(t *testing.T) {
 	svc := mailer.NewService(config.EmailConfig{}, config.ModeLocal)
-	h := NewAnalysisHandler(nil, nil, nil, nil, nil, nil, svc, "")
+	h := NewAnalysisHandler(nil, nil, nil, nil, nil, nil, svc, "", nil, nil, nil, nil, nil, nil)
 	if h.email == nil {
 		t.Fatal("email field is nil — notifications are dead code; assign email in the constructor")
 	}

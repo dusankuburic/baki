@@ -146,7 +146,7 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 	// senders that genuinely cannot upgrade yet.
 	if r.Header.Get("X-Baki-Timestamp") == "" {
 		if os.Getenv("PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP") == "1" {
-			logger.Warn("CI webhook accepted WITHOUT X-Baki-Timestamp (PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP=1; replay-vulnerable) — update the sender")
+			logger.FromContext(r.Context()).Warn("CI webhook accepted WITHOUT X-Baki-Timestamp (PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP=1; replay-vulnerable) — update the sender")
 		} else {
 			render.Error(w, fmt.Errorf("missing X-Baki-Timestamp (replay protection); include it in the signed payload or set PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP=1 on the server to re-enable legacy senders"), http.StatusUnauthorized)
 			return
@@ -177,7 +177,7 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 		// 4xx bodies pass through unmasked — a wrapped driver error
 		// (SQL state, blob details) must not reach an HMAC-authenticated but
 		// external caller. Static message; detail stays server-side.
-		logger.Warn("ci webhook: flow resolve failed", "flowId", req.FlowID, "err", err)
+		logger.FromContext(r.Context()).Warn("ci webhook: flow resolve failed", "flowId", req.FlowID, "err", err)
 		render.Error(w, fmt.Errorf("flow not found"), http.StatusNotFound)
 		return
 	}

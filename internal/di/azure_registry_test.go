@@ -7,6 +7,7 @@ import (
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/api"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
@@ -95,11 +96,11 @@ func TestProvideAzureModelService_Wiring(t *testing.T) {
 	}
 
 	// The knowledge service embeds through the registry when wired.
-	ks := ProvideKnowledgeService(nil, nil, nil, cfg, cloud)
+	ks := ProvideKnowledgeService(nil, nil, nil, cfg, cloud, nil)
 	if !ks.AzureEmbedderEnabled() {
 		t.Error("the knowledge service does not embed through the registry")
 	}
-	if ProvideKnowledgeService(nil, nil, nil, cfg, nil).AzureEmbedderEnabled() {
+	if ProvideKnowledgeService(nil, nil, nil, cfg, nil, nil).AzureEmbedderEnabled() {
 		t.Error("no registry, no registry embedder")
 	}
 }
@@ -123,6 +124,7 @@ func TestServiceModule_GraphWithAzureRegistry(t *testing.T) {
 			func() *api.MigrationRunner { return nil },
 			func() api.ScanNowFunc { return nil },
 			func() service.KeyStore { return testutil.NewFakeSecretStore() },
+			audit.Provide,
 		),
 		ServiceModule,
 		APIModule,

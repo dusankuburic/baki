@@ -19,6 +19,7 @@ import (
 // the invite-free direct path (SaveOrg through the org service store is not
 // reachable from here; use the org update API's member add as admin).
 type channelEnv struct {
+	t       *testing.T
 	rt      *Router
 	admin   string
 	orgID   string
@@ -42,7 +43,7 @@ func newChannelEnv(t *testing.T) *channelEnv {
 	if err := json.NewDecoder(rr.Body).Decode(&createdOrg); err != nil || createdOrg.ID == "" {
 		t.Fatalf("org create: %v (%s)", err, rr.Body.String())
 	}
-	return &channelEnv{rt: rt, admin: admin, orgID: createdOrg.ID, backend: backend}
+	return &channelEnv{t: t, rt: rt, admin: admin, orgID: createdOrg.ID, backend: backend}
 }
 
 // allowLoopbackDelivery relaxes this env's egress policy to the desktop one.
@@ -54,11 +55,12 @@ func newChannelEnv(t *testing.T) *channelEnv {
 // constructed dependency, and stating it here is clearer than a second router
 // builder that differs in one invisible way.
 func (e *channelEnv) allowLoopbackDelivery() *channelEnv {
-	e.rt.handlers.Org.notifyPolicy = notify.AllowLoopbackTargets
+	org := moduleOf[*OrgHandler](e.t, e.rt)
+	org.notifyPolicy = notify.AllowLoopbackTargets
 	// The shared channel client (D-25) was built under the strict policy at
 	// construction; swap it with the policy so the test delivery can dial
 	// the loopback httptest server.
-	e.rt.handlers.Org.channelClient = notify.NewChannelClient(notify.AllowLoopbackTargets)
+	org.channelClient = notify.NewChannelClient(notify.AllowLoopbackTargets)
 	return e
 }
 

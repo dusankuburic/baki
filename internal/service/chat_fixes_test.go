@@ -21,7 +21,7 @@ func newFixTestService(doc *models.FlowDocument, applyHook applyFixFunc) (*ChatS
 	ldp := NewLocalDocumentProvider()
 	ldp.SetCurrentDoc(doc)
 	lfs := NewFlowService(notifier, nil, ldp, nil, nil, nil)
-	analysisSvc, err := NewAnalysisService(notifier, nilSettings{}, nil)
+	analysisSvc, err := NewAnalysisService(notifier, nilSettings{}, nil, AnalysisOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -123,7 +123,7 @@ func TestApplyWithApproval_ApproveAppliesAndVerifies(t *testing.T) {
 	}
 	svc, _ := newFixTestService(doc, hook)
 	rec := &fixEventRecorder{}
-	ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, nil, nil)
+	ap := svc.newFixApplier(doc, "stream-1", rec.emit, nil, nil)
 	if ap == nil {
 		t.Fatal("applier not wired")
 	}
@@ -172,7 +172,7 @@ func TestApplyWithApproval_ApproveButFindingPersists(t *testing.T) {
 		return d, nil // no-op apply — the finding is still there
 	})
 	rec := &fixEventRecorder{}
-	ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, nil, nil)
+	ap := svc.newFixApplier(doc, "stream-1", rec.emit, nil, nil)
 	prop := fixTestProposal()
 	prop.Fingerprint = realFingerprintFor(t, svc, doc, prop.RuleID, prop.BlockID)
 
@@ -207,7 +207,7 @@ func TestApplyWithApproval_DeclinedAndTimeout(t *testing.T) {
 			return doc, nil
 		})
 		rec := &fixEventRecorder{}
-		ap := svc.newFixApplier("user-1", fixTestDoc(), "stream-1", rec.emit, nil, nil)
+		ap := svc.newFixApplier(fixTestDoc(), "stream-1", rec.emit, nil, nil)
 		prop := fixTestProposal()
 		go func() {
 			for i := 0; i < 1000; i++ {
@@ -231,7 +231,7 @@ func TestApplyWithApproval_DeclinedAndTimeout(t *testing.T) {
 		svc, _ := newFixTestService(fixTestDoc(), nil)
 		svc.fixDecisionWait = 30 * time.Millisecond
 		rec := &fixEventRecorder{}
-		ap := svc.newFixApplier("user-1", fixTestDoc(), "stream-1", rec.emit, nil, nil)
+		ap := svc.newFixApplier(fixTestDoc(), "stream-1", rec.emit, nil, nil)
 
 		start := time.Now()
 		out, err := ap.ApplyFixWithApproval(context.Background(), fixTestProposal())
@@ -286,7 +286,7 @@ func TestRunToolLoop_ApplyFixEndToEnd(t *testing.T) {
 	wantFP := realFingerprintFor(t, svc, doc, "unhandled-error", "b1")
 
 	rec := &fixEventRecorder{}
-	ap := svc.newFixApplier("user-1", doc, "stream-1", rec.emit, nil, nil)
+	ap := svc.newFixApplier(doc, "stream-1", rec.emit, nil, nil)
 	tctx := ai.ToolContext{Ctx: context.Background(), Doc: doc, RealDoc: doc, Analysis: svc.analysisCache, Fixes: ap}
 
 	prov := &recordingProvider{FakeProvider: testutil.FakeProvider{Tools: true, Turns: []testutil.FakeTurn{

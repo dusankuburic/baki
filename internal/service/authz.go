@@ -13,9 +13,10 @@ import (
 
 // AuthzService is the single source of truth for flow- and org-level authorization
 // decisions in cloud mode: all services and handlers gating tenant-scoped resources
-// must delegate here — do not duplicate policy elsewhere. In local/Tauri mode
-// (storage == nil) every check allows: the desktop app is single-user and the API is
-// already gated by the static sidecar token.
+// must delegate here — do not duplicate policy elsewhere. Can is the entry point: it
+// also checks an API token's scopes; the checks below are its implementation. In
+// local/Tauri mode (storage == nil) every flow and org check allows: the desktop app
+// is single-user and the API is already gated by the static sidecar token.
 type AuthzService struct {
 	storage storageif.StorageBackend
 	orgSvc  *collaboration.OrgService
@@ -370,45 +371,6 @@ func (a *AuthzService) BatchFlowPermissionsWithRoles(ctx context.Context, docs [
 	}
 
 	return result
-}
-
-// RequireOrgMember returns nil if userID is a member of orgID (any role),
-// ErrPermissionDenied otherwise.
-func (a *AuthzService) RequireOrgMember(ctx context.Context, orgID, userID string) error {
-	if a.storage == nil { // Local mode
-		return nil
-	}
-	if a.orgSvc != nil && a.orgSvc.IsMember(ctx, orgID, userID) {
-		return nil
-	}
-	return ErrPermissionDenied
-}
-
-// RequireOrgAdmin returns nil if userID is an admin of orgID.
-func (a *AuthzService) RequireOrgAdmin(ctx context.Context, orgID, userID string) error {
-	if a.storage == nil { // Local mode
-		return nil
-	}
-	if a.orgSvc != nil && a.orgSvc.IsAdmin(ctx, orgID, userID) {
-		return nil
-	}
-	return ErrPermissionDenied
-}
-
-// RequireOrgWriter returns nil if userID's role in orgID ranks at least
-// "member" (i.e. may create content in the org; viewers/guests may not).
-func (a *AuthzService) RequireOrgWriter(ctx context.Context, orgID, userID string) error {
-	if a.storage == nil { // Local mode
-		return nil
-	}
-	if a.orgSvc != nil {
-		if role, err := a.orgSvc.MemberRole(ctx, orgID, userID); err == nil {
-			if orgRoleToPermRank(role) >= permRank("editor") {
-				return nil
-			}
-		}
-	}
-	return ErrPermissionDenied
 }
 
 func permRank(p string) int {

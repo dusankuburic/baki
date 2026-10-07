@@ -337,7 +337,8 @@ func TestExportAuditEvents_KeysetWalk(t *testing.T) {
 	// list's order (created_at DESC, id ASC) is the index order.
 	stamp := func(i int) time.Time { return base.Add(-time.Duration(i/3) * time.Second) }
 	ident := func(i int) string { return fmt.Sprintf("ev-%05d", i) }
-	cols := []string{"id", "user_id", "email", "action", "resource_type", "resource_id", "ip", "meta", "created_at"}
+	cols := []string{"id", "user_id", "email", "action", "resource_type", "resource_id", "ip", "meta", "created_at",
+		"org_id", "actor_kind", "token_id", "actor_job", "user_agent"}
 	var statements []string
 	var cursors []auditCursor
 	b, _ := newFakeBackend(t, 1, func(query string, args []driver.NamedValue) fakeResult {
@@ -364,7 +365,7 @@ func TestExportAuditEvents_KeysetWalk(t *testing.T) {
 		}
 		var rows [][]driver.Value
 		for i := from; i < total && i < from+int(limit); i++ {
-			rows = append(rows, []driver.Value{ident(i), "u", "", "test", "", "", "", []byte(`{}`), stamp(i)})
+			rows = append(rows, []driver.Value{ident(i), "u", "", "test", "", "", "", []byte(`{}`), stamp(i), nil, nil, nil, nil, nil})
 		}
 		return fakeResult{cols: cols, rows: rows}
 	})

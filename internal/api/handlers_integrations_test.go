@@ -123,7 +123,7 @@ func TestCIWebhook_Unconfigured_NoErrorLogFlood(t *testing.T) {
 
 func TestCIWebhook_MissingSignature_Returns401(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	rt.handlers.Analysis.ciSecret = "topsecret"
+	moduleOf[*AnalysisHandler](t, rt).ciSecret = "topsecret"
 
 	body, _ := json.Marshal(map[string]string{"flowId": "x"})
 	req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader(body))
@@ -136,7 +136,7 @@ func TestCIWebhook_MissingSignature_Returns401(t *testing.T) {
 
 func TestCIWebhook_InvalidSignature_Returns401(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	rt.handlers.Analysis.ciSecret = "topsecret"
+	moduleOf[*AnalysisHandler](t, rt).ciSecret = "topsecret"
 
 	body, _ := json.Marshal(map[string]string{"flowId": "x"})
 	req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader(body))
@@ -150,7 +150,7 @@ func TestCIWebhook_InvalidSignature_Returns401(t *testing.T) {
 
 func TestCIWebhook_ValidSignature_MissingFlowID_Returns400(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	rt.handlers.Analysis.ciSecret = "topsecret"
+	moduleOf[*AnalysisHandler](t, rt).ciSecret = "topsecret"
 
 	body, _ := json.Marshal(map[string]string{}) // no flowId
 	ts := time.Now().Unix()
@@ -167,7 +167,7 @@ func TestCIWebhook_ValidSignature_MissingFlowID_Returns400(t *testing.T) {
 // B1.9: a legacy (timestamp-less) signature is refused — replay protection.
 func TestCIWebhook_LegacyNoTimestamp_Refused(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	rt.handlers.Analysis.ciSecret = "topsecret"
+	moduleOf[*AnalysisHandler](t, rt).ciSecret = "topsecret"
 
 	body, _ := json.Marshal(map[string]string{"flowId": "x"})
 	req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader(body))

@@ -37,6 +37,7 @@ database; the recipe is in [docs/architecture/safety-nets.md](docs/architecture/
 
 ```
 go test ./internal/api/ -run TestRoutePolicy_Golden -update-route-policy
+go test ./internal/api/ -run TestRoutePolicyDeclared_Golden -update-route-policy-declared
 go test ./internal/api/ -run TestAuthzMatrix_Golden -update-authz-matrix
 go test ./internal/storage/database/ -run TestMigrationChecksums_Golden -update-migration-checksums
 ```

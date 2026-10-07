@@ -96,7 +96,7 @@ function renderModal(
     <AzureModelModal
       scope={USER}
       entry={entry}
-      initial={opts.initial ?? (entry ? modelFormFromEntry(entry) : emptyModelForm('default'))}
+      initial={opts.initial ?? (entry ? modelFormFromEntry(entry)! : emptyModelForm('default'))}
       reportedWindow={opts.reportedWindow}
       connections={opts.connections ?? [conn('default')]}
       models={opts.models ?? []}
@@ -355,7 +355,7 @@ describe('AzureModelModal: editing', () => {
       <AzureModelModal
         scope={ORG}
         entry={shared}
-        initial={modelFormFromEntry(shared)}
+        initial={modelFormFromEntry(shared)!}
         connections={[conn('default', {shared: true})]}
         models={[shared]}
         onClose={vi.fn()}

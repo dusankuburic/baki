@@ -38,18 +38,6 @@ const maxConcurrentStreamsPerScope = 3
 // maxToolIterations bounds the read-only tool loop against a model that never stops requesting tools.
 const maxToolIterations = 6
 
-// dailyUsage returns today's AI spend; (0, nil) on a nil backend. Callers must fail closed on error — treating it as 0 removes the guardrail.
-func (s *ChatService) dailyUsage(ctx context.Context, scope, orgID string) (float64, error) {
-	if s.backend == nil {
-		return 0, nil
-	}
-	usage, err := s.backend.GetDailyUsage(ctx, scope, orgID)
-	if err != nil {
-		return 0, err
-	}
-	return usage, nil
-}
-
 // inFlightCost prices not-yet-persisted spend; double-counting is the safe direction.
 func inFlightCost(price ai.Pricing, tokensIn, tokensOut int) float64 {
 	// Negative counts must not lower the ledger entry other streams read.
@@ -73,79 +61,24 @@ func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string, in
 	return s.enforceBudgetMemo(ctx, nil, scope, orgID, inflight, self)
 }
 
-// turnBudgetUsage memoizes one tool loop's usage reads; errors cache too (fail closed).
-type turnBudgetUsage struct {
-	orgRead, userRead bool
-	org               float64
-	orgErr            error
-	user              float64
-	userErr           error
-}
-
-// read returns the memoized usage, reading the store once; a nil memo reads fresh.
-func (t *turnBudgetUsage) read(s *ChatService, ctx context.Context, scope, orgID string) (float64, error) {
-	if t == nil {
-		return s.dailyUsage(ctx, scope, orgID)
-	}
-	if orgID == "" {
-		if !t.userRead {
-			t.user, t.userErr = s.dailyUsage(ctx, scope, "")
-			t.userRead = true
-		}
-		return t.user, t.userErr
-	}
-	if !t.orgRead {
-		t.org, t.orgErr = s.dailyUsage(ctx, scope, orgID)
-		t.orgRead = true
-	}
-	return t.org, t.orgErr
-}
-
 // enforceBudgetMemo is enforceBudget with a per-loop usage memo; the in-flight ledger covers its staleness gap.
 func (s *ChatService) enforceBudgetMemo(ctx context.Context, memo *turnBudgetUsage, scope, orgID string, inflight float64, self *streamCtl) error {
-	if s.settings == nil {
-		return nil // no settings provider wired (bare-struct tests/local) — unlimited
+	var spend inFlightSpend
+	if self != nil {
+		spend = self
 	}
-	settings := s.settings.Get()
-	if settings == nil || settings.AI.DailyBudget <= 0 {
-		return nil
-	}
-	usage, err := memo.read(s, ctx, scope, orgID)
-	if err != nil {
-		return budgetUnavailable(scope, err)
-	}
-	// Concurrent streams' in-flight spend; usage rows land only after each turn.
-	orgOthers, userOthers := s.othersInFlight(scope, orgID, self)
-	concurrent := userOthers
-	if orgID != "" {
-		concurrent = orgOthers
-	}
-	if total := usage + inflight + concurrent; total >= settings.AI.DailyBudget {
-		return &budgetError{
-			kind: ErrAIBudgetExceeded,
-			msg:  fmt.Sprintf("daily AI budget exceeded ($%.2f / $%.2f, of which $%.2f is in flight on other streams)", total, settings.AI.DailyBudget, concurrent),
-		}
-	}
-
-	// Org-scoped: also enforce the per-user sub-limit (orgID "" reads the personal-only total).
-	if orgID != "" && settings.AI.PerUserDailyBudget > 0 {
-		userUsage, err := memo.read(s, ctx, scope, "")
-		if err != nil {
-			return budgetUnavailable(scope, err)
-		}
-		if total := userUsage + inflight + userOthers; total >= settings.AI.PerUserDailyBudget {
-			return &budgetError{
-				kind: ErrAIBudgetExceeded,
-				msg:  fmt.Sprintf("per-user daily AI budget exceeded ($%.2f / $%.2f, of which $%.2f is in flight on other streams)", total, settings.AI.PerUserDailyBudget, userOthers),
-			}
-		}
-	}
-	return nil
+	return s.aiBudget().check(ctx, memo, scope, orgID, inflight, spend)
 }
 
-// CheckBudget reports whether the caller may spend on AI right now (orgID "" = personal): daily budget plus per-user sub-limit, in-flight included; errors are ErrAIBudgetExceeded or ErrAIBudgetUnavailable.
-func (s *ChatService) CheckBudget(ctx context.Context, scope, orgID string) error {
-	return s.enforceBudget(ctx, scope, orgID, 0, nil)
+// aiBudget is the budget gate: the one DI shares with the knowledge base, else (a bare struct in tests) one over
+// the service's own settings and store.
+func (s *ChatService) aiBudget() *AIBudget {
+	s.budgetOnce.Do(func() {
+		if s.budget == nil {
+			s.budget = NewAIBudget(s.settings, s.backend)
+		}
+	})
+	return s.budget
 }
 
 // enforceTurnBudget: an alias (Foundry) turn is never budget-refused — baki does not price Azure usage.
@@ -161,28 +94,6 @@ func (s *ChatService) enforceTurnBudgetMemo(ctx context.Context, provider ai.Pro
 		return nil
 	}
 	return s.enforceBudgetMemo(ctx, memo, scope, orgID, inflight, self)
-}
-
-// othersInFlight sums active streams' in-flight ledger except self: orgSum for orgID, userSum for scope.
-func (s *ChatService) othersInFlight(scope, orgID string, self *streamCtl) (orgSum, userSum float64) {
-	s.activeStreams.Range(func(_, v interface{}) bool {
-		c, ok := v.(*streamCtl)
-		if !ok || c == self {
-			return true
-		}
-		cost := c.inflight()
-		if cost <= 0 {
-			return true
-		}
-		if c.ownerID == scope {
-			userSum += cost
-		}
-		if orgID != "" && c.orgID == orgID {
-			orgSum += cost
-		}
-		return true
-	})
-	return orgSum, userSum
 }
 
 // maxOutputTokens is the reservation basis: the request's cap or the 4096 default.
@@ -295,6 +206,8 @@ func (s *ChatService) tryStartStream(streamID, scope string, ctl *streamCtl) (bo
 		s.activeStreams.Delete(streamID)
 		return false, nil
 	}
+	// The budget's in-flight ledger holds exactly the active streams (released where activeStreams drops it).
+	s.aiBudget().hold(ctl)
 	return true, nil
 }
 
@@ -333,6 +246,10 @@ type ChatService struct {
 	// mode: ModeLocal persists on disk (desktop); cloud via Postgres + RLS.
 	mode      config.DeploymentMode
 	knowledge *rag.KnowledgeService
+	// budget is the daily AI budget gate and in-flight ledger, shared with the knowledge base; nil (a bare
+	// struct in tests) builds one over settings and backend on first use (aiBudget).
+	budget     *AIBudget
+	budgetOnce sync.Once
 	// watchdogInterval / idleTimeout / hostedIdleTimeout: test overrides; 0 ⇒ defaults.
 	watchdogInterval  time.Duration
 	idleTimeout       time.Duration
@@ -368,6 +285,20 @@ type ChatService struct {
 	azureConnection func(scope string, ref ai.AzureConnectionRef, entries []ai.AzureRegisteredModel) (ai.Provider, error)
 }
 
+// ChatOptions are ChatService's optional collaborators; the zero value chats without the knowledge base, the
+// Azure AI Foundry model registry or the Redis resume backplane, on a budget gate of its own.
+type ChatOptions struct {
+	// Knowledge answers retrieval for org-scoped turns; nil = no RAG.
+	Knowledge *rag.KnowledgeService
+	// Budget is the daily AI budget gate the knowledge base consults too; nil builds a private one.
+	Budget *AIBudget
+	// Azure resolves azure-foundry model ids on the model registry before the stream starts; nil keeps the
+	// single-document behaviour.
+	Azure *AzureModelService
+	// Resume enables cross-replica stream resume; nil (PAD_REDIS_URL unset) keeps the single-replica default.
+	Resume *redis.Client
+}
+
 func NewChatService(
 	notifier EventNotifier,
 	configDir string,
@@ -377,8 +308,9 @@ func NewChatService(
 	factory *ai.ProviderFactory,
 	backend chatStore,
 	mode config.DeploymentMode,
+	opts ChatOptions,
 ) *ChatService {
-	return &ChatService{
+	s := &ChatService{
 		notifier:      notifier,
 		configDir:     configDir,
 		flowCache:     flowCache,
@@ -387,18 +319,18 @@ func NewChatService(
 		factory:       factory,
 		backend:       backend,
 		mode:          mode,
+		knowledge:     opts.Knowledge,
+		budget:        opts.Budget,
+		azure:         opts.Azure,
 		resume:        noopResumeStore{},
 		chatCtxCache:  newChatContextCache(),
 		chatCtxGen:    newChatCtxGenCache(),
 	}
+	if opts.Resume != nil {
+		s.resume = redisResumeStore{c: opts.Resume}
+	}
+	return s
 }
-
-func (s *ChatService) SetKnowledgeService(ks *rag.KnowledgeService) {
-	s.knowledge = ks
-}
-
-// SetAzureModels wires the Azure model registry for model-id resolution; nil keeps the single-document behaviour.
-func (s *ChatService) SetAzureModels(azure *AzureModelService) { s.azure = azure }
 
 // resumeBackplane returns the resume store, or a no-op when unset (bare struct literal in tests).
 func (s *ChatService) resumeBackplane() resumeStore {
@@ -408,16 +340,9 @@ func (s *ChatService) resumeBackplane() resumeStore {
 	return s.resume
 }
 
-// SetResumeBackplane enables cross-replica stream resume backed by Redis; nil keeps the single-replica default.
-func (s *ChatService) SetResumeBackplane(client *redis.Client) {
-	if client == nil {
-		return
-	}
-	s.resume = redisResumeStore{c: client}
-}
-
-func (s *ChatService) GetAuthorizedFlow(ctx context.Context, flowID, userID, minPerm string) (*models.FlowDocument, error) {
-	return s.flowCache.GetAuthorized(ctx, flowID, userID, minPerm)
+// GetAuthorizedFlow resolves a flow the stream's actor (carried by ctx) may perform action on: FlowService.GetAuthorized.
+func (s *ChatService) GetAuthorizedFlow(ctx context.Context, flowID string, action Action) (*models.FlowDocument, error) {
+	return s.flowCache.GetAuthorized(ctx, flowID, action)
 }
 
 // turnSetup is the resolved provider + model + attribution + RAG lookup for one turn; ragDone nil when RAG isn't wired.
@@ -820,6 +745,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			// Finished set first: a conversation GET between the two calls must still find the stream.
 			s.finishedStreams.Store(streamID, ctl)
 			s.activeStreams.Delete(streamID)
+			s.aiBudget().release(ctl)
 			time.AfterFunc(resumeRetention, func() { s.finishedStreams.Delete(streamID) })
 			if persistAnswer {
 				// Read settings afresh: history-saving may have been switched off mid-stream.
@@ -882,7 +808,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 				RealDoc:  doc,
 				Analysis: readOnlyAnalysis{s.analysisCache},
 			}
-			if ap := s.newFixApplier(scope, doc, streamID, emit, ctl.touch, func(fresh *models.FlowDocument) {
+			if ap := s.newFixApplier(doc, streamID, emit, ctl.touch, func(fresh *models.FlowDocument) {
 				tctx.RealDoc = fresh
 				if sd, sErr := scrubber.ScrubDocument(fresh); sErr == nil {
 					tctx.Doc = sd

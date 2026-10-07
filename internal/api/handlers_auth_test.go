@@ -281,7 +281,7 @@ func TestHandleAuthRefresh_NilTokenStoreInJWTMode_FailsClosed(t *testing.T) {
 	refreshToken, _ := resp["refreshToken"].(string)
 	// Simulate the misconfiguration AFTER login (so the token was issued), by
 	// dropping the store the handler consults for replay detection.
-	rt.handlers.Auth.tokenStore = nil
+	moduleOf[*AuthHandler](t, rt).sessions = nil
 
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/refresh", "", map[string]any{
 		"refreshToken": refreshToken,

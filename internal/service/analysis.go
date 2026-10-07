@@ -226,34 +226,34 @@ type AnalysisService struct {
 	claims  *recordClaims
 }
 
+// AnalysisOptions are AnalysisService's deployment wiring; the zero value analyzes on deployment settings with
+// the built-in rules and broadcasts claim-less progress (the desktop).
+type AnalysisOptions struct {
+	// CustomRules are the compiled deployment rules (PAD_CUSTOM_RULES); DI hands the same slice to the
+	// RuleProfileResolver.
+	CustomRules DeploymentCustomRules
+	// Profiles resolves the per-org rule profile; nil falls back to deployment settings + custom rules.
+	Profiles *RuleProfileResolver
+	// AuthEnabled: requests carry auth, so claim-less progress is dropped (not broadcast).
+	AuthEnabled bool
+}
+
 // NewAnalysisService builds the service; the error return is kept for the DI signature.
-func NewAnalysisService(notifier EventNotifier, settings SettingsProvider, history *analyzer.HistoryStore) (*AnalysisService, error) {
+func NewAnalysisService(notifier EventNotifier, settings SettingsProvider, history *analyzer.HistoryStore, opts AnalysisOptions) (*AnalysisService, error) {
 	return &AnalysisService{
-		notifier: notifier,
-		settings: settings,
-		history:  history,
-		largeSem: largeAnalysisSem,
-		reports:  newReportLRU(analysisReportBudget),
-		claims:   newRecordClaims(maxRecordClaims),
+		notifier:    notifier,
+		settings:    settings,
+		history:     history,
+		customRules: opts.CustomRules,
+		profiles:    opts.Profiles,
+		authEnabled: opts.AuthEnabled,
+		largeSem:    largeAnalysisSem,
+		reports:     newReportLRU(analysisReportBudget),
+		claims:      newRecordClaims(maxRecordClaims),
 	}, nil
 }
 
-// SetRuleProfileResolver injects the per-org rule resolver; wired by DI in cloud mode, nil in local mode.
-func (s *AnalysisService) SetRuleProfileResolver(r *RuleProfileResolver) {
-	s.profiles = r
-}
-
-// SetCustomRules installs compiled deployment rules; DI hands the same slice to this service and the RuleProfileResolver.
-func (s *AnalysisService) SetCustomRules(rules DeploymentCustomRules) {
-	s.customRules = rules
-}
-
-// SetAuthEnabled records whether requests carry auth: with auth on, claim-less progress is dropped (not broadcast).
-func (s *AnalysisService) SetAuthEnabled(enabled bool) {
-	s.authEnabled = enabled
-}
-
-// AuthEnabled reports what SetAuthEnabled set.
+// AuthEnabled reports AnalysisOptions.AuthEnabled.
 func (s *AnalysisService) AuthEnabled() bool {
 	return s.authEnabled
 }

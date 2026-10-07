@@ -1,13 +1,20 @@
 import {useCallback, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {Bell, BellOff, Plus, Send, Trash2, Pencil} from 'lucide-react'
-import {channelsApi, type ChannelKind, type OrgChannel} from '@/api/governance'
+import {CHANNEL_KINDS, channelsApi, type ChannelKind, type OrgChannel} from '@/api/governance'
 import {Button, useToast} from '@/components/shared'
 import {logger} from '@/lib/logger'
 import {relativeTime} from '@/lib/time'
 import {useAsync} from '@/hooks/useAsync'
 import {useConfirm} from '@/components/shared'
+import {isKnown} from '@/types'
 import clsx from 'clsx'
+
+// A channel of a kind a newer server added is listed as sent and can be
+// tested and removed, but not paused or edited: both save the kind back, and
+// this bundle sends only the kinds it knows.
+type KnownChannel = OrgChannel & {kind: ChannelKind}
+const isKnownChannel = (ch: OrgChannel): ch is KnownChannel => isKnown(CHANNEL_KINDS, ch.kind)
 
 // OrgChannelsSection manages an org's own notification destinations
 // (webhook/Teams/Slack): governance events for the org's flows are delivered
@@ -24,7 +31,7 @@ const KINDS: {id: ChannelKind; labelKey: string; hintKey: string}[] = [
 export default function OrgChannelsSection({orgId, isAdmin}: {orgId: string; isAdmin: boolean}) {
   const {t} = useTranslation('settings')
   const toast = useToast()
-  const [editing, setEditing] = useState<OrgChannel | null>(null)
+  const [editing, setEditing] = useState<KnownChannel | null>(null)
   const [creating, setCreating] = useState(false)
 
   const {data, isLoading, error, refetch} = useAsync<OrgChannel[]>(() => channelsApi.list(orgId), [orgId])
@@ -56,7 +63,7 @@ export default function OrgChannelsSection({orgId, isAdmin}: {orgId: string; isA
   )
 
   const handleToggle = useCallback(
-    async (ch: OrgChannel) => {
+    async (ch: KnownChannel) => {
       try {
         await channelsApi.save(orgId, {
           id: ch.id,
@@ -141,19 +148,20 @@ function ChannelRow({
   ch: OrgChannel
   isAdmin: boolean
   onTest: (ch: OrgChannel) => void
-  onToggle: (ch: OrgChannel) => void
-  onEdit: (ch: OrgChannel) => void
+  onToggle: (ch: KnownChannel) => void
+  onEdit: (ch: KnownChannel) => void
   onDelete: (ch: OrgChannel) => void
 }) {
   const {t} = useTranslation('settings')
   const {confirm} = useConfirm()
   const kind = KINDS.find(k => k.id === ch.kind)
+  const known = isKnownChannel(ch)
   return (
     <li className="flex items-center gap-2 p-2 bg-surface-2 border border-border-default rounded-lg group">
       <button
-        onClick={() => isAdmin && onToggle(ch)}
-        disabled={!isAdmin}
-        title={ch.enabled ? t('channels.enabledTitle') : t('channels.pausedTitle')}
+        onClick={() => isAdmin && isKnownChannel(ch) && onToggle(ch)}
+        disabled={!isAdmin || !known}
+        title={!known ? t('channels.unknownKind') : ch.enabled ? t('channels.enabledTitle') : t('channels.pausedTitle')}
         aria-label={ch.enabled ? t('channels.pauseAria') : t('channels.enableAria')}
         className={clsx(
           'p-1.5 rounded shrink-0 transition-colors',
@@ -183,10 +191,11 @@ function ChannelRow({
             <Send size={12} />
           </button>
           <button
-            onClick={() => onEdit(ch)}
-            title={t('channels.editTitle')}
+            onClick={() => isKnownChannel(ch) && onEdit(ch)}
+            disabled={!known}
+            title={known ? t('channels.editTitle') : t('channels.unknownKind')}
             aria-label={t('channels.editAria')}
-            className="p-1.5 rounded text-text-tertiary hover:text-text-secondary hover:bg-surface-3"
+            className="p-1.5 rounded text-text-tertiary hover:text-text-secondary hover:bg-surface-3 disabled:opacity-40"
           >
             <Pencil size={12} />
           </button>
@@ -218,7 +227,7 @@ function ChannelForm({
   onCancel,
 }: {
   orgId: string
-  initial?: OrgChannel
+  initial?: KnownChannel
   onDone: () => void
   onCancel: () => void
 }) {

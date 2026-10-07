@@ -33,7 +33,7 @@ func TestKnowledge_BudgetGatesUploadAndReindex(t *testing.T) {
 	emb := &fixedEmbedder{vec: []float32{1, 0}}
 	svc := guardService(store, emb)
 	budget := &budgetStub{err: errBudgetSpent}
-	svc.SetBudgetChecker(budget)
+	svc.budget = budget
 
 	if err := svc.AddDocument(context.Background(), "u1", "org-1", "new.md", "some content"); !errors.Is(err, errBudgetSpent) {
 		t.Errorf("upload over budget: %v, want the budget refusal", err)
@@ -76,7 +76,7 @@ func TestKnowledge_AzureEmbedderIgnoresAnExhaustedBudget(t *testing.T) {
 	emb := &fixedEmbedder{vec: []float32{1, 0}}
 	svc := guardService(store, azureEmbedder{emb})
 	budget := &budgetStub{err: errBudgetSpent}
-	svc.SetBudgetChecker(budget)
+	svc.budget = budget
 
 	if err := svc.AddDocument(ctx, "u1", "org-1", "new.md", "some content"); err != nil {
 		t.Errorf("Azure upload over budget: %v, want it indexed", err)
@@ -93,7 +93,7 @@ func TestKnowledge_AzureEmbedderIgnoresAnExhaustedBudget(t *testing.T) {
 
 	priced := &fixedEmbedder{vec: []float32{1, 0}}
 	svc = guardService(store, priced)
-	svc.SetBudgetChecker(budget)
+	svc.budget = budget
 	if err := svc.AddDocument(ctx, "u1", "org-1", "other.md", "some content"); !errors.Is(err, errBudgetSpent) {
 		t.Errorf("priced upload over budget: %v, want the budget refusal", err)
 	}

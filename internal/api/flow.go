@@ -9,9 +9,10 @@ import (
 	"os"
 	"sync"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
-	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -68,17 +69,21 @@ type FlowHandler struct {
 	flowSvc       *service.FlowService
 	docProvider   service.DocumentProvider
 	backend       storageif.StorageBackend
+	shares        *service.ShareTokenService
 	security      *SecurityConfig
+	audit         *audit.Recorder
 	uploadLimiter *uploadLimiter
 	notifier      FlowNotifier
 }
 
-func NewFlowHandler(flowSvc *service.FlowService, docProvider service.DocumentProvider, backend storageif.StorageBackend, security *SecurityConfig) *FlowHandler {
+func NewFlowHandler(flowSvc *service.FlowService, docProvider service.DocumentProvider, backend storageif.StorageBackend, security *SecurityConfig, shares *service.ShareTokenService, recorder *audit.Recorder) *FlowHandler {
 	return &FlowHandler{
 		flowSvc:       flowSvc,
 		docProvider:   docProvider,
 		backend:       backend,
+		shares:        shares,
 		security:      security,
+		audit:         recorder,
 		uploadLimiter: newUploadLimiter(),
 	}
 }
@@ -95,7 +100,7 @@ func (h *FlowHandler) SetFlowNotifier(n FlowNotifier) {
 // @Success      200 {object} map[string]interface{} "Parsed document"
 // @Router       /api/flow/upload [post]
 func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleMember) {
+	if !requireInstancePerm(w, r, h.security, service.InstanceWrite) {
 		return
 	}
 	release, ok := h.uploadLimiter.acquire(r.Context(), h.security.CallerID(r))
@@ -140,7 +145,7 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// flow.upload was once declared but never emitted; emit it so the trail shows who brought a flow in.
-		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowUpload, "flow", doc.ID, map[string]string{"name": doc.Name})
+		h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowUpload, ResourceType: "flow", ResourceID: doc.ID, Meta: map[string]string{"name": doc.Name}})
 	}
 
 	render.JSON(w, doc)
@@ -329,7 +334,7 @@ func (h *FlowHandler) handleReimport(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("invalid request body: %w", err), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "viewer")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowRead)
 	if !ok {
 		return
 	}
@@ -369,10 +374,6 @@ func (h *FlowHandler) handleReimport(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} map[string]interface{} "Tags"
 // @Router       /api/flow/tags [put]
 func (h *FlowHandler) handleUpdateFlowTags(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("flow tags require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
 	var req struct {
 		FlowID string   `json:"flowId"`
 		Tags   []string `json:"tags"`
@@ -385,10 +386,10 @@ func (h *FlowHandler) handleUpdateFlowTags(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// Tags change how the flow is governed/found, so they're an edit; a metadata write needs no content resolution.
-	if !requireFlowPerm(w, r, h.flowSvc, h.security, req.FlowID, "editor") {
+	if !requireFlowPerm(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit) {
 		return
 	}
-	if err := h.backend.UpdateFlowTags(r.Context(), req.FlowID, req.Tags); err != nil {
+	if err := h.flowSvc.UpdateFlowTags(r.Context(), req.FlowID, req.Tags); err != nil {
 		if errors.Is(err, storageif.ErrNotFound) {
 			render.Error(w, err, http.StatusNotFound)
 			return
@@ -419,7 +420,7 @@ func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.ID, "viewer")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.ID, service.FlowRead)
 	if !ok {
 		return
 	}
@@ -430,15 +431,6 @@ func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render.JSON(w, res)
-}
-
-// librarySearchAvailable answers 503 in local mode, where the service used to return an empty result the UI could not tell from "no matches".
-func (h *FlowHandler) librarySearchAvailable(w http.ResponseWriter) bool {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("library search requires a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return false
-	}
-	return true
 }
 
 // @Summary      Search cloud library
@@ -453,9 +445,6 @@ func (h *FlowHandler) librarySearchAvailable(w http.ResponseWriter) bool {
 // @Failure      503 {object} map[string]string "Service Unavailable (cloud mode required)"
 // @Router       /api/flow/search-library [post]
 func (h *FlowHandler) handleSearchLibrary(w http.ResponseWriter, r *http.Request) {
-	if !h.librarySearchAvailable(w) {
-		return
-	}
 	var req struct {
 		Query models.SearchQuery `json:"query"`
 	}
@@ -492,25 +481,28 @@ func (h *FlowHandler) handleGetSourceFiles(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, files)
 }
 
-// registerRoutes wires the /api/flow group: upload/load/recent/search here;
+// Mount registers the /api/flow group: upload/load/recent/search here;
 // source, block, fix and share sub-groups live with their handlers.
-func (h *FlowHandler) registerRoutes(r chi.Router) {
-	r.Route("/api/flow", func(r chi.Router) {
-		r.Post("/upload", h.handleUploadFlow)
-		r.Post("/load-path", h.handleLoadFlowFromPath)
-		r.Post("/load-folder", h.handleLoadFlowFolder)
-		r.Get("/recent", h.handleRecentFiles)
-		r.Post("/remove-recent", h.handleRemoveRecentFile)
-		r.Post("/clear-recent", h.handleClearRecentFiles)
-		r.Post("/reveal", h.handleRevealInFileManager)
-		r.Post("/search", h.handleSearchFlow)
-		r.Post("/search-library", h.handleSearchLibrary)
-		r.Get("/source-files", h.handleGetSourceFiles)
-		r.Post("/reimport", h.handleReimport)
-		r.Put("/tags", h.handleUpdateFlowTags)
-		h.registerSourceRoutes(r)
-		h.registerBlockRoutes(r)
-		h.registerFixRoutes(r)
-		h.registerShareRoutes(r)
+func (h *FlowHandler) Mount(rb *route.Builder) {
+	rb.Route("/api/flow", func(rb *route.Builder) {
+		// A 10 MB multipart parse and save: its own bucket, outside the request transaction.
+		rb.Post("/upload", h.handleUploadFlow, route.RateLimit(route.RateUpload), route.NoTx())
+		rb.Post("/load-path", h.handleLoadFlowFromPath)
+		rb.Post("/load-folder", h.handleLoadFlowFolder)
+		rb.Get("/recent", h.handleRecentFiles)
+		rb.Post("/remove-recent", h.handleRemoveRecentFile)
+		rb.Post("/clear-recent", h.handleClearRecentFiles)
+		rb.Post("/reveal", h.handleRevealInFileManager)
+		// Searches index whole documents (blob loads per flow for the library) and write nothing. Without a
+		// server-side store there is no library: 503, which the UI tells from an empty "no matches".
+		rb.Post("/search", h.handleSearchFlow, route.NoTx())
+		rb.Post("/search-library", h.handleSearchLibrary, route.NoTx(), route.Needs(capability.ServerStore))
+		rb.Get("/source-files", h.handleGetSourceFiles)
+		rb.Post("/reimport", h.handleReimport)
+		rb.Put("/tags", h.handleUpdateFlowTags, route.Needs(capability.ServerStore))
+		h.registerSourceRoutes(rb)
+		h.registerBlockRoutes(rb)
+		h.registerFixRoutes(rb)
+		h.registerShareRoutes(rb)
 	})
 }

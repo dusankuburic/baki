@@ -13,9 +13,9 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
-	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/service"
-	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
 
 	"github.com/go-chi/chi/v5"
@@ -37,14 +37,10 @@ var validProviders = map[string]bool{
 // the handler reports 503, so one slow Ping doesn't flap the pod.
 const readinessFailureThreshold = 3
 
-// blobCheckCacheTTL is how long a probe reuses the last SUCCESSFUL blob reachability result (each
-// fresh check is a network call). Failures are never cached: replaying one would count it N times.
-const blobCheckCacheTTL = 15 * time.Second
-
 type SystemHandler struct {
 	sysSvc   *service.SystemService
 	security *SecurityConfig
-	backend  storageif.StorageBackend // may be nil in local/filesystem mode
+	audit    *audit.Recorder
 
 	// redisPinger pings the optional Redis backplane (rate limiter, hub presence, stream resume).
 	// When non-nil, readiness gates on it: all three subsystems fail open, so a Redis outage
@@ -55,11 +51,13 @@ type SystemHandler struct {
 	// IS the org's rule profile — without this a toggle waits out the resolver's TTL.
 	ruleProfiles *service.RuleProfileResolver
 
+	authz *service.AuthzService
+
+	// health probes the storage backend and its blob store; HasStore is false in local/filesystem mode.
+	health *service.HealthService
+
 	readyMu       sync.Mutex
 	readyFailures int
-
-	blobCheckMu   sync.Mutex
-	blobCheckedAt time.Time // zero when the last check failed (never cache failures)
 }
 
 // RedisPinger is the subset of the Redis client the readiness probe needs;
@@ -68,8 +66,8 @@ type RedisPinger interface {
 	Ping(ctx context.Context) error
 }
 
-func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, backend storageif.StorageBackend, redisPinger RedisPinger, ruleProfiles *service.RuleProfileResolver) *SystemHandler {
-	return &SystemHandler{sysSvc: sysSvc, security: security, backend: backend, redisPinger: redisPinger, ruleProfiles: ruleProfiles}
+func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, recorder *audit.Recorder, redisPinger RedisPinger, ruleProfiles *service.RuleProfileResolver, authz *service.AuthzService, health *service.HealthService) *SystemHandler {
+	return &SystemHandler{sysSvc: sysSvc, security: security, audit: recorder, redisPinger: redisPinger, ruleProfiles: ruleProfiles, authz: authz, health: health}
 }
 
 // @Summary      Get app settings
@@ -110,7 +108,7 @@ func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSettingsChange, "settings", userID, map[string]string{"scope": "user"})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionSettingsChange, ResourceType: "settings", ResourceID: userID, Meta: map[string]string{"scope": "user"}})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -160,7 +158,7 @@ func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.R
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSettingsChange, "org", orgID, nil)
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionSettingsChange, orgID, nil))
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -262,7 +260,7 @@ func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// The key itself never reaches the audit row — only which provider changed.
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", req.Provider, map[string]string{"op": "save"})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionKeysSave, ResourceType: "provider", ResourceID: req.Provider, Meta: map[string]string{"op": "save"}})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -321,7 +319,7 @@ func (h *SystemHandler) handleDeleteApiKey(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", req.Provider, map[string]string{"op": "delete"})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionKeysSave, ResourceType: "provider", ResourceID: req.Provider, Meta: map[string]string{"op": "delete"}})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -375,17 +373,15 @@ func (h *SystemHandler) handleLiveness(w http.ResponseWriter, r *http.Request) {
 func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	// Readiness gates traffic routing (AKS / ACA). 503 only after N consecutive failures so a
 	// transient latency spike doesn't flap the pod out of rotation; a healthy probe resets it.
-	if h.backend != nil {
+	if h.health.HasStore() {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
-		checkErr := h.backend.Ping(ctx)
+		checkErr := h.health.PingStore(ctx)
 		// When the backend offloads flow content to blob storage, broken blob auth/config would
 		// serve traffic with empty flows. Gate readiness on it (no-op when unconfigured).
-		if checkErr == nil {
-			if bc, ok := h.backend.(blobHealthChecker); ok {
-				checkErr = h.checkBlobCached(ctx, bc)
-			}
+		if checkErr == nil && h.health.HasBlob() {
+			checkErr = h.health.CheckBlob(ctx)
 		}
 		// H21: when Redis is configured, gate readiness on it — the rate limiter, hub presence and
 		// stream resume all fail open, so an outage silently degrades multi-replica correctness.
@@ -413,12 +409,6 @@ func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) 
 		h.readyMu.Unlock()
 	}
 	render.JSON(w, map[string]string{"status": "ok"})
-}
-
-// blobHealthChecker is implemented by storage backends that offload content to
-// blob storage; backends without it skip the readiness check.
-type blobHealthChecker interface {
-	CheckBlob(ctx context.Context) error
 }
 
 // classifyHealthErr reduces a dependency error to a coarse, non-leaking
@@ -465,12 +455,9 @@ type adminHealthResponse struct {
 // @Failure      403 {object} map[string]string "Forbidden"
 // @Router       /api/admin/system/health [get]
 func (h *SystemHandler) handleAdminSystemHealth(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
-		return
-	}
 	resp := adminHealthResponse{Overall: "ok"}
 
-	if h.backend == nil {
+	if !h.health.HasStore() {
 		// Local/filesystem mode: no DB, no blob, no Redis.
 		resp.Database = componentStatus{Status: "skipped"}
 		resp.Blob = componentStatus{Status: "skipped"}
@@ -485,7 +472,7 @@ func (h *SystemHandler) handleAdminSystemHealth(w http.ResponseWriter, r *http.R
 
 	// Database. B1.8: dependency errors embed hostnames/DSN fragments/SQL
 	// state — log the full error, return a coarse class only.
-	if err := h.backend.Ping(ctx); err != nil {
+	if err := h.health.PingStore(ctx); err != nil {
 		slog.Warn("health: database ping failed", "err", err)
 		resp.Database = componentStatus{Status: "error", Error: classifyHealthErr(err)}
 		resp.Overall = "down"
@@ -494,8 +481,8 @@ func (h *SystemHandler) handleAdminSystemHealth(w http.ResponseWriter, r *http.R
 	}
 
 	// Blob (optional)
-	if bc, ok := h.backend.(blobHealthChecker); ok {
-		if err := h.checkBlobCached(ctx, bc); err != nil {
+	if h.health.HasBlob() {
+		if err := h.health.CheckBlob(ctx); err != nil {
 			slog.Warn("health: blob check failed", "err", err)
 			resp.Blob = componentStatus{Status: "error", Error: classifyHealthErr(err)}
 			if resp.Overall == "ok" {
@@ -528,37 +515,32 @@ func (h *SystemHandler) handleAdminSystemHealth(w http.ResponseWriter, r *http.R
 	render.JSON(w, resp)
 }
 
-// checkBlobCached returns the blob reachability status, reusing a successful result for
-// blobCheckCacheTTL (failures never cached; the mutex collapses concurrent probes into one).
-func (h *SystemHandler) checkBlobCached(ctx context.Context, bc blobHealthChecker) error {
-	h.blobCheckMu.Lock()
-	defer h.blobCheckMu.Unlock()
-	if !h.blobCheckedAt.IsZero() && time.Since(h.blobCheckedAt) < blobCheckCacheTTL {
-		return nil
-	}
-	if err := bc.CheckBlob(ctx); err != nil {
-		h.blobCheckedAt = time.Time{}
-		return err
-	}
-	h.blobCheckedAt = time.Now()
-	return nil
-}
-
 // --- System & Keys ---
-// registerRoutes wires the system/settings and API-key route groups.
-func (h *SystemHandler) registerRoutes(r chi.Router) {
-	r.Route("/api/system", func(r chi.Router) {
-		r.Get("/settings", h.handleGetSettings)
-		r.Post("/settings", h.handleUpdateSettings)
-		r.Get("/settings/org/{id}", h.handleGetOrgSettings)     // member-only
-		r.Post("/settings/org/{id}", h.handleUpdateOrgSettings) // admin-only
-		r.Get("/info", h.handleAppInfo)
-		r.Post("/log-error", h.handleLogError)
+// Mount registers the health probes, the pre-sign-in reads, the system/settings and API-key route groups, and
+// the admin system-health page.
+func (h *SystemHandler) Mount(rb *route.Builder) {
+	rb.Get("/api/local-config", h.handleLocalConfig, route.Public())
+	rb.Get("/api/system/features", h.handleFeatures, route.Public()) // pre-auth flag read (login page)
+	rb.Get("/healthz", h.handleLiveness, route.Public())
+	rb.Get("/readyz", h.handleReadiness, route.Public())
+	rb.Get("/api/health", h.handleReadiness, route.Public())
+
+	rb.Route("/api/system", func(rb *route.Builder) {
+		rb.Get("/settings", h.handleGetSettings)
+		rb.Post("/settings", h.handleUpdateSettings)
+		rb.Get("/settings/org/{id}", h.handleGetOrgSettings)     // member-only
+		rb.Post("/settings/org/{id}", h.handleUpdateOrgSettings) // admin-only
+		rb.Get("/info", h.handleAppInfo)
+		rb.Post("/log-error", h.handleLogError)
 	})
 
-	r.Route("/api/keys", func(r chi.Router) {
-		r.Post("/save", h.handleSaveApiKey)
-		r.Post("/has", h.handleHasApiKey)
-		r.Post("/delete", h.handleDeleteApiKey)
+	rb.Route("/api/keys", func(rb *route.Builder) {
+		rb.Post("/save", h.handleSaveApiKey)
+		rb.Post("/has", h.handleHasApiKey)
+		rb.Post("/delete", h.handleDeleteApiKey)
+	})
+
+	mountAdmin(rb, h.authz, h.security, func(rb *route.Builder) {
+		rb.Get("/system/health", h.handleAdminSystemHealth)
 	})
 }

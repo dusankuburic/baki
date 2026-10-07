@@ -10,8 +10,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/notify"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
@@ -53,7 +57,7 @@ func (h *OrgHandler) handleChannelList(w http.ResponseWriter, r *http.Request) {
 		render.JSON(w, []channelOut{})
 		return
 	}
-	org := h.requireMember(w, r)
+	org := h.authorizeOrg(w, r, service.OrgRead)
 	if org == nil {
 		return
 	}
@@ -66,7 +70,7 @@ func (h *OrgHandler) handleChannelList(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	channels, err := h.backend.ListOrgChannels(r.Context(), chi.URLParam(r, "id"), false)
+	channels, err := h.channels.List(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -90,14 +94,7 @@ func (h *OrgHandler) handleChannelList(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} map[string]interface{} "Channel"
 // @Router       /api/orgs/{id}/channels [post]
 func (h *OrgHandler) handleChannelSave(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("org channels require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
-	org := h.requireAdmin(w, r)
-	if org == nil {
-		return
-	}
+	orgID := chi.URLParam(r, "id")
 	var req struct {
 		ID      string `json:"id"`
 		Name    string `json:"name"`
@@ -127,16 +124,16 @@ func (h *OrgHandler) handleChannelSave(w http.ResponseWriter, r *http.Request) {
 		enabled = *req.Enabled
 	}
 	ch := &storageif.OrgChannel{
-		ID: id, OrgID: org.ID, Name: req.Name, Kind: req.Kind,
+		ID: id, OrgID: orgID, Name: req.Name, Kind: req.Kind,
 		URL: req.URL, Secret: req.Secret, Enabled: enabled,
 		CreatedAt: time.Now().UTC(),
 	}
-	if err := h.backend.SaveOrgChannel(r.Context(), ch); err != nil {
+	if err := h.channels.Save(r.Context(), ch); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgChannelSave, "org", org.ID,
-		map[string]string{"kind": req.Kind})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgChannelSave, orgID,
+		map[string]string{"kind": req.Kind}))
 	render.JSON(w, channelOut{ID: ch.ID, Name: ch.Name, Kind: ch.Kind, URL: ch.URL, Enabled: ch.Enabled, CreatedAt: ch.CreatedAt})
 }
 
@@ -148,20 +145,13 @@ func (h *OrgHandler) handleChannelSave(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} map[string]string "Deleted"
 // @Router       /api/orgs/{id}/channels/{channelId} [delete]
 func (h *OrgHandler) handleChannelDelete(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("org channels require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
-	org := h.requireAdmin(w, r)
-	if org == nil {
-		return
-	}
-	if err := h.backend.DeleteOrgChannel(r.Context(), org.ID, chi.URLParam(r, "channelId")); err != nil {
+	orgID := chi.URLParam(r, "id")
+	if err := h.channels.Delete(r.Context(), orgID, chi.URLParam(r, "channelId")); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgChannelDelete, "org", org.ID,
-		map[string]string{"channelId": chi.URLParam(r, "channelId")})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgChannelDelete, orgID,
+		map[string]string{"channelId": chi.URLParam(r, "channelId")}))
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -175,26 +165,11 @@ func (h *OrgHandler) handleChannelDelete(w http.ResponseWriter, r *http.Request)
 // @Success      200 {object} map[string]string "Delivered"
 // @Router       /api/orgs/{id}/channels/{channelId}/test [post]
 func (h *OrgHandler) handleChannelTest(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("org channels require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
-		return
-	}
-	org := h.requireAdmin(w, r)
-	if org == nil {
-		return
-	}
 	channelID := chi.URLParam(r, "channelId")
-	channels, err := h.backend.ListOrgChannels(r.Context(), org.ID, false)
+	target, err := h.channels.Find(r.Context(), chi.URLParam(r, "id"), channelID)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
-	}
-	var target *storageif.OrgChannel
-	for _, c := range channels {
-		if c.ID == channelID {
-			target = c
-			break
-		}
 	}
 	if target == nil {
 		render.Error(w, fmt.Errorf("channel not found"), http.StatusNotFound)
@@ -206,6 +181,7 @@ func (h *OrgHandler) handleChannelTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	done := make(chan error, 1)
+	log := logger.FromContext(r.Context())
 	// #nosec G118 -- a detached, explicitly bounded context is correct here. The
 	// channel test dials an operator-supplied endpoint; binding it to r.Context()
 	// would let a client abort mid-dial and leave the delivery in an unknown
@@ -216,7 +192,7 @@ func (h *OrgHandler) handleChannelTest(w http.ResponseWriter, r *http.Request) {
 		// A panicking notifier must not take the process down: convert the panic into the reported error.
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Warn("org channel test panicked", "channel", target.Name, "kind", target.Kind, "recover", r)
+				log.Warn("org channel test panicked", "channel", target.Name, "kind", target.Kind, "recover", r)
 				done <- fmt.Errorf("delivery panicked: %v", r)
 			}
 		}()
@@ -234,12 +210,18 @@ func (h *OrgHandler) handleChannelTest(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, map[string]string{"status": "delivered"})
 }
 
-// registerChannelRoutes wires the org notification-channel sub-routes.
-func (h *OrgHandler) registerChannelRoutes(r chi.Router) {
-	r.Route("/channels", func(r chi.Router) {
-		r.Get("/", h.handleChannelList)
-		r.Post("/", h.handleChannelSave)
-		r.Post("/{channelId}/test", h.handleChannelTest)
-		r.Delete("/{channelId}", h.handleChannelDelete)
+// registerChannelRoutes wires the org notification-channel sub-routes. The
+// list checks membership itself: it renders the roster's admin flag, and
+// without the server store it is empty for anyone.
+func (h *OrgHandler) registerChannelRoutes(rb *route.Builder) {
+	rb.Route("/channels", func(rb *route.Builder) {
+		rb.Get("/", h.handleChannelList)
+		rb.With(h.requireOrg(service.OrgAdmin)).Group(func(rb *route.Builder) {
+			rb.Post("/", h.handleChannelSave, route.Idempotent())
+			// Dials the webhook for up to 15 s, outside the request transaction;
+			// the admin check is its access control.
+			rb.Post("/{channelId}/test", h.handleChannelTest, route.NoTx())
+			rb.Delete("/{channelId}", h.handleChannelDelete)
+		}, route.Needs(capability.ServerStore))
 	})
 }

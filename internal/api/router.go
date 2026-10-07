@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,8 +16,11 @@ import (
 
 	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	wshub "pad-analyzer/internal/websocket"
 
@@ -28,27 +32,15 @@ import (
 	"go.uber.org/fx"
 )
 
-// Handlers groups all feature-specific HTTP handlers.
-// Pass it as a single value to NewRouter instead of 11 separate parameters.
-type Handlers struct {
-	Sys       *SystemHandler
-	Flow      *FlowHandler
-	Library   *LibraryHandler
-	Chat      *ChatHandler
-	Analysis  *AnalysisHandler
-	Dashboard *DashboardHandler
-	Export    *ExportHandler
-	Auth      *AuthHandler
-	Admin     *AdminHandler
-	Provider  *ProviderHandler
-	Org       *OrgHandler
-	Sharing   *SharingHandler
-}
-
 type Router struct {
 	security     *SecurityConfig
 	eventManager *EventManager
-	handlers     Handlers
+	// modules are the features whose routes the router mounts, sorted by type.
+	modules []Module
+	// routes is every route's policy, built from the declarations when the routes were mounted.
+	routes *route.Table
+	// shares resolves share tokens for the /shared shell; nil when no module serves share links.
+	shares sharedFlowLookup
 
 	AllowedOrigins []string
 	trustedProxies []string
@@ -75,22 +67,38 @@ type Router struct {
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
 	mux          *chi.Mux
+
+	// Route policy (route_policy.go): the resolver over routes (finishRoutes), which policy decides
+	// (PAD_ROUTE_POLICY), and what the deployment offers routes that declare Needs.
+	resolver         *route.Resolver
+	policyMode       config.RoutePolicyMode
+	caps             capability.Set
+	fallbacksGuarded bool
 }
 
-func NewRouter(
-	lc fx.Lifecycle,
-	security *SecurityConfig,
-	eventManager *EventManager,
-	handlers Handlers,
-	cfg *config.Config,
-	shutdownCh chan struct{},
-	flowChecker wshub.FlowAccessChecker,
-	redisClient *redis.Client,
-) *Router {
+// RouterParams is what NewRouter builds the router from.
+type RouterParams struct {
+	fx.In
+
+	Lifecycle fx.Lifecycle
+	Security  *SecurityConfig
+	Events    *EventManager
+	// Modules are the features to mount: every Module in fx's "routes" group, in no particular order.
+	Modules     []Module `group:"routes"`
+	Config      *config.Config
+	ShutdownCh  chan struct{}
+	FlowChecker wshub.FlowAccessChecker
+	Redis       *redis.Client
+}
+
+// NewRouter mounts the router's own routes and every module's, and builds the route policy table from their
+// declarations. It fails when a route has no declared policy (registered around the Builder).
+func NewRouter(p RouterParams) (*Router, error) {
+	cfg := p.Config
 	rt := &Router{
-		security:       security,
-		eventManager:   eventManager,
-		handlers:       handlers,
+		security:       p.Security,
+		eventManager:   p.Events,
+		modules:        sortedModules(p.Modules),
 		AllowedOrigins: cfg.Server.AllowedOrigins,
 		trustedProxies: cfg.Server.TrustedProxies,
 		metricsToken:   cfg.Server.MetricsToken,
@@ -98,24 +106,28 @@ func NewRouter(
 		staticDir:      cfg.Server.StaticDir,
 		// nil client (PAD_REDIS_URL unset) → in-memory hub; otherwise a Redis
 		// pub/sub + presence backplane so presence/broadcasts span replicas.
-		hub:         wshub.NewHubWithRedis(redisClient),
-		flowChecker: flowChecker,
+		hub:         wshub.NewHubWithRedis(p.Redis),
+		flowChecker: p.FlowChecker,
 		usedTickets: make(map[string]time.Time),
-		shutdownCh:  shutdownCh,
+		shutdownCh:  p.ShutdownCh,
 		mux:         chi.NewRouter(),
+		policyMode:  routePolicyMode(cfg),
+		caps:        capability.Of(cfg),
 	}
 
 	// Release the hub's backplane subscriber on shutdown. SAFETY NET for startServer's OnStop (Router.ShutdownWebSocket → Hub.Shutdown,
 	// which already closes); if that hook never fires, this still releases it. Hub.Close is idempotent.
-	lc.Append(fx.Hook{OnStop: func(context.Context) error { rt.hub.Close(); return nil }})
+	p.Lifecycle.Append(fx.Hook{OnStop: func(context.Context) error { rt.hub.Close(); return nil }})
 
-	// Wire the WebSocket hub as a flow-change notifier so library saves and apply-fix /
-	// save-source / suppress edits broadcast to all connected viewers.
-	if handlers.Library != nil {
-		handlers.Library.SetFlowNotifier(rt.hub)
-	}
-	if handlers.Flow != nil {
-		handlers.Flow.SetFlowNotifier(rt.hub)
+	for _, m := range rt.modules {
+		// Wire the WebSocket hub as a flow-change notifier so library saves and apply-fix /
+		// save-source / suppress edits broadcast to all connected viewers.
+		if n, ok := m.(flowNotifierSetter); ok {
+			n.SetFlowNotifier(rt.hub)
+		}
+		if s, ok := m.(sharedFlowLookup); ok && rt.shares == nil {
+			rt.shares = s
+		}
 	}
 
 	// Wire the CORS allowlist into the SSE EventManager so it respects
@@ -132,13 +144,28 @@ func NewRouter(
 		rt.eventManager.SetRevocationChecker(rt.security.AuthMgr.IsRevoked)
 	}
 
+	rb := rt.registerRoutes()
+	var err error
+	if rt.routes, err = rb.Build(); err != nil {
+		return nil, err
+	}
+	if err := rt.finishRoutes(rb); err != nil {
+		return nil, err
+	}
+
 	// Reclaim expired single-use WS tickets in the background so consumeTicket
 	// stays O(1) per connection instead of scanning the whole map each time.
 	go rt.cleanupUsedTickets()
 
-	registerRoutes(rt, rt.mux)
+	return rt, nil
+}
 
-	return rt
+// sortedModules returns modules in a stable order (by type), so the routes mount the same way whatever order fx
+// collected the group in.
+func sortedModules(modules []Module) []Module {
+	out := slices.Clone(modules)
+	slices.SortStableFunc(out, func(a, b Module) int { return strings.Compare(fmt.Sprintf("%T", a), fmt.Sprintf("%T", b)) })
+	return out
 }
 
 func (rt *Router) Shutdown() {
@@ -152,7 +179,10 @@ func (rt *Router) ShutdownWebSocket(ctx context.Context) error {
 
 // ServeHTTP is intentionally thin. All cross-cutting concerns (security
 // headers, CORS, auth) are handled by chi middleware registered in registerRoutes.
+// It resolves the route policy when no outer layer did (tests call it directly);
+// resolving before or after the path.Clean gives the same policy.
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r = rt.withPolicy(r)
 	r.URL.Path = path.Clean(r.URL.Path)
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 	rt.mux.ServeHTTP(w, r)
@@ -160,8 +190,14 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // --- Middleware ---
 
+// BuildVersionHeader carries the running build's version on every response. The frontend compares it with the
+// version its bundle was built as and offers a reload when they differ: a tab kept open across a deploy runs old code
+// against the new API.
+const BuildVersionHeader = "X-Baki-Version"
+
 func (rt *Router) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(BuildVersionHeader, service.Version)
 		w.Header().Set("Server", "")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -187,9 +223,11 @@ func (rt *Router) corsHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Vary", "Origin")
 		if rt.isOriginAllowed(origin) && origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			// A cross-origin client (the desktop webview, a dev server) may read only the headers listed here.
+			w.Header().Set("Access-Control-Expose-Headers", BuildVersionHeader+", "+idempotentReplayedHeader)
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -198,12 +236,13 @@ func (rt *Router) corsHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// jwtAuth enforces authentication on all /api/ routes except publicRoutes,
-// judged on the path chi dispatches on (routePath), not the decoded one.
+// jwtAuth authenticates the requests whose route policy requires it (authenticates: the declared policy, or the
+// legacy publicRoutes table judged on the path chi dispatches on), and refuses a scoped API token the route does
+// not allow, before any handler runs.
 func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := routePath(r)
-		if !strings.HasPrefix(p, "/api/") || publicRoutes[p] {
+		pol, resolved := middleware.RequestPolicy(r)
+		if !rt.authenticates(r, pol, resolved) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -220,7 +259,7 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 				claims = rt.verifyAPIToken(r.Context(), tokenStr)
 				// Scope enforcement: a scoped PAT may only touch routes its capabilities allow — checked HERE, before any handler runs, so no route can skip it.
 				// Unscoped PATs and interactive JWTs pass through.
-				if claims != nil && claims.TokenScoped() && !auth.RouteAllowed(r.Method, p, claims.Scopes) {
+				if claims != nil && claims.TokenScoped() && !rt.tokenAllowed(r, pol, resolved, claims.Scopes) {
 					render.Error(w, fmt.Errorf("token is not authorized for this operation (missing scope)"), http.StatusForbidden)
 					return
 				}
@@ -239,7 +278,10 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 				render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 				return
 			}
+			// No claims without accounts: authorization (AuthzService.Can) acts as the single local user.
+			r = r.WithContext(auth.WithActor(r.Context(), auth.LocalActor(rt.security.LocalUserID)))
 		}
+		rt.security.recordCaller(r)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -260,6 +302,20 @@ func (rt *Router) verifyAPIToken(ctx context.Context, raw string) *auth.Claims {
 	// Populate a stable JTI and the PAT's expiry so a WS ticket issued from this PAT-authenticated request embeds a real SrcJTI/SrcExp —
 	// else the re-authz loop never arms the expiry timer and a revoked/expired PAT's live socket would stay open indefinitely.
 	return auth.ClaimsForPAT(user.ID, user.Email, user.Role, tok.ID, tok.ExpiresAt, tok.Scopes)
+}
+
+// validBearer reports whether r carries a live session token or API token, verified as jwtAuth verifies them, for
+// the routes that authenticate themselves outside jwtAuth (the Swagger UI).
+func (rt *Router) validBearer(r *http.Request) bool {
+	tokenStr := auth.ExtractToken(r)
+	if tokenStr == "" {
+		return false
+	}
+	if auth.IsAPIToken(tokenStr) {
+		return rt.verifyAPIToken(r.Context(), tokenStr) != nil
+	}
+	_, err := rt.security.AuthMgr.Verify(tokenStr)
+	return err == nil
 }
 
 // patBackend is what PAT authentication needs from storage.
@@ -311,6 +367,7 @@ func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
+	recordActor(r, auth.ActorFromClaims(claims))
 	var isRevoked func(string) bool
 	if rt.security.AuthMgr != nil {
 		isRevoked = rt.security.AuthMgr.IsRevoked

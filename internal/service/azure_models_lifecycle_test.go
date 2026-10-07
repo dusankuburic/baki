@@ -23,8 +23,8 @@ func TestAzureModels_LenderDisableFamilyWide(t *testing.T) {
 	e := newAzureModelsEnv(t)
 	ctx := context.Background()
 	providers := newProviderServiceWithFakeSecrets(t, e.secrets)
-	providers.SetOrgKeyStore(e.orgKeys)
-	providers.SetAzureModels(e.svc)
+	providers.orgKeys = e.orgKeys
+	providers.azure = e.svc
 	lender := AzureScope{Scope: "lender", OrgID: "org-1"}
 	other := AzureScope{Scope: "other", OrgID: "org-1"}
 	_ = e.orgKeys.SaveOrg("org-1", "azure-foundry", azmLegacyDoc(`,"chatDeployment":"c1"`), "lender")
@@ -87,8 +87,8 @@ func TestAzureModels_ErasureAndOrgDeletionReleaseTheFamily(t *testing.T) {
 	e := newAzureModelsEnv(t)
 	ctx := context.Background()
 	providers := newProviderServiceWithFakeSecrets(t, e.secrets)
-	providers.SetOrgKeyStore(e.orgKeys)
-	providers.SetAzureModels(e.svc)
+	providers.orgKeys = e.orgKeys
+	providers.azure = e.svc
 	e.mustConn(t, azmUser, "a", azmEntraConfig("s1"))
 	e.mustConn(t, azmUser, "b", azmKeyConfig("k2"))
 	_, _ = e.svc.ListConnections(ctx, azmUser) // the import memo

@@ -40,17 +40,20 @@ type DashboardService struct {
 	// tie-break when entries share one fetchedAt; map order otherwise picked the victim.
 	anaSeq uint64
 	anaSF  singleflight.Group
-	scope  scopeResolver
+	scope  ScopeResolver
 	// dashSF collapses concurrent cold-cache builds per user — one buildCloud
 	// run on a miss, not a thundering herd of ~16 DB queries per caller.
 	dashSF singleflight.Group
 }
 
-func NewDashboardService(backend storageif.DashboardStore, analysis *AnalysisService, flowSvc *FlowService) *DashboardService {
+// NewDashboardService builds the dashboard service; scope collects the analytics page's flow set (DI passes the
+// library's FlowScopeResolver; without one BuildAnalytics fails).
+func NewDashboardService(backend storageif.DashboardStore, analysis *AnalysisService, flowSvc *FlowService, scope ScopeResolver) *DashboardService {
 	return &DashboardService{
 		backend:   backend,
 		analysis:  analysis,
 		flowSvc:   flowSvc,
+		scope:     scope,
 		dashCache: make(map[string]*dashCacheEntry),
 		anaCache:  make(map[string]*anaCacheEntry),
 	}

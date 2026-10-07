@@ -66,7 +66,7 @@ func newR2Library(t *testing.T) (*LibraryService, *r2LibraryBackend, *r2OrgStore
 		}
 	}
 	authz := NewAuthzService(b, collaboration.NewOrgService(store))
-	return NewLibraryService(b, nil, authz), b, store
+	return NewLibraryService(b, nil, authz, nil), b, store
 }
 
 // TestListLibraryFlowsPage_ResolvesMembershipsOnce: one page = one
@@ -182,7 +182,7 @@ func TestBatchFlowPermissionsWithRoles_NoRoleQueries(t *testing.T) {
 // out of each roster.
 func TestMemberOrgs_RosterFallbackCarriesRoles(t *testing.T) {
 	b := &rosterOnlyBackend{FakeBackend: testutil.NewFakeBackend()}
-	lib := NewLibraryService(b, nil, NewAuthzService(b, collaboration.NewOrgService(collaboration.NewMemOrgStore())))
+	lib := NewLibraryService(b, nil, NewAuthzService(b, collaboration.NewOrgService(collaboration.NewMemOrgStore())), nil)
 	page, err := lib.ListLibraryFlowsPage(context.Background(), "u1", "", ScopeAll, "", "", 10, 0, nil)
 	if err != nil {
 		t.Fatalf("ListLibraryFlowsPage: %v", err)

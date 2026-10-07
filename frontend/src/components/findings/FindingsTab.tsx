@@ -22,7 +22,7 @@ import {buildBlockLookup, type BlockLookup} from '@/lib/tree'
 // has findings to show, so lazy-loading keeps it out of the entry chunk.
 const FindingsList = lazy(() => import('./FindingsList'))
 import {useTranslation} from 'react-i18next'
-import type {AnalysisDiff, Finding, AnalysisReport} from '@/types'
+import {TRIAGE_STATUSES, isKnown, type AnalysisDiff, type Finding, type AnalysisReport} from '@/types'
 
 export default function FindingsTab() {
   const {t} = useTranslation('findings')
@@ -102,9 +102,11 @@ export default function FindingsTab() {
       // Triage-queue filters (R0-3): status chips narrow to a working set
       // (hide resolved/acknowledged while grinding through the backlog);
       // "Mine" keeps only findings assigned to the signed-in user. An absent
-      // triage entry is 'open'.
+      // triage entry is 'open', and so is a status this bundle does not
+      // know, so that finding stays in view.
       const triage = triageMap.get(findingKey(f))
-      if (statusFilter.size > 0 && !statusFilter.has(triage?.status ?? 'open')) return false
+      const status = isKnown(TRIAGE_STATUSES, triage?.status) ? triage.status : 'open'
+      if (statusFilter.size > 0 && !statusFilter.has(status)) return false
       if (assignedToMeOnly && (!triage?.assigneeId || triage.assigneeId !== currentUserId)) return false
       if (
         q &&

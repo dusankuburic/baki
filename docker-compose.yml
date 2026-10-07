@@ -53,6 +53,8 @@ services:
       # base embeds with Azure AI Foundry). Empty = defaults.
       - PAD_EMBEDDING_DIM=${PAD_EMBEDDING_DIM:-}
       - PAD_EMBEDDING_PROVIDER=${PAD_EMBEDDING_PROVIDER:-}
+      # legacy | shadow | declarative (docs/adr/0006); empty = shadow.
+      - PAD_ROUTE_POLICY=${PAD_ROUTE_POLICY:-}
       # General per-IP rate budget. The code defaults (1 rps, burst 20) are
       # tuned for public multi-tenant deployments; behind Docker NAT every
       # request — browser and CLI alike — arrives from the single gateway IP,

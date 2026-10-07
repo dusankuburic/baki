@@ -24,6 +24,12 @@ describe('what the picker lists', () => {
     expect(isPickerModel({})).toBe(true)
   })
 
+  it('never offers a kind a newer server added: it may not be one the chat can use', () => {
+    expect(isPickerModel({kind: 'realtime'})).toBe(false)
+    const groups = groupModels([entry('chat1'), entry('voice', {kind: 'realtime'})])
+    expect(groups.flatMap(g => g.models.map(m => m.displayName))).toEqual(['chat1'])
+  })
+
   it('tells registry entries from catalogue models', () => {
     expect(isRegistryEntry({id: 'claude-sonnet-4-6'})).toBe(false)
     expect(isRegistryEntry({id: 'm/a1b2c3d4e5'})).toBe(true)

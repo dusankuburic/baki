@@ -1,5 +1,7 @@
 // AI provider catalogue + auth flows (OAuth device-code, GitHub Copilot/Models).
 
+import type {Tolerant} from './tolerant'
+
 export type ProviderID =
   'claude' | 'openai' | 'gemini' | 'xai' | 'glm' | 'github-models' | 'copilot' | 'azure-foundry' | 'local'
 
@@ -20,11 +22,15 @@ export const PROVIDERS = {
   local: {label: 'Local model'},
 } as const satisfies Record<ProviderID, {label: string}>
 
-export const PROVIDER_OPTIONS: {value: ProviderID; label: string}[] = (Object.keys(PROVIDERS) as ProviderID[]).map(
-  id => ({value: id, label: PROVIDERS[id].label}),
-)
+export const PROVIDER_IDS: readonly ProviderID[] = Object.keys(PROVIDERS) as ProviderID[]
 
-export type AuthType = 'api_key' | 'oauth'
+export const PROVIDER_OPTIONS: {value: ProviderID; label: string}[] = PROVIDER_IDS.map(id => ({
+  value: id,
+  label: PROVIDERS[id].label,
+}))
+
+export const AUTH_TYPES = ['api_key', 'oauth'] as const
+export type AuthType = (typeof AUTH_TYPES)[number]
 
 export interface ModelDetail {
   id: string
@@ -36,9 +42,9 @@ export interface ModelDetail {
   supportsTools?: boolean
   // Azure AI Foundry registry entries (id "m/<entryId>") carry the fields
   // below; catalogue models leave them out. Embedding entries are never
-  // listed in the picker.
-  kind?: AzureModelKind
-  purpose?: ModelPurpose
+  // listed in the picker, and neither is a kind this bundle does not know.
+  kind?: Tolerant<AzureModelKind>
+  purpose?: Tolerant<ModelPurpose>
   /** The text of a 'custom' purpose. */
   purposeCustom?: string
   /** Shown under the name in the chat picker. Admin-written: plain text only. */
@@ -47,8 +53,11 @@ export interface ModelDetail {
   shared?: boolean
   connectionId?: string
   connectionName?: string
-  /** 'ready', or why the entry cannot be used right now (`statusReason` carries the copy). */
-  status?: AzureStatus
+  /**
+   * 'ready', or why the entry cannot be used right now (`statusReason`
+   * carries the copy). A status this bundle does not know is unusable too.
+   */
+  status?: Tolerant<AzureStatus>
   statusReason?: string
   /**
    * Pre-registry ids this entry answers for (`gpt-4.1`, `claude:x`,
@@ -63,9 +72,10 @@ export interface ModelDetail {
 }
 
 export interface ProviderInfo {
-  id: ProviderID
+  /** A provider this bundle does not know is listed too; the chat leaves it out (it cannot send to it). */
+  id: Tolerant<ProviderID>
   name: string
-  authType: AuthType
+  authType: Tolerant<AuthType>
   contextLimit: number
   models: ModelDetail[]
   defaultModel: string
@@ -93,7 +103,8 @@ export interface ProviderTestResult {
 
 // How baki signs in to an Azure AI Foundry resource: an API key, a Microsoft
 // Entra ID app registration, or (desktop only) the Azure CLI's signed-in user.
-export type AzureFoundryAuthMode = 'api_key' | 'entra' | 'entra_cli'
+export const AZURE_AUTH_MODES = ['api_key', 'entra', 'entra_cli'] as const
+export type AzureFoundryAuthMode = (typeof AZURE_AUTH_MODES)[number]
 
 /** A resource's credentials as sent. A missing secret keeps the stored one where the carry rules allow. */
 export type AzureFoundryAuthInput =
@@ -120,7 +131,10 @@ export type AzureScope = {kind: 'user'} | {kind: 'org'; orgId: string}
  * Agent Service agent — needs Entra ID + a project endpoint) or `embedding`
  * (never offered in the chat picker).
  */
-export type AzureModelKind = 'chat' | 'claude' | 'agent' | 'embedding'
+export const AZURE_MODEL_KINDS = ['chat', 'claude', 'agent', 'embedding'] as const
+export type AzureModelKind = (typeof AZURE_MODEL_KINDS)[number]
+/** The kinds the chat talks to: not an embedding model, nor a kind this bundle does not know. */
+export const CHAT_MODEL_KINDS = ['chat', 'claude', 'agent'] as const satisfies readonly AzureModelKind[]
 
 /** The preset purposes, in picker order (lib/modelPurpose holds the runtime list). */
 export type ModelPurposePreset = 'general' | 'documentation' | 'fixes' | 'review' | 'refactoring' | 'testing'
@@ -136,14 +150,17 @@ export type ModelPurpose = ModelPurposePreset | 'custom'
  * status, or is `unsupported` (an agent on a resource without Entra ID and a
  * project endpoint). `statusReason` carries user-readable copy.
  */
-export type AzureStatus = 'ready' | 'needs_credentials' | 'unreadable' | 'invalid_config' | 'unsupported'
+export const AZURE_STATUSES = ['ready', 'needs_credentials', 'unreadable', 'invalid_config', 'unsupported'] as const
+export type AzureStatus = (typeof AZURE_STATUSES)[number]
 
 /**
  * GET /connections `registryState`: `read_only` — the desktop list file was
  * written by a newer app version; `recovered` — a corrupt list file was
- * quarantined (a copy kept) and the registry started empty.
+ * quarantined (a copy kept) and the registry started empty. A state this
+ * bundle does not know reads as `ok`: the server refuses what it cannot take.
  */
-export type AzureRegistryState = 'ok' | 'read_only' | 'recovered'
+export const AZURE_REGISTRY_STATES = ['ok', 'read_only', 'recovered'] as const
+export type AzureRegistryState = (typeof AZURE_REGISTRY_STATES)[number]
 
 /** Per-owner limits (10 resources, 50 models today). */
 export interface AzureRegistryLimits {
@@ -169,7 +186,7 @@ export interface AzureLastTest {
 export interface AzureConnectionPublicConfig {
   endpoint: string
   /** '' when the stored document is missing or unreadable (see above). */
-  authMode: AzureFoundryAuthMode | ''
+  authMode: Tolerant<AzureFoundryAuthMode> | ''
   /** A secret is stored; a PUT that leaves it out keeps it when the carry rules allow. */
   hasSecret: boolean
   tenantId?: string
@@ -189,7 +206,7 @@ export interface AzureConnection {
   /** The resource migrated from the single-document configuration. */
   legacy: boolean
   config: AzureConnectionPublicConfig
-  status: AzureStatus
+  status: Tolerant<AzureStatus>
   statusReason?: string
   /** Entra ID (or the Azure CLI) with a project endpoint: deployments and agents can be discovered. */
   canDiscover: boolean
@@ -213,13 +230,15 @@ export interface AzureModelEntry {
   modelId: string
   connectionId: string
   connectionName: string
-  kind: AzureModelKind
+  /** A kind this bundle does not know is listed under a neutral label and cannot be edited here. */
+  kind: Tolerant<AzureModelKind>
   /** The deployment name, or the agent name for kind 'agent'. */
   deployment: string
   /** What the server routes to: "<deployment>", "claude:<deployment>" or "agent:<name>". */
   target: string
   displayName: string
-  purpose: ModelPurpose
+  /** An unknown purpose (a preset a newer server added) shows as custom text (lib/modelPurpose resolvePurpose). */
+  purpose: Tolerant<ModelPurpose>
   purposeCustom?: string
   description?: string
   /** The user's override of the context window (1024–2,000,000); absent when unset. */
@@ -235,7 +254,7 @@ export interface AzureModelEntry {
   shared: boolean
   orgId?: string
   orgName?: string
-  status: AzureStatus
+  status: Tolerant<AzureStatus>
   statusReason?: string
   lastTest?: AzureLastTest | null
   updatedAt: string
@@ -244,7 +263,7 @@ export interface AzureModelEntry {
 /** GET /connections. */
 export interface AzureConnectionsListing {
   connections: AzureConnection[]
-  registryState: AzureRegistryState
+  registryState: Tolerant<AzureRegistryState>
   limits: AzureRegistryLimits
   /** The "Use for knowledge base" designation is offered (cloud with the Azure embedding provider). */
   knowledgeEmbeddingEnabled: boolean
@@ -268,7 +287,11 @@ export interface AzureModelsListing {
 /** One deployment or agent found by POST /connections/{id}/discover. */
 export interface AzureDiscoveryItem {
   name: string
-  /** The kind it would be added as: chat, claude or embedding for a deployment; agent for an agent. */
+  /**
+   * The kind it would be added as: chat, claude or embedding for a
+   * deployment; agent for an agent. Closed: the parse leaves out an item of a
+   * kind this bundle does not know, since it could not add one.
+   */
   kind: AzureModelKind
   /** The underlying model (e.g. gpt-4.1 behind a deployment named "prod-chat"); '' when unknown. */
   model: string

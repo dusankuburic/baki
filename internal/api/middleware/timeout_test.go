@@ -6,6 +6,10 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/metrics"
 )
 
 func TestRequestTimeout_StreamingPathsBypass(t *testing.T) {
@@ -13,7 +17,7 @@ func TestRequestTimeout_StreamingPathsBypass(t *testing.T) {
 	for _, p := range streamingPaths {
 		t.Run(p, func(t *testing.T) {
 			var ctxCancelled bool
-			handler := RequestTimeout(50 * time.Millisecond)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler := RequestTimeout(50*time.Millisecond, config.RoutePolicyLegacy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				select {
 				case <-r.Context().Done():
 					ctxCancelled = true
@@ -37,7 +41,7 @@ func TestRequestTimeout_StreamingPathsBypass(t *testing.T) {
 }
 
 func TestRequestTimeout_NormalPathGetsDeadline(t *testing.T) {
-	handler := RequestTimeout(20 * time.Millisecond)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequestTimeout(20*time.Millisecond, config.RoutePolicyLegacy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		deadline, ok := r.Context().Value(0).(time.Time)
 		_ = deadline
 		_ = ok
@@ -58,7 +62,7 @@ func TestRequestTimeout_NormalPathGetsDeadline(t *testing.T) {
 }
 
 func TestRequestTimeout_ContextCancelsAfterDuration(t *testing.T) {
-	handler := RequestTimeout(10 * time.Millisecond)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequestTimeout(10*time.Millisecond, config.RoutePolicyLegacy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			t.Error("context cancelled before handler finished")
@@ -72,7 +76,7 @@ func TestRequestTimeout_ContextCancelsAfterDuration(t *testing.T) {
 }
 
 func TestRequestTimeout_ContextAlreadyCancelledPropagates(t *testing.T) {
-	handler := RequestTimeout(time.Hour)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequestTimeout(time.Hour, config.RoutePolicyLegacy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Context().Err() == nil {
 			t.Error("expected context to be already cancelled")
 		}
@@ -104,7 +108,7 @@ func TestRequestTimeout_BulkKnowledgePathsGetLongDeadline(t *testing.T) {
 		t.Run(c.path, func(t *testing.T) {
 			var got time.Time
 			var has bool
-			h := RequestTimeout(30 * time.Second)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := RequestTimeout(30*time.Second, config.RoutePolicyLegacy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				got, has = r.Context().Deadline()
 				w.WriteHeader(http.StatusOK)
 			}))
@@ -179,7 +183,7 @@ func TestRequestTimeout_ClassifiesTheDispatchedPath(t *testing.T) {
 		t.Run(c.path, func(t *testing.T) {
 			var got time.Time
 			var has bool
-			h := RequestTimeout(def)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := RequestTimeout(def, config.RoutePolicyLegacy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				got, has = r.Context().Deadline()
 				w.WriteHeader(http.StatusOK)
 			}))
@@ -197,25 +201,6 @@ func TestRequestTimeout_ClassifiesTheDispatchedPath(t *testing.T) {
 				t.Errorf("deadline %v from now; want ≈ %v", remaining.Round(time.Second), c.want)
 			}
 		})
-	}
-}
-
-// TestDispatchPath_MatchesTheRouter: dispatchPath names the path chi routes
-// on. The router strips the /api/v1 alias from RawPath as well (it cleans
-// only Path), and dispatchPath returned RawPath verbatim — no deadline class
-// differs today, the classifiers match suffixes, but a prefix-based one would
-// have disagreed with chi on every escaped /api/v1 request.
-func TestDispatchPath_MatchesTheRouter(t *testing.T) {
-	for target, want := range map[string]string{
-		"/api/v1/orgs/o%2Dx/knowledge/upload": "/api/orgs/o%2Dx/knowledge/upload",
-		"/api/orgs/o%2Dx/knowledge/upload":    "/api/orgs/o%2Dx/knowledge/upload",
-		"/api/v1/probe/a%2F..%2Fb":            "/api/probe/a%2F..%2Fb", // RawPath: never cleaned
-		"/api/v1foo/a%2Fb":                    "/api/v1foo/a%2Fb",      // not the alias
-		"/api/v1/./probe//x":                  "/api/probe/x",          // no RawPath: canonicalPath
-	} {
-		if got := dispatchPath(httptest.NewRequest(http.MethodGet, target, nil)); got != want {
-			t.Errorf("dispatchPath(%s) = %q, want %q", target, got, want)
-		}
 	}
 }
 
@@ -249,5 +234,66 @@ func TestIsStreamingPath(t *testing.T) {
 	}
 	if isLongLivedPath("/api/chat/stream") {
 		t.Error("a chat stream is bounded, not long-lived")
+	}
+}
+
+// TestRequestTimeout_DeclarativeTakesThePolicyDeadline: in declarative mode the deadline class is the resolved
+// policy's, whatever the path says; a request no resolver has seen gets the default, bounded deadline.
+func TestRequestTimeout_DeclarativeTakesThePolicyDeadline(t *testing.T) {
+	const def = 30 * time.Second
+	cases := []struct {
+		path   string
+		policy *route.Policy
+		want   time.Duration // 0: no deadline
+	}{
+		{"/api/chat/stream", &route.Policy{Deadline: route.DeadlineDefault}, def},
+		{"/api/anything", &route.Policy{Deadline: route.DeadlineNone}, 0},
+		{"/api/anything", &route.Policy{Deadline: route.DeadlineStream}, StreamRequestTimeout},
+		{"/api/anything", &route.Policy{Deadline: route.DeadlineBulk}, BulkRequestTimeout},
+		{"/ws", nil, def},
+	}
+	for _, c := range cases {
+		var got time.Time
+		var has bool
+		h := RequestTimeout(def, config.RoutePolicyDeclarative)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got, has = r.Context().Deadline()
+		}))
+		r := httptest.NewRequest(http.MethodGet, c.path, nil)
+		if c.policy != nil {
+			r = withPolicy(r, c.policy)
+		}
+		h.ServeHTTP(httptest.NewRecorder(), r)
+		if c.want == 0 {
+			if has {
+				t.Errorf("%s %+v: deadline set, want none", c.path, c.policy)
+			}
+			continue
+		}
+		if remaining := time.Until(got); !has || remaining > c.want || remaining < c.want-10*time.Second {
+			t.Errorf("%s %+v: deadline %v from now (set %v), want ≈ %v", c.path, c.policy, remaining.Round(time.Second), has, c.want)
+		}
+	}
+}
+
+// TestRequestTimeout_ShadowAppliesLegacyAndCountsDisagreement: shadow mode keeps the legacy deadline and counts a
+// route whose declared class differs; 405 and no-route policies differ by design and are not counted.
+func TestRequestTimeout_ShadowAppliesLegacyAndCountsDisagreement(t *testing.T) {
+	endpoint := &route.Policy{Kind: route.KindEndpoint, Method: http.MethodPost, Pattern: "/api/shadow-deadline/stream", Label: "/api/shadow-deadline/stream", Deadline: route.DeadlineDefault}
+	notAllowed := &route.Policy{Kind: route.KindMethodNotAllowed, Label: "/api/shadow-deadline-405/stream", Deadline: route.DeadlineDefault}
+	var has bool
+	var got time.Time
+	h := RequestTimeout(30*time.Second, config.RoutePolicyShadow)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, has = r.Context().Deadline()
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), withPolicy(httptest.NewRequest(http.MethodPost, "/api/shadow-deadline/stream", nil), endpoint))
+	if remaining := time.Until(got); !has || remaining < 5*time.Minute {
+		t.Errorf("shadow mode applied %v (set %v), want the legacy stream deadline", remaining.Round(time.Second), has)
+	}
+	h.ServeHTTP(httptest.NewRecorder(), withPolicy(httptest.NewRequest(http.MethodGet, "/api/shadow-deadline-405/stream", nil), notAllowed))
+	if n := metrics.RoutePolicyMismatchCount(endpoint.Label, DecisionDeadline); n != 1 {
+		t.Errorf("endpoint deadline mismatches = %v, want 1", n)
+	}
+	if n := metrics.RoutePolicyMismatchCount(notAllowed.Label, DecisionDeadline); n != 0 {
+		t.Errorf("405 deadline mismatches = %v, want 0 (not compared)", n)
 	}
 }

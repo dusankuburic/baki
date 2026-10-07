@@ -21,7 +21,7 @@ func newProviderServiceWithFakeSecrets(t *testing.T, secrets *testutil.FakeSecre
 		return v, nil
 	}
 	factory := ai.NewProviderFactory(getKey, ai.NewCopilotAuth(), nil, nil)
-	return NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets)
+	return NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets, nil, nil)
 }
 
 // setLocalModelsEgress installs the local models egress policy for the test

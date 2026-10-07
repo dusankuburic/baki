@@ -17,13 +17,13 @@ import (
 // `dimensions` was ever sent and text-embedding-3-large came back 3072 wide).
 func TestProvideAI_EmbeddingWidthDefaultsToStorageContract(t *testing.T) {
 	cfg := config.Default()
-	_, _, factory := ProvideAI("", nil, cfg, testutil.NewFakeSecretStore())
+	_, _, factory := ProvideAI("", nil, cfg, testutil.NewFakeSecretStore(), nil)
 	if got := factory.EmbeddingDimensions(); got != config.DefaultEmbeddingDim {
 		t.Errorf("unset PAD_EMBEDDING_DIM: factory width = %d, want %d", got, config.DefaultEmbeddingDim)
 	}
 
 	cfg.Storage.EmbeddingDim = 3072
-	_, _, factory = ProvideAI("", nil, cfg, testutil.NewFakeSecretStore())
+	_, _, factory = ProvideAI("", nil, cfg, testutil.NewFakeSecretStore(), nil)
 	if got := factory.EmbeddingDimensions(); got != 3072 {
 		t.Errorf("PAD_EMBEDDING_DIM=3072: factory width = %d, want 3072", got)
 	}
@@ -43,13 +43,13 @@ func TestProvideKnowledgeService_PinsEmbeddingProvider(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Storage.EmbeddingProvider = "azure-foundry"
-	err := ProvideKnowledgeService(&testutil.FakeBackend{}, factory, nil, cfg, nil).AddDocument(ctx, "u1", "org-1", "a.md", "content")
+	err := ProvideKnowledgeService(&testutil.FakeBackend{}, factory, nil, cfg, nil, nil).AddDocument(ctx, "u1", "org-1", "a.md", "content")
 	if !errors.Is(err, rag.ErrEmbeddingUnavailable) || !errors.Is(err, ai.ErrEmbeddingDeploymentMissing) {
 		t.Errorf("pinned azure-foundry: err = %v, want Azure consulted (ErrEmbeddingDeploymentMissing)", err)
 	}
 
 	cfg.Storage.EmbeddingProvider = ""
-	err = ProvideKnowledgeService(&testutil.FakeBackend{}, factory, nil, cfg, nil).AddDocument(ctx, "u1", "org-1", "a.md", "content")
+	err = ProvideKnowledgeService(&testutil.FakeBackend{}, factory, nil, cfg, nil, nil).AddDocument(ctx, "u1", "org-1", "a.md", "content")
 	if !errors.Is(err, rag.ErrEmbeddingUnavailable) || errors.Is(err, ai.ErrEmbeddingDeploymentMissing) {
 		t.Errorf("no pin: err = %v, want ErrEmbeddingUnavailable without consulting Azure", err)
 	}

@@ -108,53 +108,6 @@ func TestHandleEvents_DisconnectsAtTokenExpiry(t *testing.T) {
 	}
 }
 
-// TestAuditEnqueue_RecoversSendOnClosedChannel proves the recover guard catches the TOCTOU window:
-// ShutdownAuditPool sets auditClosed and closes the channel as two separate statements, so a sender
-// past the flag check reaches the send AFTER the close. Reproduced deterministically by closing the
-// channel WITHOUT setting the flag — the recover must convert the panic into ("closed").
-func TestAuditEnqueue_RecoversSendOnClosedChannel(t *testing.T) {
-	ch := make(chan *interfaces.AuditEvent, 1)
-	auditCh = ch
-	auditClosed.Store(false)
-	close(ch) // intentionally do NOT set the flag: forces the send-then-recover path
-
-	sent, reason := auditEnqueue(&interfaces.AuditEvent{Action: AuditActionFlowUpload})
-	if sent || reason != "closed" {
-		t.Fatalf("got (sent=%v, reason=%q), want (false, \"closed\")", sent, reason)
-	}
-
-	auditCh = nil
-	auditClosed.Store(false)
-}
-
-// TestAuditEnqueue_DivertsWhenFull confirms a full queue returns ("full") and a
-// pool closed via the flag (the fast path) returns ("closed") so callers route
-// to the fallback sink instead of dropping silently.
-func TestAuditEnqueue_DivertsWhenFull(t *testing.T) {
-	auditCh = make(chan *interfaces.AuditEvent, 1)
-	auditClosed.Store(false)
-
-	// Fill the queue.
-	auditCh <- &interfaces.AuditEvent{Action: AuditActionFlowUpload}
-
-	sent, reason := auditEnqueue(&interfaces.AuditEvent{Action: AuditActionFlowDelete})
-	if sent || reason != "full" {
-		t.Fatalf("full queue: got (sent=%v, reason=%q), want (false, \"full\")", sent, reason)
-	}
-
-	// Close the pool via the flag fast path; the send is never attempted so no
-	// recover is needed and there is no send-vs-close race here.
-	auditClosed.Store(true)
-	sent, reason = auditEnqueue(&interfaces.AuditEvent{Action: AuditActionFlowDelete})
-	if sent || reason != "closed" {
-		t.Fatalf("closed pool: got (sent=%v, reason=%q), want (false, \"closed\")", sent, reason)
-	}
-
-	// Leave package state clean so other tests don't observe a closed channel.
-	auditCh = nil
-	auditClosed.Store(false)
-}
-
 func TestAcceptInvite_RejectsNonexistentToken(t *testing.T) {
 	rt, _ := newLibraryTestRouter(t)
 

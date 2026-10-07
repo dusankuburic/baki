@@ -20,7 +20,7 @@ import (
 // by the recover path and nothing else.
 func TestScannerScan_PanicInJobIsRecovered(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	rt.handlers.Admin.scanNow = func(context.Context) {
+	moduleOf[*AdminHandler](t, rt).scanNow = func(context.Context) {
 		panic("scanner exploded")
 	}
 	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)

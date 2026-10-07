@@ -42,12 +42,19 @@ var errFixNeedsWriteScope = fmt.Errorf("%w: this API token lacks the %q scope ne
 // fixScopeRefusal is the model-readable answer when the stream's token may not apply fixes.
 const fixScopeRefusal = "this session's API token is not allowed to modify flows (it lacks the write scope) — nothing was changed. Explain the fix instead so the user can apply it."
 
-// requireFixWriteScope allows interactive sessions and unscoped tokens; a scoped token needs ScopeWrite.
+// requireFixWriteScope allows interactive sessions and unscoped tokens; a scoped token needs ScopeWrite. It is
+// FlowEdit's actor stage (CanAttempt): no flow is at hand when the approval is offered, and the editor check that
+// follows is GetAuthorizedFlow's. Without an actor (local mode) there is nothing to restrict.
 func requireFixWriteScope(ctx context.Context) error {
-	if c := auth.ClaimsFromContext(ctx); c != nil && !c.AllowsScope(auth.ScopeWrite) {
+	actor := auth.ActorFromContext(ctx)
+	if actor == nil {
+		return nil
+	}
+	err := CanAttempt(actor, FlowEdit)
+	if errors.Is(err, ErrScopeDenied) {
 		return errFixNeedsWriteScope
 	}
-	return nil
+	return err
 }
 
 // fixDecisionState is one registered approval prompt; decided is buffered so ResolveFixDecision never blocks and
@@ -73,7 +80,6 @@ type fixDecision struct {
 // re-analyzes, and reports whether the finding resolved.
 type chatFixApplier struct {
 	svc      *ChatService
-	scope    string
 	doc      *models.FlowDocument // pre-fix snapshot: used for flow identity/authorization
 	streamID string
 	emit     func(eventType string, data map[string]interface{})
@@ -86,11 +92,11 @@ type chatFixApplier struct {
 
 // newFixApplier builds the per-stream applier; nil when the service can't apply fixes (no flow service wired),
 // leaving tctx.Fixes nil and apply_fix to report "not available".
-func (s *ChatService) newFixApplier(scope string, doc *models.FlowDocument, streamID string, emit func(string, map[string]interface{}), touch func(), onDocReplaced func(*models.FlowDocument)) ai.ToolFixApplier {
+func (s *ChatService) newFixApplier(doc *models.FlowDocument, streamID string, emit func(string, map[string]interface{}), touch func(), onDocReplaced func(*models.FlowDocument)) ai.ToolFixApplier {
 	if s.flowCache == nil || emit == nil {
 		return nil
 	}
-	return &chatFixApplier{svc: s, scope: scope, doc: doc, streamID: streamID, emit: emit, touch: touch, onDocReplaced: onDocReplaced}
+	return &chatFixApplier{svc: s, doc: doc, streamID: streamID, emit: emit, touch: touch, onDocReplaced: onDocReplaced}
 }
 
 // ApplyFixWithApproval implements ai.ToolFixApplier: the returned string is always model-readable on nil-error
@@ -157,7 +163,7 @@ wait:
 	// in the apply path cannot strand the goroutine.
 	applyDone := a.beginApplyKeepalive(ctx)
 	defer close(applyDone)
-	outcome, updated, err := a.svc.applyApprovedFix(ctx, a.scope, a.doc, prop)
+	outcome, updated, err := a.svc.applyApprovedFix(ctx, a.doc, prop)
 	if err != nil {
 		a.emitFixDecision(prop.ProposalID, "error", err.Error())
 		return "", err
@@ -304,7 +310,7 @@ wait:
 	// Keepalive through the whole multi-apply window (see ApplyFixWithApproval); closed via defer.
 	applyDone := a.beginApplyKeepalive(ctx)
 	defer close(applyDone)
-	outcome, updated, err := a.svc.applyApprovedFixes(ctx, a.scope, a.doc, props)
+	outcome, updated, err := a.svc.applyApprovedFixes(ctx, a.doc, props)
 	if err != nil {
 		a.emitFixDecision(batchID, "error", err.Error())
 		return "", err
@@ -371,13 +377,14 @@ func (s *ChatService) applyFixHook() applyFixFunc {
 }
 
 // applyApprovedFix applies an approved proposal against the REAL flow and verifies it: re-resolves a fresh
-// document with EDITOR permission (the stream itself only required viewer), runs the fix (patch recomputed on
-// the unscrubbed source), invalidates the cached chat context, and re-analyzes to check whether the finding (by
-// its re-parse-stable fingerprint) disappeared. The updated document is returned for the caller's refresh (A1).
+// document the stream's actor may edit (FlowEdit; the stream itself only required ChatUse), runs the fix (patch
+// recomputed on the unscrubbed source), invalidates the cached chat context, and re-analyzes to check whether the
+// finding (by its re-parse-stable fingerprint) disappeared. The updated document is returned for the caller's
+// refresh (A1).
 //
 // The apply+verify window is keepalive-touched: without touches the idle watchdog would cancel a healthy stream
 // during a >90s re-analysis even though fixApplyToolTimeout allows 120s.
-func (s *ChatService) applyApprovedFix(ctx context.Context, scope string, snapshot *models.FlowDocument, prop ai.FixProposal) (chatFixOutcome, *models.FlowDocument, error) {
+func (s *ChatService) applyApprovedFix(ctx context.Context, snapshot *models.FlowDocument, prop ai.FixProposal) (chatFixOutcome, *models.FlowDocument, error) {
 	if snapshot == nil {
 		return chatFixOutcome{Status: "error", Detail: "no flow loaded"}, nil, fmt.Errorf("no flow loaded")
 	}
@@ -385,8 +392,8 @@ func (s *ChatService) applyApprovedFix(ctx context.Context, scope string, snapsh
 	if err := requireFixWriteScope(ctx); err != nil {
 		return chatFixOutcome{Status: "error", Detail: err.Error()}, nil, err
 	}
-	// Fresh doc + editor check at apply time: the stream was authorized as viewer and the snapshot may be stale.
-	doc, err := s.GetAuthorizedFlow(ctx, snapshot.ID, scope, "editor")
+	// Fresh doc + FlowEdit check at apply time: the stream was authorized for ChatUse and the snapshot may be stale.
+	doc, err := s.GetAuthorizedFlow(ctx, snapshot.ID, FlowEdit)
 	if err != nil {
 		return chatFixOutcome{Status: "error", Detail: "not allowed to edit this flow: " + err.Error()}, nil, err
 	}
@@ -533,7 +540,7 @@ func (o batchOutcome) ModelSummary() string {
 // applyApprovedFixes applies an approved batch against the REAL flow one fix at a time: each apply re-parses
 // (new block IDs), so the next target is re-associated on the fresh analysis by content key. Per-item failures
 // don't abort the batch; the final analysis verifies every item. The final document is returned for A1.
-func (s *ChatService) applyApprovedFixes(ctx context.Context, scope string, snapshot *models.FlowDocument, props []ai.FixProposal) (batchOutcome, *models.FlowDocument, error) {
+func (s *ChatService) applyApprovedFixes(ctx context.Context, snapshot *models.FlowDocument, props []ai.FixProposal) (batchOutcome, *models.FlowDocument, error) {
 	out := batchOutcome{Status: "error", Items: make([]batchItemOutcome, 0, len(props))}
 	if snapshot == nil {
 		out.Detail = "no flow loaded"
@@ -543,7 +550,7 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, scope string, snap
 		out.Detail = err.Error()
 		return out, nil, err
 	}
-	doc, err := s.GetAuthorizedFlow(ctx, snapshot.ID, scope, "editor")
+	doc, err := s.GetAuthorizedFlow(ctx, snapshot.ID, FlowEdit)
 	if err != nil {
 		out.Detail = "not allowed to edit this flow: " + err.Error()
 		return out, nil, err

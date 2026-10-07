@@ -19,6 +19,8 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/egress"
@@ -64,6 +66,7 @@ type azRegEnv struct {
 	factory  *ai.ProviderFactory
 	svc      *service.ProviderService
 	sys      *service.SystemService
+	azure    *service.AzureModelService
 	foundry  *azRegFoundry
 	orgID    string
 }
@@ -83,15 +86,7 @@ func newAzRegEnv(t *testing.T) *azRegEnv {
 		return v, nil
 	}, nil, nil, nil)
 	e.factory.SetOrgKeyLookup(e.orgKeys.OrgKeyLookup)
-	e.svc = service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), e.factory, e.secrets)
-	e.svc.SetOrgKeyStore(e.orgKeys)
-	e.sys = service.NewSystemService(storage.NewInMemorySettingsStore(), e.secrets, &mockNotifier{}, fs, config.ModeCloud)
-	e.sys.OnApiKeyChanged(e.svc.InvalidateModels)
 	e.wire(nil)
-	// The handlers read their services per request: hand them the wired ones.
-	e.rt.handlers.Provider.providerSvc = e.svc
-	e.rt.handlers.Org.providers = e.svc
-	e.rt.handlers.Sys.sysSvc = e.sys
 	e.orgID = seedOrg(t, e.rt, "Acme", "u-admin")
 	addOrgMember(t, e.rt, e.orgID, "u-member", auth.RoleMember)
 	addOrgMember(t, e.rt, e.orgID, "u-viewer", auth.RoleViewer)
@@ -99,8 +94,8 @@ func newAzRegEnv(t *testing.T) *azRegEnv {
 	return e
 }
 
-// wire (re)builds the registry service on the env's registry rows and wires it into the provider
-// and system services, as DI does; adjust changes its dependencies.
+// wire (re)builds the registry service on the env's registry rows and the provider and system
+// services on it, as DI does; adjust changes its dependencies.
 func (e *azRegEnv) wire(adjust func(*testAzureModelsDeps)) {
 	d := testAzureModelsDeps{
 		Registry: e.registry, Secrets: e.secrets, OrgKeys: e.orgKeys, Factory: e.factory,
@@ -109,9 +104,19 @@ func (e *azRegEnv) wire(adjust func(*testAzureModelsDeps)) {
 	if adjust != nil {
 		adjust(&d)
 	}
-	azure, _ := newTestAzureModels(d)
-	e.svc.SetAzureModels(azure)
-	e.sys.SetAzureModels(azure)
+	e.azure, _ = newTestAzureModels(d)
+	e.install(e.azure, e.azure)
+}
+
+// install builds the provider and system services on their registries (nil for none) and hands them
+// to the handlers, which read their services per request.
+func (e *azRegEnv) install(providerAzure, systemAzure *service.AzureModelService) {
+	e.svc = service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), e.factory, e.secrets, e.orgKeys, providerAzure)
+	e.sys = service.NewSystemService(storage.NewInMemorySettingsStore(), e.secrets, &mockNotifier{}, e.fs, config.ModeCloud, systemAzure)
+	e.sys.OnApiKeyChanged(e.svc.InvalidateModels)
+	moduleOf[*ProviderHandler](e.t, e.rt).providerSvc = e.svc
+	moduleOf[*OrgHandler](e.t, e.rt).providers = e.svc
+	moduleOf[*SystemHandler](e.t, e.rt).sysSvc = e.sys
 }
 
 // orgBase is the organisation's registry.
@@ -471,7 +476,7 @@ func TestAzureRegistryRoutes_Registered(t *testing.T) {
 func TestAzureRegistry_Unavailable(t *testing.T) {
 	t.Run("no registry", func(t *testing.T) {
 		e := newAzRegEnv(t)
-		e.svc.SetAzureModels(nil)
+		e.install(nil, e.azure)
 		const code = "AZURE_REGISTRY_UNAVAILABLE"
 		azRegWantError(t, e.do("u-admin", http.MethodGet, azRegBase+"/connections", nil), http.StatusServiceUnavailable, code)
 		azRegWantError(t, e.do("u-admin", http.MethodPost, azRegBase+"/models", map[string]any{}), http.StatusServiceUnavailable, code)
@@ -524,7 +529,7 @@ func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 	if raw, _ := e.secrets.Get(user, "azure-foundry/"+conn.ID); !strings.Contains(raw, "sk-secret-1") {
 		t.Errorf("stored credential = %q, want the key under azure-foundry/%s", raw, conn.ID)
 	}
-	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureConnectionSave)), "azure_connection", conn.ID,
+	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureConnectionSave)), "azure_connection", conn.ID,
 		map[string]string{"op": "create", "connectionId": conn.ID, "authMode": "api_key"})
 
 	if got := e.connection(user, azRegBase, conn.ID); got.ID != conn.ID || got.Name != "contoso-prod" {
@@ -538,7 +543,7 @@ func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 	if renamed.Connection.Name != "Contoso" || renamed.Connection.UpdatedAt == conn.UpdatedAt {
 		t.Errorf("renamed = %+v", renamed.Connection)
 	}
-	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureConnectionSave)), "azure_connection", conn.ID,
+	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureConnectionSave)), "azure_connection", conn.ID,
 		map[string]string{"op": "update", "connectionId": conn.ID, "renamed": "true"})
 	azRegWantError(t, e.do(user, http.MethodPut, azRegBase+"/connections/"+conn.ID, map[string]any{"name": "Other", "updatedAt": conn.UpdatedAt}),
 		http.StatusConflict, "CONFLICT")
@@ -552,7 +557,7 @@ func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 		model.MaxOutputTokens != 4096 || model.Status != service.AzureStatusReady || model.Shared {
 		t.Errorf("created model = %+v", model)
 	}
-	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureModelSave)), "azure_model", model.ID, map[string]string{
+	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureModelSave)), "azure_model", model.ID, map[string]string{
 		"op": "create", "modelId": model.ID, "connectionId": conn.ID, "kind": "chat", "deployment": "gpt-4.1",
 		"isDefault": "false", "isKnowledgeEmbedding": "false",
 	})
@@ -582,11 +587,11 @@ func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 	if got := azureDecode(t, rr); got["status"] != "ok" {
 		t.Errorf("DELETE /models answer = %v", got)
 	}
-	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureModelDelete)), "azure_model", model.ID,
+	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureModelDelete)), "azure_model", model.ID,
 		map[string]string{"op": "delete", "modelId": model.ID})
 
 	e.createModel(user, azRegBase, map[string]any{"connectionId": conn.ID, "kind": "claude", "deployment": "claude-sonnet"})
-	_ = awaitAudit(t, ch, isAzRegAudit(AuditActionAzureModelSave))
+	_ = awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureModelSave))
 	rr = e.do(user, http.MethodDelete, azRegBase+"/connections/"+conn.ID+"?cascade=true", nil)
 	checkStatus(t, rr, http.StatusOK)
 	var deleted service.AzureConnectionDeleteResult
@@ -594,7 +599,7 @@ func TestAzureRegistry_PersonalLifecycle(t *testing.T) {
 	if deleted != (service.AzureConnectionDeleteResult{Status: "ok", DeletedModels: 1}) {
 		t.Errorf("DELETE /connections answer = %+v", deleted)
 	}
-	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureConnectionDelete)), "azure_connection", conn.ID,
+	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureConnectionDelete)), "azure_connection", conn.ID,
 		map[string]string{"op": "delete", "connectionId": conn.ID, "deletedModels": "1", "clearedKnowledgeEmbedding": "false"})
 	if has, _ := e.secrets.Has(user, "azure-foundry/"+conn.ID); has {
 		t.Error("the removed resource's credential is still stored")
@@ -907,7 +912,7 @@ func TestAzureRegistry_OrgRoleMatrix(t *testing.T) {
 	// The refusal's shape is the org config routes': 403 FORBIDDEN.
 	azRegWantError(t, e.do("u-viewer", http.MethodGet, base+"/models", nil), http.StatusForbidden, "FORBIDDEN")
 	// An unknown organisation: a read is refused like any non-member's, a
-	// write is 404 (requireAdmin, as on the org config routes).
+	// write is 404 (canOrg's OrgAdmin answer, as on the org config routes).
 	azRegWantError(t, e.do("u-admin", http.MethodGet, "/api/orgs/nope/providers/azure-foundry/connections", nil), http.StatusForbidden, "FORBIDDEN")
 	checkStatus(t, e.do("u-admin", http.MethodPost, "/api/orgs/nope/providers/azure-foundry/connections", apiKeyResource("x", "x.openai.azure.com", "k")), http.StatusNotFound)
 
@@ -994,14 +999,14 @@ func TestAzureRegistry_OrgWritesAuditedAndLenderDisable(t *testing.T) {
 	base := e.orgBase()
 
 	conn := e.createConnection("u-admin2", base, entraResource("lent", "lent.services.ai.azure.com", "lender-secret"))
-	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureConnectionSave)), "org", e.orgID,
+	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureConnectionSave)), "org", e.orgID,
 		map[string]string{"op": "create", "connectionId": conn.ID, "authMode": "entra"})
 	model := e.createModel("u-admin2", base, map[string]any{"connectionId": conn.ID, "kind": "agent", "deployment": "helper", "description": "private note"})
-	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureModelSave)), "org", e.orgID,
+	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureModelSave)), "org", e.orgID,
 		map[string]string{"op": "create", "modelId": model.ID, "connectionId": conn.ID, "kind": "agent", "deployment": "helper"})
 	rr := e.do("u-admin", http.MethodPut, base+"/connections/"+conn.ID, map[string]any{"dismissDiscovery": true})
 	checkStatus(t, rr, http.StatusOK)
-	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureConnectionSave)), "org", e.orgID,
+	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureConnectionSave)), "org", e.orgID,
 		map[string]string{"op": "update", "connectionId": conn.ID, "dismissDiscovery": "true"})
 
 	// The lender is demoted: their resource's credential goes (one keys.save disable row naming the key),
@@ -1012,7 +1017,7 @@ func TestAzureRegistry_OrgWritesAuditedAndLenderDisable(t *testing.T) {
 		t.Error("the lender's demotion did not report the shared credential disabled")
 	}
 	ev := awaitAudit(t, ch, func(ev *storageif.AuditEvent) bool {
-		return ev.Action == AuditActionKeysSave && ev.Meta["op"] == "disable"
+		return ev.Action == audit.ActionKeysSave && ev.Meta["op"] == "disable"
 	})
 	if ev.ResourceID != e.orgID || ev.Meta["provider"] != "azure-foundry/"+conn.ID || ev.Meta["connectionId"] != conn.ID ||
 		ev.Meta["reason"] != lenderReasonDemoted || ev.Meta["user"] != "u-admin2" {
@@ -1024,9 +1029,9 @@ func TestAzureRegistry_OrgWritesAuditedAndLenderDisable(t *testing.T) {
 	}
 
 	checkStatus(t, e.do("u-admin", http.MethodDelete, base+"/models/"+model.ID, nil), http.StatusOK)
-	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureModelDelete)), "org", e.orgID, map[string]string{"op": "delete", "modelId": model.ID})
+	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureModelDelete)), "org", e.orgID, map[string]string{"op": "delete", "modelId": model.ID})
 	checkStatus(t, e.do("u-admin", http.MethodDelete, base+"/connections/"+conn.ID, nil), http.StatusOK)
-	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(AuditActionAzureConnectionDelete)), "org", e.orgID,
+	assertAzRegAudit(t, awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureConnectionDelete)), "org", e.orgID,
 		map[string]string{"op": "delete", "connectionId": conn.ID, "deletedModels": "0"})
 }
 
@@ -1237,7 +1242,7 @@ func TestAzureRegistry_OrgTest(t *testing.T) {
 	ch := captureAudit(t)
 	const orgHost, legacyHost = "orgres" + azRegHostSuffix, "legacy" + azRegHostSuffix
 	conn := e.createConnection("u-admin", e.orgBase(), apiKeyResource("orgres", orgHost, "org-key"))
-	_ = awaitAudit(t, ch, isAzRegAudit(AuditActionAzureConnectionSave))
+	_ = awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureConnectionSave))
 
 	res := e.test("u-admin", e.orgBase(), map[string]any{"connectionId": conn.ID})
 	if !res.OK {
@@ -1246,7 +1251,7 @@ func TestAzureRegistry_OrgTest(t *testing.T) {
 	if calls := f.callsTo(orgHost); len(calls) != 1 || calls[0].APIKey != "org-key" || calls[0].Path != "/openai/v1/models" {
 		t.Errorf("calls = %v, want one probe with the org's key", calls)
 	}
-	ev := awaitAudit(t, ch, isAzRegAudit(AuditActionProvidersTest))
+	ev := awaitAudit(t, ch, isAzRegAudit(audit.ActionProvidersTest))
 	assertAzRegAudit(t, ev, "org", e.orgID, map[string]string{"provider": "azure-foundry", "ok": "true", "connectionId": conn.ID})
 
 	// A draft: its auth mode and model are audited, never its settings.
@@ -1255,7 +1260,7 @@ func TestAzureRegistry_OrgTest(t *testing.T) {
 	if !res.OK {
 		t.Errorf("org draft test = %+v", res)
 	}
-	ev = awaitAudit(t, ch, isAzRegAudit(AuditActionProvidersTest))
+	ev = awaitAudit(t, ch, isAzRegAudit(audit.ActionProvidersTest))
 	assertAzRegAudit(t, ev, "org", e.orgID, map[string]string{"draft": "true", "authMode": "api_key", "kind": "chat", "deployment": "gpt-4.1"})
 	if _, has := ev.Meta["endpoint"]; has {
 		t.Errorf("the audit row carries the draft's endpoint: %v", ev.Meta)
@@ -1281,7 +1286,7 @@ func TestAzureRegistry_OrgTest(t *testing.T) {
 		t.Errorf("calls = %v, want one resource probe of the default resource (no chat call)", calls)
 	}
 	ev = awaitAudit(t, ch, func(ev *storageif.AuditEvent) bool {
-		return ev.Action == AuditActionProvidersTest && ev.Meta["ok"] == "true"
+		return ev.Action == audit.ActionProvidersTest && ev.Meta["ok"] == "true"
 	})
 	if ev.ResourceID != e.orgID || ev.Meta["provider"] != "azure-foundry" {
 		t.Errorf("deprecated test audit = %+v (meta %v)", ev, ev.Meta)
@@ -1425,8 +1430,8 @@ func TestAzureOutboundRoute_Classification(t *testing.T) {
 		}
 		// The RLS middleware runs on the canonical path (the router has
 		// cleaned it and stripped the alias by then).
-		if !rlsExemptPath(canonicalRequestPath(c.path)) {
-			t.Errorf("rlsExemptPath(%s) = false, want the outbound route exempt", canonicalRequestPath(c.path))
+		if !rlsExemptPath(route.CanonicalPath(c.path)) {
+			t.Errorf("rlsExemptPath(%s) = false, want the outbound route exempt", route.CanonicalPath(c.path))
 		}
 	}
 	notOutbound := []struct{ method, path string }{
@@ -1451,7 +1456,7 @@ func TestAzureOutboundRoute_Classification(t *testing.T) {
 		if g := rateLimitGroup(c.method, &url.URL{Path: c.path}); g != rlGroupGeneral {
 			t.Errorf("rateLimitGroup(%s %s) = %q, want general", c.method, c.path, g)
 		}
-		if p := canonicalRequestPath(c.path); rlsExemptPath(p) {
+		if p := route.CanonicalPath(c.path); rlsExemptPath(p) {
 			t.Errorf("rlsExemptPath(%s) = true, want the route inside the RLS transaction", p)
 		}
 	}
@@ -1479,7 +1484,7 @@ func TestAzureRegistry_FailedUpdateThatKeptTheNewCredentialIsAudited(t *testing.
 	ch := captureAudit(t)
 	host := "shared" + azRegHostSuffix
 	conn := e.createConnection("u-admin", e.orgBase(), apiKeyResource("team", host, "k1"))
-	_ = awaitAudit(t, ch, isAzRegAudit(AuditActionAzureConnectionSave))
+	_ = awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureConnectionSave))
 	body := map[string]any{
 		"config":              map[string]any{"endpoint": "https://" + host, "auth": map[string]any{"mode": "api_key", "key": "k2"}},
 		"credentialUpdatedAt": conn.CredentialUpdatedAt,
@@ -1488,14 +1493,14 @@ func TestAzureRegistry_FailedUpdateThatKeptTheNewCredentialIsAudited(t *testing.
 
 	e.registry.FailOn("UpdateConnection", storageif.ErrAzureRegistryConflict)
 	azRegWantError(t, e.do("u-admin", http.MethodPut, e.orgBase()+"/connections/"+conn.ID, body), http.StatusConflict, service.AzureCodeConflict)
-	noAudit(t, ch, isAzRegAudit(AuditActionAzureConnectionSave))
+	noAudit(t, ch, isAzRegAudit(audit.ActionAzureConnectionSave))
 	if raw, _ := e.orgKeys.GetOrg(e.orgID, key); !strings.Contains(raw, `"key":"k1"`) {
 		t.Errorf("the credential did not go back: %s", raw)
 	}
 
 	e.wire(func(d *testAzureModelsDeps) { d.OrgKeys = azRegRestoreFailingOrgKeys{e.orgKeys} })
 	azRegWantError(t, e.do("u-admin", http.MethodPut, e.orgBase()+"/connections/"+conn.ID, body), http.StatusConflict, service.AzureCodeConflict)
-	ev := awaitAudit(t, ch, isAzRegAudit(AuditActionAzureConnectionSave))
+	ev := awaitAudit(t, ch, isAzRegAudit(audit.ActionAzureConnectionSave))
 	assertAzRegAudit(t, ev, "org", e.orgID, map[string]string{
 		"op": "update", "connectionId": conn.ID, "credentialChanged": "true",
 		"outcome": "failed_after_credential_change", "authMode": "api_key",
@@ -1531,7 +1536,7 @@ func TestAzureRegistry_FailedLegacySaveThatKeptTheNewDocumentIsAudited(t *testin
 	}
 	isFailedSave := func(resourceType string) func(*storageif.AuditEvent) bool {
 		return func(ev *storageif.AuditEvent) bool {
-			return ev.Action == AuditActionKeysSave && ev.ResourceType == resourceType && ev.Meta["outcome"] == "failed_after_credential_change"
+			return ev.Action == audit.ActionKeysSave && ev.ResourceType == resourceType && ev.Meta["outcome"] == "failed_after_credential_change"
 		}
 	}
 
@@ -1558,7 +1563,7 @@ func TestAzureRegistry_FailedLegacySaveThatKeptTheNewDocumentIsAudited(t *testin
 	if rr.Code < 400 {
 		t.Fatalf("stranger save: %d", rr.Code)
 	}
-	noAudit(t, ch, func(ev *storageif.AuditEvent) bool { return ev.Action == AuditActionKeysSave })
+	noAudit(t, ch, func(ev *storageif.AuditEvent) bool { return ev.Action == audit.ActionKeysSave })
 	if has, _ := e.secrets.Has("u-stranger", ai.AzureFoundryProviderID); has {
 		t.Error("the document of a failed save stayed")
 	}

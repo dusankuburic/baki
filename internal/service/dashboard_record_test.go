@@ -29,7 +29,7 @@ func (c *captureDashBackend) SaveFlowAnalysis(_ context.Context, fa *storageif.F
 // and TotalFindings equals errors+warnings+info.
 func TestRecordAnalysis_PersistsConfidenceAndFixability(t *testing.T) {
 	backend := &captureDashBackend{FakeBackend: testutil.NewFakeBackend()}
-	svc := NewDashboardService(backend, nil, nil)
+	svc := NewDashboardService(backend, nil, nil, nil)
 
 	doc := &models.FlowDocument{ID: "flow-1"}
 	report := &models.AnalysisReport{
@@ -78,7 +78,7 @@ func TestRecordAnalysis_PersistsConfidenceAndFixability(t *testing.T) {
 // a nil document or report is a no-op, never a panic.
 func TestRecordAnalysis_NilSafeDocument(t *testing.T) {
 	backend := &captureDashBackend{FakeBackend: testutil.NewFakeBackend()}
-	svc := NewDashboardService(backend, nil, nil)
+	svc := NewDashboardService(backend, nil, nil, nil)
 
 	svc.RecordAnalysis(context.Background(), nil, &models.AnalysisReport{})
 	svc.RecordAnalysis(context.Background(), &models.FlowDocument{ID: "x"}, nil)

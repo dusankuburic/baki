@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/config"
 )
 
@@ -15,8 +16,10 @@ import (
 // sample. 5xx alerting was blind to the one failure mode it exists for.
 func TestBuildHandler_HandlerPanicIsCountedAsA500(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	rt.mux.Get("/api/panic-probe", func(http.ResponseWriter, *http.Request) {
-		panic("handler exploded")
+	mountTestRoutes(t, rt, func(rb *route.Builder) {
+		rb.Get("/api/panic-probe", func(http.ResponseWriter, *http.Request) {
+			panic("handler exploded")
+		})
 	})
 	cfg := config.Default() // local mode: no rate limiters, no Redis
 	h, limiters := BuildHandler(rt, cfg, nil)

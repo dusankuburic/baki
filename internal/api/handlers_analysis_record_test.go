@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -63,7 +64,7 @@ func TestHandleAnalyzeFlow_RecordsOnlyFreshRuns(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := rt.handlers.Analysis.DrainBackground(ctx); err != nil {
+	if err := moduleOf[*AnalysisHandler](t, rt).DrainBackground(ctx); err != nil {
 		t.Fatalf("DrainBackground: %v", err)
 	}
 	if got := backend.saves.Load(); got != 2 {
@@ -99,11 +100,12 @@ func TestHandleAnalyzeFlow_RecordDoesNotBlockResponse(t *testing.T) {
 		t.Fatal("the dashboard record never started")
 	}
 
+	analysis := moduleOf[*AnalysisHandler](t, rt)
 	drained := make(chan error, 1)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		drained <- rt.handlers.Analysis.DrainBackground(ctx)
+		drained <- analysis.DrainBackground(ctx)
 	}()
 	select {
 	case err := <-drained:
@@ -147,10 +149,10 @@ func TestHandleAnalyzeFlow_RecordsReportsTheScannerProducedFirst(t *testing.T) {
 	seedCloudFlowForAuthz(t, backend.FakeBackend)
 	rt := newTestRouter(backend, true)
 	tok := jwtBearer(t, rt, "u1", "u1@example.com")
-	h := rt.handlers.Analysis
+	h := moduleOf[*AnalysisHandler](t, rt)
 
 	// Scanner-style: resolve the flow and analyse it in the background.
-	doc, err := h.flowSvc.GetAuthorized(context.Background(), "f1", "u1", "viewer")
+	doc, err := h.flowSvc.GetAuthorized(userActorCtx("u1"), "f1", service.FlowRead)
 	if err != nil {
 		t.Fatalf("resolve flow: %v", err)
 	}
@@ -184,7 +186,7 @@ func TestHandleAnalyzeFlow_DroppedRecordIsRetried(t *testing.T) {
 	seedCloudFlowForAuthz(t, backend.FakeBackend)
 	rt := newTestRouter(backend, true)
 	tok := jwtBearer(t, rt, "u1", "u1@example.com")
-	h := rt.handlers.Analysis
+	h := moduleOf[*AnalysisHandler](t, rt)
 
 	// A drained runner refuses every task — the drop path without having to
 	// saturate 32 slots.
@@ -199,7 +201,7 @@ func TestHandleAnalyzeFlow_DroppedRecordIsRetried(t *testing.T) {
 		t.Fatalf("SaveFlowAnalysis calls = %d after a refused record, want 0", got)
 	}
 
-	doc, err := h.flowSvc.GetAuthorized(context.Background(), "f1", "u1", "viewer")
+	doc, err := h.flowSvc.GetAuthorized(userActorCtx("u1"), "f1", service.FlowRead)
 	if err != nil {
 		t.Fatalf("resolve flow: %v", err)
 	}

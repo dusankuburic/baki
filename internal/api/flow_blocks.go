@@ -6,9 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
 )
@@ -47,7 +48,7 @@ func (h *FlowHandler) handleBlockEdit(w http.ResponseWriter, r *http.Request, ki
 		render.Error(w, fmt.Errorf("blockId is required"), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit)
 	if !ok {
 		return
 	}
@@ -92,7 +93,7 @@ func (h *FlowHandler) handleUpdateBlockProperties(w http.ResponseWriter, r *http
 		render.Error(w, fmt.Errorf("blockId and at least one change are required"), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit)
 	if !ok {
 		return
 	}
@@ -131,7 +132,7 @@ func (h *FlowHandler) handleMoveBlock(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("blockId is required"), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit)
 	if !ok {
 		return
 	}
@@ -169,7 +170,7 @@ func (h *FlowHandler) handleRemoveBlocks(w http.ResponseWriter, r *http.Request)
 		render.Error(w, fmt.Errorf("blockIds must not be empty"), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit)
 	if !ok {
 		return
 	}
@@ -209,7 +210,7 @@ func (h *FlowHandler) handleRenameBlock(w http.ResponseWriter, r *http.Request) 
 		render.Error(w, fmt.Errorf("blockId and name are required"), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit)
 	if !ok {
 		return
 	}
@@ -251,7 +252,7 @@ func (h *FlowHandler) handleMoveBlockTo(w http.ResponseWriter, r *http.Request) 
 		render.Error(w, fmt.Errorf("blockId and refBlockId are required"), http.StatusBadRequest)
 		return
 	}
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, service.FlowEdit)
 	if !ok {
 		return
 	}
@@ -272,12 +273,12 @@ func (h *FlowHandler) handleMoveBlockTo(w http.ResponseWriter, r *http.Request) 
 }
 
 // registerBlockRoutes wires the /api/flow block-edit sub-routes.
-func (h *FlowHandler) registerBlockRoutes(r chi.Router) {
-	r.Post("/block/remove", h.handleRemoveBlock)
-	r.Post("/block/duplicate", h.handleDuplicateBlock)
-	r.Post("/block/properties", h.handleUpdateBlockProperties)
-	r.Post("/block/move", h.handleMoveBlock)
-	r.Post("/block/move-to", h.handleMoveBlockTo)
-	r.Post("/block/remove-batch", h.handleRemoveBlocks)
-	r.Post("/block/rename", h.handleRenameBlock)
+func (h *FlowHandler) registerBlockRoutes(rb *route.Builder) {
+	rb.Post("/block/remove", h.handleRemoveBlock)
+	rb.Post("/block/duplicate", h.handleDuplicateBlock)
+	rb.Post("/block/properties", h.handleUpdateBlockProperties)
+	rb.Post("/block/move", h.handleMoveBlock)
+	rb.Post("/block/move-to", h.handleMoveBlockTo)
+	rb.Post("/block/remove-batch", h.handleRemoveBlocks)
+	rb.Post("/block/rename", h.handleRenameBlock)
 }

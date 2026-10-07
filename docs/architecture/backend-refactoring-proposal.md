@@ -4,6 +4,84 @@
 
 **Fix first:** R1–R6 and S1–S3 are done. R7 and R8 come with Phase 4c.
 
+**Phase 2a: done** (2026-10-07, uncommitted).
+
+*Delivered:*
+- **Services own the storage work.** Handlers make no direct storage calls any more: the `backend.X` ratchet is 0
+  (from 85), and a second ratchet (`internal/archtest/storehandles_test.go`, go/types) pins the remaining
+  infrastructure store handles per file (PAT auth, the Idempotency-Key store, the migration lock, the Redis health
+  probe). New services take narrow role interfaces: `TriageService`, `CommentService`, `ShareTokenService`,
+  `PolicyService`, `GovernanceAlertService`, `OrgRuleService`, `ChannelService`, `UserDirectory`,
+  `CollaboratorService`, `SessionService`, `IdentityService`, `APITokenService`, `UserAdminService`,
+  `HealthService`, and `AccountLifecycleService`, which runs erasure as prepare → delete → finalize in the old order.
+- **`internal/audit`** (ADR 0008): an fx-managed `*audit.Recorder` replaces the package-global pool in `api`;
+  `Record(ctx, audit.Entry{…})` takes the user, actor, token, IP and user agent from the context. Every handler
+  records through its injected recorder (83 sites; `logAudit` and the global default are gone) and passes the
+  organisation where it is already in hand. Migration v33 adds `org_id`, `actor_kind`, `token_id`, `actor_job` and
+  `user_agent`; a boot-time job backfills `org_id` under an advisory lock, in statements of at most 1,000 rows.
+  The existing columns are byte-identical to before (tested across actors, proxies and address forms).
+- **DI:** `AIBudget` and `FlowScopeResolver` are extracted, the other setters became constructor parameters, and
+  `internal/di/setters_test.go` pins the remaining ones, each with its reason (`docs/architecture/di-wiring.md`).
+- `apperr` moved to `internal/platform/apperr`, so services may return typed errors.
+
+*Found in review and fixed:* the flow phase of the backfill could exceed the pool's 30 s statement timeout on a
+large table and then fail at the same page on every boot; erasure left the user agent on the user's pre-auth rows.
+
+*Open:* audit rows of personal flows and of flows deleted before v33 keep a NULL organisation (by design);
+`FlowService.SetRuleProfileResolver` stays a setter (55 test call sites); the four event-hook setters are replaced
+by Phase 2b's event bus.
+
+**Phase 1b: done** (2026-10-07, uncommitted).
+
+*Delivered:*
+- **Typed endpoints** (`internal/api/endpoint.go`, `page.go`, `apperr`): `JSON`/`Query` adapters run the strict
+  decode, URL parameters, page bounds, `Validate()`, `AuthorizeFlow` and the function in a fixed order, and refuse a
+  misdeclared request when the handler is built. `render` honours `*apperr.Error` (byte-identical envelope for every
+  other error). `Page[T]` and `PageRequest`; conventions in `docs/architecture/api-conventions.md`. No existing
+  handler was migrated; `TestArch_RoutesUseTheTypedAdapter` pins the hand-written routes per file, so new routes use
+  the adapter.
+- **`Idempotency-Key`** for 14 create routes (`route.Idempotent()`, ADR 0007): migration 0032 (the first `.sql`
+  step, `expand`), the claim inside the request transaction under an advisory lock, a concurrent duplicate answers
+  409 `IDEMPOTENCY_IN_PROGRESS`, another body under the same key 422, bodies sealed at rest, 24 h retention purge.
+  Postgres store, fake and a contract suite. CORS allows the header and exposes `Idempotent-Replayed`.
+- **Frontend:** tolerant enums (`tolerantEnum`, `Tolerant<T>`) for provider, model, Azure, alert, channel and
+  triage values; roles and finding severity stay closed. `X-Baki-Version` on every response and a reload banner,
+  offered once per server build; the image stamps the version into `index.html`, not a chunk.
+
+*Deferred:* the frontend does not send `Idempotency-Key` yet (one key per user action, and `fetchWithRetry` could
+then retry those POSTs); cursor/sort helpers until the first endpoint needs them.
+
+**Phase 1a: done** (2026-10-07, uncommitted; the rollout flag defaults to `shadow`).
+
+*Delivered:*
+- **Modules and declared route policy** (ADR 0006): every handler is an `api.Module` contributed through the fx
+  `routes` group and declares its routes and policy in `Mount(rb)`. The `Handlers` struct, `ProvideHandlers` and the
+  central route list are gone. The request is resolved once in the outer layer; each endpoint's guard checks chi's
+  match against it (500 on a mismatch in declarative mode); a route not registered through the builder fails the
+  boot. `PAD_ROUTE_POLICY=legacy|shadow|declarative` (Bicep `routePolicy`, compose), shadow counting mismatches in
+  `pad_route_policy_mismatch_total`. The metrics label is the matched pattern (dashboards: `:id` becomes `{param}`).
+- **Request info and actor:** `reqinfo` and `auth.Actor` (user, token, system); the access log's `user_id` is
+  filled and app logs carry the request ID (`logger.FromContext`).
+- **Authorization through `AuthzService.Can`**, token scopes included (closes the S2 class): flows (27 sites, route
+  middleware for the path-parameter routes), orgs, `/api/admin` as one group middleware, the WebSocket flow checker.
+  Four sites stay on their role checks because `Can`'s scope rule would tighten what a token may do today (rule
+  enable/config, GET snapshots, GET invites, chat save/clear).
+- **Mode gating:** `route.Needs(capability.ServerStore)` on 52 routes replaces their handler 503s.
+- **CI:** the previous release boots against the new schema (`previous-release-boot`).
+- **Security fixes found while building:** the SSO flow cookie is signed and verified (an attacker could link their
+  IdP identity to a victim's account); `/swagger/*` accepted any `Authorization` header.
+
+*Deviations from the plan, and why:*
+- Org admin writes that also run on the desktop's in-memory org store (rename, delete, invite revoke, role change)
+  use `AuthorizeOrg`, which reads the org first, because `Can` allows every org action without storage; one roster
+  read in cloud.
+- On the desktop, a few routes now answer 503 before validating their body or session (account delete/export,
+  admin role PUT, collaborator add/update), because `Needs` is decided before the handler.
+
+*Open:* flip to `declarative` after a soak with zero shadow mismatches, then delete the legacy tables one release
+later. Tightening the four role-check sites to `Can` is a product decision (it changes what existing tokens may do).
+`securityAuthz` builds an `AuthzService` per call where the handlers have no injected one.
+
 **Phase 0b: done** (uncommitted).
 
 *Delivered:*

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/audit"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -14,7 +15,7 @@ import (
 // and "Invalid Date" on every row.
 func TestAuditEventView_UsesTheKeysClientsRead(t *testing.T) {
 	views := toAuditEventViews([]*storageif.AuditEvent{{
-		ID: "evt-1", UserID: "user-1", Email: "admin@example.com", Action: AuditActionFlowUpload,
+		ID: "evt-1", UserID: "user-1", Email: "admin@example.com", Action: audit.ActionFlowUpload,
 		ResourceType: "flow", ResourceID: "flow-1", IP: "127.0.0.1",
 		Meta: map[string]string{"name": "Billing"}, CreatedAt: time.Now().UTC(),
 	}})

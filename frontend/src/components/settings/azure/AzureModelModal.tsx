@@ -339,6 +339,11 @@ export default function AzureModelModal({
       return
     }
     const next = modelFormFromEntry(fresh)
+    if (!next) {
+      // Changed meanwhile to a kind this version of the app cannot edit.
+      setFormAlert({kind: 'message', text: t('azureModels.model.editUnknownKind')})
+      return
+    }
     setBase(fresh)
     setBaseline(next)
     setForm(next)

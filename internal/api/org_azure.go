@@ -8,8 +8,11 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/service"
 	"pad-core/models"
 )
@@ -46,11 +49,10 @@ func (h *OrgHandler) handleOrgAzureFoundryConfigGet(w http.ResponseWriter, r *ht
 	if !h.orgProviderKeysAvailable(w) {
 		return
 	}
-	org := h.requireMember(w, r)
-	if org == nil {
+	if !h.canOrg(w, r, service.OrgRead) {
 		return
 	}
-	cfg, err := h.providers.GetOrgAzureFoundryConfig(org.ID)
+	cfg, err := h.providers.GetOrgAzureFoundryConfig(chi.URLParam(r, "id"))
 	if err != nil {
 		if errors.Is(err, service.ErrOrgCredentialUnreadable) {
 			render.ErrorWithCode(w, err, http.StatusInternalServerError, "ORG_CREDENTIAL_UNREADABLE")
@@ -82,10 +84,10 @@ func (h *OrgHandler) handleOrgAzureFoundryConfigSave(w http.ResponseWriter, r *h
 	if !h.orgProviderKeysAvailable(w) {
 		return
 	}
-	org := h.requireAdmin(w, r)
-	if org == nil {
+	if !h.canOrg(w, r, service.OrgAdmin) {
 		return
 	}
+	orgID := chi.URLParam(r, "id")
 	// Same strict decode as the per-user route.
 	var req orgAzureFoundrySaveRequest
 	if err := decodeAzureConfigBody(w, r, &req); err != nil {
@@ -94,7 +96,7 @@ func (h *OrgHandler) handleOrgAzureFoundryConfigSave(w http.ResponseWriter, r *h
 	}
 	// Normalised before the save and audit row so the row carries the canonical auth mode.
 	req.Normalize()
-	updatedAt, err := h.providers.SaveOrgAzureFoundryConfig(org.ID, h.security.CallerID(r), req.UpdatedAt, req.AzureFoundryConfig)
+	updatedAt, err := h.providers.SaveOrgAzureFoundryConfig(orgID, h.security.CallerID(r), req.UpdatedAt, req.AzureFoundryConfig)
 	// Audit carries no secrets: only where the credential goes, whose it is, and whether the stored one carried over.
 	meta := azureConfigAuditMeta(req.AzureFoundryConfig, !req.HasSecret())
 	meta["provider"] = ai.AzureFoundryProviderID
@@ -102,12 +104,12 @@ func (h *OrgHandler) handleOrgAzureFoundryConfigSave(w http.ResponseWriter, r *h
 		if _, changed := service.AzureCredentialChanged(err); changed {
 			// The credential went in and could not be rolled back: the change stands, audited as failed_after_credential_change.
 			meta["outcome"] = "failed_after_credential_change"
-			logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "org", org.ID, meta)
+			h.audit.Record(r.Context(), orgAuditEntry(audit.ActionKeysSave, orgID, meta))
 		}
 		renderAzureRegistryError(w, err)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "org", org.ID, meta)
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionKeysSave, orgID, meta))
 	render.JSON(w, orgAzureFoundrySaveResponse{Status: "ok", UpdatedAt: updatedAt})
 }
 
@@ -125,16 +127,16 @@ func (h *OrgHandler) handleOrgAzureFoundryConfigDelete(w http.ResponseWriter, r 
 	if !h.orgProviderKeysAvailable(w) {
 		return
 	}
-	org := h.requireAdmin(w, r)
-	if org == nil {
+	if !h.canOrg(w, r, service.OrgAdmin) {
 		return
 	}
-	if err := h.providers.DeleteOrgAzureFoundryConfig(org.ID); err != nil {
+	orgID := chi.URLParam(r, "id")
+	if err := h.providers.DeleteOrgAzureFoundryConfig(orgID); err != nil {
 		renderAzureRegistryError(w, err)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "org", org.ID,
-		map[string]string{"op": "delete", "provider": ai.AzureFoundryProviderID})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionKeysSave, orgID,
+		map[string]string{"op": "delete", "provider": ai.AzureFoundryProviderID}))
 	render.JSON(w, statusResponse{Status: "ok"})
 }
 
@@ -155,17 +157,17 @@ func (h *OrgHandler) handleOrgAzureFoundryTest(w http.ResponseWriter, r *http.Re
 	if !h.orgProviderKeysAvailable(w) {
 		return
 	}
-	org := h.requireAdmin(w, r)
-	if org == nil {
+	if !h.canOrg(w, r, service.OrgAdmin) {
 		return
 	}
+	orgID := chi.URLParam(r, "id")
 	body, err := readAzureRegistryBody(w, r, azureRegistryBodyLimit)
 	if err != nil {
 		renderAzureBodyError(w, err)
 		return
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
-		h.legacyOrgAzureTest(w, r, org.ID)
+		h.legacyOrgAzureTest(w, r, orgID)
 		return
 	}
 	svc := azureModelsOf(h.providers)
@@ -183,10 +185,9 @@ func (h *OrgHandler) handleOrgAzureFoundryTest(w http.ResponseWriter, r *http.Re
 		return
 	}
 	call := azureRegistryCall{
-		svc:     svc,
-		scope:   service.AzureScope{Scope: h.security.KeyScope(r), OrgID: org.ID},
-		backend: h.backend,
-		proxies: h.security.TrustedProxies,
+		svc:   svc,
+		scope: service.AzureScope{Scope: h.security.KeyScope(r), OrgID: orgID},
+		rec:   h.audit,
 	}
 	call.test(w, r, in)
 }
@@ -198,8 +199,8 @@ func (h *OrgHandler) legacyOrgAzureTest(w http.ResponseWriter, r *http.Request, 
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionProvidersTest, "org", orgID,
-		map[string]string{"provider": ai.AzureFoundryProviderID, "ok": testOutcome(res)})
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionProvidersTest, orgID,
+		map[string]string{"provider": ai.AzureFoundryProviderID, "ok": testOutcome(res)}))
 	render.JSON(w, res)
 }
 
@@ -222,10 +223,9 @@ func (h *OrgHandler) orgAzureRegistry(w http.ResponseWriter, r *http.Request, ac
 		return azureRegistryCall{}, false
 	}
 	return azureRegistryCall{
-		svc:     svc,
-		scope:   service.AzureScope{Scope: h.security.KeyScope(r), OrgID: orgID},
-		backend: h.backend,
-		proxies: h.security.TrustedProxies,
+		svc:   svc,
+		scope: service.AzureScope{Scope: h.security.KeyScope(r), OrgID: orgID},
+		rec:   h.audit,
 	}, true
 }
 
@@ -444,23 +444,25 @@ func (h *OrgHandler) handleOrgAzureModelDelete(w http.ResponseWriter, r *http.Re
 // registerOrgAzureRoutes wires the organisation-shared Azure AI Foundry
 // sub-routes - same sub-paths as the caller's own registry. Read: admin or
 // member; write/delete/test/discover: admin. /config is the deprecated
-// single-document form; /test also serves its body-less org test.
-func (h *OrgHandler) registerOrgAzureRoutes(r chi.Router) {
-	r.Route("/providers/azure-foundry", func(r chi.Router) {
-		r.Get("/config", h.handleOrgAzureFoundryConfigGet)
-		r.Post("/config", h.handleOrgAzureFoundryConfigSave)
-		r.Delete("/config", h.handleOrgAzureFoundryConfigDelete)
-		r.Post("/test", h.handleOrgAzureFoundryTest)
-		r.Get("/connections", h.handleOrgAzureConnectionList)
-		r.Post("/connections", h.handleOrgAzureConnectionCreate)
-		r.Get("/connections/{connectionId}", h.handleOrgAzureConnectionGet)
-		r.Put("/connections/{connectionId}", h.handleOrgAzureConnectionUpdate)
-		r.Delete("/connections/{connectionId}", h.handleOrgAzureConnectionDelete)
-		r.Post("/connections/{connectionId}/discover", h.handleOrgAzureConnectionDiscover)
-		r.Get("/models", h.handleOrgAzureModelList)
-		r.Post("/models", h.handleOrgAzureModelCreate)
-		r.Get("/models/{modelId}", h.handleOrgAzureModelGet)
-		r.Put("/models/{modelId}", h.handleOrgAzureModelUpdate)
-		r.Delete("/models/{modelId}", h.handleOrgAzureModelDelete)
+// single-document form; /test also serves its body-less org test. /test and
+// discover dial Azure like the caller's own: the same buckets, outside the RLS
+// transaction.
+func (h *OrgHandler) registerOrgAzureRoutes(rb *route.Builder) {
+	rb.Route("/providers/azure-foundry", func(rb *route.Builder) {
+		rb.Get("/config", h.handleOrgAzureFoundryConfigGet)
+		rb.Post("/config", h.handleOrgAzureFoundryConfigSave)
+		rb.Delete("/config", h.handleOrgAzureFoundryConfigDelete)
+		rb.Post("/test", h.handleOrgAzureFoundryTest, route.RateLimit(route.RateChat), route.NoTx())
+		rb.Get("/connections", h.handleOrgAzureConnectionList)
+		rb.Post("/connections", h.handleOrgAzureConnectionCreate, route.Idempotent())
+		rb.Get("/connections/{connectionId}", h.handleOrgAzureConnectionGet)
+		rb.Put("/connections/{connectionId}", h.handleOrgAzureConnectionUpdate)
+		rb.Delete("/connections/{connectionId}", h.handleOrgAzureConnectionDelete)
+		rb.Post("/connections/{connectionId}/discover", h.handleOrgAzureConnectionDiscover, route.RateLimit(route.RateAnalysis), route.NoTx())
+		rb.Get("/models", h.handleOrgAzureModelList)
+		rb.Post("/models", h.handleOrgAzureModelCreate, route.Idempotent())
+		rb.Get("/models/{modelId}", h.handleOrgAzureModelGet)
+		rb.Put("/models/{modelId}", h.handleOrgAzureModelUpdate)
+		rb.Delete("/models/{modelId}", h.handleOrgAzureModelDelete)
 	})
 }

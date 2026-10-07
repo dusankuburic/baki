@@ -49,3 +49,13 @@ func TestOf(t *testing.T) {
 		}
 	}
 }
+
+func TestNewSet(t *testing.T) {
+	s := NewSet(Cloud, ServerStore, Accounts)
+	if s.Profile() != Cloud || !s.Has(ServerStore, Accounts) || s.Has(RowLevelSecurity) || s.Has(ServerStore, SharedState) {
+		t.Errorf("NewSet(Cloud, ServerStore, Accounts) = %+v", s)
+	}
+	if !NewSet(Desktop).Has() {
+		t.Error("every Set has the empty requirement")
+	}
+}

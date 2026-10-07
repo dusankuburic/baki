@@ -9,10 +9,10 @@ package errreport
 
 import (
 	"context"
-	"log/slog"
 	"sync"
 
 	"pad-analyzer/internal/metrics"
+	"pad-core/logger"
 )
 
 // Sink receives forwarded exceptions. A concrete implementation (Sentry, App
@@ -43,15 +43,16 @@ func Register(s Sink) {
 }
 
 // CaptureError forwards a notable error. It always bumps the
-// pad_errors_reported_total{location} counter and logs, then forwards to the
-// registered sink if any. location is a short call-site tag ("chat.stream",
-// "scanner"). nil errors are ignored.
+// pad_errors_reported_total{location} counter and logs (with ctx's request
+// attributes, logger.FromContext), then forwards to the registered sink if
+// any. location is a short call-site tag ("chat.stream", "scanner"). nil
+// errors are ignored.
 func CaptureError(ctx context.Context, location string, err error, attrs Attrs) {
 	if err == nil {
 		return
 	}
 	metrics.RecordError(location)
-	slog.ErrorContext(ctx, "error reported", "location", location, "err", err, "attrs", attrs)
+	logger.FromContext(ctx).ErrorContext(ctx, "error reported", "location", location, "err", err, "attrs", attrs)
 	forward(func(s Sink) { s.CaptureError(ctx, err, attrs) })
 }
 
@@ -60,7 +61,7 @@ func CaptureError(ctx context.Context, location string, err error, attrs Attrs) 
 // registered sink if any. location is a short call-site tag ("http", "scanner").
 func CapturePanic(ctx context.Context, location string, recovered any, stack []byte, attrs Attrs) {
 	metrics.RecordPanic(location)
-	slog.ErrorContext(ctx, "panic reported",
+	logger.FromContext(ctx).ErrorContext(ctx, "panic reported",
 		"location", location, "panic", recovered, "stack", string(stack), "attrs", attrs)
 	forward(func(s Sink) { s.CapturePanic(ctx, recovered, stack, attrs) })
 }

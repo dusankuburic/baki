@@ -97,7 +97,7 @@ type streamCtl struct {
 	// inputCostPerM / outputCostPerM are the rates the finished turn was billed at (noteDoneRates); guarded by mu.
 	inputCostPerM  float64
 	outputCostPerM float64
-	// ownerID, orgID, streamID, flowID and convKey are IMMUTABLE after publication: othersInFlight /
+	// ownerID, orgID, streamID, flowID and convKey are IMMUTABLE after publication: the budget ledger (spender) /
 	// ActiveStreamFor read them from other goroutines without a lock, so a later write would be a data race.
 	// orgID is the budget scope ("" = personal); flowID/convKey identify the conversation, so GET conversation
 	// can report the in-flight stream to a client that reloaded mid-turn.
@@ -245,6 +245,9 @@ func (c *streamCtl) setInflight(cost float64) {
 	c.inflightCost = cost
 	c.mu.Unlock()
 }
+
+// spender is who the in-flight spend is charged to: the caller and the budget's org ("" = personal).
+func (c *streamCtl) spender() (scope, orgID string) { return c.ownerID, c.orgID }
 
 func (c *streamCtl) inflight() float64 {
 	c.mu.Lock()

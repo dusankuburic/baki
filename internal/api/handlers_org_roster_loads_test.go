@@ -8,12 +8,11 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
-
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	mail "pad-analyzer/internal/mail"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -53,17 +52,15 @@ func (s *pointLookupOrgStore) OrgMemberRole(ctx context.Context, orgID, userID s
 	return "", false, nil
 }
 
-// newOrgRosterRouter serves the org member and invite routes for the
-// (local-mode) caller callerID over the given org store.
+// newOrgRosterRouter serves the org routes, the member and invite lists
+// among them, for the (local-mode) caller callerID over the given org store.
 func newOrgRosterRouter(t *testing.T, store collaboration.OrgStore, callerID string) (http.Handler, *collaboration.OrgService) {
 	t.Helper()
 	orgSvc := collaboration.NewOrgService(store)
-	h := NewOrgHandler(orgSvc, testutil.NewFakeBackend(), nil, &SecurityConfig{LocalUserID: callerID},
-		mail.NewService(config.EmailConfig{}, config.ModeLocal), nil, nil)
-	r := chi.NewRouter()
-	r.Get("/api/orgs/{id}/members", h.handleOrgMemberList)
-	r.Get("/api/orgs/{id}/invites", h.handleOrgInviteList)
-	return r, orgSvc
+	backend := testutil.NewFakeBackend()
+	h := NewOrgHandler(orgSvc, backend, nil, &SecurityConfig{LocalUserID: callerID},
+		mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(backend, backend, nil), nil, service.NewAuthzService(backend, orgSvc), service.NewChannelService(backend), service.NewUserDirectory(backend), testAuditRecorder(backend))
+	return mountedAs(h, callerID), orgSvc
 }
 
 func getOrgRoute(h http.Handler, path string) *httptest.ResponseRecorder {

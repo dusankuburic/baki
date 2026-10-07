@@ -11,7 +11,6 @@ import (
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/ai"
-	"pad-analyzer/internal/api"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/mail"
@@ -108,7 +107,9 @@ func ProvideHistoryStore(configDir string) *analyzer.HistoryStore {
 	return analyzer.NewHistoryStore(filepath.Join(configDir, "analysis-history"))
 }
 
-func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.Config, keys service.KeyStore) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory) {
+// ProvideAI builds the GitHub/Copilot auth and the provider factory. With an organisation credential store
+// (cloud) ForOrg and ForEmbeddingOrg fall back to — or, for embeddings, prefer — the org's shared credential.
+func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.Config, keys service.KeyStore, orgKeys service.OrgKeyStore) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory) {
 	copilotAuth := ai.NewCopilotAuth()
 	// The storage backend is nil in local/desktop mode (no usage store). Leave the
 	// recorder nil there — the audited provider guards a nil recorder and skips
@@ -121,6 +122,9 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 		}
 	}
 	factory := ai.NewProviderFactory(memberKeyLookup(keys), copilotAuth, recorder, &cfg.Runtime)
+	if orgKeys != nil {
+		factory.SetOrgKeyLookup(orgKeyLookup(orgKeys))
+	}
 	// Embeddings come back at the knowledge base's vector width where the
 	// model supports it, so they are indexable. The width is the storage
 	// contract's, default included: passing the raw PAD_EMBEDDING_DIM (0 when
@@ -189,15 +193,23 @@ func ProvideOrgKeyStore(keys service.KeyStore) service.OrgKeyStore {
 	return nil
 }
 
-// decorateAnalysisService wires the AnalysisService's post-construction
-// dependencies (see the fx.Decorate in ServiceModule).
-func decorateAnalysisService(cfg *config.Config, rules service.DeploymentCustomRules, resolver *service.RuleProfileResolver, svc *service.AnalysisService) *service.AnalysisService {
-	svc.SetCustomRules(rules)
-	svc.SetRuleProfileResolver(resolver)
-	// With auth on, an analysis that carries no user (the scanner) must not
-	// broadcast progress to every connected client.
-	svc.SetAuthEnabled(cfg.Auth.Enabled)
-	return svc
+// ProvideAnalysisService builds the AnalysisService on the deployment's custom rules and the per-org rule
+// resolver (the resolver takes the same compiled slice, ProvideDeploymentCustomRules).
+func ProvideAnalysisService(notifier service.EventNotifier, settings service.SettingsProvider, history *analyzer.HistoryStore, cfg *config.Config, rules service.DeploymentCustomRules, resolver *service.RuleProfileResolver) (*service.AnalysisService, error) {
+	return service.NewAnalysisService(notifier, settings, history, service.AnalysisOptions{
+		CustomRules: rules,
+		Profiles:    resolver,
+		// With auth on, an analysis that carries no user (the scanner) must not
+		// broadcast progress to every connected client.
+		AuthEnabled: cfg.Auth.Enabled,
+	})
+}
+
+// ProvideAIBudget builds the daily AI budget gate chat turns and the knowledge base's billed embedding runs
+// share (R-4): one in-flight ledger, so an embedding run counts what running chat streams have committed.
+// backend is nil on the desktop (no usage store: spend reads $0).
+func ProvideAIBudget(settings service.SettingsProvider, backend storageif.StorageBackend) *service.AIBudget {
+	return service.NewAIBudget(settings, backend)
 }
 
 // ProvideKnowledgeService builds the org knowledge-base service.
@@ -212,11 +224,15 @@ func decorateAnalysisService(cfg *config.Config, rules service.DeploymentCustomR
 // PAD_EMBEDDING_PROVIDER (validated at boot) pins the embedding provider for
 // the deployment; it is the only way the knowledge base embeds with Azure AI
 // Foundry — through the model registry's "Use for knowledge base"
-// designation when azure (the registry) is wired.
-func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config, azure *service.AzureModelService) *rag.KnowledgeService {
+// designation when azure (the registry) is wired. budget is the daily AI budget
+// a chat turn consults too (R-4); nil leaves billed runs unlimited.
+func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config, azure *service.AzureModelService, budget *service.AIBudget) *rag.KnowledgeService {
 	opts := []rag.Option{rag.WithEmbeddingProvider(cfg.Storage.EmbeddingProvider)}
 	if azure != nil {
 		opts = append(opts, rag.WithAzureEmbedder(azure))
+	}
+	if budget != nil {
+		opts = append(opts, rag.WithBudgetChecker(budget))
 	}
 	return rag.NewKnowledgeService(backend, factory, settings, opts...)
 }
@@ -279,6 +295,48 @@ func ProvideAzureModelService(registry storageif.AzureRegistryStore, secrets ser
 	return svc
 }
 
+// The org-governance services take the role interfaces they use, which fx
+// cannot derive from the StorageBackend it provides, hence these adapters. On
+// the desktop the backend is nil and so are their stores; the routes that
+// reach them declare the server store.
+
+func ProvidePolicyService(backend storageif.StorageBackend) *service.PolicyService {
+	return service.NewPolicyService(backend)
+}
+
+func ProvideGovernanceAlertService(backend storageif.StorageBackend) *service.GovernanceAlertService {
+	return service.NewGovernanceAlertService(backend)
+}
+
+func ProvideOrgRuleService(backend storageif.StorageBackend, profiles *service.RuleProfileResolver) *service.OrgRuleService {
+	return service.NewOrgRuleService(backend, backend, profiles)
+}
+
+func ProvideChannelService(backend storageif.StorageBackend) *service.ChannelService {
+	return service.NewChannelService(backend)
+}
+
+func ProvideUserDirectory(backend storageif.StorageBackend) *service.UserDirectory {
+	return service.NewUserDirectory(backend)
+}
+
+// ProvideTriageService, ProvideCommentService and ProvideShareTokenService
+// narrow the full backend to the role interfaces each service takes (fx only
+// provides storageif.StorageBackend). On the desktop the backend is nil and so
+// are the roles; the routes that reach these services need the server-side
+// store.
+func ProvideTriageService(backend storageif.StorageBackend) *service.TriageService {
+	return service.NewTriageService(backend, backend, backend)
+}
+
+func ProvideCommentService(backend storageif.StorageBackend, triage *service.TriageService) *service.CommentService {
+	return service.NewCommentService(backend, triage)
+}
+
+func ProvideShareTokenService(backend storageif.StorageBackend) *service.ShareTokenService {
+	return service.NewShareTokenService(backend, backend)
+}
+
 // ServiceModule bundles all internal services.
 var ServiceModule = fx.Options(
 	fx.Provide(
@@ -298,40 +356,75 @@ var ServiceModule = fx.Options(
 		ProvideOrgKeyStore,
 		ProvideAzureRegistry,
 		ProvideAzureModelService,
+		ProvideAIBudget,
 		ProvideKnowledgeService,
-		func(settings service.SettingsProvider, secrets service.KeyStore, notifier service.EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode, azure *service.AzureModelService) *service.SystemService {
-			svc := service.NewSystemService(settings, secrets, notifier, backend, mode)
-			// /api/keys/has and /api/keys/delete for azure-foundry act on the
-			// model registry (any resource; resource "default").
-			svc.SetAzureModels(azure)
-			return svc
-		},
+		// /api/keys/has and /api/keys/delete for azure-foundry act on the
+		// model registry (any resource; resource "default").
+		service.NewSystemService,
 		service.NewAuthzService,
 		service.NewFlowService,
-		service.NewAnalysisService,
+		ProvideAnalysisService,
+		// The library and the analytics page resolve a scope's flow set
+		// (owner / shared / org membership) through the same resolver.
+		service.NewFlowScopeResolver,
 		// Adapter: fx only provides the full storageif.StorageBackend, but
-		// DashboardService's constructor takes the narrower DashboardStore;
-		// fx's reflection-based provider matching needs this bridge.
-		func(backend storageif.StorageBackend, analysis *service.AnalysisService, flowSvc *service.FlowService, lib *service.LibraryService) *service.DashboardService {
-			svc := service.NewDashboardService(backend, analysis, flowSvc)
-			// The analytics page resolves its flow set through the library's
-			// scope checks (owner / shared / org membership).
-			svc.SetScopeResolver(lib)
-			// Post-construction wiring, same pattern as ChatService's
-			// SetKnowledgeService below: the dashboard cache is user-keyed and
-			// must drop when the owner's flows change, but DashboardService
-			// already depends on FlowService, so the hook is registered here
-			// (a constructor parameter would cycle).
+		// DashboardService's constructor takes the narrower DashboardStore and
+		// the ScopeResolver interface; fx's reflection-based provider matching
+		// needs this bridge.
+		func(backend storageif.StorageBackend, analysis *service.AnalysisService, flowSvc *service.FlowService, scopes *service.FlowScopeResolver) *service.DashboardService {
+			svc := service.NewDashboardService(backend, analysis, flowSvc, scopes)
+			// Event hook (Phase 2b's bus replaces it): the dashboard cache is
+			// user-keyed and must drop when the owner's flows change, but
+			// DashboardService already depends on FlowService, so the hook is
+			// registered here (a constructor parameter would cycle).
 			flowSvc.SetCloudFlowMutationHook(svc.InvalidateDashboardCache)
 			return svc
 		},
 		service.NewExportService,
 		service.NewLibraryService,
+		ProvidePolicyService,
+		ProvideGovernanceAlertService,
+		ProvideOrgRuleService,
+		ProvideChannelService,
+		ProvideUserDirectory,
+		ProvideTriageService,
+		ProvideCommentService,
+		ProvideShareTokenService,
+		// Adapter: the collaborator service takes the narrower store it uses (nil on the desktop).
+		func(backend storageif.StorageBackend) *service.CollaboratorService {
+			return service.NewCollaboratorService(backend)
+		},
 		// Adapter: fx only provides the full storageif.StorageBackend, but
 		// AuthService's constructor takes the narrower authStore it actually
 		// uses (same rationale as the DashboardService adapter above).
 		func(backend storageif.StorageBackend, email *mail.Service) *service.AuthService {
 			return service.NewAuthService(backend, email)
+		},
+		// Account and identity services, over the narrow store roles their
+		// constructors take (same adapter rationale). Without a server store
+		// (desktop) the roles are nil; the routes that use them declare
+		// route.Needs(capability.ServerStore) or check for SSO first.
+		func(backend storageif.StorageBackend, links service.IdentityLinkStore) *service.IdentityService {
+			return service.NewIdentityService(backend, links)
+		},
+		service.NewSessionService,
+		func(backend storageif.StorageBackend) *service.APITokenService {
+			return service.NewAPITokenService(backend)
+		},
+		func(backend storageif.StorageBackend) *service.UserAdminService {
+			return service.NewUserAdminService(backend)
+		},
+		service.NewHealthService,
+		// Account erasure cascades the user's provider keys in SQL; finalize
+		// drops the provider service's cached live listings for that scope so
+		// they cannot outlive the account. The provider service also releases
+		// the user's own Azure AI Foundry credential (read in prepare, before
+		// the cascade) and disables every organisation credential the user lent
+		// as an admin (org_provider_keys rows do not cascade with the account).
+		func(backend storageif.StorageBackend, providers *service.ProviderService) *service.AccountLifecycleService {
+			svc := service.NewAccountLifecycleService(backend, providers)
+			svc.OnUserDeleted(providers.InvalidateScope)
+			return svc
 		},
 		func(
 			notifier service.EventNotifier,
@@ -345,18 +438,22 @@ var ServiceModule = fx.Options(
 			mode config.DeploymentMode,
 			redisClient *redis.Client,
 			azure *service.AzureModelService,
+			budget *service.AIBudget,
 		) *service.ChatService {
-			svc := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, backend, mode)
-			svc.SetKnowledgeService(knowledge)
-			// Chat turns and context previews on azure-foundry resolve their
-			// model id on the Azure AI Foundry model registry and run on
-			// exactly that entry's resource.
-			svc.SetAzureModels(azure)
-			wireKnowledgeBudget(knowledge, svc)
-			// nil when PAD_REDIS_URL is unset → single-replica resume (local maps).
-			svc.SetResumeBackplane(redisClient)
-			// Drop the scrubbed-context cache when a flow changes in place,
-			// routed through FlowService so LibraryService has no direct chat dep.
+			svc := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, backend, mode, service.ChatOptions{
+				Knowledge: knowledge,
+				// The budget the knowledge base consults too (R-4).
+				Budget: budget,
+				// Chat turns and context previews on azure-foundry resolve their
+				// model id on the Azure AI Foundry model registry and run on
+				// exactly that entry's resource.
+				Azure: azure,
+				// nil when PAD_REDIS_URL is unset → single-replica resume (local maps).
+				Resume: redisClient,
+			})
+			// Event hook (Phase 2b's bus replaces it): drop the scrubbed-context
+			// cache when a flow changes in place, routed through FlowService so
+			// LibraryService has no direct chat dep.
 			flowSvc.OnInvalidateFlow(svc.InvalidateChatContext)
 			return svc
 		},
@@ -369,19 +466,17 @@ var ServiceModule = fx.Options(
 			sys *service.SystemService,
 			azure *service.AzureModelService,
 		) *service.ProviderService {
-			svc := service.NewProviderService(auth, copilot, factory, secrets)
-			// Organisation-shared credentials (G7): nil outside cloud mode,
-			// where the org routes report ORG_KEYSTORE_UNAVAILABLE.
-			svc.SetOrgKeyStore(orgKeys)
-			// The Azure AI Foundry model registry: the
-			// single-document routes act on its resource "default", the
-			// lifecycle and "configured" checks on every resource.
-			svc.SetAzureModels(azure)
-			// POST /api/keys/save and /api/keys/delete go through SystemService
-			// (removing an Azure AI Foundry configuration too): drop that
-			// provider's cached live listing and fence off one in flight — a
-			// replacement key may carry other entitlements than the one it
-			// replaces.
+			// orgKeys: organisation-shared credentials (G7), nil outside cloud
+			// mode, where the org routes report ORG_KEYSTORE_UNAVAILABLE. azure:
+			// the Azure AI Foundry model registry — the single-document routes
+			// act on its resource "default", the lifecycle and "configured"
+			// checks on every resource.
+			svc := service.NewProviderService(auth, copilot, factory, secrets, orgKeys, azure)
+			// Event hook (Phase 2b's bus replaces it). POST /api/keys/save and
+			// /api/keys/delete go through SystemService (removing an Azure AI
+			// Foundry configuration too): drop that provider's cached live
+			// listing and fence off one in flight — a replacement key may carry
+			// other entitlements than the one it replaces.
 			sys.OnApiKeyChanged(svc.InvalidateModels)
 			return svc
 		},
@@ -393,51 +488,17 @@ var ServiceModule = fx.Options(
 	// cycle (the service also needs the resolver).
 	fx.Provide(ProvideDeploymentCustomRules),
 	fx.Provide(service.NewRuleProfileResolver),
-	// The factory learns the organisation credential store after construction
-	// (ProvideAI's signature is the tests' contract): ForOrg and ForEmbeddingOrg
-	// then fall back to — or, for embeddings, prefer — the org's shared
-	// credential. A decorator, not a second provider.
-	fx.Decorate(func(factory *ai.ProviderFactory, orgKeys service.OrgKeyStore) *ai.ProviderFactory {
-		if orgKeys != nil {
-			factory.SetOrgKeyLookup(orgKeyLookup(orgKeys))
-		}
-		return factory
-	}),
-	// A DECORATOR, not a second provider of *AnalysisService — fx hard-fails
-	// that graph with "already provided"; it wires both dependencies into the
-	// service the constructor built.
-	fx.Decorate(decorateAnalysisService),
-	// FlowService needs the same resolver: its batch-fix loop re-analyzes the
+	// FlowService needs the rule resolver too: its batch-fix loop re-analyzes the
 	// flow to find what to fix, and without the org profile that analysis ran
 	// on deployment defaults — "fix all" could apply a fix for a rule the org
-	// had disabled, and never applied an org custom rule's autoFix. A second
-	// decorator, because one fx.Decorate returns exactly one type.
+	// had disabled, and never applied an org custom rule's autoFix. A decorator,
+	// not a constructor parameter, only because NewFlowService has ~55 test
+	// call sites (no cycle; docs/architecture/di-wiring.md).
 	fx.Decorate(func(resolver *service.RuleProfileResolver, svc *service.FlowService) *service.FlowService {
 		svc.SetRuleProfileResolver(resolver)
 		return svc
 	}),
-	// Account erasure (handleAuthDeleteAccount → backend.DeleteUser) cascades
-	// the user's provider keys in SQL; this wiring drops the provider service's
-	// cached live listings for that scope so they cannot outlive the account.
-	// The provider service also releases the user's own Azure AI Foundry
-	// credential (read before the cascade) and disables every organisation
-	// credential the user lent as an admin (org_provider_keys rows do not
-	// cascade with the account).
-	fx.Decorate(func(h *api.AuthHandler, svc *service.ProviderService) *api.AuthHandler {
-		h.OnUserDeleted(svc.InvalidateScope)
-		h.SetProviderService(svc)
-		return h
-	}),
 )
-
-// wireKnowledgeBudget makes the knowledge base's billed embedding runs
-// (upload, re-index) consult the daily AI budget a chat turn does (R-4);
-// nil knowledge (no knowledge service wired) is a no-op.
-func wireKnowledgeBudget(knowledge *rag.KnowledgeService, chat *service.ChatService) {
-	if knowledge != nil && chat != nil {
-		knowledge.SetBudgetChecker(chat)
-	}
-}
 
 // ProvideDeploymentCustomRules compiles PAD_CUSTOM_RULES once at boot.
 // Invalid entries are SKIPPED WITH A WARNING EACH, never silently: R0-5 was

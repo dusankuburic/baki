@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
 
@@ -290,5 +291,37 @@ func TestEmbedBatched_FailureStopsTheRest(t *testing.T) {
 	}
 	if c := emb.calls.Load(); c > embedConcurrency+1 {
 		t.Errorf("%d batches were sent after the first one failed", c-1)
+	}
+}
+
+// DeleteDocument removes only the org's document and, like an upload, makes the org's cached "empty"/count
+// stale, so the next Search reads the count again.
+func TestDeleteDocument_InvalidatesCorpusCount(t *testing.T) {
+	store := &countStore{FakeBackend: &testutil.FakeBackend{}}
+	svc := NewKnowledgeService(store, nil, nil, WithEmbedder(&identityEmbedder{}))
+	ctx := context.Background()
+	for _, d := range []*interfaces.KnowledgeDocument{{ID: "d1", OrgID: "org-1"}, {ID: "d2", OrgID: "org-1"}, {ID: "d3", OrgID: "org-2"}} {
+		if err := store.SaveKnowledgeDocument(ctx, "u-1", d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !svc.corpusEmpty(ctx, "org-1") {
+		t.Fatal("an org without chunks reads as non-empty")
+	}
+
+	if err := svc.DeleteDocument(ctx, "u-1", "org-2", "d1"); err != nil {
+		t.Fatal(err)
+	}
+	if docs, err := svc.ListDocuments(ctx, "org-1", 0, 0); err != nil || len(docs) != 2 {
+		t.Fatalf("another org's delete removed a document: %v, %v", docs, err)
+	}
+	if err := svc.DeleteDocument(ctx, "u-1", "org-1", "d1"); err != nil {
+		t.Fatal(err)
+	}
+	if docs, _ := svc.ListDocuments(ctx, "org-1", 0, 0); len(docs) != 1 || docs[0].ID != "d2" {
+		t.Errorf("ListDocuments after delete = %v, want [d2]", docs)
+	}
+	if svc.corpusEmpty(ctx, "org-1") {
+		t.Error("the cached count survived the delete")
 	}
 }

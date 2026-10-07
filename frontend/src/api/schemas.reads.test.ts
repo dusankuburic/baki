@@ -12,8 +12,9 @@ import {systemApi} from './system'
 
 // Runtime validation of the core read endpoints (schemas.lazy.ts): for every
 // NEW schema namespace, a well-formed payload passes through unchanged and a
-// drifted one (missing required field / wrong type / enum miss) throws
-// ResponseValidationError at the boundary instead of surfacing downstream.
+// drifted one (missing required field / wrong type / a closed enum's miss)
+// throws ResponseValidationError at the boundary instead of surfacing
+// downstream. Values a newer server may add are schemas.tolerant.test.ts's.
 vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({
     getBackendConfig: vi.fn().mockResolvedValue({
@@ -115,8 +116,10 @@ describe('api read validation (per schema namespace)', () => {
       await expect(governanceApi.unreadCount()).resolves.toEqual({count: 3})
     })
 
-    it('throws ResponseValidationError on an unknown severity (enum miss)', async () => {
-      mockFetch([{...alert, severity: 'critical'}])
+    // An unknown severity is kept as sent (schemas.tolerant.test.ts); a value
+    // that is not even a string is still drift.
+    it('throws ResponseValidationError on a severity that is not a string', async () => {
+      mockFetch([{...alert, severity: 2}])
       await expect(governanceApi.list()).rejects.toBeInstanceOf(ResponseValidationError)
     })
   })

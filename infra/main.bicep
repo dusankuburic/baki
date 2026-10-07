@@ -142,6 +142,15 @@ param requestTimeout string = ''
 @description('Log level (PAD_LOG_LEVEL): debug, info, warn, error. Empty uses the cloud default of info.')
 param logLevel string = ''
 
+@description('Which route policy decides (PAD_ROUTE_POLICY, docs/adr/0006): legacy (the path tables), shadow (the tables decide and pad_route_policy_mismatch_total counts every disagreement with the declared policy) or declarative (the declared policy decides). Empty uses the app default, shadow. Flip to declarative once a soak shows no mismatches; set it here so a later template deploy keeps the flip.')
+@allowed([
+  ''
+  'legacy'
+  'shadow'
+  'declarative'
+])
+param routePolicy string = ''
+
 @description('Max open Postgres connections PER REPLICA (PAD_DB_MAX_OPEN_CONNS). Empty uses the app default of 25. Right-size against the Flexible Server SKU\'s connection cap — a Burstable B1ms tops out around 35.')
 param dbMaxOpenConns string = ''
 
@@ -526,6 +535,7 @@ var optionalEnv = concat(
   provisionRedis ? [ { name: 'PAD_REDIS_URL', secretRef: 'redis-url' } ] : [],
   empty(requestTimeout) ? [] : [ { name: 'PAD_REQUEST_TIMEOUT', value: requestTimeout } ],
   empty(logLevel) ? [] : [ { name: 'PAD_LOG_LEVEL', value: logLevel } ],
+  empty(routePolicy) ? [] : [ { name: 'PAD_ROUTE_POLICY', value: routePolicy } ],
   empty(dbMaxOpenConns) ? [] : [ { name: 'PAD_DB_MAX_OPEN_CONNS', value: dbMaxOpenConns } ],
   empty(auditRetentionDays) ? [] : [ { name: 'PAD_AUDIT_RETENTION_DAYS', value: auditRetentionDays } ],
   empty(scanInterval) ? [] : [ { name: 'PAD_SCAN_INTERVAL', value: scanInterval } ],

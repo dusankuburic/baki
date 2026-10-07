@@ -16,7 +16,7 @@ func newOrgProviderService(t *testing.T, secrets *testutil.FakeSecretStore, orgK
 	t.Helper()
 	svc := newProviderServiceWithFakeSecrets(t, secrets)
 	svc.factory.SetOrgKeyLookup(orgKeys.OrgKeyLookup)
-	svc.SetOrgKeyStore(orgKeys)
+	svc.orgKeys = orgKeys
 	return svc
 }
 

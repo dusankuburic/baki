@@ -108,13 +108,11 @@ type AzureEmbedderSource interface {
 	KnowledgeEmbedder(ctx context.Context, scope, orgID string) (ai.Provider, error)
 }
 
-// BudgetChecker is the daily AI budget gate consulted before a billed embedding run (wired in di).
+// BudgetChecker is the daily AI budget gate consulted before a billed embedding run (service.AIBudget,
+// the one chat turns use).
 type BudgetChecker interface {
 	CheckBudget(ctx context.Context, scope, orgID string) error
 }
-
-// SetBudgetChecker wires the daily budget gate; set once at boot, before requests are served.
-func (s *KnowledgeService) SetBudgetChecker(b BudgetChecker) { s.budget = b }
 
 // checkBudget refuses a billed run once the org's (and caller's) daily AI budget is spent. A run on
 // Azure AI Foundry (ai.UsesModelAliases) is never refused — its usage is neither priced nor counted.
@@ -143,6 +141,12 @@ func WithEmbedder(p ai.Provider) Option {
 // operator pins the embedding provider to it; a nil source keeps the single-document path.
 func WithAzureEmbedder(source AzureEmbedderSource) Option {
 	return func(s *KnowledgeService) { s.azureEmbedder = source }
+}
+
+// WithBudgetChecker gates billed embedding runs (upload, re-index) on the daily AI budget; without it they
+// are unlimited.
+func WithBudgetChecker(b BudgetChecker) Option {
+	return func(s *KnowledgeService) { s.budget = b }
 }
 
 // AzureEmbedderEnabled reports whether the knowledge base embeds with Azure AI Foundry through the
@@ -486,6 +490,21 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 				"orgId", orgID, "filename", filename, "docId", id, "error", err)
 		}
 	}
+	return nil
+}
+
+// ListDocuments returns up to limit of the org's documents (<=0 = all), newest first, skipping offset.
+func (s *KnowledgeService) ListDocuments(ctx context.Context, orgID string, limit, offset int) ([]*interfaces.KnowledgeDocument, error) {
+	return s.store.ListKnowledgeDocuments(ctx, orgID, limit, offset)
+}
+
+// DeleteDocument removes one of the org's documents (its chunks cascade), RLS-scoped to userID, then makes the
+// next chat turn re-check the org's chunk count rather than trust the cached "non-empty".
+func (s *KnowledgeService) DeleteDocument(ctx context.Context, userID, orgID, docID string) error {
+	if err := s.store.DeleteKnowledgeDocument(ctx, userID, orgID, docID); err != nil {
+		return err
+	}
+	s.InvalidateCorpus(orgID)
 	return nil
 }
 

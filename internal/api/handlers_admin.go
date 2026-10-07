@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,9 +12,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/errreport"
 	"pad-analyzer/internal/lifecycle"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -52,23 +57,29 @@ func runDetached(location, label string, run func(ctx context.Context)) bool {
 }
 
 type AdminHandler struct {
-	backend  storageif.StorageBackend
+	audit    *audit.Recorder
 	security *SecurityConfig
 	runner   *MigrationRunner
 	scanNow  ScanNowFunc
+	authz    *service.AuthzService
+	users    *service.UserAdminService
 }
 
 func NewAdminHandler(
-	backend storageif.StorageBackend,
+	recorder *audit.Recorder,
 	security *SecurityConfig,
 	runner *MigrationRunner,
 	scanNow ScanNowFunc,
+	authz *service.AuthzService,
+	users *service.UserAdminService,
 ) *AdminHandler {
 	return &AdminHandler{
-		backend:  backend,
+		audit:    recorder,
 		security: security,
 		runner:   runner,
 		scanNow:  scanNow,
+		authz:    authz,
+		users:    users,
 	}
 }
 
@@ -92,14 +103,6 @@ const maxUserSearchLen = 200
 // @Failure      503 {object} map[string]string "No storage backend (local mode)"
 // @Router       /api/admin/users/list [get]
 func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
-		return
-	}
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
-		return
-	}
-
 	q := r.URL.Query()
 	limit, ok := parseIntParam(w, q.Get("limit"), "limit", 50)
 	if !ok {
@@ -129,14 +132,11 @@ func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	users, total, err := h.backend.QueryUsers(r.Context(), storageif.UserQuery{Q: search, Role: role, Limit: limit, Offset: offset})
+	// An empty page is [] on the wire, never null: the admin table maps it.
+	users, total, err := h.users.QueryUsers(r.Context(), storageif.UserQuery{Q: search, Role: role, Limit: limit, Offset: offset})
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
-	}
-	if users == nil {
-		// An empty page is [] on the wire, never null: the admin table maps it.
-		users = []*storageif.User{}
 	}
 
 	render.JSON(w, render.PagedResponse[*storageif.User]{
@@ -191,14 +191,7 @@ func toUserStatsView(s *storageif.UserStats) userStatsView {
 // @Failure      503 {object} map[string]string "No storage backend (local mode)"
 // @Router       /api/admin/users/stats [get]
 func (h *AdminHandler) handleAdminUserStats(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
-		return
-	}
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
-		return
-	}
-	stats, err := h.backend.LoadUserStats(r.Context())
+	stats, err := h.users.Stats(r.Context())
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -217,9 +210,6 @@ func (h *AdminHandler) handleAdminUserStats(w http.ResponseWriter, r *http.Reque
 // @Failure      403 {object} map[string]string "Forbidden"
 // @Router       /api/admin/users/{id}/role [put]
 func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
-		return
-	}
 	id := chi.URLParam(r, "id")
 
 	var req struct {
@@ -234,36 +224,16 @@ func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
-		return
-	}
-
-	// Prevent demoting the last admin
-	if auth.Role(req.Role) != auth.RoleAdmin {
-		admins, err := h.backend.ListAdmins(r.Context())
-		if err != nil {
-			render.Error(w, err, http.StatusInternalServerError)
+	// The last admin cannot be demoted; a changed user's refresh tokens are revoked so the new role takes effect.
+	if err := h.users.ChangeRole(r.Context(), id, auth.Role(req.Role)); err != nil {
+		if errors.Is(err, service.ErrLastAdmin) {
+			render.Error(w, err, http.StatusConflict)
 			return
 		}
-		if len(admins) == 1 && admins[0].ID == id {
-			render.Error(w, fmt.Errorf("cannot demote the last administrator"), http.StatusConflict)
-			return
-		}
-	}
-
-	if err := h.backend.UpdateUserRole(r.Context(), id, auth.Role(req.Role)); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// Revoke the refresh tokens so the user must re-authenticate and pick up the new role: their
-	// existing access JWT keeps the old role until it expires, and no new one may be minted stale.
-	if rs, ok := h.backend.(RefreshTokenStore); ok {
-		if err := rs.RevokeUserRefreshTokens(r.Context(), id); err != nil {
-			slog.Warn("failed to revoke refresh tokens after role change", "userID", id, "error", err)
-		}
-	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionRoleChange, "user", id, map[string]string{"new_role": req.Role})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionRoleChange, ResourceType: "user", ResourceID: id, Meta: map[string]string{"new_role": req.Role}})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -275,10 +245,7 @@ func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Reques
 // @Failure      403 {object} map[string]string "Forbidden"
 // @Router       /api/admin/audit/actions [get]
 func (h *AdminHandler) handleAdminAuditActions(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
-		return
-	}
-	render.JSON(w, AllAuditActions())
+	render.JSON(w, audit.AllActions())
 }
 
 // auditEventView is the wire shape of an audit entry: the storage struct stays untagged (the
@@ -321,14 +288,6 @@ func toAuditEventViews(events []*storageif.AuditEvent) []auditEventView {
 // @Failure      503 {object} map[string]string "No storage backend (local mode)"
 // @Router       /api/admin/audit [get]
 func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
-		return
-	}
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
-		return
-	}
-
 	q := r.URL.Query()
 	limit, ok := parseIntParam(w, q.Get("limit"), "limit", 0)
 	if !ok {
@@ -348,7 +307,7 @@ func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Reque
 		IncludeSubject: true,
 	}
 
-	events, err := h.backend.ListAuditEvents(r.Context(), filter)
+	events, err := h.users.AuditEvents(r.Context(), filter)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -366,9 +325,6 @@ func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Reque
 // @Failure      503 {object} map[string]string "Migration not configured"
 // @Router       /api/admin/migration/start [post]
 func (h *AdminHandler) handleMigrationStart(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
-		return
-	}
 	if !h.runner.Enabled() {
 		render.Error(w, fmt.Errorf("migration not configured: set PAD_DATA_DIR (and PAD_STORAGE=database) in cloud mode"), http.StatusServiceUnavailable)
 		return
@@ -377,7 +333,7 @@ func (h *AdminHandler) handleMigrationStart(w http.ResponseWriter, r *http.Reque
 		render.Error(w, fmt.Errorf("migration already in progress"), http.StatusConflict)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionMigrationStart, "migration", "start", nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionMigrationStart, ResourceType: "migration", ResourceID: "start"})
 	render.JSON(w, map[string]string{"status": "started"})
 }
 
@@ -389,9 +345,6 @@ func (h *AdminHandler) handleMigrationStart(w http.ResponseWriter, r *http.Reque
 // @Failure      403 {object} map[string]string "Forbidden"
 // @Router       /api/admin/migration/status [get]
 func (h *AdminHandler) handleMigrationStatus(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
-		return
-	}
 	render.JSON(w, h.runner.Status())
 }
 
@@ -414,9 +367,6 @@ func (h *AdminHandler) handleMigrationStatus(w http.ResponseWriter, r *http.Requ
 // @Failure      500 {object} map[string]string "Error"
 // @Router       /api/admin/scanner/scan [post]
 func (h *AdminHandler) handleScannerScan(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
-		return
-	}
 	if h.scanNow == nil {
 		render.Error(w, fmt.Errorf("governance scanner not configured: set PAD_SCAN_INTERVAL"), http.StatusServiceUnavailable)
 		return
@@ -425,22 +375,24 @@ func (h *AdminHandler) handleScannerScan(w http.ResponseWriter, r *http.Request)
 		render.ErrorWithCode(w, fmt.Errorf("a governance scan is already running; try again when it finishes"), http.StatusTooManyRequests, "SCAN_ALREADY_RUNNING")
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionScanNow, "scanner", "", nil)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionScanNow, ResourceType: "scanner"})
 	render.JSON(w, map[string]bool{"started": true})
 }
 
-// registerRoutes wires the /api/admin group. sys serves the one route that
-// belongs to the system handler (health) but lives in the admin tree.
-func (h *AdminHandler) registerRoutes(r chi.Router, sys *SystemHandler) {
-	r.Route("/api/admin", func(r chi.Router) {
-		r.Get("/users/list", h.handleAdminUserList)
-		r.Get("/users/stats", h.handleAdminUserStats)
-		r.Put("/users/{id}/role", h.handleAdminUserRole)
-		r.Post("/migration/start", h.handleMigrationStart)
-		r.Get("/migration/status", h.handleMigrationStatus)
-		r.Get("/audit", h.handleAdminAuditList)
-		r.Get("/audit/actions", h.handleAdminAuditActions)
-		r.Post("/scanner/scan", h.handleScannerScan)
-		r.Get("/system/health", sys.handleAdminSystemHealth)
+// Mount registers the deployment administration routes (mountAdmin: the global admin role, and the admin scope
+// for a scoped token). The system-health page in this tree is the SystemHandler's. The user and audit routes read
+// the server store.
+func (h *AdminHandler) Mount(rb *route.Builder) {
+	mountAdmin(rb, h.authz, h.security, func(rb *route.Builder) {
+		rb.Group(func(rb *route.Builder) {
+			rb.Get("/users/list", h.handleAdminUserList)
+			rb.Get("/users/stats", h.handleAdminUserStats)
+			rb.Put("/users/{id}/role", h.handleAdminUserRole)
+			rb.Get("/audit", h.handleAdminAuditList)
+		}, route.Needs(capability.ServerStore))
+		rb.Post("/migration/start", h.handleMigrationStart)
+		rb.Get("/migration/status", h.handleMigrationStatus)
+		rb.Get("/audit/actions", h.handleAdminAuditActions)
+		rb.Post("/scanner/scan", h.handleScannerScan)
 	})
 }

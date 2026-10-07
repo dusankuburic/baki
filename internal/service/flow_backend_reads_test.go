@@ -8,6 +8,7 @@ import (
 	"sort"
 	"testing"
 
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 	"pad-core/models"
@@ -24,20 +25,25 @@ func newCountingFlowService(t *testing.T) (*FlowService, *loadCountingBackend) {
 	return svc, backend
 }
 
+// actorCtx is a context acting as userID's interactive session, the way jwtAuth installs it.
+func actorCtx(userID string) context.Context {
+	return auth.WithActor(context.Background(), userActor(userID, auth.RoleMember))
+}
+
 // TestGetAuthorized_ReadsTheHeaderOnce: the authz check and the document
 // cache's version check each read the flow header, so every warm resolve paid
 // two header reads. One header now serves both.
 func TestGetAuthorized_ReadsTheHeaderOnce(t *testing.T) {
 	svc, backend := newCountingFlowService(t)
 	seedCloudFlow(t, backend.FakeBackend, "f1") // owner u1
-	ctx := context.Background()
+	ctx := actorCtx("u1")
 
-	if _, err := svc.GetAuthorized(ctx, "f1", "u1", "viewer"); err != nil {
+	if _, err := svc.GetAuthorized(ctx, "f1", FlowRead); err != nil {
 		t.Fatalf("cold GetAuthorized: %v", err)
 	}
 	backend.loadFlowCalls, backend.loadFlowHeaderCalls = 0, 0
 
-	doc, err := svc.GetAuthorized(ctx, "f1", "u1", "viewer")
+	doc, err := svc.GetAuthorized(ctx, "f1", FlowRead)
 	if err != nil || doc == nil {
 		t.Fatalf("warm GetAuthorized: %v", err)
 	}
@@ -50,7 +56,7 @@ func TestGetAuthorized_ReadsTheHeaderOnce(t *testing.T) {
 
 	// A denied caller still costs only the header, and never the content.
 	backend.loadFlowCalls, backend.loadFlowHeaderCalls = 0, 0
-	if _, err := svc.GetAuthorized(ctx, "f1", "mallory", "viewer"); err == nil {
+	if _, err := svc.GetAuthorized(actorCtx("mallory"), "f1", FlowRead); err == nil {
 		t.Fatal("non-owner was authorized")
 	}
 	if backend.loadFlowCalls != 0 || backend.loadFlowHeaderCalls != 1 {
@@ -63,7 +69,7 @@ func TestGetAuthorized_ReadsTheHeaderOnce(t *testing.T) {
 func TestGetAuthorizedHeader_NoDocumentResolve(t *testing.T) {
 	svc, backend := newCountingFlowService(t)
 	seedCloudFlow(t, backend.FakeBackend, "f1")
-	hdr, err := svc.GetAuthorizedHeader(context.Background(), "f1", "u1", "editor")
+	hdr, err := svc.GetAuthorizedHeader(actorCtx("u1"), "f1", FlowEdit)
 	if err != nil {
 		t.Fatalf("GetAuthorizedHeader: %v", err)
 	}
@@ -73,7 +79,7 @@ func TestGetAuthorizedHeader_NoDocumentResolve(t *testing.T) {
 	if backend.loadFlowCalls != 0 {
 		t.Errorf("GetAuthorizedHeader loaded the content %d times", backend.loadFlowCalls)
 	}
-	if _, err := svc.GetAuthorizedHeader(context.Background(), "f1", "mallory", "editor"); err == nil {
+	if _, err := svc.GetAuthorizedHeader(actorCtx("mallory"), "f1", FlowEdit); err == nil {
 		t.Error("non-owner was authorized")
 	}
 }
@@ -94,7 +100,7 @@ func contentHasSourceKey(t *testing.T, content json.RawMessage) bool {
 // new flows unfindable by any text that appears only in their source.
 func TestStoredContent_KeepsSourceForContentSearch(t *testing.T) {
 	svc, backend := newCountingFlowService(t)
-	ctx := context.Background()
+	ctx := actorCtx("u1")
 	const raw = "Display.ShowMessage Title: $'''hi'''"
 
 	up := &models.FlowDocument{ID: "up1", Name: "Up", Source: raw, Subflows: []models.Subflow{{ID: "main", Name: "Main"}}}
@@ -111,7 +117,7 @@ func TestStoredContent_KeepsSourceForContentSearch(t *testing.T) {
 	if up.Source != raw {
 		t.Error("SaveUploadedFlow cleared the caller's doc.Source")
 	}
-	resolved, err := svc.GetAuthorized(ctx, "up1", "u1", "viewer")
+	resolved, err := svc.GetAuthorized(ctx, "up1", FlowRead)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -151,9 +157,9 @@ func searchHits(t *testing.T, svc *FlowService, doc *models.FlowDocument, text s
 func TestSearchIndex_RebuildsForAVersionWrittenElsewhere(t *testing.T) {
 	svc, backend := newCountingFlowService(t)
 	seedCloudFlow(t, backend.FakeBackend, "f1") // one block named "Block"
-	ctx := context.Background()
+	ctx := actorCtx("u1")
 
-	v0, err := svc.GetAuthorized(ctx, "f1", "u1", "viewer")
+	v0, err := svc.GetAuthorized(ctx, "f1", FlowRead)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +180,7 @@ func TestSearchIndex_RebuildsForAVersionWrittenElsewhere(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	v1, err := svc.GetAuthorized(ctx, "f1", "u1", "viewer")
+	v1, err := svc.GetAuthorized(ctx, "f1", FlowRead)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,24 +197,28 @@ func TestSearchIndex_RebuildsForAVersionWrittenElsewhere(t *testing.T) {
 func TestLibraryMetaReads_NoContent(t *testing.T) {
 	backend := &loadCountingBackend{FakeBackend: testutil.NewFakeBackend()}
 	seedCloudFlow(t, backend.FakeBackend, "f1")
-	lib := NewLibraryService(backend, nil, NewAuthzService(backend, nil))
-	ctx := context.Background()
+	lib := NewLibraryService(backend, nil, NewAuthzService(backend, nil), nil)
+	ctx, mallory := actorCtx("u1"), actorCtx("mallory")
 
-	doc, err := lib.GetLibraryFlowMetaForUser(ctx, "f1", "u1")
+	doc, err := lib.GetLibraryFlowMetaForUser(ctx, "f1")
 	if err != nil {
 		t.Fatalf("GetLibraryFlowMetaForUser: %v", err)
 	}
 	if doc.Name != "Flow f1" || doc.Content != nil {
 		t.Errorf("meta = %+v", doc)
 	}
-	if _, err := lib.GetLibraryFlowMetaForUser(ctx, "f1", "mallory"); !errors.Is(err, ErrPermissionDenied) {
+	if _, err := lib.GetLibraryFlowMetaForUser(mallory, "f1"); !errors.Is(err, ErrPermissionDenied) {
 		t.Errorf("non-reader: err = %v, want ErrPermissionDenied", err)
 	}
-	if err := lib.DeleteLibraryFlow(ctx, "f1", "mallory"); !errors.Is(err, ErrPermissionDenied) {
+	if _, err := lib.DeleteLibraryFlow(mallory, "f1"); !errors.Is(err, ErrPermissionDenied) {
 		t.Errorf("non-owner delete: err = %v, want ErrPermissionDenied", err)
 	}
-	if err := lib.DeleteLibraryFlow(ctx, "f1", "u1"); err != nil {
+	deleted, err := lib.DeleteLibraryFlow(ctx, "f1")
+	if err != nil {
 		t.Fatalf("DeleteLibraryFlow: %v", err)
+	}
+	if deleted == nil || deleted.ID != "f1" {
+		t.Errorf("DeleteLibraryFlow returned %+v, want the deleted flow's header", deleted)
 	}
 	if backend.loadFlowCalls != 0 {
 		t.Errorf("metadata paths loaded the content %d times, want 0", backend.loadFlowCalls)
@@ -274,8 +284,8 @@ func newScopeBackend(n int, ignoreAfterID bool) *scopeBackend {
 // the scope — membership queries included — for every page.
 func TestScopeFlowIDs_KeysetPagingAndOneScopeResolution(t *testing.T) {
 	b := newScopeBackend(1203, false)
-	lib := NewLibraryService(b, nil, NewAuthzService(b, nil))
-	ids, orgIDs, err := lib.ScopeFlowIDs(context.Background(), "u1", "", ScopeAll, 0)
+	lib := NewLibraryService(b, nil, NewAuthzService(b, nil), nil)
+	ids, orgIDs, err := lib.scopes.ScopeFlowIDs(context.Background(), "u1", "", ScopeAll, 0)
 	if err != nil {
 		t.Fatalf("ScopeFlowIDs: %v", err)
 	}
@@ -313,8 +323,8 @@ func TestScopeFlowIDs_KeysetPagingAndOneScopeResolution(t *testing.T) {
 // finish by OFFSET instead of looping or duplicating ids.
 func TestScopeFlowIDs_FallsBackToOffsetWhenAfterIDIsIgnored(t *testing.T) {
 	b := newScopeBackend(1100, true)
-	lib := NewLibraryService(b, nil, NewAuthzService(b, nil))
-	ids, _, err := lib.ScopeFlowIDs(context.Background(), "u1", "", ScopeMine, 0)
+	lib := NewLibraryService(b, nil, NewAuthzService(b, nil), nil)
+	ids, _, err := lib.scopes.ScopeFlowIDs(context.Background(), "u1", "", ScopeMine, 0)
 	if err != nil {
 		t.Fatalf("ScopeFlowIDs: %v", err)
 	}

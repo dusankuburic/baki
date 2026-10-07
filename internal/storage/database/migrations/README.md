@@ -57,3 +57,7 @@ When you add a step, refresh the golden file:
 ```
 go test ./internal/storage/database/ -run TestMigrationChecksums_Golden -update-migration-checksums
 ```
+
+CI also boots the previous release on the schema your branch migrates to (`previous-release-boot`, see
+[safety-nets.md](../../../../docs/architecture/safety-nets.md)): a newer `breaking` step fails it, and so does an
+`expand` step the previous release cannot boot on.

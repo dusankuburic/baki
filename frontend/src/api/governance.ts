@@ -1,16 +1,22 @@
 import {request, requestValidated} from './client'
 import {getGovernanceAlertsSchema, getUnreadCountSchema} from './schemas'
+import type {Tolerant} from '@/types'
+
+export type GovernanceAlertType = 'drift' | 'health_regression' | 'finding_assigned' | 'comment_added'
+export type GovernanceAlertSeverity = 'error' | 'warning'
 
 // A governance alert row, mirroring storageif.GovernanceAlert on the backend.
+// The server writes the title and message, so an alert of a type or severity
+// this bundle does not know still reads; only its chip falls back.
 export interface GovernanceAlert {
   id: string
   flowId: string
   flowName?: string
   orgId?: string
-  type: 'drift' | 'health_regression' | 'finding_assigned' | 'comment_added'
+  type: Tolerant<GovernanceAlertType>
   title: string
   message?: string
-  severity: 'error' | 'warning'
+  severity: Tolerant<GovernanceAlertSeverity>
   newErrors?: number
   newWarnings?: number
   healthScore?: number
@@ -55,12 +61,14 @@ export const governanceApi = {
 // events for the org's flows are delivered there in addition to the
 // deployment-global channels.
 
-export type ChannelKind = 'webhook' | 'teams' | 'slack'
+export const CHANNEL_KINDS = ['webhook', 'teams', 'slack'] as const
+export type ChannelKind = (typeof CHANNEL_KINDS)[number]
 
 export interface OrgChannel {
   id: string
   name: string
-  kind: ChannelKind
+  /** A kind this bundle does not know is listed as sent; it can be tested and removed here, not edited. */
+  kind: Tolerant<ChannelKind>
   url: string
   enabled: boolean
   createdAt: string

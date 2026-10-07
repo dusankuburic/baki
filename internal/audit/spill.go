@@ -1,4 +1,4 @@
-package api
+package audit
 
 import (
 	"bytes"
@@ -8,51 +8,43 @@ import (
 	"sync"
 
 	"pad-analyzer/internal/metrics"
-	"pad-analyzer/internal/storage/interfaces"
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
 
 const (
-	defaultAuditSpillMaxBytes = 10 * 1024 * 1024 // 10 MB
-	auditSpillFileName        = "audit-spill.jsonl"
+	defaultSpillMaxBytes = 10 * 1024 * 1024 // 10 MB
+	spillFileName        = "audit-spill.jsonl"
 )
 
-// auditSpillStore is a bounded, on-disk FIFO of audit events that overflowed the
-// in-memory pool. auditSpillReaper drains it back into the pool when capacity
-// returns, so a transient DB/throughput hiccup doesn't drop events.
+// spillStore is a bounded, on-disk FIFO of audit events that overflowed the in-memory pool. The reaper drains
+// it back into the pool when capacity returns, so a transient DB/throughput hiccup doesn't drop events.
 //
-// The store is a single append-only JSON-lines file guarded by a mutex. Drain
-// rewrites the file without the consumed prefix — O(n) per drain, but the file
-// is size-capped (default 10 MB) and drains are throttled, so it is cheap
-// relative to the DB write it precedes.
+// The store is a single append-only JSON-lines file guarded by a mutex. Drain rewrites the file without the
+// consumed prefix — O(n) per drain, but the file is size-capped (default 10 MB) and drains are throttled, so it
+// is cheap relative to the DB write it precedes.
 //
-// Durability trade-off: an event accepted by Spill survives a pool outage until
-// the reaper replays it. Events still in the file at process exit remain on
-// disk and drain on the next boot's InitAuditPool WHEN the spill dir is on
-// persistent storage; the default temp-dir location trades that cross-restart
-// durability for zero-config (operators wanting it set PAD_AUDIT_SPILL_DIR to a
-// mounted volume).
-type auditSpillStore struct {
+// Durability trade-off: an event accepted by Spill survives a pool outage until the reaper replays it. Events
+// still in the file at process exit remain on disk and drain on the next boot's Start WHEN the spill dir is on
+// persistent storage; the default temp-dir location trades that cross-restart durability for zero-config
+// (operators wanting it set PAD_AUDIT_SPILL_DIR to a mounted volume).
+type spillStore struct {
 	path     string
 	maxBytes int64
 	mu       sync.Mutex
-	// depth is the count of events currently on the spill file, maintained
-	// under mu (cheap) so the pad_audit_spill_depth gauge is accurate without a
-	// file read on every observation.
+	// depth is the count of events currently on the spill file, maintained under mu (cheap) so the
+	// pad_audit_spill_depth gauge is accurate without a file read on every observation.
 	depth int
 }
 
-func newAuditSpiller(dir string, maxBytes int64) (*auditSpillStore, error) {
-	if dir == "" {
-		dir = filepath.Join(os.TempDir(), "baki-audit-spill")
-	}
+func newSpillStore(dir string, maxBytes int64) (*spillStore, error) {
 	if maxBytes <= 0 {
-		maxBytes = defaultAuditSpillMaxBytes
+		maxBytes = defaultSpillMaxBytes
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	p := filepath.Join(dir, auditSpillFileName)
+	p := filepath.Join(dir, spillFileName)
 	// Ensure the file exists so HasItems/Stat don't error before the first spill.
 	if _, err := os.Stat(p); os.IsNotExist(err) {
 		f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- path is operator-configured, not user input
@@ -61,13 +53,13 @@ func newAuditSpiller(dir string, maxBytes int64) (*auditSpillStore, error) {
 		}
 		_ = f.Close()
 	}
-	return &auditSpillStore{path: p, maxBytes: maxBytes}, nil
+	return &spillStore{path: p, maxBytes: maxBytes}, nil
 }
 
-// Spill appends an event to the spill file. When the file is at capacity the
-// event is NOT stored (the caller diverts it to the log fallback) and
-// pad_audit_spill_dropped_total is bumped. Returns whether the event was stored.
-func (s *auditSpillStore) Spill(e *interfaces.AuditEvent) bool {
+// Spill appends an event to the spill file. When the file is at capacity the event is NOT stored (the caller
+// diverts it to the log fallback) and pad_audit_spill_dropped_total is bumped. Returns whether the event was
+// stored.
+func (s *spillStore) Spill(e *storageif.AuditEvent) bool {
 	line, err := json.Marshal(e)
 	if err != nil {
 		return false
@@ -95,9 +87,9 @@ func (s *auditSpillStore) Spill(e *interfaces.AuditEvent) bool {
 	return true
 }
 
-// Drain removes and returns up to max events from the head of the spill file,
-// oldest first. Malformed lines are skipped (a corrupt line can't be replayed).
-func (s *auditSpillStore) Drain(max int) []*interfaces.AuditEvent {
+// Drain removes and returns up to max events from the head of the spill file, oldest first. Malformed lines
+// are skipped (a corrupt line can't be replayed).
+func (s *spillStore) Drain(max int) []*storageif.AuditEvent {
 	if max <= 0 {
 		return nil
 	}
@@ -107,7 +99,7 @@ func (s *auditSpillStore) Drain(max int) []*interfaces.AuditEvent {
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-	var out []*interfaces.AuditEvent
+	var out []*storageif.AuditEvent
 	remaining := data
 	for len(out) < max {
 		nl := bytes.IndexByte(remaining, '\n')
@@ -119,17 +111,15 @@ func (s *auditSpillStore) Drain(max int) []*interfaces.AuditEvent {
 		if len(line) == 0 {
 			continue
 		}
-		var e interfaces.AuditEvent
+		var e storageif.AuditEvent
 		if err := json.Unmarshal(line, &e); err == nil {
 			out = append(out, &e)
 		}
 	}
-	// Rewrite the file with the unconsumed tail ATOMICALLY (temp + rename):
-	// a plain WriteFile truncates first, so a mid-write failure would lose the
-	// unconsumed tail. With rename semantics, any failure leaves the ORIGINAL
-	// file (including the events counted in `out`) fully intact — we report
-	// nothing drained and let the reaper retry, rather than risk replaying
-	// duplicates or corrupting the queue.
+	// Rewrite the file with the unconsumed tail ATOMICALLY (temp + rename): a plain WriteFile truncates first,
+	// so a mid-write failure would lose the unconsumed tail. With rename semantics, any failure leaves the
+	// ORIGINAL file (including the events counted in `out`) fully intact — we report nothing drained and let
+	// the reaper retry, rather than risk replaying duplicates or corrupting the queue.
 	tmp := s.path + ".drain.tmp"
 	// #nosec G703 -- s.path is the operator-configured spill file
 	// (PAD_AUDIT_SPILL_DIR, or a temp dir), fixed at boot. No request data
@@ -154,18 +144,17 @@ func (s *auditSpillStore) Drain(max int) []*interfaces.AuditEvent {
 }
 
 // HasItems reports whether the spill file holds any events.
-func (s *auditSpillStore) HasItems() bool {
+func (s *spillStore) HasItems() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	info, err := os.Stat(s.path)
 	return err == nil && info.Size() > 0
 }
 
-// reSpill re-appends already-drained events back to the spill file WITHOUT
-// bumping pad_audit_spilled_total: these events were already counted when first
-// spilled, and this is a replay retrial (the pool filled mid-batch), not a new
-// overflow. Used by the reaper when it can't push a whole drained batch.
-func (s *auditSpillStore) reSpill(events []*interfaces.AuditEvent) {
+// reSpill re-appends already-drained events back to the spill file WITHOUT bumping pad_audit_spilled_total:
+// these events were already counted when first spilled, and this is a replay retrial (the pool filled
+// mid-batch), not a new overflow. Used by the reaper when it can't push a whole drained batch.
+func (s *spillStore) reSpill(events []*storageif.AuditEvent) {
 	if len(events) == 0 {
 		return
 	}

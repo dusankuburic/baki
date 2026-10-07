@@ -1,5 +1,6 @@
 import {describe, it, expect} from 'vitest'
 import type {AzureDiscoveryItem, AzureModelEntry} from '@/types'
+import {unknownValue} from '@/testing/testHelpers'
 import {
   cleanLength,
   discoveryQuickAddInput,
@@ -139,10 +140,14 @@ describe('the form', () => {
     expect(validateModelForm(typed, {supportsAgents: true}).errors).toEqual({})
 
     // Saved like that by the server, it keeps following on edit…
-    const saved = entry({kind: 'agent', deployment: name, displayName: typed.displayName})
-    expect(modelFormFromEntry(saved).displayNameEdited).toBe(false)
+    const saved = modelFormFromEntry(entry({kind: 'agent', deployment: name, displayName: typed.displayName}))!
+    expect(saved.displayNameEdited).toBe(false)
     // …and a display name cleared on edit goes back to that default.
-    expect(toModelUpdateInput({...modelFormFromEntry(saved), displayName: ' '}).displayName).toBe(typed.displayName)
+    expect(toModelUpdateInput({...saved, displayName: ' '}).displayName).toBe(typed.displayName)
+  })
+
+  it('has no edit form for a kind a newer server added: it could not send that kind back', () => {
+    expect(modelFormFromEntry(entry({kind: unknownValue('realtime')}))).toBeNull()
   })
 
   it('suggests a kind from the name', () => {

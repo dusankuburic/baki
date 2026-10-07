@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/config"
-	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/testutil"
 	"pad-core/models"
@@ -23,20 +23,34 @@ func (budgetSettings) AddRecentFile(string, int64) error                { return
 func (budgetSettings) RemoveRecentFile(string) error                    { return nil }
 func (budgetSettings) ClearRecentFiles() error                          { return nil }
 
-// R-4 wiring: the knowledge base consults the chat service's daily budget,
-// so an upload on a spent budget is refused with its sentinel before any
-// embedding is attempted. The embedder is a priced (non-Azure) provider: the
-// knowledge base resolves it before the budget check, and Azure AI Foundry
-// is never budget-gated.
-func TestWireKnowledgeBudget(t *testing.T) {
+// R-4 wiring: the knowledge base consults the daily AI budget chat turns use
+// (ProvideAIBudget), so an upload on a spent budget is refused with its
+// sentinel before any embedding is attempted. The embedder is a priced
+// (non-Azure) provider: the knowledge base resolves it before the budget
+// check, and Azure AI Foundry is never budget-gated.
+func TestProvideKnowledgeService_ConsultsTheAIBudget(t *testing.T) {
 	backend := testutil.NewFakeBackend()
 	backend.DailyUsage = 10
-	chat := service.NewChatService(nil, t.TempDir(), nil, nil, budgetSettings{budget: 5}, nil, backend, config.ModeCloud)
-	ks := rag.NewKnowledgeService(testutil.NewFakeBackend(), nil, nil, rag.WithEmbedder(&testutil.FakeProvider{}))
-	wireKnowledgeBudget(ks, chat)
-	err := ks.AddDocument(context.Background(), "u1", "org-1", "a.md", "content")
+	settings := budgetSettings{budget: 5}
+	factory := ai.NewProviderFactory(func(_, provider string) (string, error) {
+		if provider == "openai" {
+			return "sk-test", nil
+		}
+		return "", nil
+	}, nil, nil, nil)
+	cfg := config.Default()
+	budget := ProvideAIBudget(settings, backend)
+
+	err := ProvideKnowledgeService(testutil.NewFakeBackend(), factory, settings, cfg, nil, budget).AddDocument(context.Background(), "u1", "org-1", "a.md", "content")
 	if !errors.Is(err, service.ErrAIBudgetExceeded) {
 		t.Errorf("upload on a spent budget: %v, want ErrAIBudgetExceeded", err)
 	}
-	wireKnowledgeBudget(nil, chat) // no knowledge service: no-op
+	backend.UsageErr = errors.New("db down")
+	if err := budget.CheckBudget(context.Background(), "u1", "org-1"); !errors.Is(err, service.ErrAIBudgetUnavailable) {
+		t.Errorf("unreadable spend: %v, want ErrAIBudgetUnavailable (fail closed)", err)
+	}
+	// The desktop has no usage store: spend reads $0, within any budget.
+	if err := ProvideAIBudget(settings, nil).CheckBudget(context.Background(), "local", ""); err != nil {
+		t.Errorf("no usage store: %v", err)
+	}
 }

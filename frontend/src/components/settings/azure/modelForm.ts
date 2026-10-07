@@ -1,10 +1,12 @@
-import type {
-  AzureDiscoveryItem,
-  AzureModelCreateInput,
-  AzureModelEntry,
-  AzureModelKind,
-  AzureModelUpdateInput,
-  ModelPurpose,
+import {
+  AZURE_MODEL_KINDS,
+  isKnown,
+  type AzureDiscoveryItem,
+  type AzureModelCreateInput,
+  type AzureModelEntry,
+  type AzureModelKind,
+  type AzureModelUpdateInput,
+  type ModelPurpose,
 } from '@/types'
 import {
   DEFAULT_PURPOSE,
@@ -90,8 +92,13 @@ export function emptyModelForm(connectionId = ''): ModelFormState {
   }
 }
 
-/** The edit form of a saved model. A display name that is the deployment's default keeps following it. */
-export function modelFormFromEntry(entry: AzureModelEntry): ModelFormState {
+/**
+ * The edit form of a saved model. A display name that is the deployment's
+ * default keeps following it. Null for a kind this bundle does not know: the
+ * form could neither show nor validate it, and must not send another kind.
+ */
+export function modelFormFromEntry(entry: AzureModelEntry): ModelFormState | null {
+  if (!isKnown(AZURE_MODEL_KINDS, entry.kind)) return null
   const purpose = resolvePurpose(entry)
   return {
     connectionId: entry.connectionId,

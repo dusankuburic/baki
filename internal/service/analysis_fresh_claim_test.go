@@ -13,7 +13,7 @@ import (
 // (new doc UUID, same path — the reload workflow) is fresh again. Freshness
 // tracks the report pair, so AnalyzeFlow keeps seeing the same reports.
 func TestAnalyzeFlowFresh_ReportsCacheHits(t *testing.T) {
-	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil)
+	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil, AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("NewAnalysisService: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestAnalyzeFlowFresh_ReportsCacheHits(t *testing.T) {
 // flow_analysis stale for every flow the scanner reached first after a restart (and the
 // scanner's own health-drop check reads that row).
 func TestAnalyzeFlowFresh_ClaimsReportsOtherCallersProduced(t *testing.T) {
-	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil)
+	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil, AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("NewAnalysisService: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestAnalyzeFlowFresh_ClaimsReportsOtherCallersProduced(t *testing.T) {
 // back, so the next analyze retries; a stale release (an older report) is a
 // no-op.
 func TestReleaseRecord_ReopensTheClaim(t *testing.T) {
-	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil)
+	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil, AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("NewAnalysisService: %v", err)
 	}

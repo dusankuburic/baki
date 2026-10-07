@@ -536,10 +536,9 @@ func (b *PostgresStorageBackend) SaveAuditEvent(ctx context.Context, event *inte
 		meta = []byte("{}")
 	}
 	_, err = b.db.ExecContext(ctx,
-		`INSERT INTO audit_events (id, user_id, email, action, resource_type, resource_id, ip, meta, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		event.ID, event.UserID, event.Email, event.Action,
-		event.ResourceType, event.ResourceID, event.IP, meta, event.CreatedAt,
+		`INSERT INTO audit_events (`+auditInsertColumns+`)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''))`,
+		auditInsertArgs(event, meta)...,
 	)
 	if err != nil {
 		return fmt.Errorf("save audit event: %w", err)
@@ -547,15 +546,26 @@ func (b *PostgresStorageBackend) SaveAuditEvent(ctx context.Context, event *inte
 	return nil
 }
 
+// auditInsertColumns is the column list of every audit_events INSERT; the v33 columns are written as NULL when
+// empty, like the rows written before them.
+const auditInsertColumns = "id, user_id, email, action, resource_type, resource_id, ip, meta, created_at, " +
+	"org_id, actor_kind, token_id, actor_job, user_agent"
+
+// auditInsertArgs is the bind arguments of one row, in auditInsertColumns order.
+func auditInsertArgs(e *interfaces.AuditEvent, meta []byte) []any {
+	return []any{e.ID, e.UserID, e.Email, e.Action, e.ResourceType, e.ResourceID, e.IP, meta, e.CreatedAt,
+		e.OrgID, e.ActorKind, e.TokenID, e.ActorJob, e.UserAgent}
+}
+
 // SaveAuditEvents inserts a batch of audit events in a single round-trip — the async audit worker's
 // throughput path (a single bad row failing the whole batch is handled by the caller falling back to
 // per-event writes). auditInsertCols is the number of columns (and bind params per row) in the audit_events
-// INSERT: Postgres caps a single statement at 65535 bind parameters, so batches must stay under 65535/9 ≈ 7281 rows.
-const auditInsertCols = 9
+// INSERT: Postgres caps a single statement at 65535 bind parameters, so batches must stay under 65535/14 ≈ 4681 rows.
+const auditInsertCols = 14
 
 // auditInsertBatchRows bounds one INSERT well under the 65535-param ceiling
-// (5000*9 = 45000 params).
-const auditInsertBatchRows = 5000
+// (4000*14 = 56000 params).
+const auditInsertBatchRows = 4000
 
 // chunkAuditEvents splits events into contiguous batches of at most size rows.
 // A size <= 0 yields a single batch (no chunking).
@@ -576,7 +586,7 @@ func chunkAuditEvents(events []*interfaces.AuditEvent, size int) [][]*interfaces
 func buildAuditInsert(batch []*interfaces.AuditEvent) (string, []any) {
 	var sb strings.Builder
 	args := make([]any, 0, len(batch)*auditInsertCols)
-	sb.WriteString(`INSERT INTO audit_events (id, user_id, email, action, resource_type, resource_id, ip, meta, created_at) VALUES `)
+	sb.WriteString(`INSERT INTO audit_events (` + auditInsertColumns + `) VALUES `)
 	for i, e := range batch {
 		meta, err := json.Marshal(e.Meta)
 		if err != nil {
@@ -586,10 +596,10 @@ func buildAuditInsert(batch []*interfaces.AuditEvent) (string, []any) {
 			sb.WriteByte(',')
 		}
 		base := i*auditInsertCols + 1
-		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
-			base, base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8)
-		args = append(args, e.ID, e.UserID, e.Email, e.Action,
-			e.ResourceType, e.ResourceID, e.IP, meta, e.CreatedAt)
+		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,NULLIF($%d,''),NULLIF($%d,''),NULLIF($%d,''),NULLIF($%d,''),NULLIF($%d,''))",
+			base, base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8,
+			base+9, base+10, base+11, base+12, base+13)
+		args = append(args, auditInsertArgs(e, meta)...)
 	}
 	return sb.String(), args
 }
@@ -643,7 +653,8 @@ type auditCursor struct {
 
 // auditEventColumns is the audit_events select list every variant of the
 // list statement reads, in the order scanAuditEvents expects.
-const auditEventColumns = "id, user_id, email, action, resource_type, resource_id, ip, meta, created_at"
+const auditEventColumns = "id, user_id, email, action, resource_type, resource_id, ip, meta, created_at, " +
+	"org_id, actor_kind, token_id, actor_job, user_agent"
 
 // auditEventOrder orders the audit log newest first, with `id` (the primary key) as the final tiebreaker:
 // events logged in the same microsecond tie on created_at and SQL orders tied rows arbitrarily, so paging could
@@ -760,10 +771,14 @@ func (b *PostgresStorageBackend) listAuditEvents(ctx context.Context, filter int
 	for rows.Next() {
 		ev := &interfaces.AuditEvent{}
 		var metaRaw []byte
+		var orgID, actorKind, tokenID, actorJob, userAgent sql.NullString
 		if err := rows.Scan(&ev.ID, &ev.UserID, &ev.Email, &ev.Action,
-			&ev.ResourceType, &ev.ResourceID, &ev.IP, &metaRaw, &ev.CreatedAt); err != nil {
+			&ev.ResourceType, &ev.ResourceID, &ev.IP, &metaRaw, &ev.CreatedAt,
+			&orgID, &actorKind, &tokenID, &actorJob, &userAgent); err != nil {
 			return nil, err
 		}
+		ev.OrgID, ev.ActorKind, ev.TokenID = orgID.String, actorKind.String, tokenID.String
+		ev.ActorJob, ev.UserAgent = actorJob.String, userAgent.String
 		if len(metaRaw) > 0 {
 			if err := json.Unmarshal(metaRaw, &ev.Meta); err != nil {
 				slog.Warn("audit event: failed to unmarshal metadata", "eventID", ev.ID, "error", err)

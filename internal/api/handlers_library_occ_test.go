@@ -91,7 +91,7 @@ func TestLibraryUpdate_NotifierCalledAfterSave(t *testing.T) {
 	seed("nflow", "alice")
 
 	notifier := &captureNotifier{}
-	rt.handlers.Library.SetFlowNotifier(notifier)
+	moduleOf[*LibraryHandler](t, rt).SetFlowNotifier(notifier)
 
 	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
 	rr := doRequestWithAuth(t, rt, http.MethodPut, "/api/library/nflow", bearer, map[string]any{

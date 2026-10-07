@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"pad-analyzer/internal/config"
 )
 
 // TestRequestTimeout_StreamRoutesGetAnOuterDeadline: chat/analysis streams
@@ -27,7 +29,7 @@ func TestRequestTimeout_StreamRoutesGetAnOuterDeadline(t *testing.T) {
 		t.Run(c.path, func(t *testing.T) {
 			var got time.Time
 			var has bool
-			h := RequestTimeout(30 * time.Second)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := RequestTimeout(30*time.Second, config.RoutePolicyLegacy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				got, has = r.Context().Deadline()
 				w.WriteHeader(http.StatusOK)
 			}))

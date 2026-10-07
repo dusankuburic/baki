@@ -79,9 +79,9 @@ type AnalyticsCaller struct {
 	IsAdmin bool
 }
 
-// scopeResolver is what BuildAnalytics needs from the library service: the
+// ScopeResolver is what BuildAnalytics needs to collect its flow set (FlowScopeResolver, the library's): the
 // flow ids the caller may see under a scope and the org ids that widened it.
-type scopeResolver interface {
+type ScopeResolver interface {
 	ScopeFlowIDs(ctx context.Context, userID, orgID string, scope LibraryScope, limit int) (ids []string, orgIDs []string, err error)
 }
 
@@ -107,10 +107,6 @@ type ruleMeta struct {
 
 // CloudMode reports whether a durable backend is wired (analytics needs one).
 func (s *DashboardService) CloudMode() bool { return s.backend != nil }
-
-// SetScopeResolver wires the library service after construction (the DI
-// adapter does it; tests inject a stub).
-func (s *DashboardService) SetScopeResolver(r scopeResolver) { s.scope = r }
 
 func (s *DashboardService) anaCacheGet(key string) *models.DashboardAnalyticsData {
 	s.dashMu.Lock()

@@ -39,7 +39,7 @@ func seedAuditPopulation(t *testing.T, b *PostgresStorageBackend) {
 
 // auditListByActionSQL is the statement ListAuditEvents sends for an
 // action-only filter (the admin log filtered by event type).
-const auditListByActionSQL = `SELECT id, user_id, email, action, resource_type, resource_id, ip, meta, created_at FROM audit_events WHERE action = $1 ORDER BY created_at DESC, id ASC LIMIT $2 OFFSET $3`
+const auditListByActionSQL = `SELECT id, user_id, email, action, resource_type, resource_id, ip, meta, created_at, org_id, actor_kind, token_id, actor_job, user_agent FROM audit_events WHERE action = $1 ORDER BY created_at DESC, id ASC LIMIT $2 OFFSET $3`
 
 // failedLoginCountSQL is the dashboard's failed-login counter
 // (GetDashboardOverview, security posture) verbatim.

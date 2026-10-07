@@ -68,7 +68,7 @@ func newRound4Service(t *testing.T, budget int64, runs *fakeRuns) *AnalysisServi
 	t.Helper()
 	analyzer.DefaultCache.Clear()
 	t.Cleanup(analyzer.DefaultCache.Clear)
-	svc, err := NewAnalysisService(NilNotifier{}, nilSettings{}, nil)
+	svc, err := NewAnalysisService(NilNotifier{}, nilSettings{}, nil, AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("NewAnalysisService: %v", err)
 	}
@@ -454,7 +454,7 @@ func (g *gatedRuns) run(_ context.Context, doc *models.FlowDocument, _ []analyze
 func TestAnalyzeFlow_LargeAnalysesAreGated(t *testing.T) {
 	analyzer.DefaultCache.Clear()
 	t.Cleanup(analyzer.DefaultCache.Clear)
-	svc, err := NewAnalysisService(NilNotifier{}, nilSettings{}, nil)
+	svc, err := NewAnalysisService(NilNotifier{}, nilSettings{}, nil, AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("NewAnalysisService: %v", err)
 	}
