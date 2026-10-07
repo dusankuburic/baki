@@ -10,6 +10,8 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/errreport"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
@@ -28,29 +30,19 @@ type SystemService struct {
 	notifier EventNotifier
 	backend  storageif.StorageBackend
 	mode     config.DeploymentMode
-	// onKeyChanged runs after SaveApiKey stored or DeleteApiKey removed a credential
-	// (wired in di/services.go to ProviderService.InvalidateModels); nil = no hook.
-	onKeyChanged func(scope, provider string)
+	// bus carries CredentialChanged (the provider model cache drops the listing) and SettingsChanged (the
+	// settings cache and the rule profiles drop); nil publishes nothing.
+	bus *eventbus.Bus
 	// azure is the Azure AI Foundry model registry (Part 9): with it, "has a key"
 	// means "has a resource", and deleting the azure-foundry key removes resource
 	// "default" with its models. nil = the single document.
 	azure *AzureModelService
 }
 
-// OnApiKeyChanged registers the hook SaveApiKey and DeleteApiKey run after a
-// successful write (post-construction wiring, like the dashboard and chat cache
-// hooks): the provider service's cached live listing for that provider — a removed
-// Azure AI Foundry configuration's deployments, or the entitlements of a replaced
-// key — must not outlive the credential, and a listing in flight must not write it
-// back. Set once at boot, before requests are served.
-func (s *SystemService) OnApiKeyChanged(fn func(scope, provider string)) {
-	s.onKeyChanged = fn
-}
-
 // NewSystemService builds the system service; azure is the Azure AI Foundry model registry /api/keys acts on for
-// azure-foundry (nil keeps the single document).
-func NewSystemService(settings SettingsProvider, secrets KeyStore, notifier EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode, azure *AzureModelService) *SystemService {
-	return &SystemService{settings: settings, secrets: secrets, notifier: notifier, backend: backend, mode: mode, azure: azure}
+// azure-foundry (nil keeps the single document). bus announces credential and settings changes (nil: none).
+func NewSystemService(settings SettingsProvider, secrets KeyStore, notifier EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode, azure *AzureModelService, bus *eventbus.Bus) *SystemService {
+	return &SystemService{settings: settings, secrets: secrets, notifier: notifier, backend: backend, mode: mode, azure: azure, bus: bus}
 }
 
 // B5: the settings methods thread the caller's context.Context through to the storage
@@ -80,7 +72,9 @@ func (s *SystemService) UpdateSettings(ctx context.Context, settings models.AppS
 	if err = s.settings.Update(ctx, settings); err != nil {
 		return fmt.Errorf("persist settings: %w", err)
 	}
-	s.notifier.Emit("settings:changed", settings)
+	s.bus.Publish(ctx, events.SettingsChanged{Scope: events.DeploymentSettings})
+	// Reached only without a server store (the desktop): its clients are the local user's.
+	s.notifier.EmitTo(LocalUser, "settings:changed", settings)
 	return nil
 }
 
@@ -104,6 +98,7 @@ func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, s
 	if err := s.backend.SaveUserSettings(ctx, userID, settingsFromModel(&settings)); err != nil {
 		return err
 	}
+	s.bus.Publish(ctx, events.SettingsChanged{Scope: events.UserSettings, ID: userID})
 	s.notifier.EmitTo(userID, "settings:changed", settings)
 	return nil
 }
@@ -128,43 +123,12 @@ func (s *SystemService) UpdateOrgSettings(ctx context.Context, orgID string, set
 	if err := s.backend.SaveOrgSettings(ctx, orgID, settingsFromModel(&settings)); err != nil {
 		return err
 	}
-	s.emitOrgSettingsChanged(ctx, orgID, settings)
+	// The org's settings are its rule profile (Analysis.Rules).
+	s.bus.Publish(ctx, events.SettingsChanged{Scope: events.OrgSettings, ID: orgID})
+	// The members (owner included) are resolved where the event is delivered, on ctx. Best-effort: a roster that
+	// cannot be read is logged there and never fails the persisted update.
+	s.notifier.EmitToOrg(ctx, orgID, "settings:changed", settings)
 	return nil
-}
-
-// emitOrgSettingsChanged notifies one org's members that their analysis configuration
-// changed. It used to be a bare Emit, which fans out to EVERY connected SSE client —
-// one org's rule profile reached every other tenant's users; EmitTo is the documented
-// requirement for anything user-scoped. The EventManager indexes clients by user, not
-// org, so the fan-out happens here (load the org, address each member — one storage
-// read beats an org→client index that must stay correct across membership changes
-// and reconnects). Best-effort by design: the settings are already persisted, so a
-// failure to notify is logged, never fails the update.
-func (s *SystemService) emitOrgSettingsChanged(ctx context.Context, orgID string, settings models.AppSettings) {
-	org, err := s.backend.LoadOrg(ctx, orgID)
-	if err != nil || org == nil {
-		logger.Warn("org settings saved but members could not be notified",
-			"orgId", orgID, "error", err)
-		return
-	}
-	// The owner is not necessarily in Members, so address them explicitly and
-	// dedupe — a double EmitTo would deliver the event twice to one client.
-	seen := make(map[string]bool, len(org.Members)+1)
-	for _, id := range append([]string{org.OwnerID}, memberIDs(org.Members)...) {
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		s.notifier.EmitTo(id, "settings:changed", settings)
-	}
-}
-
-func memberIDs(members []storageif.OrgMember) []string {
-	out := make([]string, 0, len(members))
-	for _, m := range members {
-		out = append(out, m.UserID)
-	}
-	return out
 }
 
 // AppInfo returns the deployment's version/platform/build metadata.
@@ -212,15 +176,19 @@ func truncateForLog(s string, max int) string {
 	return s[:cut] + fmt.Sprintf("…[truncated %d bytes]", len(s)-cut)
 }
 
-func (s *SystemService) SaveApiKey(scope, provider string, key string) (err error) {
+// SaveApiKey stores a credential and announces it: the provider's cached live listing must not outlive the key
+// it was listed with (a replacement key may carry other entitlements), nor may a listing in flight write it back.
+func (s *SystemService) SaveApiKey(ctx context.Context, scope, provider string, key string) (err error) {
 	defer logger.Guard("SystemService.SaveApiKey", &err)
 	if err := s.secrets.Save(scope, provider, key); err != nil {
 		return err
 	}
-	if s.onKeyChanged != nil {
-		s.onKeyChanged(scope, provider)
-	}
+	s.credentialChanged(ctx, scope, provider, events.CredentialSaved)
 	return nil
+}
+
+func (s *SystemService) credentialChanged(ctx context.Context, scope, provider string, kind events.CredentialChangeKind) {
+	s.bus.Publish(ctx, events.CredentialChanged{Scope: scope, ProviderID: provider, Kind: kind})
 }
 
 func (s *SystemService) HasApiKey(scope, provider string) (result bool, err error) {
@@ -232,7 +200,9 @@ func (s *SystemService) HasApiKey(scope, provider string) (result bool, err erro
 	return s.secrets.Has(scope, provider)
 }
 
-func (s *SystemService) DeleteApiKey(scope, provider string) (err error) {
+// DeleteApiKey removes a credential (for azure-foundry with the registry, resource "default" with its models) and
+// announces it like SaveApiKey.
+func (s *SystemService) DeleteApiKey(ctx context.Context, scope, provider string) (err error) {
 	defer logger.Guard("SystemService.DeleteApiKey", &err)
 	if provider == ai.AzureFoundryProviderID && s.azure != nil {
 		// Deprecated for the registry (one release): the key is resource
@@ -241,9 +211,7 @@ func (s *SystemService) DeleteApiKey(scope, provider string) (err error) {
 		if err := s.azure.legacyDeleteDefault(context.Background(), s.azure.userOwner(scope), scope); err != nil {
 			return err
 		}
-		if s.onKeyChanged != nil {
-			s.onKeyChanged(scope, provider)
-		}
+		s.credentialChanged(ctx, scope, provider, events.CredentialDeleted)
 		return nil
 	}
 	// The Azure AI Foundry document registers process-wide state beyond the
@@ -261,8 +229,6 @@ func (s *SystemService) DeleteApiKey(scope, provider string) (err error) {
 			ai.ForgetAzureFoundryCredential(cfg)
 		}
 	}
-	if s.onKeyChanged != nil {
-		s.onKeyChanged(scope, provider)
-	}
+	s.credentialChanged(ctx, scope, provider, events.CredentialDeleted)
 	return nil
 }

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"sync"
 
 	"pad-analyzer/internal/api/render"
@@ -73,7 +72,6 @@ type FlowHandler struct {
 	security      *SecurityConfig
 	audit         *audit.Recorder
 	uploadLimiter *uploadLimiter
-	notifier      FlowNotifier
 }
 
 func NewFlowHandler(flowSvc *service.FlowService, docProvider service.DocumentProvider, backend storageif.StorageBackend, security *SecurityConfig, shares *service.ShareTokenService, recorder *audit.Recorder) *FlowHandler {
@@ -86,11 +84,6 @@ func NewFlowHandler(flowSvc *service.FlowService, docProvider service.DocumentPr
 		audit:         recorder,
 		uploadLimiter: newUploadLimiter(),
 	}
-}
-
-// SetFlowNotifier wires the WebSocket hub: apply-fix, save-source and suppress-in-source broadcast a flow-changed event to connected viewers.
-func (h *FlowHandler) SetFlowNotifier(n FlowNotifier) {
-	h.notifier = n
 }
 
 // @Summary      Upload flow file
@@ -342,26 +335,11 @@ func (h *FlowHandler) handleReimport(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("no source file path on the current flow"), http.StatusBadRequest)
 		return
 	}
-	info, err := os.Stat(doc.FilePath)
-	if err != nil {
-		render.Error(w, fmt.Errorf("source file not accessible: %w", err), http.StatusInternalServerError)
-		return
-	}
-	metrics.RecordFlowOp("reimport")
-	var fresh *models.FlowDocument
-	if info.IsDir() {
-		fresh, err = h.flowSvc.LoadFlowFolder(doc.FilePath)
-	} else {
-		fresh, err = h.flowSvc.LoadFlowFromPath(doc.FilePath)
-	}
+	fresh, err := h.flowSvc.ReimportFlow(r.Context(), doc)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// Drop only the re-imported flow's stale analytics entry; the rest of the session's analytics survive.
-	analyzer.DefaultCache.Invalidate(analyzer.StableFlowID(fresh))
-	// Derived caches (search index, chat context) must not serve the pre-import state.
-	h.flowSvc.InvalidateSearchIndex(fresh.ID)
 	render.JSON(w, fresh)
 }
 

@@ -17,28 +17,15 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// FlowNotifier broadcasts a flow-changed notification to connected WebSocket
-// clients after a library flow is saved; nil in local mode (no hub).
-type FlowNotifier interface {
-	NotifyFlowChanged(flowID string, version int)
-}
-
 type LibraryHandler struct {
 	libSvc   *service.LibraryService
 	security *SecurityConfig
 	backend  storageif.StorageBackend
 	audit    *audit.Recorder
-	notifier FlowNotifier
 }
 
 func NewLibraryHandler(libSvc *service.LibraryService, backend storageif.StorageBackend, security *SecurityConfig, recorder *audit.Recorder) *LibraryHandler {
 	return &LibraryHandler{libSvc: libSvc, security: security, backend: backend, audit: recorder}
-}
-
-// SetFlowNotifier wires the WebSocket hub: library saves broadcast a
-// flow.changed event to connected viewers.
-func (h *LibraryHandler) SetFlowNotifier(n FlowNotifier) {
-	h.notifier = n
 }
 
 // flowOrgID is the organisation of a flow header already in hand, for its audit row ("" without one).
@@ -432,9 +419,6 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 	if err := h.libSvc.UpdateLibraryFlow(ctx, existing); err != nil {
 		render.Error(w, err, 0)
 		return
-	}
-	if h.notifier != nil {
-		h.notifier.NotifyFlowChanged(existing.ID, existing.Version)
 	}
 	render.JSON(w, h.toLibraryFlow(ctx, existing, userID, h.libSvc.ResolveOwnerName(ctx, existing.OwnerID)))
 }

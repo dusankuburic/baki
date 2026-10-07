@@ -12,6 +12,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/egress"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/testutil"
 )
 
@@ -549,17 +550,18 @@ func TestDynamicModels_InvalidateDuringFetchSkipsTheWrite(t *testing.T) {
 	}
 }
 
-// Finding #47: POST /api/keys/delete (SystemService.DeleteApiKey) runs the
-// registered hook, which DI wires to ProviderService.InvalidateModels.
+// Finding #47: POST /api/keys/delete (SystemService.DeleteApiKey) announces
+// CredentialChanged, on which the provider service drops the listing.
 func TestDeleteApiKey_InvalidatesTheProviderListing(t *testing.T) {
 	secrets := testutil.NewFakeSecretStore()
 	_ = secrets.Save("u1", "azure-foundry", "doc")
-	sys := NewSystemService(nil, secrets, nil, nil, "", nil)
+	bus := eventbus.New(nil, 0)
+	sys := NewSystemService(nil, secrets, nil, nil, "", nil, bus)
 	svc := newProviderServiceWithFakeSecrets(t, secrets)
+	SubscribeModelCache(bus, svc)
 	svc.modelCache["u1\x00azure-foundry"] = modelCacheEntry{models: []ai.ModelInfo{{ID: "old"}}, expiresAt: time.Now().Add(time.Hour)}
 	gen := svc.modelGen
-	sys.OnApiKeyChanged(svc.InvalidateModels)
-	if err := sys.DeleteApiKey("u1", "azure-foundry"); err != nil {
+	if err := sys.DeleteApiKey(context.Background(), "u1", "azure-foundry"); err != nil {
 		t.Fatal(err)
 	}
 	if _, cached := svc.modelCache["u1\x00azure-foundry"]; cached || svc.modelGen == gen {

@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"time"
 
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -15,14 +17,23 @@ const shareLinkDays = 30
 
 // ShareTokenService owns the public, read-only report links of a flow: the store keeps only the
 // token's SHA-256, the raw token is shown once at creation. Authorization is the caller's; resolving
-// a token is what authorizes the unauthenticated /api/shared routes.
+// a token is what authorizes the unauthenticated /api/shared routes. Creating or revoking a link is announced as a
+// FlowChanged of kind FlowSharingChanged.
 type ShareTokenService struct {
 	store storageif.ShareTokenStore
 	flows storageif.FlowStore
+	bus   *eventbus.Bus
 }
 
-func NewShareTokenService(store storageif.ShareTokenStore, flows storageif.FlowStore) *ShareTokenService {
-	return &ShareTokenService{store: store, flows: flows}
+// NewShareTokenService builds the service; a nil bus announces nothing.
+func NewShareTokenService(store storageif.ShareTokenStore, flows storageif.FlowStore, bus *eventbus.Bus) *ShareTokenService {
+	return &ShareTokenService{store: store, flows: flows, bus: bus}
+}
+
+// sharingChanged announces a change of the flow's links, with the flow id only (the routes do not hand over the
+// flow's header, and reading it here would add a statement).
+func (s *ShareTokenService) sharingChanged(ctx context.Context, flowID string) {
+	s.bus.Publish(ctx, events.FlowChanged{FlowID: flowID, StableID: flowID, Kind: events.FlowSharingChanged})
 }
 
 // Create mints a link for flowID that expires after shareLinkDays and returns it with the raw token.
@@ -42,6 +53,7 @@ func (s *ShareTokenService) Create(ctx context.Context, flowID, createdBy string
 	if err := s.store.CreateShareToken(ctx, t); err != nil {
 		return nil, "", err
 	}
+	s.sharingChanged(ctx, flowID)
 	return t, rawToken, nil
 }
 
@@ -52,7 +64,11 @@ func (s *ShareTokenService) List(ctx context.Context, flowID string) ([]*storage
 
 // Revoke deletes one of the flow's links.
 func (s *ShareTokenService) Revoke(ctx context.Context, flowID, tokenID string) error {
-	return s.store.RevokeShareToken(ctx, flowID, tokenID)
+	if err := s.store.RevokeShareToken(ctx, flowID, tokenID); err != nil {
+		return err
+	}
+	s.sharingChanged(ctx, flowID)
+	return nil
 }
 
 // Resolve looks up a raw token; an unknown or expired one is an error.

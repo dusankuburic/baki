@@ -342,6 +342,28 @@ var (
 		Name: "pad_blob_cleaner_pending",
 		Help: "Deferred blob-cleanup jobs waiting in the cleaner's pending heap. Sustained growth under bulk import/migration signals the worker pool can't keep up.",
 	})
+	eventsPublishedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_events_published_total",
+			Help: "Domain events published on the in-process event bus, by event.",
+		},
+		[]string{"event"},
+	)
+	eventSubscriberFailedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_event_subscriber_failed_total",
+			Help: "Event deliveries a subscriber did not complete, by event, subscriber and reason (panic, timeout, dropped: the async runner was saturated or shutting down).",
+		},
+		[]string{"event", "subscriber", "reason"},
+	)
+	eventSubscriberDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "pad_event_subscriber_duration_seconds",
+			Help:    "Run time of one event delivery to one subscriber, by event, subscriber and tier (sync, async).",
+			Buckets: []float64{0.0001, 0.001, 0.01, 0.05, 0.25, 1, 5, 30},
+		},
+		[]string{"event", "subscriber", "tier"},
+	)
 	auditSpillDepth = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "pad_audit_spill_depth",
 		Help: "Audit events currently on the on-disk spill queue (overflow past the in-memory pool). Non-zero means the DB sink fell behind; pair with pad_audit_spill_replayed_total to confirm recovery.",
@@ -403,6 +425,9 @@ var registry = func() *prometheus.Registry {
 		aiHostedToolStepsTotal,
 		blobCleanerPending,
 		auditSpillDepth,
+		eventsPublishedTotal,
+		eventSubscriberFailedTotal,
+		eventSubscriberDuration,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -803,4 +828,21 @@ func RecordAIHostedToolStep(provider, tool string) {
 // or registered but never incremented).
 func Gather() ([]*dto.MetricFamily, error) {
 	return registry.Gather()
+}
+
+// RecordEventPublished counts one domain event published on the event bus.
+func RecordEventPublished(event string) {
+	eventsPublishedTotal.WithLabelValues(event).Inc()
+}
+
+// RecordEventDelivery records one delivery of event to subscriber on tier ("sync" or "async"); failure is "" for a
+// delivery that completed, else its reason ("panic", "timeout", "dropped").
+func RecordEventDelivery(event, subscriber, tier string, d time.Duration, failure string) {
+	if failure != "" {
+		eventSubscriberFailedTotal.WithLabelValues(event, subscriber, failure).Inc()
+		if failure == "dropped" {
+			return
+		}
+	}
+	eventSubscriberDuration.WithLabelValues(event, subscriber, tier).Observe(d.Seconds())
 }

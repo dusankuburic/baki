@@ -38,6 +38,7 @@ import (
 	padmetrics "pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/migration"
 	"pad-analyzer/internal/notify"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/redisx"
 	"pad-analyzer/internal/scanner"
 	"pad-analyzer/internal/service"
@@ -497,12 +498,12 @@ func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 	return auth.NewManager(token, blacklist), nil
 }
 
-func provideOrgService(backend storageif.StorageBackend) *collaboration.OrgService {
+func provideOrgService(backend storageif.StorageBackend, bus *eventbus.Bus) *collaboration.OrgService {
 	orgStore := collaboration.NewMemOrgStore()
 	if s, ok := backend.(collaboration.OrgStore); ok {
 		orgStore = s
 	}
-	return collaboration.NewOrgService(orgStore)
+	return collaboration.NewOrgService(orgStore, collaboration.WithEventBus(bus))
 }
 
 func initLogger(cfg *config.Config) {

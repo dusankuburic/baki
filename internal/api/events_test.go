@@ -97,7 +97,7 @@ func TestDeliver_ShedsProgressToProtectChat(t *testing.T) {
 
 	// Flood with progress. Shedding must stop it short of filling the buffer.
 	for range 200 {
-		m.Emit("analysis:progress", map[string]int{"pct": 1})
+		m.EmitToAll("analysis:progress", map[string]int{"pct": 1})
 	}
 	if len(ch) == cap(ch) {
 		t.Fatalf("progress burst filled the buffer (%d/%d); nothing was shed", len(ch), cap(ch))
@@ -105,7 +105,7 @@ func TestDeliver_ShedsProgressToProtectChat(t *testing.T) {
 
 	// A chat frame must still fit.
 	before := len(ch)
-	m.Emit("chat:event", map[string]string{"streamId": "s1", "type": "chunk"})
+	m.EmitToAll("chat:event", map[string]string{"streamId": "s1", "type": "chunk"})
 	if len(ch) != before+1 {
 		t.Fatalf("chat frame was dropped: buffer went %d → %d (cap %d)", before, len(ch), cap(ch))
 	}
@@ -129,7 +129,7 @@ func TestDeliver_NeverShedsNonProgress(t *testing.T) {
 	m.clients[ch] = ""
 
 	for range 4 {
-		m.Emit("analysis:complete", map[string]int{"n": 1})
+		m.EmitToAll("analysis:complete", map[string]int{"n": 1})
 	}
 	if len(ch) != 4 {
 		t.Fatalf("non-droppable events were shed: %d/%d buffered", len(ch), cap(ch))
@@ -181,7 +181,7 @@ func TestDeliver_ReplacesOversizedFlowLoaded(t *testing.T) {
 	m.clients[ch] = ""
 
 	big := strings.Repeat("x", maxFrameBytes)
-	m.Emit("flow:loaded", &models.FlowDocument{ID: "flow-1", Name: "Big", Source: big})
+	m.EmitToAll("flow:loaded", &models.FlowDocument{ID: "flow-1", Name: "Big", Source: big})
 	if len(ch) != 1 {
 		t.Fatalf("oversized flow:loaded was dropped instead of replaced: %d frames buffered", len(ch))
 	}
@@ -190,7 +190,7 @@ func TestDeliver_ReplacesOversizedFlowLoaded(t *testing.T) {
 		t.Fatalf("client received wrong payload for oversized flow:loaded: %q", frame)
 	}
 
-	m.Emit("analysis:complete", map[string]string{"blob": big})
+	m.EmitToAll("analysis:complete", map[string]string{"blob": big})
 	if len(ch) != 0 {
 		t.Fatalf("oversized non-convertible event occupied a buffer slot: %q", string(<-ch))
 	}
@@ -270,7 +270,8 @@ func TestEventManager_PerUserIndexFollowsConnections(t *testing.T) {
 	if aliceConns != 2 || bobConns != 1 {
 		t.Fatalf("index = alice:%d bob:%d, want 2 and 1", aliceConns, bobConns)
 	}
-	if !m.HasSubscriber("alice") || !m.HasSubscriber("bob") || m.HasSubscriber("carol") || !m.HasSubscriber("") {
+	// "" is the local user (clients without an identity), not "anyone": every stream here has a user.
+	if !m.HasSubscriber("alice") || !m.HasSubscriber("bob") || m.HasSubscriber("carol") || m.HasSubscriber("") {
 		t.Fatal("HasSubscriber disagrees with the connected streams")
 	}
 

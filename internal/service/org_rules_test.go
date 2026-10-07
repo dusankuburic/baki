@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -21,12 +22,14 @@ func (s failingRuleStore) SaveOrgCustomRule(context.Context, *storageif.OrgCusto
 
 func (s failingRuleStore) DeleteOrgCustomRule(context.Context, string, string) error { return s.err }
 
-// A stored rule change drops the org's cached rule profile (the next analysis re-resolves); a failed one
-// leaves it, and other orgs' profiles are untouched.
+// A stored rule change announces the org's changed configuration, which drops its cached rule profile (the
+// next analysis re-resolves); a failed one leaves it, and other orgs' profiles are untouched.
 func TestOrgRuleService_InvalidatesProfileOnChange(t *testing.T) {
 	b := testutil.NewFakeBackend()
 	resolver := NewRuleProfileResolver(b, deploymentSettings(nil), nil)
-	svc := NewOrgRuleService(b, b, resolver)
+	bus := eventbus.New(nil, 0)
+	SubscribeRuleProfiles(bus, resolver)
+	svc := NewOrgRuleService(b, b, bus)
 	ctx := context.Background()
 	warm := func() {
 		resolver.Resolve(ctx, "org-a")
@@ -59,7 +62,7 @@ func TestOrgRuleService_InvalidatesProfileOnChange(t *testing.T) {
 		t.Errorf("List after Delete = %v", got)
 	}
 
-	failing := NewOrgRuleService(failingRuleStore{FakeBackend: b, err: errors.New("db down")}, b, resolver)
+	failing := NewOrgRuleService(failingRuleStore{FakeBackend: b, err: errors.New("db down")}, b, bus)
 	warm()
 	if err := failing.Save(ctx, rule); err == nil {
 		t.Fatal("Save swallowed the store error")
@@ -71,7 +74,7 @@ func TestOrgRuleService_InvalidatesProfileOnChange(t *testing.T) {
 		t.Error("a failed write invalidated the profile")
 	}
 
-	// Without a resolver (tests, desktop) writes still work.
+	// Without a bus (tests) writes still work.
 	if err := NewOrgRuleService(b, b, nil).Save(ctx, rule); err != nil {
 		t.Fatal(err)
 	}

@@ -10,7 +10,7 @@ import (
 	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/capability"
-	"pad-analyzer/internal/platform/txhook"
+	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
@@ -102,10 +102,6 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Fetch the prior assignee so we only notify on an actual assignment change
-	// (not on every status tweak that re-sends the same assignee).
-	priorAssignee := h.triage.Assignee(r.Context(), req.FlowID, req.FindingKey)
-
 	st := &storageif.FindingStatus{
 		FlowID:        req.FlowID,
 		FindingKey:    req.FindingKey,
@@ -115,38 +111,25 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 		AssigneeID:    req.AssigneeID,
 		UpdatedBy:     userID,
 	}
-	if err := h.triage.SetStatus(r.Context(), st); err != nil {
+	// An actual assignment change (not a status tweak re-sending the same assignee) publishes
+	// FindingAssigned: OnFindingAssigned alerts and emails the assignee after the commit.
+	if err := h.triage.SetStatus(r.Context(), service.FlowRefOf(flow), st); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFindingTriage, ResourceType: "flow", ResourceID: req.FlowID, OrgID: flowOrgID(flow),
 		Meta: map[string]string{"findingKey": req.FindingKey, "status": req.Status}})
 
-	// Best-effort assignment notification: email the assignee only when the assignment actually
-	// changed, detached so SMTP does not delay the response; the email service is nil-safe.
-	if req.AssigneeID != "" && req.AssigneeID != priorAssignee {
-		flowName := ""
-		if flow != nil {
-			flowName = flow.Name
-		}
-		// After the commit, and detached: run inline here the alert/email held a SECOND pooled
-		// connection while the RLS transaction pinned the first (pool exhaustion), and announced
-		// an assignment the transaction could still roll back. txhook.Register defers the hook
-		// until the middleware commits; h.alerts caps how many run and is drained on shutdown.
-		actorEmail := claimsEmail(r.Context())
-		txhook.Register(r.Context(), func(context.Context) {
-			fanOut := func() {
-				h.fanOutAssignment(req.FlowID, req.FindingKey, req.RuleID, flowName, req.AssigneeID, userID, actorEmail)
-			}
-			if !h.alerts.Go(fanOut) {
-				// Pool saturated or draining: the alert row must not be lost
-				// (it never could be when the hook ran it inline).
-				fanOut()
-			}
-		})
-	}
-
 	render.JSON(w, st)
+}
+
+// OnFindingAssigned is the async subscriber of events.FindingAssigned (subscribed in internal/di): the
+// assignment's fan-out, after the commit and never for a rolled-back assignment.
+func (h *AnalysisHandler) OnFindingAssigned(ctx context.Context, e events.FindingAssigned) {
+	actorEmail := claimsEmail(ctx, e.AssignerID)
+	h.goFanOut(func() {
+		h.fanOutAssignment(e.FlowID, e.FindingKey, e.RuleID, e.FlowName, e.AssigneeID, e.AssignerID, actorEmail)
+	})
 }
 
 // fanOutAssignment is the detached work of one assignment change: resolve the assigner's display
@@ -289,7 +272,9 @@ func (h *AnalysisHandler) handleBatchSetFindingStatus(w http.ResponseWriter, r *
 	}
 
 	userID := h.security.CallerID(r)
-	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, service.FlowEdit); err != nil {
+	// The header the check reads names the flow's owner and organisation in the event the write publishes.
+	flow, err := h.flowSvc.GetAuthorizedHeader(r.Context(), req.FlowID, service.FlowEdit)
+	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -308,7 +293,7 @@ func (h *AnalysisHandler) handleBatchSetFindingStatus(w http.ResponseWriter, r *
 	}
 	// Atomic: all items commit or none (a single RLS-scoped tx) — the old per-item loop committed
 	// 1..K-1 on a mid-batch failure, desyncing the audit's "updated: N" from reality.
-	if err := h.triage.SetStatusBatch(r.Context(), req.FlowID, userID, items); err != nil {
+	if err := h.triage.SetStatusBatch(r.Context(), service.FlowRefOf(flow), userID, items); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -338,12 +323,13 @@ func (h *AnalysisHandler) handleClearFindingStatus(w http.ResponseWriter, r *htt
 		return
 	}
 
-	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, service.FlowEdit); err != nil {
+	flow, err := h.flowSvc.GetAuthorizedHeader(r.Context(), req.FlowID, service.FlowEdit)
+	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
 
-	if err := h.triage.ClearStatus(r.Context(), req.FlowID, req.FindingKey); err != nil {
+	if err := h.triage.ClearStatus(r.Context(), service.FlowRefOf(flow), req.FindingKey); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -426,7 +412,7 @@ func (h *AnalysisHandler) handleSetBaseline(w http.ResponseWriter, r *http.Reque
 	}
 
 	bl := &storageif.FlowBaseline{FlowID: req.FlowID, Keys: keys, CreatedBy: userID}
-	if err := h.triage.SetBaseline(r.Context(), bl); err != nil {
+	if err := h.triage.SetBaseline(r.Context(), service.FlowRef{ID: req.FlowID, Name: doc.Name, OwnerID: doc.OwnerID, OrgID: doc.OrganizationID}, bl); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -452,12 +438,13 @@ func (h *AnalysisHandler) handleClearBaseline(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, service.FlowEdit); err != nil {
+	flow, err := h.flowSvc.GetAuthorizedHeader(r.Context(), req.FlowID, service.FlowEdit)
+	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
 
-	if err := h.triage.ClearBaseline(r.Context(), req.FlowID); err != nil {
+	if err := h.triage.ClearBaseline(r.Context(), service.FlowRefOf(flow)); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

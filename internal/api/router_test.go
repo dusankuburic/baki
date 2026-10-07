@@ -148,7 +148,8 @@ func TestRouter_EventsEndpoint_SetsSSEHeaders(t *testing.T) {
 func TestRouter_Emit_DoesNotPanicWithNoClients(t *testing.T) {
 	rt := newLocalTestRouter()
 	// Should be a no-op when no SSE clients are connected
-	rt.eventManager.Emit("test-event", map[string]string{"key": "value"})
+	rt.eventManager.EmitToAll("test-event", map[string]string{"key": "value"})
+	rt.eventManager.EmitToOrg(context.Background(), "org-1", "test-event", nil)
 }
 
 // TestIsLocalhostOrigin_TauriWebviewOrigins guards the desktop CORS allowlist: the Windows Tauri v2

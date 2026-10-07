@@ -13,7 +13,7 @@ func TestProvideAnalysisService_WiresAuthMode(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
 		cfg := &config.Config{}
 		cfg.Auth.Enabled = enabled
-		svc, err := ProvideAnalysisService(nil, nil, nil, cfg, nil, nil)
+		svc, err := ProvideAnalysisService(nil, nil, nil, cfg, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("ProvideAnalysisService: %v", err)
 		}

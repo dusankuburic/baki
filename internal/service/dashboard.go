@@ -4,12 +4,14 @@ import (
 	"context"
 	"golang.org/x/sync/errgroup"
 	"math"
+	"slices"
 	"sort"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
@@ -44,6 +46,14 @@ type DashboardService struct {
 	// dashSF collapses concurrent cold-cache builds per user — one buildCloud
 	// run on a miss, not a thundering herd of ~16 DB queries per caller.
 	dashSF singleflight.Group
+
+	// homeGen fences home fills (keyed by user) and anaGen analytics fills (keyed "u:"+user and "o:"+org) against
+	// the invalidations that ran while they read: a build that read the old rows is not stored after the drop.
+	homeGen eventbus.Gen[string]
+	anaGen  eventbus.Gen[string]
+	// orgEpoch counts organisation invalidations: an analytics fill learns which organisations it spans only
+	// from its scope read, so it captures their generations after that read and is refused if one ran meanwhile.
+	orgEpoch atomic.Uint64
 }
 
 // NewDashboardService builds the dashboard service; scope collects the analytics page's flow set (DI passes the
@@ -141,11 +151,9 @@ func (s *DashboardService) RecordAnalysis(ctx context.Context, doc *models.FlowD
 	if err := s.backend.SaveFlowAnalysis(ctx, fa); err != nil {
 		logger.Warn("dashboard: persist flow analysis failed", "flowId", doc.ID, "err", err)
 	}
-	// This owner's summaries just changed — drop their cached payload so the
-	// next load reflects it instead of waiting out the TTL.
-	if doc.OwnerID != "" {
-		s.InvalidateDashboardCache(doc.OwnerID)
-	}
+	// The flow's summary changed (an analysis is not a change of the flow, so no FlowChanged): drop the views
+	// built over it now instead of waiting out the TTL.
+	s.InvalidateFlowViews(doc.OwnerID, doc.OrganizationID)
 }
 
 // BuildHome assembles the dashboard payload for userID; it never hard-fails —
@@ -170,12 +178,17 @@ func (s *DashboardService) BuildHome(ctx context.Context, userID string) *models
 	// Single-flight the cold build: concurrent cold-cache requests for the same
 	// user share one buildCloud run instead of each issuing ~16 DB queries.
 	res, _, _ := s.dashSF.Do("home:"+userID, func() (any, error) {
+		gen := s.homeGen.Load(userID)
 		out := s.buildCloud(ctx, userID)
 		out.IsCloud = true
 		// Store in cache (even on partial failure — the emptyHome stub is cheap
-		// to serve for 30s and avoids hammering the DB on a transient error).
+		// to serve for 30s and avoids hammering the DB on a transient error),
+		// unless the user's views were invalidated while it read. Checked under
+		// the lock the invalidation deletes under, so neither can slip between.
 		s.dashMu.Lock()
-		s.dashCache[userID] = &dashCacheEntry{data: out, fetchedAt: time.Now()}
+		if s.homeGen.FillOK(ctx, userID, gen) {
+			s.dashCache[userID] = &dashCacheEntry{data: out, fetchedAt: time.Now()}
+		}
 		// The TTL governs freshness, not lifetime — sweep entries past it at
 		// write time or the map grows with every distinct user forever.
 		for id, entry := range s.dashCache {
@@ -194,22 +207,44 @@ func (s *DashboardService) BuildHome(ctx context.Context, userID string) *models
 }
 
 // InvalidateDashboardCache clears the cached dashboard data for a user (all
-// users when empty) — after settings changes or uploads that change the view.
+// users when empty): their home and every analytics view they built.
 func (s *DashboardService) InvalidateDashboardCache(userID string) {
+	if userID != "" {
+		s.InvalidateFlowViews(userID, "")
+		return
+	}
+	s.homeGen.BumpAll()
+	s.anaGen.BumpAll()
 	s.dashMu.Lock()
 	defer s.dashMu.Unlock()
-	if userID == "" {
-		s.dashCache = make(map[string]*dashCacheEntry)
-		s.anaCache = make(map[string]*anaCacheEntry)
-	} else {
-		delete(s.dashCache, userID)
-		// Every analytics view this user built (any scope or filter) is keyed
-		// under their id; other members' org-scoped views wait out the TTL.
-		prefix := userID + "\x00"
-		for k := range s.anaCache {
-			if strings.HasPrefix(k, prefix) {
-				delete(s.anaCache, k)
-			}
+	s.dashCache = make(map[string]*dashCacheEntry)
+	s.anaCache = make(map[string]*anaCacheEntry)
+}
+
+// InvalidateFlowViews drops what a change to a flow of ownerID in orgID ("" for a personal flow) makes stale: the
+// owner's home and analytics views, and every analytics view whose scope spans orgID, whoever built it. Other
+// collaborators' views of a shared flow wait out the TTL: which users those are is not known without a read.
+func (s *DashboardService) InvalidateFlowViews(ownerID, orgID string) {
+	if ownerID == "" && orgID == "" {
+		return
+	}
+	// Generations first, then the delete: a fill either sees the bump or stored before the delete removes it.
+	if orgID != "" {
+		s.orgEpoch.Add(1) // before the org's generation: see anaFence.scopeRead
+		s.anaGen.Bump("o:" + orgID)
+	}
+	if ownerID != "" {
+		s.homeGen.Bump(ownerID)
+		s.anaGen.Bump("u:" + ownerID)
+	}
+	s.dashMu.Lock()
+	defer s.dashMu.Unlock()
+	if ownerID != "" {
+		delete(s.dashCache, ownerID)
+	}
+	for k, e := range s.anaCache {
+		if (ownerID != "" && e.userID == ownerID) || (orgID != "" && slices.Contains(e.orgIDs, orgID)) {
+			delete(s.anaCache, k)
 		}
 	}
 }

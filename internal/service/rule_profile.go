@@ -8,6 +8,8 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
 	"pad-core/logger"
@@ -47,6 +49,8 @@ type RuleProfileResolver struct {
 
 	mu     sync.RWMutex
 	cached map[string]*cachedProfile
+	// gen fences a resolve against Invalidate: a profile read before a change committed is not cached.
+	gen eventbus.Gen[string]
 	// flights deduplicates cold resolves per org (see Resolve).
 	flights singleflight.Group
 }
@@ -66,7 +70,8 @@ func NewRuleProfileResolver(backend storageif.StorageBackend, settings SettingsP
 }
 
 // Invalidate drops an org's cached profile (every entry when orgID is empty —
-// a deployment-settings change affects all orgs, which inherit from it).
+// a deployment-settings change affects all orgs, which inherit from it) and
+// refuses the resolves in flight.
 func (r *RuleProfileResolver) Invalidate(orgID string) {
 	if r == nil {
 		return
@@ -74,10 +79,33 @@ func (r *RuleProfileResolver) Invalidate(orgID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if orgID == "" {
+		r.gen.BumpAll()
 		clear(r.cached)
 		return
 	}
+	r.gen.Bump(orgID)
 	delete(r.cached, orgID)
+}
+
+// SubscribeRuleProfiles drops cached rule profiles when what they are resolved from changes: the deployment
+// settings (every org inherits them), an org's settings or custom rules (SettingsChanged{OrgSettings}), and an
+// org's deletion. Subscribe it after the settings cache, whose fresh value the next resolve reads.
+func SubscribeRuleProfiles(bus *eventbus.Bus, r *RuleProfileResolver) {
+	eventbus.Subscribe(bus, eventbus.Sync, "rule-profiles", func(_ context.Context, e events.SettingsChanged) {
+		switch e.Scope {
+		case events.DeploymentSettings:
+			r.Invalidate("")
+		case events.OrgSettings:
+			if e.ID != "" {
+				r.Invalidate(e.ID)
+			}
+		}
+	})
+	eventbus.Subscribe(bus, eventbus.Sync, "rule-profiles", func(_ context.Context, e events.OrgMemberChanged) {
+		if e.Kind == events.OrgDeleted && e.OrgID != "" {
+			r.Invalidate(e.OrgID)
+		}
+	})
 }
 
 // Resolve returns the profile for orgID (empty = pre-R4 deployment behaviour).
@@ -100,20 +128,25 @@ func (r *RuleProfileResolver) Resolve(ctx context.Context, orgID string) *RulePr
 	// (storage-unavailable) profile; the inner re-check serves callers that
 	// waited out a flight which already refreshed the entry. The builder
 	// never returns an error, so the ignored flight error is inert.
+	// The flight stores what it resolved only if no invalidation ran since it
+	// began (and its transaction announced no change of its own): a resolve
+	// that read before a change committed must not be cached for the TTL.
 	v, _, _ := r.flights.Do(orgID, func() (any, error) {
 		if p := r.cachedFor(orgID); p != nil {
 			return p, nil
 		}
-		return r.resolveUncached(context.WithoutCancel(ctx), orgID), nil
+		captured := r.gen.Load(orgID)
+		profile := r.resolveUncached(context.WithoutCancel(ctx), orgID)
+		r.mu.Lock()
+		if r.gen.FillOK(ctx, orgID, captured) {
+			now := time.Now()
+			r.pruneLocked(now)
+			r.cached[orgID] = &cachedProfile{profile: profile, resolved: now}
+		}
+		r.mu.Unlock()
+		return profile, nil
 	})
-	profile := v.(*RuleProfile)
-
-	r.mu.Lock()
-	now := time.Now()
-	r.pruneLocked(now)
-	r.cached[orgID] = &cachedProfile{profile: profile, resolved: now}
-	r.mu.Unlock()
-	return profile
+	return v.(*RuleProfile)
 }
 
 // pruneLocked makes room for one insert: it drops expired profiles — reads

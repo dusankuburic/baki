@@ -13,7 +13,9 @@ import (
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
+	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/lifecycle"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -38,30 +40,67 @@ const (
 	lenderReasonAccountDeleted = "lender_account_deleted"
 )
 
-// disableLentCredential disables the org's shared Azure credentials userID lent when userID stops
-// being an admin of orgID; registry rows stay (needs_credentials). Best effort: failures are logged.
-func disableLentCredential(r *http.Request, rec *audit.Recorder, providers *service.ProviderService, orgID, userID, reason string) bool {
+// lendsSharedCredential reports whether userID lent orgID shared Azure credentials, which leaving the admin role
+// disables: the reply says so at once, the disabling itself follows the membership change's commit
+// (SubscribeLentCredentialRevocation). Read before the change, which may deliver at once where there is no
+// transaction to wait for. Best effort: a failed read is logged and reports false.
+func lendsSharedCredential(ctx context.Context, providers *service.ProviderService, orgID, userID string) bool {
 	if providers == nil || !providers.OrgKeysAvailable() {
 		return false
 	}
-	keys, err := providers.DisableOrgAzureCredentialsSavedBy(orgID, userID)
+	keys, err := providers.OrgAzureCredentialsLentBy(orgID, userID)
 	if err != nil {
-		logger.FromContext(r.Context()).Warn("org: disabling a departed admin's shared credentials failed", "org", orgID, "error", err)
+		logger.FromContext(ctx).Warn("org: reading a departing admin's shared credentials failed", "org", orgID, "error", err)
 		return false
-	}
-	for _, key := range keys {
-		auditLentCredentialDisabled(r, rec, orgID, key, userID, reason)
 	}
 	return len(keys) > 0
 }
 
+// SubscribeLentCredentialRevocation disables the org's shared Azure credentials a member lent once they stop
+// being an admin of it, removed or demoted. Async: only after the membership change has committed, never for one
+// that rolled back. The delivery keeps the request's actor and request info, so the audit rows name who made the
+// change. It must not be lost (the credential would stay in use, and the response already said it was disabled),
+// so it runs inline when the bus's runner is full: one keystore delete.
+func SubscribeLentCredentialRevocation(bus *eventbus.Bus, providers *service.ProviderService, rec *audit.Recorder) {
+	eventbus.Subscribe(bus, eventbus.Async, "lent-credential-revocation", func(ctx context.Context, e events.OrgMemberChanged) {
+		revokeLentCredentials(ctx, rec, providers, e)
+	}, eventbus.InlineWhenSaturated())
+}
+
+// revokeLentCredentials is SubscribeLentCredentialRevocation's delivery.
+func revokeLentCredentials(ctx context.Context, rec *audit.Recorder, providers *service.ProviderService, e events.OrgMemberChanged) {
+	switch {
+	case e.Kind == events.OrgMemberRemoved:
+		disableLentCredential(ctx, rec, providers, e.OrgID, e.UserID, lenderReasonRemoved)
+	case e.Kind == events.OrgMemberRoleChanged && auth.Role(e.Role) != auth.RoleAdmin:
+		// A demoted admin can no longer manage the credential they lent.
+		disableLentCredential(ctx, rec, providers, e.OrgID, e.UserID, lenderReasonDemoted)
+	}
+}
+
+// disableLentCredential disables the org's shared Azure credentials userID lent when userID stops
+// being an admin of orgID; registry rows stay (needs_credentials). Best effort: failures are logged.
+func disableLentCredential(ctx context.Context, rec *audit.Recorder, providers *service.ProviderService, orgID, userID, reason string) {
+	if providers == nil || !providers.OrgKeysAvailable() {
+		return
+	}
+	keys, err := providers.DisableOrgAzureCredentialsSavedBy(orgID, userID)
+	if err != nil {
+		logger.FromContext(ctx).Warn("org: disabling a departed admin's shared credentials failed", "org", orgID, "error", err)
+		return
+	}
+	for _, key := range keys {
+		auditLentCredentialDisabled(ctx, rec, orgID, key, userID, reason)
+	}
+}
+
 // auditLentCredentialDisabled records one disabled credential; meta carries the user id because the reason names only the relationship.
-func auditLentCredentialDisabled(r *http.Request, rec *audit.Recorder, orgID, key, userID, reason string) {
+func auditLentCredentialDisabled(ctx context.Context, rec *audit.Recorder, orgID, key, userID, reason string) {
 	meta := map[string]string{"op": "disable", "provider": key, "reason": reason, "user": userID}
 	if connID, ok := ai.ParseAzureConnectionKey(key); ok {
 		meta["connectionId"] = connID
 	}
-	rec.Record(r.Context(), orgAuditEntry(audit.ActionKeysSave, orgID, meta))
+	rec.Record(ctx, orgAuditEntry(audit.ActionKeysSave, orgID, meta))
 }
 
 // @Summary      List org members
@@ -106,6 +145,8 @@ func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	// A removed admin who lent the shared credential takes it along (after the commit).
+	disabled := lendsSharedCredential(r.Context(), h.providers, id, userID)
 	if err := h.orgSvc.RemoveMember(r.Context(), id, userID); err != nil {
 		if errors.Is(err, collaboration.ErrLastAdmin) {
 			render.Error(w, err, http.StatusConflict)
@@ -115,8 +156,6 @@ func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgMemberRemove, id, map[string]string{"targetUser": userID}))
-	// A removed admin who lent the shared credential takes it along.
-	disabled := disableLentCredential(r, h.audit, h.providers, id, userID, lenderReasonRemoved)
 	render.JSON(w, orgMemberMutationResponse{Status: "ok", SharedCredentialDisabled: disabled})
 }
 
@@ -311,16 +350,16 @@ func (h *OrgHandler) handleOrgMemberRoleUpdate(w http.ResponseWriter, r *http.Re
 		render.Error(w, fmt.Errorf("invalid role %q", req.Role), http.StatusBadRequest)
 		return
 	}
+	disabled := false
+	if role != auth.RoleAdmin {
+		// A demoted admin's lent credential is disabled after the commit.
+		disabled = lendsSharedCredential(r.Context(), h.providers, id, userID)
+	}
 	if err := h.orgSvc.SetRole(r.Context(), id, userID, role); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgMemberRole, id, map[string]string{"targetUser": userID, "role": req.Role}))
-	disabled := false
-	if role != auth.RoleAdmin {
-		// A demoted admin can no longer manage the credential they lent.
-		disabled = disableLentCredential(r, h.audit, h.providers, id, userID, lenderReasonDemoted)
-	}
 	render.JSON(w, orgMemberMutationResponse{Status: "ok", SharedCredentialDisabled: disabled})
 }
 

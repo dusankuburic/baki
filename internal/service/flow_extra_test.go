@@ -196,7 +196,7 @@ func TestFlowService_LoadFlowFromPath_NonExistent(t *testing.T) {
 }
 
 // TestLoadFlowFromPath_LoadedEventCarriesOnlyASummary pins the local-mode
-// (broadcast) flow:loaded payload contract. The summary must carry the
+// (LocalUser) flow:loaded payload contract. The summary must carry the
 // on-disk path (and folder flag) so other tabs can refetch the document via
 // load-path/load-folder — cloud events carry no path and refetch from the
 // library instead — and must never carry the document itself: the SSE hub
@@ -216,7 +216,10 @@ func TestLoadFlowFromPath_LoadedEventCarriesOnlyASummary(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 
-	payloads := notifier.broadcastPayload("flow:loaded")
+	if n := notifier.countBroadcast("flow:loaded"); n != 0 {
+		t.Errorf("flow:loaded broadcast %d time(s); a desktop load goes to LocalUser", n)
+	}
+	payloads := notifier.targetedPayload(LocalUser, "flow:loaded")
 	if len(payloads) != 1 {
 		t.Fatalf("captured %d flow:loaded payloads, want 1", len(payloads))
 	}
@@ -264,7 +267,7 @@ func TestSuppressFindingInSource_PersistsAndReparses(t *testing.T) {
 		t.Fatalf("no HTTP action block found in fixture")
 	}
 
-	updated, err := svc.SuppressFindingInSource(doc, httpBlockID, "unhandled-error")
+	updated, err := svc.SuppressFindingInSource(context.Background(), doc, httpBlockID, "unhandled-error")
 	if err != nil {
 		t.Fatalf("SuppressFindingInSource: %v", err)
 	}
@@ -319,7 +322,7 @@ func TestPatchFlow_RejectsPatchThatIntroducesParseErrors(t *testing.T) {
 			New:       "BROKEN_NOT_AN_END",
 		}},
 	}
-	if _, err := svc.PatchFlow(doc, patch); err == nil {
+	if _, err := svc.PatchFlow(context.Background(), doc, patch); err == nil {
 		t.Fatal("expected PatchFlow to reject a structurally-breaking patch, got nil error")
 	}
 
@@ -352,7 +355,7 @@ func TestPatchFlow_AcceptsStructurallyValidPatch(t *testing.T) {
 			Lines:      []string{"# harmless comment"},
 		}},
 	}
-	if _, err := svc.PatchFlow(doc, patch); err != nil {
+	if _, err := svc.PatchFlow(context.Background(), doc, patch); err != nil {
 		t.Fatalf("expected the valid comment-insert patch to be accepted, got: %v", err)
 	}
 	onDisk, _ := os.ReadFile(path)

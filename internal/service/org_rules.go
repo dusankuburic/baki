@@ -3,21 +3,24 @@ package service
 import (
 	"context"
 
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 // OrgRuleService owns an organisation's custom analyzer rules (R4) and the org settings their
-// export reads. A rule change drops the org's cached rule profile so the next analysis re-resolves;
-// without it the change waits out the resolver's TTL.
+// export reads. A rule change is announced as a change of the org's analysis configuration
+// (SettingsChanged{OrgSettings}), so its cached rule profile drops and the next analysis
+// re-resolves; without it the change waits out the resolver's TTL.
 type OrgRuleService struct {
 	rules    storageif.OrgCustomRuleStore
 	settings storageif.AppSettingsStore
-	// profiles may be nil (tests); Invalidate is nil-safe.
-	profiles *RuleProfileResolver
+	// bus may be nil (tests): nothing is announced.
+	bus *eventbus.Bus
 }
 
-func NewOrgRuleService(rules storageif.OrgCustomRuleStore, settings storageif.AppSettingsStore, profiles *RuleProfileResolver) *OrgRuleService {
-	return &OrgRuleService{rules: rules, settings: settings, profiles: profiles}
+func NewOrgRuleService(rules storageif.OrgCustomRuleStore, settings storageif.AppSettingsStore, bus *eventbus.Bus) *OrgRuleService {
+	return &OrgRuleService{rules: rules, settings: settings, bus: bus}
 }
 
 // List returns the org's rules; enabledOnly is what the analysis path compiles.
@@ -25,21 +28,21 @@ func (s *OrgRuleService) List(ctx context.Context, orgID string, enabledOnly boo
 	return s.rules.ListOrgCustomRules(ctx, orgID, enabledOnly)
 }
 
-// Save upserts rule and, once stored, invalidates its org's rule profile.
+// Save upserts rule and, once stored, announces the org's changed analysis configuration.
 func (s *OrgRuleService) Save(ctx context.Context, rule *storageif.OrgCustomRule) error {
 	if err := s.rules.SaveOrgCustomRule(ctx, rule); err != nil {
 		return err
 	}
-	s.profiles.Invalidate(rule.OrgID)
+	s.bus.Publish(ctx, events.SettingsChanged{Scope: events.OrgSettings, ID: rule.OrgID})
 	return nil
 }
 
-// Delete removes one of orgID's rules and, once removed, invalidates the org's rule profile.
+// Delete removes one of orgID's rules and, once removed, announces the org's changed analysis configuration.
 func (s *OrgRuleService) Delete(ctx context.Context, orgID, id string) error {
 	if err := s.rules.DeleteOrgCustomRule(ctx, orgID, id); err != nil {
 		return err
 	}
-	s.profiles.Invalidate(orgID)
+	s.bus.Publish(ctx, events.SettingsChanged{Scope: events.OrgSettings, ID: orgID})
 	return nil
 }
 

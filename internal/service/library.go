@@ -9,24 +9,26 @@ import (
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
-	"pad-core/analyzer"
 	"pad-core/logger"
 )
 
 // LibraryService manages CRUD operations for saved flows in cloud mode.
 type LibraryService struct {
-	storage   storageif.StorageBackend
-	mode      config.DeploymentMode
-	flowCache *FlowService // Needed to invalidate search index when flow is updated/deleted
-	authz     *AuthzService
+	storage storageif.StorageBackend
+	mode    config.DeploymentMode
+	// bus announces every flow the library creates, changes or deletes (FlowChanged); nil in bare tests.
+	bus   *eventbus.Bus
+	authz *AuthzService
 	// scopes resolves what a library scope covers; the analytics dashboard lists through the same resolver.
 	scopes *FlowScopeResolver
 }
 
 // NewLibraryService builds the library service; a nil scopes builds a resolver over the same storage and authz
 // (it holds no state, so sharing DI's instance is wiring, not behaviour).
-func NewLibraryService(storage storageif.StorageBackend, flowCache *FlowService, authz *AuthzService, scopes *FlowScopeResolver) *LibraryService {
+func NewLibraryService(storage storageif.StorageBackend, bus *eventbus.Bus, authz *AuthzService, scopes *FlowScopeResolver) *LibraryService {
 	mode := config.ModeLocal
 	if storage != nil {
 		mode = config.ModeCloud
@@ -34,7 +36,7 @@ func NewLibraryService(storage storageif.StorageBackend, flowCache *FlowService,
 	if scopes == nil {
 		scopes = NewFlowScopeResolver(storage, authz)
 	}
-	return &LibraryService{storage: storage, mode: mode, flowCache: flowCache, authz: authz, scopes: scopes}
+	return &LibraryService{storage: storage, mode: mode, bus: bus, authz: authz, scopes: scopes}
 }
 
 // authorize decides action on doc, a flow as storage holds it, for the actor ctx carries (AuthzService.Can, which
@@ -343,16 +345,20 @@ func (s *LibraryService) CreateLibraryFlow(ctx context.Context, ownerID, orgID s
 	if err := s.storage.SaveFlow(ctx, &doc); err != nil {
 		return nil, err
 	}
-	s.notifyFlowSetChanged(ownerID)
+	s.publish(ctx, events.FlowCreated, &doc)
 	return &doc, nil
 }
 
-// notifyFlowSetChanged fires the same owner-scoped hook as FlowService's upload/save paths (it drops the owner's
-// dashboard cache); without it a library create/update/delete showed the old flow set until the cache TTL.
-func (s *LibraryService) notifyFlowSetChanged(ownerID string) {
-	if s.flowCache != nil {
-		s.flowCache.notifyCloudFlowMutation(ownerID)
+// publish announces a change of doc, the flow as storage holds it after the change (inside the request's
+// transaction when there is one: the bus ties the later deliveries to its outcome).
+func (s *LibraryService) publish(ctx context.Context, kind events.FlowChangeKind, doc *storageif.FlowDocument) {
+	version := int64(doc.Version)
+	if kind == events.FlowDeleted {
+		version = 0
 	}
+	s.bus.Publish(ctx, events.FlowChanged{
+		FlowID: doc.ID, StableID: doc.ID, OwnerID: doc.OwnerID, OrgID: doc.OrganizationID, Kind: kind, Version: version,
+	})
 }
 
 // UpdateLibraryFlow saves changes to an existing flow, doc as loaded from
@@ -369,11 +375,7 @@ func (s *LibraryService) UpdateLibraryFlow(ctx context.Context, doc *storageif.F
 	if err := s.storage.SaveFlow(ctx, doc); err != nil {
 		return err
 	}
-	// Content changed in place (same ID) — drop any cached search index
-	if s.flowCache != nil {
-		s.flowCache.InvalidateSearchIndex(doc.ID)
-	}
-	s.notifyFlowSetChanged(doc.OwnerID)
+	s.publish(ctx, events.FlowUpdated, doc)
 	return nil
 }
 
@@ -397,16 +399,7 @@ func (s *LibraryService) DeleteLibraryFlow(ctx context.Context, flowID string) (
 	if err := s.storage.DeleteFlow(ctx, flowID); err != nil {
 		return nil, err
 	}
-	analyzer.DefaultCache.Invalidate(flowID)
-	if s.flowCache != nil {
-		s.flowCache.InvalidateSearchIndex(flowID)
-		// The resolved-document cache pins on (id, version); a row that
-		// later reappears under the same id must not be served the old parse.
-		if p, ok := s.flowCache.DocProvider().(interface{ Invalidate(string) }); ok {
-			p.Invalidate(flowID)
-		}
-	}
-	s.notifyFlowSetChanged(doc.OwnerID)
+	s.publish(ctx, events.FlowDeleted, doc)
 	return doc, nil
 }
 

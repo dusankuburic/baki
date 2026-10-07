@@ -3,19 +3,23 @@ package service
 import (
 	"context"
 
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 // CommentService owns the team-shared review threads on findings and the lookups their notifications
 // need: who to alert and which assignee to email. The finding's assignee comes from TriageService,
-// which owns triage state. Authorization is the caller's.
+// which owns triage state. Authorization is the caller's. A new comment publishes FindingCommented.
 type CommentService struct {
 	store  storageif.CommentStore
 	triage *TriageService
+	bus    *eventbus.Bus
 }
 
-func NewCommentService(store storageif.CommentStore, triage *TriageService) *CommentService {
-	return &CommentService{store: store, triage: triage}
+// NewCommentService builds the service; bus carries its events (nil publishes nothing).
+func NewCommentService(store storageif.CommentStore, triage *TriageService, bus *eventbus.Bus) *CommentService {
+	return &CommentService{store: store, triage: triage, bus: bus}
 }
 
 // List returns a finding's comments.
@@ -23,9 +27,17 @@ func (s *CommentService) List(ctx context.Context, flowID, findingKey string) ([
 	return s.store.ListFindingComments(ctx, flowID, findingKey)
 }
 
-// Add stores a comment; the store assigns its ID.
-func (s *CommentService) Add(ctx context.Context, c *storageif.FindingComment) error {
-	return s.store.AddFindingComment(ctx, c)
+// Add stores a comment of flow (the store assigns its ID) and announces it: the finding's assignee and earlier
+// commenters are alerted, and the assignee emailed, once the write commits.
+func (s *CommentService) Add(ctx context.Context, flow FlowRef, c *storageif.FindingComment) error {
+	if err := s.store.AddFindingComment(ctx, c); err != nil {
+		return err
+	}
+	s.bus.Publish(ctx, events.FindingCommented{
+		FlowID: c.FlowID, FlowName: flow.Name, OwnerID: flow.OwnerID, OrgID: flow.OrgID,
+		FindingKey: c.FindingKey, CommentID: c.ID, AuthorID: c.AuthorID, Body: c.Body,
+	})
+	return nil
 }
 
 // Delete removes a comment. A non-empty authorID restricts the delete to that author's comment

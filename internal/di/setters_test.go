@@ -25,10 +25,6 @@ var diSetters = map[string]string{
 	// AzureModelService, which is built on the backend. Phase 3's data-lifecycle registry replaces it.
 	"src.SetAzureExportConfigSource": "cycle: backend <-> AzureModelService (Phase 3)",
 	// Event hooks Phase 2b's bus replaces.
-	"flowSvc.SetCloudFlowMutationHook": "event hook (Phase 2b): FlowService -> dashboard cache",
-	"flowSvc.OnInvalidateFlow":         "event hook (Phase 2b): FlowService -> chat context cache",
-	"sys.OnApiKeyChanged":              "event hook (Phase 2b): SystemService -> provider model cache",
-	"svc.OnUserDeleted":                "event hook (Phase 2b): account erasure (AccountLifecycleService) -> provider caches",
 	// No cycle: NewFlowService has ~55 test call sites, so the resolver is decorated in.
 	"svc.SetRuleProfileResolver": "no cycle; FlowService constructor churn (deferred)",
 }

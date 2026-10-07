@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/api/route"
@@ -68,9 +67,6 @@ func (h *FlowHandler) handleBlockEdit(w http.ResponseWriter, r *http.Request, ki
 		render.Error(w, err, http.StatusConflict) // stale-file/guard errors carry their own guidance
 		return
 	}
-	if h.notifier != nil {
-		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
-	}
 	render.JSON(w, map[string]any{"document": updated})
 }
 
@@ -106,9 +102,6 @@ func (h *FlowHandler) handleUpdateBlockProperties(w http.ResponseWriter, r *http
 		}
 		render.Error(w, err, http.StatusConflict)
 		return
-	}
-	if h.notifier != nil {
-		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
 	}
 	render.JSON(w, map[string]any{"document": updated})
 }
@@ -146,9 +139,6 @@ func (h *FlowHandler) handleMoveBlock(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, http.StatusConflict)
 		return
 	}
-	if h.notifier != nil {
-		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
-	}
 	render.JSON(w, map[string]any{"document": updated})
 }
 
@@ -183,9 +173,6 @@ func (h *FlowHandler) handleRemoveBlocks(w http.ResponseWriter, r *http.Request)
 		}
 		render.Error(w, err, http.StatusConflict)
 		return
-	}
-	if h.notifier != nil {
-		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
 	}
 	render.JSON(w, map[string]any{"document": updated})
 }
@@ -223,9 +210,6 @@ func (h *FlowHandler) handleRenameBlock(w http.ResponseWriter, r *http.Request) 
 		}
 		render.Error(w, err, http.StatusConflict)
 		return
-	}
-	if h.notifier != nil {
-		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
 	}
 	render.JSON(w, map[string]any{"document": updated, "gotoRefsUpdated": gotoRefs})
 }
@@ -265,9 +249,6 @@ func (h *FlowHandler) handleMoveBlockTo(w http.ResponseWriter, r *http.Request) 
 		}
 		render.Error(w, err, http.StatusConflict)
 		return
-	}
-	if h.notifier != nil {
-		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
 	}
 	render.JSON(w, map[string]any{"document": updated})
 }

@@ -12,7 +12,7 @@ import (
 // TestAddComment_AlertsSurviveSaturatedPool: the in-app bell rows never could
 // be dropped when the fan-out ran inline; detached on h.alerts they must not
 // be either. When the pool refuses (saturated, or draining at shutdown) the
-// post-commit hook pays the round trips itself instead of losing the rows.
+// FindingCommented delivery pays the round trips itself instead of losing the rows.
 func TestAddComment_AlertsSurviveSaturatedPool(t *testing.T) {
 	backend := newGatedAlertBackend()
 	close(backend.release) // alert writes return at once
@@ -38,9 +38,8 @@ func TestAddComment_AlertsSurviveSaturatedPool(t *testing.T) {
 	checkStatus(t, doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/comments/add",
 		bearer, map[string]any{"flowId": "flow-c", "findingKey": "unused-variable:b1", "body": "still here"}), http.StatusOK)
 
-	// No RLS transaction on this backend, so the hook ran inline before the
-	// response: both rows (assignee + prior commenter) are already there.
-	if n := backend.alerts.Load(); n != 2 {
-		t.Fatalf("alerts recorded with the pool refusing = %d, want 2 (hook must run the fan-out itself)", n)
-	}
+	// Both rows (assignee + prior commenter), written on the event delivery's own goroutine.
+	waitUntil(t, "both alerts with the pool refusing (the delivery must run the fan-out itself)", func() bool {
+		return backend.alerts.Load() == 2
+	})
 }

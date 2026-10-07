@@ -18,7 +18,10 @@ type progressRecorder struct {
 	targets []string
 }
 
-func (r *progressRecorder) Emit(name string, data any) { r.EmitTo("<broadcast>", name, data) }
+func (r *progressRecorder) EmitToAll(name string, data any) { r.EmitTo("<broadcast>", name, data) }
+func (r *progressRecorder) EmitToOrg(_ context.Context, orgID, name string, data any) {
+	r.EmitTo("<org:"+orgID+">", name, data)
+}
 func (r *progressRecorder) EmitTo(userID, name string, data any) {
 	if name != "analysis:progress" {
 		return
@@ -92,14 +95,13 @@ func TestAnalyzeFlowBackground_RecordsWithoutProgress(t *testing.T) {
 }
 
 // TestAnalyzeFlow_NeverBroadcastsProgressWhenAuthEnabled: with auth enabled a
-// claim-less context must not produce EmitTo("") (a broadcast); with auth off
-// (local/desktop mode: one client, no claims ever) the "" broadcast is how
-// that client gets progress and must keep working.
+// claim-less context emits no progress; with auth off (local/desktop mode: no
+// claims ever) progress goes to LocalUser, the clients without an identity.
 func TestAnalyzeFlow_NeverBroadcastsProgressWhenAuthEnabled(t *testing.T) {
 	rec := &progressRecorder{}
 	svc := newProgressScopeService(t, rec)
 
-	// Local mode (default): "" is the single desktop client.
+	// Local mode (default): LocalUser is the desktop's clients.
 	if _, err := svc.AnalyzeFlow(context.Background(), progressDoc()); err != nil {
 		t.Fatal(err)
 	}

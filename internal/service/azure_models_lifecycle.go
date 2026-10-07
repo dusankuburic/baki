@@ -404,6 +404,26 @@ func (s *AzureModelService) ExportConnectionConfigs(_ context.Context, userID st
 
 // ---- ProviderService lifecycle (family-wide) ----
 
+// OrgAzureCredentialsLentBy lists the Azure AI Foundry credential keys of orgID that userID lent, by
+// DisableOrgAzureCredentialsSavedBy's lender rule, without disabling them: a membership change reports at once
+// what the disabling that follows its commit will take.
+func (s *ProviderService) OrgAzureCredentialsLentBy(orgID, userID string) (keys []string, err error) {
+	defer logger.Guard("App.OrgAzureCredentialsLentBy", &err)
+	if s.orgKeys == nil || orgID == "" || userID == "" {
+		return nil, nil
+	}
+	refs, err := orgsWithAzureFamilySavedBy(s.orgKeys, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range refs {
+		if r.OrgID == orgID {
+			keys = append(keys, r.Provider)
+		}
+	}
+	return keys, nil
+}
+
 // DisableOrgAzureCredentialsSavedBy disables every Azure AI Foundry credential of
 // orgID that userID lent (on that admin's demotion, removal or account erasure):
 // every key whose secret they supplied is deleted in one statement — a newer save by

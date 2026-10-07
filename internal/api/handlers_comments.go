@@ -12,8 +12,8 @@ import (
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/capability"
+	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/metrics"
-	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
@@ -96,40 +96,43 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 		AuthorID:   userID,
 		Body:       req.Body,
 	}
-	if err := h.comments.Add(r.Context(), comment); err != nil {
+	// The fan-out (bell alerts for the assignee and prior commenters, the assignee's email) follows the
+	// FindingCommented event the write publishes: OnFindingCommented, after the commit.
+	if err := h.comments.Add(r.Context(), service.FlowRefOf(flow), comment); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-
-	// The fan-out (bell alerts for the assignee and prior commenters, the assignee's email) is
-	// best-effort and runs AFTER the commit, detached: the post-commit hook only ENQUEUES onto
-	// h.alerts (capped, drained on shutdown) — running inline needed a second pooled connection
-	// while the request's RLS transaction pinned the first, and the middleware runs hooks before
-	// the response is complete.
-	actorEmail := claimsEmail(r.Context())
-	flowName := flow.Name
-	txhook.Register(r.Context(), func(context.Context) {
-		fanOut := func() {
-			h.fanOutComment(req.FlowID, req.FindingKey, flowName, userID, actorEmail, req.Body, comment.ID)
-		}
-		if !h.alerts.Go(fanOut) {
-			// Pool saturated or draining: the bell rows must not be lost (they
-			// never could be when this ran inline), so pay the round trips here.
-			fanOut()
-		}
-	})
 
 	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionCommentAdd, ResourceType: "flow", ResourceID: req.FlowID, OrgID: flow.OrganizationID, Meta: map[string]string{"findingKey": req.FindingKey, "commentId": comment.ID}})
 	render.JSON(w, comment)
 }
 
-// claimsEmail is the caller's email from the request's auth claims ("" when unauthenticated or in
-// local mode): the display-name fallback the detached notifications use without a user lookup.
-func claimsEmail(ctx context.Context) string {
-	if c := auth.ClaimsFromContext(ctx); c != nil {
+// claimsEmail is the email in ctx's auth claims when they are userID's ("" otherwise, and in local mode): the
+// display-name fallback the detached notifications use without a user lookup. An event delivery's ctx carries
+// the claims of the request that published it.
+func claimsEmail(ctx context.Context, userID string) string {
+	if c := auth.ClaimsFromContext(ctx); c != nil && c.UserID == userID {
 		return c.Email
 	}
 	return ""
+}
+
+// OnFindingCommented is the async subscriber of events.FindingCommented (subscribed in internal/di): the
+// comment's fan-out, after the commit and never for a rolled-back comment.
+func (h *AnalysisHandler) OnFindingCommented(ctx context.Context, e events.FindingCommented) {
+	actorEmail := claimsEmail(ctx, e.AuthorID)
+	h.goFanOut(func() {
+		h.fanOutComment(e.FlowID, e.FindingKey, e.FlowName, e.AuthorID, actorEmail, e.Body, e.CommentID)
+	})
+}
+
+// goFanOut runs a notification fan-out on h.alerts (capped, drained on shutdown), so the event runner, shared by
+// every subscriber, is held only for the hand-off. When h.alerts is saturated or draining the fan-out runs here:
+// the bell rows must not be lost.
+func (h *AnalysisHandler) goFanOut(fanOut func()) {
+	if !h.alerts.Go(fanOut) {
+		fanOut()
+	}
 }
 
 // fanOutComment is the detached work of one comment: the actor's display name resolved ONCE, then

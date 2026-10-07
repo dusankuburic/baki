@@ -3,21 +3,31 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/testutil"
 	"pad-core/parser"
 )
 
 // TestEditorMutations_InvalidateDerivedCaches is the R3.3 coherence gate:
-// EVERY editor mutation path must drop derived caches (search index + the
-// registered consumers — the chat context's scrubbed-doc cache key rides the
-// same callback). Before this fix, PatchFlow/persistCloudDoc never
-// invalidated: a user could delete a block, then ask the AI about the flow
-// and get answers describing the deleted block (cached pre-edit context).
+// EVERY editor mutation path must announce the change (FlowChanged), which
+// drops the derived caches (search index, the chat context's scrubbed-doc
+// cache, the dashboard: FlowCacheSubscribers). Before R3.3, PatchFlow and
+// persistCloudDoc never invalidated: a user could delete a block, then ask the
+// AI about the flow and get answers describing the deleted block (cached
+// pre-edit context).
 func TestEditorMutations_InvalidateDerivedCaches(t *testing.T) {
 	record := func(svc *FlowService) *int {
+		bus := eventbus.New(nil, time.Second)
+		svc.bus = bus
 		fired := 0
-		svc.OnInvalidateFlow(func(flowID string) { fired++ })
+		eventbus.Subscribe(bus, eventbus.Sync, "probe", func(_ context.Context, e events.FlowChanged) {
+			if e.Kind != events.FlowSharingChanged {
+				fired++
+			}
+		})
 		return &fired
 	}
 
@@ -123,24 +133,19 @@ func TestEditorMutations_InvalidateDerivedCaches(t *testing.T) {
 }
 
 // TestEditorMutations_ChatContextGenerationBumped proves the consumer side:
-// with a ChatService registered through OnInvalidateFlow (the production DI
-// wiring), an editor mutation bumps the per-flow generation counter that keys
-// the scrubbed-context cache — the next AI turn rebuilds against the
-// post-edit flow.
+// with the flow caches subscribed as DI subscribes them, an editor mutation
+// bumps the per-flow generation that keys the scrubbed-context cache — the
+// next AI turn rebuilds against the post-edit flow.
 func TestEditorMutations_ChatContextGenerationBumped(t *testing.T) {
 	svc, doc := newDesktopEditSvc(t)
-	chat := &ChatService{chatCtxCache: newChatContextCache(), chatCtxGen: newChatCtxGenCache()}
-	svc.OnInvalidateFlow(chat.InvalidateChatContext)
+	chat := &ChatService{chatCtxCache: newChatContextCache()}
+	svc.bus = subscribedBus(svc, NewDashboardService(nil, nil, svc, nil), chat)
 
-	genBefore := uint64(0)
-	if v, ok := chat.chatCtxGen.Get(context.Background(), doc.ID); ok {
-		genBefore = v.(uint64)
-	}
+	genBefore := chat.chatCtxGen.Load(doc.ID)
 	if _, err := svc.RemoveBlock(context.Background(), doc, blockIDByURL(doc, "https://target")); err != nil {
 		t.Fatalf("RemoveBlock: %v", err)
 	}
-	v, ok := chat.chatCtxGen.Get(context.Background(), doc.ID)
-	if !ok || v.(uint64) != genBefore+1 {
-		t.Errorf("chat generation = %v (ok=%v), want %d", v, ok, genBefore+1)
+	if got := chat.chatCtxGen.Load(doc.ID); got != genBefore+1 {
+		t.Errorf("chat generation = %d, want %d", got, genBefore+1)
 	}
 }

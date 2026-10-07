@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"weak"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
@@ -28,9 +29,6 @@ const maxScrubbedDocCache = 4
 
 // maxCachedScrubbedBlocks is the largest clone the doc cache holds; a bigger flow is re-scrubbed per turn.
 const maxCachedScrubbedBlocks = 40_000
-
-// maxChatCtxGen bounds the per-flow generation-counter cache — larger than maxChatContextCache (counters are bytes).
-const maxChatCtxGen = 256
 
 // ragGuidelinesDeadline caps the streaming path's wait for RAG guidelines; on timeout the turn proceeds without.
 const ragGuidelinesDeadline = 800 * time.Millisecond
@@ -105,45 +103,11 @@ func newChatContextCache() cache.Cache {
 	return &chatContextCache{texts: texts, docs: docs}
 }
 
-// newChatCtxGenCache builds the bounded LRU for the per-flow generation counters.
-func newChatCtxGenCache() cache.Cache {
-	c, _ := cache.NewLRUCache(maxChatCtxGen)
-	return c
-}
-
-// chatCtxGenCache lazily initializes chatCtxGen, so a bare struct literal (tests) still works.
-func (s *ChatService) chatCtxGenCache() cache.Cache {
-	s.chatCtxGenOnce.Do(func() {
-		if s.chatCtxGen == nil {
-			s.chatCtxGen = newChatCtxGenCache()
-		}
-	})
-	return s.chatCtxGen
-}
-
-// InvalidateChatContext drops cached scrubbed context for a flow by bumping a per-flow generation counter.
+// InvalidateChatContext drops the flow's cached scrubbed context (FlowCacheSubscribers' "chat-context-cache"):
+// its generation moves on, so the keys built from the old one are never asked for again, and a fill that read
+// before the bump is refused.
 func (s *ChatService) InvalidateChatContext(flowID string) {
-	if s.chatCtxCache == nil {
-		return
-	}
-	genCache := s.chatCtxGenCache()
-	ctx := context.Background()
-	// Serialize the read-modify-write so two concurrent invalidations can't both write N+1 (stale context).
-	s.chatCtxGenMu.Lock()
-	defer s.chatCtxGenMu.Unlock()
-	gen := uint64(0)
-	if v, ok := genCache.Get(ctx, flowID); ok {
-		gen = v.(uint64)
-	}
-	genCache.Set(ctx, flowID, gen+1, 0)
-}
-
-// chatCtxGeneration is the flow's current edit generation: 0 until first bumped.
-func (s *ChatService) chatCtxGeneration(flowID string) uint64 {
-	if v, ok := s.chatCtxGenCache().Get(context.Background(), flowID); ok {
-		return v.(uint64)
-	}
-	return 0
+	s.chatCtxGen.Bump(flowID)
 }
 
 // chatContextKeyAt is chatContextKey for a generation the caller already read.
@@ -195,10 +159,20 @@ type chatContextValue struct {
 	contextText string
 }
 
-// chatContextEntry is the cached texts only — a strong pointer here let 32 entries pin 32 clones.
+// chatContextEntry is the cached texts only — a strong pointer here let 32 entries pin 32 clones. src is the
+// document they were built from: the generation is read after the caller resolved its document, so an entry
+// built from a document resolved before an edit committed may carry the new generation; a turn holding the
+// edited document (another object) misses it instead of being served the old flow.
 type chatContextEntry struct {
+	src         weak.Pointer[models.FlowDocument]
 	sysPrompt   string
 	contextText string
+}
+
+// scrubbedDocEntry is a cached clone with the document it was scrubbed from (see chatContextEntry.src).
+type scrubbedDocEntry struct {
+	src weak.Pointer[models.FlowDocument]
+	doc *models.FlowDocument
 }
 
 // scrubbedDocKey keys the doc cache: scope, flow and edit generation.
@@ -206,18 +180,22 @@ func scrubbedDocKey(scope, flowID string, gen uint64) string {
 	return scope + "|" + flowID + "|" + strconv.FormatUint(gen, 10)
 }
 
-// scrubbedDocFor returns the flow's scrubbed clone for gen, cached when within maxCachedScrubbedBlocks.
+// scrubbedDocFor returns the flow's scrubbed clone for gen, cached when within maxCachedScrubbedBlocks and the
+// flow was not invalidated since gen was read.
 func (s *ChatService) scrubbedDocFor(ctx context.Context, scope string, doc *models.FlowDocument, gen uint64) *models.FlowDocument {
 	cc, twoLevel := s.chatCtxCache.(*chatContextCache)
 	key := scrubbedDocKey(scope, doc.ID, gen)
+	src := weak.Make(doc)
 	if twoLevel {
 		if v, ok := cc.docs.Get(ctx, key); ok {
-			return v.(*models.FlowDocument)
+			if e := v.(scrubbedDocEntry); e.src == src {
+				return e.doc
+			}
 		}
 	}
 	sd := scrubOrSelf(doc)
-	if twoLevel && len(sd.BlocksByID) <= maxCachedScrubbedBlocks {
-		cc.docs.Set(ctx, key, sd, 0)
+	if twoLevel && len(sd.BlocksByID) <= maxCachedScrubbedBlocks && s.chatCtxGen.FillOK(ctx, doc.ID, gen) {
+		cc.docs.Set(ctx, key, scrubbedDocEntry{src: src, doc: sd}, 0)
 	}
 	return sd
 }
@@ -321,18 +299,23 @@ func (s *ChatService) cachedContextCore(ctx context.Context, scope string, provi
 	if s.chatCtxCache == nil || doc == nil {
 		return s.computeContextCore(provider, doc, report, req)
 	}
-	// One generation read for both keys: the entry and the clone it points into must agree.
-	gen := s.chatCtxGeneration(doc.ID)
+	// One generation read for both keys, before the build: the entry and the clone it points into must agree,
+	// and an invalidation during the build refuses the fill.
+	gen := s.chatCtxGen.Load(doc.ID)
+	src := weak.Make(doc)
 	key := s.chatContextKeyAt(scope, doc.ID, gen, req, provider.ID(), req.Model, report,
 		sourceFilesFingerprint(filepath.Dir(doc.FilePath), req.SelectedSourceFiles))
 	if v, ok := s.chatCtxCache.Get(ctx, key); ok {
 		// The texts are memoised; the clone comes from the doc cache, never the entry.
-		e := v.(chatContextEntry)
-		return chatContextValue{scrubbedDoc: s.scrubbedDocFor(ctx, scope, doc, gen), sysPrompt: e.sysPrompt, contextText: e.contextText}
+		if e := v.(chatContextEntry); e.src == src {
+			return chatContextValue{scrubbedDoc: s.scrubbedDocFor(ctx, scope, doc, gen), sysPrompt: e.sysPrompt, contextText: e.contextText}
+		}
 	}
 	sd := s.scrubbedDocFor(ctx, scope, doc, gen)
 	cv := s.computeContextCoreWith(provider, doc, sd, report, req)
-	s.chatCtxCache.Set(ctx, key, chatContextEntry{sysPrompt: cv.sysPrompt, contextText: cv.contextText}, 0)
+	if s.chatCtxGen.FillOK(ctx, doc.ID, gen) {
+		s.chatCtxCache.Set(ctx, key, chatContextEntry{src: src, sysPrompt: cv.sysPrompt, contextText: cv.contextText}, 0)
+	}
 	return cv
 }
 

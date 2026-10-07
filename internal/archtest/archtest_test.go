@@ -159,6 +159,36 @@ func TestArch_AuditDoesNotImportAPI(t *testing.T) {
 	}
 }
 
+// TestArch_EventsStayLeaves: the domain event types import nothing of the module, and the bus no domain package,
+// so a publisher and its subscribers depend only on internal/events (ADR 0009).
+func TestArch_EventsStayLeaves(t *testing.T) {
+	busAllowed := []string{"pad-analyzer/internal/auth", "pad-analyzer/internal/metrics", "pad-analyzer/internal/platform"}
+	for _, f := range sourceFiles(t) {
+		switch {
+		case strings.HasPrefix(f.path, "internal/events/"):
+			for _, imp := range f.ast.Imports {
+				if p, _ := strconv.Unquote(imp.Path.Value); strings.HasPrefix(p, "pad-analyzer/") || strings.HasPrefix(p, "pad-core/") {
+					t.Errorf("%s imports %s: event types import nothing of the module", f.path, p)
+				}
+			}
+		case strings.HasPrefix(f.path, "internal/platform/eventbus/"):
+			for _, imp := range f.ast.Imports {
+				p, _ := strconv.Unquote(imp.Path.Value)
+				if !strings.HasPrefix(p, "pad-analyzer/") {
+					continue
+				}
+				ok := false
+				for _, allowed := range busAllowed {
+					ok = ok || p == allowed || strings.HasPrefix(p, allowed+"/")
+				}
+				if !ok {
+					t.Errorf("%s imports %s: the bus depends on no domain package", f.path, p)
+				}
+			}
+		}
+	}
+}
+
 // TestArch_TransactionsOpenedOnlyWhereAllowed: a transaction opened beside the request's RLS transaction takes a
 // second pooled connection and runs without app.current_user_id (RLS allow-all). New writes go through withTx.
 func TestArch_TransactionsOpenedOnlyWhereAllowed(t *testing.T) {

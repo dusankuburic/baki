@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -24,14 +26,23 @@ type collaboratorStore interface {
 }
 
 // CollaboratorService manages who a flow is shared with. Authorization stays with the caller (the route's
-// requireFlow, or the handler's own check for self-removal); nothing is cached, so a change invalidates nothing.
-// The store is nil on the desktop, whose routes never reach it (route.Needs or the handler's own nil check).
+// requireFlow, or the handler's own check for self-removal); each change is announced as a FlowChanged of kind
+// FlowSharingChanged. The store is nil on the desktop, whose routes never reach it (route.Needs or the handler's
+// own nil check).
 type CollaboratorService struct {
 	store collaboratorStore
+	bus   *eventbus.Bus
 }
 
-func NewCollaboratorService(store collaboratorStore) *CollaboratorService {
-	return &CollaboratorService{store: store}
+// NewCollaboratorService builds the service; a nil bus announces nothing.
+func NewCollaboratorService(store collaboratorStore, bus *eventbus.Bus) *CollaboratorService {
+	return &CollaboratorService{store: store, bus: bus}
+}
+
+// sharingChanged announces a change of the flow's grants. Only the flow id: the routes decide on the flow without
+// handing its header over, and reading it here would add a statement.
+func (s *CollaboratorService) sharingChanged(ctx context.Context, flowID string) {
+	s.bus.Publish(ctx, events.FlowChanged{FlowID: flowID, StableID: flowID, Kind: events.FlowSharingChanged})
 }
 
 // List returns up to limit grants on the flow (limit <= 0 = all).
@@ -62,15 +73,24 @@ func (s *CollaboratorService) Add(ctx context.Context, flowID string, u *storage
 		}
 		return nil, err
 	}
+	s.sharingChanged(ctx, flowID)
 	return c, nil
 }
 
 // Update changes an existing grant's permission; storage's ErrNotFound when there is none.
 func (s *CollaboratorService) Update(ctx context.Context, flowID, userID, permission string) error {
-	return s.store.UpdateCollaborator(ctx, flowID, userID, permission)
+	if err := s.store.UpdateCollaborator(ctx, flowID, userID, permission); err != nil {
+		return err
+	}
+	s.sharingChanged(ctx, flowID)
+	return nil
 }
 
 // Remove revokes a grant; storage's ErrNotFound when there is none.
 func (s *CollaboratorService) Remove(ctx context.Context, flowID, userID string) error {
-	return s.store.RemoveCollaborator(ctx, flowID, userID)
+	if err := s.store.RemoveCollaborator(ctx, flowID, userID); err != nil {
+		return err
+	}
+	s.sharingChanged(ctx, flowID)
+	return nil
 }

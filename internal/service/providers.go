@@ -11,6 +11,8 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/egress"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
@@ -226,6 +228,27 @@ func (s *ProviderService) InvalidateModels(scope, providerID string) {
 	s.invalidatedKeys[key] = invalidation{gen: s.modelGen, at: now}
 	delete(s.modelCache, key)
 	s.modelMu.Unlock()
+}
+
+// SubscribeModelCache drops s's cached live listings when the credentials they were listed with change: a key
+// saved or deleted (one provider, or the whole scope when the event names none), an erased account's scope, a
+// deleted organisation's shared scope. The cache's own generation fences listings in flight.
+func SubscribeModelCache(bus *eventbus.Bus, s *ProviderService) {
+	eventbus.Subscribe(bus, eventbus.Sync, "provider-model-cache", func(_ context.Context, e events.CredentialChanged) {
+		if e.ProviderID == "" || e.Kind == events.CredentialScopeErased {
+			s.InvalidateScope(e.Scope)
+			return
+		}
+		s.InvalidateModels(e.Scope, e.ProviderID)
+	})
+	eventbus.Subscribe(bus, eventbus.Sync, "provider-model-cache", func(_ context.Context, e events.AccountErased) {
+		s.InvalidateScope(e.KeyScope)
+	})
+	eventbus.Subscribe(bus, eventbus.Sync, "provider-model-cache", func(_ context.Context, e events.OrgMemberChanged) {
+		if e.Kind == events.OrgDeleted && e.OrgID != "" {
+			s.InvalidateScope(ai.OrgScope(e.OrgID))
+		}
+	})
 }
 
 // chatModels drops non-chat entries (embedding deployments): kept in Models() for pricing, never in the chat picker.

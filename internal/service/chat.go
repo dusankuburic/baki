@@ -17,6 +17,7 @@ import (
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/errreport"
 	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -272,12 +273,10 @@ type ChatService struct {
 	applyFixFunc    applyFixFunc
 	fixDecisionWait time.Duration
 
-	// chatCtxCache memoises the scrubbed doc + built context; keys embed a flow generation.
-	chatCtxCache   cache.Cache
-	chatCtxGen     cache.Cache
-	chatCtxGenOnce sync.Once
-	// chatCtxGenMu serializes the generation counter (a lost increment serves stale cache).
-	chatCtxGenMu sync.Mutex
+	// chatCtxCache memoises the scrubbed doc + built context; keys embed the flow's generation in chatCtxGen,
+	// which InvalidateChatContext bumps and which fences the fills (chat_context.go).
+	chatCtxCache cache.Cache
+	chatCtxGen   eventbus.Gen[string]
 
 	// azure resolves foundry model ids before the stream starts; nil keeps single-document behaviour.
 	azure *AzureModelService
@@ -324,7 +323,6 @@ func NewChatService(
 		azure:         opts.Azure,
 		resume:        noopResumeStore{},
 		chatCtxCache:  newChatContextCache(),
-		chatCtxGen:    newChatCtxGenCache(),
 	}
 	if opts.Resume != nil {
 		s.resume = redisResumeStore{c: opts.Resume}

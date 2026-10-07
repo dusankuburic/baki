@@ -47,10 +47,6 @@ type SystemHandler struct {
 	// would silently degrade multi-replica correctness.
 	redisPinger RedisPinger
 
-	// ruleProfiles is invalidated when an org's settings change, because AppSettings.Analysis.Rules
-	// IS the org's rule profile — without this a toggle waits out the resolver's TTL.
-	ruleProfiles *service.RuleProfileResolver
-
 	authz *service.AuthzService
 
 	// health probes the storage backend and its blob store; HasStore is false in local/filesystem mode.
@@ -66,8 +62,8 @@ type RedisPinger interface {
 	Ping(ctx context.Context) error
 }
 
-func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, recorder *audit.Recorder, redisPinger RedisPinger, ruleProfiles *service.RuleProfileResolver, authz *service.AuthzService, health *service.HealthService) *SystemHandler {
-	return &SystemHandler{sysSvc: sysSvc, security: security, audit: recorder, redisPinger: redisPinger, ruleProfiles: ruleProfiles, authz: authz, health: health}
+func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, recorder *audit.Recorder, redisPinger RedisPinger, authz *service.AuthzService, health *service.HealthService) *SystemHandler {
+	return &SystemHandler{sysSvc: sysSvc, security: security, audit: recorder, redisPinger: redisPinger, authz: authz, health: health}
 }
 
 // @Summary      Get app settings
@@ -148,11 +144,6 @@ func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.R
 	var req models.AppSettings
 	if !decodeBody(w, r, &req) {
 		return
-	}
-	if h.ruleProfiles != nil {
-		// Deferred so it runs AFTER the write: invalidating before would let a
-		// resolve in the gap re-cache the stale profile.
-		defer h.ruleProfiles.Invalidate(orgID)
 	}
 	if err := h.sysSvc.UpdateOrgSettings(r.Context(), orgID, req); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
@@ -255,7 +246,7 @@ func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request)
 		render.ErrorWithCode(w, fmt.Errorf("this provider is configured through /api/providers/local/config"), http.StatusBadRequest, "USE_PROVIDER_CONFIG")
 		return
 	}
-	if err := h.sysSvc.SaveApiKey(h.security.KeyScope(r), req.Provider, req.Key); err != nil {
+	if err := h.sysSvc.SaveApiKey(r.Context(), h.security.KeyScope(r), req.Provider, req.Key); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -310,7 +301,7 @@ func (h *SystemHandler) handleDeleteApiKey(w http.ResponseWriter, r *http.Reques
 		render.Error(w, fmt.Errorf("invalid or unsupported provider: %q", req.Provider), http.StatusBadRequest)
 		return
 	}
-	if err := h.sysSvc.DeleteApiKey(h.security.KeyScope(r), req.Provider); err != nil {
+	if err := h.sysSvc.DeleteApiKey(r.Context(), h.security.KeyScope(r), req.Provider); err != nil {
 		if req.Provider == ai.AzureFoundryProviderID {
 			// Resource "default" with its models: the registry's refusals (REGISTRY_READ_ONLY, …).
 			renderAzureRegistryError(w, err)

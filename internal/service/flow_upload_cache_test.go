@@ -120,7 +120,11 @@ func newTargetingNotifierStub() *targetingNotifierStub {
 	}
 }
 
-func (n *targetingNotifierStub) Emit(name string, data any) {
+func (n *targetingNotifierStub) EmitToOrg(_ context.Context, orgID, name string, data any) {
+	n.EmitTo("org:"+orgID, name, data)
+}
+
+func (n *targetingNotifierStub) EmitToAll(name string, data any) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.broadcasts = append(n.broadcasts, name)
@@ -168,21 +172,12 @@ func (n *targetingNotifierStub) targetedPayload(userID, name string) []any {
 	return append([]any{}, n.targetedPayloads[userID+"|"+name]...)
 }
 
-// broadcastPayload returns the data payloads of the broadcast (name)
-// deliveries, for shape assertions.
-func (n *targetingNotifierStub) broadcastPayload(name string) []any {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return append([]any{}, n.broadcastData[name]...)
-}
-
 // TestLoadFlowFiles_LoadedEventIsAddressedToTheCaller is the second half of the
 // same defect. The cache fix stops one tenant's document being SAVED over
 // another's; this stops it being BROADCAST to them.
 //
-// EventManager.Emit delivers to every connected SSE client ("use only for
-// events that are truly global or in local mode where only one client exists"),
-// and LoadFlowFiles emitted the whole parsed document through it — so in cloud
+// A broadcast (EmitToAll, then the bare Emit) delivers to every connected SSE
+// client, and LoadFlowFiles emitted the whole parsed document through it — so in cloud
 // mode every upload shipped its full contents, block tree and all, to every
 // other tenant with an open event stream. No collision or attacker needed; it
 // happened on every single upload.

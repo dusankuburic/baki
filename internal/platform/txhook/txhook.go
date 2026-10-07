@@ -3,9 +3,9 @@
 // then rolled back.
 //
 // The owner of a transaction (the RLS middleware for a request, withTx for a storage call that opened its own)
-// installs a Registry with With and later commits or aborts it. Everyone else only calls Register, from any
-// layer: the package knows nothing about databases, and what context a hook runs with is the owner's choice
-// (a Runner).
+// installs a Registry with With and later commits or aborts it. Everyone else only calls Register (or OnRollback),
+// from any layer: the package knows nothing about databases, and what context a hook runs with is the owner's
+// choice (a Runner).
 package txhook
 
 import (
@@ -32,12 +32,28 @@ const (
 	aborted
 )
 
+// when says on which outcome a registered hook runs.
+type when uint8
+
+const (
+	onCommit when = iota
+	onRollback
+)
+
+type entry struct {
+	fn   Hook
+	when when
+}
+
 // Registry collects the hooks registered while its transaction is open.
 type Registry struct {
 	mu     sync.Mutex
 	state  state
-	hooks  []Hook
+	hooks  []entry
 	runner Runner
+	// published records that the transaction announced a change of its own (MarkPublished): until it ends, what
+	// it reads may be its own uncommitted writes.
+	published bool
 }
 
 type ctxKey struct{}
@@ -59,22 +75,42 @@ func registryOf(ctx context.Context) *Registry {
 //   - registry aborted: fn is dropped and logged, the write it follows having been rolled back;
 //   - no registry: fn runs now (autocommit: the write is already durable), on ctx without its cancellation.
 func Register(ctx context.Context, fn Hook) {
+	register(ctx, fn, onCommit)
+}
+
+// OnRollback defers fn until the transaction owning ctx's registry rolls back, and drops it on a commit: work
+// that undoes what was done while the transaction was open (a cache invalidation that must also drop what was
+// filled from writes that are now gone). It runs on a background context. Without a registry, or after a commit,
+// fn is dropped; after a rollback it runs now.
+func OnRollback(ctx context.Context, fn Hook) {
+	register(ctx, fn, onRollback)
+}
+
+func register(ctx context.Context, fn Hook, w when) {
 	r := registryOf(ctx)
 	if r == nil {
-		runHook(Detached(ctx), fn)
+		if w == onCommit {
+			runHook(Detached(ctx), fn)
+		}
 		return
 	}
 	r.mu.Lock()
 	switch r.state {
 	case pending:
-		r.hooks = append(r.hooks, fn)
+		r.hooks = append(r.hooks, entry{fn: fn, when: w})
 		r.mu.Unlock()
 	case committed:
 		runner := r.runner
 		r.mu.Unlock()
-		runHook(runner, fn)
+		if w == onCommit {
+			runHook(runner, fn)
+		}
 	default:
 		r.mu.Unlock()
+		if w == onRollback {
+			runHook(Detached(context.Background()), fn)
+			return
+		}
 		logger.FromContext(ctx).Warn("post-commit work dropped: its transaction already rolled back")
 	}
 }
@@ -90,6 +126,41 @@ func Has(ctx context.Context) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.state != aborted
+}
+
+// Pending reports whether ctx's transaction is still open: a registry that has neither committed nor aborted.
+func Pending(ctx context.Context) bool {
+	r := registryOf(ctx)
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.state == pending
+}
+
+// MarkPublished records that ctx's open transaction announced a change of its own (the event bus calls it on
+// Publish). No-op without an open transaction.
+func MarkPublished(ctx context.Context) {
+	if r := registryOf(ctx); r != nil {
+		r.mu.Lock()
+		if r.state == pending {
+			r.published = true
+		}
+		r.mu.Unlock()
+	}
+}
+
+// Published reports whether ctx's transaction is still open and has announced a change of its own: what it
+// reads may then be its own uncommitted writes, which a shared cache must not keep.
+func Published(ctx context.Context) bool {
+	r := registryOf(ctx)
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.state == pending && r.published
 }
 
 // Commit marks the transaction committed and runs the registered hooks in order through runner (nil: Detached
@@ -109,13 +180,15 @@ func (r *Registry) Commit(runner Runner) {
 	hooks := r.hooks
 	r.hooks = nil
 	r.mu.Unlock()
-	for _, fn := range hooks {
-		runHook(runner, fn)
+	for _, h := range hooks {
+		if h.when == onCommit {
+			runHook(runner, h.fn)
+		}
 	}
 }
 
-// Abort marks the transaction rolled back: the registered hooks are dropped, and so is anything registered
-// later. Abort after Commit does nothing.
+// Abort marks the transaction rolled back: the Register hooks are dropped, and so is anything Registered later;
+// the OnRollback hooks run, in order, on a background context. Abort after Commit does nothing.
 func (r *Registry) Abort() {
 	r.mu.Lock()
 	if r.state != pending {
@@ -123,9 +196,18 @@ func (r *Registry) Abort() {
 		return
 	}
 	r.state = aborted
-	dropped := len(r.hooks)
+	hooks := r.hooks
 	r.hooks = nil
 	r.mu.Unlock()
+	dropped := 0
+	runner := Detached(context.Background())
+	for _, h := range hooks {
+		if h.when == onRollback {
+			runHook(runner, h.fn)
+			continue
+		}
+		dropped++
+	}
 	if dropped > 0 {
 		logger.Info("post-commit work dropped: the transaction rolled back", "hooks", dropped)
 	}

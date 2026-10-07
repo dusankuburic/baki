@@ -11,6 +11,8 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/testutil"
 )
 
@@ -323,16 +325,17 @@ func TestInvalidate_PrunesStaleMarksWithoutAnInsert(t *testing.T) {
 }
 
 // V-cfg-1: saving a replacement key drops the previous key's cached listing
-// (the hook SaveApiKey shares with DeleteApiKey).
+// (the CredentialChanged SaveApiKey shares with DeleteApiKey).
 func TestSaveApiKey_InvalidatesTheProviderListing(t *testing.T) {
 	secrets := testutil.NewFakeSecretStore()
 	_ = secrets.Save("u1", "openai", "k1")
-	sys := NewSystemService(nil, secrets, nil, nil, "", nil)
+	bus := eventbus.New(nil, 0)
+	sys := NewSystemService(nil, secrets, nil, nil, "", nil, bus)
 	svc := newProviderServiceWithFakeSecrets(t, secrets)
+	SubscribeModelCache(bus, svc)
 	svc.modelCache["u1\x00openai"] = modelCacheEntry{models: []ai.ModelInfo{{ID: "old"}}, expiresAt: time.Now().Add(time.Hour)}
 	gen := svc.modelGen
-	sys.OnApiKeyChanged(svc.InvalidateModels)
-	if err := sys.SaveApiKey("u1", "openai", "k2"); err != nil {
+	if err := sys.SaveApiKey(context.Background(), "u1", "openai", "k2"); err != nil {
 		t.Fatal(err)
 	}
 	if _, cached := svc.modelCache["u1\x00openai"]; cached || svc.modelGen == gen {
@@ -344,7 +347,7 @@ func TestSaveApiKey_InvalidatesTheProviderListing(t *testing.T) {
 }
 
 // D-15: removing the Azure AI Foundry document releases what the process
-// kept for it (ai.ForgetAzureFoundryCredential) and still runs the hook
+// kept for it (ai.ForgetAzureFoundryCredential) and still announces it
 // after the delete; a document that cannot be parsed is simply deleted.
 func TestDeleteApiKey_ForgetsAzureCredential(t *testing.T) {
 	cfg := ai.AzureFoundryConfig{Endpoint: "https://my-res.openai.azure.com", ChatDeployment: "chat"}
@@ -358,22 +361,23 @@ func TestDeleteApiKey_ForgetsAzureCredential(t *testing.T) {
 	for _, doc := range []string{raw, "not-a-document"} {
 		secrets := testutil.NewFakeSecretStore()
 		_ = secrets.Save("u1", "azure-foundry", doc)
-		sys := NewSystemService(nil, secrets, nil, nil, "", nil)
+		bus := eventbus.New(nil, 0)
+		sys := NewSystemService(nil, secrets, nil, nil, "", nil, bus)
 		var hooked []string
-		sys.OnApiKeyChanged(func(scope, provider string) {
-			if has, _ := secrets.Has(scope, provider); has {
-				t.Error("the hook ran before the delete")
+		eventbus.Subscribe(bus, eventbus.Sync, "test", func(_ context.Context, e events.CredentialChanged) {
+			if has, _ := secrets.Has(e.Scope, e.ProviderID); has {
+				t.Error("announced before the delete")
 			}
-			hooked = append(hooked, scope+"/"+provider)
+			hooked = append(hooked, e.Scope+"/"+e.ProviderID+"/"+string(e.Kind))
 		})
-		if err := sys.DeleteApiKey("u1", "azure-foundry"); err != nil {
+		if err := sys.DeleteApiKey(context.Background(), "u1", "azure-foundry"); err != nil {
 			t.Fatal(err)
 		}
 		if has, _ := secrets.Has("u1", "azure-foundry"); has {
 			t.Error("document not deleted")
 		}
-		if strings.Join(hooked, ",") != "u1/azure-foundry" {
-			t.Errorf("hook calls = %v", hooked)
+		if strings.Join(hooked, ",") != "u1/azure-foundry/deleted" {
+			t.Errorf("announcements = %v", hooked)
 		}
 	}
 }

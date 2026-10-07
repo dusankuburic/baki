@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -52,7 +55,7 @@ func TestCollaboratorService_ResolveUserPrefersID(t *testing.T) {
 		FakeBackend: testutil.NewFakeBackend(),
 		byID:        map[string]*storageif.User{alice.ID: alice},
 		byEmail:     map[string]*storageif.User{bob.Email: bob},
-	})
+	}, nil)
 	ctx := context.Background()
 	if u, err := svc.ResolveUser(ctx, alice.ID, bob.Email); err != nil || u != alice {
 		t.Fatalf("by id: got %v, %v; want alice", u, err)
@@ -67,7 +70,7 @@ func TestCollaboratorService_ResolveUserPrefersID(t *testing.T) {
 
 func TestCollaboratorService_AddBuildsTheGrant(t *testing.T) {
 	fake := &collabFake{FakeBackend: testutil.NewFakeBackend()}
-	svc := NewCollaboratorService(fake)
+	svc := NewCollaboratorService(fake, nil)
 	u := &storageif.User{ID: "u1", Email: "u1@example.com"}
 	c, err := svc.Add(context.Background(), "flow-1", u, "editor")
 	if err != nil {
@@ -90,7 +93,7 @@ func TestCollaboratorService_AddMapsDuplicates(t *testing.T) {
 		{errors.New("user ALREADY has access"), ErrAlreadyCollaborator},
 		{storageif.ErrNotFound, storageif.ErrNotFound},
 	} {
-		svc := NewCollaboratorService(&collabFake{FakeBackend: testutil.NewFakeBackend(), addErr: tc.err})
+		svc := NewCollaboratorService(&collabFake{FakeBackend: testutil.NewFakeBackend(), addErr: tc.err}, nil)
 		_, err := svc.Add(context.Background(), "flow-1", &storageif.User{ID: "u1"}, "viewer")
 		if !errors.Is(err, tc.want) {
 			t.Errorf("store error %q: got %v, want %v", tc.err, err, tc.want)
@@ -103,7 +106,7 @@ func TestCollaboratorService_AddMapsDuplicates(t *testing.T) {
 
 func TestCollaboratorService_PassThrough(t *testing.T) {
 	fake := &collabFake{FakeBackend: testutil.NewFakeBackend()}
-	svc := NewCollaboratorService(fake)
+	svc := NewCollaboratorService(fake, nil)
 	ctx := context.Background()
 	if _, err := svc.List(ctx, "flow-1", 10); err != nil {
 		t.Fatalf("List: %v", err)
@@ -122,9 +125,41 @@ func TestCollaboratorService_PassThrough(t *testing.T) {
 	}
 }
 
+// Every change of a flow's grants is announced as a sharing change of that flow; a refused one is not.
+func TestCollaboratorService_AnnouncesSharingChanges(t *testing.T) {
+	bus := eventbus.New(nil, time.Second)
+	rec := eventbus.NewRecorder(bus)
+	ctx := context.Background()
+	u := &storageif.User{ID: "u1", Email: "u1@example.com"}
+
+	refused := NewCollaboratorService(&collabFake{FakeBackend: testutil.NewFakeBackend(), addErr: errors.New("duplicate")}, bus)
+	if _, err := refused.Add(ctx, "flow-1", u, "viewer"); err == nil {
+		t.Fatal("the duplicate grant was accepted")
+	}
+	if got := eventbus.Recorded[events.FlowChanged](rec); len(got) != 0 {
+		t.Fatalf("a refused grant was announced: %+v", got)
+	}
+
+	svc := NewCollaboratorService(&collabFake{FakeBackend: testutil.NewFakeBackend()}, bus)
+	if _, err := svc.Add(ctx, "flow-1", u, "viewer"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := svc.Update(ctx, "flow-1", "u1", "editor"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := svc.Remove(ctx, "flow-1", "u1"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	want := events.FlowChanged{FlowID: "flow-1", StableID: "flow-1", Kind: events.FlowSharingChanged}
+	got := eventbus.Recorded[events.FlowChanged](rec)
+	if len(got) != 3 || got[0] != want || got[1] != want || got[2] != want {
+		t.Errorf("announced %+v, want three times %+v (add, update, remove)", got, want)
+	}
+}
+
 func TestNewCollaboratorService_NilBackend(t *testing.T) {
 	var backend storageif.StorageBackend // the desktop: no store
-	if NewCollaboratorService(backend) == nil {
+	if NewCollaboratorService(backend, nil) == nil {
 		t.Fatal("construction over a nil backend must not fail")
 	}
 }

@@ -4,6 +4,40 @@
 
 **Fix first:** R1–R6 and S1–S3 are done. R7 and R8 come with Phase 4c.
 
+**Phase 2b: done** (2026-10-07, uncommitted).
+
+*Delivered:*
+- **Domain events** (ADR 0009): typed events in `internal/events` (imports nothing of the module) and an in-process
+  bus in `internal/platform/eventbus`. Sync tier for cache invalidation: runs immediately and again after the
+  transaction commits or rolls back (`txhook.OnRollback` is new). Async tier for side effects: after the commit only,
+  on a bounded runner drained at shutdown, with a timeout and panic recovery per delivery. Metrics per event and
+  subscriber; a test recorder.
+- **The four hook setters are gone:** `SetCloudFlowMutationHook`, `OnInvalidateFlow` (now `FlowChanged`),
+  `OnApiKeyChanged` (`CredentialChanged`), `OnUserDeleted` (`AccountErased`). Also published: `SettingsChanged`,
+  `OrgMemberChanged`, `KnowledgeDocChanged`, `FindingStatusChanged`, `FindingAssigned`, `FindingCommented`.
+- **Generation-checked fills** (`eventbus.Gen`): the dashboard home and analytics, chat scrubbed context, deployment
+  settings, rule profiles and the knowledge corpus count refuse a fill read before a concurrent invalidation, or
+  inside a transaction that published (it may be reading its own uncommitted writes).
+- **Stale windows closed:** pre-commit invalidations followed by a refill of the old row (up to 30 s in the
+  dashboard, rule profile and settings caches); the chat context's LRU-of-256 generation resetting on eviction;
+  deployment rule toggles never invalidating rule profiles; org delete leaving its rule profile, corpus count and
+  model scope cached; other members' org analytics views staying stale after an org flow changed.
+- **After the commit only:** WebSocket `flow.changed`, the comment and assignment bell rows and emails, and disabling a
+  departed lender's shared credential (before, a rolled-back membership change still lost the credential). The last
+  two run inline if the bus runner is full, so they are never dropped.
+- **SSE audience is mandatory:** `EmitTo`, `EmitToOrg` (roster read at delivery) or the explicit `EmitToAll`; an
+  empty user no longer broadcasts to every client.
+
+*Found in review and fixed:* `flow.changed` carried the stored version, which a viewer could already hold over stale
+content and then skip (it now sends a stamp, as before); the bell rows and the lent-credential revocation could be
+dropped by a saturated bus runner.
+
+*Open:* `settings:changed` is still emitted directly (driving it from `SettingsChanged` would need payload reloads
+and add pushes for rule toggles); the frontend's flow reload records the metadata version for content read in
+parallel (a stamp in `flow.changed` makes it harmless now); `OrgService.Create` publishes no `OrgMemberAdded` for the
+owner; the legacy migrator publishes nothing; audit rows are still written for rolled-back requests; delivery is at
+most once (no outbox).
+
 **Phase 2a: done** (2026-10-07, uncommitted).
 
 *Delivered:*

@@ -27,6 +27,7 @@ import (
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/egress"
 	mailer "pad-analyzer/internal/mail"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	"pad-analyzer/internal/storage/filesystem"
@@ -352,9 +353,10 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	orgSvc := collaboration.NewOrgService(azE2EOrgStore{OrgStore: collaboration.NewMemOrgStore(), fs: fs})
 	authzSvc := service.NewAuthzService(fs, orgSvc)
 	docProv := service.NewCloudDocumentProvider(fs)
-	flowSvc := service.NewFlowService(events, settings, docProv, fs, authzSvc, nil)
+	bus := eventbus.New(nil, 0)
+	flowSvc := service.NewFlowService(events, settings, docProv, fs, authzSvc, nil, service.WithFlowEvents(bus))
 	scopes := service.NewFlowScopeResolver(fs, authzSvc)
-	libSvc := service.NewLibraryService(fs, flowSvc, authzSvc, scopes)
+	libSvc := service.NewLibraryService(fs, bus, authzSvc, scopes)
 	analysisSvc, err := service.NewAnalysisService(events, settings, nil, service.AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("analysis service: %v", err)
@@ -381,7 +383,7 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	})
 	chatSvc := service.NewChatService(events, t.TempDir(), flowSvc, analysisSvc, settings, factory, fs, config.ModeCloud, service.ChatOptions{Azure: azure})
 	providerSvc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets, orgKeys, azure)
-	sysSvc := service.NewSystemService(settings, secrets, events, fs, config.ModeCloud, azure)
+	sysSvc := service.NewSystemService(settings, secrets, events, fs, config.ModeCloud, azure, nil)
 
 	security := &SecurityConfig{
 		JWTEnabled:     true,
@@ -395,23 +397,26 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	}
 	mail := mailer.NewService(config.EmailConfig{}, config.ModeLocal)
 	dashboardSvc := service.NewDashboardService(fs, analysisSvc, flowSvc, scopes)
-	triageSvc := service.NewTriageService(fs, fs, fs)
-	shareSvc := service.NewShareTokenService(fs, fs)
+	triageSvc := service.NewTriageService(fs, fs, fs, bus)
+	shareSvc := service.NewShareTokenService(fs, fs, bus)
+	for _, s := range service.FlowCacheSubscribers(flowSvc, dashboardSvc, chatSvc) {
+		eventbus.Subscribe(bus, eventbus.Sync, s.Name, s.Fn)
+	}
 	// Never started, as before boot: every row is a detached write to the backend.
 	auditRec := testAuditRecorder(fs)
 	modules := []Module{
-		NewSystemHandler(sysSvc, security, auditRec, nil, nil, authzSvc, service.NewHealthService(fs)),
+		NewSystemHandler(sysSvc, security, auditRec, nil, authzSvc, service.NewHealthService(fs)),
 		NewFlowHandler(flowSvc, docProv, fs, security, shareSvc, auditRec),
 		NewLibraryHandler(libSvc, fs, security, auditRec),
 		NewChatHandler(chatSvc, flowSvc, security, auditRec),
-		NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, fs, security, service.NewWebhookNotifier(nil), mail, "", service.NewPolicyService(fs), service.NewGovernanceAlertService(fs), triageSvc, service.NewCommentService(fs, triageSvc), shareSvc, auditRec),
+		NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, fs, security, service.NewWebhookNotifier(nil), mail, "", service.NewPolicyService(fs), service.NewGovernanceAlertService(fs), triageSvc, service.NewCommentService(fs, triageSvc, nil), shareSvc, auditRec),
 		NewDashboardHandler(dashboardSvc, security),
 		NewExportHandler(exportSvc, flowSvc, analysisSvc, security, auditRec),
-		NewAuthHandler(service.NewSessionService(newMockTokenStore()), fs, security, nil, service.NewIdentityService(fs, nil), mail, service.NewAuthService(fs, mail), service.NewAccountLifecycleService(fs, nil), service.NewAPITokenService(fs), auditRec),
+		NewAuthHandler(service.NewSessionService(newMockTokenStore()), fs, security, nil, service.NewIdentityService(fs, nil), mail, service.NewAuthService(fs, mail), service.NewAccountLifecycleService(fs, nil, nil), service.NewAPITokenService(fs), auditRec),
 		NewAdminHandler(auditRec, security, NewMigrationRunner(nil), nil, authzSvc, service.NewUserAdminService(fs)),
 		NewProviderHandler(providerSvc, security, auditRec),
 		NewOrgHandler(orgSvc, fs, nil, security, mail, service.NewOrgRuleService(fs, fs, nil), providerSvc, authzSvc, service.NewChannelService(fs), service.NewUserDirectory(fs), auditRec),
-		NewSharingHandler(fs, flowSvc, service.NewCollaboratorService(fs), security, auditRec),
+		NewSharingHandler(fs, flowSvc, service.NewCollaboratorService(fs, bus), security, auditRec),
 	}
 	rt, err := NewRouter(RouterParams{Lifecycle: noopLifecycle{}, Security: security, Events: events, Modules: modules, Config: cfg, ShutdownCh: shutdown})
 	if err != nil {

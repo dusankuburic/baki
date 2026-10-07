@@ -352,7 +352,7 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 			wrote = true
 		}
 		s.pushSnapshot(doc, before)
-		s.InvalidateSearchIndex(doc.ID)
+		s.publishDesktopChange(ctx, doc)
 		logger.Info("folder snapshot restored", "flow", doc.ID, "snapshot", snapshotID, "label", snap.Label)
 		return s.LoadFlowFolder(snap.TargetPath)
 	}
@@ -366,7 +366,7 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 		}
 		s.pushSnapshot(doc, before)
 		// The restored bytes replaced the file: derived caches are stale.
-		s.InvalidateSearchIndex(doc.ID)
+		s.publishDesktopChange(ctx, doc)
 		if doc.FilePath != "" {
 			if info, serr := os.Stat(doc.FilePath); serr == nil && info.IsDir() {
 				return s.LoadFlowFolder(doc.FilePath)

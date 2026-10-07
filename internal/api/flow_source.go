@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/api/route"
@@ -47,13 +46,10 @@ func (h *FlowHandler) handleSuppressInSource(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	metrics.RecordFlowOp("patch_suppress")
-	updated, err := h.flowSvc.SuppressFindingInSource(doc, req.BlockID, req.RuleID)
+	updated, err := h.flowSvc.SuppressFindingInSource(r.Context(), doc, req.BlockID, req.RuleID)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
-	}
-	if h.notifier != nil {
-		h.notifier.NotifyFlowChanged(doc.ID, int(time.Now().UnixMilli()))
 	}
 	render.JSON(w, updated)
 }
@@ -103,9 +99,6 @@ func (h *FlowHandler) handleRestoreSourceSnapshot(w http.ResponseWriter, r *http
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
-	}
-	if h.notifier != nil {
-		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
 	}
 	render.JSON(w, map[string]any{"document": updated})
 }
@@ -188,9 +181,6 @@ func (h *FlowHandler) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
-	}
-	if h.notifier != nil {
-		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
 	}
 	render.JSON(w, updated)
 }

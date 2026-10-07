@@ -87,3 +87,56 @@ func TestDetached_DropsCancellationKeepsValues(t *testing.T) {
 		}
 	})
 }
+
+func TestOnRollback_RunsOnlyOnARollback(t *testing.T) {
+	var ran []string
+	ctx, reg := With(context.Background())
+	Register(ctx, func(context.Context) { ran = append(ran, "commit") })
+	OnRollback(ctx, func(context.Context) { ran = append(ran, "rollback") })
+	reg.Abort()
+	if !slices.Equal(ran, []string{"rollback"}) {
+		t.Fatalf("after Abort ran %v, want [rollback]", ran)
+	}
+	OnRollback(ctx, func(context.Context) { ran = append(ran, "late") })
+	if !slices.Equal(ran, []string{"rollback", "late"}) {
+		t.Fatalf("a hook registered after the rollback did not run at once: %v", ran)
+	}
+
+	ran = nil
+	ctx, reg = With(context.Background())
+	OnRollback(ctx, func(context.Context) { ran = append(ran, "rollback") })
+	reg.Commit(nil)
+	OnRollback(ctx, func(context.Context) { ran = append(ran, "late") })
+	if len(ran) != 0 {
+		t.Fatalf("rollback hooks ran on a commit: %v", ran)
+	}
+
+	OnRollback(context.Background(), func(context.Context) { ran = append(ran, "no tx") })
+	if len(ran) != 0 {
+		t.Fatalf("a rollback hook ran without a transaction: %v", ran)
+	}
+}
+
+func TestPendingAndPublished(t *testing.T) {
+	if Pending(context.Background()) || Published(context.Background()) {
+		t.Fatal("no transaction reported as open")
+	}
+	MarkPublished(context.Background()) // no-op without a registry
+
+	ctx, reg := With(context.Background())
+	if !Pending(ctx) || Published(ctx) {
+		t.Fatalf("open transaction: pending %v published %v, want true false", Pending(ctx), Published(ctx))
+	}
+	MarkPublished(ctx)
+	if !Published(ctx) {
+		t.Fatal("MarkPublished not recorded")
+	}
+	reg.Commit(nil)
+	if Pending(ctx) || Published(ctx) {
+		t.Fatalf("after the commit: pending %v published %v, want false false", Pending(ctx), Published(ctx))
+	}
+	MarkPublished(ctx)
+	if Published(ctx) {
+		t.Fatal("MarkPublished after the commit was recorded")
+	}
+}

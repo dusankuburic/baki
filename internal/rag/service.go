@@ -12,7 +12,9 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/ai/scrubber"
 	"pad-core/logger"
@@ -99,6 +101,8 @@ type KnowledgeService struct {
 	// search holds Search's caches (per-org corpus sizes, query embeddings); built on first use.
 	search     *searchCaches
 	searchOnce sync.Once
+	// bus announces corpus changes (KnowledgeDocChanged); the corpus count cache drops on them. nil publishes nothing.
+	bus *eventbus.Bus
 }
 
 // AzureEmbedderSource resolves the knowledge base's Azure AI Foundry embedder from the model registry:
@@ -147,6 +151,11 @@ func WithAzureEmbedder(source AzureEmbedderSource) Option {
 // are unlimited.
 func WithBudgetChecker(b BudgetChecker) Option {
 	return func(s *KnowledgeService) { s.budget = b }
+}
+
+// WithEventBus announces every change of an org's corpus (upload, delete, re-index) on bus.
+func WithEventBus(bus *eventbus.Bus) Option {
+	return func(s *KnowledgeService) { s.bus = bus }
 }
 
 // AzureEmbedderEnabled reports whether the knowledge base embeds with Azure AI Foundry through the
@@ -415,7 +424,10 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 	}
 	defer unlock()
 	// Whatever the outcome, the org's cached corpus size is stale once this returns.
-	defer s.InvalidateCorpus(orgID)
+	var docID string
+	defer func() {
+		s.bus.Publish(ctx, events.KnowledgeDocChanged{OrgID: orgID, DocID: docID, Kind: events.KnowledgeDocAdded})
+	}()
 
 	// Replace semantics: re-uploading a filename supersedes the old version (chunks cascade). Superseded
 	// IDs are captured up front and deleted BY ID, because DeleteKnowledgeDocumentByName would also match the new document.
@@ -457,6 +469,7 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 		OrgID:    orgID,
 		Filename: filename,
 	}
+	docID = doc.ID
 	// ORDERING: write the new version FIRST, delete the old only once the new document AND its chunks
 	// have committed — deleting first meant a failure left the org with NEITHER version. No cross-call
 	// transaction exists, so write-new-then-delete-old makes a failed re-upload a no-op.
@@ -498,13 +511,13 @@ func (s *KnowledgeService) ListDocuments(ctx context.Context, orgID string, limi
 	return s.store.ListKnowledgeDocuments(ctx, orgID, limit, offset)
 }
 
-// DeleteDocument removes one of the org's documents (its chunks cascade), RLS-scoped to userID, then makes the
-// next chat turn re-check the org's chunk count rather than trust the cached "non-empty".
+// DeleteDocument removes one of the org's documents (its chunks cascade), RLS-scoped to userID, then announces
+// it, so the next chat turn re-checks the org's chunk count rather than trust the cached "non-empty".
 func (s *KnowledgeService) DeleteDocument(ctx context.Context, userID, orgID, docID string) error {
 	if err := s.store.DeleteKnowledgeDocument(ctx, userID, orgID, docID); err != nil {
 		return err
 	}
-	s.InvalidateCorpus(orgID)
+	s.bus.Publish(ctx, events.KnowledgeDocChanged{OrgID: orgID, DocID: docID, Kind: events.KnowledgeDocDeleted})
 	return nil
 }
 
@@ -606,7 +619,7 @@ func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, 
 		return ReindexResult{}, err
 	}
 	defer unlock()
-	defer s.InvalidateCorpus(orgID)
+	defer s.bus.Publish(ctx, events.KnowledgeDocChanged{OrgID: orgID, Kind: events.KnowledgeDocReindexed})
 	if err := s.reindexGuard(ctx, provider, orgID, force, after); err != nil {
 		return ReindexResult{}, err
 	}

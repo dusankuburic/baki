@@ -1,33 +1,52 @@
 package testutil
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
-// CountingNotifier implements service.EventNotifier for tests. It counts all
-// Emit calls and captures the last emitted event for assertions.
+// Audiences a CountingNotifier records (Emitted.Audience).
+const (
+	AudienceUser = "user"
+	AudienceOrg  = "org"
+	AudienceAll  = "all"
+)
+
+// CountingNotifier implements service.EventNotifier for tests: it counts every emit and records its
+// audience, name and payload.
 type CountingNotifier struct {
 	mu           sync.Mutex
 	count        int
-	events       []emittedEvent
+	events       []Emitted
 	noSubscriber bool
 }
 
-type emittedEvent struct {
-	Name string
-	Data any
+// Emitted is one recorded emit: Audience is AudienceUser, AudienceOrg or AudienceAll, Target the user or
+// organisation id ("" for AudienceAll).
+type Emitted struct {
+	Audience string
+	Target   string
+	Name     string
+	Data     any
 }
 
-func (n *CountingNotifier) Emit(name string, data any) {
+func (n *CountingNotifier) record(e Emitted) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.count++
-	n.events = append(n.events, emittedEvent{Name: name, Data: data})
+	n.events = append(n.events, e)
 }
 
-// EmitTo delegates to Emit — CountingNotifier does not distinguish per-user
-// delivery. Tests that need to verify user-scoped delivery should inspect the
-// EventManager directly.
 func (n *CountingNotifier) EmitTo(userID, name string, data any) {
-	n.Emit(name, data)
+	n.record(Emitted{Audience: AudienceUser, Target: userID, Name: name, Data: data})
+}
+
+func (n *CountingNotifier) EmitToOrg(_ context.Context, orgID, name string, data any) {
+	n.record(Emitted{Audience: AudienceOrg, Target: orgID, Name: name, Data: data})
+}
+
+func (n *CountingNotifier) EmitToAll(name string, data any) {
+	n.record(Emitted{Audience: AudienceAll, Name: name, Data: data})
 }
 
 // HasSubscriber reports a connected client unless SetNoSubscriber(true) was
@@ -51,10 +70,10 @@ func (n *CountingNotifier) Count() int {
 	return n.count
 }
 
-func (n *CountingNotifier) Events() []emittedEvent {
+func (n *CountingNotifier) Events() []Emitted {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	cp := make([]emittedEvent, len(n.events))
+	cp := make([]Emitted, len(n.events))
 	copy(cp, n.events)
 	return cp
 }

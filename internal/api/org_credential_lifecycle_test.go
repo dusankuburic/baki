@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +16,10 @@ import (
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/events"
 	mailer "pad-analyzer/internal/mail"
+	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
@@ -508,5 +512,73 @@ func TestOrgLenderLosesAdmin_CarryingEditorKeepsCredential(t *testing.T) {
 	ev := awaitAudit(t, ch, isDisableAudit(f.orgID, lenderReasonDemoted))
 	if ev.Meta["user"] != "u-lender" {
 		t.Errorf("disable audit meta = %v, want the departed lender's id under \"user\"", ev.Meta)
+	}
+}
+
+// The lender's credential is disabled only once the demotion has committed: not while the request's transaction
+// is open, never when it rolls back. The reply reports it at once either way, and the audit row still names the
+// request (actor, user agent) although it is written after it.
+func TestOrgLenderLosesAdmin_DisablesOnlyAfterCommit(t *testing.T) {
+	for _, outcome := range []string{"commit", "rollback"} {
+		t.Run(outcome, func(t *testing.T) {
+			f := newOrgProvidersFixture(t, true)
+			if err := f.orgSvc.AddMember(bgCtx(), f.orgID, "u-admin2", auth.RoleAdmin); err != nil {
+				t.Fatal(err)
+			}
+			f.saveOrgDoc(t, "u-admin2")
+			ch := captureAudit(t)
+
+			ctx, reg := txhook.With(bgCtx())
+			req := httptest.NewRequest(http.MethodPut, "/api/orgs/"+f.orgID+"/members/u-admin2/role", strings.NewReader(`{"role":"member"}`)).WithContext(ctx)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("User-Agent", "lender-test/1")
+			rr := httptest.NewRecorder()
+			f.orgRouter("u-admin", nil).ServeHTTP(rr, req)
+			checkStatus(t, rr, http.StatusOK)
+			if !decodeMutationFlag(t, rr) {
+				t.Error("the reply did not report the lender's credential disabled")
+			}
+			if !f.hasOrgDoc() {
+				t.Fatal("the credential was disabled before the demotion committed")
+			}
+			noAudit(t, ch, isDisableAudit(f.orgID, lenderReasonDemoted))
+
+			if outcome == "rollback" {
+				reg.Abort()
+				if !f.hasOrgDoc() {
+					t.Error("a rolled-back demotion disabled the credential")
+				}
+				noAudit(t, ch, isDisableAudit(f.orgID, lenderReasonDemoted))
+				return
+			}
+			reg.Commit(nil)
+			if f.hasOrgDoc() {
+				t.Error("the committed demotion left the lender's credential live")
+			}
+			ev := awaitAudit(t, ch, isDisableAudit(f.orgID, lenderReasonDemoted))
+			if ev.Meta["user"] != "u-admin2" || ev.UserAgent != "lender-test/1" || ev.ActorKind == "" {
+				t.Errorf("disable row = %+v (meta %v), want the lender in meta and the request's actor and user agent", ev, ev.Meta)
+			}
+		})
+	}
+}
+
+// refusingRunner is a bus runner that is always full.
+type refusingRunner struct{}
+
+func (refusingRunner) Go(func()) bool { return false }
+
+// TestLentCredentialRevocation_SurvivesASaturatedBus: the production subscription still disables a departed
+// lender's credential when the bus's async runner is full (it runs inline instead of being dropped): the response
+// already told the client it was disabled.
+func TestLentCredentialRevocation_SurvivesASaturatedBus(t *testing.T) {
+	f := newOrgProvidersFixture(t, true)
+	f.saveOrgDoc(t, "u-admin")
+	bus := eventbus.New(refusingRunner{}, time.Second)
+	SubscribeLentCredentialRevocation(bus, f.svc, testAuditRecorder(f.backend))
+
+	bus.Publish(bgCtx(), events.OrgMemberChanged{OrgID: f.orgID, UserID: "u-admin", Kind: events.OrgMemberRemoved})
+	if f.hasOrgDoc() {
+		t.Error("a full bus dropped the revocation: the removed lender's credential is still live")
 	}
 }

@@ -4,21 +4,47 @@ import (
 	"context"
 	"time"
 
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 // TriageService owns a flow's persistent, team-shared finding triage state and its accepted-findings
 // baseline, plus what the triage and comment notifications read and write: the finding's assignee,
 // the personal in-app alert, and the user lookups behind the alert and email copy. Authorization is
-// the caller's.
+// the caller's. Its writes publish FindingStatusChanged, and a new assignment FindingAssigned.
 type TriageService struct {
 	store  storageif.TriageStore
 	alerts storageif.GovernanceAlertStore
 	users  storageif.UserStore
+	bus    *eventbus.Bus
 }
 
-func NewTriageService(store storageif.TriageStore, alerts storageif.GovernanceAlertStore, users storageif.UserStore) *TriageService {
-	return &TriageService{store: store, alerts: alerts, users: users}
+// NewTriageService builds the service; bus carries its events (nil publishes nothing).
+func NewTriageService(store storageif.TriageStore, alerts storageif.GovernanceAlertStore, users storageif.UserStore, bus *eventbus.Bus) *TriageService {
+	return &TriageService{store: store, alerts: alerts, users: users, bus: bus}
+}
+
+// FlowRef is the flow a triage or comment write belongs to, as the caller's authorization check read it: the
+// events the write publishes name its owner, organisation and name from it, without a read of their own.
+type FlowRef struct {
+	ID      string
+	Name    string
+	OwnerID string
+	OrgID   string
+}
+
+// FlowRefOf is the reference of a stored flow header; nil gives an empty one.
+func FlowRefOf(h *storageif.FlowDocument) FlowRef {
+	if h == nil {
+		return FlowRef{}
+	}
+	return FlowRef{ID: h.ID, Name: h.Name, OwnerID: h.OwnerID, OrgID: h.OrganizationID}
+}
+
+// statusChanged announces that findings of the flow changed state (findingKey "": several, or the baseline).
+func (s *TriageService) statusChanged(ctx context.Context, flow FlowRef, flowID, findingKey string) {
+	s.bus.Publish(ctx, events.FindingStatusChanged{FlowID: flowID, FindingKey: findingKey, OwnerID: flow.OwnerID, OrgID: flow.OrgID})
 }
 
 // ListStatuses returns the flow's persisted triage states.
@@ -26,19 +52,41 @@ func (s *TriageService) ListStatuses(ctx context.Context, flowID string) ([]*sto
 	return s.store.ListFindingStatuses(ctx, flowID)
 }
 
-// SetStatus upserts one finding's triage state.
-func (s *TriageService) SetStatus(ctx context.Context, st *storageif.FindingStatus) error {
-	return s.store.SetFindingStatus(ctx, st)
+// SetStatus upserts one finding's triage state. An assignee other than the finding's previous one is announced
+// as FindingAssigned (st.UpdatedBy assigned it), which alerts and emails them once the write commits; re-sending
+// the same assignee with a status change notifies no one.
+func (s *TriageService) SetStatus(ctx context.Context, flow FlowRef, st *storageif.FindingStatus) error {
+	prior := s.Assignee(ctx, st.FlowID, st.FindingKey)
+	if err := s.store.SetFindingStatus(ctx, st); err != nil {
+		return err
+	}
+	s.statusChanged(ctx, flow, st.FlowID, st.FindingKey)
+	if st.AssigneeID != "" && st.AssigneeID != prior {
+		s.bus.Publish(ctx, events.FindingAssigned{
+			FlowID: st.FlowID, FlowName: flow.Name, OwnerID: flow.OwnerID, OrgID: flow.OrgID,
+			FindingKey: st.FindingKey, RuleID: st.RuleID, AssigneeID: st.AssigneeID, AssignerID: st.UpdatedBy,
+		})
+	}
+	return nil
 }
 
-// SetStatusBatch upserts many findings of one flow atomically: all items commit or none.
-func (s *TriageService) SetStatusBatch(ctx context.Context, flowID, userID string, items []*storageif.FindingStatus) error {
-	return s.store.BatchSetFindingStatus(ctx, flowID, userID, items)
+// SetStatusBatch upserts many findings of one flow atomically: all items commit or none. A batch notifies no
+// assignee.
+func (s *TriageService) SetStatusBatch(ctx context.Context, flow FlowRef, userID string, items []*storageif.FindingStatus) error {
+	if err := s.store.BatchSetFindingStatus(ctx, flow.ID, userID, items); err != nil {
+		return err
+	}
+	s.statusChanged(ctx, flow, flow.ID, "")
+	return nil
 }
 
 // ClearStatus resets one finding to "open".
-func (s *TriageService) ClearStatus(ctx context.Context, flowID, findingKey string) error {
-	return s.store.DeleteFindingStatus(ctx, flowID, findingKey)
+func (s *TriageService) ClearStatus(ctx context.Context, flow FlowRef, findingKey string) error {
+	if err := s.store.DeleteFindingStatus(ctx, flow.ID, findingKey); err != nil {
+		return err
+	}
+	s.statusChanged(ctx, flow, flow.ID, findingKey)
+	return nil
 }
 
 // Assignee returns the finding's current assignee, "" when it has no state or the lookup fails (the
@@ -67,13 +115,21 @@ func (s *TriageService) Baseline(ctx context.Context, flowID string) (*storageif
 }
 
 // SetBaseline replaces the flow's baseline.
-func (s *TriageService) SetBaseline(ctx context.Context, b *storageif.FlowBaseline) error {
-	return s.store.SetFlowBaseline(ctx, b)
+func (s *TriageService) SetBaseline(ctx context.Context, flow FlowRef, b *storageif.FlowBaseline) error {
+	if err := s.store.SetFlowBaseline(ctx, b); err != nil {
+		return err
+	}
+	s.statusChanged(ctx, flow, b.FlowID, "")
+	return nil
 }
 
 // ClearBaseline removes the flow's baseline.
-func (s *TriageService) ClearBaseline(ctx context.Context, flowID string) error {
-	return s.store.ClearFlowBaseline(ctx, flowID)
+func (s *TriageService) ClearBaseline(ctx context.Context, flow FlowRef) error {
+	if err := s.store.ClearFlowBaseline(ctx, flow.ID); err != nil {
+		return err
+	}
+	s.statusChanged(ctx, flow, flow.ID, "")
+	return nil
 }
 
 // RecordAlert persists a personal (targeted) in-app alert stamped now. The ID embeds the (flow, type,

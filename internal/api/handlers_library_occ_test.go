@@ -3,8 +3,11 @@ package api
 import (
 	"context"
 	"net/http"
+	"sync"
 	"testing"
 
+	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -86,21 +89,45 @@ func TestLibraryGetContent_ReturnsVersionHeader(t *testing.T) {
 	}
 }
 
-func TestLibraryUpdate_NotifierCalledAfterSave(t *testing.T) {
+// flowViewersProbe records the flow.changed notifications the realtime subscriber sends.
+type flowViewersProbe struct {
+	mu   sync.Mutex
+	sent map[string][]int
+}
+
+func (p *flowViewersProbe) NotifyFlowChanged(flowID string, version int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sent[flowID] = append(p.sent[flowID], version)
+}
+
+// TestLibraryUpdate_NotifiesTheFlowsViewers: a library update reaches the flow's open viewers through the
+// FlowChanged event and the realtime subscriber (as di.SubscribeRealtime wires it), with a stamp no viewer can have
+// applied (never the stored version); a rejected update notifies no one.
+func TestLibraryUpdate_NotifiesTheFlowsViewers(t *testing.T) {
 	rt, seed := newLibraryTestRouter(t)
 	seed("nflow", "alice")
-
-	notifier := &captureNotifier{}
-	moduleOf[*LibraryHandler](t, rt).SetFlowNotifier(notifier)
+	probe := &flowViewersProbe{sent: map[string][]int{}}
+	eventbus.Subscribe(busOf(t, rt), eventbus.Async, "ws-flow-changed", service.NotifyFlowViewers(probe))
 
 	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
-	rr := doRequestWithAuth(t, rt, http.MethodPut, "/api/library/nflow", bearer, map[string]any{
-		"name": "notified",
-	})
+	rr := doRequestWithAuth(t, rt, http.MethodPut, "/api/library/nflow", bearer, map[string]any{"name": "notified"})
 	checkStatus(t, rr, http.StatusOK)
+	var body struct {
+		Version int `json:"version"`
+	}
+	decodeJSON(t, rr, &body)
+	if got := probe.sent["nflow"]; len(got) != 1 || got[0] == body.Version {
+		t.Errorf("viewers were sent %v, want one notification whose version is not the stored %d", got, body.Version)
+	}
 
-	if !notifier.called {
-		t.Error("expected NotifyFlowChanged to be called after save")
+	other := jwtBearer(t, rt, "mallory", "mallory@example.com")
+	rr = doRequestWithAuth(t, rt, http.MethodPut, "/api/library/nflow", other, map[string]any{"name": "nope"})
+	if rr.Code == http.StatusOK {
+		t.Fatalf("an outsider updated the flow: %d", rr.Code)
+	}
+	if got := probe.sent["nflow"]; len(got) != 1 {
+		t.Errorf("a rejected update notified the viewers: %v", got)
 	}
 }
 
@@ -199,12 +226,4 @@ func TestFakeBackend_OCC_CorrectVersionSucceeds(t *testing.T) {
 	if doc.Version != 2 {
 		t.Errorf("after correct update: want version 2, got %d", doc.Version)
 	}
-}
-
-type captureNotifier struct {
-	called bool
-}
-
-func (n *captureNotifier) NotifyFlowChanged(flowID string, version int) {
-	n.called = true
 }

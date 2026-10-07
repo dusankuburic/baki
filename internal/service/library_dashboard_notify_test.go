@@ -1,22 +1,23 @@
 package service
 
 import (
-	"slices"
 	"testing"
+	"time"
 
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
 
-// TestLibraryMutations_NotifyOwnerDashboard: library create, update and delete change the owner's flow set, so
-// they fire the same mutation hook as FlowService's upload/save paths (DI wires it to the dashboard cache).
-func TestLibraryMutations_NotifyOwnerDashboard(t *testing.T) {
+// TestLibraryMutations_AnnounceFlowChanged: library create, update (a version restore is one) and delete
+// announce the change with the ids the flow caches need, the stored version after a write, and 0 after a delete.
+func TestLibraryMutations_AnnounceFlowChanged(t *testing.T) {
 	backend := testutil.NewFakeBackend()
 	authz := NewAuthzService(backend, nil)
-	flows := NewFlowService(&testutil.CountingNotifier{}, nil, NewCloudDocumentProvider(backend), backend, authz, nil)
-	var notified []string
-	flows.SetCloudFlowMutationHook(func(ownerID string) { notified = append(notified, ownerID) })
-	lib := NewLibraryService(backend, flows, authz, nil)
+	bus := eventbus.New(nil, time.Second)
+	rec := eventbus.NewRecorder(bus)
+	lib := NewLibraryService(backend, bus, authz, nil)
 	ctx := actorCtx("u1")
 
 	saved, err := lib.CreateLibraryFlow(ctx, "u1", "", storageif.FlowDocument{Name: "New flow"})
@@ -31,7 +32,22 @@ func TestLibraryMutations_NotifyOwnerDashboard(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	if want := []string{"u1", "u1", "u1"}; !slices.Equal(notified, want) {
-		t.Errorf("dashboard notifications = %v, want %v (create, update, delete)", notified, want)
+	id := saved.ID
+	want := []events.FlowChanged{
+		{FlowID: id, StableID: id, OwnerID: "u1", Kind: events.FlowCreated, Version: 0},
+		{FlowID: id, StableID: id, OwnerID: "u1", Kind: events.FlowUpdated, Version: int64(saved.Version)},
+		{FlowID: id, StableID: id, OwnerID: "u1", Kind: events.FlowDeleted},
+	}
+	got := eventbus.Recorded[events.FlowChanged](rec)
+	if len(got) != len(want) {
+		t.Fatalf("announced %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("event %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if saved.Version == 0 {
+		t.Error("fixture: the update did not bump the stored version")
 	}
 }

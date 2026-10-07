@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -14,7 +16,9 @@ func TestShareTokenService_CreateResolveRevoke(t *testing.T) {
 	ctx := context.Background()
 	b := testutil.NewFakeBackend()
 	b.Flows["f1"] = &storageif.FlowDocument{ID: "f1", Name: "Invoices", Content: []byte(`{}`)}
-	svc := NewShareTokenService(b, b)
+	bus := eventbus.New(nil, time.Second)
+	rec := eventbus.NewRecorder(bus)
+	svc := NewShareTokenService(b, b, bus)
 
 	tok, raw, err := svc.Create(ctx, "f1", "alice")
 	if err != nil {
@@ -58,12 +62,17 @@ func TestShareTokenService_CreateResolveRevoke(t *testing.T) {
 	if doc := svc.SharedFlowHeader(ctx, raw); doc != nil {
 		t.Errorf("revoked token header = %+v, want nil", doc)
 	}
+	// Creating and revoking a link are sharing changes of the flow.
+	wantEv := events.FlowChanged{FlowID: "f1", StableID: "f1", Kind: events.FlowSharingChanged}
+	if got := eventbus.Recorded[events.FlowChanged](rec); len(got) != 2 || got[0] != wantEv || got[1] != wantEv {
+		t.Errorf("announced %+v, want twice %+v", got, wantEv)
+	}
 }
 
 func TestShareTokenService_SharedFlowHeaderMissingFlow(t *testing.T) {
 	ctx := context.Background()
 	b := testutil.NewFakeBackend()
-	svc := NewShareTokenService(b, b)
+	svc := NewShareTokenService(b, b, nil)
 	_, raw, err := svc.Create(ctx, "gone", "alice")
 	if err != nil {
 		t.Fatalf("create: %v", err)

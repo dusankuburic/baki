@@ -12,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
@@ -42,12 +44,30 @@ const DefaultInviteTTL = 7 * 24 * time.Hour
 // Business logic lives here; persistence is delegated to an OrgStore.
 type OrgService struct {
 	store OrgStore
+	// bus announces membership changes and deletions (OrgMemberChanged); nil publishes nothing.
+	bus *eventbus.Bus
+}
+
+// Option configures an OrgService at construction.
+type Option func(*OrgService)
+
+// WithEventBus announces membership changes and organisation deletions on bus.
+func WithEventBus(bus *eventbus.Bus) Option {
+	return func(s *OrgService) { s.bus = bus }
 }
 
 // NewOrgService creates an OrgService backed by the given store.
 // Pass NewMemOrgStore() for local/test mode, or a postgres-backed store for cloud mode.
-func NewOrgService(store OrgStore) *OrgService {
-	return &OrgService{store: store}
+func NewOrgService(store OrgStore, opts ...Option) *OrgService {
+	s := &OrgService{store: store}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+func (s *OrgService) memberChanged(ctx context.Context, orgID, userID string, role auth.Role, kind events.OrgMemberChangeKind) {
+	s.bus.Publish(ctx, events.OrgMemberChanged{OrgID: orgID, UserID: userID, Role: string(role), Kind: kind})
 }
 
 // Create creates a new organisation owned by ownerID.
@@ -91,7 +111,7 @@ func (s *OrgService) AddMember(ctx context.Context, orgID, userID string, role a
 		return fmt.Errorf("collaboration: invalid role %q", role)
 	}
 
-	return s.store.MutateOrg(ctx, orgID, func(org *interfaces.Organisation) error {
+	if err := s.store.MutateOrg(ctx, orgID, func(org *interfaces.Organisation) error {
 		if _, m := findMember(org, userID); m != nil {
 			return ErrAlreadyMember
 		}
@@ -102,12 +122,17 @@ func (s *OrgService) AddMember(ctx context.Context, orgID, userID string, role a
 		})
 		org.UpdatedAt = time.Now().UTC()
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	s.memberChanged(ctx, orgID, userID, role, events.OrgMemberAdded)
+	return nil
 }
 
-// RemoveMember removes userID from orgID.
+// RemoveMember removes userID from orgID. The announcement carries the role the member held.
 func (s *OrgService) RemoveMember(ctx context.Context, orgID, userID string) error {
-	return s.store.MutateOrg(ctx, orgID, func(org *interfaces.Organisation) error {
+	var held auth.Role
+	if err := s.store.MutateOrg(ctx, orgID, func(org *interfaces.Organisation) error {
 		idx, m := findMember(org, userID)
 		if m == nil {
 			return ErrMemberNotFound
@@ -117,10 +142,15 @@ func (s *OrgService) RemoveMember(ctx context.Context, orgID, userID string) err
 			return ErrLastAdmin
 		}
 
+		held = m.Role
 		org.Members = append(org.Members[:idx], org.Members[idx+1:]...)
 		org.UpdatedAt = time.Now().UTC()
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	s.memberChanged(ctx, orgID, userID, held, events.OrgMemberRemoved)
+	return nil
 }
 
 // SetRole changes a member's role within an organisation.
@@ -129,7 +159,7 @@ func (s *OrgService) SetRole(ctx context.Context, orgID, userID string, role aut
 		return fmt.Errorf("collaboration: invalid role %q", role)
 	}
 
-	return s.store.MutateOrg(ctx, orgID, func(org *interfaces.Organisation) error {
+	if err := s.store.MutateOrg(ctx, orgID, func(org *interfaces.Organisation) error {
 		_, m := findMember(org, userID)
 		if m == nil {
 			return ErrMemberNotFound
@@ -140,7 +170,11 @@ func (s *OrgService) SetRole(ctx context.Context, orgID, userID string, role aut
 		m.Role = role
 		org.UpdatedAt = time.Now().UTC()
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	s.memberChanged(ctx, orgID, userID, role, events.OrgMemberRoleChanged)
+	return nil
 }
 
 // IsMember reports whether userID is a member of orgID.
@@ -193,7 +227,11 @@ func (s *OrgService) IsAdmin(ctx context.Context, orgID, userID string) bool {
 
 // Delete removes an organisation entirely.
 func (s *OrgService) Delete(ctx context.Context, orgID string) error {
-	return s.store.DeleteOrg(ctx, orgID)
+	if err := s.store.DeleteOrg(ctx, orgID); err != nil {
+		return err
+	}
+	s.memberChanged(ctx, orgID, "", "", events.OrgDeleted)
+	return nil
 }
 
 func (s *OrgService) Update(ctx context.Context, orgID, name string) (*interfaces.Organisation, error) {

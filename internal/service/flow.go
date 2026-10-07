@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -21,6 +22,8 @@ import (
 
 	"golang.org/x/sync/singleflight"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
 	"pad-core/cache"
@@ -50,12 +53,9 @@ type FlowService struct {
 	// snapshots is the in-memory undo ring (flow_snapshots.go); nil when disabled.
 	snapshots *snapshotStore
 
-	// invalidateCbs holds invalidation callbacks from other services — indirect wiring avoids a DI cycle.
-	invalidateMu  sync.Mutex
-	invalidateCbs []func(flowID string)
-
-	// onCloudFlowMutation fires after cloud flow writes other services' user-keyed caches key on; DI setter avoids a constructor cycle.
-	onCloudFlowMutation func(ownerID string)
+	// bus carries FlowChanged to the caches derived from flows (FlowCacheSubscribers) and to the realtime clients;
+	// nil in bare tests.
+	bus *eventbus.Bus
 
 	// idxFlights dedups concurrent index builds — search-as-you-type would otherwise rebuild per keystroke.
 	idxFlights singleflight.Group
@@ -98,7 +98,7 @@ func FlowLoadedSummaryOf(doc *models.FlowDocument) FlowLoadedSummary {
 	return FlowLoadedSummary{ID: doc.ID, Name: doc.Name, FilePath: doc.FilePath, IsFolder: doc.IsFolder}
 }
 
-func NewFlowService(notifier EventNotifier, settings SettingsProvider, docProvider DocumentProvider, storage storageif.StorageBackend, authz *AuthzService, astCache cache.Cache) *FlowService {
+func NewFlowService(notifier EventNotifier, settings SettingsProvider, docProvider DocumentProvider, storage storageif.StorageBackend, authz *AuthzService, astCache cache.Cache, opts ...FlowOption) *FlowService {
 	idxCache := cache.NewSizedLRU(searchIndexCacheBudget, cache.WithMaxEntries(maxSearchIndexCache))
 	snapshotBudget := maxSnapshotBytes
 	if storage != nil {
@@ -119,6 +119,9 @@ func NewFlowService(notifier EventNotifier, settings SettingsProvider, docProvid
 	if storage != nil {
 		svc.uploadIDs, _ = cache.NewLRUCache(uploadIDMemoSize) // size > 0 ⇒ error impossible
 	}
+	for _, opt := range opts {
+		opt(svc)
+	}
 	return svc
 }
 
@@ -127,17 +130,6 @@ const uploadIDMemoSize = 1024
 // SetRuleProfileResolver injects the per-org rule resolver; wired by DI after construction (the resolver needs the storage backend from the same graph).
 func (s *FlowService) SetRuleProfileResolver(r *RuleProfileResolver) {
 	s.profiles = r
-}
-
-// SetCloudFlowMutationHook registers fn invoked (best-effort, after the write committed) on cloud flow uploads/saves/patches; a setter to avoid a constructor cycle.
-func (s *FlowService) SetCloudFlowMutationHook(fn func(ownerID string)) {
-	s.onCloudFlowMutation = fn
-}
-
-func (s *FlowService) notifyCloudFlowMutation(ownerID string) {
-	if fn := s.onCloudFlowMutation; fn != nil && ownerID != "" {
-		fn(ownerID)
-	}
 }
 
 // fixOptions builds the fix-loop config from the same per-org profile as analysis, so "fix all" can never fix a disabled rule.
@@ -279,22 +271,9 @@ func (s *FlowService) DocProvider() DocumentProvider {
 	return s.docProvider
 }
 
+// InvalidateSearchIndex drops the flow's cached search index (FlowCacheSubscribers' "flow-search-index").
 func (s *FlowService) InvalidateSearchIndex(flowID string) {
 	s.idxCache.Delete(context.Background(), flowID)
-	// Snapshot the callbacks under the lock so one may register another without deadlock.
-	s.invalidateMu.Lock()
-	cbs := append([]func(string){}, s.invalidateCbs...)
-	s.invalidateMu.Unlock()
-	for _, cb := range cbs {
-		cb(flowID)
-	}
-}
-
-// OnInvalidateFlow registers a callback invoked from InvalidateSearchIndex when derived caches must drop.
-func (s *FlowService) OnInvalidateFlow(cb func(flowID string)) {
-	s.invalidateMu.Lock()
-	defer s.invalidateMu.Unlock()
-	s.invalidateCbs = append(s.invalidateCbs, cb)
 }
 
 // FindBlockByID resolves a block by ID via the BlocksByID map, then a tree walk (the map is transient).
@@ -566,7 +545,14 @@ func (s *FlowService) SaveUploadedFlow(ctx context.Context, doc *models.FlowDocu
 	if err := s.storage.SaveFlow(ctx, &libDoc); err != nil {
 		return err
 	}
-	s.notifyCloudFlowMutation(ownerID)
+	// A re-upload updates the stored row, whose owner and organisation the upsert keeps.
+	e := events.FlowChanged{FlowID: doc.ID, StableID: doc.ID, OwnerID: ownerID, Kind: events.FlowCreated, Version: int64(libDoc.Version)}
+	if existing != nil {
+		e.Kind = events.FlowUpdated
+		e.OwnerID = cmp.Or(existing.OwnerID, ownerID)
+		e.OrgID = existing.OrganizationID
+	}
+	s.bus.Publish(ctx, e)
 	return nil
 }
 
@@ -877,7 +863,7 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 				docCopy := *doc
 				docCopy.FilePath = path
 				doc = &docCopy
-				s.notifier.Emit("flow:loaded", FlowLoadedSummaryOf(doc))
+				s.notifier.EmitTo(LocalUser, "flow:loaded", FlowLoadedSummaryOf(doc))
 				logger.Info("flow loaded from cache", "file", filepath.Base(path))
 				return doc, nil
 			}
@@ -890,7 +876,7 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 	var doc *models.FlowDocument
 	if info.Size() > 1_000_000 {
 		doc, err = parser.ParseTextWithProgress(text, fileName, info.Size(), func(percent int, message string) {
-			s.notifier.Emit("flow:parse-progress", map[string]any{
+			s.notifier.EmitTo(LocalUser, "flow:parse-progress", map[string]any{
 				"percent": percent, "message": message,
 			})
 		})
@@ -911,7 +897,7 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 		_ = s.settings.AddRecentFile(path, info.Size())
 	}
 
-	s.notifier.Emit("flow:loaded", FlowLoadedSummaryOf(doc))
+	s.notifier.EmitTo(LocalUser, "flow:loaded", FlowLoadedSummaryOf(doc))
 
 	logger.Info("flow parsed",
 		"file", fileName,
@@ -937,7 +923,7 @@ func searchBlock(blocks []models.Block, id string) *models.Block {
 }
 
 // PatchFlow applies a textual patch to the raw source atomically, then re-parses; patch.File must be a bare filename.
-func (s *FlowService) PatchFlow(doc *models.FlowDocument, patch models.Patch) (*models.FlowDocument, error) {
+func (s *FlowService) PatchFlow(ctx context.Context, doc *models.FlowDocument, patch models.Patch) (*models.FlowDocument, error) {
 	if doc == nil || doc.FilePath == "" {
 		return nil, fmt.Errorf("patching requires a local source file (desktop mode)")
 	}
@@ -1001,7 +987,7 @@ func (s *FlowService) PatchFlow(doc *models.FlowDocument, patch models.Patch) (*
 	unlock = func() {} // neutralize the deferred double-release
 
 	// Drop derived caches only after the write committed — a failed patch never invalidates.
-	s.InvalidateSearchIndex(doc.ID)
+	s.publishDesktopChange(ctx, doc)
 
 	// Folder flows re-merge the whole folder; single files reuse the after-parse of the bytes written.
 	if info.IsDir() {
@@ -1016,13 +1002,13 @@ func (s *FlowService) PatchFlow(doc *models.FlowDocument, patch models.Patch) (*
 	if s.settings != nil {
 		_ = s.settings.AddRecentFile(doc.FilePath, int64(len(patched)))
 	}
-	s.notifier.Emit("flow:loaded", FlowLoadedSummaryOf(afterDoc))
+	s.notifier.EmitTo(LocalUser, "flow:loaded", FlowLoadedSummaryOf(afterDoc))
 	s.docProvider.SetCurrentDoc(afterDoc)
 	return afterDoc, nil
 }
 
 // SuppressFindingInSource writes a # pad-ignore[ruleID] directive before the block (ruleID "" = all rules).
-func (s *FlowService) SuppressFindingInSource(doc *models.FlowDocument, blockID, ruleID string) (*models.FlowDocument, error) {
+func (s *FlowService) SuppressFindingInSource(ctx context.Context, doc *models.FlowDocument, blockID, ruleID string) (*models.FlowDocument, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
 	}
@@ -1039,7 +1025,7 @@ func (s *FlowService) SuppressFindingInSource(doc *models.FlowDocument, blockID,
 			}
 		}
 	}
-	return s.PatchFlow(doc, patch)
+	return s.PatchFlow(ctx, doc, patch)
 }
 
 func (s *FlowService) generateFixPatch(doc *models.FlowDocument, blockID, fixType, ruleID, variable, property string) (models.Patch, error) {
@@ -1102,7 +1088,7 @@ func (s *FlowService) ApplyFix(ctx context.Context, doc *models.FlowDocument, bl
 	if err != nil {
 		return nil, err
 	}
-	return s.PatchFlow(doc, patch)
+	return s.PatchFlow(ctx, doc, patch)
 }
 
 // desktopSourcePath resolves the file the editor reads/writes; folder members are traversal-guarded bare filenames.
@@ -1173,7 +1159,7 @@ func (s *FlowService) SaveSource(ctx context.Context, doc *models.FlowDocument, 
 	}
 	s.pushSnapshot(doc, snap)
 	// The source-editor save replaced the file: derived caches are stale.
-	s.InvalidateSearchIndex(doc.ID)
+	s.publishDesktopChange(ctx, doc)
 	if info, _ := os.Stat(doc.FilePath); info != nil && info.IsDir() {
 		return s.LoadFlowFolder(doc.FilePath)
 	}
@@ -1290,6 +1276,7 @@ func (s *FlowService) ApplyFixBatchResult(ctx context.Context, doc *models.FlowD
 		return FixBatchResult{Applied: res.Fixed}, fmt.Errorf("write source file: %w", err)
 	}
 	s.pushSnapshot(doc, snap)
+	s.publishDesktopChange(ctx, doc)
 	// Seed the AST cache so the reload below is a hit, not another parse.
 	if s.astCache != nil {
 		hash := sha256.Sum256([]byte(source))
@@ -1380,7 +1367,7 @@ func (s *FlowService) applyFixBatchDesktopFolder(ctx context.Context, doc *model
 		s.cacheFolderMember(name, src, fixedDocs[name])
 	}
 	s.pushSnapshot(doc, snap)
-	s.InvalidateSearchIndex(doc.ID)
+	s.publishDesktopChange(ctx, doc)
 	updated, err := s.LoadFlowFolder(doc.FilePath)
 	if err != nil {
 		return FixBatchResult{Applied: total}, err
@@ -1414,18 +1401,22 @@ func (s *FlowService) persistCloudDoc(ctx context.Context, doc *models.FlowDocum
 			},
 		}
 		// OCC: load the current version so SaveFlow can detect a concurrent edit.
+		kind := events.FlowCreated
 		if header, hErr := s.storage.LoadFlowHeader(ctx, doc.ID); hErr == nil && header != nil {
 			libDoc.Version = header.Version
 			libDoc.Description = header.Description
+			kind = events.FlowUpdated
 		} else if hErr != nil && !errors.Is(hErr, storageif.ErrNotFound) {
 			return nil, fmt.Errorf("check existing flow: %w", hErr)
 		}
 		if err := s.storage.SaveFlow(ctx, &libDoc); err != nil {
 			return nil, err
 		}
-		// Saved content changed: drop derived caches so the next reader sees the post-edit flow.
-		s.InvalidateSearchIndex(doc.ID)
-		s.notifyCloudFlowMutation(doc.OwnerID)
+		// Saved content changed: derived caches drop so the next reader sees the post-edit flow.
+		s.bus.Publish(ctx, events.FlowChanged{
+			FlowID: doc.ID, StableID: doc.ID, OwnerID: doc.OwnerID, OrgID: doc.OrganizationID,
+			Kind: kind, Version: int64(libDoc.Version),
+		})
 	}
 	return updated, nil
 }

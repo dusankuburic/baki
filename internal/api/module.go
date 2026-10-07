@@ -14,12 +14,6 @@ type Module interface {
 	Mount(rb *route.Builder)
 }
 
-// flowNotifierSetter is a module whose writes tell a flow's live viewers that it changed; NewRouter hands it
-// the WebSocket hub.
-type flowNotifierSetter interface {
-	SetFlowNotifier(n FlowNotifier)
-}
-
 // sharedFlowLookup resolves a share token to its flow's header for the /shared shell (serveSharedShell), or nil
 // for an unknown token.
 type sharedFlowLookup interface {

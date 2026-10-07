@@ -171,7 +171,7 @@ func TestOrgAzureFoundryConfig_LabelNamesLender(t *testing.T) {
 	}
 
 	// The lender is demoted: their secret goes, although Bob saved last.
-	disableLentCredential(httptest.NewRequest(http.MethodPost, "/", nil), testAuditRecorder(f.backend), f.svc, f.orgID, "u-admin", lenderReasonDemoted)
+	disableLentCredential(bgCtx(), testAuditRecorder(f.backend), f.svc, f.orgID, "u-admin", lenderReasonDemoted)
 	if has, _ := f.orgKeys.HasOrg(f.orgID, ai.AzureFoundryProviderID); has {
 		t.Error("the demoted lender's credential is still stored")
 	}

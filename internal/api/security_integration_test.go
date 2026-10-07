@@ -48,7 +48,7 @@ func TestEventManager_EmitTo_OnlyDeliversToTargetUser(t *testing.T) {
 	}
 }
 
-func TestEventManager_Emit_BroadcastsToAll(t *testing.T) {
+func TestEventManager_EmitToAll_BroadcastsToAll(t *testing.T) {
 	em := NewEventManager(make(chan struct{}))
 
 	ch1 := make(chan []byte, 8)
@@ -59,7 +59,7 @@ func TestEventManager_Emit_BroadcastsToAll(t *testing.T) {
 	em.clients[ch2] = "user-bob"
 	em.clientsMu.Unlock()
 
-	em.Emit("settings:changed", "global-update")
+	em.EmitToAll("settings:changed", "global-update")
 
 	for i, ch := range []chan []byte{ch1, ch2} {
 		select {

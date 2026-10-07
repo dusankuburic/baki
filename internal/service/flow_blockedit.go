@@ -95,7 +95,7 @@ func (s *FlowService) editBlock(ctx context.Context, doc *models.FlowDocument, b
 		if err != nil {
 			return nil, err
 		}
-		return s.PatchFlow(doc, patch)
+		return s.PatchFlow(ctx, doc, patch)
 	}
 
 	// Cloud: align, patch against the CANONICAL block, persist shared path.
@@ -213,7 +213,7 @@ func (s *FlowService) RemoveBlocks(ctx context.Context, doc *models.FlowDocument
 			if err != nil {
 				return nil, err
 			}
-			return s.PatchFlow(doc, patch)
+			return s.PatchFlow(ctx, doc, patch)
 		}
 		// Single-file desktop doc.
 		text, _, _, _, _, err := s.blockEditTargetText(doc, blocks[0], blocks[0].ID)
@@ -224,7 +224,7 @@ func (s *FlowService) RemoveBlocks(ctx context.Context, doc *models.FlowDocument
 		if err != nil {
 			return nil, err
 		}
-		return s.PatchFlow(doc, patch)
+		return s.PatchFlow(ctx, doc, patch)
 	}
 
 	// Cloud: align the FIRST block, relocate the rest by preorder index into
@@ -376,7 +376,7 @@ func (s *FlowService) RenameBlock(ctx context.Context, doc *models.FlowDocument,
 		updated, err := s.applyCloudPatch(ctx, doc, cctx)
 		return updated, gotoRefs, err
 	}
-	updated, err := s.PatchFlow(doc, patch)
+	updated, err := s.PatchFlow(ctx, doc, patch)
 	return updated, gotoRefs, err
 }
 
@@ -546,7 +546,7 @@ func (s *FlowService) UpdateBlockProperties(ctx context.Context, doc *models.Flo
 		cctx.patch = patch
 		return s.applyCloudPatch(ctx, doc, cctx)
 	}
-	return s.PatchFlow(doc, patch)
+	return s.PatchFlow(ctx, doc, patch)
 }
 
 // siblingList returns the ordered non-END siblings of blockID in its scope
@@ -735,7 +735,7 @@ func (s *FlowService) MoveBlock(ctx context.Context, doc *models.FlowDocument, b
 		cctx.patch = patch
 		return s.applyCloudPatch(ctx, doc, cctx)
 	}
-	return s.PatchFlow(doc, patch)
+	return s.PatchFlow(ctx, doc, patch)
 }
 
 // MoveBlockTo reorders a block relative to a REFERENCE sibling ("before"/"after")
@@ -924,7 +924,7 @@ func (s *FlowService) MoveBlockTo(ctx context.Context, doc *models.FlowDocument,
 		cctx.patch = patch
 		return s.applyCloudPatch(ctx, doc, cctx)
 	}
-	return s.PatchFlow(doc, patch)
+	return s.PatchFlow(ctx, doc, patch)
 }
 
 // reindentLines shifts each line's leading whitespace by delta COLUMNS

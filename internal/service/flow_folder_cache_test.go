@@ -247,7 +247,7 @@ func TestPatchFlow_FolderReloadReusesTheGateParse(t *testing.T) {
 	}
 
 	cc.reset()
-	updated, err := svc.SuppressFindingInSource(doc, setBlock, "redundant-action")
+	updated, err := svc.SuppressFindingInSource(context.Background(), doc, setBlock, "redundant-action")
 	if err != nil {
 		t.Fatalf("SuppressFindingInSource: %v", err)
 	}

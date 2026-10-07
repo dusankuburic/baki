@@ -120,11 +120,6 @@ func NewRouter(p RouterParams) (*Router, error) {
 	p.Lifecycle.Append(fx.Hook{OnStop: func(context.Context) error { rt.hub.Close(); return nil }})
 
 	for _, m := range rt.modules {
-		// Wire the WebSocket hub as a flow-change notifier so library saves and apply-fix /
-		// save-source / suppress edits broadcast to all connected viewers.
-		if n, ok := m.(flowNotifierSetter); ok {
-			n.SetFlowNotifier(rt.hub)
-		}
 		if s, ok := m.(sharedFlowLookup); ok && rt.shares == nil {
 			rt.shares = s
 		}
@@ -170,6 +165,11 @@ func sortedModules(modules []Module) []Module {
 
 func (rt *Router) Shutdown() {
 	rt.shutdownOnce.Do(func() { close(rt.shutdownCh) })
+}
+
+// FlowViewers is the WebSocket hub as the FlowChanged subscriber reaches a flow's open viewers (internal/di).
+func (rt *Router) FlowViewers() service.FlowViewers {
+	return rt.hub
 }
 
 // ShutdownWebSocket gracefully drains all WebSocket clients (CloseGoingAway, conns closed, pumps waited for). Call BEFORE server.Shutdown — http.Server.Shutdown does not close hijacked sockets. Idempotent.

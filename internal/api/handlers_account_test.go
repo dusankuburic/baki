@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"sync"
 	"testing"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -51,39 +53,28 @@ func TestAccountDelete_ErasesAndRevokesToken(t *testing.T) {
 	checkStatus(t, rr2, http.StatusUnauthorized)
 }
 
-// TestAccountDelete_RunsUserDeletedHook: the erasure must run the
-// onUserDeleted hook (DI wires it to ProviderService.InvalidateScope — the
-// SQL cascade removes the provider keys, the hook tells the in-process
-// caches) with the caller's key scope, and only after a successful delete.
-func TestAccountDelete_RunsUserDeletedHook(t *testing.T) {
-	rt, _ := newAccountTestRouter(t, "u1", "alice@example.com")
+// TestAccountDelete_AnnouncesErasure: the erasure must announce AccountErased
+// (the provider service drops its cached listings on it — the SQL cascade
+// removes the provider keys, the event tells the in-process caches) with the
+// caller's key scope, and only after a successful delete.
+func TestAccountDelete_AnnouncesErasure(t *testing.T) {
+	rt, backend := newAccountTestRouter(t, "u1", "alice@example.com")
 	bearer := jwtBearer(t, rt, "u1", "alice@example.com")
+	bus := eventbus.New(nil, 0)
+	rec := eventbus.NewRecorder(bus)
+	moduleOf[*AuthHandler](t, rt).accounts = service.NewAccountLifecycleService(backend, nil, bus)
 
-	var mu sync.Mutex
-	var scopes []string
-	moduleOf[*AuthHandler](t, rt).accounts.OnUserDeleted(func(scope string) {
-		mu.Lock()
-		scopes = append(scopes, scope)
-		mu.Unlock()
-	})
-
-	// A refused confirmation must not fire the hook.
+	// A refused confirmation announces nothing.
 	rr := doRequestWithAuth(t, rt, http.MethodDelete, "/api/auth/account", bearer, map[string]string{"confirmEmail": "other@example.com"})
 	checkStatus(t, rr, http.StatusBadRequest)
-	mu.Lock()
-	fired := len(scopes)
-	mu.Unlock()
-	if fired != 0 {
-		t.Errorf("hook fired on a refused confirmation: %v", scopes)
+	if got := rec.Events(); len(got) != 0 {
+		t.Errorf("announced %v on a refused confirmation", got)
 	}
 
 	rr = doRequestWithAuth(t, rt, http.MethodDelete, "/api/auth/account", bearer, map[string]string{"confirmEmail": "alice@example.com"})
 	checkStatus(t, rr, http.StatusOK)
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(scopes) != 1 || scopes[0] != "u1" {
-		t.Errorf("onUserDeleted scopes = %v, want exactly [u1] (the caller's key scope)", scopes)
+	if got := eventbus.Recorded[events.AccountErased](rec); len(got) != 1 || got[0].KeyScope != "u1" || got[0].UserID != "u1" {
+		t.Errorf("AccountErased = %v, want exactly one with key scope u1 (the caller's)", got)
 	}
 }
 

@@ -8,7 +8,10 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/service"
+	"pad-analyzer/internal/storage"
 	"pad-analyzer/internal/testutil"
 	"pad-core/models"
 )
@@ -154,13 +157,16 @@ func TestDeploymentRuleConfig_RequiresSystemAdmin(t *testing.T) {
 // Regression (R4): org-settings rule overrides used not to invalidate the
 // resolver's cached profile (the rules endpoints did; settings didn't), so a
 // save changed nothing until the TTL elapsed — the symptom looks like "the
-// feature does not work", so pin it.
+// feature does not work", so pin it. The save announces SettingsChanged, on
+// which the resolver drops the org's profile.
 func TestOrgSettings_InvalidatesRuleProfile(t *testing.T) {
 	env := newChannelEnv(t)
 	rt, admin, orgID := env.rt, env.admin, env.orgID
 
 	resolver := service.NewRuleProfileResolver(env.backend, &stubSettingsProvider{s: models.DefaultSettings()}, nil)
-	moduleOf[*SystemHandler](t, rt).ruleProfiles = resolver
+	bus := eventbus.New(nil, 0)
+	service.SubscribeRuleProfiles(bus, resolver)
+	moduleOf[*SystemHandler](t, rt).sysSvc = service.NewSystemService(storage.NewInMemorySettingsStore(), nil, &mockNotifier{}, env.backend, config.ModeCloud, nil, bus)
 
 	ctx := context.Background()
 	// Warm the cache for this org.

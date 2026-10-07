@@ -13,7 +13,9 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-core/analyzer"
 	"pad-core/logger"
 	"pad-core/models"
@@ -214,8 +216,11 @@ type AnalysisService struct {
 	customRules []analyzer.Rule
 	// profiles resolves the per-org rule profile; nil (desktop/tests) falls back to deployment settings + custom rules.
 	profiles *RuleProfileResolver
-	// authEnabled: with JWT claims, EmitTo("") would broadcast to EVERY client — right only in desktop mode.
+	// authEnabled: with accounts, a claim-less analysis has no one to send progress to (EmitTo(LocalUser) reaches
+	// only identity-less clients, which exist only in desktop mode).
 	authEnabled bool
+	// bus announces the rule toggles (deployment SettingsChanged); nil publishes nothing.
+	bus *eventbus.Bus
 
 	// largeSem gates uncached analyses of large flows (nil disables); run is the uncached entry point.
 	largeSem *semaphore.Weighted
@@ -236,6 +241,8 @@ type AnalysisOptions struct {
 	Profiles *RuleProfileResolver
 	// AuthEnabled: requests carry auth, so claim-less progress is dropped (not broadcast).
 	AuthEnabled bool
+	// Bus announces the deployment rule toggles (SettingsChanged); nil publishes nothing.
+	Bus *eventbus.Bus
 }
 
 // NewAnalysisService builds the service; the error return is kept for the DI signature.
@@ -247,6 +254,7 @@ func NewAnalysisService(notifier EventNotifier, settings SettingsProvider, histo
 		customRules: opts.CustomRules,
 		profiles:    opts.Profiles,
 		authEnabled: opts.AuthEnabled,
+		bus:         opts.Bus,
 		largeSem:    largeAnalysisSem,
 		reports:     newReportLRU(analysisReportBudget),
 		claims:      newRecordClaims(maxRecordClaims),
@@ -341,7 +349,7 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 		userID = claims.UserID
 	}
 
-	// No callback when nobody is listening: a claim-less context with auth on would broadcast to every tenant.
+	// No callback when nobody is listening: with auth on, a claim-less context has no recipient.
 	var onProgress func(current, total int, ruleName string)
 	if progress && (userID != "" || !s.authEnabled) {
 		onProgress = func(current, total int, ruleName string) {
@@ -709,7 +717,16 @@ func (s *AnalysisService) SetRuleEnabled(ctx context.Context, ruleID string, ena
 	rc.Enabled = enabled
 	settings.Analysis.Rules[ruleID] = rc
 
-	return s.settings.Update(ctx, *settings)
+	return s.updateDeploymentRules(ctx, settings)
+}
+
+// updateDeploymentRules writes the deployment settings and announces it: every org's rule profile inherits them.
+func (s *AnalysisService) updateDeploymentRules(ctx context.Context, settings *models.AppSettings) error {
+	if err := s.settings.Update(ctx, *settings); err != nil {
+		return err
+	}
+	s.bus.Publish(ctx, events.SettingsChanged{Scope: events.DeploymentSettings})
+	return nil
 }
 
 // UpdateRuleConfig writes the deployment-wide settings singleton; see SetRuleEnabled for the context.
@@ -728,5 +745,5 @@ func (s *AnalysisService) UpdateRuleConfig(ctx context.Context, ruleID string, c
 	}
 	settings.Analysis.Rules[ruleID] = config
 
-	return s.settings.Update(ctx, *settings)
+	return s.updateDeploymentRules(ctx, settings)
 }

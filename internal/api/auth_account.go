@@ -50,7 +50,7 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 	// own credential, disables the org credentials they lent as an admin, drops the in-process caches); each
 	// disabled credential is audited here.
 	if err := h.accounts.DeleteAccount(r.Context(), claims.UserID, h.security.KeyScope(r), func(ref storageif.OrgKeyRef) {
-		auditLentCredentialDisabled(r, h.audit, ref.OrgID, ref.Provider, claims.UserID, lenderReasonAccountDeleted)
+		auditLentCredentialDisabled(r.Context(), h.audit, ref.OrgID, ref.Provider, claims.UserID, lenderReasonAccountDeleted)
 	}); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return

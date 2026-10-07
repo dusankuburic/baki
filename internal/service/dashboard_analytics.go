@@ -95,6 +95,53 @@ type anaCacheEntry struct {
 	data      *models.DashboardAnalyticsData
 	fetchedAt time.Time
 	seq       uint64 // insertion order; breaks fetchedAt ties on eviction
+	// userID built the view; orgIDs are the organisations its scope spans (InvalidateFlowViews drops by both).
+	userID string
+	orgIDs []string
+}
+
+// anaFence is what an analytics build captured before it read, for its fill to be checked against the
+// invalidations that ran meanwhile (DashboardService.anaGen).
+type anaFence struct {
+	userID  string
+	userGen uint64
+	epoch   uint64
+	// Set by scopeRead: the organisations the view spans, their generations, and whether an organisation was
+	// invalidated while the scope was read (its bump may precede the capture: refuse).
+	orgIDs     []string
+	orgGens    []uint64
+	scopeDirty bool
+}
+
+func (s *DashboardService) beginAnaFill(userID string) *anaFence {
+	return &anaFence{userID: userID, epoch: s.orgEpoch.Load(), userGen: s.anaGen.Load("u:" + userID)}
+}
+
+// scopeRead records the organisations the view spans, right after the scope read that named them. An
+// invalidation bumps orgEpoch before the organisation's generation, so one whose bump this capture already saw
+// also shows in the epoch.
+func (f *anaFence) scopeRead(s *DashboardService, orgIDs []string) {
+	f.orgIDs = orgIDs
+	f.orgGens = make([]uint64, len(orgIDs))
+	for i, org := range orgIDs {
+		f.orgGens[i] = s.anaGen.Load("o:" + org)
+	}
+	f.scopeDirty = s.orgEpoch.Load() != f.epoch
+}
+
+func (s *DashboardService) anaFillOK(ctx context.Context, f *anaFence) bool {
+	if !s.anaGen.FillOK(ctx, "u:"+f.userID, f.userGen) {
+		return false
+	}
+	if len(f.orgIDs) > 0 && f.scopeDirty {
+		return false
+	}
+	for i, org := range f.orgIDs {
+		if !s.anaGen.FillOK(ctx, "o:"+org, f.orgGens[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // ruleMeta is the catalog view of one rule.
@@ -117,14 +164,19 @@ func (s *DashboardService) anaCacheGet(key string) *models.DashboardAnalyticsDat
 	return nil
 }
 
-func (s *DashboardService) anaCachePut(key string, data *models.DashboardAnalyticsData) {
+// anaCacheFill stores a view built under fence unless an invalidation it overlapped refuses it; checked under
+// the lock InvalidateFlowViews deletes under.
+func (s *DashboardService) anaCacheFill(ctx context.Context, key string, data *models.DashboardAnalyticsData, f *anaFence) {
 	s.dashMu.Lock()
 	defer s.dashMu.Unlock()
+	if !s.anaFillOK(ctx, f) {
+		return
+	}
 	if s.anaCache == nil {
 		s.anaCache = make(map[string]*anaCacheEntry)
 	}
 	s.anaSeq++
-	s.anaCache[key] = &anaCacheEntry{data: data, fetchedAt: time.Now(), seq: s.anaSeq}
+	s.anaCache[key] = &anaCacheEntry{data: data, fetchedAt: time.Now(), seq: s.anaSeq, userID: f.userID, orgIDs: f.orgIDs}
 	// Same write-time sweep as the home cache: entries past the TTL are dead
 	// weight the hit check skips anyway.
 	for k, e := range s.anaCache {
@@ -166,11 +218,12 @@ func (s *DashboardService) BuildAnalytics(ctx context.Context, userID string, ca
 		if hit := s.anaCacheGet(key); hit != nil {
 			return hit, nil
 		}
-		out, err := s.buildAnalytics(ctx, userID, caller, q)
+		fence := s.beginAnaFill(userID)
+		out, err := s.buildAnalytics(ctx, userID, caller, q, fence)
 		if err != nil {
 			return nil, err
 		}
-		s.anaCachePut(key, out)
+		s.anaCacheFill(ctx, key, out, fence)
 		return out, nil
 	})
 	if err != nil {
@@ -212,11 +265,12 @@ func libraryScopeOf(scope string) LibraryScope {
 	}
 }
 
-func (s *DashboardService) buildAnalytics(ctx context.Context, userID string, caller AnalyticsCaller, q AnalyticsQuery) (*models.DashboardAnalyticsData, error) {
+func (s *DashboardService) buildAnalytics(ctx context.Context, userID string, caller AnalyticsCaller, q AnalyticsQuery, fence *anaFence) (*models.DashboardAnalyticsData, error) {
 	ids, orgIDs, err := s.scope.ScopeFlowIDs(ctx, userID, q.OrgID, libraryScopeOf(q.Scope), maxAnalyticsFlows)
 	if err != nil {
 		return nil, err
 	}
+	fence.scopeRead(s, orgIDs)
 	truncated := len(ids) >= maxAnalyticsFlows
 	scopeIDs := ids
 	applied := []string{}

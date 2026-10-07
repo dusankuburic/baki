@@ -18,6 +18,7 @@ import (
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/egress"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	"pad-analyzer/internal/testutil"
@@ -46,8 +47,9 @@ func newLocalHarness(t *testing.T) *localHarness {
 		return v, nil
 	}, nil, nil, nil)
 	svc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets, nil, nil)
-	sys := service.NewSystemService(storage.NewInMemorySettingsStore(), secrets, nil, nil, "local", nil)
-	sys.OnApiKeyChanged(svc.InvalidateModels)
+	bus := eventbus.New(nil, 0)
+	sys := service.NewSystemService(storage.NewInMemorySettingsStore(), secrets, nil, nil, "local", nil, bus)
+	service.SubscribeModelCache(bus, svc)
 	return &localHarness{h: NewProviderHandler(svc, &SecurityConfig{}, nil), svc: svc, sys: sys, secrets: secrets}
 }
 
@@ -202,7 +204,7 @@ func TestLocalConfigRoutes_SaveGetAndDelete(t *testing.T) {
 	}
 
 	// Removal goes through the existing keys/delete service path.
-	if err := l.sys.DeleteApiKey("", ai.LocalProviderID); err != nil {
+	if err := l.sys.DeleteApiKey(bgCtx(), "", ai.LocalProviderID); err != nil {
 		t.Fatal(err)
 	}
 	if got := l.get(t); got["configured"] != false {
@@ -371,7 +373,7 @@ func TestListProviders_LocalOnlyWhenConfigured(t *testing.T) {
 	}
 
 	// Removal drops the provider from the list again.
-	if err := l.sys.DeleteApiKey("", ai.LocalProviderID); err != nil {
+	if err := l.sys.DeleteApiKey(bgCtx(), "", ai.LocalProviderID); err != nil {
 		t.Fatal(err)
 	}
 	if p := l.localEntry(t); p != nil {

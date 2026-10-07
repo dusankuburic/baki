@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,9 +12,20 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
+
+// newSubscribedService builds the service on a bus with its corpus count cache subscribed, as DI wires it, and
+// records what it announces.
+func newSubscribedService(store interfaces.StorageBackend, opts ...Option) (*KnowledgeService, *eventbus.Recorder) {
+	bus := eventbus.New(nil, 0)
+	svc := NewKnowledgeService(store, nil, nil, append(opts, WithEventBus(bus))...)
+	SubscribeCorpusCache(bus, svc)
+	return svc, eventbus.NewRecorder(bus)
+}
 
 // countStore counts CountKnowledgeChunks reads; onCount (when set) runs
 // inside the read, before it answers.
@@ -93,7 +105,7 @@ func TestSearch_EmptyCorpusSkipsEmbedding(t *testing.T) {
 func TestSearch_UploadInvalidatesCorpusCount(t *testing.T) {
 	store := &countStore{FakeBackend: &testutil.FakeBackend{}}
 	emb := &identityEmbedder{identity: "id-1"}
-	svc := NewKnowledgeService(store, nil, nil, WithEmbedder(emb))
+	svc, rec := newSubscribedService(store, WithEmbedder(emb))
 	const q = "what is the retry policy?"
 
 	if _, err := svc.Search(context.Background(), "u1", "org-1", q); err != nil {
@@ -107,6 +119,9 @@ func TestSearch_UploadInvalidatesCorpusCount(t *testing.T) {
 	}
 	if n := emb.embedded(q); n != 1 {
 		t.Errorf("query embedded %d times after the upload, want 1", n)
+	}
+	if got := eventbus.Recorded[events.KnowledgeDocChanged](rec); len(got) != 1 || got[0].OrgID != "org-1" || got[0].DocID == "" || got[0].Kind != events.KnowledgeDocAdded {
+		t.Errorf("announced %+v, want one KnowledgeDocAdded of org-1 naming the new document", got)
 	}
 
 	// After the settle window the count is read again (and is non-zero).
@@ -298,7 +313,7 @@ func TestEmbedBatched_FailureStopsTheRest(t *testing.T) {
 // stale, so the next Search reads the count again.
 func TestDeleteDocument_InvalidatesCorpusCount(t *testing.T) {
 	store := &countStore{FakeBackend: &testutil.FakeBackend{}}
-	svc := NewKnowledgeService(store, nil, nil, WithEmbedder(&identityEmbedder{}))
+	svc, rec := newSubscribedService(store, WithEmbedder(&identityEmbedder{}))
 	ctx := context.Background()
 	for _, d := range []*interfaces.KnowledgeDocument{{ID: "d1", OrgID: "org-1"}, {ID: "d2", OrgID: "org-1"}, {ID: "d3", OrgID: "org-2"}} {
 		if err := store.SaveKnowledgeDocument(ctx, "u-1", d); err != nil {
@@ -323,5 +338,31 @@ func TestDeleteDocument_InvalidatesCorpusCount(t *testing.T) {
 	}
 	if svc.corpusEmpty(ctx, "org-1") {
 		t.Error("the cached count survived the delete")
+	}
+	want := []events.KnowledgeDocChanged{
+		{OrgID: "org-2", DocID: "d1", Kind: events.KnowledgeDocDeleted},
+		{OrgID: "org-1", DocID: "d1", Kind: events.KnowledgeDocDeleted},
+	}
+	if got := eventbus.Recorded[events.KnowledgeDocChanged](rec); !reflect.DeepEqual(got, want) {
+		t.Errorf("announced %+v, want %+v", got, want)
+	}
+}
+
+// A deleted organisation's cached count goes with it; other organisations' stay.
+func TestOrgDeleted_InvalidatesCorpusCount(t *testing.T) {
+	store := &countStore{FakeBackend: &testutil.FakeBackend{}}
+	bus := eventbus.New(nil, 0)
+	svc := NewKnowledgeService(store, nil, nil, WithEmbedder(&identityEmbedder{}), WithEventBus(bus))
+	SubscribeCorpusCache(bus, svc)
+	ctx := context.Background()
+	svc.corpusEmpty(ctx, "org-1")
+	svc.corpusEmpty(ctx, "org-2")
+	bus.Publish(ctx, events.OrgMemberChanged{OrgID: "org-1", Kind: events.OrgDeleted})
+	bus.Publish(ctx, events.OrgMemberChanged{OrgID: "org-2", UserID: "u1", Kind: events.OrgMemberRemoved})
+	if v, _ := svc.caches().counts.Get(ctx, "org-1"); v != corpusUnknown {
+		t.Errorf("deleted org's count = %v, want invalidated", v)
+	}
+	if v, _ := svc.caches().counts.Get(ctx, "org-2"); v != 0 {
+		t.Errorf("another org's count = %v, want its cached 0", v)
 	}
 }

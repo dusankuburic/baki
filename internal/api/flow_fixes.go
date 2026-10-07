@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/api/route"
@@ -58,9 +57,6 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
-	}
-	if h.notifier != nil {
-		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
 	}
 	render.JSON(w, updated)
 }
@@ -151,9 +147,6 @@ func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request
 		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
-	}
-	if h.notifier != nil {
-		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
 	}
 	// `partial`: the deadline ended the loop early; the applied fixes ARE persisted and the client can
 	// re-run. The timeout middleware only cancels r.Context(), so this response still reaches the client.

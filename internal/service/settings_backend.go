@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
@@ -81,6 +83,8 @@ type BackendSettingsProvider struct {
 
 	// refreshMu serialises refreshes so a cache expiry under concurrent load produces one query.
 	refreshMu sync.Mutex
+	// gen fences refreshes against Invalidate: a refresh that read before a write committed must not store.
+	gen eventbus.Gen[string]
 
 	// now is overridable in tests.
 	now func() time.Time
@@ -94,17 +98,22 @@ func NewBackendSettingsProvider(ctx context.Context, backend storageif.StorageBa
 		cached:  models.DefaultSettings(),
 		now:     time.Now,
 	}
-	if err := p.refresh(ctx); err != nil {
+	if _, err := p.refresh(ctx); err != nil {
 		logger.Warn("settings: initial load from backend failed, serving defaults until it succeeds", "error", err)
 	}
 	return p
 }
 
-// refresh loads settings from the backend and replaces the cache.
-func (p *BackendSettingsProvider) refresh(ctx context.Context) error {
+// settingsGenKey is the one key of the provider's generation: the deployment settings are a singleton.
+const settingsGenKey = ""
+
+// refresh loads settings from the backend and replaces the cache, unless an invalidation ran since the read
+// began (the value read may predate a write that has committed since); it returns what it read either way.
+func (p *BackendSettingsProvider) refresh(ctx context.Context) (*models.AppSettings, error) {
 	loadCtx, cancel := context.WithTimeout(ctx, backendSettingsTimeout)
 	defer cancel()
 
+	captured := p.gen.Load(settingsGenKey)
 	// A detached context on purpose: a settings read must not depend on a request transaction that may still
 	// roll back, and the settings tables carry no RLS policies, so nothing is lost by reading outside it.
 	stored, err := p.backend.LoadSettings(loadCtx)
@@ -112,14 +121,36 @@ func (p *BackendSettingsProvider) refresh(ctx context.Context) error {
 		p.mu.Lock()
 		p.expires = p.now().Add(backendSettingsErrorTTL)
 		p.mu.Unlock()
-		return err
+		return nil, err
 	}
 
+	read := settingsToModel(stored)
 	p.mu.Lock()
-	p.cached = settingsToModel(stored)
-	p.expires = p.now().Add(backendSettingsTTL)
+	if p.gen.FillOK(ctx, settingsGenKey, captured) {
+		p.cached = read
+		p.expires = p.now().Add(backendSettingsTTL)
+	}
 	p.mu.Unlock()
-	return nil
+	return read, nil
+}
+
+// Invalidate forces the next Get to reload and refuses a refresh already in flight.
+func (p *BackendSettingsProvider) Invalidate() {
+	p.mu.Lock()
+	p.gen.Bump(settingsGenKey)
+	p.expires = time.Time{}
+	p.mu.Unlock()
+}
+
+// SubscribeSettingsCache drops p's cached deployment settings on every deployment SettingsChanged: once when
+// published, again when the write's transaction ends, so a refresh between the write and its commit cannot
+// leave the old value cached.
+func SubscribeSettingsCache(bus *eventbus.Bus, p *BackendSettingsProvider) {
+	eventbus.Subscribe(bus, eventbus.Sync, "settings-cache", func(_ context.Context, e events.SettingsChanged) {
+		if e.Scope == events.DeploymentSettings {
+			p.Invalidate()
+		}
+	})
 }
 
 // Get returns the current deployment settings: never blocks longer than backendSettingsTimeout, and on failure
@@ -142,8 +173,12 @@ func (p *BackendSettingsProvider) Get() *models.AppSettings {
 	fresh = p.now().Before(p.expires)
 	p.mu.RUnlock()
 	if !fresh {
-		if err := p.refresh(context.Background()); err != nil {
+		read, err := p.refresh(context.Background())
+		if err != nil {
 			logger.Warn("settings: backend load failed, serving last known values", "error", err)
+		} else if read != nil {
+			// What was read is current even when an invalidation kept it out of the cache.
+			return read.Clone()
 		}
 	}
 
@@ -161,10 +196,8 @@ func (p *BackendSettingsProvider) Update(ctx context.Context, updated models.App
 	if err := p.backend.SaveSettings(ctx, settingsFromModel(&updated)); err != nil {
 		return err
 	}
-
-	p.mu.Lock()
-	p.expires = time.Time{} // force a reload on the next Get
-	p.mu.Unlock()
+	// The writer's SettingsChanged invalidates again once the transaction has ended.
+	p.Invalidate()
 	return nil
 }
 

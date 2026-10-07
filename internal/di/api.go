@@ -11,6 +11,7 @@ import (
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/mail"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/sso"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -118,7 +119,7 @@ var APIModule = fx.Options(
 	fx.Provide(
 		ProvideSecurityConfig,
 		ProvideFlowAccessChecker,
-		api.NewEventManager,
+		ProvideEventManager,
 		// Adapter: *redis.Client (nil when PAD_REDIS_URL is unset) →
 		// api.RedisPinger (see ProvideRedisPinger above).
 		ProvideRedisPinger,
@@ -163,4 +164,26 @@ var APIModule = fx.Options(
 		},
 		api.NewRouter,
 	),
+	// A member who stops being an admin takes the org credentials they lent along, after the change commits.
+	fx.Invoke(api.SubscribeLentCredentialRevocation),
+	fx.Invoke(SubscribeRealtime),
 )
+
+// ProvideEventManager is the SSE hub; EmitToOrg resolves an organisation's members from the store (none without
+// one: the desktop has no organisations).
+func ProvideEventManager(shutdownCh chan struct{}, backend storageif.StorageBackend) *api.EventManager {
+	if backend == nil {
+		return api.NewEventManager(shutdownCh)
+	}
+	return api.NewEventManager(shutdownCh, api.WithOrgRoster(api.OrgRosterOf(backend)))
+}
+
+// SubscribeRealtime subscribes what tells clients and people that something changed: all async, so each runs
+// once the write committed (a client refetching earlier read the old row) and never for a rolled-back one.
+func SubscribeRealtime(bus *eventbus.Bus, router *api.Router, analysis *api.AnalysisHandler) {
+	eventbus.Subscribe(bus, eventbus.Async, "ws-flow-changed", service.NotifyFlowViewers(router.FlowViewers()))
+	// The bell rows of a comment or an assignment must not be lost: when the bus's runner is full, the hand-off to
+	// the handler's own alert runner runs inline instead.
+	eventbus.Subscribe(bus, eventbus.Async, "finding-comment-fanout", analysis.OnFindingCommented, eventbus.InlineWhenSaturated())
+	eventbus.Subscribe(bus, eventbus.Async, "finding-assignment-fanout", analysis.OnFindingAssigned, eventbus.InlineWhenSaturated())
+}

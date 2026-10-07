@@ -712,17 +712,17 @@ func TestBuildAnalytics_NeedsCloudBackendAndResolver(t *testing.T) {
 	}
 }
 
-// TestAnaCachePut_BoundedByEntryCap pins the cache bound: the analytics key
+// TestAnaCacheFill_BoundedByEntryCap pins the cache bound: the analytics key
 // embeds caller-chosen From/To nanoseconds and flow lists, so distinct keys
 // are unbounded input. Inserting well over anaCacheMaxEntries entries must
 // keep the map at ≤ cap (expired-first sweep, then nearest-to-expiry
 // eviction), and the most recently inserted key must still be resident.
-func TestAnaCachePut_BoundedByEntryCap(t *testing.T) {
+func TestAnaCacheFill_BoundedByEntryCap(t *testing.T) {
 	svc := NewDashboardService(newAnaStub(), nil, nil, nil)
 
 	const extra = 50
 	for i := 0; i < anaCacheMaxEntries+extra; i++ {
-		svc.anaCachePut(fmt.Sprintf("user-1\x00q%d", i), &models.DashboardAnalyticsData{})
+		svc.anaCacheFill(context.Background(), fmt.Sprintf("user-1\x00q%d", i), &models.DashboardAnalyticsData{}, svc.beginAnaFill("user-1"))
 	}
 
 	svc.dashMu.Lock()

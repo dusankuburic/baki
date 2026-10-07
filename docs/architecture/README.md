@@ -39,9 +39,14 @@ and when it shrinks, so the pinned numbers keep going down.
 - **Responses.** The request's transaction commits before the first byte of the response. Once a handler has
   started writing, it must not touch the database again (ADR 0004).
 - **Wiring.** A service takes its dependencies in its constructor. A post-construction `Set*`/`On*` call in
-  `internal/di` is allowed only for a cycle, an event hook (until Phase 2b's bus), or a listed deferral, and
-  every one is pinned with its reason (`TestDISetters_Listed`, [di-wiring.md](di-wiring.md)). When two services
-  need each other, extract the part both need, as `AIBudget` and `FlowScopeResolver` were.
+  `internal/di` is allowed only for a cycle or a listed deferral, and every one is pinned with its reason
+  (`TestDISetters_Listed`, [di-wiring.md](di-wiring.md)). When two services need each other, extract the part both
+  need, as `AIBudget` and `FlowScopeResolver` were.
+- **Events.** A change another module derives something from is published as a domain event
+  (`internal/events`, ADR 0009) by the service that made it, inside its transaction; the deriving module subscribes
+  from an `fx.Invoke`. Cache invalidation is a sync subscriber, and the cache's fills are generation-checked
+  (`eventbus.Gen`); side effects (email, realtime, notifications) are async subscribers, which run only after the
+  commit. Never call into another service to tell it something changed, and never add a hook setter for it.
 - **Background work.** Anything that must not hold up the request runs on a `lifecycle.NewBounded` runner,
   which is capped, reports panics and is drained at shutdown, never a bare `go func`.
 - **Request logs.** Log on the request path through `logger.FromContext(ctx)`, so the line carries the

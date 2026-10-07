@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 
 	"pad-analyzer/internal/ai"
@@ -15,7 +16,9 @@ import (
 	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/events"
 	mailer "pad-analyzer/internal/mail"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	"pad-analyzer/internal/storage/filesystem"
@@ -163,7 +166,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 
 	notifier := &mockNotifier{}
 	settings, _ := storage.NewSettingsStore()
-	sysSvc := service.NewSystemService(settings, storage.NewKeyringSecretStore(), notifier, backend, cfg.Mode, nil)
+	sysSvc := service.NewSystemService(settings, storage.NewKeyringSecretStore(), notifier, backend, cfg.Mode, nil, nil)
 	docProv := service.DocumentProvider(service.NewLocalDocumentProvider())
 	if jwtEnabled {
 		docProv = service.NewCloudDocumentProvider(backend)
@@ -177,12 +180,15 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		blacklist = auth.NewTokenBlacklist()
 	}
 	authMgr := auth.NewManager(testToken, blacklist)
-	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
+	// The event bus as di builds it, its async deliveries inline (after the request's commit).
+	bus := eventbus.New(nil, 0)
+	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore(), collaboration.WithEventBus(bus))
 	authzSvc := service.NewAuthzService(backend, orgSvc)
 
-	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, authzSvc, nil)
+	// The flow caches subscribe to the same bus below.
+	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, authzSvc, nil, service.WithFlowEvents(bus))
 	scopes := service.NewFlowScopeResolver(backend, authzSvc)
-	libSvc := service.NewLibraryService(backend, flowSvc, authzSvc, scopes)
+	libSvc := service.NewLibraryService(backend, bus, authzSvc, scopes)
 	analysisSvc, err := service.NewAnalysisService(notifier, settings, nil, service.AnalysisOptions{})
 	if err != nil {
 		// NewAnalysisService keeps an error return for the DI signature but
@@ -219,27 +225,39 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 
 	dashboardSvc := service.NewDashboardService(backend, analysisSvc, flowSvc, scopes)
 	authSvc := service.NewAuthService(backend, mailer.NewService(config.EmailConfig{}, config.ModeLocal))
-	triageSvc := service.NewTriageService(backend, backend, backend)
-	shareSvc := service.NewShareTokenService(backend, backend)
+	triageSvc := service.NewTriageService(backend, backend, backend, bus)
+	shareSvc := service.NewShareTokenService(backend, backend, bus)
+	for _, s := range service.FlowCacheSubscribers(flowSvc, dashboardSvc, chatSvc) {
+		eventbus.Subscribe(bus, eventbus.Sync, s.Name, s.Fn)
+	}
 	// Never started, as before boot: every row is a detached write to the backend.
 	auditRec := testAuditRecorder(backend)
+	orgHandler := NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(backend, backend, bus), providerSvc, authzSvc, service.NewChannelService(backend), service.NewUserDirectory(backend), auditRec)
+	// As APIModule subscribes it, on the provider service the org handler holds at delivery (tests swap it).
+	eventbus.Subscribe(bus, eventbus.Async, "lent-credential-revocation", func(ctx context.Context, e events.OrgMemberChanged) {
+		revokeLentCredentials(ctx, auditRec, orgHandler.providers, e)
+	}, eventbus.InlineWhenSaturated())
+	analysisHandler := NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security, service.NewWebhookNotifier(nil), mailer.NewService(config.EmailConfig{}, config.ModeLocal), "", service.NewPolicyService(backend), service.NewGovernanceAlertService(backend), triageSvc, service.NewCommentService(backend, triageSvc, bus), shareSvc, auditRec)
+	// The subscriptions internal/di.SubscribeRealtime makes for the handlers.
+	eventbus.Subscribe(bus, eventbus.Async, "finding-comment-fanout", analysisHandler.OnFindingCommented, eventbus.InlineWhenSaturated())
+	eventbus.Subscribe(bus, eventbus.Async, "finding-assignment-fanout", analysisHandler.OnFindingAssigned, eventbus.InlineWhenSaturated())
 	modules := []Module{
-		NewSystemHandler(sysSvc, security, auditRec, nil, nil, authzSvc, service.NewHealthService(backend)),
+		NewSystemHandler(sysSvc, security, auditRec, nil, authzSvc, service.NewHealthService(backend)),
 		NewFlowHandler(flowSvc, docProv, backend, security, shareSvc, auditRec),
 		NewLibraryHandler(libSvc, backend, security, auditRec),
 		NewChatHandler(chatSvc, flowSvc, security, auditRec),
-		NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security, service.NewWebhookNotifier(nil), mailer.NewService(config.EmailConfig{}, config.ModeLocal), "", service.NewPolicyService(backend), service.NewGovernanceAlertService(backend), triageSvc, service.NewCommentService(backend, triageSvc), shareSvc, auditRec),
+		analysisHandler,
 		NewDashboardHandler(dashboardSvc, security),
 		NewExportHandler(exportSvc, flowSvc, analysisSvc, security, auditRec),
 		// Cloud/JWT mode always runs with a refresh-token store in production
 		// (main.go wires one whenever auth is enabled); mirror that here so the
 		// refresh handler's replay/rotation path is exercised, and a nil store
 		// (which the handler now rejects as a misconfiguration) isn't relied on.
-		NewAuthHandler(service.NewSessionService(newMockTokenStore()), backend, security, ssoClient, service.NewIdentityService(backend, identityStore), mailer.NewService(config.EmailConfig{}, config.ModeLocal), authSvc, service.NewAccountLifecycleService(backend, nil), service.NewAPITokenService(backend), auditRec),
+		NewAuthHandler(service.NewSessionService(newMockTokenStore()), backend, security, ssoClient, service.NewIdentityService(backend, identityStore), mailer.NewService(config.EmailConfig{}, config.ModeLocal), authSvc, service.NewAccountLifecycleService(backend, nil, nil), service.NewAPITokenService(backend), auditRec),
 		NewAdminHandler(auditRec, security, NewMigrationRunner(nil), nil, authzSvc, service.NewUserAdminService(backend)),
 		NewProviderHandler(providerSvc, security, auditRec),
-		NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(backend, backend, nil), providerSvc, authzSvc, service.NewChannelService(backend), service.NewUserDirectory(backend), auditRec),
-		NewSharingHandler(backend, flowSvc, service.NewCollaboratorService(backend), security, auditRec),
+		orgHandler,
+		NewSharingHandler(backend, flowSvc, service.NewCollaboratorService(backend, bus), security, auditRec),
 	}
 
 	rt, err := NewRouter(RouterParams{Lifecycle: noopLifecycle{}, Security: security, Events: eventManager, Modules: modules, Config: cfg, ShutdownCh: make(chan struct{})})
@@ -247,6 +265,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		panic("NewRouter: " + err.Error())
 	}
 	rt.caps = testCaps(jwtEnabled, backend)
+	testRouterBuses.Store(rt, bus)
 	return rt
 }
 
@@ -416,4 +435,17 @@ func newBadBodyRequest(t *testing.T, rt *Router, method, path string) *httptest.
 	rr := httptest.NewRecorder()
 	rt.ServeHTTP(rr, req)
 	return rr
+}
+
+// testRouterBuses maps each test router to the event bus its services publish on, for tests that subscribe.
+var testRouterBuses sync.Map
+
+// busOf returns the event bus rt's services publish on.
+func busOf(t *testing.T, rt *Router) *eventbus.Bus {
+	t.Helper()
+	b, ok := testRouterBuses.Load(rt)
+	if !ok {
+		t.Fatal("not a test router built by newTestRouterSSO")
+	}
+	return b.(*eventbus.Bus)
 }

@@ -18,7 +18,9 @@ import (
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/egress"
+	"pad-analyzer/internal/events"
 	mailer "pad-analyzer/internal/mail"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
@@ -59,7 +61,8 @@ func newOrgProvidersFixture(t *testing.T, withOrgStore bool) *orgProvidersFixtur
 	ai.ResetAzureFoundryCaches()
 	t.Cleanup(func() { ai.ConfigureAzureFoundry(ai.AzureFoundryOptions{}) })
 
-	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
+	bus := eventbus.New(nil, 0)
+	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore(), collaboration.WithEventBus(bus))
 	org, err := orgSvc.Create(bgCtx(), "Acme", "u-admin")
 	if err != nil {
 		t.Fatalf("create org: %v", err)
@@ -81,6 +84,10 @@ func newOrgProvidersFixture(t *testing.T, withOrgStore bool) *orgProvidersFixtur
 	} else {
 		f.useOrgStore(nil)
 	}
+	// As APIModule subscribes it, on the provider service and backend the fixture holds at delivery.
+	eventbus.Subscribe(bus, eventbus.Async, "lent-credential-revocation", func(ctx context.Context, e events.OrgMemberChanged) {
+		revokeLentCredentials(ctx, testAuditRecorder(f.backend), f.svc, e)
+	}, eventbus.InlineWhenSaturated())
 	return f
 }
 

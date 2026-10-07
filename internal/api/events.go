@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,14 +15,52 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
 )
 
 type Event struct {
-	Name       string `json:"name"`
-	Data       any    `json:"data"`
-	TargetUser string `json:"-"` // empty = broadcast to all; non-empty = only this user
+	Name string `json:"name"`
+	Data any    `json:"data"`
+	// TargetUser is the one user whose clients receive the event (service.LocalUser, "": the clients that connected
+	// without an identity), unless all is set.
+	TargetUser string `json:"-"`
+	// all delivers to every client of every user (EmitToAll); never implied by an empty TargetUser.
+	all bool
+}
+
+// OrgRoster lists who belongs to an organisation: its owner and members, in any order (EmitToOrg dedupes).
+type OrgRoster func(ctx context.Context, orgID string) ([]string, error)
+
+// OrgRosterOf resolves rosters from the stored organisation: its owner, who is not necessarily listed as a member,
+// and its members.
+func OrgRosterOf(orgs interface {
+	LoadOrg(ctx context.Context, id string) (*storageif.Organisation, error)
+}) OrgRoster {
+	return func(ctx context.Context, orgID string) ([]string, error) {
+		org, err := orgs.LoadOrg(ctx, orgID)
+		if err != nil {
+			return nil, err
+		}
+		if org == nil {
+			return nil, storageif.ErrNotFound
+		}
+		ids := make([]string, 0, len(org.Members)+1)
+		ids = append(ids, org.OwnerID)
+		for _, m := range org.Members {
+			ids = append(ids, m.UserID)
+		}
+		return ids, nil
+	}
+}
+
+// EventManagerOption configures an EventManager at construction.
+type EventManagerOption func(*EventManager)
+
+// WithOrgRoster is how EmitToOrg resolves an organisation's members; without it EmitToOrg reaches no one.
+func WithOrgRoster(r OrgRoster) EventManagerOption {
+	return func(m *EventManager) { m.roster = r }
 }
 
 // sseHeartbeatInterval is how often HandleEvents writes an SSE comment frame
@@ -70,6 +109,9 @@ type EventManager struct {
 	// the last "buffer full" warning was written, rate-limited so a stalled client doesn't log per event.
 	droppedFrames atomic.Int64
 	dropWarnedAt  atomic.Int64
+
+	// roster resolves EmitToOrg's audience; nil (no server store) reaches no one.
+	roster OrgRoster
 }
 
 // dropWarnInterval is the minimum gap between two "send buffer full" warnings; the drops in
@@ -85,13 +127,17 @@ func (m *EventManager) heartbeatTick() time.Duration {
 	return sseHeartbeatInterval
 }
 
-func NewEventManager(shutdownCh chan struct{}) *EventManager {
-	return &EventManager{
+func NewEventManager(shutdownCh chan struct{}, opts ...EventManagerOption) *EventManager {
+	m := &EventManager{
 		clients:      make(map[chan []byte]string),
 		byUser:       make(map[string]map[chan []byte]struct{}),
 		sseConnCount: make(map[string]int),
 		shutdownCh:   shutdownCh,
 	}
+	for _, o := range opts {
+		o(m)
+	}
+	return m
 }
 
 // SetOriginChecker injects the router's CORS logic so the SSE endpoint
@@ -113,27 +159,46 @@ func (m *EventManager) SetRevocationChecker(fn func(string) bool) {
 	m.isRevoked = fn
 }
 
-// Emit satisfies the service.EventNotifier interface: broadcasts to ALL connected SSE clients —
-// use only for events that are truly global or in local mode where only one client exists.
-func (m *EventManager) Emit(name string, data any) {
-	m.deliver(Event{Name: name, Data: data})
-}
-
-// EmitTo satisfies the service.EventNotifier interface: delivers only to userID's clients (identically
-// to Emit when userID is ""). Use it for any user-scoped event to prevent cross-tenant leaks.
+// EmitTo satisfies the service.EventNotifier interface: delivers only to userID's clients. "" is
+// service.LocalUser, the clients that connected without an identity (a deployment without accounts), never a
+// broadcast: with accounts no client registers under it.
 func (m *EventManager) EmitTo(userID, name string, data any) {
 	m.deliver(Event{Name: name, Data: data, TargetUser: userID})
 }
 
-// HasSubscriber satisfies the service.EventNotifier interface: whether EmitTo(userID, …) would reach
-// a connected client ("" matches any). Services use it to detect abandoned work — e.g. a chat stream
-// whose tab closed without /cancel.
-func (m *EventManager) HasSubscriber(userID string) bool {
-	if userID == "" {
-		m.clientsMu.RLock()
-		defer m.clientsMu.RUnlock()
-		return len(m.clients) > 0
+// EmitToAll satisfies the service.EventNotifier interface: delivers to every connected client of every user.
+func (m *EventManager) EmitToAll(name string, data any) {
+	m.deliver(Event{Name: name, Data: data, all: true})
+}
+
+// EmitToOrg satisfies the service.EventNotifier interface: delivers to every member of orgID (owner included),
+// each once, resolving the roster on ctx at delivery. A failed read is logged: the event is best-effort, the
+// change it announces already made.
+func (m *EventManager) EmitToOrg(ctx context.Context, orgID, name string, data any) {
+	if m.roster == nil || orgID == "" {
+		return
 	}
+	ids, err := m.roster(ctx, orgID)
+	if err != nil {
+		logger.FromContext(ctx).Warn("SSE: organisation roster unavailable; event not delivered", "event", name, "orgId", orgID, "err", err)
+		return
+	}
+	seen := make(map[string]bool, len(ids))
+	users := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		users = append(users, id)
+	}
+	m.deliverTo(Event{Name: name, Data: data}, users)
+}
+
+// HasSubscriber satisfies the service.EventNotifier interface: whether EmitTo(userID, …) would reach
+// a connected client. Services use it to detect abandoned work — e.g. a chat stream whose tab closed
+// without /cancel.
+func (m *EventManager) HasSubscriber(userID string) bool {
 	m.rlockIndexed()
 	defer m.clientsMu.RUnlock()
 	return len(m.byUser[userID]) > 0
@@ -226,6 +291,15 @@ func sheddable(name string) bool {
 }
 
 func (m *EventManager) deliver(ev Event) {
+	if ev.all {
+		m.deliverTo(ev, nil)
+		return
+	}
+	m.deliverTo(ev, []string{ev.TargetUser})
+}
+
+// deliverTo offers ev to the clients of users, or to every client when ev.all is set.
+func (m *EventManager) deliverTo(ev Event, users []string) {
 	// Encode the SSE frame ONCE for all recipients: per-client encoding would
 	// multiply the cost (and allocations) by the number of live SSE tabs.
 	frame, ok := encodeEventFrame(ev)
@@ -239,9 +313,7 @@ func (m *EventManager) deliver(ev Event) {
 	// Drops are counted here and logged after the release — the synchronous log write would stall
 	// every delivery and connect if run inside the lock.
 	dropped := 0
-	if ev.TargetUser == "" {
-		// Broadcast: every client, whatever its user (local mode's clients all
-		// have userID "" and rely on this).
+	if ev.all {
 		m.clientsMu.RLock()
 		for ch := range m.clients {
 			if !m.offerFrame(ch, frame, droppable) {
@@ -250,11 +322,13 @@ func (m *EventManager) deliver(ev Event) {
 		}
 		m.clientsMu.RUnlock()
 	} else {
-		// Targeted: only the target user's own channels.
+		// Targeted: only the target users' own channels.
 		m.rlockIndexed()
-		for ch := range m.byUser[ev.TargetUser] {
-			if !m.offerFrame(ch, frame, droppable) {
-				dropped++
+		for _, user := range users {
+			for ch := range m.byUser[user] {
+				if !m.offerFrame(ch, frame, droppable) {
+					dropped++
+				}
 			}
 		}
 		m.clientsMu.RUnlock()
@@ -360,7 +434,7 @@ func lightweightEvent(ev Event) (Event, bool) {
 	default:
 		return Event{}, false
 	}
-	return Event{Name: ev.Name, Data: service.FlowLoadedSummaryOf(doc), TargetUser: ev.TargetUser}, true
+	return Event{Name: ev.Name, Data: service.FlowLoadedSummaryOf(doc), TargetUser: ev.TargetUser, all: ev.all}, true
 }
 
 // HandleEvents is the HTTP handler for the SSE endpoint.
@@ -393,7 +467,7 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 
 	// Key the connection cap per authenticated user (JWT mode) or per proxy-aware client IP, via the
 	// Router-injected clientKey. The key is "user:<id>" in JWT mode — strip the prefix so userID
-	// matches what services pass to EmitTo; in local mode the key is the bare IP (userID "", broadcast).
+	// matches what services pass to EmitTo; in local mode the key is the bare IP (userID "", service.LocalUser).
 	key := middleware.ClientIP(r, nil)
 	userID := ""
 	if m.clientKey != nil {

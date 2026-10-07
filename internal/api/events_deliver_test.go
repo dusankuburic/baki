@@ -65,7 +65,7 @@ func TestDeliver_DropWarningOutsideLockAndRateLimited(t *testing.T) {
 		m.EmitTo("alice", "chat:chunk", "x")
 	}
 	for range broadcast {
-		m.Emit("flow:changed", "x")
+		m.EmitToAll("flow:changed", "x")
 	}
 
 	probe.mu.Lock()

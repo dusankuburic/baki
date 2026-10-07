@@ -24,6 +24,7 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/egress"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	"pad-analyzer/internal/storage/filesystem"
@@ -112,8 +113,9 @@ func (e *azRegEnv) wire(adjust func(*testAzureModelsDeps)) {
 // to the handlers, which read their services per request.
 func (e *azRegEnv) install(providerAzure, systemAzure *service.AzureModelService) {
 	e.svc = service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), e.factory, e.secrets, e.orgKeys, providerAzure)
-	e.sys = service.NewSystemService(storage.NewInMemorySettingsStore(), e.secrets, &mockNotifier{}, e.fs, config.ModeCloud, systemAzure)
-	e.sys.OnApiKeyChanged(e.svc.InvalidateModels)
+	bus := eventbus.New(nil, 0)
+	e.sys = service.NewSystemService(storage.NewInMemorySettingsStore(), e.secrets, &mockNotifier{}, e.fs, config.ModeCloud, systemAzure, bus)
+	service.SubscribeModelCache(bus, e.svc)
 	moduleOf[*ProviderHandler](e.t, e.rt).providerSvc = e.svc
 	moduleOf[*OrgHandler](e.t, e.rt).providers = e.svc
 	moduleOf[*SystemHandler](e.t, e.rt).sysSvc = e.sys

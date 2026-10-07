@@ -32,7 +32,7 @@ through `SetAzureModels`, so it became a constructor parameter.
 | `knowledge.SetBudgetChecker(chat)` (`wireKnowledgeBudget`) | `rag.WithBudgetChecker(budget)` in `ProvideKnowledgeService` | Cycle broken by `AIBudget` |
 | `ChatService.SetKnowledgeService(knowledge)` | `ChatOptions.Knowledge` | No cycle once the budget is extracted |
 | `DashboardService.SetScopeResolver(lib)` | `NewDashboardService(..., scopes)` | `FlowScopeResolver` extracted, so both services take it |
-| `SystemService.SetAzureModels(azure)` | `NewSystemService(..., azure)` | No cycle |
+| `SystemService.SetAzureModels(azure)` | `NewSystemService(..., azure, bus)` | No cycle |
 | `ChatService.SetAzureModels(azure)` | `ChatOptions.Azure` | No cycle |
 | `ProviderService.SetAzureModels(azure)` | `NewProviderService(..., orgKeys, azure)` | No cycle |
 | `ProviderService.SetOrgKeyStore(orgKeys)` | `NewProviderService(..., orgKeys, azure)` | No cycle |
@@ -41,11 +41,7 @@ through `SetAzureModels`, so it became a constructor parameter.
 | `factory.SetOrgKeyLookup` (an `fx.Decorate` on `*ai.ProviderFactory`) | Called inside `ProvideAI`, which now takes the `OrgKeyStore` | No cycle. It configures the factory where it is built. |
 | `factory.SetEmbeddingDimensions` (in `ProvideAI`) | Unchanged | Configures the object its own provider builds. `ai.NewProviderFactory` has about 65 test call sites. |
 | `src.SetAzureExportConfigSource(svc.ExportConnectionConfigs)` (in `ProvideAzureModelService`) | Unchanged | **Cycle.** The backend's data-subject export reads Azure connection configs from `AzureModelService`, which is built on the backend. Phase 3's data-lifecycle registry replaces the central export. |
-| `flowSvc.SetCloudFlowMutationHook(dashboard.InvalidateDashboardCache)` | Unchanged | **Event hook** (Phase 2b, `FlowChanged`). `DashboardService` depends on `FlowService`. |
-| `flowSvc.OnInvalidateFlow(chat.InvalidateChatContext)` | Unchanged | **Event hook** (Phase 2b, `FlowChanged`). `ChatService` depends on `FlowService`. |
-| `sys.OnApiKeyChanged(provider.InvalidateModels)` | Unchanged | **Event hook** (Phase 2b, `CredentialChanged`) |
-| `AuthHandler.OnUserDeleted(provider.InvalidateScope)` (`fx.Decorate`) | `AccountLifecycleService.OnUserDeleted(provider.InvalidateScope)` in its provider | **Event hook** (Phase 2b). Account deletion moved into `AccountLifecycleService`. |
-| `AuthHandler.SetProviderService(provider)` (`fx.Decorate`) | `NewAccountLifecycleService(users, provider)` | No cycle: a constructor parameter. |
+| `AuthHandler.SetProviderService(provider)` (`fx.Decorate`) | `NewAccountLifecycleService(users, provider, bus)` | No cycle: a constructor parameter. |
 | `FlowService.SetRuleProfileResolver(resolver)` (`fx.Decorate`) | Unchanged | **Deferred.** No cycle, but `NewFlowService` has about 55 test call sites. |
 
 ## Wiring outside `internal/di` (not ratcheted)
@@ -53,7 +49,7 @@ through `SetAzureModels`, so it became a constructor parameter.
 | Where | Setter | Why it stays |
 |---|---|---|
 | `main.go` `provideScanner` | `scanner.SetEventNotifier(eventMgr)`, `SetRuleSetDigest(...)` | **Deferred.** No cycle, so these can become `scanner.New` parameters. |
-| `api.NewRouter` | `SetFlowNotifier(hub)` on modules, `EventManager.SetOriginChecker` / `SetClientKeyFunc` / `SetRevocationChecker` | The router builds the hub and owns the origin, client-key and revocation policy it hands out, so these are wiring inside one component. |
+| `api.NewRouter` | `EventManager.SetOriginChecker` / `SetClientKeyFunc` / `SetRevocationChecker` | The router owns the origin, client-key and revocation policy it hands out, so these are wiring inside one component. (The modules' `SetFlowNotifier(hub)` is gone: the `ws-flow-changed` subscriber of `FlowChanged` reaches the hub through `Router.FlowViewers`.) |
 | `ProvideAI` | `ai.ConfigureAzureFoundry`, `ai.ConfigureLocalModels` | Process-wide egress settings of the `ai` package, set once at boot |
 | `main.go` | `logger.SetPanicHook`, `logger.SetContextAttrs` | Process-wide settings, set once at boot. (The audit spill directory is resolved inside `audit.Provide`.) |
 

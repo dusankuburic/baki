@@ -921,23 +921,29 @@ func TestCachedContextCore_CachesAcrossTurns(t *testing.T) {
 	}
 }
 
-// TestChatCtxGen_BoundedAcrossManyFlows verifies the per-flow generation cache doesn't grow without bound:
-// invalidating far more flows than maxChatCtxGen LRU-evicts the oldest entries.
-func TestChatCtxGen_BoundedAcrossManyFlows(t *testing.T) {
+// TestChatCtxGen_NeverResetsAcrossManyFlows: the generations take no memory per flow, and invalidating many
+// other flows never takes a flow's generation back. The LRU of 256 counters it replaces forgot a flow's counter
+// on eviction, so the flow was back at generation 0 and its pre-edit gen-0 entry was served again.
+func TestChatCtxGen_NeverResetsAcrossManyFlows(t *testing.T) {
+	scrubs := countScrubs(t)
 	svc := &ChatService{chatCtxCache: newChatContextCache()}
-	genCache := svc.chatCtxGenCache()
+	doc := toolLoopDoc()
+	doc.ID = "flow-0"
+	provider := ctxCacheStubProvider{}
+	req := models.ChatRequest{Model: "m1", UserMessage: "q"}
 
-	total := maxChatCtxGen * 4
-	for i := range total {
-		svc.InvalidateChatContext(fmt.Sprintf("flow-%d", i))
+	before := svc.cachedContextCore(context.Background(), "s", provider, doc, nil, req)
+	svc.InvalidateChatContext(doc.ID)
+	gen := svc.chatCtxGen.Load(doc.ID)
+	for i := range 1024 {
+		svc.InvalidateChatContext(fmt.Sprintf("other-%d", i))
 	}
-
-	if _, ok := genCache.Get(context.Background(), "flow-0"); ok {
-		t.Error("expected the earliest flow's generation entry to have been LRU-evicted")
+	if now := svc.chatCtxGen.Load(doc.ID); now == 0 || now < gen {
+		t.Fatalf("flow-0's generation went from %d to %d", gen, now)
 	}
-	last := fmt.Sprintf("flow-%d", total-1)
-	if _, ok := genCache.Get(context.Background(), last); !ok {
-		t.Errorf("expected the most recently invalidated flow (%s) to still be cached", last)
+	after := svc.cachedContextCore(context.Background(), "s", provider, doc, nil, req)
+	if after.scrubbedDoc == before.scrubbedDoc || scrubs.Load() != 2 {
+		t.Fatal("the pre-invalidation context was served again")
 	}
 }
 

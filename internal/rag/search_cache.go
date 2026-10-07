@@ -8,13 +8,15 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-core/cache"
 )
 
 // Search cache tuning (see searchCaches). Vars so tests can shorten them.
 var (
 	// corpusCountTTL is how long an org's chunk count is trusted; in-process changes invalidate at
-	// once (InvalidateCorpus), another replica's upload is seen within this window.
+	// once (KnowledgeDocChanged), another replica's upload is seen within this window.
 	corpusCountTTL = 30 * time.Second
 	// corpusSettleTTL is how long an org reads as non-empty after an invalidation, without a count:
 	// an upload's chunks may still sit in its uncommitted transaction when AddDocument returns.
@@ -35,9 +37,9 @@ const (
 // the billed query embedding) and recent query embeddings (a regenerated answer embeds once). Bounded LRUs.
 type searchCaches struct {
 	// mu orders a count fill against InvalidateCorpus: a fill stores its count only when no
-	// invalidation ran since it read gen, so a count read before an upload never overwrites it.
+	// invalidation of its org ran since it read gen, so a count read before an upload never overwrites it.
 	mu     sync.Mutex
-	gen    uint64
+	gen    eventbus.Gen[string]
 	counts cache.Cache // orgID → total chunks (int)
 	embeds cache.Cache // queryEmbeddingKey → []float32
 }
@@ -51,14 +53,26 @@ func (s *KnowledgeService) caches() *searchCaches {
 	return s.search
 }
 
-// InvalidateCorpus drops the org's cached chunk count: call it whenever chunks are added or removed outside
-// AddDocument/ReindexOrg/DeleteDocument (which invalidate themselves). Until re-read the org counts as non-empty.
+// InvalidateCorpus drops the org's cached chunk count. Until re-read the org counts as non-empty.
 func (s *KnowledgeService) InvalidateCorpus(orgID string) {
 	c := s.caches()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.gen++
+	c.gen.Bump(orgID)
 	c.counts.Set(context.Background(), orgID, corpusUnknown, corpusSettleTTL)
+}
+
+// SubscribeCorpusCache drops s's cached chunk count of an org whenever its corpus changes, and when the
+// organisation is deleted.
+func SubscribeCorpusCache(bus *eventbus.Bus, s *KnowledgeService) {
+	eventbus.Subscribe(bus, eventbus.Sync, "knowledge-corpus-count", func(_ context.Context, e events.KnowledgeDocChanged) {
+		s.InvalidateCorpus(e.OrgID)
+	})
+	eventbus.Subscribe(bus, eventbus.Sync, "knowledge-corpus-count", func(_ context.Context, e events.OrgMemberChanged) {
+		if e.Kind == events.OrgDeleted && e.OrgID != "" {
+			s.InvalidateCorpus(e.OrgID)
+		}
+	})
 }
 
 // corpusEmpty reports whether the org has no knowledge chunks at all, from
@@ -69,15 +83,13 @@ func (s *KnowledgeService) corpusEmpty(ctx context.Context, orgID string) bool {
 	if v, ok := c.counts.Get(ctx, orgID); ok {
 		return v.(int) == 0
 	}
-	c.mu.Lock()
-	gen := c.gen
-	c.mu.Unlock()
+	captured := c.gen.Load(orgID)
 	total, _, err := s.store.CountKnowledgeChunks(ctx, orgID)
 	if err != nil {
 		return false
 	}
 	c.mu.Lock()
-	if c.gen == gen {
+	if c.gen.FillOK(ctx, orgID, captured) {
 		c.counts.Set(ctx, orgID, total, corpusCountTTL)
 	}
 	c.mu.Unlock()

@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
@@ -16,21 +18,19 @@ type AccountLifecycleService struct {
 	// providers releases the user's own Azure credential and disables the org credentials they lent as an admin;
 	// nil = none (bare tests, desktop).
 	providers *ProviderService
-	// onUserDeleted runs after a successful erasure (wired to ProviderService.InvalidateScope): the SQL cascade
-	// does not reach the in-process caches.
-	onUserDeleted func(scope string)
+	// bus announces a successful erasure (AccountErased): the SQL cascade does not reach the in-process caches.
+	// nil publishes nothing.
+	bus *eventbus.Bus
 }
 
-// NewAccountLifecycleService builds the service over the user store; providers may be nil (bare tests, desktop).
-func NewAccountLifecycleService(users storageif.UserStore, providers *ProviderService) *AccountLifecycleService {
-	return &AccountLifecycleService{users: users, providers: providers}
+// NewAccountLifecycleService builds the service over the user store; providers and bus may be nil (bare tests,
+// desktop).
+func NewAccountLifecycleService(users storageif.UserStore, providers *ProviderService, bus *eventbus.Bus) *AccountLifecycleService {
+	return &AccountLifecycleService{users: users, providers: providers, bus: bus}
 }
 
 // SetProviderService replaces the provider service; for tests that build a router before their provider service.
 func (s *AccountLifecycleService) SetProviderService(p *ProviderService) { s.providers = p }
-
-// OnUserDeleted registers the post-erasure hook; set once at boot.
-func (s *AccountLifecycleService) OnUserDeleted(fn func(scope string)) { s.onUserDeleted = fn }
 
 // DeleteAccount erases userID (GDPR). keyScope is the caller's credential scope. lentDisabled is called once per
 // org credential finalize disabled, in order, so the caller can audit each. A failed delete returns its error
@@ -54,7 +54,7 @@ func (s *AccountLifecycleService) prepare(keyScope string) (release func()) {
 }
 
 // finalize releases the user's own credential, disables every org credential they lent (org_provider_keys is
-// org-keyed and does not cascade with the account), then runs the post-erasure hook. Best effort: a failure to
+// org-keyed and does not cascade with the account), then announces the erasure. Best effort: a failure to
 // disable is logged and what was disabled is still reported.
 func (s *AccountLifecycleService) finalize(ctx context.Context, userID, keyScope string, release func(), lentDisabled func(storageif.OrgKeyRef)) {
 	if release != nil {
@@ -71,9 +71,7 @@ func (s *AccountLifecycleService) finalize(ctx context.Context, userID, keyScope
 			}
 		}
 	}
-	if s.onUserDeleted != nil {
-		s.onUserDeleted(keyScope)
-	}
+	s.bus.Publish(ctx, events.AccountErased{UserID: userID, KeyScope: keyScope})
 }
 
 // userDataStreamer is implemented by backends that can stream a data-subject export incrementally; backends

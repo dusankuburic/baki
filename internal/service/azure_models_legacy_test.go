@@ -255,7 +255,7 @@ func TestAzureModels_DeprecatedAdapters(t *testing.T) {
 	providers := newProviderServiceWithFakeSecrets(t, e.secrets)
 	providers.orgKeys = e.orgKeys
 	providers.azure = e.svc
-	system := NewSystemService(nil, e.secrets, nil, nil, "", nil)
+	system := NewSystemService(nil, e.secrets, nil, nil, "", nil, nil)
 	system.azure = e.svc
 	owner := storageif.AzureUserOwner("u1")
 
@@ -318,7 +318,7 @@ func TestAzureModels_DeprecatedAdapters(t *testing.T) {
 	if has, err := system.HasApiKey("u1", "azure-foundry"); err != nil || !has {
 		t.Errorf("has = %v, %v", has, err)
 	}
-	if err := system.DeleteApiKey("u1", "azure-foundry"); err != nil {
+	if err := system.DeleteApiKey(ctx, "u1", "azure-foundry"); err != nil {
 		t.Fatal(err)
 	}
 	conns, _ := e.reg.ListConnections(ctx, owner)
