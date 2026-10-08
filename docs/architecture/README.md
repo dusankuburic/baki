@@ -10,6 +10,8 @@ lasting consequences are recorded as ADRs in [`../adr/`](../adr/).
 | Schema migrations (format, compat, rollback) | [`internal/storage/database/migrations/README.md`](../../internal/storage/database/migrations/README.md) |
 | Test safety nets (goldens, ratchets, isolated databases, benchmark) | [safety-nets.md](safety-nets.md) |
 | DI wiring and the post-construction setters that remain | [di-wiring.md](di-wiring.md) |
+| What the export, erasure, organisation deletion and retention do with each table | [data-lifecycle.md](data-lifecycle.md) |
+| How a storage write gets its transaction (`withTx` and its variants) | [transactions.md](transactions.md) |
 | Per-package test map | [`../testing.md`](../testing.md) |
 
 ## Rules for new code
@@ -23,7 +25,13 @@ and when it shrinks, so the pinned numbers keep going down.
   - `internal/service` never imports `internal/api`.
   - `core` is a separate module, and `internal` is out of its reach by construction.
 - **Transactions.** Writes go through `withTx` (`internal/storage/database/rls.go`), which joins the request's
-  RLS transaction. A raw `BeginTx` beside it takes a second connection and runs without RLS (`internal/archtest`).
+  RLS transaction, or a variant of it: `withTxAs` opens its own transaction as the user when there is no request
+  transaction, `withOwnTx` never joins (writes that must outlive the request's rollback). A raw `BeginTx` beside
+  them takes a second connection and runs without RLS (`internal/archtest`, [transactions.md](transactions.md)).
+- **Tenant scoping.** Row-level security limits a table to the rows the caller can see; roles are the service's
+  (`AuthzService.Can`). A new table gets a policy or a reason in `TestRLS_TablesWithoutRowSecurityAreListed`, and a
+  read across tenants (`FlowFilter.AllFlows`, the scanner's batch reads) stays in the jobs
+  `TestArch_SystemReadsPinned` lists (ADR 0013).
 - **Handlers.** New endpoints do not call the storage backend directly. Put the logic in a service: that is
   where authorization, audit and cache invalidation belong. The count of existing direct calls only goes down
   (`internal/archtest`).
@@ -57,14 +65,25 @@ and when it shrinks, so the pinned numbers keep going down.
 - **Audit.** Record through an injected `*audit.Recorder`: `Record(ctx, audit.Entry{…, OrgID})`. The actor comes from
   the context (a background job sets `auth.SystemActor(name)`), the address and user agent from `reqinfo`.
   `internal/audit` never imports `internal/api` (`internal/archtest`, ADR 0008).
+- **Data lifecycle.** Every table is claimed in a `lifecycle_<domain>.go` file of `internal/storage/database`:
+  what the data-subject export, account erasure, organisation deletion and the retention sweep do with it
+  (`TestPostgres_Lifecycle_EveryTableClaimed`, ADR 0011, [data-lifecycle.md](data-lifecycle.md)).
 - **Secret columns.** Credentials stored outside the keystore are sealed with `sealField`/`openField` and
   included in the at-rest backfill (ADR 0005).
 - **Configuration.** Read environment variables only in `internal/config`. Resolve secrets once at load
   (`config.ResolveRuntimeSecrets`); providers never fill in config later (`internal/archtest`).
 - **Deployment modes.** Ask `capability.Of(cfg)` what the process can do; don't compare `cfg.Mode` or test for a
   nil backend.
+- **Storage capabilities.** Never type-assert a store to learn what it can do (`internal/archtest`, ADR 0010). A
+  method any store could offer joins its role interface, and every backend implements it under the storage
+  contract. What only the database offers (the cross-replica lock, the request transaction, the keystore, …) is an
+  fx value `main.go` provides beside the backend, nil without a database: take it as a parameter.
 - **Migrations.** New steps are `.sql` files with a `-- baki:compat expand|breaking` line. Prefer expand/contract.
   Never edit a shipped step (its checksum is pinned).
+- **Settings.** Each top-level key of `AppSettings` is a section with its own version, declared in
+  `internal/storage/settingsdoc/sections.go` (`TestSections_CoverTheDocument`). A change of a section's stored
+  shape that decoding cannot absorb raises its version and adds an upgrade; a field never changes its JSON type.
+  The stores keep what a newer binary wrote (ADR 0012).
 - **Routes.** A feature mounts its own routes: its handler implements `api.Module` (`Mount(rb *route.Builder)`),
   joins fx's `routes` group in `internal/di`, and declares each route's policy where it registers the route.
   There is no central route list, and the router refuses to build when a route was registered around the

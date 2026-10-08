@@ -13,32 +13,29 @@ import (
 	"pad-core/models"
 )
 
-// roleBackend is a FakeBackend whose org listing carries a fixed roster:
-// org-A has u-admin (admin), u-member and u-own (members), u-viewer (viewer)
-// and u-guest (guest); u-collab is nobody's member (a per-flow collaborator).
+// roleBackend is a FakeBackend whose org-A has a fixed roster: u-admin (admin),
+// u-member, u-own and u-none (members), u-viewer (viewer) and u-guest (guest);
+// u-collab is nobody's member (a per-flow collaborator). readErr fails every
+// membership read.
 type roleBackend struct {
 	testutil.FakeBackend
-	listErr error
+	readErr error
 }
 
-func (b *roleBackend) ListOrgsForUser(_ context.Context, userID string) ([]*interfaces.Organisation, error) {
-	if b.listErr != nil {
-		return nil, b.listErr
+var roleBackendRoster = map[string]auth.Role{
+	"u-admin": auth.RoleAdmin, "u-member": auth.RoleMember, "u-own": auth.RoleMember,
+	"u-none": auth.RoleMember, "u-viewer": auth.RoleViewer, "u-guest": auth.RoleGuest,
+}
+
+func (b *roleBackend) OrgMemberRole(_ context.Context, orgID, userID string) (auth.Role, bool, error) {
+	if b.readErr != nil {
+		return "", false, b.readErr
 	}
-	org := &interfaces.Organisation{ID: "org-A", Members: []interfaces.OrgMember{
-		{UserID: "u-admin", Role: auth.RoleAdmin},
-		{UserID: "u-member", Role: auth.RoleMember},
-		{UserID: "u-own", Role: auth.RoleMember},
-		{UserID: "u-none", Role: auth.RoleMember},
-		{UserID: "u-viewer", Role: auth.RoleViewer},
-		{UserID: "u-guest", Role: auth.RoleGuest},
-	}}
-	for _, m := range org.Members {
-		if m.UserID == userID {
-			return []*interfaces.Organisation{org}, nil
-		}
+	if orgID != "org-A" {
+		return "", false, interfaces.ErrNotFound
 	}
-	return nil, nil
+	role, ok := roleBackendRoster[userID]
+	return role, ok, nil
 }
 
 // orgKeyChatService is a ChatService on a factory whose org-A has a shared
@@ -173,7 +170,7 @@ func TestPrepareTurn_SharedCredentialOnlyForAdminsAndMembers(t *testing.T) {
 
 	t.Run("membership lookup failure fails closed", func(t *testing.T) {
 		orgCalls := 0
-		svc := orgKeyChatService(nil, &orgCalls, &roleBackend{listErr: errors.New("store down")})
+		svc := orgKeyChatService(nil, &orgCalls, &roleBackend{readErr: errors.New("store down")})
 		_, err := svc.prepareTurn(context.Background(), "u-member", orgDoc, models.ChatRequest{Provider: "fake"}, nil, &streamCtl{ownerID: "u-member", orgID: "org-A"})
 		if !errors.Is(err, ai.ErrKeyNotConfigured) || orgCalls != 0 {
 			t.Errorf("err = %v, org consulted %d times; want own key only", err, orgCalls)

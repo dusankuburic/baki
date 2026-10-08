@@ -18,8 +18,8 @@ import (
 // r2Roles is the test user's role per org.
 var r2Roles = map[string]auth.Role{"org-admin": auth.RoleAdmin, "org-member": auth.RoleMember, "org-viewer": auth.RoleViewer}
 
-// r2LibraryBackend is a FakeBackend with the roster-free membership list the
-// Postgres backend offers (storageif.OrgMembershipLister), counting reads.
+// r2LibraryBackend is a FakeBackend whose roster-free membership list holds
+// r2Roles, counting reads.
 type r2LibraryBackend struct {
 	*testutil.FakeBackend
 	membershipReads int
@@ -34,9 +34,9 @@ func (b *r2LibraryBackend) ListOrgMembershipsForUser(context.Context, string) ([
 	return out, nil
 }
 
-// r2OrgStore is the org store behind the OrgService, with the point role
-// lookup (interfaces.OrgMembershipReader) the Postgres backend offers,
-// counting lookups — the query BatchFlowPermissions issues per distinct org.
+// r2OrgStore is the org store behind the OrgService, its point role lookup
+// answering r2Roles and counting lookups — the query BatchFlowPermissions
+// issues per distinct org.
 type r2OrgStore struct {
 	collaboration.OrgStore
 	roleLookups int
@@ -86,8 +86,9 @@ func TestListLibraryFlowsPage_ResolvesMembershipsOnce(t *testing.T) {
 	if page.Memberships == nil || len(page.Memberships) != 3 {
 		t.Errorf("page.Memberships = %v, want the 3 memberships", page.Memberships)
 	}
-	if page.Total != len(b.Flows) || len(page.Docs) != len(b.Flows) {
-		t.Errorf("page: %d docs, total %d; want %d and %d", len(page.Docs), page.Total, len(b.Flows), len(b.Flows))
+	// u1 sees its own flow and the three orgs' flows, not the foreign org's or the ownerless one.
+	if page.Total != 4 || len(page.Docs) != 4 {
+		t.Errorf("page: %d docs, total %d; want 4 and 4", len(page.Docs), page.Total)
 	}
 	filters := b.ListFlowsFilterLog()
 	if n := len(filters); n != 1 {
@@ -129,15 +130,20 @@ func TestListLibraryFlowsPage_ResolvesMembershipsOnce(t *testing.T) {
 // role queries, foreign orgs included (the list is complete, so absence
 // means non-member). nil memberships keep the lookups.
 func TestBatchFlowPermissionsWithRoles_NoRoleQueries(t *testing.T) {
-	lib, _, store := newR2Library(t)
+	lib, b, store := newR2Library(t)
 	ctx := context.Background()
 	page, err := lib.ListLibraryFlowsPage(ctx, "u1", "", ScopeAll, "", "", 25, 0, nil)
 	if err != nil {
 		t.Fatalf("ListLibraryFlowsPage: %v", err)
 	}
+	// Every seeded flow, the foreign-org and ownerless ones too (u1's page holds neither).
+	docs := make([]*interfaces.FlowDocument, 0, len(b.Flows))
+	for _, f := range b.Flows {
+		docs = append(docs, f)
+	}
 
 	store.roleLookups = 0
-	seeded := lib.BatchFlowPermissionsWithRoles(ctx, page.Docs, "u1", page.Memberships)
+	seeded := lib.BatchFlowPermissionsWithRoles(ctx, docs, "u1", page.Memberships)
 	if store.roleLookups != 0 {
 		t.Errorf("seeded permissions ran %d org-role queries, want 0", store.roleLookups)
 	}
@@ -156,7 +162,7 @@ func TestBatchFlowPermissionsWithRoles_NoRoleQueries(t *testing.T) {
 	}
 
 	store.roleLookups = 0
-	looked := lib.BatchFlowPermissions(ctx, page.Docs, "u1")
+	looked := lib.BatchFlowPermissions(ctx, docs, "u1")
 	if store.roleLookups != 4 {
 		t.Errorf("unseeded permissions ran %d org-role queries, want 4 (one per distinct org)", store.roleLookups)
 	}
@@ -168,34 +174,11 @@ func TestBatchFlowPermissionsWithRoles_NoRoleQueries(t *testing.T) {
 
 	// An empty, non-nil list is still "complete": no lookups, no org grants.
 	store.roleLookups = 0
-	none := lib.BatchFlowPermissionsWithRoles(ctx, page.Docs, "u1", []interfaces.OrgMembership{})
+	none := lib.BatchFlowPermissionsWithRoles(ctx, docs, "u1", []interfaces.OrgMembership{})
 	if store.roleLookups != 0 {
 		t.Errorf("empty memberships ran %d org-role queries, want 0", store.roleLookups)
 	}
 	if none["f-admin"] != (PermFlags{}) || none["f-own"] != (PermFlags{CanEdit: true, CanDelete: true, CanShare: true}) {
 		t.Errorf("empty memberships: admin-org flow = %+v (want none), own flow = %+v (want all)", none["f-admin"], none["f-own"])
 	}
-}
-
-// TestMemberOrgs_RosterFallbackCarriesRoles: a backend without the
-// roster-free lister still yields memberships with the caller's role picked
-// out of each roster.
-func TestMemberOrgs_RosterFallbackCarriesRoles(t *testing.T) {
-	b := &rosterOnlyBackend{FakeBackend: testutil.NewFakeBackend()}
-	lib := NewLibraryService(b, nil, NewAuthzService(b, collaboration.NewOrgService(collaboration.NewMemOrgStore())), nil)
-	page, err := lib.ListLibraryFlowsPage(context.Background(), "u1", "", ScopeAll, "", "", 10, 0, nil)
-	if err != nil {
-		t.Fatalf("ListLibraryFlowsPage: %v", err)
-	}
-	if len(page.Memberships) != 1 || page.Memberships[0].OrgID != "o1" || page.Memberships[0].Role != auth.RoleAdmin {
-		t.Errorf("memberships = %+v, want [{o1 admin}]", page.Memberships)
-	}
-}
-
-type rosterOnlyBackend struct{ *testutil.FakeBackend }
-
-func (b *rosterOnlyBackend) ListOrgsForUser(context.Context, string) ([]*interfaces.Organisation, error) {
-	return []*interfaces.Organisation{{ID: "o1", Name: "One", Members: []interfaces.OrgMember{
-		{UserID: "other", Role: auth.RoleMember}, {UserID: "u1", Role: auth.RoleAdmin},
-	}}}, nil
 }

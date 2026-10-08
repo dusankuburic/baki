@@ -29,7 +29,7 @@ func (b *PostgresStorageBackend) ListFindingComments(ctx context.Context, flowID
 		`SELECT id, flow_id, finding_key, author_id, author_name, body, created_at
 		 FROM finding_comments
 		 WHERE flow_id = $1 AND finding_key = $2
-		 ORDER BY created_at ASC`, flowID, findingKey)
+		 ORDER BY created_at ASC, id ASC`, flowID, findingKey)
 	if err != nil {
 		return nil, err
 	}
@@ -45,16 +45,17 @@ func (b *PostgresStorageBackend) ListFindingComments(ctx context.Context, flowID
 	return out, rows.Err()
 }
 
+// DeleteFindingComment removes authorID's own comment. An empty authorID is no one's: it deletes nothing and
+// answers ErrNotCommentAuthor, so a missing caller id can never delete someone else's comment.
 func (b *PostgresStorageBackend) DeleteFindingComment(ctx context.Context, flowID, commentID, authorID string) error {
+	if authorID == "" {
+		return storageif.ErrNotCommentAuthor
+	}
 	res, err := b.query(ctx).ExecContext(ctx,
-		`DELETE FROM finding_comments
-		 WHERE flow_id = $1 AND id = $2 AND ($3 = '' OR author_id = $3)`,
+		`DELETE FROM finding_comments WHERE flow_id = $1 AND id = $2 AND author_id = $3`,
 		flowID, commentID, authorID)
 	if err != nil {
 		return err
-	}
-	if authorID == "" {
-		return nil
 	}
 	// Nothing deleted: distinguish an absent comment (idempotent no-op) from
 	// one authored by someone else (denied).
@@ -70,4 +71,11 @@ func (b *PostgresStorageBackend) DeleteFindingComment(ctx context.Context, flowI
 		}
 	}
 	return nil
+}
+
+// DeleteFindingCommentAsModerator removes a comment of the flow whoever wrote it.
+func (b *PostgresStorageBackend) DeleteFindingCommentAsModerator(ctx context.Context, flowID, commentID string) error {
+	_, err := b.query(ctx).ExecContext(ctx,
+		`DELETE FROM finding_comments WHERE flow_id = $1 AND id = $2`, flowID, commentID)
+	return err
 }

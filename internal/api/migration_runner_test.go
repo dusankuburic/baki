@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"pad-analyzer/internal/migration"
+	"pad-analyzer/internal/storage/contract"
+	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -35,6 +37,20 @@ func validFlow(id, name string) *storageif.FlowDocument {
 	}
 }
 
+// legacySource lays the flows out as a legacy data directory and opens it read-only, as main does.
+func legacySource(t *testing.T, flows ...*storageif.FlowDocument) migration.LegacySource {
+	t.Helper()
+	d := contract.NewLegacyDir(t)
+	for _, f := range flows {
+		d.Flow(f)
+	}
+	src, err := filesystem.OpenLegacySource(d.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return src
+}
+
 func TestMigrationRunner_DisabledWhenNoMigrator(t *testing.T) {
 	r := NewMigrationRunner(nil)
 	if r.Enabled() {
@@ -50,12 +66,8 @@ func TestMigrationRunner_DisabledWhenNoMigrator(t *testing.T) {
 }
 
 func TestMigrationRunner_StartRunsAndCompletes(t *testing.T) {
-	src := testutil.NewFakeBackend()
+	src := legacySource(t, validFlow("f1", "Flow One"))
 	dst := testutil.NewFakeBackend()
-
-	if err := src.SaveFlow(context.Background(), validFlow("f1", "Flow One")); err != nil {
-		t.Fatal(err)
-	}
 
 	r := NewMigrationRunner(migration.New(src, dst))
 	if !r.Enabled() {
@@ -90,13 +102,13 @@ func TestMigrationRunner_StartRunsAndCompletes(t *testing.T) {
 }
 
 func TestMigrationRunner_DoubleStartRejected(t *testing.T) {
-	src := testutil.NewFakeBackend()
-	dst := testutil.NewFakeBackend()
 	// Seed many flows so the run is still in flight when we re-Start.
+	var flows []*storageif.FlowDocument
 	for i := 0; i < 200; i++ {
-		_ = src.SaveFlow(context.Background(), validFlow(
-			"f"+strconv.Itoa(i), "Flow "+strconv.Itoa(i)))
+		flows = append(flows, validFlow("f"+strconv.Itoa(i), "Flow "+strconv.Itoa(i)))
 	}
+	src := legacySource(t, flows...)
+	dst := testutil.NewFakeBackend()
 
 	r := NewMigrationRunner(migration.New(src, dst).WithBatchSize(5))
 	if !r.Start() {
@@ -107,6 +119,35 @@ func TestMigrationRunner_DoubleStartRejected(t *testing.T) {
 		t.Fatal("second Start while running should return false (409 path)")
 	}
 	waitDone(t, r, 10*time.Second)
+}
+
+// TestMigrationRunner_RejectedStartAsKeepsTheRunsAdopter: a second admin's start, refused because a run is going,
+// must not hand that run's orphaned flows to the second admin.
+func TestMigrationRunner_RejectedStartAsKeepsTheRunsAdopter(t *testing.T) {
+	var flows []*storageif.FlowDocument
+	for i := 0; i < 200; i++ {
+		f := validFlow("f"+strconv.Itoa(i), "Flow "+strconv.Itoa(i))
+		f.OwnerID = "ghost" // no such user in the destination: the run's operator adopts it
+		flows = append(flows, f)
+	}
+	dst := testutil.NewFakeBackend()
+	r := NewMigrationRunner(migration.New(legacySource(t, flows...), dst).WithBatchSize(1))
+	if !r.StartAs("admin-a") {
+		t.Fatal("first StartAs should succeed")
+	}
+	if r.StartAs("admin-b") {
+		t.Fatal("a second StartAs while running should be rejected")
+	}
+	waitDone(t, r, 10*time.Second)
+	for _, f := range flows {
+		got, err := dst.LoadFlow(context.Background(), f.ID)
+		if err != nil {
+			t.Fatalf("LoadFlow(%s): %v", f.ID, err)
+		}
+		if got.OwnerID != "admin-a" {
+			t.Fatalf("flow %s adopted by %q, want the run's operator admin-a", f.ID, got.OwnerID)
+		}
+	}
 }
 
 // fakeLocker simulates the cross-replica advisory lock: configurable
@@ -125,7 +166,7 @@ func (f *fakeLocker) TryGlobalLock(_ context.Context, _ int64) (func(), bool, er
 }
 
 func TestMigrationRunner_LockHeldElsewhereRejectsStart(t *testing.T) {
-	src := testutil.NewFakeBackend()
+	src := legacySource(t)
 	dst := testutil.NewFakeBackend()
 	r := NewMigrationRunner(migration.New(src, dst)).WithLocker(&fakeLocker{acquired: false})
 
@@ -140,11 +181,8 @@ func TestMigrationRunner_LockHeldElsewhereRejectsStart(t *testing.T) {
 }
 
 func TestMigrationRunner_LockAcquiredRunsAndReleases(t *testing.T) {
-	src := testutil.NewFakeBackend()
+	src := legacySource(t, validFlow("f1", "Flow One"))
 	dst := testutil.NewFakeBackend()
-	if err := src.SaveFlow(context.Background(), validFlow("f1", "Flow One")); err != nil {
-		t.Fatal(err)
-	}
 	lk := &fakeLocker{acquired: true, released: make(chan struct{})}
 	r := NewMigrationRunner(migration.New(src, dst)).WithLocker(lk)
 

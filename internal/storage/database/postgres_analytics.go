@@ -234,19 +234,20 @@ func (b *PostgresStorageBackend) LoadTriageAnalytics(ctx context.Context, w inte
 
 // usageScope builds the WHERE fragment for usage_metrics: "user" = the
 // caller's own calls, "org" = the scoped orgs', "both" = either. Only the
-// parameters the fragment references are bound (Postgres rejects unused ones).
-func usageScope(mode, userID string, orgIDs []string) (string, []any) {
+// parameters the fragment references are bound on args (Postgres rejects unused ones).
+func usageScope(mode, userID string, orgIDs []string, args *sqlArgs) string {
 	switch mode {
 	case "org":
 		if len(orgIDs) > 0 {
-			return "u.org_id = ANY($1)", []any{orgIDs}
+			return "u.org_id = ANY(" + args.add(orgIDs) + ")"
 		}
 	case "both":
 		if len(orgIDs) > 0 {
-			return "(u.user_id = $1 OR u.org_id = ANY($2))", []any{userID, orgIDs}
+			user := args.add(userID)
+			return "(u.user_id = " + user + " OR u.org_id = ANY(" + args.add(orgIDs) + "))"
 		}
 	}
-	return "u.user_id = $1", []any{userID}
+	return "u.user_id = " + args.add(userID)
 }
 
 func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID string, orgIDs []string, mode string, w interfaces.AnalyticsWindow) (*interfaces.UsageRows, error) {
@@ -259,17 +260,18 @@ func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID 
 	if tz == "" {
 		tz = "UTC"
 	}
-	pred, args := usageScope(mode, userID, orgIDs)
-	n := len(args)
-	// $n+1 = range start, $n+2 = range end, $n+3 = tz
+	var scope sqlArgs
+	pred := usageScope(mode, userID, orgIDs, &scope)
+	args := append(sqlArgs{}, scope...)
+	from, to, zone := args.add(start), args.add(w.To), args.add(tz)
 	daily, err := b.query(ctx).QueryContext(ctx, fmt.Sprintf(`
-		SELECT TO_CHAR((u.created_at AT TIME ZONE $%d)::date, 'YYYY-MM-DD'),
+		SELECT TO_CHAR((u.created_at AT TIME ZONE %s)::date, 'YYYY-MM-DD'),
 		       COALESCE(SUM(u.prompt_tokens), 0)::int, COALESCE(SUM(u.completion_tokens), 0)::int,
 		       COUNT(*)::int, COALESCE(SUM(u.estimated_cost), 0)::float
 		FROM usage_metrics u
-		WHERE %s AND u.created_at >= $%d AND u.created_at < $%d
+		WHERE %s AND u.created_at >= %s AND u.created_at < %s
 		GROUP BY 1
-		ORDER BY 1`, n+3, pred, n+1, n+2), append(append([]any{}, args...), start, w.To, tz)...)
+		ORDER BY 1`, zone, pred, from, to), args...)
 	if err != nil {
 		return nil, fmt.Errorf("analytics usage daily: %w", err)
 	}
@@ -286,13 +288,15 @@ func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID 
 	}
 
 	// Provider and model breakdowns cover the current window only.
+	args = append(sqlArgs{}, scope...)
+	from, to = args.add(w.From), args.add(w.To)
 	prov, err := b.query(ctx).QueryContext(ctx, fmt.Sprintf(`
 		SELECT u.provider, COALESCE(SUM(u.estimated_cost), 0)::float,
 		       COALESCE(SUM(u.prompt_tokens), 0)::int, COALESCE(SUM(u.completion_tokens), 0)::int
 		FROM usage_metrics u
-		WHERE %s AND u.created_at >= $%d AND u.created_at < $%d
+		WHERE %s AND u.created_at >= %s AND u.created_at < %s
 		GROUP BY u.provider
-		ORDER BY 2 DESC`, pred, n+1, n+2), append(append([]any{}, args...), w.From, w.To)...)
+		ORDER BY 2 DESC`, pred, from, to), args...)
 	if err != nil {
 		return nil, fmt.Errorf("analytics usage providers: %w", err)
 	}
@@ -315,10 +319,10 @@ func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID 
 		       COALESCE(SUM(u.prompt_tokens), 0)::int,
 		       COALESCE(SUM(u.completion_tokens), 0)::int, COUNT(*)::int, COALESCE(SUM(u.estimated_cost), 0)::float
 		FROM usage_metrics u
-		WHERE %s AND u.created_at >= $%d AND u.created_at < $%d
+		WHERE %s AND u.created_at >= %s AND u.created_at < %s
 		GROUP BY 1, 2, 3
 		ORDER BY 7 DESC
-		LIMIT 10`, pred, n+1, n+2), append(append([]any{}, args...), w.From, w.To)...)
+		LIMIT 10`, pred, from, to), args...)
 	if err != nil {
 		return nil, fmt.Errorf("analytics usage models: %w", err)
 	}

@@ -7,29 +7,29 @@ import (
 	"time"
 
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 )
 
-func seedUserWithPassword(t *testing.T, fs *filesystem.LocalStorageBackend, id, email, password string) {
+func seedUserWithPassword(t *testing.T, store *testutil.FakeBackend, id, email, password string) {
 	t.Helper()
 	hash, err := auth.HashPassword(password)
 	if err != nil {
 		t.Fatalf("hash password: %v", err)
 	}
-	if err := fs.CreateUser(context.Background(), &storageif.User{ID: id, Email: email, Password: hash, Role: auth.RoleMember}); err != nil {
+	if err := store.CreateUser(context.Background(), &storageif.User{ID: id, Email: email, Password: hash, Role: auth.RoleMember}); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 }
 
 func TestResetPassword_Flow(t *testing.T) {
-	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	rt := newTestRouter(fs, true)
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, true)
 	ctx := context.Background()
-	seedUserWithPassword(t, fs, "u1", "u1@example.com", "OldPassw0rd!")
+	seedUserWithPassword(t, store, "u1", "u1@example.com", "OldPassw0rd!")
 
 	const raw = "reset-raw-token"
-	if err := fs.CreateUserToken(ctx, &storageif.UserToken{
+	if err := store.CreateUserToken(ctx, &storageif.UserToken{
 		TokenHash: auth.HashOpaqueToken(raw),
 		Purpose:   storageif.TokenPurposePasswordReset,
 		UserID:    "u1",
@@ -44,7 +44,7 @@ func TestResetPassword_Flow(t *testing.T) {
 		t.Fatalf("reset-password status = %d, body=%s", rr.Code, rr.Body.String())
 	}
 
-	u, err := fs.LoadUserByID(ctx, "u1")
+	u, err := store.LoadUserByID(ctx, "u1")
 	if err != nil {
 		t.Fatalf("load user: %v", err)
 	}
@@ -61,8 +61,8 @@ func TestResetPassword_Flow(t *testing.T) {
 }
 
 func TestResetPassword_InvalidToken(t *testing.T) {
-	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	rt := newTestRouter(fs, true)
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, true)
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/reset-password", "",
 		map[string]string{"token": "nope", "newPassword": "BrandNewPassw0rd!"})
 	if rr.Code != http.StatusBadRequest {
@@ -71,13 +71,13 @@ func TestResetPassword_InvalidToken(t *testing.T) {
 }
 
 func TestVerifyEmail_Flow(t *testing.T) {
-	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	rt := newTestRouter(fs, true)
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, true)
 	ctx := context.Background()
-	seedUserWithPassword(t, fs, "u2", "u2@example.com", "OldPassw0rd!")
+	seedUserWithPassword(t, store, "u2", "u2@example.com", "OldPassw0rd!")
 
 	const raw = "verify-raw-token"
-	if err := fs.CreateUserToken(ctx, &storageif.UserToken{
+	if err := store.CreateUserToken(ctx, &storageif.UserToken{
 		TokenHash: auth.HashOpaqueToken(raw),
 		Purpose:   storageif.TokenPurposeEmailVerify,
 		UserID:    "u2",
@@ -91,16 +91,16 @@ func TestVerifyEmail_Flow(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("verify-email status = %d, body=%s", rr.Code, rr.Body.String())
 	}
-	u, _ := fs.LoadUserByID(ctx, "u2")
+	u, _ := store.LoadUserByID(ctx, "u2")
 	if !u.EmailVerified {
 		t.Error("expected EmailVerified=true after verify-email")
 	}
 }
 
 func TestForgotPassword_NoEnumeration(t *testing.T) {
-	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	rt := newTestRouter(fs, true)
-	seedUserWithPassword(t, fs, "u3", "known@example.com", "OldPassw0rd!")
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, true)
+	seedUserWithPassword(t, store, "u3", "known@example.com", "OldPassw0rd!")
 
 	for _, email := range []string{"known@example.com", "unknown@example.com"} {
 		rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/forgot-password", "",

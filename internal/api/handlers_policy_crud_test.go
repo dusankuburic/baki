@@ -7,12 +7,9 @@ import (
 	"pad-analyzer/internal/auth"
 )
 
-// The filesystem backend does not store policies: Get→ErrNotFound, List→empty, and Save/Delete
-// return ErrPoliciesUnsupported. They previously returned nil — SUCCESS — while writing nothing,
-// which is why the two "…Succeeds" tests below used to assert a flat 200 off a backend that
-// cannot store a policy at all. These tests verify the HANDLER layer: auth, body parsing,
-// org-membership checks, and error mapping — so the member cases assert what they mean
-// (authorization passed), not whole-request success, which depends on the backend.
+// These tests verify the HANDLER layer: auth, body parsing, org-membership checks, and error mapping. The
+// test router's backend (the fake, held to Postgres's semantics by the storage contract) stores policies, so
+// the member cases assert whole-request success.
 
 func TestPolicySave_OrgMemberSucceeds(t *testing.T) {
 	rt := newJWTTestRouter(t)
@@ -27,11 +24,7 @@ func TestPolicySave_OrgMemberSucceeds(t *testing.T) {
 		"rules":        []map[string]any{{"ruleId": "hardcoded-credential", "enabled": true}},
 		"gateSeverity": "error",
 	})
-	// Authorization passed. Persistence is a backend concern: this router is
-	// backed by the filesystem store, which cannot hold policies.
-	if rr.Code == http.StatusForbidden || rr.Code == http.StatusUnauthorized {
-		t.Fatalf("an org member was denied: status %d — body: %s", rr.Code, rr.Body.String())
-	}
+	checkStatus(t, rr, http.StatusOK)
 }
 
 func TestPolicySave_NonMemberForbidden(t *testing.T) {
@@ -105,7 +98,7 @@ func TestPolicyList_ReturnsEmptyArray(t *testing.T) {
 		"orgId": orgID,
 	})
 	checkStatus(t, rr, http.StatusOK)
-	// Filesystem backend returns empty list
+	// No policy saved: an empty list
 	var policies []any
 	decodeJSON(t, rr, &policies)
 	// nil or empty is fine
@@ -131,7 +124,7 @@ func TestPolicyGet_NonExistentReturnsError(t *testing.T) {
 		"orgId": orgID,
 		"id":    "nonexistent",
 	})
-	// Filesystem backend returns ErrNotFound → handler maps to 404 or 403
+	// The store answers ErrNotFound → handler maps to 404 or 403
 	if rr.Code != http.StatusNotFound && rr.Code != http.StatusForbidden {
 		t.Errorf("expected 404 or 403 for non-existent policy, got %d", rr.Code)
 	}
@@ -158,11 +151,7 @@ func TestPolicyDelete_OrgMemberSucceeds(t *testing.T) {
 		"orgId": orgID,
 		"id":    "pol-1",
 	})
-	// Authorization passed; see the note at the top of this file on why this is
-	// not a flat 200 assertion.
-	if rr.Code == http.StatusForbidden || rr.Code == http.StatusUnauthorized {
-		t.Fatalf("an org member was denied: status %d — body: %s", rr.Code, rr.Body.String())
-	}
+	checkStatus(t, rr, http.StatusOK)
 }
 
 func TestPolicyDelete_NonMemberForbidden(t *testing.T) {

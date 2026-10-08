@@ -53,6 +53,9 @@ func TestNewEvent_ReadsActorAndRequestInfo(t *testing.T) {
 		{"local user", inRequest(auth.WithActor(bg, auth.LocalActor("local"))),
 			"", "", "user", "", "", "203.0.113.7", "Mozilla/5.0"},
 		{"nobody outside a request", bg, "", "", "", "", "", "", ""},
+		// Recorded after the account was erased in the same request: the action stays, the identity does not.
+		{"erased actor", WithErasedActor(inRequest(auth.WithClaims(bg, auth.ClaimsForPAT("u-1", "a@example.com", auth.RoleMember, "tok-1", nil, []string{"read"})))),
+			"", "", "token", "", "", "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -9,24 +9,6 @@ import (
 	"pad-core/logger"
 )
 
-// RefreshTokenStore tracks issued refresh tokens so they can be rotated and revoked (cloud mode).
-type RefreshTokenStore interface {
-	// userAgent and ip are captured from the issuing request so the session can later be shown with a friendly
-	// device label.
-	StoreRefreshToken(ctx context.Context, jti, userID string, expiresAt time.Time, userAgent, ip string) error
-	IsRefreshTokenValid(ctx context.Context, jti string) (bool, error)
-	RevokeRefreshToken(ctx context.Context, jti string) error
-	// VerifyAndRevokeRefreshToken atomically verifies and revokes a refresh token. Returns the token info if
-	// successful, or ErrTokenAlreadyRevoked if the token was already revoked/invalid.
-	VerifyAndRevokeRefreshToken(ctx context.Context, jti string) (*storageif.RefreshTokenInfo, error)
-	RevokeUserRefreshTokens(ctx context.Context, userID string) error
-	// ListUserRefreshTokens returns active sessions for a user, for display in profile/session-management UIs.
-	ListUserRefreshTokens(ctx context.Context, userID string) ([]storageif.RefreshTokenInfo, error)
-	// RevokeRefreshTokenForUser revokes a single session, scoped to userID so a user cannot revoke another user's
-	// session.
-	RevokeRefreshTokenForUser(ctx context.Context, jti, userID string) error
-}
-
 var (
 	// ErrSessionReplayed: the refresh token was already used; every session of the user has been revoked.
 	ErrSessionReplayed = errors.New("refresh token replayed")
@@ -35,12 +17,12 @@ var (
 )
 
 // SessionService owns the refresh-token sessions (rotation, replay detection, listing, revocation). Without a
-// token store (desktop, local mode) Enabled is false and the caller decides what that means.
+// server store (desktop) Enabled is false and the caller decides what that means.
 type SessionService struct {
-	store RefreshTokenStore
+	store storageif.RefreshTokenStore
 }
 
-func NewSessionService(store RefreshTokenStore) *SessionService {
+func NewSessionService(store storageif.RefreshTokenStore) *SessionService {
 	return &SessionService{store: store}
 }
 

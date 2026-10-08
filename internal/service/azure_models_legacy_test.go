@@ -121,7 +121,7 @@ func TestAzureModels_LegacyMarkerPreventsResurrection(t *testing.T) {
 	// A rolled-back binary writes the document again; a fresh process (no
 	// memo) must still not import it.
 	_ = e.secrets.Save("u1", "azure-foundry", azmLegacyDoc(`,"chatDeployment":"chat1"`))
-	fresh := NewAzureModelService(AzureModelServiceDeps{Registry: e.reg, Secrets: e.secrets, OrgKeys: e.orgKeys, PerUserOwners: true})
+	fresh := NewAzureModelService(AzureModelServiceDeps{Registry: e.reg, Secrets: e.secrets, KeyFamilies: e.secrets, OrgKeys: e.orgKeys, PerUserOwners: true})
 	if l, _ := fresh.ListConnections(ctx, azmUser); len(l.Connections) != 0 {
 		t.Errorf("resurrected: %+v", l.Connections)
 	}

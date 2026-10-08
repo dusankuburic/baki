@@ -40,10 +40,16 @@ func (s *CommentService) Add(ctx context.Context, flow FlowRef, c *storageif.Fin
 	return nil
 }
 
-// Delete removes a comment. A non-empty authorID restricts the delete to that author's comment
-// (storageif.ErrNotCommentAuthor otherwise); "" deletes unconditionally.
+// Delete removes authorID's own comment: someone else's, or any comment for an empty authorID, is
+// storageif.ErrNotCommentAuthor.
 func (s *CommentService) Delete(ctx context.Context, flowID, commentID, authorID string) error {
 	return s.store.DeleteFindingComment(ctx, flowID, commentID, authorID)
+}
+
+// DeleteAsModerator removes a comment whoever wrote it, for a caller allowed to moderate the flow's comments
+// (FlowShare).
+func (s *CommentService) DeleteAsModerator(ctx context.Context, flowID, commentID string) error {
+	return s.store.DeleteFindingCommentAsModerator(ctx, flowID, commentID)
 }
 
 // AuthorName resolves the commenter's name for alert and email copy (TriageService.DisplayName).

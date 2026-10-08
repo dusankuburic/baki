@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"testing"
@@ -127,22 +128,20 @@ func TestAccountErased_DropsTheScopeListings(t *testing.T) {
 func TestAccountLifecycle_Export(t *testing.T) {
 	backend := &testutil.FakeBackend{Users: map[string]*storageif.User{"u1": {ID: "u1", Email: "a@example.com"}}}
 	svc := NewAccountLifecycleService(backend, nil, nil)
-	if svc.StreamsExport() {
-		t.Error("the fake cannot stream")
+	var buf bytes.Buffer
+	if err := svc.StreamExport(context.Background(), "u1", &buf); err != nil {
+		t.Fatalf("StreamExport: %v", err)
 	}
-	export, err := svc.Export(context.Background(), "u1")
-	if err != nil || export.User == nil || export.User.ID != "u1" {
-		t.Fatalf("Export = %+v, %v", export, err)
+	var export storageif.UserDataExport
+	if err := json.Unmarshal(buf.Bytes(), &export); err != nil || export.User == nil || export.User.ID != "u1" {
+		t.Fatalf("export = %s, %v", buf.String(), err)
 	}
-	if _, err := svc.Export(context.Background(), "nobody"); !errors.Is(err, storageif.ErrNotFound) {
+	if err := svc.StreamExport(context.Background(), "nobody", io.Discard); !errors.Is(err, storageif.ErrNotFound) {
 		t.Errorf("unknown user: %v, want ErrNotFound", err)
 	}
 
+	buf.Reset()
 	streaming := NewAccountLifecycleService(streamingStore{backend}, nil, nil)
-	if !streaming.StreamsExport() {
-		t.Fatal("a streaming store must stream")
-	}
-	var buf bytes.Buffer
 	if err := streaming.StreamExport(context.Background(), "u1", &buf); err != nil || buf.String() != `{"user":"u1"}` {
 		t.Errorf("StreamExport = %q, %v", buf.String(), err)
 	}

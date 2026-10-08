@@ -7,21 +7,18 @@ import (
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 )
 
-// newAuthzFixture builds an AuthzService over a real filesystem backend and a
+// newAuthzFixture builds an AuthzService over the fake backend and a
 // mem-backed OrgService, with one org ("org1", admin "alice", member "bob",
 // viewer "carol") and one flow per scenario seeded by the caller.
 func newAuthzFixture(t *testing.T) (*AuthzService, storageif.StorageBackend, *collaboration.OrgService) {
 	t.Helper()
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
+	store := testutil.NewFakeBackend()
 	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
-	return NewAuthzService(fs, orgSvc), fs, orgSvc
+	return NewAuthzService(store, orgSvc), store, orgSvc
 }
 
 func seedAuthzOrg(t *testing.T, orgSvc *collaboration.OrgService) string {
@@ -57,8 +54,15 @@ func seedAuthzAdmin(t *testing.T, backend storageif.StorageBackend, id string) {
 
 func addAuthzCollab(t *testing.T, backend storageif.StorageBackend, flowID, userID, perm string) {
 	t.Helper()
+	ctx := context.Background()
+	// The grant's user must exist, as the foreign key does on Postgres.
+	if _, err := backend.LoadUserByID(ctx, userID); errors.Is(err, storageif.ErrNotFound) {
+		if err := backend.SaveUser(ctx, &storageif.User{ID: userID, Email: userID + "@x.test", Role: auth.RoleMember}); err != nil {
+			t.Fatalf("seed user: %v", err)
+		}
+	}
 	c := &storageif.Collaborator{UserID: userID, Email: userID + "@x.test", Permission: perm}
-	if err := backend.AddCollaborator(context.Background(), flowID, c); err != nil {
+	if err := backend.AddCollaborator(ctx, flowID, c); err != nil {
 		t.Fatalf("add collaborator: %v", err)
 	}
 }

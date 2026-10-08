@@ -75,6 +75,7 @@ func TestRequireRole_LocalModeBypass(t *testing.T) {
 // seedCollaborator grants userID the given permission on flowID.
 func seedCollaborator(t *testing.T, rt *Router, flowID, userID, perm string) {
 	t.Helper()
+	ensureUser(t, rt, userID)
 	err := rt.security.Backend.AddCollaborator(context.Background(), flowID, &storageif.Collaborator{
 		UserID:     userID,
 		Email:      userID + "@example.com",

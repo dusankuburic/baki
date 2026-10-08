@@ -14,8 +14,8 @@ func IsSharingViolation(err error) bool {
 // it is unconditionally false: POSIX rename over an open destination succeeds
 // outright, so the only errors left are genuine, permanent failures —
 // fs.ErrPermission on POSIX really means no permission, and retrying it burned
-// 20×100 ms while the caller (often holding flowMu) serialized every other
-// flow save behind a hopeless retry.
+// 20×100 ms while the caller (often holding a store lock) serialized every
+// other save behind a hopeless retry.
 func TransientSharingConflict(err error) bool {
 	return false
 }

@@ -26,6 +26,7 @@ import (
 
 	"pad-analyzer/internal/lifecycle"
 	"pad-analyzer/internal/notify"
+	"pad-analyzer/internal/platform/lock"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -54,6 +55,7 @@ type SSENotifier interface {
 // Scanner periodically scans stored flows for governance regressions.
 type Scanner struct {
 	backend  storageif.StorageBackend
+	locker   lock.GlobalLocker // one sweep at a time across replicas; nil (no database) sweeps alone
 	analyze  AnalyzeFunc
 	notifier *notify.Dispatcher
 	interval time.Duration
@@ -94,10 +96,12 @@ type Scanner struct {
 }
 
 // New creates a Scanner. interval <= 0 disables periodic scanning (Start is a
-// no-op); ScanOnce can still be invoked directly.
-func New(backend storageif.StorageBackend, analyze AnalyzeFunc, notifier *notify.Dispatcher, interval time.Duration, notifyPolicy notify.TargetPolicy) *Scanner {
+// no-op); ScanOnce can still be invoked directly. locker is the cross-replica
+// lock (nil without a database).
+func New(backend storageif.StorageBackend, locker lock.GlobalLocker, analyze AnalyzeFunc, notifier *notify.Dispatcher, interval time.Duration, notifyPolicy notify.TargetPolicy) *Scanner {
 	return &Scanner{
 		backend:       backend,
+		locker:        locker,
 		analyze:       analyze,
 		notifier:      notifier,
 		interval:      interval,
@@ -178,10 +182,10 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 	}
 	// One sweep at a time ACROSS replicas: every pod runs its own ticker and the
 	// dedup signature is per process, so N replicas would re-analyze every flow
-	// N times per interval. Postgres exposes a session-level advisory lock; a
-	// backend without one sweeps as before.
-	if locker, ok := s.backend.(globalLocker); ok {
-		release, acquired, err := locker.TryGlobalLock(ctx, scanLockKey)
+	// N times per interval. Postgres provides a session-level advisory lock;
+	// without a database there is one process and no lock.
+	if s.locker != nil {
+		release, acquired, err := s.locker.TryGlobalLock(ctx, scanLockKey)
 		switch {
 		case err != nil:
 			logger.Warn("scanner: advisory lock unavailable; sweeping without it", "err", err)
@@ -259,12 +263,6 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 	// Surface loop liveness so ops can alert on a hung scanner (time() -
 	// last_tick > 2 * interval), which /healthz cannot see.
 	metrics.RecordBackgroundLoopTick("scanner")
-}
-
-// globalLocker mirrors api.GlobalLocker (the scanner cannot import the api
-// package): the Postgres backend's TryGlobalLock; release exactly once when acquired.
-type globalLocker interface {
-	TryGlobalLock(ctx context.Context, key int64) (release func(), acquired bool, err error)
 }
 
 // scanLockKey namespaces the sweep's advisory lock: every replica must use the

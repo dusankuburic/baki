@@ -58,8 +58,8 @@ func Of(cfg *config.Config) Set {
 }
 
 // NewSet returns the Set of a profile with exactly caps. Production derives its Set from the config (Of); tests use
-// this to give a router the capabilities of a deployment their config does not describe (test routers run on a
-// filesystem backend with the default config).
+// this to give a router the capabilities of a deployment their config does not describe (test routers run on the
+// test fake backend with the default config).
 func NewSet(profile Profile, caps ...Capability) Set {
 	s := Set{profile: profile, has: make(map[Capability]bool, len(caps))}
 	for _, c := range caps {

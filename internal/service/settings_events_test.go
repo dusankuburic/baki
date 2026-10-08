@@ -196,6 +196,9 @@ func TestDeploymentRuleToggles_InvalidateEveryProfile(t *testing.T) {
 // profile and no other org's; a failed write announces nothing.
 func TestSystemService_AnnouncesSettingsChanges(t *testing.T) {
 	b := testutil.NewFakeBackend()
+	// Settings rows reference their user and org.
+	b.Users = map[string]*storageif.User{"u1": {ID: "u1"}}
+	b.Orgs = map[string]*storageif.Organisation{"org-1": {ID: "org-1"}}
 	r := NewRuleProfileResolver(b, deploymentSettings(nil), nil)
 	bus := eventbus.New(nil, 0)
 	SubscribeRuleProfiles(bus, r)

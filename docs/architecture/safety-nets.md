@@ -93,6 +93,13 @@ BOOT_DATABASE_URL="postgres://baki_app:baki_app@127.0.0.1:55433/baki_boot?sslmod
 
 These tests pin today's exceptions to the layering and convention rules in [README.md](README.md). They fail
 when an exception grows and when it shrinks, so each pinned number can only go down.
+`TestArch_SystemReadsPinned` lists the jobs that may read across tenants (ADR 0013).
+
+## Tenant scoping: `internal/storage/database/rls_scoped_methods_test.go`
+
+`TestRLS_TablesWithoutRowSecurityAreListed` fails on a table that has neither row-level security nor a listed
+reason. It is a catalog query, so it runs in CI as well. The `TestRLS_ScopedMethods_*` tests open a stranger's RLS
+scope and prove that the id-only methods reach none of another tenant's rows. They need an unprivileged role.
 
 ## DI setters: `internal/di/setters_test.go`
 
@@ -103,9 +110,27 @@ the constructors that `TestAppGraph`'s type check skips.
 
 ## Fake backend contract: `internal/testutil/fakebackend_contract_test.go`
 
-The storage contract (`internal/storage/contract`) now also runs against `testutil.FakeBackend`. The scenarios
-where the fake still diverges are listed with their reason, and the list may only shrink. Run them anyway with
-`CONTRACT_STRICT=1`.
+The storage contract (`internal/storage/contract`) also runs against `testutil.FakeBackend`, with no known
+divergence: the fake follows Postgres on every method it implements (visibility filters, optimistic versions, what
+a write stamps, defaults, ordering, `ErrNotFound`, cascades), so a test that passes on the fake holds on Postgres.
+`contract/semantics.go` holds those store-semantics scenarios, `contract/lifecycle.go` the data lifecycle's (account
+erasure, organisation deletion, the export) and the organisation store's; a new one must pass on Postgres too
+(`go test ./internal/storage/database/ -run TestPostgres_Contract` with `DATABASE_URL`). The fake refuses rows
+whose parent is missing where Postgres has a foreign key (collaborators, versions, comments, invitations, user and
+org settings), so seed the user, org or flow first; a test may set stored fields directly (e.g. a timestamp a save
+stamps itself) through the exported maps. No backend lists known divergences (`KnownDivergence`,
+`CONTRACT_STRICT=1`) any more: the filesystem backend, the last to list them, is now only the read-only legacy
+source below. The API, DI and service tests run their routers and services on the fake; a test about Postgres
+behaviour itself (row-level security, transactions, statement counts) uses `pgtest`.
+
+## Legacy source contract: `internal/storage/contract/legacy.go`
+
+The legacy-server migrator reads a PAD_DATA_DIR through `migration.LegacySource`, implemented read-only by
+`filesystem.OpenLegacySource`. `RunLegacySourceSuite` writes its fixtures as raw files in the layout old builds
+left (`contract.LegacyDir`), never through a writer of this build, and includes a flow file with literal keys, so a
+renamed JSON tag on `FlowDocument` fails it. It also makes the directory read-only and compares a snapshot of the
+whole tree before and after a full read: the source may not create, change or remove anything. Windows ignores the
+read-only bit on directories, so there only the snapshot proves it.
 
 ## Isolated test databases: `internal/testutil/pgtest`
 

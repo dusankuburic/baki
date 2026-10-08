@@ -56,9 +56,9 @@ func (rt *Router) idempotency(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		store, ok := rt.security.Backend.(storageif.IdempotencyStore)
+		store := rt.security.Idempotency
 		claims := auth.ClaimsFromContext(r.Context())
-		if !ok || claims == nil {
+		if store == nil || claims == nil {
 			next.ServeHTTP(w, r)
 			return
 		}

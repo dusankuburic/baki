@@ -221,7 +221,7 @@ func TestScanOnce_ReadsAnOrgRosterOncePerSweep(t *testing.T) {
 	}
 
 	global := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
 	sse := &fakeSSE{}
 	s.SetEventNotifier(sse)
 	s.ScanOnce(ctx)

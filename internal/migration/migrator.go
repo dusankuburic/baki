@@ -2,7 +2,8 @@
 // that ran with the filesystem storage backend and a PAD_DATA_DIR) to the
 // PostgreSQL StorageBackend. It copies flows, settings and chat conversations
 // only; Result.NotMigrated names what stays behind. It is not a desktop-app
-// export: the desktop app keeps no store under PAD_DATA_DIR.
+// export: the desktop app keeps no store under PAD_DATA_DIR. The source is read
+// through LegacySource, which never writes to the legacy directory.
 //
 // # Failure model
 //
@@ -20,17 +21,14 @@ package migration
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
+	"slices"
 	"time"
 
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
-	"pad-core/models"
 )
 
 // errSkipped is returned by migrateOneFlow when the item is already present in dst.
@@ -62,20 +60,47 @@ type MigrationError struct {
 	Message string
 }
 
-// Migrator copies data from a source StorageBackend to a destination
-// StorageBackend in batches, with basic validation before each item.
+// Step is one kind of data a legacy data directory can hold. Run copies it into
+// the destination and adds its tally to the Result; a nil Run declares the kind
+// as deliberately left behind, and Result.NotMigrated names it. A new kind of
+// legacy data is one entry in steps.
+type Step struct {
+	Name string
+	// Fatal aborts the run when Run fails: without the flow walk nothing else
+	// is worth copying. Any other step's failure is logged and the run goes on.
+	Fatal bool
+	Run   func(m *Migrator, ctx context.Context, res *Result) error
+}
+
+// steps runs in order: flows first, then settings, then conversations.
+var steps = []Step{
+	{Name: "flows", Fatal: true, Run: (*Migrator).migrateFlows},
+	{Name: "settings", Run: (*Migrator).migrateSettings},
+	{Name: "conversations", Run: (*Migrator).migrateConversations},
+	{Name: "users and sessions"},
+	{Name: "organisations and memberships"},
+	{Name: "API tokens"},
+	{Name: "finding triage and comments"},
+	{Name: "flow versions"},
+	{Name: "share links"},
+	{Name: "governance alerts"},
+	{Name: "audit events"},
+}
+
+// Steps returns the declared steps in run order, the left-behind kinds included.
+func Steps() []Step { return slices.Clone(steps) }
+
+// Migrator copies a legacy data directory into a destination StorageBackend in
+// batches, with basic validation before each item.
 type Migrator struct {
-	src       interfaces.StorageBackend
+	src       LegacySource
 	dst       interfaces.StorageBackend
 	batchSize int
 	// perFlowTimeout bounds a single flow's load+save so one pathological flow
 	// (huge content, slow dst write) can't stall the whole run or the app's
 	// shutdown; mirrors the scanner's perFlowScanTimeout.
 	perFlowTimeout time.Duration
-	// convDir is the local-mode conversations directory (configDir/conversations).
-	// When non-empty, conversations are migrated alongside flows; empty disables.
-	convDir   string
-	validator *Validator
+	validator      *Validator
 	// defaultOwner adopts flows whose owner does not exist in the destination
 	// (users are not migrated, so that is the common case): without adoption
 	// the flow is owned by nobody and invisible in every library and
@@ -92,7 +117,7 @@ type Migrator struct {
 const defaultPerFlowMigrationTimeout = 60 * time.Second
 
 // New creates a Migrator with the given source and destination.
-func New(src, dst interfaces.StorageBackend) *Migrator {
+func New(src LegacySource, dst interfaces.StorageBackend) *Migrator {
 	return &Migrator{
 		src:            src,
 		dst:            dst,
@@ -119,13 +144,6 @@ func (m *Migrator) WithPerFlowTimeout(d time.Duration) *Migrator {
 	return m
 }
 
-// WithConversationsDir enables conversation migration from the given local-mode
-// conversations directory (configDir/conversations). An empty dir disables it.
-func (m *Migrator) WithConversationsDir(dir string) *Migrator {
-	m.convDir = dir
-	return m
-}
-
 // WithDefaultOwner sets the account that adopts flows whose recorded owner does
 // not exist in the destination (users are not migrated, so that is the common
 // case). Empty leaves owners untouched.
@@ -134,48 +152,35 @@ func (m *Migrator) WithDefaultOwner(userID string) *Migrator {
 	return m
 }
 
-// Migrate runs the full migration: flows first, then settings, then
-// conversations (best-effort). It returns a Result even on partial failure.
-// notMigrated is what a legacy filesystem data directory can hold beyond the
-// flows, settings and conversations Migrate copies.
-var notMigrated = []string{
-	"users and sessions",
-	"organisations and memberships",
-	"API tokens",
-	"finding triage and comments",
-	"flow versions",
-	"share links",
-	"governance alerts",
-	"audit events",
-}
-
+// Migrate runs the steps in order. It returns a Result even on partial failure.
 func (m *Migrator) Migrate(ctx context.Context) (Result, error) {
 	start := time.Now()
-	res := Result{NotMigrated: append([]string(nil), notMigrated...)}
+	res := Result{NotMigrated: []string{}}
+	for _, s := range steps {
+		if s.Run == nil {
+			res.NotMigrated = append(res.NotMigrated, s.Name)
+		}
+	}
 	m.adopted = 0
 
 	if err := m.dst.Ping(ctx); err != nil {
 		return res, fmt.Errorf("destination unreachable: %w", err)
 	}
 
-	// Migrate flows
-	if err := m.migrateFlows(ctx, &res); err != nil {
-		// migrateFlows accumulates per-item errors into res.Errors;
-		// a non-nil return signals a fatal infrastructure failure.
-		res.Duration = time.Since(start)
-		return res, fmt.Errorf("flows migration aborted: %w", err)
-	}
-
-	// Migrate settings (non-fatal if absent)
-	if err := m.migrateSettings(ctx); err != nil {
-		logger.Warn("migration: settings warning", "error", err)
-	} else {
-		res.SettingsMoved = true
-	}
-
-	// Migrate conversations (best-effort; non-fatal)
-	if err := m.migrateConversations(ctx, &res); err != nil {
-		logger.Warn("migration: conversations warning", "error", err)
+	for _, s := range steps {
+		if s.Run == nil {
+			continue
+		}
+		if err := s.Run(m, ctx, &res); err != nil {
+			if s.Fatal {
+				// Steps accumulate per-item errors into res.Errors; a
+				// returned error is an infrastructure failure.
+				res.FlowsAdopted = m.adopted
+				res.Duration = time.Since(start)
+				return res, fmt.Errorf("%s migration aborted: %w", s.Name, err)
+			}
+			logger.Warn("migration: "+s.Name+" warning", "error", err)
+		}
 	}
 
 	res.FlowsAdopted = m.adopted
@@ -184,60 +189,50 @@ func (m *Migrator) Migrate(ctx context.Context) (Result, error) {
 }
 
 func (m *Migrator) migrateFlows(ctx context.Context, res *Result) error {
-	offset := 0
+	after := ""
 	for {
-		batch, err := m.src.ListFlows(ctx, interfaces.FlowFilter{
-			AllFlows: true, // operational enumeration: copy every flow, unscoped
-			// Order by the immutable primary key, not the default updated_at
-			// DESC: this walk pages with LIMIT/OFFSET, and any ordering on a
-			// mutable column lets rows shift between pages — silently skipping
-			// flows while the run still reports success and no errors (data
-			// loss presented as a clean migration).
-			SortBy: interfaces.FlowSortIDAsc,
-			Limit:  m.batchSize,
-			Offset: offset,
-			// The listing only drives the walk (ids to copy); migrateOneFlow
-			// reloads each flow it actually copies. Without this every page
-			// hydrated every flow's content — including the ones a rerun then
-			// skipped as already migrated.
-			MetadataOnly: true,
-		})
+		// Page by the immutable primary key: any ordering on a mutable column
+		// lets rows shift between pages, silently skipping flows while the run
+		// still reports success and no errors (data loss presented as a clean
+		// migration). The listing carries IDs only; migrateOneFlow loads the
+		// flows it actually copies.
+		ids, err := m.src.ListFlowIDs(ctx, after, m.batchSize)
 		if err != nil {
-			return fmt.Errorf("list flows (offset %d): %w", offset, err)
-		}
-		if len(batch) == 0 {
-			break
+			return fmt.Errorf("list flows (after %q): %w", after, err)
 		}
 
-		for _, flow := range batch {
+		for _, id := range ids {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := m.migrateOneFlow(ctx, flow); err != nil {
+			if err := m.migrateOneFlow(ctx, id); err != nil {
 				if errors.Is(err, errSkipped) {
 					res.FlowsSkipped++
 					continue
 				}
 				res.FlowsFailed++
 				res.Errors = append(res.Errors, MigrationError{
-					FlowID:  flow.ID,
+					FlowID:  id,
 					Message: err.Error(),
 				})
-				logger.Error("migration: flow failed", "flowID", flow.ID, "error", err)
+				logger.Error("migration: flow failed", "flowID", id, "error", err)
 				continue
 			}
 			res.FlowsMigrated++
 		}
 
-		offset += len(batch)
-		if len(batch) < m.batchSize {
-			break // last page
+		if len(ids) < m.batchSize {
+			return nil // last page
 		}
+		last := ids[len(ids)-1]
+		if last <= after {
+			return fmt.Errorf("list flows (after %q): the source did not advance past %q", after, last)
+		}
+		after = last
 	}
-	return nil
 }
 
-func (m *Migrator) migrateOneFlow(ctx context.Context, flow *interfaces.FlowDocument) error {
+func (m *Migrator) migrateOneFlow(ctx context.Context, id string) error {
 	// Bound a single flow's load+save so one bad flow can't stall the run.
 	flowCtx, cancel := context.WithTimeout(ctx, m.perFlowTimeout)
 	defer cancel()
@@ -246,12 +241,11 @@ func (m *Migrator) migrateOneFlow(ctx context.Context, flow *interfaces.FlowDocu
 	// The header is enough (a LoadFlow fetched the row AND downloaded the
 	// content blob), and it comes BEFORE the source load: a rerun used to
 	// hydrate every already-migrated flow from the source only to skip it.
-	if _, err := m.dst.LoadFlowHeader(flowCtx, flow.ID); err == nil {
+	if _, err := m.dst.LoadFlowHeader(flowCtx, id); err == nil {
 		return errSkipped
 	}
 
-	// Reload from source to get the full content (the listing is metadata-only)
-	full, err := m.src.LoadFlow(flowCtx, flow.ID)
+	full, err := m.src.LoadFlow(flowCtx, id)
 	if err != nil {
 		return fmt.Errorf("load from source: %w", err)
 	}
@@ -260,10 +254,18 @@ func (m *Migrator) migrateOneFlow(ctx context.Context, flow *interfaces.FlowDocu
 		return fmt.Errorf("validation: %s", errs[0])
 	}
 
-	if m.adoptOwner(flowCtx, full) {
+	adopted := m.adoptOwner(flowCtx, full)
+	// ImportFlow, not SaveFlow: the copy keeps the flow's created and updated
+	// times, which SaveFlow would stamp with the time of the run.
+	if err := m.dst.ImportFlow(flowCtx, full); errors.Is(err, interfaces.ErrVersionConflict) {
+		return errSkipped // stored since the existence check above
+	} else if err != nil {
+		return err
+	}
+	if adopted {
 		m.adopted++
 	}
-	return m.dst.SaveFlow(flowCtx, full)
+	return nil
 }
 
 // adoptOwner points a flow at the operator when its recorded owner is absent
@@ -290,13 +292,15 @@ func (m *Migrator) adoptOwner(ctx context.Context, flow *interfaces.FlowDocument
 	return true
 }
 
-func (m *Migrator) migrateSettings(ctx context.Context) error {
+func (m *Migrator) migrateSettings(ctx context.Context, res *Result) error {
 	settings, err := m.src.LoadSettings(ctx)
+	if errors.Is(err, interfaces.ErrNotFound) || (err == nil && settings == nil) {
+		// Nothing to move. The destination keeps its own settings instead of
+		// being handed defaults the legacy server never stored.
+		return errors.New("no settings in source")
+	}
 	if err != nil {
 		return fmt.Errorf("load settings from source: %w", err)
-	}
-	if settings == nil {
-		return errors.New("no settings in source")
 	}
 	// H2: skip-if-present mirrors migrateOneFlow's idempotency. Without this
 	// check, a re-run after an admin tunes cloud-mode settings silently rolls
@@ -306,126 +310,62 @@ func (m *Migrator) migrateSettings(ctx context.Context) error {
 	if existing, err := m.dst.LoadSettings(ctx); err == nil && existing != nil {
 		if len(existing.Analysis.Rules) > 0 || len(existing.RecentFiles) > 0 {
 			logger.Info("migration: dst already has settings — skipping (clear dst to force overwrite)")
+			res.SettingsMoved = true
 			return nil
 		}
 	}
-	return m.dst.SaveSettings(ctx, settings)
+	if err := m.dst.SaveSettings(ctx, settings); err != nil {
+		return err
+	}
+	res.SettingsMoved = true
+	return nil
 }
 
-// migrateConversations walks the local-mode conversations directory and copies
-// each conversation file to the destination backend. Conversations are stored
-// per-provider per-flow as JSON files (see ChatService.convFilePath); the
-// migrator reads them directly from disk because the StorageBackend interface
-// has no ListConversations. Best-effort: per-file failures are recorded and
-// never abort the run.
+// migrateConversations copies every conversation the source lists.
+// Best-effort: per-conversation failures are recorded and never abort the run.
 func (m *Migrator) migrateConversations(ctx context.Context, res *Result) error {
-	if m.convDir == "" {
-		return nil
-	}
-	info, err := os.Stat(m.convDir)
+	refs, err := m.src.ListConversations(ctx)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // no conversations directory — nothing to migrate
-		}
-		return fmt.Errorf("stat conversations dir: %w", err)
+		return fmt.Errorf("list conversations: %w", err)
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("conversations path is not a directory: %s", m.convDir)
-	}
-
-	walkErr := filepath.WalkDir(m.convDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() || !strings.HasSuffix(path, ".json") {
-			return nil
-		}
+	for _, ref := range refs {
+		// A cancellation (the operator asked us to stop) is reported apart
+		// from a source error; it used to be swallowed, hiding partial runs.
 		if err := ctx.Err(); err != nil {
+			logger.Warn("migration: conversations walk cancelled mid-sweep", "migrated", res.ConversationsMigrated, "failed", res.ConversationsFailed)
 			return err
 		}
-		if migrateErr := m.migrateOneConversation(ctx, path); migrateErr != nil {
-			if errors.Is(migrateErr, errSkipped) {
+		if err := m.migrateOneConversation(ctx, ref); err != nil {
+			if errors.Is(err, errSkipped) {
 				res.ConversationsSkipped++
-				return nil // continue walking
+				continue
 			}
 			res.ConversationsFailed++
 			res.Errors = append(res.Errors, MigrationError{
-				FlowID:  filepath.Base(path),
-				Message: "conversation: " + migrateErr.Error(),
+				FlowID:  filepath.Base(ref.Path),
+				Message: "conversation: " + err.Error(),
 			})
-			logger.Warn("migration: conversation failed", "path", path, "error", migrateErr)
-			return nil // continue walking
+			logger.Warn("migration: conversation failed", "path", ref.Path, "error", err)
+			continue
 		}
 		res.ConversationsMigrated++
-		return nil
-	})
-	if walkErr != nil {
-		// Distinguish "walk was cancelled mid-sweep" (operator asked us to
-		// stop) from a genuine filesystem error — the cancellation used to be
-		// silently swallowed, hiding partial runs.
-		if errors.Is(walkErr, ctx.Err()) {
-			logger.Warn("migration: conversations walk cancelled mid-sweep", "migrated", res.ConversationsMigrated, "failed", res.ConversationsFailed)
-			return ctx.Err()
-		}
-		return fmt.Errorf("walk conversations dir: %w", walkErr)
 	}
 	return nil
 }
 
-// migrateOneConversation reads, converts, and saves a single conversation file.
+// migrateOneConversation reads and saves a single conversation.
 // H3: skip-if-present — if dst already has messages for (flowID, scope) the
 // conversation is left untouched, so re-running migration cannot clobber
 // conversations the user has continued in cloud mode since the first run.
 // Mirrors migrateOneFlow's idempotency contract.
-func (m *Migrator) migrateOneConversation(ctx context.Context, path string) error {
-	data, err := os.ReadFile(path) // #nosec G304 -- path from WalkDir over convDir, not user input
+func (m *Migrator) migrateOneConversation(ctx context.Context, ref ConversationRef) error {
+	conv, err := m.src.LoadConversation(ctx, ref)
 	if err != nil {
-		return fmt.Errorf("read: %w", err)
+		return err
 	}
-	var conv models.ConversationFile
-	if err := json.Unmarshal(data, &conv); err != nil {
-		return fmt.Errorf("decode: %w", err)
-	}
-
-	flowID := conv.FlowKey
-	if flowID == "" {
-		flowID = strings.TrimSuffix(filepath.Base(path), ".json")
-	}
-	scope := conv.Scope
-	if scope == "" {
-		scope = filepath.Base(filepath.Dir(path))
-	}
-
-	// Skip if dst already has messages for this (flowID, scope) — re-runs must
-	// not roll back post-migration chat activity.
-	if existing, err := m.dst.LoadConversation(ctx, flowID, scope); err == nil && len(existing) > 0 {
-		logger.Info("migration: dst already has conversation — skipping", "flowID", flowID, "scope", scope)
+	if existing, err := m.dst.LoadConversation(ctx, conv.FlowID, conv.Scope); err == nil && len(existing) > 0 {
+		logger.Info("migration: dst already has conversation — skipping", "flowID", conv.FlowID, "scope", conv.Scope)
 		return errSkipped
 	}
-
-	msgs := make([]interfaces.ChatMessage, len(conv.Messages))
-	for i, msg := range conv.Messages {
-		ts := ""
-		if !msg.Timestamp.IsZero() {
-			ts = msg.Timestamp.UTC().Format(time.RFC3339Nano)
-		}
-		msgs[i] = interfaces.ChatMessage{
-			ID:               msg.ID,
-			Role:             msg.Role,
-			Content:          msg.Content,
-			Timestamp:        ts,
-			ContextBlockID:   msg.ContextBlockID,
-			ContextSubflowID: msg.ContextSubflowID,
-			TokensIn:         msg.TokensIn,
-			TokensOut:        msg.TokensOut,
-			Provider:         msg.Provider,
-			Model:            msg.Model,
-			ServedModel:      msg.ServedModel,
-			InputCostPerM:    msg.InputCostPerM,
-			OutputCostPerM:   msg.OutputCostPerM,
-			FinishReason:     msg.FinishReason,
-		}
-	}
-
-	return m.dst.SaveConversation(ctx, flowID, scope, msgs)
+	return m.dst.SaveConversation(ctx, conv.FlowID, conv.Scope, conv.Messages)
 }

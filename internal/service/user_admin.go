@@ -16,6 +16,7 @@ var ErrLastAdmin = errors.New("cannot demote the last administrator")
 type userAdminStore interface {
 	storageif.UserStore
 	storageif.AuditStore
+	storageif.RefreshTokenStore
 }
 
 // UserAdminService backs the deployment administration pages: the user list and statistics, role changes and
@@ -61,10 +62,8 @@ func (s *UserAdminService) ChangeRole(ctx context.Context, userID string, role a
 	if err := s.store.UpdateUserRole(ctx, userID, role); err != nil {
 		return err
 	}
-	if rs, ok := s.store.(RefreshTokenStore); ok {
-		if err := rs.RevokeUserRefreshTokens(ctx, userID); err != nil {
-			logger.FromContext(ctx).Warn("failed to revoke refresh tokens after role change", "userID", userID, "error", err)
-		}
+	if err := s.store.RevokeUserRefreshTokens(ctx, userID); err != nil {
+		logger.FromContext(ctx).Warn("failed to revoke refresh tokens after role change", "userID", userID, "error", err)
 	}
 	return nil
 }

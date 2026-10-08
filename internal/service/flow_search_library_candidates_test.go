@@ -60,10 +60,11 @@ func seedNeedleFlow(t *testing.T, backend *testutil.FakeBackend, i int) string {
 	}
 	if err := backend.SaveFlow(context.Background(), &interfaces.FlowDocument{
 		ID: id, Name: doc.Name, Content: content, OwnerID: "user-1",
-		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Duration(i) * time.Minute),
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// A save stamps the current time; the stored timestamp is set directly.
+	backend.Flows[id].UpdatedAt = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Duration(i) * time.Minute)
 	return id
 }
 

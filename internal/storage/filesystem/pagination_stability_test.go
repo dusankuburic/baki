@@ -4,142 +4,154 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/storage/contract"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// TestListFlows_PaginationVisitsEveryFlow pins the property the storage
-// migrator and the governance scanner both depend on: walking ListFlows with
-// LIMIT/OFFSET until a short page must visit every flow exactly once.
-//
-// It seeds flows that TIE on UpdatedAt, which is the ordinary case rather than a
-// corner one: SaveFlow persists whatever UpdatedAt the caller supplied and never
-// stamps one itself, so any flow written without an explicit timestamp carries
-// the zero time — and all of them tie with each other.
-//
-// With a tie, ordering came from two non-deterministic sources at once: the map
-// range in ListFlows, and slices.SortFunc, which is NOT a stable sort. Each page
-// was therefore ordered independently of the last, so a LIMIT/OFFSET walk
-// re-shuffled between pages and silently skipped rows.
-func TestListFlows_PaginationVisitsEveryFlow(t *testing.T) {
-	const total, pageSize = 40, 10
+// walkFlowIDs is the loop in migration.Migrate: keyset pages of pageSize until a short page. between runs after
+// each page, for a test that changes the directory mid-walk.
+func walkFlowIDs(t *testing.T, src *LegacySource, pageSize int, between func(page int)) map[string]int {
+	t.Helper()
+	seen := map[string]int{}
+	after := ""
+	for page := 0; ; page++ {
+		if page > 1000 {
+			t.Fatal("the walk does not end")
+		}
+		ids, err := src.ListFlowIDs(context.Background(), after, pageSize)
+		if err != nil {
+			t.Fatalf("ListFlowIDs(after %q): %v", after, err)
+		}
+		for _, id := range ids {
+			seen[id]++
+		}
+		if len(ids) < pageSize {
+			return seen
+		}
+		after = ids[len(ids)-1]
+		if between != nil {
+			between(page)
+		}
+	}
+}
 
+// TestLegacySource_WalkVisitsEveryFlowOnce pins the property the migrator's copy depends on: walking ListFlowIDs page
+// by page visits every flow exactly once. Flows that tie on name and timestamps are the ordinary case in an old data
+// directory (the old backend wrote whatever UpdatedAt the caller supplied, often none); the walk's key is the file
+// name, so ties cannot reorder pages.
+func TestLegacySource_WalkVisitsEveryFlowOnce(t *testing.T) {
+	const total, pageSize = 40, 10
 	for _, tc := range []struct {
 		name  string
 		stamp func(i int) time.Time
 	}{
-		{"all tied on the zero time (no UpdatedAt supplied)", func(int) time.Time { return time.Time{} }},
-		{"all tied on one timestamp (bulk import)", func(int) time.Time {
-			return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-		}},
+		{"all tied on the zero time", func(int) time.Time { return time.Time{} }},
+		{"all tied on one timestamp (bulk import)", func(int) time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }},
 		{"distinct timestamps", func(i int) time.Time {
 			return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Minute)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b, err := NewLocalStorageBackend(t.TempDir())
-			if err != nil {
-				t.Fatalf("NewLocalStorageBackend: %v", err)
-			}
-			ctx := context.Background()
-
-			want := make(map[string]bool, total)
-			for i := 0; i < total; i++ {
+			d := contract.NewLegacyDir(t)
+			for i := range total {
 				id := fmt.Sprintf("flow-%02d", i)
-				if err := b.SaveFlow(ctx, &interfaces.FlowDocument{
-					ID:        id,
-					Name:      id,
-					Content:   json.RawMessage(`{}`),
-					UpdatedAt: tc.stamp(i),
-				}); err != nil {
-					t.Fatalf("SaveFlow %s: %v", id, err)
-				}
-				want[id] = true
+				d.Flow(&interfaces.FlowDocument{ID: id, Name: "same name", Content: json.RawMessage(`{}`), UpdatedAt: tc.stamp(i)})
 			}
-
-			// Exactly the loop in migration.Migrator.migrateFlows and
-			// scanner.ScanOnce.
-			seen := map[string]int{}
-			for offset := 0; ; {
-				page, err := b.ListFlows(ctx, interfaces.FlowFilter{
-					AllFlows: true, Limit: pageSize, Offset: offset, MetadataOnly: true,
-				})
-				if err != nil {
-					t.Fatalf("ListFlows(offset=%d): %v", offset, err)
-				}
-				if len(page) == 0 {
-					break
-				}
-				for _, f := range page {
-					seen[f.ID]++
-				}
-				offset += len(page)
-				if len(page) < pageSize {
-					break
-				}
+			src, err := OpenLegacySource(d.Root)
+			if err != nil {
+				t.Fatal(err)
 			}
-
-			var missed, duped []string
-			for id := range want {
-				switch n := seen[id]; {
-				case n == 0:
-					missed = append(missed, id)
-				case n > 1:
-					duped = append(duped, fmt.Sprintf("%s x%d", id, n))
+			seen := walkFlowIDs(t, src, pageSize, nil)
+			if len(seen) != total {
+				t.Errorf("the walk visited %d of %d flows", len(seen), total)
+			}
+			for id, n := range seen {
+				if n != 1 {
+					t.Errorf("%s visited %d times", id, n)
 				}
-			}
-			if len(missed) > 0 {
-				t.Errorf("paginated enumeration skipped %d of %d flows: %v", len(missed), total, missed)
-			}
-			if len(duped) > 0 {
-				t.Errorf("paginated enumeration returned %d flow(s) more than once: %v", len(duped), duped)
 			}
 		})
 	}
 }
 
-// TestListFlows_OrderIsDeterministic is the narrower property underneath:
-// identical queries must return identical orderings. Without it, no
-// LIMIT/OFFSET walk over this backend can be correct.
-func TestListFlows_OrderIsDeterministic(t *testing.T) {
-	b, err := NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewLocalStorageBackend: %v", err)
-	}
-	ctx := context.Background()
-	for i := 0; i < 40; i++ {
+// TestLegacySource_WalkSurvivesChangesMidWalk: an old build may still be serving the directory while the migration
+// runs. With LIMIT/OFFSET paging, removing a flow the walk already passed shifted every later page and skipped a
+// flow; with the keyset, a removal or an addition only affects that flow.
+func TestLegacySource_WalkSurvivesChangesMidWalk(t *testing.T) {
+	const total, pageSize = 40, 10
+	d := contract.NewLegacyDir(t)
+	for i := range total {
 		id := fmt.Sprintf("flow-%02d", i)
-		if err := b.SaveFlow(ctx, &interfaces.FlowDocument{
-			ID: id, Name: "same name", Content: json.RawMessage(`{}`),
-		}); err != nil {
-			t.Fatalf("SaveFlow: %v", err)
+		d.Flow(&interfaces.FlowDocument{ID: id, Name: id, Content: json.RawMessage(`{}`)})
+	}
+	src, err := OpenLegacySource(d.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remove := func(id string) {
+		if err := os.Remove(filepath.Join(d.Root, "flows", id+".json")); err != nil {
+			t.Fatal(err)
 		}
 	}
-
-	order := func() []string {
-		page, err := b.ListFlows(ctx, interfaces.FlowFilter{AllFlows: true, MetadataOnly: true})
-		if err != nil {
-			t.Fatalf("ListFlows: %v", err)
+	seen := walkFlowIDs(t, src, pageSize, func(page int) {
+		if page != 0 {
+			return
 		}
-		ids := make([]string, len(page))
-		for i, f := range page {
-			ids[i] = f.ID
+		remove("flow-03") // already visited
+		remove("flow-35") // not yet visited
+		d.Flow(&interfaces.FlowDocument{ID: "flow-00a", Name: "behind the cursor", Content: json.RawMessage(`{}`)})
+		d.Flow(&interfaces.FlowDocument{ID: "flow-99", Name: "ahead of the cursor", Content: json.RawMessage(`{}`)})
+	})
+
+	for i := range total {
+		id := fmt.Sprintf("flow-%02d", i)
+		want := 1
+		if id == "flow-35" {
+			want = 0
+		}
+		if seen[id] != want {
+			t.Errorf("%s visited %d times, want %d", id, seen[id], want)
+		}
+	}
+	if seen["flow-99"] != 1 {
+		t.Errorf("a flow added ahead of the cursor was visited %d times, want 1", seen["flow-99"])
+	}
+	if seen["flow-00a"] != 0 {
+		t.Errorf("a flow added behind the cursor was visited %d times, want 0 (a rerun copies it)", seen["flow-00a"])
+	}
+}
+
+// TestLegacySource_ListingIsDeterministic: identical calls return identical pages, whatever order the directory
+// returns its entries in. Without it no paged walk can be correct.
+func TestLegacySource_ListingIsDeterministic(t *testing.T) {
+	d := contract.NewLegacyDir(t)
+	for i := range 40 {
+		d.Flow(&interfaces.FlowDocument{ID: fmt.Sprintf("flow-%02d", i), Name: "same name", Content: json.RawMessage(`{}`)})
+	}
+	src, err := OpenLegacySource(d.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := func() []string {
+		ids, err := src.ListFlowIDs(context.Background(), "flow-05", 20)
+		if err != nil {
+			t.Fatalf("ListFlowIDs: %v", err)
 		}
 		return ids
 	}
-
-	first := order()
-	for i := 0; i < 20; i++ {
-		got := order()
-		if len(got) != len(first) {
-			t.Fatalf("call %d returned %d flows, first returned %d", i, len(got), len(first))
-		}
-		for j := range got {
-			if got[j] != first[j] {
-				t.Fatalf("call %d differs from the first at position %d: %s vs %s — ListFlows ordering is not deterministic, so LIMIT/OFFSET pagination cannot be correct", i, j, got[j], first[j])
-			}
+	first := list()
+	if len(first) != 20 || first[0] != "flow-06" {
+		t.Fatalf("ListFlowIDs(after flow-05, 20) = %v", first)
+	}
+	for i := range 20 {
+		if got := list(); !slices.Equal(got, first) {
+			t.Fatalf("call %d returned %v, the first returned %v", i, got, first)
 		}
 	}
 }

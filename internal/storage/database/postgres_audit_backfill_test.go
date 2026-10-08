@@ -194,14 +194,14 @@ func TestBackfillOrgIDs_SkipsWhileAnotherReplicaHoldsTheLock(t *testing.T) {
 	if err != nil || !acquired {
 		t.Fatalf("hold the lock: acquired %v err %v", acquired, err)
 	}
-	if n, ran, err := audit.BackfillOrgIDs(ctx, b); ran || n != 0 || err != nil {
+	if n, ran, err := audit.BackfillOrgIDs(ctx, b, b); ran || n != 0 || err != nil {
 		t.Fatalf("with the lock held elsewhere: filled %d ran %v err %v, want a skip", n, ran, err)
 	}
 	if got := auditOrgIDs(t, b)["org-row"]; got != "<null>" {
 		t.Fatalf("org-row = %q while the lock was held elsewhere", got)
 	}
 	release()
-	if n, ran, err := audit.BackfillOrgIDs(ctx, b); !ran || n != 1 || err != nil {
+	if n, ran, err := audit.BackfillOrgIDs(ctx, b, b); !ran || n != 1 || err != nil {
 		t.Fatalf("with the lock free: filled %d ran %v err %v, want 1 true nil", n, ran, err)
 	}
 }

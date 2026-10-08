@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/migration"
+	"pad-analyzer/internal/platform/lock"
 	"pad-core/logger"
 )
 
@@ -23,21 +24,13 @@ type MigrationRunner struct {
 	// replicas: the in-process mutex below only guards one pod, so without it
 	// two pods could both pass the guard and run Migrate concurrently (the
 	// migrator's skip-if-present check is check-then-act).
-	locker GlobalLocker
+	locker lock.GlobalLocker
 
 	mu        sync.Mutex
 	running   bool
 	startedAt time.Time
 	last      *migration.Result
 	lastErr   error
-}
-
-// GlobalLocker is an optional capability of the destination backend: a
-// cross-replica mutual-exclusion lock (the Postgres backend implements it via
-// a session-level advisory lock). acquired=false means another holder has the
-// key; release must be called exactly once when acquired.
-type GlobalLocker interface {
-	TryGlobalLock(ctx context.Context, key int64) (release func(), acquired bool, err error)
 }
 
 // migrationLockKey namespaces the advisory lock for the local→cloud data
@@ -52,8 +45,8 @@ func NewMigrationRunner(m *migration.Migrator) *MigrationRunner {
 	return &MigrationRunner{migrator: m}
 }
 
-// WithLocker wires the cross-replica lock capability (see GlobalLocker).
-func (r *MigrationRunner) WithLocker(l GlobalLocker) *MigrationRunner {
+// WithLocker wires the cross-replica lock (nil without a database).
+func (r *MigrationRunner) WithLocker(l lock.GlobalLocker) *MigrationRunner {
 	r.locker = l
 	return r
 }
@@ -69,15 +62,13 @@ func (r *MigrationRunner) Enabled() bool { return r != nil && r.migrator != nil 
 // admin who asked for the migration. Users are not migrated, so legacy flows
 // name owners the destination does not have; stored as-is they are invisible in
 // every library view while the run reports them migrated.
-func (r *MigrationRunner) StartAs(operatorID string) bool {
-	if !r.Enabled() {
-		return false
-	}
-	r.migrator.WithDefaultOwner(operatorID)
-	return r.Start()
-}
+func (r *MigrationRunner) StartAs(operatorID string) bool { return r.start(&operatorID) }
 
-func (r *MigrationRunner) Start() bool {
+func (r *MigrationRunner) Start() bool { return r.start(nil) }
+
+// start claims the run, then sets the adopting owner: a start rejected because a run is going must not change who
+// adopts that run's flows.
+func (r *MigrationRunner) start(owner *string) bool {
 	if !r.Enabled() {
 		return false
 	}
@@ -87,6 +78,9 @@ func (r *MigrationRunner) Start() bool {
 		return false
 	}
 	r.running = true
+	if owner != nil {
+		r.migrator.WithDefaultOwner(*owner)
+	}
 	r.startedAt = time.Now()
 	r.last = nil
 	r.lastErr = nil

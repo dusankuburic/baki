@@ -12,13 +12,6 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// userSettingsLoader is the part of the storage backend that holds each user's own
-// preferences (cloud); the chat store interface does not include it, so it is detected
-// rather than required.
-type userSettingsLoader interface {
-	LoadUserSettings(ctx context.Context, userID string) (*storageif.AppSettings, error)
-}
-
 // callerPreferences returns the settings that carry the CALLING user's chat preferences
 // (custom instructions, history toggle): the user's own row in cloud, s.settings on
 // desktop and when the row cannot be read. Deployment-wide limits (daily budgets)
@@ -35,16 +28,14 @@ func (s *ChatService) callerPreferences(ctx context.Context) *models.AppSettings
 // loadCallerPreferences is callerPreferences without the turn's memo.
 func (s *ChatService) loadCallerPreferences(ctx context.Context) *models.AppSettings {
 	if s.mode == config.ModeCloud && s.backend != nil {
-		if loader, ok := s.backend.(userSettingsLoader); ok {
-			if claims := auth.ClaimsFromContext(ctx); claims != nil && claims.UserID != "" {
-				stored, err := loader.LoadUserSettings(ctx, claims.UserID)
-				if err == nil && stored != nil {
-					if m, ok := storageSettingsToModel(stored); ok {
-						return m
-					}
-				} else if err != nil {
-					logger.Warn("chat: user settings unavailable; using deployment settings", "error", err)
+		if claims := auth.ClaimsFromContext(ctx); claims != nil && claims.UserID != "" {
+			stored, err := s.backend.LoadUserSettings(ctx, claims.UserID)
+			if err == nil && stored != nil {
+				if m, ok := storageSettingsToModel(stored); ok {
+					return m
 				}
+			} else if err != nil {
+				logger.Warn("chat: user settings unavailable; using deployment settings", "error", err)
 			}
 		}
 	}

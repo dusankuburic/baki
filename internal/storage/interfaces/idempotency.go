@@ -31,7 +31,8 @@ type IdempotentResponse struct {
 
 // IdempotencyStore keeps the responses of requests sent with an Idempotency-Key, per user and key (ADR 0007).
 // Both methods run inside the request's transaction: the claim and the stored response commit with the request's
-// writes, and a rollback removes them with those writes. Optional: callers type-assert.
+// writes, and a rollback removes them with those writes. Not a StorageBackend role: the database provides it as an
+// fx value beside the backend (nil without row-level security), and the test fake implements it.
 type IdempotencyStore interface {
 	// ClaimIdempotencyKey claims key for userID's request with fingerprint, or finds the response a completed
 	// request with the key stored. It returns (nil, nil) when claimed: the request runs, and stores its response

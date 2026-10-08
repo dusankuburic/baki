@@ -6,18 +6,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pad-analyzer/internal/storage/filesystem"
+	"pad-analyzer/internal/testutil"
 )
 
 // TestHandleSuppressionInventory_ListsAndFlagsStale pins C10's route: the
 // inventory the CLI computes is reachable over HTTP, a directive on a block
 // where its rule fires is live, and one where it does not is stale.
 func TestHandleSuppressionInventory_ListsAndFlagsStale(t *testing.T) {
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("storage: %v", err)
-	}
-	rt := newTestRouter(fs, false) // local mode: resolveFlow uses the loaded doc
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, false) // local mode: resolveFlow uses the loaded doc
 
 	flow := "#Region \"Main\"\n" +
 		"# pad-ignore[missing-timeout]\n" +

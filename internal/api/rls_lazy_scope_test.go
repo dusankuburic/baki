@@ -14,8 +14,8 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/platform/txhook"
 	storagedb "pad-analyzer/internal/storage/database"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 )
 
 // The RLS middleware used to run BEGIN + set_config + COMMIT on EVERY
@@ -45,11 +45,8 @@ type lazyRLSBackend struct {
 
 func newLazyRLSBackend(t *testing.T) *lazyRLSBackend {
 	t.Helper()
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("backend: %v", err)
-	}
-	b := &lazyRLSBackend{StorageBackend: fs}
+	store := testutil.NewFakeBackend()
+	b := &lazyRLSBackend{StorageBackend: store}
 	b.db = sql.OpenDB(countingConnector{b: b})
 	b.db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = b.db.Close() })

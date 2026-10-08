@@ -14,7 +14,7 @@ import (
 // The clamp read `if limit <= 0 || limit > 500 { limit = 100 }` — so asking for
 // MORE than the maximum silently gave you the DEFAULT, which is five times
 // FEWER. That is the wrong failure mode for a cap, and it had a live victim:
-// the GDPR data-subject export (postgres_retention.go) requests Limit: 1000 and
+// the GDPR data-subject export (exportAuditEvents) requests Limit: 1000 and
 // was therefore shipping 100 audit events with no error and no truncation
 // marker. A compliance export that silently omits records is worse than one
 // that fails.

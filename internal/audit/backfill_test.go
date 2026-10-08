@@ -7,17 +7,13 @@ import (
 	"testing"
 
 	"go.uber.org/fx/fxtest"
-
-	"pad-analyzer/internal/testutil"
 )
 
-// backfillStore is a store with the backfill and, optionally, a cross-replica lock.
+// backfillStore is a backfiller that counts its runs.
 type backfillStore struct {
-	*testutil.FakeBackend
-	calls    atomic.Int32
-	filled   int
-	block    bool // wait for the context instead of returning
-	released atomic.Int32
+	calls  atomic.Int32
+	filled int
+	block  bool // wait for the context instead of returning
 }
 
 func (s *backfillStore) BackfillAuditOrgIDs(ctx context.Context) (int, error) {
@@ -29,63 +25,61 @@ func (s *backfillStore) BackfillAuditOrgIDs(ctx context.Context) (int, error) {
 	return s.filled, nil
 }
 
-type lockedBackfillStore struct {
-	*backfillStore
+// testLocker is a cross-replica lock that is free (acquired), held by another replica, or unavailable (err).
+type testLocker struct {
 	acquired bool
 	err      error
+	released atomic.Int32
 }
 
-func (s *lockedBackfillStore) TryGlobalLock(context.Context, int64) (func(), bool, error) {
-	if s.err != nil || !s.acquired {
-		return nil, false, s.err
+func (l *testLocker) TryGlobalLock(context.Context, int64) (func(), bool, error) {
+	if l.err != nil || !l.acquired {
+		return nil, false, l.err
 	}
-	return func() { s.released.Add(1) }, true, nil
+	return func() { l.released.Add(1) }, true, nil
 }
 
 func TestBackfillOrgIDs_RunsUnderTheLock(t *testing.T) {
 	ctx := context.Background()
 
-	if _, ran, err := BackfillOrgIDs(ctx, testutil.NewFakeBackend()); ran || err != nil {
-		t.Errorf("a store without the backfill: ran %v err %v", ran, err)
-	}
-	if _, ran, err := BackfillOrgIDs(ctx, nil); ran || err != nil {
-		t.Errorf("desktop (no store): ran %v err %v", ran, err)
+	if _, ran, err := BackfillOrgIDs(ctx, nil, nil); ran || err != nil {
+		t.Errorf("desktop (no database): ran %v err %v", ran, err)
 	}
 
-	unlocked := &backfillStore{FakeBackend: testutil.NewFakeBackend(), filled: 3}
-	if n, ran, err := BackfillOrgIDs(ctx, unlocked); n != 3 || !ran || err != nil {
-		t.Errorf("a store without a lock: filled %d ran %v err %v, want 3 true nil", n, ran, err)
+	unlocked := &backfillStore{filled: 3}
+	if n, ran, err := BackfillOrgIDs(ctx, unlocked, nil); n != 3 || !ran || err != nil {
+		t.Errorf("without a lock: filled %d ran %v err %v, want 3 true nil", n, ran, err)
 	}
 
-	held := &lockedBackfillStore{backfillStore: &backfillStore{FakeBackend: testutil.NewFakeBackend()}}
-	if _, ran, err := BackfillOrgIDs(ctx, held); ran || err != nil || held.calls.Load() != 0 {
+	held := &backfillStore{}
+	if _, ran, err := BackfillOrgIDs(ctx, held, &testLocker{}); ran || err != nil || held.calls.Load() != 0 {
 		t.Errorf("lock held by another replica: ran %v err %v calls %d, want a skip", ran, err, held.calls.Load())
 	}
 
-	broken := &lockedBackfillStore{backfillStore: &backfillStore{FakeBackend: testutil.NewFakeBackend()}, err: errors.New("conn refused")}
-	if _, ran, err := BackfillOrgIDs(ctx, broken); ran || err == nil || broken.calls.Load() != 0 {
+	broken := &backfillStore{}
+	if _, ran, err := BackfillOrgIDs(ctx, broken, &testLocker{err: errors.New("conn refused")}); ran || err == nil || broken.calls.Load() != 0 {
 		t.Errorf("lock unavailable: ran %v err %v calls %d, want a skip with the error", ran, err, broken.calls.Load())
 	}
 
-	mine := &lockedBackfillStore{backfillStore: &backfillStore{FakeBackend: testutil.NewFakeBackend(), filled: 5}, acquired: true}
-	if n, ran, err := BackfillOrgIDs(ctx, mine); n != 5 || !ran || err != nil || mine.released.Load() != 1 {
-		t.Errorf("lock acquired: filled %d ran %v err %v released %d, want 5 true nil 1", n, ran, err, mine.released.Load())
+	mine, lock := &backfillStore{filled: 5}, &testLocker{acquired: true}
+	if n, ran, err := BackfillOrgIDs(ctx, mine, lock); n != 5 || !ran || err != nil || lock.released.Load() != 1 {
+		t.Errorf("lock acquired: filled %d ran %v err %v released %d, want 5 true nil 1", n, ran, err, lock.released.Load())
 	}
 }
 
 // ScheduleOrgBackfill runs the backfill once when the app starts, and stopping the app cancels a run still
 // going, so the shutdown drain does not wait for it.
 func TestScheduleOrgBackfill_RunsOnStartAndStopsWithTheApp(t *testing.T) {
-	store := &lockedBackfillStore{backfillStore: &backfillStore{FakeBackend: testutil.NewFakeBackend(), block: true}, acquired: true}
+	store, lock := &backfillStore{block: true}, &testLocker{acquired: true}
 	lc := fxtest.NewLifecycle(t)
-	ScheduleOrgBackfill(lc, store)
+	ScheduleOrgBackfill(lc, store, lock)
 	lc.RequireStart()
 	waitFor(t, "the backfill to start", func() bool { return store.calls.Load() == 1 })
 	lc.RequireStop()
-	waitFor(t, "the cancelled run to release its lock", func() bool { return store.released.Load() == 1 })
+	waitFor(t, "the cancelled run to release its lock", func() bool { return lock.released.Load() == 1 })
 
 	none := fxtest.NewLifecycle(t)
-	ScheduleOrgBackfill(none, testutil.NewFakeBackend()) // nothing to fill: no hook
+	ScheduleOrgBackfill(none, nil, nil) // no database: nothing to fill, no hook
 	none.RequireStart()
 	none.RequireStop()
 }

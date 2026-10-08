@@ -9,7 +9,6 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/platform/txhook"
-	storagedb "pad-analyzer/internal/storage/database"
 )
 
 // rlsStreamingPrefixes: streaming endpoints that must NOT be wrapped in the per-request RLS transaction — it would pin a pooled connection for the stream's lifetime.
@@ -148,8 +147,8 @@ func isOrgChannelTestPath(path string) bool {
 	return len(segs) == 4 && segs[0] != "" && segs[1] == "channels" && segs[2] != "" && segs[3] == "test"
 }
 
-// rlsMiddleware sets app.current_user_id for authenticated /api/ requests that are not exempt, in a transaction wrapping the entire request: LAZY for reads (first scoped statement, storagedb.RLSScope), fail-closed for mutations (starts before the handler; a start failure is a 503).
-// No-op without JWT auth, Postgres, or on public/exempt routes; /ws and background work (scanner, retention, audit writer, notifications) are outside it entirely and rest on Go-layer authz plus explicit clauses — RLS policies allow every row when app.current_user_id is unset. Ends the transaction before the first response byte (txResponseWriter): below 400 it commits, and a failed commit becomes a 503; 400 and above, or a panic before the response started, roll back.
+// rlsMiddleware sets app.current_user_id for authenticated /api/ requests that are not exempt, in a transaction wrapping the entire request: LAZY for reads (first scoped statement, reqtx.Scope), fail-closed for mutations (starts before the handler; a start failure is a 503).
+// No-op without JWT auth, without a request transaction (SecurityConfig.RequestTx: Postgres), or on public/exempt routes; /ws and background work (scanner, retention, audit writer, notifications) are outside it entirely and rest on Go-layer authz plus explicit clauses — RLS policies allow every row when app.current_user_id is unset. Ends the transaction before the first response byte (txResponseWriter): below 400 it commits, and a failed commit becomes a 503; 400 and above, or a panic before the response started, roll back.
 func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !rt.security.JWTEnabled {
@@ -171,8 +170,8 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		rlsBackend, ok := rt.security.Backend.(storagedb.RLSBeginner)
-		if !ok {
+		requestTx := rt.security.RequestTx
+		if requestTx == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -181,9 +180,9 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 		// MUTATING requests fail CLOSED — without the transaction the policies short-circuit to allow-all — so a mutation's scope starts HERE, before handler code, landing the 503 before its non-transactional side effects (keystore writes, provider calls, blob uploads, audit rows). Reads stay fail-open (explicit ownership predicates also scope them).
 		failOpen := r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
 		base := r.Context()
-		ctx, scope := storagedb.WithLazyRLS(base, rlsBackend, claims.UserID, failOpen)
+		ctx, scope := requestTx.Open(base, claims.UserID, failOpen)
 		if !failOpen {
-			if err := storagedb.EnsureRLS(ctx); err != nil {
+			if err := scope.Begin(); err != nil {
 				slog.Error("rls: failed to begin transaction, refusing mutation", "method", r.Method, "path", r.URL.Path, "err", err)
 				render.Error(w, errRLSUnavailableResponse, http.StatusServiceUnavailable)
 				return
@@ -192,7 +191,7 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 		ctx, hooks := txhook.With(ctx)
 		r = r.WithContext(ctx)
 		// Post-commit work runs with a fresh RLS scope for the same user per hook: the request's own scope has ended.
-		runHooks := func() { hooks.Commit(storagedb.RLSHookRunner(base, rlsBackend, claims.UserID)) }
+		runHooks := func() { hooks.Commit(requestTx.HookRunner(base, claims.UserID)) }
 
 		tw := newTxResponseWriter(w, func(status int) bool {
 			if status >= http.StatusBadRequest {

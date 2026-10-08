@@ -318,28 +318,11 @@ func (rt *Router) validBearer(r *http.Request) bool {
 	return err == nil
 }
 
-// patBackend is what PAT authentication needs from storage.
-type patBackend interface {
-	GetAPITokenByHash(ctx context.Context, tokenHash string) (*storageif.APIToken, error)
-	LoadUserByID(ctx context.Context, id string) (*storageif.User, error)
-}
-
-// lookupAPITokenOwner resolves a PAT hash to the token and its owner's current user row, or (nil, nil). Backends that can join the two
-// (storageif.APITokenOwnerLookup — Postgres) answer in one round trip; the fallback is the token read then the user read.
-func lookupAPITokenOwner(ctx context.Context, b patBackend, tokenHash string) (*storageif.APIToken, *storageif.User) {
-	if j, ok := b.(storageif.APITokenOwnerLookup); ok {
-		tok, user, err := j.GetAPITokenWithOwnerByHash(ctx, tokenHash)
-		if err != nil || tok == nil || user == nil {
-			return nil, nil
-		}
-		return tok, user
-	}
-	tok, err := b.GetAPITokenByHash(ctx, tokenHash)
-	if err != nil || tok == nil {
-		return nil, nil
-	}
-	user, err := b.LoadUserByID(ctx, tok.UserID)
-	if err != nil || user == nil {
+// lookupAPITokenOwner resolves a PAT hash to the token and its owner's current user row in one round trip, or
+// (nil, nil) when either is gone.
+func lookupAPITokenOwner(ctx context.Context, tokens storageif.APITokenStore, tokenHash string) (*storageif.APIToken, *storageif.User) {
+	tok, user, err := tokens.GetAPITokenWithOwnerByHash(ctx, tokenHash)
+	if err != nil || tok == nil || user == nil {
 		return nil, nil
 	}
 	return tok, user

@@ -178,8 +178,7 @@ type azureCredentialSnapshot struct {
 	// exists: a credential was stored.
 	exists bool
 	// restorable: restoreCredential can put it back — no credential always (it deletes the new one), a readable
-	// personal document, or an org row whose store restores rows (OrgSecretRestorer: sealed document with
-	// writer, lender and stamp).
+	// personal document, or an org row (OrgSecretRestorer: sealed document with writer, lender and stamp).
 	restorable bool
 	// raw is the personal document; org is the organisation's row as stored.
 	raw string
@@ -201,15 +200,7 @@ func (s *AzureModelService) snapshotCredential(owner storageif.AzureOwner, scope
 		if s.orgKeys == nil {
 			return azureCredentialSnapshot{}, ErrOrgKeyStoreUnavailable
 		}
-		r, ok := s.orgKeys.(storageif.OrgSecretRestorer)
-		if !ok {
-			meta, found, err := s.orgKeys.OrgKeyMeta(owner.ID, key)
-			if err != nil {
-				return azureCredentialSnapshot{}, fmt.Errorf("read the stored credential of Azure resource %q: %w", connID, err)
-			}
-			return azureCredentialSnapshot{exists: found, org: storageif.OrgKeySnapshot{OrgKeyInfo: meta}}, nil
-		}
-		snap, found, err := r.SnapshotOrg(owner.ID, key)
+		snap, found, err := s.orgKeys.SnapshotOrg(owner.ID, key)
 		if err != nil {
 			return azureCredentialSnapshot{}, fmt.Errorf("read the stored credential of Azure resource %q: %w", connID, err)
 		}
@@ -245,16 +236,12 @@ func (s *AzureModelService) restoreCredential(owner storageif.AzureOwner, scope,
 	}
 	key := credentialKey(connID)
 	if owner.IsOrg() {
-		r, ok := s.orgKeys.(storageif.OrgSecretRestorer)
-		if !ok {
-			return errCredentialNotRestorable
-		}
 		var prev *storageif.OrgKeySnapshot
 		if snap.exists {
 			p := snap.org
 			prev = &p
 		}
-		restored, err := r.RestoreOrgIfUnchanged(owner.ID, key, savedAt, prev)
+		restored, err := s.orgKeys.RestoreOrgIfUnchanged(owner.ID, key, savedAt, prev)
 		if err != nil {
 			return err
 		}

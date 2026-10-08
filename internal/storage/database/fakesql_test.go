@@ -17,10 +17,11 @@ import (
 // scripted respond func and records every call. It parses nothing: tests
 // assert on the SQL text the backend produced.
 type fakeSQL struct {
-	mu      sync.Mutex
-	calls   []fakeCall
-	conns   int
-	respond func(query string, args []driver.NamedValue) fakeResult
+	mu         sync.Mutex
+	calls      []fakeCall
+	conns      int
+	isolations []driver.IsolationLevel // of every BEGIN, in order
+	respond    func(query string, args []driver.NamedValue) fakeResult
 }
 
 // fakeCall is one statement as the driver received it.
@@ -115,7 +116,10 @@ func (c *fakeConn) Begin() (driver.Tx, error) {
 	return c.BeginTx(context.Background(), driver.TxOptions{})
 }
 
-func (c *fakeConn) BeginTx(_ context.Context, _ driver.TxOptions) (driver.Tx, error) {
+func (c *fakeConn) BeginTx(_ context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	c.f.mu.Lock()
+	c.f.isolations = append(c.f.isolations, opts.Isolation)
+	c.f.mu.Unlock()
 	c.f.answer(c, "BEGIN", nil)
 	c.inTx = true
 	return &fakeTx{c: c}, nil

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"pad-analyzer/internal/storage/filesystem"
+	"pad-analyzer/internal/testutil"
 )
 
 // TestServeHTTP_SecurityHeadersOnEveryResponse verifies the always-on
@@ -78,11 +78,8 @@ func TestSwagger_AuthGatedInCloudMode(t *testing.T) {
 		t.Errorf("cloud mode /swagger/index.html with a session: got %d, want 200", rr.Code)
 	}
 
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	local := newTestRouter(fs, false)
+	store := testutil.NewFakeBackend()
+	local := newTestRouter(store, false)
 	rr = doRequestWithAuth(t, local, http.MethodGet, "/swagger", "", nil)
 	if rr.Code != http.StatusMovedPermanently {
 		t.Errorf("local mode /swagger: got %d, want 301", rr.Code)
@@ -105,8 +102,8 @@ func TestServeHTTP_StripsDefaultServerHeader(t *testing.T) {
 // in the test environment.
 func makeStaticRouter(t *testing.T, staticDir string) *Router {
 	t.Helper()
-	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	rt := newTestRouter(fs, true)
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, true)
 	rt.staticDir = staticDir
 	return rt
 }

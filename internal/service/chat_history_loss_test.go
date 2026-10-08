@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	storageif "pad-analyzer/internal/storage/interfaces"
 
@@ -45,6 +46,14 @@ func (f *flakyConvStore) SaveUsageMetric(_ context.Context, _ *storageif.UsageMe
 }
 func (f *flakyConvStore) GetDailyUsage(_ context.Context, _, _ string) (float64, error) {
 	return 0, nil
+}
+
+// The caller has no settings row of their own and belongs to no organisation.
+func (f *flakyConvStore) LoadUserSettings(context.Context, string) (*storageif.AppSettings, error) {
+	return nil, nil
+}
+func (f *flakyConvStore) OrgMemberRole(context.Context, string, string) (auth.Role, bool, error) {
+	return "", false, nil
 }
 
 func (f *flakyConvStore) count() int {

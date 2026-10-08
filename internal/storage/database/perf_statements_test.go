@@ -332,14 +332,17 @@ func TestGetFindingStatus_SingleRow(t *testing.T) {
 // TestFlowFilterWhere_AfterIDKeyset: ScopeFlowIDs pages by id with a keyset
 // cursor instead of OFFSET.
 func TestFlowFilterWhere_AfterIDKeyset(t *testing.T) {
-	where, args, n := flowFilterWhere(interfaces.FlowFilter{UserID: "u1", AfterID: "f-500", SortBy: interfaces.FlowSortIDAsc})
+	where, args := flowFilterWhere(interfaces.FlowFilter{UserID: "u1", AfterID: "f-500", SortBy: interfaces.FlowSortIDAsc})
 	if !strings.Contains(where, "id > $2") {
 		t.Errorf("AfterID not applied as id > $2: %s", where)
 	}
-	if len(args) != 2 || args[1] != "f-500" || n != 3 {
-		t.Errorf("args = %v, next placeholder = %d", args, n)
+	if len(args) != 2 || args[1] != "f-500" {
+		t.Errorf("args = %v", args)
 	}
-	where, _, _ = flowFilterWhere(interfaces.FlowFilter{UserID: "u1"})
+	if next := args.add("limit"); next != "$3" {
+		t.Errorf("next placeholder = %s, want $3", next)
+	}
+	where, _ = flowFilterWhere(interfaces.FlowFilter{UserID: "u1"})
 	if strings.Contains(where, "id >") {
 		t.Errorf("no cursor must add no id predicate: %s", where)
 	}

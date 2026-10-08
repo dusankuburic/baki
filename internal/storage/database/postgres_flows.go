@@ -62,6 +62,32 @@ func metadataRecordsContent(m interfaces.FlowMetadata) bool {
 // SaveFlow upserts a flow document: existing rows update only when flow.Version matches (OCC —
 // stale returns ErrVersionConflict); new rows insert at version 0 regardless of flow.Version.
 func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.FlowDocument) error {
+	now := time.Now().UTC()
+	return b.writeFlow(ctx, flow, now, now, flow.Version)
+}
+
+// importNoVersion is the stored version ImportFlow expects: no row has it, so saveFlowSQL inserts or writes nothing.
+const importNoVersion = -1
+
+// ImportFlow inserts a flow that is not stored yet at version 0 with its own created and updated times (zero: now,
+// then the created time), for the legacy migration. A stored flow is left alone and reported as ErrVersionConflict.
+func (b *PostgresStorageBackend) ImportFlow(ctx context.Context, flow *interfaces.FlowDocument) error {
+	created, updated := flow.CreatedAt.UTC(), flow.UpdatedAt.UTC()
+	if flow.CreatedAt.IsZero() {
+		created = time.Now().UTC()
+	}
+	if flow.UpdatedAt.IsZero() {
+		updated = created
+	}
+	if err := b.writeFlow(ctx, flow, created, updated, importNoVersion); err != nil {
+		return err
+	}
+	flow.CreatedAt = created
+	return nil
+}
+
+// writeFlow is SaveFlow with the new row's times and the stored version the write expects given.
+func (b *PostgresStorageBackend) writeFlow(ctx context.Context, flow *interfaces.FlowDocument, created, updated time.Time, expectedVer int) error {
 	if err := validFlowID(flow.ID); err != nil {
 		return err
 	}
@@ -76,10 +102,10 @@ func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.
 	// version is durable.
 	if b.blobClient != nil {
 		return b.withTx(ctx, func(txCtx context.Context, _ *sql.Tx) error {
-			return b.saveFlowTx(txCtx, flow, content)
+			return b.saveFlowTx(txCtx, flow, content, created, updated, expectedVer)
 		})
 	}
-	return b.saveFlowTx(ctx, flow, content)
+	return b.saveFlowTx(ctx, flow, content, created, updated, expectedVer)
 }
 
 // saveFlowSQL upserts the flows row AND its flow_search side row in ONE statement (a failed OCC
@@ -108,7 +134,8 @@ const saveFlowSQL = `
 		SELECT version FROM up`
 
 // saveFlowTx performs the conditional upsert and optional blob upload via b.query(ctx); content is the normalized content.
-func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interfaces.FlowDocument, content []byte) error {
+// created stamps an inserted row only, updated every written row.
+func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interfaces.FlowDocument, content []byte, created, updated time.Time, expectedVer int) error {
 	// In blob mode the DB row holds only a "{}" placeholder: the blob is written only after the OCC
 	// check succeeds (a rejected writer never touches it) and keyed by the *new* DB version, so a
 	// failed later COMMIT leaves the row on the previous (correct) blob, the new one an orphan.
@@ -121,12 +148,10 @@ func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interface
 	if err != nil {
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
-	now := time.Now().UTC()
-	expectedVer := flow.Version
 	var newVersion int
 	err = b.query(ctx).QueryRowContext(ctx, saveFlowSQL,
 		flow.ID, flow.Name, flow.Description, string(dbContent), flow.Source, string(meta),
-		flow.OwnerID, flow.OrganizationID, now, now, expectedVer,
+		flow.OwnerID, flow.OrganizationID, created, updated, expectedVer,
 	).Scan(&newVersion)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -156,7 +181,7 @@ func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interface
 		}
 	}
 
-	flow.UpdatedAt = now
+	flow.UpdatedAt = updated
 	flow.Version = newVersion
 	return nil
 }
@@ -252,10 +277,9 @@ func (b *PostgresStorageBackend) LoadFlow(ctx context.Context, id string) (*inte
 }
 
 // flowFilterWhere builds the WHERE clause and args for a FlowFilter; shared by ListFlows and CountFlows so they never drift.
-func flowFilterWhere(filter interfaces.FlowFilter) (string, []any, int) {
+func flowFilterWhere(filter interfaces.FlowFilter) (string, sqlArgs) {
 	where := []string{"1=1"}
-	args := []any{}
-	n := 1
+	args := sqlArgs{}
 
 	// The visibility set is `id IN (arm UNION ALL arm …)` — one index-backed arm per access path
 	// rather than an OR with a correlated EXISTS, which forces a sequential scan of flows for every
@@ -267,82 +291,64 @@ func flowFilterWhere(filter interfaces.FlowFilter) (string, []any, int) {
 	case filter.SharedOnly:
 		// "Shared with me" — collaborator rows only, excluding owned flows.
 		if filter.UserID == "" {
-			return "1=0", nil, 1
+			return "1=0", nil
 		}
-		where = append(where, fmt.Sprintf(
-			"owner_id <> $%d AND id IN (SELECT flow_id FROM flow_collaborators WHERE user_id = $%d)",
-			n, n))
-		args = append(args, filter.UserID)
-		n++
+		user := args.add(filter.UserID)
+		where = append(where, "owner_id <> "+user+" AND id IN (SELECT flow_id FROM flow_collaborators WHERE user_id = "+user+")")
 	case filter.UserID == "" && filter.OrganizationID == "" && len(filter.OrganizationIDs) == 0:
 		// Defense-in-depth: unscoped would match every row — always-false instead, so a caller
 		// who forgets to set filter fields cannot dump all data.
-		return "1=0", nil, 1
+		return "1=0", nil
 	case filter.UserID != "":
-		arms := []string{fmt.Sprintf("SELECT id FROM flows WHERE owner_id = $%d", n)}
-		args = append(args, filter.UserID)
-		userArg := n
-		n++
+		user := args.add(filter.UserID)
+		arms := []string{"SELECT id FROM flows WHERE owner_id = " + user}
 		if filter.OrganizationID != "" {
-			arms = append(arms, fmt.Sprintf("SELECT id FROM flows WHERE org_id = $%d", n))
-			args = append(args, filter.OrganizationID)
-			n++
+			arms = append(arms, "SELECT id FROM flows WHERE org_id = "+args.add(filter.OrganizationID))
 		}
 		if len(filter.OrganizationIDs) > 0 {
-			arms = append(arms, fmt.Sprintf("SELECT id FROM flows WHERE org_id = ANY($%d)", n))
-			args = append(args, textArray(filter.OrganizationIDs))
-			n++
+			arms = append(arms, "SELECT id FROM flows WHERE org_id = ANY("+args.add(textArray(filter.OrganizationIDs))+")")
 		}
-		arms = append(arms, fmt.Sprintf("SELECT flow_id FROM flow_collaborators WHERE user_id = $%d", userArg))
+		arms = append(arms, "SELECT flow_id FROM flow_collaborators WHERE user_id = "+user)
 		where = append(where, "id IN ("+strings.Join(arms, " UNION ALL ")+")")
 	case filter.OrganizationID != "":
-		where = append(where, fmt.Sprintf("org_id = $%d", n))
-		args = append(args, filter.OrganizationID)
-		n++
+		where = append(where, "org_id = "+args.add(filter.OrganizationID))
 	case len(filter.OrganizationIDs) > 0:
-		where = append(where, fmt.Sprintf("org_id = ANY($%d)", n))
-		args = append(args, textArray(filter.OrganizationIDs))
-		n++
+		where = append(where, "org_id = ANY("+args.add(textArray(filter.OrganizationIDs))+")")
 	}
 
 	if filter.Query != "" {
 		// Name substring via flow_search (v27): its trigram index is usable, the one on flows never
 		// was (FORCE RLS + non-leakproof operator); flow_search has no RLS — tenant-correct but a weak cross-tenant timing oracle.
-		where = append(where, fmt.Sprintf("id IN (SELECT flow_id FROM flow_search WHERE name ILIKE $%d)", n))
-		args = append(args, "%"+likeLiteral(filter.Query)+"%")
-		n++
+		where = append(where, "id IN (SELECT flow_id FROM flow_search WHERE name ILIKE "+args.add("%"+likeLiteral(filter.Query)+"%")+")")
 	}
 	if filter.CreatedAfter != nil {
-		where = append(where, fmt.Sprintf("created_at > $%d", n))
-		args = append(args, *filter.CreatedAfter)
-		n++
+		where = append(where, "created_at > "+args.add(*filter.CreatedAfter))
 	}
 	if filter.CreatedBefore != nil {
-		where = append(where, fmt.Sprintf("created_at < $%d", n))
-		args = append(args, *filter.CreatedBefore)
-		n++
+		where = append(where, "created_at < "+args.add(*filter.CreatedBefore))
 	}
 	// Keyset cursor for id-ordered walks: the next page starts after the last id seen instead of OFFSET re-reading.
 	if filter.AfterID != "" {
-		where = append(where, fmt.Sprintf("id > $%d", n))
-		args = append(args, filter.AfterID)
-		n++
+		where = append(where, "id > "+args.add(filter.AfterID))
 	}
 
 	// Tags: ANY-of semantics; delimiter-anchored LIKE over the CSV so 'prod' never matches 'production'.
 	if len(filter.Tags) > 0 {
 		normalized, err := interfaces.NormalizeFlowTags(filter.Tags)
 		if err != nil || len(normalized) == 0 {
-			return "1=0", nil, 1 // invalid tag in a filter matches nothing
+			return "1=0", nil // invalid tag in a filter matches nothing
 		}
-		// One array bind so the statement shape does not vary with the number of tags.
-		where = append(where, fmt.Sprintf(
-			"EXISTS (SELECT 1 FROM unnest($%d::text[]) AS t(tag) WHERE (',' || tags || ',') LIKE ('%%,' || t.tag || ',%%'))", n))
-		args = append(args, textArray(normalized))
-		n++
+		// One array bind so the statement shape does not vary with the number of tags. Each tag is a LIKE pattern,
+		// escaped so that "_" (a valid tag character) is not a wildcard.
+		patterns := make([]string, len(normalized))
+		for i, tag := range normalized {
+			patterns[i] = likeLiteral(tag)
+		}
+		where = append(where, "EXISTS (SELECT 1 FROM unnest("+args.add(textArray(patterns))+
+			"::text[]) AS t(tag) WHERE (',' || tags || ',') LIKE ('%,' || t.tag || ',%'))")
 	}
 
-	return strings.Join(where, " AND "), args, n
+	return strings.Join(where, " AND "), args
 }
 
 // textArray copies ids into a fresh slice for `= ANY($n)` binds, keeping the caller's slice from the driver.
@@ -354,7 +360,7 @@ func textArray(ids []string) []string {
 
 // countFlowsSQL is the CountFlows statement for filter (exposed for the plan tests).
 func countFlowsSQL(filter interfaces.FlowFilter) (string, []any) {
-	whereClause, args, _ := flowFilterWhere(filter)
+	whereClause, args := flowFilterWhere(filter)
 	return "SELECT count(*) FROM flows WHERE " + whereClause, args
 }
 
@@ -370,13 +376,12 @@ func listFlowsWithTotalSQL(filter interfaces.FlowFilter) (string, []any) {
 }
 
 func listFlowsSQLFor(filter interfaces.FlowFilter, extraSelect string) (string, []any) {
-	whereClause, args, n := flowFilterWhere(filter)
+	whereClause, args := flowFilterWhere(filter)
 
 	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	args = append(args, limit, filter.Offset)
 
 	// Select literals instead of content/source when MetadataOnly, keeping the row shape identical.
 	contentExpr := "content"
@@ -392,8 +397,8 @@ func listFlowsSQLFor(filter interfaces.FlowFilter, extraSelect string) (string, 
 		FROM flows
 		WHERE %s
 		%s
-		LIMIT $%d OFFSET $%d`,
-		contentExpr, sourceExpr, extraSelect, whereClause, orderClause, n, n+1)
+		LIMIT %s OFFSET %s`,
+		contentExpr, sourceExpr, extraSelect, whereClause, orderClause, args.add(limit), args.add(filter.Offset))
 	return q, args
 }
 
@@ -445,11 +450,17 @@ func (b *PostgresStorageBackend) ListFlows(ctx context.Context, filter interface
 }
 
 // ListFlowsWithTotal is ListFlows plus the unpaginated total in ONE statement: the visibility
-// semi-join and flows RLS policy are the read path's most expensive predicates. Implements storageif.FlowPageLister.
+// semi-join and flows RLS policy are the read path's most expensive predicates. The total rides the
+// rows, so an empty page past the first is counted on its own (CountFlows).
 func (b *PostgresStorageBackend) ListFlowsWithTotal(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, int, error) {
 	docs, total, err := b.queryFlowRowsTotal(ctx, filter, true)
 	if err != nil {
 		return nil, 0, err
+	}
+	if len(docs) == 0 && filter.Offset > 0 {
+		if total, err = b.CountFlows(ctx, filter); err != nil {
+			return nil, 0, err
+		}
 	}
 	if !filter.MetadataOnly && b.blobClient != nil {
 		if err := b.backfillBlobContent(ctx, docs); err != nil {
@@ -479,7 +490,15 @@ func (b *PostgresStorageBackend) queryFlowRowsTotal(ctx context.Context, filter 
 		return nil, 0, fmt.Errorf("list flows: %w", err)
 	}
 	defer rows.Close()
+	return scanFlowList(rows, filter.MetadataOnly, withTotal)
+}
 
+// flowListColumns are a flow listing's columns in the order scanFlowList reads them (listFlowsSQLFor spells them out
+// to substitute content and source for MetadataOnly).
+const flowListColumns = `id, name, description, content, source, metadata, owner_id, org_id, created_at, updated_at, version, tags`
+
+// scanFlowList reads the rows of a flow listing (flowListColumns, then the page total when withTotal).
+func scanFlowList(rows *sql.Rows, metadataOnly, withTotal bool) ([]*interfaces.FlowDocument, int, error) {
 	var result []*interfaces.FlowDocument
 	var pageTotal int
 	for rows.Next() {
@@ -500,7 +519,7 @@ func (b *PostgresStorageBackend) queryFlowRowsTotal(ctx context.Context, filter 
 			return nil, 0, fmt.Errorf("scan row: %w", err)
 		}
 		flow.Content = contentRaw
-		if filter.MetadataOnly {
+		if metadataOnly {
 			// Keep Content nil (not "{}") so "MetadataOnly ⇒ empty Content" holds across backends.
 			flow.Content = nil
 		}
@@ -652,13 +671,17 @@ func (b *PostgresStorageBackend) DeleteConversation(ctx context.Context, flowID,
 	return nil
 }
 
-// ListCollaborators returns the collaborators for a flow.
+// ListCollaborators returns the collaborators for a flow. Every collaborator statement reaches the grants through
+// their flow: flow_collaborators cannot carry a row-level policy (every flow policy reads it, so one would recurse),
+// but flows can, so inside a user's RLS scope a flow the caller cannot see has no grants to read or write (a write
+// answers ErrNotFound). Without a scope every flow is reachable.
 func (b *PostgresStorageBackend) ListCollaborators(ctx context.Context, flowID string, limit int) ([]*interfaces.Collaborator, error) {
 	rows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT c.user_id, u.email, c.permission, c.granted_at
 		FROM flow_collaborators c
 		JOIN users u ON c.user_id = u.id
 		WHERE c.flow_id = $1
+		  AND EXISTS (SELECT 1 FROM flows f WHERE f.id = c.flow_id)
 		ORDER BY c.granted_at ASC
 		LIMIT CASE WHEN $2 > 0 THEN $2 ELSE NULL END`, flowID, limit)
 	if err != nil {
@@ -702,6 +725,7 @@ func (b *PostgresStorageBackend) ListCollaboratorsBatch(ctx context.Context, flo
 		FROM flow_collaborators c
 		JOIN users u ON c.user_id = u.id
 		WHERE c.flow_id = ANY($1)
+		  AND EXISTS (SELECT 1 FROM flows f WHERE f.id = c.flow_id)
 		ORDER BY c.granted_at ASC`
 	rows, err := b.query(ctx).QueryContext(ctx, q, ids)
 	if err != nil {
@@ -919,9 +943,9 @@ func (b *PostgresStorageBackend) AddCollaborator(ctx context.Context, flowID str
 	if c.GrantedAt.IsZero() {
 		c.GrantedAt = time.Now().UTC()
 	}
-	_, err := b.query(ctx).ExecContext(ctx, `
+	res, err := b.query(ctx).ExecContext(ctx, `
 		INSERT INTO flow_collaborators (flow_id, user_id, permission, granted_at)
-		VALUES ($1, $2, $3, $4)
+		SELECT f.id, $2, $3, $4 FROM flows f WHERE f.id = $1
 		ON CONFLICT (flow_id, user_id) DO UPDATE SET
 			permission = EXCLUDED.permission,
 			granted_at = EXCLUDED.granted_at`,
@@ -929,13 +953,17 @@ func (b *PostgresStorageBackend) AddCollaborator(ctx context.Context, flowID str
 	if err != nil {
 		return fmt.Errorf("add collaborator: %w", err)
 	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return interfaces.ErrNotFound
+	}
 	return nil
 }
 
 func (b *PostgresStorageBackend) UpdateCollaborator(ctx context.Context, flowID, userID string, permission string) error {
 	res, err := b.query(ctx).ExecContext(ctx, `
 		UPDATE flow_collaborators SET permission = $1
-		WHERE flow_id = $2 AND user_id = $3`,
+		WHERE flow_id = $2 AND user_id = $3
+		  AND EXISTS (SELECT 1 FROM flows f WHERE f.id = $2)`,
 		permission, flowID, userID)
 	if err != nil {
 		return fmt.Errorf("update collaborator: %w", err)
@@ -950,7 +978,8 @@ func (b *PostgresStorageBackend) UpdateCollaborator(ctx context.Context, flowID,
 func (b *PostgresStorageBackend) RemoveCollaborator(ctx context.Context, flowID, userID string) error {
 	res, err := b.query(ctx).ExecContext(ctx, `
 		DELETE FROM flow_collaborators
-		WHERE flow_id = $1 AND user_id = $2`,
+		WHERE flow_id = $1 AND user_id = $2
+		  AND EXISTS (SELECT 1 FROM flows f WHERE f.id = $1)`,
 		flowID, userID)
 	if err != nil {
 		return fmt.Errorf("remove collaborator: %w", err)
@@ -1206,7 +1235,7 @@ func likeLiteral(needle string) string {
 // searchFlowContentsSQL is the SearchFlowContents statement (exposed for the plan tests); needle is
 // trimmed and non-empty, limit clamped.
 func searchFlowContentsSQL(filter interfaces.FlowFilter, needle string, limit int) (string, []any) {
-	where, args, n := flowFilterWhere(filter)
+	where, args := flowFilterWhere(filter)
 	// The match runs on flow_search (v27): its trigram indexes are usable by the app role, the one on
 	// flows(content::text) never was (FORCE RLS + non-leakproof operators). body-only for parity with
 	// the old predicate — SearchLibrary re-ranks the capped candidate list in process, so name-only
@@ -1217,11 +1246,10 @@ func searchFlowContentsSQL(filter interfaces.FlowFilter, needle string, limit in
 		SELECT id, name, description, '{}'::jsonb AS content, '' AS source,
 		       metadata, owner_id, org_id, created_at, updated_at, version, tags
 		FROM flows
-		WHERE %s AND id IN (SELECT flow_id FROM flow_search WHERE body ILIKE $%d)
+		WHERE %s AND id IN (SELECT flow_id FROM flow_search WHERE body ILIKE %s)
 		ORDER BY updated_at DESC
-		LIMIT $%d`,
-		where, n, n+1)
-	args = append(args, pattern, limit)
+		LIMIT %s`,
+		where, args.add(pattern), args.add(limit))
 	return q, args
 }
 

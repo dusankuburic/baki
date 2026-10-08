@@ -11,8 +11,8 @@ import (
 
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/config"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 )
 
 // captureModuleAudit points the recorder of rt's module M at a fresh capture channel.
@@ -66,15 +66,15 @@ func onlyAudit(t *testing.T, ch chan *storageif.AuditEvent) *storageif.AuditEven
 // the client address middleware.ClientIP gives for an untrusted peer, the action, resource and meta) and add the
 // flow's organisation when the handler has the flow's header in hand.
 func TestRecordSites_KeepTheColumnsAndAddTheFlowOrg(t *testing.T) {
-	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	rt := newTestRouter(fs, true)
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, true)
 	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
 	ctx := context.Background()
 	for _, f := range []*storageif.FlowDocument{
 		{ID: "f-org", Name: "Org flow", OwnerID: "alice", OrganizationID: "org-1", Content: []byte(`{}`)},
 		{ID: "f-own", Name: "Own flow", OwnerID: "alice", Content: []byte(`{}`)},
 	} {
-		if err := fs.SaveFlow(ctx, f); err != nil {
+		if err := store.SaveFlow(ctx, f); err != nil {
 			t.Fatalf("seed flow: %v", err)
 		}
 	}
@@ -117,8 +117,8 @@ func TestRecordSites_KeepTheColumnsAndAddTheFlowOrg(t *testing.T) {
 // Local mode with a store (local+db): the user comes from the claims, which local mode has none of, so these rows
 // carry the empty user_id they always had although the request acts as the local actor.
 func TestRecordSites_LocalModeKeepsAnEmptyUser(t *testing.T) {
-	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	rt := newTestRouter(fs, false)
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, false)
 	ch := captureModuleAudit(t, rt, func(h *AnalysisHandler, r *audit.Recorder) { h.audit = r })
 	do := serveChain(t, rt)
 

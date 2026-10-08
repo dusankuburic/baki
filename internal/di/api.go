@@ -12,6 +12,7 @@ import (
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/mail"
 	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/platform/reqtx"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/sso"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -77,7 +78,9 @@ func (a redisPingerAdapter) Ping(ctx context.Context) error {
 	return a.client.Ping(ctx).Err()
 }
 
-func ProvideSecurityConfig(cfg *config.Config, authMgr *auth.Manager, backend storageif.StorageBackend, orgSvc *collaboration.OrgService) *api.SecurityConfig {
+// ProvideSecurityConfig: requestTx and idem are the database's request transaction and Idempotency-Key store,
+// nil without row-level security.
+func ProvideSecurityConfig(cfg *config.Config, authMgr *auth.Manager, backend storageif.StorageBackend, requestTx reqtx.Opener, idem storageif.IdempotencyStore, orgSvc *collaboration.OrgService) *api.SecurityConfig {
 	return &api.SecurityConfig{
 		JWTEnabled:     cfg.Auth.Enabled,
 		LocalUserID:    "local",
@@ -85,6 +88,8 @@ func ProvideSecurityConfig(cfg *config.Config, authMgr *auth.Manager, backend st
 		Token:          cfg.Auth.Secret,
 		AuthMgr:        authMgr,
 		Backend:        backend,
+		RequestTx:      requestTx,
+		Idempotency:    idem,
 		OrgSvc:         orgSvc,
 		TrustedProxies: cfg.Server.TrustedProxies,
 		Features: api.FeatureFlags{
@@ -141,26 +146,16 @@ var APIModule = fx.Options(
 		api.NewProviderHandler,
 		api.NewOrgHandler,
 		api.NewSharingHandler,
-		func(backend storageif.StorageBackend) api.RefreshTokenStore {
-			if ts, ok := backend.(api.RefreshTokenStore); ok {
-				return ts
-			}
-			return nil
-		},
-		// SSO wiring: both are nil unless OIDC is configured and the backend
-		// can persist identity links (Postgres). The auth handler treats a nil
-		// pair as "SSO disabled".
+		// The session and identity-link stores are roles of the backend (nil on the desktop), which fx only
+		// provides whole.
+		func(backend storageif.StorageBackend) storageif.RefreshTokenStore { return backend },
+		func(backend storageif.StorageBackend) storageif.IdentityLinkStore { return backend },
+		// SSO is off (a nil client) unless OIDC is configured.
 		func(cfg *config.Config) api.SSOClient {
 			if !cfg.Auth.SSO.Enabled() {
 				return nil
 			}
 			return sso.NewClient(cfg.Auth.SSO)
-		},
-		func(backend storageif.StorageBackend) api.IdentityStore {
-			if is, ok := backend.(api.IdentityStore); ok {
-				return is
-			}
-			return nil
 		},
 		api.NewRouter,
 	),

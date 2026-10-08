@@ -12,11 +12,15 @@ import (
 func TestGovernanceAlertService_Inbox(t *testing.T) {
 	b := testutil.NewFakeBackend()
 	ctx := context.Background()
+	// Alerts are about a flow, and a user sees those of the flows they can see.
+	if err := b.SaveFlow(ctx, &storageif.FlowDocument{ID: "f-1", Name: "F", OwnerID: "u-1"}); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now()
 	for _, a := range []*storageif.GovernanceAlert{
-		{ID: "team", Title: "drift", CreatedAt: now},
-		{ID: "mine", Title: "assigned", TargetUser: "u-1", CreatedAt: now.Add(time.Second)},
-		{ID: "theirs", Title: "assigned", TargetUser: "u-2", CreatedAt: now.Add(2 * time.Second)},
+		{ID: "team", FlowID: "f-1", Title: "drift", CreatedAt: now},
+		{ID: "mine", FlowID: "f-1", Title: "assigned", TargetUser: "u-1", CreatedAt: now.Add(time.Second)},
+		{ID: "theirs", FlowID: "f-1", Title: "assigned", TargetUser: "u-2", CreatedAt: now.Add(2 * time.Second)},
 	} {
 		if err := b.RecordGovernanceAlert(ctx, a); err != nil {
 			t.Fatal(err)

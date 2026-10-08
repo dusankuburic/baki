@@ -8,7 +8,6 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
@@ -99,49 +98,19 @@ func (s *ChatService) orgRoleCached(ctx context.Context, orgID, userID string) (
 	return r.role, r.ok, nil
 }
 
-// lookupOrgRoleUncached reads userID's role in orgID from the org store. A full
-// organisation store (both real backends; see main.go's org service) answers through
-// collaboration.OrgService.MemberRole — one org's row and members instead of every org
-// the caller belongs to with all their members; a narrower backend (test doubles) keeps
-// the ListOrgsForUser scan. ok is false outside the org (unknown org included), in
-// local mode and on a backend without either.
+// lookupOrgRoleUncached reads userID's role in orgID: one membership row, not the org's
+// roster or every org the caller belongs to. ok is false outside the org (unknown org
+// included) and in local mode.
 func (s *ChatService) lookupOrgRoleUncached(ctx context.Context, orgID, userID string) (auth.Role, bool, error) {
 	if s.backend == nil || orgID == "" || userID == "" {
 		return "", false, nil
 	}
-	if store, isStore := s.backend.(collaboration.OrgStore); isStore {
-		role, err := collaboration.NewOrgService(store).MemberRole(ctx, orgID, userID)
-		switch {
-		case err == nil:
-			return role, true, nil
-		case errors.Is(err, collaboration.ErrMemberNotFound), errors.Is(err, collaboration.ErrOrgNotFound), errors.Is(err, interfaces.ErrNotFound):
-			return "", false, nil
-		default:
-			return "", false, err
-		}
-	}
-	orgs, isLister := s.backend.(interface {
-		ListOrgsForUser(ctx context.Context, userID string) ([]*interfaces.Organisation, error)
-	})
-	if !isLister {
+	role, member, err := s.backend.OrgMemberRole(ctx, orgID, userID)
+	switch {
+	case errors.Is(err, interfaces.ErrNotFound):
 		return "", false, nil
-	}
-	list, err := orgs.ListOrgsForUser(ctx, userID)
-	if err != nil {
+	case err != nil:
 		return "", false, err
 	}
-	for _, o := range list {
-		if o == nil || o.ID != orgID {
-			continue
-		}
-		for _, m := range o.Members {
-			if m.UserID == userID {
-				return m.Role, true, nil
-			}
-		}
-		// Listed among the caller's organisations without a member row: a member whose role
-		// the listing does not carry — no role, so never the shared credential (OrgRoleUsesSharedCredential).
-		return "", true, nil
-	}
-	return "", false, nil
+	return role, member, nil
 }

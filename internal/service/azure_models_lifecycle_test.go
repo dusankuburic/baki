@@ -95,7 +95,7 @@ func TestAzureModels_ErasureAndOrgDeletionReleaseTheFamily(t *testing.T) {
 	if !e.svc.importMemoFresh(e.svc.userOwner("u1")) {
 		t.Fatal("no memo to forget")
 	}
-	docs := userAzureDocuments(e.secrets, "u1", nil)
+	docs := userAzureDocuments(e.secrets, e.secrets, "u1", nil)
 	if len(docs) != 2 {
 		t.Fatalf("family documents = %d, want 2", len(docs))
 	}
@@ -272,7 +272,7 @@ func TestAzureModels_DesktopRollbackSkipsAReadOnlyRegistry(t *testing.T) {
 		}
 		secrets := testutil.NewFakeSecretStore()
 		_ = secrets.Save("", "azure-foundry/earlierrun", azmLegacyDoc(""))
-		svc := NewAzureModelService(AzureModelServiceDeps{Registry: reg, Secrets: secrets})
+		svc := NewAzureModelService(AzureModelServiceDeps{Registry: reg, Secrets: secrets, KeyFamilies: secrets})
 		svc.refresher = nil
 		list, err := svc.ListConnections(ctx, AzureScope{})
 		if err != nil {

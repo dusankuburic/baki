@@ -67,7 +67,7 @@ owner           GET    /api/system/settings/org/{org}           200
 owner           GET    /api/providers/list                      200
 owner           GET    /api/orgs/{org}/channels                 200
 owner           POST   /api/orgs/{org}/channels                 400
-owner           DELETE /api/orgs/{org}/channels/no-such-channel 500
+owner           DELETE /api/orgs/{org}/channels/no-such-channel 200
 owner           GET    /api/orgs/{org}/rules/export             200
 owner           POST   /api/analysis/triage/list                200
 owner           POST   /api/analysis/comments/list              200
@@ -167,7 +167,7 @@ pat:read+write  GET    /api/system/settings/org/{org}           200
 pat:read+write  GET    /api/providers/list                      200
 pat:read+write  GET    /api/orgs/{org}/channels                 200
 pat:read+write  POST   /api/orgs/{org}/channels                 400
-pat:read+write  DELETE /api/orgs/{org}/channels/no-such-channel 500
+pat:read+write  DELETE /api/orgs/{org}/channels/no-such-channel 200
 pat:read+write  GET    /api/orgs/{org}/rules/export             200
 pat:read+write  POST   /api/analysis/triage/list                200
 pat:read+write  POST   /api/analysis/comments/list              200

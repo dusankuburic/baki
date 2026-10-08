@@ -9,6 +9,7 @@ import (
 	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/platform/txhook"
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 	"pad-core/models"
 )
@@ -17,7 +18,12 @@ import (
 // for the deployment settings, written only on the desktop, the local user. Nothing is a broadcast.
 func TestSystemService_SettingsChangedAudiences(t *testing.T) {
 	n := &testutil.CountingNotifier{}
-	cloud := NewSystemService(newTestSettingsStore(t), nil, n, &testutil.FakeBackend{}, config.ModeCloud, nil, nil)
+	// Settings rows reference their user and org.
+	backend := &testutil.FakeBackend{
+		Users: map[string]*storageif.User{"user-9": {ID: "user-9"}},
+		Orgs:  map[string]*storageif.Organisation{"org-a": {ID: "org-a"}},
+	}
+	cloud := NewSystemService(newTestSettingsStore(t), nil, n, backend, config.ModeCloud, nil, nil)
 	if err := cloud.UpdateUserSettings(context.Background(), "user-9", *models.DefaultSettings()); err != nil {
 		t.Fatal(err)
 	}

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pad-analyzer/internal/storage/filesystem"
+	"pad-analyzer/internal/testutil"
 )
 
 // Desktop-era analysis endpoints operate on server-local folders or the
@@ -25,11 +25,8 @@ func TestAnalysisDesktopEndpoints_ForbiddenInCloud(t *testing.T) {
 
 // In local/desktop mode (JWTEnabled = false) the same endpoints stay available.
 func TestAnalysisDesktopEndpoints_AvailableInLocal(t *testing.T) {
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("storage: %v", err)
-	}
-	rt := newTestRouter(fs, false) // local mode
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, false) // local mode
 
 	// Session analytics return aggregate stats (empty cache → zeros), 200.
 	dash := doRequest(t, rt, "GET", "/api/analysis/dashboard", nil)

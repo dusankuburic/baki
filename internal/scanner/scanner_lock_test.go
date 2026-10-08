@@ -10,8 +10,8 @@ import (
 	"pad-analyzer/internal/notify"
 )
 
-// lockingBackend adds the Postgres advisory-lock method to the in-memory
-// backend so the cross-replica guard in ScanOnce is exercised.
+// lockingBackend is the in-memory backend and a cross-replica lock that
+// behaves like the Postgres advisory lock, so the guard in ScanOnce is exercised.
 type lockingBackend struct {
 	*healthBackend
 	held     bool
@@ -43,7 +43,7 @@ func TestScanOnce_SkipsWhileAnotherReplicaHoldsTheLock(t *testing.T) {
 	seedFlow(t, b, "f1")
 	var analysed atomic.Int32
 
-	s := New(b, countingAnalyze(&analysed), nil, 0, notify.AllowLoopbackTargets)
+	s := New(b, b, countingAnalyze(&analysed), nil, 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	if got := analysed.Load(); got != 0 {
@@ -61,7 +61,7 @@ func TestScanOnce_SweepsAndReleasesWhenLockAcquired(t *testing.T) {
 	seedFlow(t, b, "f1")
 	var analysed atomic.Int32
 
-	s := New(b, countingAnalyze(&analysed), nil, 0, notify.AllowLoopbackTargets)
+	s := New(b, b, countingAnalyze(&analysed), nil, 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	if got := analysed.Load(); got != 1 {

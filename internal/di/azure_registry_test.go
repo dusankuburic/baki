@@ -22,18 +22,17 @@ import (
 	"pad-analyzer/internal/testutil"
 )
 
-// registryBackend is a storage backend that holds an Azure registry (the
-// Postgres backend's capability) and takes the export hook.
-type registryBackend struct {
-	*testutil.FakeBackend
+// databaseRegistry stands in for the database's Azure registry provider: the
+// registry tables and the data-subject export's hook.
+type databaseRegistry struct {
 	registry storageif.AzureRegistryStore
 	export   storageif.AzureExportConfigFunc
 }
 
-func (b *registryBackend) AzureRegistry() storageif.AzureRegistryStore { return b.registry }
+func (d *databaseRegistry) AzureRegistry() storageif.AzureRegistryStore { return d.registry }
 
-func (b *registryBackend) SetAzureExportConfigSource(fn storageif.AzureExportConfigFunc) {
-	b.export = fn
+func (d *databaseRegistry) SetAzureExportConfigSource(fn storageif.AzureExportConfigFunc) {
+	d.export = fn
 }
 
 // Part 9: the registry lives in Postgres with auth on and the database
@@ -56,15 +55,15 @@ func TestProvideAzureRegistry_Selection(t *testing.T) {
 		t.Errorf("file = %s", file.Path())
 	}
 
-	db := &registryBackend{FakeBackend: testutil.NewFakeBackend(), registry: storage.NewMemoryAzureRegistry()}
+	db := &databaseRegistry{registry: storage.NewMemoryAzureRegistry()}
 	if reg, _ := ProvideAzureRegistry(cfg, db, nil, dir); reg == db.registry {
 		t.Error("auth off: the database registry must not be used (owner ids are not real users)")
 	}
 	cfg.Auth.Enabled = true
 	if reg, _ := ProvideAzureRegistry(cfg, db, nil, dir); reg != db.registry {
-		t.Errorf("auth on + database backend: registry = %T, want the backend's", reg)
+		t.Errorf("auth on + database: registry = %T, want the database's", reg)
 	}
-	if reg, _ := ProvideAzureRegistry(cfg, testutil.NewFakeBackend(), nil, ""); reg == nil {
+	if reg, _ := ProvideAzureRegistry(cfg, nil, nil, ""); reg == nil {
 		t.Error("no store at all must still give an (in-memory) registry")
 	} else if _, isFile := reg.(*storage.FileAzureRegistry); isFile {
 		t.Error("no config directory: no file store")
@@ -76,22 +75,29 @@ func TestProvideAzureRegistry_Selection(t *testing.T) {
 // embeds with Azure, and installs the data-subject export's hook.
 func TestProvideAzureModelService_Wiring(t *testing.T) {
 	cfg := config.Default()
-	desktop := ProvideAzureModelService(storage.NewMemoryAzureRegistry(), testutil.NewFakeSecretStore(), nil, nil, nil, nil, cfg)
+	desktop := ProvideAzureModelService(storage.NewMemoryAzureRegistry(), testutil.NewFakeSecretStore(), nil, nil, nil, nil, nil, nil, cfg)
 	if desktop.OrgRegistriesAvailable() || desktop.KnowledgeEmbeddingEnabled() {
 		t.Errorf("desktop: orgs %v, knowledge %v", desktop.OrgRegistriesAvailable(), desktop.KnowledgeEmbeddingEnabled())
 	}
 
+	db := &databaseRegistry{}
+	authOff := ProvideAzureModelService(storage.NewMemoryAzureRegistry(), testutil.NewFakeSecretStore(), nil, nil, nil, nil, testutil.NewFakeBackend(), db, cfg)
+	if authOff.OrgRegistriesAvailable() || db.export != nil {
+		t.Errorf("database with auth off: orgs %v, export hook installed %v; want the file registry's single owner", authOff.OrgRegistriesAvailable(), db.export != nil)
+	}
+
 	cfg.Mode = config.ModeCloud
+	cfg.Auth.Enabled = true
 	cfg.Storage.EmbeddingProvider = "azure-foundry"
-	backend := &registryBackend{FakeBackend: testutil.NewFakeBackend()}
-	cloud := ProvideAzureModelService(storagedb.NewPostgresAzureRegistry(nil), testutil.NewFakeSecretStore(), testutil.NewFakeOrgSecretStore(), nil, nil, backend, cfg)
+	keys := testutil.NewFakeSecretStore()
+	cloud := ProvideAzureModelService(storagedb.NewPostgresAzureRegistry(nil), keys, keys, testutil.NewFakeOrgSecretStore(), nil, nil, testutil.NewFakeBackend(), db, cfg)
 	if !cloud.OrgRegistriesAvailable() || !cloud.KnowledgeEmbeddingEnabled() {
 		t.Errorf("cloud: orgs %v, knowledge %v", cloud.OrgRegistriesAvailable(), cloud.KnowledgeEmbeddingEnabled())
 	}
-	if backend.export == nil {
+	if db.export == nil {
 		t.Fatal("the export hook was not installed")
 	}
-	if got, err := backend.export(context.Background(), "u1", []string{"abcdefghij"}); err != nil || len(got) != 0 {
+	if got, err := db.export(context.Background(), "u1", []string{"abcdefghij"}); err != nil || len(got) != 0 {
 		t.Errorf("export of a missing credential = %v, %v", got, err)
 	}
 
@@ -123,9 +129,10 @@ func TestServiceModule_GraphWithAzureRegistry(t *testing.T) {
 			func() *scanner.Scanner { return nil },
 			func() *api.MigrationRunner { return nil },
 			func() api.ScanNowFunc { return nil },
-			func() service.KeyStore { return testutil.NewFakeSecretStore() },
 			audit.Provide,
 		),
+		noDatabase(),
+		fakeKeyStore(),
 		ServiceModule,
 		APIModule,
 		redisx.Module,

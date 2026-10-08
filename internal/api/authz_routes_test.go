@@ -10,7 +10,7 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/rag"
-	"pad-analyzer/internal/storage/filesystem"
+	"pad-analyzer/internal/testutil"
 )
 
 // sessionBearer is an interactive session for userID with the global role.
@@ -63,11 +63,8 @@ func TestAdminRoutes_InstanceAdminGroup(t *testing.T) {
 
 // Without accounts every caller is the local user, whom the admin group lets through as RequireRole did.
 func TestAdminRoutes_LocalModePasses(t *testing.T) {
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	rt := newTestRouter(fs, false)
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, false)
 	for _, p := range adminRoutePolicies(t, rt) {
 		path := route.SamplePath(p.Pattern)
 		if rr := doRequest(t, rt, p.Method, path, nil); rr.Code == http.StatusUnauthorized || rr.Code == http.StatusForbidden {

@@ -15,27 +15,18 @@ import (
 	"pad-core/logger"
 )
 
-// IdentityLinkStore is the optional storage capability for SSO identity links, implemented by the Postgres
-// backend.
-type IdentityLinkStore interface {
-	SaveIdentityLink(ctx context.Context, link *storageif.IdentityLink) error
-	LoadIdentityLink(ctx context.Context, provider, subject string) (*storageif.IdentityLink, error)
-	ListIdentityLinks(ctx context.Context, userID string) ([]*storageif.IdentityLink, error)
-	DeleteIdentityLink(ctx context.Context, userID, provider string) error
-}
-
 // ErrUnlinkOnlySignIn refuses removing the link of an account without a password: the link is then its only way
 // to sign in.
 var ErrUnlinkOnlySignIn = errors.New("set a password first — this identity is currently the only way to sign in")
 
 // IdentityService maps external (SSO) identities to local accounts: first-login provisioning, account linking
-// and unlinking. Without a link store (no OIDC-capable backend) Available is false.
+// and unlinking. Without a link store (no server store: the desktop) Available is false.
 type IdentityService struct {
 	users authStore
-	links IdentityLinkStore
+	links storageif.IdentityLinkStore
 }
 
-func NewIdentityService(users authStore, links IdentityLinkStore) *IdentityService {
+func NewIdentityService(users authStore, links storageif.IdentityLinkStore) *IdentityService {
 	return &IdentityService{users: users, links: links}
 }
 

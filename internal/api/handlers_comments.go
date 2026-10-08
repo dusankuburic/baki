@@ -268,7 +268,7 @@ func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Req
 	err := h.comments.Delete(r.Context(), req.FlowID, req.CommentID, userID)
 	if errors.Is(err, storageif.ErrNotCommentAuthor) {
 		if adminErr := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, service.FlowShare); adminErr == nil {
-			err = h.comments.Delete(r.Context(), req.FlowID, req.CommentID, "")
+			err = h.comments.DeleteAsModerator(r.Context(), req.FlowID, req.CommentID)
 		}
 	}
 	if err != nil {

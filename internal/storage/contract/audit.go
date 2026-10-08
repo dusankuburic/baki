@@ -13,7 +13,6 @@ import (
 
 // RunAuditSuite runs the audit-log store contract: Postgres (DB-gated) and the test fake agree on what a saved
 // row reads back as, including the organisation and actor columns of v33, and on the list's order and filters.
-// The filesystem backend keeps no audit log and does not run it.
 func RunAuditSuite(t *testing.T, store interfaces.AuditStore) {
 	t.Helper()
 	for _, sc := range auditScenarios {
@@ -28,6 +27,7 @@ var auditScenarios = []struct {
 	{"every_column_round_trips", auditRoundTrip},
 	{"empty_actor_and_org_read_back_empty", auditEmptyColumns},
 	{"list_orders_newest_first_and_filters", auditListOrder},
+	{"batch_is_written_all_or_nothing", auditBatch},
 }
 
 func auditEvent(userID, action string, at time.Time) *interfaces.AuditEvent {
@@ -139,5 +139,54 @@ func auditListOrder(t *testing.T, store interfaces.AuditStore) {
 	since := base.Add(90 * time.Second)
 	if got, want := ids(interfaces.AuditFilter{UserID: user, Since: &since}), []string{tiedA.ID, tiedB.ID}; !reflect.DeepEqual(got, want) {
 		t.Errorf("by user since = %v, want %v", got, want)
+	}
+}
+
+// auditBatch: SaveAuditEvents writes every row of a batch or none of them. The recorder relies on it: after a
+// failed batch it writes the rows one by one, which would duplicate a partly written batch.
+func auditBatch(t *testing.T, store interfaces.AuditStore) {
+	ctx := context.Background()
+	user := "contract-audit-" + uuid.NewString()[:8]
+	now := time.Now()
+	batch := []*interfaces.AuditEvent{
+		auditEvent(user, "contract.batch", now.Add(-2*time.Second)),
+		auditEvent(user, "contract.batch", now.Add(-time.Second)),
+		auditEvent(user, "contract.batch", now),
+	}
+	if err := store.SaveAuditEvents(ctx, batch); err != nil {
+		t.Fatalf("SaveAuditEvents: %v", err)
+	}
+	if err := store.SaveAuditEvents(ctx, nil); err != nil {
+		t.Errorf("an empty batch: %v", err)
+	}
+	rows, err := store.ListAuditEvents(ctx, interfaces.AuditFilter{UserID: user})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 || rows[0].ID != batch[2].ID || rows[2].ID != batch[0].ID {
+		t.Fatalf("listed %d rows, want the batch's 3 newest first", len(rows))
+	}
+
+	// A row whose id is taken fails the batch, and the batch's other row is not written either.
+	fresh := auditEvent(user, "contract.batch.rejected", now)
+	if err := store.SaveAuditEvents(ctx, []*interfaces.AuditEvent{fresh, auditEvent(user, "contract.batch.rejected", now)}); err != nil {
+		t.Fatalf("SaveAuditEvents (distinct ids): %v", err)
+	}
+	again := auditEvent(user, "contract.batch.rejected", now)
+	dup := *batch[0]
+	if err := store.SaveAuditEvents(ctx, []*interfaces.AuditEvent{again, &dup}); err == nil {
+		t.Fatal("a batch with a duplicate id was accepted")
+	}
+	rows, err = store.ListAuditEvents(ctx, interfaces.AuditFilter{UserID: user, Action: "contract.batch.rejected"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.ID == again.ID {
+			t.Error("a row of the failed batch was written")
+		}
+	}
+	if len(rows) != 2 {
+		t.Errorf("listed %d rows of the accepted batch, want 2", len(rows))
 	}
 }

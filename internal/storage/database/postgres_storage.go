@@ -24,6 +24,7 @@ import (
 
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/storage/settingsdoc"
 )
 
 // pgErrUniqueViolation is the SQLSTATE for a unique constraint violation.
@@ -68,6 +69,9 @@ type PostgresStorageBackend struct {
 
 	// sealer encrypts secret columns at rest (EnableFieldEncryption); nil = stored as given.
 	sealer atomic.Pointer[fieldSealer]
+
+	// settingsSections declares the settings document's sections; nil = settingsdoc.Default (tests swap in their own).
+	settingsSections *settingsdoc.Registry
 }
 
 // Config holds the connection settings for the PostgreSQL backend.

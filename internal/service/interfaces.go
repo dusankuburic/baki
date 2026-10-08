@@ -33,12 +33,14 @@ type KeyStore interface {
 	Delete(scope, provider string) error
 }
 
-// OrgKeyStore mirrors storage/interfaces.OrgSecretStore where it is consumed: an
+// OrgKeyStore is the part of storage/interfaces.OrgSecretStore the services use: an
 // organisation's shared provider credential (G7), written by org admins and run on by
-// members with no credential of their own; nil on the desktop and in local mode. The
-// secret is write-only — GetOrg builds providers and merges an edit that omits the
-// secret, never rendering it to a client; each row records its last writer and its
-// secret's lender (see storageif.OrgSecretStore).
+// members with no credential of their own; nil without the encrypted database keystore
+// (the desktop, and a database deployment without an encryption key). The secret is
+// write-only — GetOrg builds providers and merges an edit that omits the secret, never
+// rendering it to a client; each row records its last writer and its secret's lender
+// (see storageif.OrgSecretStore). The key families hold the Azure AI Foundry resources'
+// credentials, and the restorer undoes a save whose registry write failed.
 type OrgKeyStore interface {
 	SaveOrg(orgID, provider, key, updatedBy string) error
 	GetOrg(orgID, provider string) (string, error)
@@ -46,6 +48,6 @@ type OrgKeyStore interface {
 	DeleteOrg(orgID, provider string) error
 	OrgKeyMeta(orgID, provider string) (info storageif.OrgKeyInfo, ok bool, err error)
 	SaveOrgIfUnchanged(orgID, provider, key, updatedBy string, secretCarried bool, expected time.Time) (updatedAt time.Time, ok bool, err error)
-	DeleteOrgIfSavedBy(orgID, provider, userID string) (deleted bool, err error)
-	OrgsWithKeySavedBy(provider, userID string) ([]string, error)
+	storageif.OrgSecretFamilyStore
+	storageif.OrgSecretRestorer
 }

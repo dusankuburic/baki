@@ -122,12 +122,9 @@ func TestRegistryCredentialOrg(t *testing.T) {
 	if got := s.credentialOrg(ctx, "org-1", "u1"); got != "" {
 		t.Errorf("store down: credentialOrg = %q, want the caller's own credential (fail closed)", got)
 	}
-	// Local mode and a backend without the organisation store: no org, no error.
-	type storeWithoutOrgs struct{ chatStore }
-	for _, svc := range []*ChatService{{}, {backend: storeWithoutOrgs{}}} {
-		if got, err := svc.registryCredentialOrg(ctx, "org-1", "u1"); got != "" || err != nil {
-			t.Errorf("no organisation store: registryCredentialOrg = %q, %v", got, err)
-		}
+	// Local mode: no org, no error.
+	if got, err := (&ChatService{}).registryCredentialOrg(ctx, "org-1", "u1"); got != "" || err != nil {
+		t.Errorf("local mode: registryCredentialOrg = %q, %v", got, err)
 	}
 }
 

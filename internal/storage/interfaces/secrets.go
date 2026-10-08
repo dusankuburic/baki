@@ -36,6 +36,10 @@ type OrgSecretStore interface {
 	DeleteOrgIfSavedBy(orgID, provider, userID string) (deleted bool, err error)
 	// OrgsWithKeySavedBy lists the orgs whose credential for provider userID lent (DeleteOrgIfSavedBy's lender rule).
 	OrgsWithKeySavedBy(provider, userID string) ([]string, error)
+	// Key families (an Azure AI Foundry resource each) and the undo of a save, which every organisation keystore
+	// offers: only the encrypted database keystore holds organisation credentials.
+	OrgSecretFamilyStore
+	OrgSecretRestorer
 }
 
 // OrgKeyInfo is an organisation credential row's metadata — never the secret.
@@ -55,8 +59,9 @@ type OrgKeyInfo struct {
 // each other resource's. Such a set is a key FAMILY: a key is in family f when it equals f or starts with
 // f + "/" (InSecretFamily), so "azure-foundryX" is never in family "azure-foundry". The SQL form is
 // `provider = f OR starts_with(provider, f || '/')`, never LIKE, whose _ and % would be wildcards inside f.
-// The family operations are separate optional interfaces: the encrypted keystore and the test fakes implement
-// them; the OS keyring cannot enumerate its entries and does not (callers type-assert).
+// The organisation keystore's family operations are part of OrgSecretStore. The personal ones (SecretFamilyLister)
+// are the encrypted database keystore's alone: the OS keyring cannot enumerate its entries, so the deployment provides
+// the lister as a value of its own, nil with the keyring.
 
 // InSecretFamily reports whether provider is in key family.
 func InSecretFamily(provider, family string) bool {
@@ -100,7 +105,7 @@ type OrgSecretFamilyStore interface {
 
 // OrgSecretRestorer undoes an org credential save the caller made, for a write that spans the keystore and
 // another store (the Azure registry saves a resource's credential, then writes its registry row; when that
-// write fails the credential is put back as it was). Optional: callers type-assert.
+// write fails the credential is put back as it was).
 type OrgSecretRestorer interface {
 	// SnapshotOrg reads the org's key row exactly as stored — the sealed document, its writer, its lender
 	// and its stamp — in one read; ok is false when there is none (an undecryptable row is snapshotted as is).

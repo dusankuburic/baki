@@ -104,8 +104,24 @@ func TestCollaboratorService_AddMapsDuplicates(t *testing.T) {
 	}
 }
 
+// seedGrant stores userID's grant on flowID in the backing fake, with the user and the flow it references.
+func seedGrant(t *testing.T, f *testutil.FakeBackend, flowID, userID string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := f.SaveUser(ctx, &storageif.User{ID: userID, Email: userID + "@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SaveFlow(ctx, &storageif.FlowDocument{ID: flowID, Name: flowID, OwnerID: "owner"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.AddCollaborator(ctx, flowID, &storageif.Collaborator{UserID: userID, Permission: "viewer"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCollaboratorService_PassThrough(t *testing.T) {
 	fake := &collabFake{FakeBackend: testutil.NewFakeBackend()}
+	seedGrant(t, fake.FakeBackend, "flow-1", "u1")
 	svc := NewCollaboratorService(fake, nil)
 	ctx := context.Background()
 	if _, err := svc.List(ctx, "flow-1", 10); err != nil {
@@ -140,7 +156,10 @@ func TestCollaboratorService_AnnouncesSharingChanges(t *testing.T) {
 		t.Fatalf("a refused grant was announced: %+v", got)
 	}
 
-	svc := NewCollaboratorService(&collabFake{FakeBackend: testutil.NewFakeBackend()}, bus)
+	// The recording fake does not store the grant Add makes; the one Update and Remove act on is seeded.
+	fake := &collabFake{FakeBackend: testutil.NewFakeBackend()}
+	seedGrant(t, fake.FakeBackend, "flow-1", "u1")
+	svc := NewCollaboratorService(fake, bus)
 	if _, err := svc.Add(ctx, "flow-1", u, "viewer"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}

@@ -5,18 +5,22 @@ import (
 	"sync"
 	"time"
 
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// OrgStore abstracts persistence for organisations.
-// The in-memory implementation is used in local/desktop mode and in tests.
-// Cloud mode wires in a PostgreSQL implementation via the storage backend.
+// OrgStore abstracts persistence for organisations: the slice of interfaces.OrgStore and interfaces.OrgInviteStore
+// the service uses, so every storage backend is one (the server store's organisations). Without a server store (the
+// desktop) the in-memory implementation serves; tests use it too.
 type OrgStore interface {
 	SaveOrg(ctx context.Context, org *interfaces.Organisation) error
 	LoadOrg(ctx context.Context, id string) (*interfaces.Organisation, error)
 	ListOrgsForUser(ctx context.Context, userID string) ([]*interfaces.Organisation, error)
 	DeleteOrg(ctx context.Context, id string) error
 	MutateOrg(ctx context.Context, id string, fn func(*interfaces.Organisation) error) error
+	// OrgMemberRole is interfaces.OrgStore's point lookup: member is false when the organisation exists without
+	// the user; a missing organisation is the store's not-found error.
+	OrgMemberRole(ctx context.Context, orgID, userID string) (role auth.Role, member bool, err error)
 
 	SaveOrgInvite(ctx context.Context, invite *interfaces.OrgInvite) error
 	ListOrgInvites(ctx context.Context, orgID string) ([]*interfaces.OrgInvite, error)
@@ -25,6 +29,8 @@ type OrgStore interface {
 	DeleteOrgInvite(ctx context.Context, orgID, inviteID string) error
 	MarkOrgInviteAccepted(ctx context.Context, inviteID string, acceptedAt time.Time) error
 }
+
+var _ OrgStore = interfaces.StorageBackend(nil)
 
 // NewMemOrgStore returns an in-memory OrgStore.
 func NewMemOrgStore() OrgStore {
@@ -79,6 +85,19 @@ func (s *memOrgStore) ListOrgsForUser(_ context.Context, userID string) ([]*inte
 		}
 	}
 	return result, nil
+}
+
+func (s *memOrgStore) OrgMemberRole(_ context.Context, orgID, userID string) (auth.Role, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	org, ok := s.orgs[orgID]
+	if !ok {
+		return "", false, ErrOrgNotFound
+	}
+	if _, m := findMember(org, userID); m != nil {
+		return m.Role, true, nil
+	}
+	return "", false, nil
 }
 
 func (s *memOrgStore) DeleteOrg(_ context.Context, id string) error {

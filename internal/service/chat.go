@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/errreport"
 	"pad-analyzer/internal/metrics"
@@ -212,10 +213,13 @@ func (s *ChatService) tryStartStream(streamID, scope string, ctl *streamCtl) (bo
 	return true, nil
 }
 
-// chatStore is the narrow storage slice ChatService uses.
+// chatStore is the narrow storage slice ChatService uses: conversations, usage, the caller's own settings and
+// their role in an organisation.
 type chatStore interface {
 	storageif.ConversationStore
 	storageif.UsageStore
+	LoadUserSettings(ctx context.Context, userID string) (*storageif.AppSettings, error)
+	OrgMemberRole(ctx context.Context, orgID, userID string) (role auth.Role, member bool, err error)
 }
 
 // readOnlyAnalysis adapts AnalysisService: tool-driven analyses never record history or emit progress.

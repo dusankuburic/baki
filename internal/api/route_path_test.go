@@ -20,8 +20,8 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	storagedb "pad-analyzer/internal/storage/database"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 )
 
 // These tests pin one invariant: every path-based policy decision (auth and public routes, SSE query token, PAT scope, RLS, rate limits, /assets/) is made on the path chi DISPATCHES on — r.URL.RawPath verbatim under non-default escapes — not on the cleaned, decoded r.URL.Path.
@@ -280,11 +280,8 @@ func (b *rlsProbeBackend) LoadFlowHeader(ctx context.Context, id string) (*stora
 
 // The RLS exemptions (streaming prefixes, outbound routes, public routes) apply to the route chi dispatches on — neither skipped for a route that only LOOKS exempt once decoded, nor imposed on an exempt route whose id carries an escaped "/".
 func TestRLSMiddleware_DecidesOnTheDispatchedRoute(t *testing.T) {
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("backend: %v", err)
-	}
-	backend := &rlsProbeBackend{StorageBackend: fs}
+	store := testutil.NewFakeBackend()
+	backend := &rlsProbeBackend{StorageBackend: store}
 	rt := newTestRouter(backend, true)
 	probe, _ := mountProbes(t, rt)
 	h := fullChain(t, rt, nil)

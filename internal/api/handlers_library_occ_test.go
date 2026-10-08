@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
 	"testing"
@@ -178,9 +179,6 @@ func TestFakeBackend_OCC_StaleVersionConflict(t *testing.T) {
 	doc.Version = 0
 	_ = b.SaveFlow(ctx, doc) // version=1
 
-	// Try to save with stale version=0 when DB has version=1
-	// But version=0 skips the check! So this should succeed.
-	// To test real conflict, we need version > 0 that doesn't match.
 	stale := &storageif.FlowDocument{ID: "f3", Name: "stale", Version: 99}
 	err := b.SaveFlow(ctx, stale)
 	if err == nil {
@@ -188,7 +186,9 @@ func TestFakeBackend_OCC_StaleVersionConflict(t *testing.T) {
 	}
 }
 
-func TestFakeBackend_OCC_VersionZeroSkipsCheck(t *testing.T) {
+// Version 0 is an expected version like any other (Postgres's WHERE version = $n): once the flow is at 1, a save
+// expecting 0 conflicts instead of overwriting.
+func TestFakeBackend_OCC_VersionZeroIsChecked(t *testing.T) {
 	b := testutil.NewFakeBackend()
 	ctx := context.Background()
 
@@ -196,14 +196,13 @@ func TestFakeBackend_OCC_VersionZeroSkipsCheck(t *testing.T) {
 	_ = b.SaveFlow(ctx, doc) // version=0
 	doc.Version = 0
 	_ = b.SaveFlow(ctx, doc) // version=1
-	doc.Version = 0          // version=0 should skip check even though DB has 1
+	doc.Version = 0
 	doc.Name = "force overwrite"
-	err := b.SaveFlow(ctx, doc)
-	if err != nil {
-		t.Errorf("version=0 should skip check: %v", err)
+	if err := b.SaveFlow(ctx, doc); !errors.Is(err, storageif.ErrVersionConflict) {
+		t.Errorf("stale version 0: got %v, want ErrVersionConflict", err)
 	}
-	if doc.Version != 2 {
-		t.Errorf("after forced update: want version 2, got %d", doc.Version)
+	if got, _ := b.LoadFlow(ctx, "f4"); got.Name != "test" || got.Version != 1 {
+		t.Errorf("after the rejected save: %q at version %d, want \"test\" at 1", got.Name, got.Version)
 	}
 }
 

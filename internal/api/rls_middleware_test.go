@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"pad-analyzer/internal/storage/filesystem"
+	"pad-analyzer/internal/testutil"
 )
 
 // TestRLSHeavyExemptPathsAreRegisteredRoutes guards the RLS heavy-path
@@ -18,11 +18,8 @@ import (
 // nothing — the renamed route would keep its per-request RLS transaction —
 // while giving the false impression it is exempt.
 func TestRLSHeavyExemptPathsAreRegisteredRoutes(t *testing.T) {
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("backend: %v", err)
-	}
-	rt := newTestRouter(fs, false)
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, false)
 
 	// Collect "METHOD /path" for every registered route.
 	registered := map[string]bool{}

@@ -96,32 +96,9 @@ func (b *PostgresStorageBackend) BatchSetFindingStatus(ctx context.Context, flow
 	if len(items) == 0 {
 		return nil
 	}
-
-	if existingTx, ok, err := rlsTxFromContext(ctx); err != nil {
-		return err
-	} else if ok {
-		return execFindingStatusBatch(ctx, existingTx, flowID, items)
-	}
-
-	// No existing tx — open and commit our own RLS-scoped tx.
-	tx, err := b.BeginRLS(ctx, userID)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-	if err := execFindingStatusBatch(ctx, tx, flowID, items); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("batch triage commit: %w", err)
-	}
-	committed = true
-	return nil
+	return b.withTxAs(ctx, userID, func(_ context.Context, tx *sql.Tx) error {
+		return execFindingStatusBatch(ctx, tx, flowID, items)
+	})
 }
 
 func (b *PostgresStorageBackend) ListFindingStatuses(ctx context.Context, flowID string) ([]*interfaces.FindingStatus, error) {

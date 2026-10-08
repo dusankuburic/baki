@@ -184,18 +184,6 @@ func orgKeyLookup(keys service.OrgKeyStore) func(orgID, provider string) (string
 	}
 }
 
-// ProvideOrgKeyStore exposes the organisation credential store (G7) when the
-// deployment's keystore can hold one — the encrypted database keystore of
-// cloud mode implements both interfaces; the OS keyring does not — and nil
-// otherwise (desktop, local mode), which the org routes report as
-// ORG_KEYSTORE_UNAVAILABLE.
-func ProvideOrgKeyStore(keys service.KeyStore) service.OrgKeyStore {
-	if store, ok := keys.(service.OrgKeyStore); ok {
-		return store
-	}
-	return nil
-}
-
 // ProvideAnalysisService builds the AnalysisService on the deployment's custom rules and the per-org rule
 // resolver (the resolver takes the same compiled slice, ProvideDeploymentCustomRules).
 func ProvideAnalysisService(notifier service.EventNotifier, settings service.SettingsProvider, history *analyzer.HistoryStore, cfg *config.Config, rules service.DeploymentCustomRules, resolver *service.RuleProfileResolver, bus *eventbus.Bus) (*service.AnalysisService, error) {
@@ -241,20 +229,27 @@ func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.Provi
 	return rag.NewKnowledgeService(backend, factory, settings, opts...)
 }
 
+// azureDatabaseRegistry is the database's registry when the registry lives
+// there: with authentication on, since only then are owner ids real users and
+// organisations and the foreign keys (and their cascades) hold. nil otherwise.
+func azureDatabaseRegistry(cfg *config.Config, db storagedb.AzureRegistryProvider) storagedb.AzureRegistryProvider {
+	if !cfg.Auth.Enabled {
+		return nil
+	}
+	return db
+}
+
 // ProvideAzureRegistry selects where the Azure AI Foundry model registry
-// lives: Postgres when authentication is on and the backend is the database
-// one — only then are owner ids real users and organisations and the foreign
-// keys (and their cascades) hold — else the per-user config directory's
-// azure-models.json (the desktop, and a database backend with auth off),
-// whose one personal registry is owner "". Never settings.json. orgKeys only
-// decides whether organisations can hold registries (logged). Without a
-// config directory the registry is kept in memory, with a warning.
-func ProvideAzureRegistry(cfg *config.Config, backend storageif.StorageBackend, orgKeys service.OrgKeyStore, configDir string) (storageif.AzureRegistryStore, error) {
-	if cfg.Auth.Enabled && backend != nil {
-		if p, ok := backend.(storagedb.AzureRegistryProvider); ok {
-			logger.Info("azure registry: database store", "organisationRegistries", orgKeys != nil)
-			return p.AzureRegistry(), nil
-		}
+// lives: Postgres (azureDatabaseRegistry), else the per-user config
+// directory's azure-models.json (the desktop, and a database with auth off),
+// whose one personal registry is owner "". Never settings.json. db is the
+// database's registry provider, nil without a database. orgKeys only decides
+// whether organisations can hold registries (logged). Without a config
+// directory the registry is kept in memory, with a warning.
+func ProvideAzureRegistry(cfg *config.Config, db storagedb.AzureRegistryProvider, orgKeys service.OrgKeyStore, configDir string) (storageif.AzureRegistryStore, error) {
+	if p := azureDatabaseRegistry(cfg, db); p != nil {
+		logger.Info("azure registry: database store", "organisationRegistries", orgKeys != nil)
+		return p.AzureRegistry(), nil
 	}
 	if configDir == "" {
 		logger.Warn("azure registry: no config directory and no database registry; Azure AI Foundry resources and models are kept in memory only")
@@ -273,12 +268,15 @@ func ProvideAzureRegistry(cfg *config.Config, backend storageif.StorageBackend, 
 // membership, the knowledge corpus counts and user names. The knowledge-base
 // designation is offered where the knowledge base embeds with Azure (cloud
 // with PAD_EMBEDDING_PROVIDER=azure-foundry); the data-subject export reads
-// each personal resource's public configuration through it.
-func ProvideAzureModelService(registry storageif.AzureRegistryStore, secrets service.KeyStore, orgKeys service.OrgKeyStore, factory *ai.ProviderFactory, settings service.SettingsProvider, backend storageif.StorageBackend, cfg *config.Config) *service.AzureModelService {
-	_, perUser := registry.(*storagedb.PostgresAzureRegistry)
+// each personal resource's public configuration through it. keyFamilies and
+// orgKeys are the database keystore's (nil with the OS keyring).
+func ProvideAzureModelService(registry storageif.AzureRegistryStore, secrets service.KeyStore, keyFamilies storageif.SecretFamilyLister, orgKeys service.OrgKeyStore, factory *ai.ProviderFactory, settings service.SettingsProvider, backend storageif.StorageBackend, db storagedb.AzureRegistryProvider, cfg *config.Config) *service.AzureModelService {
+	src := azureDatabaseRegistry(cfg, db)
+	perUser := src != nil
 	deps := service.AzureModelServiceDeps{
 		Registry:                  registry,
 		Secrets:                   secrets,
+		KeyFamilies:               keyFamilies,
 		OrgKeys:                   orgKeys,
 		Factory:                   factory,
 		Settings:                  settings,
@@ -290,11 +288,7 @@ func ProvideAzureModelService(registry storageif.AzureRegistryStore, secrets ser
 	}
 	svc := service.NewAzureModelService(deps)
 	if perUser {
-		if src, ok := backend.(interface {
-			SetAzureExportConfigSource(storageif.AzureExportConfigFunc)
-		}); ok {
-			src.SetAzureExportConfigSource(svc.ExportConnectionConfigs)
-		}
+		src.SetAzureExportConfigSource(svc.ExportConnectionConfigs)
 	}
 	return svc
 }
@@ -368,9 +362,8 @@ var ServiceModule = fx.Options(
 		// consolidating analysis-complete alerts onto the same delivery stack as
 		// governance (scanner) alerts; provided by main.go's provideNotifier.
 		service.NewWebhookNotifier,
-		// service.KeyStore itself comes from main.go's provideKeyStore (a plain
-		// fx provider, not a global) — no adapter needed here.
-		ProvideOrgKeyStore,
+		// service.KeyStore, service.OrgKeyStore and the key-family lister come
+		// from main.go's provideKeyStore (plain fx values, not globals).
 		ProvideAzureRegistry,
 		ProvideAzureModelService,
 		ProvideAIBudget,
@@ -415,7 +408,7 @@ var ServiceModule = fx.Options(
 		// constructors take (same adapter rationale). Without a server store
 		// (desktop) the roles are nil; the routes that use them declare
 		// route.Needs(capability.ServerStore) or check for SSO first.
-		func(backend storageif.StorageBackend, links service.IdentityLinkStore) *service.IdentityService {
+		func(backend storageif.StorageBackend, links storageif.IdentityLinkStore) *service.IdentityService {
 			return service.NewIdentityService(backend, links)
 		},
 		service.NewSessionService,

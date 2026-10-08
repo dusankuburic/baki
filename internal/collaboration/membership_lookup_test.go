@@ -9,8 +9,8 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// pointLookupStore is an OrgStore that also offers the single-row membership
-// lookup (as the Postgres backend does) and counts roster loads.
+// pointLookupStore answers the single-row membership lookup from roles (as
+// the Postgres backend does from org_members) and counts roster loads.
 type pointLookupStore struct {
 	OrgStore
 	roles    map[string]auth.Role // userID → role in org "o1"
@@ -34,8 +34,8 @@ func (s *pointLookupStore) LoadOrg(ctx context.Context, id string) (*interfaces.
 
 // TestMembershipChecks_UsePointLookup: MemberRole / IsMember / IsAdmin back
 // every flow-authz org check and used to load the org plus its WHOLE roster
-// to find one member. With a store that offers the point lookup they must not
-// load the roster, and the error split (missing org vs non-member) holds.
+// to find one member. They must ask the store's point lookup, never load the
+// roster, and the error split (missing org vs non-member) holds.
 func TestMembershipChecks_UsePointLookup(t *testing.T) {
 	store := &pointLookupStore{
 		OrgStore: NewMemOrgStore(),

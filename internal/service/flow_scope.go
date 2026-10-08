@@ -66,33 +66,15 @@ func (r *FlowScopeResolver) filter(ctx context.Context, userID, orgID string, sc
 	}
 }
 
-// memberOrgs lists the orgs userID belongs to with the role in each (the
-// roster-free list when the backend has one). Never nil — empty means "no orgs".
+// memberOrgs lists the orgs userID belongs to with the role in each, without
+// rosters. Never nil — empty means "no orgs".
 func (r *FlowScopeResolver) memberOrgs(ctx context.Context, userID string) ([]storageif.OrgMembership, error) {
-	if l, ok := r.storage.(storageif.OrgMembershipLister); ok {
-		ms, err := l.ListOrgMembershipsForUser(ctx, userID)
-		if err != nil {
-			return nil, err
-		}
-		if ms == nil {
-			ms = []storageif.OrgMembership{}
-		}
-		return ms, nil
-	}
-	orgs, err := r.storage.ListOrgsForUser(ctx, userID)
+	ms, err := r.storage.ListOrgMembershipsForUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	ms := make([]storageif.OrgMembership, 0, len(orgs))
-	for _, o := range orgs {
-		m := storageif.OrgMembership{OrgID: o.ID, OrgName: o.Name}
-		for _, om := range o.Members {
-			if om.UserID == userID {
-				m.Role = om.Role
-				break
-			}
-		}
-		ms = append(ms, m)
+	if ms == nil {
+		ms = []storageif.OrgMembership{}
 	}
 	return ms, nil
 }

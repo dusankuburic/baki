@@ -43,6 +43,12 @@ func newChannelEnv(t *testing.T) *channelEnv {
 	if err := json.NewDecoder(rr.Body).Decode(&createdOrg); err != nil || createdOrg.ID == "" {
 		t.Fatalf("org create: %v (%s)", err, rr.Body.String())
 	}
+	// The test router's org service keeps orgs in its own store; on Postgres the org is a row of the backend,
+	// which the org's settings reference.
+	if err := backend.SaveOrg(context.Background(), &storageif.Organisation{ID: createdOrg.ID, Name: "Acme", OwnerID: "boss",
+		Members: []storageif.OrgMember{{UserID: "boss", Role: auth.RoleAdmin}}}); err != nil {
+		t.Fatalf("mirror org: %v", err)
+	}
 	return &channelEnv{t: t, rt: rt, admin: admin, orgID: createdOrg.ID, backend: backend}
 }
 

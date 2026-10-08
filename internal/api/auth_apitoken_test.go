@@ -29,7 +29,7 @@ func mintToken(t *testing.T, rt *Router, userID, email string, role auth.Role, e
 }
 
 func TestAPIToken_AuthenticatesRequest(t *testing.T) {
-	rt, _ := newLibraryTestRouter(t) // filesystem backend, JWT enabled
+	rt, _ := newLibraryTestRouter(t) // fake backend, JWT enabled
 	raw := mintToken(t, rt, "alice", "alice@example.com", auth.RoleMember, nil)
 
 	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/auth/me", "Bearer "+raw, nil)

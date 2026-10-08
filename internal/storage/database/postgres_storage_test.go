@@ -12,10 +12,10 @@ import (
 )
 
 // TestPostgres_Contract runs the cross-backend contract suite against
-// Postgres so the two storage backends cannot quietly diverge on return-
+// Postgres so Postgres and the test fake cannot quietly diverge on return-
 // shape semantics (nil vs empty slice, ErrNotFound vs nil, etc.). The
-// same suite runs against the filesystem backend in
-// `filesystem/local_storage_test.go::TestLocalStorageBackend_Contract`.
+// same suite runs against the fake in
+// `internal/testutil/fakebackend_contract_test.go::TestFakeBackend_Contract`.
 func TestPostgres_Contract(t *testing.T) {
 	b := openTestDB(t)
 	contract.RunSuite(t, b)

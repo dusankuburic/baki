@@ -202,23 +202,9 @@ func (s *LibraryService) ListLibraryFlowsPage(ctx context.Context, userID, orgID
 		return nil, err
 	}
 	filter.Tags = tags
-	// One statement when the backend can: the visibility filter (membership
+	// Page and total in one statement: the visibility filter (membership
 	// semi-join + RLS) is the read path's most expensive predicate.
-	if lp, ok := s.storage.(storageif.FlowPageLister); ok {
-		docs, total, err := lp.ListFlowsWithTotal(ctx, filter)
-		if err != nil {
-			return nil, err
-		}
-		return &LibraryPage{Docs: docs, Total: total, Memberships: memberships}, nil
-	}
-	docs, err := s.storage.ListFlows(ctx, filter)
-	if err != nil {
-		return nil, err
-	}
-	// The total ignores pagination: same filter, no limit/offset/sort.
-	countFilter := filter
-	countFilter.Limit, countFilter.Offset, countFilter.SortBy = 0, 0, storageif.FlowSortUpdatedDesc
-	total, err := s.storage.CountFlows(ctx, countFilter)
+	docs, total, err := s.storage.ListFlowsWithTotal(ctx, filter)
 	if err != nil {
 		return nil, err
 	}

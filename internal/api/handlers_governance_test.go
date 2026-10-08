@@ -97,7 +97,7 @@ func TestGovernanceAlerts_MarkAllReadAndDismiss(t *testing.T) {
 // TestGovernanceAlerts_TargetedVisibility pins R2-5's personal-delivery
 // semantics: a targeted alert (assignment/comment) is visible ONLY to its
 // target — in the list AND the unread badge — while team-wide alerts remain
-// visible to everyone.
+// visible to everyone who can see the flow (bob is a viewer collaborator).
 func TestGovernanceAlerts_TargetedVisibility(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	seedUserWithRole(t, rt, "alice", "alice@example.com", "admin")
@@ -112,6 +112,7 @@ func TestGovernanceAlerts_TargetedVisibility(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed flow: %v", err)
 	}
+	seedCollaborator(t, rt, "f1", "bob", "viewer")
 	if err := rt.security.Backend.RecordGovernanceAlert(context.Background(), &storageif.GovernanceAlert{
 		ID: "f1|finding_assigned|k|alice", FlowID: "f1", FlowName: "Flow One",
 		Type: "finding_assigned", Title: "Hardcoded credential", Severity: "info",

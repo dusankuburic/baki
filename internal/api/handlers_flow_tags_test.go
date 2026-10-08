@@ -11,9 +11,8 @@ import (
 	"pad-analyzer/internal/testutil"
 )
 
-// newTagsTestRouter builds a JWT router on the FakeBackend (tags are
-// cloud-library features; the filesystem backend intentionally rejects them)
-// with one editor user and one seeded org flow.
+// newTagsTestRouter builds a JWT router on the FakeBackend with one editor
+// user and one seeded org flow.
 func newTagsTestRouter(t *testing.T) (*Router, *testutil.FakeBackend, string) {
 	t.Helper()
 	backend := &testutil.FakeBackend{}
@@ -45,7 +44,7 @@ func TestFlowTags_SetAndValidate(t *testing.T) {
 	if len(res.Tags) != 2 || res.Tags[0] != "prod" || res.Tags[1] != "business-unit" {
 		t.Errorf("normalized tags = %v", res.Tags)
 	}
-	if got := backend.FlowTags[flowID]; len(got) != 2 || got[0] != "prod" {
+	if got := backend.Flows[flowID].Tags; len(got) != 2 || got[0] != "prod" {
 		t.Errorf("stored tags = %v", got)
 	}
 
@@ -74,9 +73,12 @@ func TestLibraryFlow_SerializesTags(t *testing.T) {
 	backend := &testutil.FakeBackend{}
 	rt := newTestRouter(backend, true)
 	seedUserWithRole(t, rt, "editor", "editor@example.com", auth.RoleMember)
-	doc := &storageif.FlowDocument{ID: "flow-t", Name: "Tagged", OwnerID: "editor", Tags: []string{"finance", "prod"}}
+	doc := &storageif.FlowDocument{ID: "flow-t", Name: "Tagged", OwnerID: "editor"}
 	if err := backend.SaveFlow(context.Background(), doc); err != nil {
 		t.Fatalf("seed flow: %v", err)
+	}
+	if err := backend.UpdateFlowTags(context.Background(), doc.ID, []string{"finance", "prod"}); err != nil {
+		t.Fatalf("seed tags: %v", err)
 	}
 	bearer := jwtBearer(t, rt, "editor", "editor@example.com")
 

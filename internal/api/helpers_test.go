@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -19,9 +20,10 @@ import (
 	"pad-analyzer/internal/events"
 	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/platform/reqtx"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
-	"pad-analyzer/internal/storage/filesystem"
+	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 
@@ -30,8 +32,7 @@ import (
 
 type mockNotifier = service.NilNotifier
 
-// memIdentityStore is an in-memory IdentityStore for SSO handler tests (the
-// filesystem backend used by the test router doesn't persist identity links).
+// memIdentityStore is an in-memory identity-link store for SSO handler tests.
 type memIdentityStore struct {
 	links map[string]*storageif.IdentityLink // key: provider + "\x00" + subject
 }
@@ -135,6 +136,8 @@ func newTestAzureModels(d testAzureModelsDeps) (*service.AzureModelService, *tes
 	if d.Orgs != nil {
 		deps.Orgs = orgServiceDirectory{orgs: d.Orgs}
 	}
+	// As provideKeyStore wires the database keystore: a keystore that lists its key families is the lister too.
+	deps.KeyFamilies, _ = d.Secrets.(storageif.SecretFamilyLister)
 	return service.NewAzureModelService(deps), reg
 }
 
@@ -155,7 +158,7 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 // tweak lets a caller adjust the config the router is built from (e.g. to turn
 // on PAD_PPROF_ENABLED). Variadic so the existing four-arg call sites are
 // unaffected.
-func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClient SSOClient, identityStore IdentityStore, tweak ...func(*config.Config)) *Router {
+func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClient SSOClient, identityStore storageif.IdentityLinkStore, tweak ...func(*config.Config)) *Router {
 	cfg := config.Default()
 	cfg.Auth.Enabled = jwtEnabled
 	cfg.Auth.Secret = testToken
@@ -165,8 +168,11 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	}
 
 	notifier := &mockNotifier{}
-	settings, _ := storage.NewSettingsStore()
-	sysSvc := service.NewSystemService(settings, storage.NewKeyringSecretStore(), notifier, backend, cfg.Mode, nil, nil)
+	// In memory: the settings file is the developer's own desktop settings, and the keyring store runs on
+	// go-keyring's in-memory mock (TestMain), never the OS keychain.
+	settings := storage.NewInMemorySettingsStore()
+	secrets := storage.NewKeyringSecretStore()
+	sysSvc := service.NewSystemService(settings, secrets, notifier, backend, cfg.Mode, nil, nil)
 	docProv := service.DocumentProvider(service.NewLocalDocumentProvider())
 	if jwtEnabled {
 		docProv = service.NewCloudDocumentProvider(backend)
@@ -208,7 +214,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 
 	ghAuth := ai.NewGitHubAuth()
 	cpAuth := ai.NewCopilotAuth()
-	providerSvc := service.NewProviderService(ghAuth, cpAuth, factory, storage.NewKeyringSecretStore(), nil, nil)
+	providerSvc := service.NewProviderService(ghAuth, cpAuth, factory, secrets, nil, nil)
 
 	security := &SecurityConfig{
 		JWTEnabled:     jwtEnabled,
@@ -217,6 +223,8 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		Token:          testToken,
 		AuthMgr:        authMgr,
 		Backend:        backend,
+		RequestTx:      testRequestTx(jwtEnabled, backend),
+		Idempotency:    testIdempotency(jwtEnabled, backend),
 		OrgSvc:         orgSvc,
 		TrustedProxies: cfg.Server.TrustedProxies,
 	}
@@ -242,7 +250,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	eventbus.Subscribe(bus, eventbus.Async, "finding-comment-fanout", analysisHandler.OnFindingCommented, eventbus.InlineWhenSaturated())
 	eventbus.Subscribe(bus, eventbus.Async, "finding-assignment-fanout", analysisHandler.OnFindingAssigned, eventbus.InlineWhenSaturated())
 	modules := []Module{
-		NewSystemHandler(sysSvc, security, auditRec, nil, authzSvc, service.NewHealthService(backend)),
+		NewSystemHandler(sysSvc, security, auditRec, nil, authzSvc, service.NewHealthService(backend, testBlob(backend))),
 		NewFlowHandler(flowSvc, docProv, backend, security, shareSvc, auditRec),
 		NewLibraryHandler(libSvc, backend, security, auditRec),
 		NewChatHandler(chatSvc, flowSvc, security, auditRec),
@@ -269,8 +277,32 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	return rt
 }
 
+// testRequestTx and testIdempotency are what di takes from the database, taken from what the test wired instead:
+// a backend that begins RLS transactions (Postgres, or a test double that counts them) opens each request's
+// transaction, and one that keeps Idempotency-Key responses (Postgres, the fake) stores them; both only with
+// accounts, as row-level security needs a caller.
+func testRequestTx(jwtEnabled bool, backend storageif.StorageBackend) reqtx.Opener {
+	if b, ok := backend.(storagedb.RLSBeginner); ok && jwtEnabled {
+		return storagedb.RequestTx(b)
+	}
+	return nil
+}
+
+// testBlob is the blob probe di takes from the database (Postgres probes its blob container).
+func testBlob(backend storageif.StorageBackend) service.BlobHealthChecker {
+	b, _ := backend.(service.BlobHealthChecker)
+	return b
+}
+
+func testIdempotency(jwtEnabled bool, backend storageif.StorageBackend) storageif.IdempotencyStore {
+	if s, ok := backend.(storageif.IdempotencyStore); ok && jwtEnabled {
+		return s
+	}
+	return nil
+}
+
 // testCaps is what a test router's deployment offers, from what the test wired rather than from config: the
-// server-side store whenever a backend is wired (the filesystem backend stands in for Postgres here), accounts
+// server-side store whenever a backend is wired (the fake backend stands in for Postgres here), accounts
 // with JWT auth, row-level security with both.
 func testCaps(jwtEnabled bool, backend storageif.StorageBackend) capability.Set {
 	profile, caps := capability.Desktop, []capability.Capability(nil)
@@ -302,8 +334,7 @@ func moduleOf[M Module](t testing.TB, rt *Router) M {
 
 func newJWTTestRouter(t *testing.T) *Router {
 	t.Helper()
-	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	return newTestRouter(fs, true)
+	return newTestRouter(testutil.NewFakeBackend(), true)
 }
 
 func jwtBearer(t *testing.T, rt *Router, userID, email string) string {
@@ -346,18 +377,15 @@ func decodeJSON(t *testing.T, rr *httptest.ResponseRecorder, v any) {
 
 func newLibraryTestRouter(t *testing.T) (*Router, func(id, ownerID string)) {
 	t.Helper()
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("create local storage: %v", err)
-	}
-	rt := newTestRouter(fs, true)
+	backend := testutil.NewFakeBackend()
+	rt := newTestRouter(backend, true)
 	seed := func(id, ownerID string) {
 		doc := &storageif.FlowDocument{
 			ID:      id,
 			Name:    "test",
 			OwnerID: ownerID,
 		}
-		if err := fs.SaveFlow(context.Background(), doc); err != nil {
+		if err := backend.SaveFlow(context.Background(), doc); err != nil {
 			t.Fatalf("seed flow %s: %v", id, err)
 		}
 	}
@@ -390,6 +418,20 @@ func seedOrg(t *testing.T, rt *Router, name, ownerID string) string {
 		t.Fatalf("seed org %s: %v", name, err)
 	}
 	return org.ID
+}
+
+// mirrorOrg copies the org from the router's in-memory org store into the backend, which holds both on Postgres:
+// rows keyed by the org (its settings) need it there.
+func mirrorOrg(t *testing.T, rt *Router, orgID string) {
+	t.Helper()
+	ctx := context.Background()
+	org, err := rt.security.OrgSvc.Get(ctx, orgID)
+	if err != nil {
+		t.Fatalf("load org %s: %v", orgID, err)
+	}
+	if err := rt.security.Backend.SaveOrg(ctx, org); err != nil {
+		t.Fatalf("mirror org %s: %v", orgID, err)
+	}
 }
 
 // addOrgMember adds userID to the org with the given role.
@@ -425,6 +467,15 @@ func seedUserWithRole(t *testing.T, rt *Router, id, email string, role auth.Role
 	}
 	if err := rt.security.Backend.SaveUser(context.Background(), u); err != nil {
 		t.Fatalf("seed user %s: %v", id, err)
+	}
+}
+
+// ensureUser seeds a member user row for id unless one exists: a collaborator grant needs its user, as the
+// foreign key does on Postgres.
+func ensureUser(t *testing.T, rt *Router, id string) {
+	t.Helper()
+	if _, err := rt.security.Backend.LoadUserByID(context.Background(), id); errors.Is(err, storageif.ErrNotFound) {
+		seedUserWithRole(t, rt, id, id+"@example.com", auth.RoleMember)
 	}
 }
 

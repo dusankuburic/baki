@@ -149,11 +149,17 @@ func TestReindexOrg_NoProvider(t *testing.T) {
 // but chunks exist) must return empty guidelines WITHOUT error — the
 // detection logs/meters; it never breaks the chat turn.
 func TestSearch_DimMismatchPathIsSafe(t *testing.T) {
-	svc, _, _ := newStubService()
+	svc, store, _ := newStubService()
 	ctx := context.Background()
 	_ = svc.AddDocument(ctx, "scope", "org-1", "g.md", "content") // 1 chunk
+	// Strand it: the stored embeddings are another model's width, so the search
+	// finds nothing comparable.
+	for id, c := range store.KnowledgeChunks {
+		c.Embedding = []float32{1, 2}
+		store.KnowledgeChunks[id] = c
+	}
 
-	// FakeBackend.SearchKnowledge returns nil → the detection path runs
+	// An empty search result → the detection path runs
 	// (CountKnowledgeChunks > 0) and must not turn into an error.
 	out, err := svc.Search(ctx, "scope", "org-1", "question")
 	if err != nil {

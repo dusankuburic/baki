@@ -11,7 +11,6 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/rag"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -26,7 +25,7 @@ import (
 type turnReadsBackend struct {
 	*testutil.FakeBackend
 	settingsReads atomic.Int32
-	orgListReads  atomic.Int32
+	orgRoleReads  atomic.Int32
 }
 
 func (b *turnReadsBackend) LoadUserSettings(_ context.Context, _ string) (*storageif.AppSettings, error) {
@@ -34,12 +33,15 @@ func (b *turnReadsBackend) LoadUserSettings(_ context.Context, _ string) (*stora
 	return &storageif.AppSettings{AI: storageif.AISettings{SaveConversationHistory: true, SystemPromptSuffix: "Be brief."}}, nil
 }
 
-func (b *turnReadsBackend) ListOrgsForUser(_ context.Context, userID string) ([]*storageif.Organisation, error) {
-	b.orgListReads.Add(1)
-	if userID != "u1" {
-		return nil, nil
+func (b *turnReadsBackend) OrgMemberRole(_ context.Context, orgID, userID string) (auth.Role, bool, error) {
+	b.orgRoleReads.Add(1)
+	if orgID != "org-A" {
+		return "", false, storageif.ErrNotFound
 	}
-	return []*storageif.Organisation{{ID: "org-A", Members: []storageif.OrgMember{{UserID: "u1", Role: auth.RoleMember}}}}, nil
+	if userID != "u1" {
+		return "", false, nil
+	}
+	return auth.RoleMember, true, nil
 }
 
 // One chat turn read the caller's settings row twice before the provider
@@ -83,79 +85,48 @@ func TestStreamTurn_ReadsSettingsAndOrgRoleOncePerTurn(t *testing.T) {
 	if n := backend.settingsReads.Load(); n != 2 {
 		t.Errorf("LoadUserSettings ran %d times in one turn, want 2", n)
 	}
-	if n := backend.orgListReads.Load(); n != 1 {
-		t.Errorf("ListOrgsForUser ran %d times in one turn, want 1", n)
+	if n := backend.orgRoleReads.Load(); n != 1 {
+		t.Errorf("OrgMemberRole ran %d times in one turn, want 1", n)
 	}
 }
 
-// orgStoreBackend is a chat backend that is a full organisation store (as
-// both real backends are), counting single-org loads and full listings.
+// orgStoreBackend is a chat backend counting membership reads and full
+// listings of the caller's organisations; readErr fails the membership reads.
 type orgStoreBackend struct {
 	*testutil.FakeBackend
-	orgs     collaboration.OrgStore
-	loadErr  error
-	loads    atomic.Int32
+	readErr  error
+	reads    atomic.Int32
 	listings atomic.Int32
 }
 
-func (b *orgStoreBackend) SaveOrg(ctx context.Context, o *storageif.Organisation) error {
-	return b.orgs.SaveOrg(ctx, o)
-}
-func (b *orgStoreBackend) LoadOrg(ctx context.Context, id string) (*storageif.Organisation, error) {
-	b.loads.Add(1)
-	if b.loadErr != nil {
-		return nil, b.loadErr
+func (b *orgStoreBackend) OrgMemberRole(ctx context.Context, orgID, userID string) (auth.Role, bool, error) {
+	b.reads.Add(1)
+	if b.readErr != nil {
+		return "", false, b.readErr
 	}
-	return b.orgs.LoadOrg(ctx, id)
+	return b.FakeBackend.OrgMemberRole(ctx, orgID, userID)
 }
 func (b *orgStoreBackend) ListOrgsForUser(ctx context.Context, userID string) ([]*storageif.Organisation, error) {
 	b.listings.Add(1)
-	return b.orgs.ListOrgsForUser(ctx, userID)
-}
-func (b *orgStoreBackend) DeleteOrg(ctx context.Context, id string) error {
-	return b.orgs.DeleteOrg(ctx, id)
-}
-func (b *orgStoreBackend) MutateOrg(ctx context.Context, id string, fn func(*storageif.Organisation) error) error {
-	return b.orgs.MutateOrg(ctx, id, fn)
-}
-func (b *orgStoreBackend) SaveOrgInvite(ctx context.Context, i *storageif.OrgInvite) error {
-	return b.orgs.SaveOrgInvite(ctx, i)
-}
-func (b *orgStoreBackend) ListOrgInvites(ctx context.Context, orgID string) ([]*storageif.OrgInvite, error) {
-	return b.orgs.ListOrgInvites(ctx, orgID)
-}
-func (b *orgStoreBackend) GetOrgInvite(ctx context.Context, orgID, id string) (*storageif.OrgInvite, error) {
-	return b.orgs.GetOrgInvite(ctx, orgID, id)
-}
-func (b *orgStoreBackend) GetOrgInviteByTokenHash(ctx context.Context, h string) (*storageif.OrgInvite, error) {
-	return b.orgs.GetOrgInviteByTokenHash(ctx, h)
-}
-func (b *orgStoreBackend) DeleteOrgInvite(ctx context.Context, orgID, id string) error {
-	return b.orgs.DeleteOrgInvite(ctx, orgID, id)
-}
-func (b *orgStoreBackend) MarkOrgInviteAccepted(ctx context.Context, id string, at time.Time) error {
-	return b.orgs.MarkOrgInviteAccepted(ctx, id, at)
+	return b.FakeBackend.ListOrgsForUser(ctx, userID)
 }
 
-// On a backend that is an organisation store, the caller's role in ONE org
-// is that org's member lookup (collaboration.OrgService.MemberRole), not a
-// listing of every org the caller belongs to; an unknown org or a
-// non-member is "not a member", and a failed read is an error.
+// The caller's role in ONE org is that org's membership row, not a listing of
+// every org the caller belongs to; an unknown org or a non-member is "not a
+// member", and a failed read is an error.
 func TestLookupOrgRole_SingleOrgLookup(t *testing.T) {
-	store := collaboration.NewMemOrgStore()
-	org, err := collaboration.NewOrgService(store).Create(context.Background(), "Contoso", "u-admin")
-	if err != nil {
+	backend := &orgStoreBackend{FakeBackend: testutil.NewFakeBackend()}
+	if err := backend.SaveOrg(context.Background(), &storageif.Organisation{ID: "org-1", Name: "Contoso", OwnerID: "u-admin",
+		Members: []storageif.OrgMember{{UserID: "u-admin", Role: auth.RoleAdmin}}}); err != nil {
 		t.Fatal(err)
 	}
-	backend := &orgStoreBackend{FakeBackend: testutil.NewFakeBackend(), orgs: store}
-	var _ collaboration.OrgStore = backend
 	svc := &ChatService{backend: backend}
 
-	role, ok, err := svc.orgRoleCached(context.Background(), org.ID, "u-admin")
+	role, ok, err := svc.orgRoleCached(context.Background(), "org-1", "u-admin")
 	if err != nil || !ok || role != auth.RoleAdmin {
 		t.Fatalf("admin: %q %v %v", role, ok, err)
 	}
-	if _, ok, err := svc.orgRoleCached(context.Background(), org.ID, "stranger"); ok || err != nil {
+	if _, ok, err := svc.orgRoleCached(context.Background(), "org-1", "stranger"); ok || err != nil {
 		t.Errorf("non-member: ok=%v err=%v, want not a member", ok, err)
 	}
 	if _, ok, err := svc.orgRoleCached(context.Background(), "no-such-org", "u-admin"); ok || err != nil {
@@ -164,16 +135,16 @@ func TestLookupOrgRole_SingleOrgLookup(t *testing.T) {
 	if n := backend.listings.Load(); n != 0 {
 		t.Errorf("ListOrgsForUser ran %d times, want 0 (single-org lookups)", n)
 	}
-	if n := backend.loads.Load(); n != 3 {
-		t.Errorf("LoadOrg ran %d times, want 3", n)
+	if n := backend.reads.Load(); n != 3 {
+		t.Errorf("OrgMemberRole ran %d times, want 3", n)
 	}
 
-	backend.loadErr = errors.New("db down")
-	if _, _, err := svc.orgRoleCached(context.Background(), org.ID, "u-admin"); err == nil {
-		t.Error("a failed org read must be an error, not \"not a member\"")
+	backend.readErr = errors.New("db down")
+	if _, _, err := svc.orgRoleCached(context.Background(), "org-1", "u-admin"); err == nil {
+		t.Error("a failed membership read must be an error, not \"not a member\"")
 	}
-	if svc.isOrgMember(context.Background(), org.ID, "u-admin") {
-		t.Error("a failed org read must fail the membership gate closed")
+	if svc.isOrgMember(context.Background(), "org-1", "u-admin") {
+		t.Error("a failed membership read must fail the membership gate closed")
 	}
 }
 
@@ -193,16 +164,16 @@ func TestOrgRoleCached_OncePerTurn(t *testing.T) {
 	if !svc.isOrgMember(ctx, "org-A", "u1") {
 		t.Fatal("member gate refused a member")
 	}
-	if n := backend.orgListReads.Load(); n != 1 {
+	if n := backend.orgRoleReads.Load(); n != 1 {
 		t.Errorf("org store read %d times in one turn, want 1", n)
 	}
 	// Another turn reads again.
 	svc.isOrgMember(withTurnMemo(context.Background()), "org-A", "u1")
-	if n := backend.orgListReads.Load(); n != 2 {
+	if n := backend.orgRoleReads.Load(); n != 2 {
 		t.Errorf("a new turn reused the previous turn's role (reads=%d, want 2)", n)
 	}
 
-	failing := &ChatService{backend: &roleBackend{listErr: errors.New("db down")}}
+	failing := &ChatService{backend: &roleBackend{readErr: errors.New("db down")}}
 	fctx := withTurnMemo(context.Background())
 	if _, _, err := failing.orgRoleCached(fctx, "org-A", "u-admin"); err == nil {
 		t.Fatal("want the store error")

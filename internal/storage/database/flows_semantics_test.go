@@ -344,13 +344,11 @@ func TestListCollaboratorsBatch_OneArrayBind(t *testing.T) {
 func legacyGovAlertIDs(t *testing.T, b *PostgresStorageBackend, ctx context.Context, userID string, includeDismissed bool) []string {
 	t.Helper()
 	where := []string{}
-	args := []any{}
+	args := sqlArgs{}
 	if !includeDismissed {
 		where = append(where, "dismissed_at IS NULL")
 	}
-	vis, visArgs := govAlertWhere(userID, len(args)+1)
-	where = append(where, vis)
-	args = append(args, visArgs...)
+	where = append(where, govAlertWhere(userID, &args))
 	q := "SELECT id FROM gov_alerts WHERE " + strings.Join(where, " AND ") + " ORDER BY created_at DESC, id ASC"
 	rows, err := b.query(ctx).QueryContext(ctx, q, args...)
 	if err != nil {
@@ -373,7 +371,8 @@ func legacyGovAlertIDs(t *testing.T, b *PostgresStorageBackend, ctx context.Cont
 
 func legacyUnreadCount(t *testing.T, b *PostgresStorageBackend, ctx context.Context, userID string) int {
 	t.Helper()
-	vis, args := govAlertWhere(userID, 1)
+	var args sqlArgs
+	vis := govAlertWhere(userID, &args)
 	var n int
 	if err := b.query(ctx).QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM gov_alerts WHERE read_at IS NULL AND dismissed_at IS NULL AND `+vis, args...).Scan(&n); err != nil {

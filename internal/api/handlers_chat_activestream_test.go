@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
-	"pad-analyzer/internal/storage/filesystem"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -84,11 +83,8 @@ func TestHandleGetConversation_ReportsActiveStream(t *testing.T) {
 	defer p.closeOnce.Do(func() { close(p.release) })
 	ai.RegisterProvider("f21-blocking", func(string) ai.Provider { return p })
 
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("local storage: %v", err)
-	}
-	rt := newTestRouter(fs, true)
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, true)
 	doc := &interfaces.FlowDocument{ID: "f-f21", Name: "t", OwnerID: "u1"}
 	if err := rt.security.Backend.SaveFlow(context.Background(), doc); err != nil {
 		t.Fatalf("seed flow: %v", err)

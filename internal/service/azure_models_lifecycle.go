@@ -50,66 +50,35 @@ func forgetAzureDocument(raw string) {
 
 // disableOrgAzureFamily deletes, in one statement, every Azure credential of orgID
 // whose secret userID lent (secret_set_by; updated_by for a row no save has stamped
-// since v24), releasing each one's process state, and returns the keys removed. A
-// store without key families (none in production) removes the default key alone.
+// since v24), releasing each one's process state, and returns the keys removed.
 func disableOrgAzureFamily(orgKeys OrgKeyStore, orgID, userID string) ([]string, error) {
-	if fam, ok := orgKeys.(storageif.OrgSecretFamilyStore); ok {
-		deleted, err := fam.DeleteOrgKeyFamilyIfSavedBy(orgID, azureKeyFamily, userID)
-		if err != nil {
-			return nil, err
-		}
-		keys := make([]string, 0, len(deleted))
-		for _, d := range deleted {
-			keys = append(keys, d.Provider)
-			if !d.Unreadable {
-				forgetAzureDocument(d.Document)
-			}
-		}
-		return keys, nil
-	}
-	prev, hadPrev := storedAzureConfig(func() (string, error) { return orgKeys.GetOrg(orgID, azureKeyFamily) })
-	deleted, err := orgKeys.DeleteOrgIfSavedBy(orgID, azureKeyFamily, userID)
-	if err != nil || !deleted {
-		return nil, err
-	}
-	if hadPrev {
-		ai.ForgetAzureFoundryCredential(prev)
-	}
-	return []string{azureKeyFamily}, nil
-}
-
-// orgsWithAzureFamilySavedBy lists the (org, key) pairs of the Azure family
-// userID lent, ordered by org then key.
-func orgsWithAzureFamilySavedBy(orgKeys OrgKeyStore, userID string) ([]storageif.OrgKeyRef, error) {
-	if fam, ok := orgKeys.(storageif.OrgSecretFamilyStore); ok {
-		return fam.OrgKeyFamilySavedBy(azureKeyFamily, userID)
-	}
-	orgIDs, err := orgKeys.OrgsWithKeySavedBy(azureKeyFamily, userID)
+	deleted, err := orgKeys.DeleteOrgKeyFamilyIfSavedBy(orgID, azureKeyFamily, userID)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]storageif.OrgKeyRef, 0, len(orgIDs))
-	for _, id := range orgIDs {
-		out = append(out, storageif.OrgKeyRef{OrgID: id, Provider: azureKeyFamily})
+	keys := make([]string, 0, len(deleted))
+	for _, d := range deleted {
+		keys = append(keys, d.Provider)
+		if !d.Unreadable {
+			forgetAzureDocument(d.Document)
+		}
 	}
-	return out, nil
+	return keys, nil
 }
 
 // ---- Organisation deletion and account erasure ----
 
 // orgAzureDocuments reads every Azure credential of orgID (while the rows still
-// exist) for release: the family, or the default resource's key without families.
+// exist) for release: the family, or the default resource's key when it cannot be listed.
 func orgAzureDocuments(orgKeys OrgKeyStore, orgID string) []string {
 	keys := []string{azureKeyFamily}
-	if fam, ok := orgKeys.(storageif.OrgSecretFamilyStore); ok {
-		entries, err := fam.ListOrgKeyFamily(orgID, azureKeyFamily)
-		if err != nil {
-			logger.Warn("azure ai foundry: listing an organisation's credentials for release failed", "org", orgID, "error", err)
-		} else {
-			keys = keys[:0]
-			for _, e := range entries {
-				keys = append(keys, e.Provider)
-			}
+	entries, err := orgKeys.ListOrgKeyFamily(orgID, azureKeyFamily)
+	if err != nil {
+		logger.Warn("azure ai foundry: listing an organisation's credentials for release failed", "org", orgID, "error", err)
+	} else {
+		keys = keys[:0]
+		for _, e := range entries {
+			keys = append(keys, e.Provider)
 		}
 	}
 	var docs []string
@@ -122,12 +91,12 @@ func orgAzureDocuments(orgKeys OrgKeyStore, orgID string) []string {
 }
 
 // userAzureDocuments reads every Azure credential of the user with key scope scope
-// (while they still exist): the family when listed, else the default key plus the
-// registry's resources.
-func userAzureDocuments(secrets KeyStore, scope string, registryIDs []string) []string {
+// (while they still exist): the family when families lists it, else the default key
+// plus the registry's resources.
+func userAzureDocuments(secrets KeyStore, families storageif.SecretFamilyLister, scope string, registryIDs []string) []string {
 	keys := []string{azureKeyFamily}
-	if lister, ok := secrets.(storageif.SecretFamilyLister); ok {
-		if entries, err := lister.ListFamily(scope, azureKeyFamily); err == nil {
+	if families != nil {
+		if entries, err := families.ListFamily(scope, azureKeyFamily); err == nil {
 			keys = keys[:0]
 			for _, e := range entries {
 				keys = append(keys, e.Provider)
@@ -201,27 +170,31 @@ func (s *AzureModelService) sweepOrphans(ctx context.Context, st *azureOwnerStat
 	var del func(key string, at time.Time) (bool, error)
 	var get func(key string) (string, error)
 	if owner.IsOrg() {
-		fam, ok := s.orgKeys.(storageif.OrgSecretFamilyStore)
-		if !ok {
+		if s.orgKeys == nil {
 			return
 		}
 		list = func() ([]storageif.SecretFamilyEntry, error) {
-			entries, err := fam.ListOrgKeyFamily(owner.ID, azureKeyFamily)
+			entries, err := s.orgKeys.ListOrgKeyFamily(owner.ID, azureKeyFamily)
 			out := make([]storageif.SecretFamilyEntry, 0, len(entries))
 			for _, e := range entries {
 				out = append(out, storageif.SecretFamilyEntry{Provider: e.Provider, UpdatedAt: e.UpdatedAt})
 			}
 			return out, err
 		}
-		del = func(key string, at time.Time) (bool, error) { return fam.DeleteOrgKeyIfUnchanged(owner.ID, key, at) }
+		del = func(key string, at time.Time) (bool, error) {
+			return s.orgKeys.DeleteOrgKeyIfUnchanged(owner.ID, key, at)
+		}
 		get = func(key string) (string, error) { return s.orgKeys.GetOrg(owner.ID, key) }
 	} else {
-		lister, ok := s.secrets.(storageif.SecretFamilyLister)
-		if !ok {
+		if s.keyFamilies == nil {
 			return
 		}
-		list = func() ([]storageif.SecretFamilyEntry, error) { return lister.ListFamily(st.scope, azureKeyFamily) }
-		del = func(key string, at time.Time) (bool, error) { return lister.DeleteIfUnchanged(st.scope, key, at) }
+		list = func() ([]storageif.SecretFamilyEntry, error) {
+			return s.keyFamilies.ListFamily(st.scope, azureKeyFamily)
+		}
+		del = func(key string, at time.Time) (bool, error) {
+			return s.keyFamilies.DeleteIfUnchanged(st.scope, key, at)
+		}
 		get = func(key string) (string, error) { return s.secrets.Get(st.scope, key) }
 	}
 	if !s.sweepDue(owner) {
@@ -273,7 +246,7 @@ func (s *AzureModelService) sweepOrphans(ctx context.Context, st *azureOwnerStat
 func (s *AzureModelService) credentialStamp(owner storageif.AzureOwner, scope, connID string) (stamp time.Time, known bool) {
 	key := credentialKey(connID)
 	if owner.IsOrg() {
-		if _, ok := s.orgKeys.(storageif.OrgSecretFamilyStore); !ok {
+		if s.orgKeys == nil {
 			return time.Time{}, false
 		}
 		meta, found, err := s.orgKeys.OrgKeyMeta(owner.ID, key)
@@ -285,11 +258,10 @@ func (s *AzureModelService) credentialStamp(owner storageif.AzureOwner, scope, c
 		}
 		return meta.UpdatedAt, true
 	}
-	lister, ok := s.secrets.(storageif.SecretFamilyLister)
-	if !ok {
+	if s.keyFamilies == nil {
 		return time.Time{}, false
 	}
-	entries, err := lister.ListFamily(scope, azureKeyFamily)
+	entries, err := s.keyFamilies.ListFamily(scope, azureKeyFamily)
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -304,7 +276,8 @@ func (s *AzureModelService) credentialStamp(owner storageif.AzureOwner, scope, c
 // deleteCredentialIfUnchanged deletes resource connID's credential as credentialStamp
 // saw it: only while its row still carries stamp (a save racing the delete is kept),
 // nothing when there was none, unconditionally when the stamp is not known (the
-// keyring: one local user, no racing writer). deleted reports whether a credential went.
+// keyring: one local user, no racing writer; a known stamp means the keystore deletes
+// conditionally). deleted reports whether a credential went.
 func (s *AzureModelService) deleteCredentialIfUnchanged(owner storageif.AzureOwner, scope, connID string, stamp time.Time, known bool) (deleted bool, err error) {
 	if !known {
 		return true, s.deleteCredential(owner, scope, connID)
@@ -314,13 +287,9 @@ func (s *AzureModelService) deleteCredentialIfUnchanged(owner storageif.AzureOwn
 	}
 	key := credentialKey(connID)
 	if owner.IsOrg() {
-		if fam, ok := s.orgKeys.(storageif.OrgSecretFamilyStore); ok {
-			return fam.DeleteOrgKeyIfUnchanged(owner.ID, key, stamp)
-		}
-	} else if lister, ok := s.secrets.(storageif.SecretFamilyLister); ok {
-		return lister.DeleteIfUnchanged(scope, key, stamp)
+		return s.orgKeys.DeleteOrgKeyIfUnchanged(owner.ID, key, stamp)
 	}
-	return true, s.deleteCredential(owner, scope, connID)
+	return s.keyFamilies.DeleteIfUnchanged(scope, key, stamp)
 }
 
 // ---- Desktop pending rows ----
@@ -412,7 +381,7 @@ func (s *ProviderService) OrgAzureCredentialsLentBy(orgID, userID string) (keys 
 	if s.orgKeys == nil || orgID == "" || userID == "" {
 		return nil, nil
 	}
-	refs, err := orgsWithAzureFamilySavedBy(s.orgKeys, userID)
+	refs, err := s.orgKeys.OrgKeyFamilySavedBy(azureKeyFamily, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -456,7 +425,7 @@ func (s *ProviderService) DisableOrgAzureCredentialsLentBy(userID string) (refs 
 	if s.orgKeys == nil || userID == "" {
 		return nil, nil
 	}
-	candidates, err := orgsWithAzureFamilySavedBy(s.orgKeys, userID)
+	candidates, err := s.orgKeys.OrgKeyFamilySavedBy(azureKeyFamily, userID)
 	if err != nil {
 		return nil, err
 	}

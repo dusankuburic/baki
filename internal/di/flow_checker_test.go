@@ -7,8 +7,8 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/service"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 )
 
 // CanEdit answers AuthzService.Can's FlowEdit for the socket's user: the owner and an org member edit, an org
@@ -16,10 +16,7 @@ import (
 func TestFlowAccessChecker_CanEditIsFlowEdit(t *testing.T) {
 	t.Parallel()
 
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
+	store := testutil.NewFakeBackend()
 	ctx := context.Background()
 	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
 	org, err := orgSvc.Create(ctx, "acme", "alice")
@@ -31,10 +28,10 @@ func TestFlowAccessChecker_CanEditIsFlowEdit(t *testing.T) {
 			t.Fatalf("add %s: %v", user, err)
 		}
 	}
-	if err := fs.SaveFlow(ctx, &storageif.FlowDocument{ID: "f1", Name: "f", OwnerID: "alice", OrganizationID: org.ID}); err != nil {
+	if err := store.SaveFlow(ctx, &storageif.FlowDocument{ID: "f1", Name: "f", OwnerID: "alice", OrganizationID: org.ID}); err != nil {
 		t.Fatalf("seed flow: %v", err)
 	}
-	checker := ProvideFlowAccessChecker(service.NewAuthzService(fs, orgSvc), fs)
+	checker := ProvideFlowAccessChecker(service.NewAuthzService(store, orgSvc), store)
 
 	for user, want := range map[string]bool{"alice": true, "carol": true, "bob": false, "mallory": false} {
 		if got := checker.CanEdit(ctx, "f1", user); got != want {

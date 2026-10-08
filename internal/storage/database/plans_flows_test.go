@@ -336,7 +336,8 @@ func TestPlan_GovernanceAlerts_StartFromVisibleFlows(t *testing.T) {
 func TestPlan_OldAlertPredicateWalksEveryAlert(t *testing.T) {
 	b := openMigrationTestDB(t)
 	seedPlanPopulation(t, b)
-	vis, args := govAlertWhere(planUser, 1)
+	var args sqlArgs
+	vis := govAlertWhere(planUser, &args)
 	old := `SELECT COUNT(*) FROM gov_alerts WHERE read_at IS NULL AND dismissed_at IS NULL AND ` + vis
 	nodes := explainAsUser(t, b, planUser, old, args)
 	for _, n := range nodes {

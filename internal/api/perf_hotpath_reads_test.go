@@ -12,16 +12,16 @@ import (
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/platform/txhook"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 )
 
 // Tests for the 2026-10 performance round (HTTP side).
 
-// readCountingBackend wraps the filesystem backend and counts the reads the
+// readCountingBackend wraps the fake backend and counts the reads the
 // round removed from hot paths.
 type readCountingBackend struct {
-	*filesystem.LocalStorageBackend
+	*testutil.FakeBackend
 	loadFlow       int
 	listStatuses   int
 	getStatus      int
@@ -30,31 +30,28 @@ type readCountingBackend struct {
 
 func (b *readCountingBackend) LoadFlow(ctx context.Context, id string) (*storageif.FlowDocument, error) {
 	b.loadFlow++
-	return b.LocalStorageBackend.LoadFlow(ctx, id)
+	return b.FakeBackend.LoadFlow(ctx, id)
 }
 
 func (b *readCountingBackend) ListFindingStatuses(ctx context.Context, flowID string) ([]*storageif.FindingStatus, error) {
 	b.listStatuses++
-	return b.LocalStorageBackend.ListFindingStatuses(ctx, flowID)
+	return b.FakeBackend.ListFindingStatuses(ctx, flowID)
 }
 
 func (b *readCountingBackend) GetFindingStatus(ctx context.Context, flowID, findingKey string) (*storageif.FindingStatus, error) {
 	b.getStatus++
-	return b.LocalStorageBackend.GetFindingStatus(ctx, flowID, findingKey)
+	return b.FakeBackend.GetFindingStatus(ctx, flowID, findingKey)
 }
 
 func (b *readCountingBackend) RecordGovernanceAlert(ctx context.Context, a *storageif.GovernanceAlert) error {
 	b.recordedAlerts.Add(1)
-	return b.LocalStorageBackend.RecordGovernanceAlert(ctx, a)
+	return b.FakeBackend.RecordGovernanceAlert(ctx, a)
 }
 
 func newReadCountingRouter(t *testing.T) (*Router, *readCountingBackend) {
 	t.Helper()
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("create local storage: %v", err)
-	}
-	b := &readCountingBackend{LocalStorageBackend: fs}
+	store := testutil.NewFakeBackend()
+	b := &readCountingBackend{FakeBackend: store}
 	return newTestRouter(b, true), b
 }
 
@@ -108,7 +105,7 @@ func TestTriageSet_ReadsHeaderAndOneStatus(t *testing.T) {
 	if b.getStatus != 2 {
 		t.Errorf("single-status lookups = %d, want 2", b.getStatus)
 	}
-	// No RLS transaction here (filesystem backend), so the post-commit hook
+	// No RLS transaction here (fake backend), so the post-commit hook
 	// runs right after the handler; it only enqueues the fan-out, so wait for
 	// the detached job: exactly one assignment alert, for the first set only.
 	waitUntil(t, "assignment alert", func() bool { return b.recordedAlerts.Load() == 1 })
@@ -149,7 +146,7 @@ func TestTriageSet_AssignmentNoticeWaitsForCommit(t *testing.T) {
 // patJoinBackend offers the one-round-trip token+owner lookup and fails the
 // test if PAT authentication still takes the two-query path.
 type patJoinBackend struct {
-	*filesystem.LocalStorageBackend
+	*testutil.FakeBackend
 	joined  int
 	twoStep int
 }
@@ -166,22 +163,19 @@ func (b *patJoinBackend) GetAPITokenWithOwnerByHash(_ context.Context, tokenHash
 
 func (b *patJoinBackend) GetAPITokenByHash(ctx context.Context, tokenHash string) (*storageif.APIToken, error) {
 	b.twoStep++
-	return b.LocalStorageBackend.GetAPITokenByHash(ctx, tokenHash)
+	return b.FakeBackend.GetAPITokenByHash(ctx, tokenHash)
 }
 
 func (b *patJoinBackend) LoadUserByID(ctx context.Context, id string) (*storageif.User, error) {
 	b.twoStep++
-	return b.LocalStorageBackend.LoadUserByID(ctx, id)
+	return b.FakeBackend.LoadUserByID(ctx, id)
 }
 
 // TestVerifyAPIToken_OneRoundTripWhenTheBackendJoins: PAT auth read the
 // token and then its owner sequentially on every machine request.
 func TestVerifyAPIToken_OneRoundTripWhenTheBackendJoins(t *testing.T) {
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	b := &patJoinBackend{LocalStorageBackend: fs}
+	store := testutil.NewFakeBackend()
+	b := &patJoinBackend{FakeBackend: store}
 	rt := newTestRouter(b, true)
 
 	claims := rt.verifyAPIToken(context.Background(), "raw-pat")
@@ -202,15 +196,12 @@ func TestVerifyAPIToken_OneRoundTripWhenTheBackendJoins(t *testing.T) {
 // TestLookupAPITokenOwner_FallbackStillChecksTheOwner: backends without the
 // join keep the two-step path, including the "owner gone ⇒ reject" rule.
 func TestLookupAPITokenOwner_FallbackStillChecksTheOwner(t *testing.T) {
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := testutil.NewFakeBackend()
 	ctx := context.Background()
-	if err := fs.CreateAPIToken(ctx, &storageif.APIToken{ID: "pat-1", UserID: "ghost", Name: "ci", TokenHash: auth.HashAPIToken("raw")}); err != nil {
+	if err := store.CreateAPIToken(ctx, &storageif.APIToken{ID: "pat-1", UserID: "ghost", Name: "ci", TokenHash: auth.HashAPIToken("raw")}); err != nil {
 		t.Fatalf("CreateAPIToken: %v", err)
 	}
-	if tok, user := lookupAPITokenOwner(ctx, fs, auth.HashAPIToken("raw")); tok != nil || user != nil {
+	if tok, user := lookupAPITokenOwner(ctx, store, auth.HashAPIToken("raw")); tok != nil || user != nil {
 		t.Errorf("token of a missing owner resolved: %+v %+v", tok, user)
 	}
 }

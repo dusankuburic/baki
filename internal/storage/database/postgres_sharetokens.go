@@ -24,6 +24,8 @@ func (b *PostgresStorageBackend) CreateShareToken(ctx context.Context, t *storag
 	return err
 }
 
+// GetShareTokenByHash resolves a link for the public share routes, which run without a user context: the token is
+// the authorization. Inside a user's RLS scope (v34) a link of a flow that user cannot see does not resolve.
 func (b *PostgresStorageBackend) GetShareTokenByHash(ctx context.Context, tokenHash string) (*storageif.ShareToken, error) {
 	t := &storageif.ShareToken{}
 	err := b.query(ctx).QueryRowContext(ctx,

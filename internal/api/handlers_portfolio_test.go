@@ -32,7 +32,7 @@ func TestPortfolio_ListsAccessibleFlows(t *testing.T) {
 		if e.FlowID == "flow3" {
 			t.Error("portfolio leaked another user's flow")
 		}
-		// Filesystem backend persists no health, so flows are unanalyzed here.
+		// No analysis was saved, so the flows are unanalyzed.
 		if e.Analyzed {
 			t.Errorf("expected unanalyzed flow in local mode, got analyzed %s", e.FlowID)
 		}

@@ -20,7 +20,6 @@ import (
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/reqinfo"
-	"pad-analyzer/internal/storage/filesystem"
 	"pad-analyzer/internal/testutil"
 )
 
@@ -55,14 +54,11 @@ func routePolicyFromEnv(cfg *config.Config) {
 
 var allRoutePolicyModes = []config.RoutePolicyMode{config.RoutePolicyLegacy, config.RoutePolicyShadow, config.RoutePolicyDeclarative}
 
-// newModeTestRouter is a JWT test router on a filesystem backend in route-policy mode.
+// newModeTestRouter is a JWT test router on the fake backend in route-policy mode.
 func newModeTestRouter(t *testing.T, mode config.RoutePolicyMode) *Router {
 	t.Helper()
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return newTestRouterSSO(fs, true, nil, nil, func(c *config.Config) { c.Server.RoutePolicy = mode })
+	store := testutil.NewFakeBackend()
+	return newTestRouterSSO(store, true, nil, nil, func(c *config.Config) { c.Server.RoutePolicy = mode })
 }
 
 // withResolvedPolicy returns r carrying p as the policy an outer layer resolved: the way to make the resolver
@@ -323,11 +319,8 @@ func TestRoutePolicyModes_DecideAndCountDisagreements(t *testing.T) {
 	}
 	for _, mode := range allRoutePolicyModes {
 		t.Run(string(mode), func(t *testing.T) {
-			fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			backend := &rlsProbeBackend{StorageBackend: fs}
+			store := testutil.NewFakeBackend()
+			backend := &rlsProbeBackend{StorageBackend: store}
 			rt := newTestRouterSSO(backend, true, nil, nil, func(c *config.Config) { c.Server.RoutePolicy = mode })
 			prefix := "/api/shadow-" + string(mode)
 			public, admin, chat, notx := &countingHandler{}, &countingHandler{}, &countingHandler{}, &countingHandler{}

@@ -39,8 +39,8 @@ func (b *purgeOnlyBackend) PurgeExpiredData(ctx context.Context, _ int) (*storag
 	return &storageif.PurgeResult{}, nil
 }
 
-// lockingPurgeBackend adds the Postgres advisory-lock capability, modelled
-// the way the real one behaves: one holder at a time, released exactly once.
+// lockingPurgeBackend is also the cross-replica lock, modelled the way the
+// Postgres advisory lock behaves: one holder at a time, released exactly once.
 type lockingPurgeBackend struct {
 	*purgeOnlyBackend
 	held     atomic.Bool
@@ -72,7 +72,7 @@ func TestRunRetentionSweep_OverlappingSweepsPurgeOnce(t *testing.T) {
 	first := make(chan struct{})
 	go func() {
 		defer close(first)
-		runRetentionSweep(context.Background(), b, 30)
+		runRetentionSweep(context.Background(), b, b, 30)
 	}()
 	select {
 	case <-inner.entered:
@@ -84,7 +84,7 @@ func TestRunRetentionSweep_OverlappingSweepsPurgeOnce(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRetentionSweep(context.Background(), b, 30)
+		runRetentionSweep(context.Background(), b, b, 30)
 	}()
 	select {
 	case <-done:
@@ -113,7 +113,7 @@ func TestRunRetentionSweep_OverlappingSweepsPurgeOnce(t *testing.T) {
 	}
 
 	// A later sweep (next tick) acquires the freed lock and purges again.
-	runRetentionSweep(context.Background(), b, 30)
+	runRetentionSweep(context.Background(), b, b, 30)
 	if got := inner.purges.Load(); got != 2 {
 		t.Fatalf("sweep after release purged %d time(s) total, want 2", got)
 	}
@@ -129,11 +129,11 @@ func TestRunRetentionSweep_LockKeyIsDistinct(t *testing.T) {
 	}
 }
 
-// TestRunRetentionSweep_NoLockerSweeps: a backend without the lock capability
-// (filesystem, memory) sweeps as before.
+// TestRunRetentionSweep_NoLockerSweeps: without a locker (no database) the
+// sweep runs alone.
 func TestRunRetentionSweep_NoLockerSweeps(t *testing.T) {
 	b := &purgeOnlyBackend{}
-	runRetentionSweep(context.Background(), b, 30)
+	runRetentionSweep(context.Background(), b, nil, 30)
 	if got := b.purges.Load(); got != 1 {
 		t.Fatalf("purged %d time(s), want 1", got)
 	}
@@ -145,7 +145,7 @@ func TestRunRetentionSweep_NoLockerSweeps(t *testing.T) {
 func TestRunRetentionSweep_BudgetIsMinutesNotSeconds(t *testing.T) {
 	b := &purgeOnlyBackend{ctxs: make(chan context.Context, 1)}
 	start := time.Now()
-	runRetentionSweep(context.Background(), b, 30)
+	runRetentionSweep(context.Background(), b, nil, 30)
 	ctx := <-b.ctxs
 	dl, ok := ctx.Deadline()
 	if !ok {
@@ -161,7 +161,7 @@ func TestRunRetentionSweep_BudgetIsMinutesNotSeconds(t *testing.T) {
 // every replica until the process restarts.
 func TestRunRetentionSweep_PanicReleasesLock(t *testing.T) {
 	b := &lockingPurgeBackend{purgeOnlyBackend: &purgeOnlyBackend{panics: true}}
-	runRetentionSweep(context.Background(), b, 30) // must not propagate
+	runRetentionSweep(context.Background(), b, b, 30) // must not propagate
 	if got := b.released.Load(); got != 1 {
 		t.Fatalf("lock released %d time(s) after a panicking sweep, want 1", got)
 	}

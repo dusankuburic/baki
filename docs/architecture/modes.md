@@ -12,7 +12,9 @@ validated config, and `capability_test.go` pins this matrix.
 Capabilities (`capability.Capability`):
 
 - `server-store`: a persistent server-side store (Postgres) for library, orgs, sharing, analytics and audit.
-- `accounts`: multiple users authenticate (JWT sessions, API tokens, SSO). Without it there is one local user.
+- `accounts`: multiple users authenticate (JWT sessions, API tokens, SSO). Without it there is one local user, with
+  no `users` row even on Postgres: their settings are the deployment's (`GET/POST /api/system/settings` act on the
+  empty key scope), as on the desktop.
 - `row-level-security`: requests run in a per-user RLS transaction. This needs both a store and accounts.
 - `shared-state`: a Redis backplane shares rate limits, presence and chat-stream resume across replicas.
 
@@ -23,7 +25,7 @@ Routes do the same with `route.Needs(capability.ServerStore, ...)`. When the pro
 route needs, the route answers 503 `SERVICE_UNAVAILABLE` before its handler runs, in every `PAD_ROUTE_POLICY`
 mode. That is the same answer as the handlers' own "cloud mode required" checks, which move onto their routes
 route by route. The router takes its capabilities from `capability.Of(cfg)`. Tests give a router other ones with
-`capability.NewSet`, since test routers run on a filesystem backend with the default config.
+`capability.NewSet`, since test routers run on the test fake backend with the default config.
 
 Running more than one replica is a separate question. The deployment is pinned to one replica
 (`infra/main.bicep`) until the realtime backplane exists (Phase 5b of the proposal), even when `shared-state` is

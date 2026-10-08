@@ -79,10 +79,17 @@ func newBackend() *healthBackend {
 
 func seedFlow(t *testing.T, b storageif.StorageBackend, id string) {
 	t.Helper()
+	seedOrgFlow(t, b, id, "")
+}
+
+// seedOrgFlow seeds a flow in orgID; a flow's organisation is set when it is created (a later save keeps it).
+func seedOrgFlow(t *testing.T, b storageif.StorageBackend, id, orgID string) {
+	t.Helper()
 	if err := b.SaveFlow(context.Background(), &storageif.FlowDocument{
-		ID:      id,
-		Name:    id,
-		Content: json.RawMessage(`{"id":"` + id + `","subflows":[]}`),
+		ID:             id,
+		Name:           id,
+		Content:        json.RawMessage(`{"id":"` + id + `","subflows":[]}`),
+		OrganizationID: orgID,
 	}); err != nil {
 		t.Fatalf("seed flow %s: %v", id, err)
 	}
@@ -109,7 +116,7 @@ func TestScanOnce_DriftAlert(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	got := cap.all()
@@ -129,7 +136,7 @@ func TestScanOnce_NoBaselineNoAlert(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	if got := cap.all(); len(got) != 0 {
@@ -146,7 +153,7 @@ func TestScanOnce_HealthRegression(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	got := cap.all()
@@ -167,7 +174,7 @@ func TestScanOnce_NoRegressionWhenHealthImproves(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	if got := cap.all(); len(got) != 0 {
@@ -186,7 +193,7 @@ func TestScanOnce_DedupsRepeatAlerts(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 
 	s.ScanOnce(context.Background())
 	s.ScanOnce(context.Background()) // identical state — must not re-alert
@@ -212,7 +219,7 @@ func TestScanOnce_PrunesDedupEntriesForDeletedFlows(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 
 	s.ScanOnce(context.Background())
 	s.mu.Lock()
@@ -249,7 +256,7 @@ func TestScanOnce_PersistsAlertToInbox(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	// One external dispatch AND one persisted inbox row.
@@ -330,7 +337,7 @@ func TestScanOnce_PushesAlertOverSSE(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	sse := &fakeSSE{}
 	s.SetEventNotifier(sse)
 	s.ScanOnce(context.Background())
@@ -353,14 +360,7 @@ func TestScanOnce_PushesAlertOverSSE(t *testing.T) {
 // globally.
 func TestScanOnce_OrgChannelRouting(t *testing.T) {
 	b := newBackend()
-	// Seed the org flow with OrganizationID set AT SAVE TIME (seedFlow copies
-	// the doc; mutating the map entry post-hoc works too, but keeping the
-	// fixture explicit documents the org-scoped shape).
-	seedFlow(t, b, "f-org")
-	if doc, err := b.LoadFlow(context.Background(), "f-org"); err == nil {
-		doc.OrganizationID = "org-1"
-		_ = b.SaveFlow(context.Background(), doc)
-	}
+	seedOrgFlow(t, b, "f-org", "org-1")
 	seedFlow(t, b, "f-plain")
 
 	for _, f := range []string{"f-org", "f-plain"} {
@@ -393,7 +393,7 @@ func TestScanOnce_OrgChannelRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := New(b, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	// Org delivery runs on detached goroutines (parity with the global
@@ -436,15 +436,15 @@ func TestEnabled_DoesNotRequireEnvNotifier(t *testing.T) {
 	}
 	cases := map[string]*notify.Dispatcher{"empty dispatcher": empty, "nil dispatcher": nil}
 	for name, d := range cases {
-		s := New(b, analyzeReturning(nil), d, time.Hour, notify.AllowLoopbackTargets)
+		s := New(b, nil, analyzeReturning(nil), d, time.Hour, notify.AllowLoopbackTargets)
 		if !s.enabled() {
 			t.Errorf("%s: scanner must be enabled with a backend, analyzer and interval", name)
 		}
 	}
-	if s := New(b, analyzeReturning(nil), empty, 0, notify.AllowLoopbackTargets); s.enabled() {
+	if s := New(b, nil, analyzeReturning(nil), empty, 0, notify.AllowLoopbackTargets); s.enabled() {
 		t.Errorf("zero interval must still disable the scanner")
 	}
-	if s := New(nil, analyzeReturning(nil), empty, time.Hour, notify.AllowLoopbackTargets); s.enabled() {
+	if s := New(nil, nil, analyzeReturning(nil), empty, time.Hour, notify.AllowLoopbackTargets); s.enabled() {
 		t.Errorf("nil backend must still disable the scanner")
 	}
 }
@@ -484,7 +484,7 @@ func newSkipHarness(t *testing.T, b *healthBackend) *skipHarness {
 		}
 		return &models.AnalysisReport{FlowID: doc.ID}, nil
 	}
-	h.s = New(b, analyze, mustNotifier(t, h.cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	h.s = New(b, nil, analyze, mustNotifier(t, h.cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	h.s.SetRuleSetDigest(func(context.Context, string) string {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -534,17 +534,12 @@ func TestScanOnce_RescansAFlowWhenAnInputChanges(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, ""},
+		// A save keeps a flow's organisation and owner, so these two change the stored row (the version stays).
 		{"organization", func(t *testing.T, h *skipHarness) {
-			if err := h.b.SaveFlow(ctx, &storageif.FlowDocument{ID: "f1", Name: "f1", OrganizationID: "org-2",
-				Content: json.RawMessage(`{"id":"f1","subflows":[]}`)}); err != nil {
-				t.Fatal(err)
-			}
+			h.b.Flows["f1"].OrganizationID = "org-2"
 		}, ""},
 		{"owner", func(t *testing.T, h *skipHarness) {
-			if err := h.b.SaveFlow(ctx, &storageif.FlowDocument{ID: "f1", Name: "f1", OwnerID: "u-2",
-				Content: json.RawMessage(`{"id":"f1","subflows":[]}`)}); err != nil {
-				t.Fatal(err)
-			}
+			h.b.Flows["f1"].OwnerID = "u-2"
 		}, ""},
 		{"rule set", func(t *testing.T, h *skipHarness) {
 			h.mu.Lock()
@@ -653,7 +648,7 @@ func TestScanOnce_RescansWhatItCouldNotCompletelyScan(t *testing.T) {
 	eb := baselineErrBackend{newBackend()}
 	seedFlow(t, eb, "f1")
 	analyzed := 0
-	s := New(eb, func(_ context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
+	s := New(eb, nil, func(_ context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
 		analyzed++
 		return &models.AnalysisReport{FlowID: doc.ID}, nil
 	}, nil, 0, notify.AllowLoopbackTargets)
@@ -671,7 +666,7 @@ func TestScanOnce_WithoutARuleSetDigestNothingIsSkipped(t *testing.T) {
 	b := newBackend()
 	seedFlow(t, b, "f1")
 	var n int
-	s := New(b, func(_ context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
+	s := New(b, nil, func(_ context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
 		n++
 		return &models.AnalysisReport{FlowID: doc.ID}, nil
 	}, nil, 0, notify.AllowLoopbackTargets)

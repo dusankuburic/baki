@@ -8,9 +8,8 @@ import (
 	"pad-analyzer/internal/testutil"
 )
 
-// blobStore is a store that offloads content to blob storage, counting reachability checks.
+// blobStore is the database's blob probe, counting reachability checks.
 type blobStore struct {
-	*testutil.FakeBackend
 	blobErr error
 	checks  int
 }
@@ -25,14 +24,14 @@ func TestHealthService_NoStore(t *testing.T) {
 	if nilSvc.HasStore() || nilSvc.HasBlob() {
 		t.Error("a nil service has nothing to probe")
 	}
-	if svc := NewHealthService(nil); svc.HasStore() || svc.HasBlob() {
+	if svc := NewHealthService(nil, nil); svc.HasStore() || svc.HasBlob() {
 		t.Error("no backend: nothing to probe")
 	}
 }
 
 func TestHealthService_PingStore(t *testing.T) {
 	backend := testutil.NewFakeBackend()
-	svc := NewHealthService(backend)
+	svc := NewHealthService(backend, nil)
 	if !svc.HasStore() || svc.HasBlob() {
 		t.Fatalf("HasStore=%v HasBlob=%v, want a store without blob", svc.HasStore(), svc.HasBlob())
 	}
@@ -47,8 +46,8 @@ func TestHealthService_PingStore(t *testing.T) {
 
 // A successful blob check is reused; a failure is never cached.
 func TestHealthService_CheckBlobCachesSuccessOnly(t *testing.T) {
-	store := &blobStore{FakeBackend: testutil.NewFakeBackend(), blobErr: errors.New("auth")}
-	svc := NewHealthService(store)
+	store := &blobStore{blobErr: errors.New("auth")}
+	svc := NewHealthService(testutil.NewFakeBackend(), store)
 	if !svc.HasBlob() {
 		t.Fatal("a blob-offloading store must be probed")
 	}

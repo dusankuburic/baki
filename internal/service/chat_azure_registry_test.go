@@ -39,14 +39,14 @@ type azChatEnv struct {
 }
 
 // azChatBackend is the chat store: usage rows and daily usage from
-// testutil.FakeBackend, the caller's organisations from the registry env's directory.
+// testutil.FakeBackend, the caller's organisation roles from the registry env's directory.
 type azChatBackend struct {
 	*testutil.FakeBackend
 	orgs *azmOrgDir
 }
 
-func (b *azChatBackend) ListOrgsForUser(ctx context.Context, userID string) ([]*storageif.Organisation, error) {
-	return b.orgs.ListOrgsForUser(ctx, userID)
+func (b *azChatBackend) OrgMemberRole(ctx context.Context, orgID, userID string) (auth.Role, bool, error) {
+	return b.orgs.OrgMemberRole(ctx, orgID, userID)
 }
 
 func newAzChatEnv(t *testing.T) *azChatEnv {

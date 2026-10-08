@@ -30,10 +30,8 @@ import (
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
-	"pad-core/models"
 	"pad-core/parser"
 )
 
@@ -280,30 +278,45 @@ func azE2EWriteJSON(w http.ResponseWriter, status int, body string, headers ...s
 
 // --- the baki side ---
 
-// azE2EOrgStore is the collaboration OrgStore on top of the filesystem backend's organisations, so the OrgService (org routes, flow authz) and the ChatService's role lookup (backend.ListOrgsForUser) see the same rosters — as they do on Postgres. Invites stay in memory (not exercised).
+// azE2EOrgStore is the collaboration OrgStore on top of the fake backend's organisations, so the OrgService (org routes, flow authz) and the ChatService's role lookup (backend.OrgMemberRole) see the same rosters — as they do on Postgres. Invites stay in memory (not exercised).
 type azE2EOrgStore struct {
 	collaboration.OrgStore
-	fs *filesystem.LocalStorageBackend
+	store *testutil.FakeBackend
+	mu    *sync.Mutex // serializes MutateOrg
 }
 
 func (s azE2EOrgStore) SaveOrg(ctx context.Context, org *storageif.Organisation) error {
-	return s.fs.SaveOrg(ctx, org)
+	return s.store.SaveOrg(ctx, org)
 }
 
 func (s azE2EOrgStore) LoadOrg(ctx context.Context, id string) (*storageif.Organisation, error) {
-	return s.fs.LoadOrg(ctx, id)
+	return s.store.LoadOrg(ctx, id)
 }
 
 func (s azE2EOrgStore) ListOrgsForUser(ctx context.Context, userID string) ([]*storageif.Organisation, error) {
-	return s.fs.ListOrgsForUser(ctx, userID)
+	return s.store.ListOrgsForUser(ctx, userID)
 }
 
 func (s azE2EOrgStore) DeleteOrg(ctx context.Context, id string) error {
-	return s.fs.DeleteOrg(ctx, id)
+	return s.store.DeleteOrg(ctx, id)
 }
 
+// MutateOrg is load, fn, save under one lock, as Postgres holds the row lock across them.
 func (s azE2EOrgStore) MutateOrg(ctx context.Context, id string, fn func(*storageif.Organisation) error) error {
-	return s.fs.MutateOrg(ctx, id, fn)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	org, err := s.store.LoadOrg(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := fn(org); err != nil {
+		return err
+	}
+	return s.store.SaveOrg(ctx, org)
+}
+
+func (s azE2EOrgStore) OrgMemberRole(ctx context.Context, orgID, userID string) (auth.Role, bool, error) {
+	return s.store.OrgMemberRole(ctx, orgID, userID)
 }
 
 // azE2EEnv is the running baki API plus the fake Azure side.
@@ -311,34 +324,21 @@ type azE2EEnv struct {
 	rt      *Router
 	api     *httptest.Server
 	fake    *azE2EFake
-	backend *filesystem.LocalStorageBackend
+	backend *testutil.FakeBackend
 	secrets *testutil.FakeSecretStore
 	orgKeys *testutil.FakeOrgSecretStore
 	orgSvc  *collaboration.OrgService
 }
 
-// newAzureE2EEnv wires the router the way DI does in cloud mode (JWT auth, cloud document provider, backend conversations, org credential store, the EventManager as the services' notifier, the Azure AI Foundry model registry on the provider, system and chat services) on in-memory secrets, an in-memory registry and a temp-dir filesystem backend, and serves it over real HTTP.
+// newAzureE2EEnv wires the router the way DI does in cloud mode (JWT auth, cloud document provider, backend conversations, org credential store, the EventManager as the services' notifier, the Azure AI Foundry model registry on the provider, system and chat services) on in-memory secrets, an in-memory registry and the fake backend, and serves it over real HTTP.
 func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	t.Helper()
 	fake := newAzureE2EFake(t)
 	installAzureE2ETransport(t, fake.transport(t))
 
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("filesystem backend: %v", err)
-	}
-	// Cloud chat reads the caller's preferences through backend.LoadUserSettings. Postgres answers a user without a row with models.DefaultSettings() ("Save conversation history" on); the filesystem backend's bare document would turn history off, so seed the Postgres default to behave like production.
-	defaults, err := json.Marshal(models.DefaultSettings())
-	if err != nil {
-		t.Fatalf("marshal default settings: %v", err)
-	}
-	var stored storageif.AppSettings
-	if err := json.Unmarshal(defaults, &stored); err != nil {
-		t.Fatalf("default settings: %v", err)
-	}
-	if err := fs.SaveSettings(context.Background(), &stored); err != nil {
-		t.Fatalf("seed default settings: %v", err)
-	}
+	// Cloud chat reads the caller's preferences through backend.LoadUserSettings; the fake, like Postgres, answers a
+	// user without a row with models.DefaultSettings() ("Save conversation history" on).
+	store := testutil.NewFakeBackend()
 	cfg := config.Default()
 	cfg.Auth.Enabled = true
 	cfg.Auth.Secret = testToken
@@ -350,13 +350,13 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	secrets := testutil.NewFakeSecretStore()
 	orgKeys := testutil.NewFakeOrgSecretStore()
 
-	orgSvc := collaboration.NewOrgService(azE2EOrgStore{OrgStore: collaboration.NewMemOrgStore(), fs: fs})
-	authzSvc := service.NewAuthzService(fs, orgSvc)
-	docProv := service.NewCloudDocumentProvider(fs)
+	orgSvc := collaboration.NewOrgService(azE2EOrgStore{OrgStore: collaboration.NewMemOrgStore(), store: store, mu: &sync.Mutex{}})
+	authzSvc := service.NewAuthzService(store, orgSvc)
+	docProv := service.NewCloudDocumentProvider(store)
 	bus := eventbus.New(nil, 0)
-	flowSvc := service.NewFlowService(events, settings, docProv, fs, authzSvc, nil, service.WithFlowEvents(bus))
-	scopes := service.NewFlowScopeResolver(fs, authzSvc)
-	libSvc := service.NewLibraryService(fs, bus, authzSvc, scopes)
+	flowSvc := service.NewFlowService(events, settings, docProv, store, authzSvc, nil, service.WithFlowEvents(bus))
+	scopes := service.NewFlowScopeResolver(store, authzSvc)
+	libSvc := service.NewLibraryService(store, bus, authzSvc, scopes)
 	analysisSvc, err := service.NewAnalysisService(events, settings, nil, service.AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("analysis service: %v", err)
@@ -372,18 +372,19 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	azure := service.NewAzureModelService(service.AzureModelServiceDeps{
 		Registry:      storage.NewMemoryAzureRegistry(),
 		Secrets:       secrets,
+		KeyFamilies:   secrets,
 		OrgKeys:       orgKeys,
 		Factory:       factory,
 		Settings:      settings,
-		UserSettings:  fs,
-		Orgs:          fs,
-		Corpus:        fs,
-		Users:         fs,
+		UserSettings:  store,
+		Orgs:          store,
+		Corpus:        store,
+		Users:         store,
 		PerUserOwners: true,
 	})
-	chatSvc := service.NewChatService(events, t.TempDir(), flowSvc, analysisSvc, settings, factory, fs, config.ModeCloud, service.ChatOptions{Azure: azure})
+	chatSvc := service.NewChatService(events, t.TempDir(), flowSvc, analysisSvc, settings, factory, store, config.ModeCloud, service.ChatOptions{Azure: azure})
 	providerSvc := service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets, orgKeys, azure)
-	sysSvc := service.NewSystemService(settings, secrets, events, fs, config.ModeCloud, azure, nil)
+	sysSvc := service.NewSystemService(settings, secrets, events, store, config.ModeCloud, azure, nil)
 
 	security := &SecurityConfig{
 		JWTEnabled:     true,
@@ -391,44 +392,44 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 		LocalName:      "You",
 		Token:          testToken,
 		AuthMgr:        auth.NewManager(testToken, auth.NewTokenBlacklist()),
-		Backend:        fs,
+		Backend:        store,
 		OrgSvc:         orgSvc,
 		TrustedProxies: cfg.Server.TrustedProxies,
 	}
 	mail := mailer.NewService(config.EmailConfig{}, config.ModeLocal)
-	dashboardSvc := service.NewDashboardService(fs, analysisSvc, flowSvc, scopes)
-	triageSvc := service.NewTriageService(fs, fs, fs, bus)
-	shareSvc := service.NewShareTokenService(fs, fs, bus)
+	dashboardSvc := service.NewDashboardService(store, analysisSvc, flowSvc, scopes)
+	triageSvc := service.NewTriageService(store, store, store, bus)
+	shareSvc := service.NewShareTokenService(store, store, bus)
 	for _, s := range service.FlowCacheSubscribers(flowSvc, dashboardSvc, chatSvc) {
 		eventbus.Subscribe(bus, eventbus.Sync, s.Name, s.Fn)
 	}
 	// Never started, as before boot: every row is a detached write to the backend.
-	auditRec := testAuditRecorder(fs)
+	auditRec := testAuditRecorder(store)
 	modules := []Module{
-		NewSystemHandler(sysSvc, security, auditRec, nil, authzSvc, service.NewHealthService(fs)),
-		NewFlowHandler(flowSvc, docProv, fs, security, shareSvc, auditRec),
-		NewLibraryHandler(libSvc, fs, security, auditRec),
+		NewSystemHandler(sysSvc, security, auditRec, nil, authzSvc, service.NewHealthService(store, nil)),
+		NewFlowHandler(flowSvc, docProv, store, security, shareSvc, auditRec),
+		NewLibraryHandler(libSvc, store, security, auditRec),
 		NewChatHandler(chatSvc, flowSvc, security, auditRec),
-		NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, fs, security, service.NewWebhookNotifier(nil), mail, "", service.NewPolicyService(fs), service.NewGovernanceAlertService(fs), triageSvc, service.NewCommentService(fs, triageSvc, nil), shareSvc, auditRec),
+		NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, store, security, service.NewWebhookNotifier(nil), mail, "", service.NewPolicyService(store), service.NewGovernanceAlertService(store), triageSvc, service.NewCommentService(store, triageSvc, nil), shareSvc, auditRec),
 		NewDashboardHandler(dashboardSvc, security),
 		NewExportHandler(exportSvc, flowSvc, analysisSvc, security, auditRec),
-		NewAuthHandler(service.NewSessionService(newMockTokenStore()), fs, security, nil, service.NewIdentityService(fs, nil), mail, service.NewAuthService(fs, mail), service.NewAccountLifecycleService(fs, nil, nil), service.NewAPITokenService(fs), auditRec),
-		NewAdminHandler(auditRec, security, NewMigrationRunner(nil), nil, authzSvc, service.NewUserAdminService(fs)),
+		NewAuthHandler(service.NewSessionService(newMockTokenStore()), store, security, nil, service.NewIdentityService(store, nil), mail, service.NewAuthService(store, mail), service.NewAccountLifecycleService(store, nil, nil), service.NewAPITokenService(store), auditRec),
+		NewAdminHandler(auditRec, security, NewMigrationRunner(nil), nil, authzSvc, service.NewUserAdminService(store)),
 		NewProviderHandler(providerSvc, security, auditRec),
-		NewOrgHandler(orgSvc, fs, nil, security, mail, service.NewOrgRuleService(fs, fs, nil), providerSvc, authzSvc, service.NewChannelService(fs), service.NewUserDirectory(fs), auditRec),
-		NewSharingHandler(fs, flowSvc, service.NewCollaboratorService(fs, bus), security, auditRec),
+		NewOrgHandler(orgSvc, store, nil, security, mail, service.NewOrgRuleService(store, store, nil), providerSvc, authzSvc, service.NewChannelService(store), service.NewUserDirectory(store), auditRec),
+		NewSharingHandler(store, flowSvc, service.NewCollaboratorService(store, bus), security, auditRec),
 	}
 	rt, err := NewRouter(RouterParams{Lifecycle: noopLifecycle{}, Security: security, Events: events, Modules: modules, Config: cfg, ShutdownCh: shutdown})
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
-	rt.caps = testCaps(true, fs)
+	rt.caps = testCaps(true, store)
 	api := httptest.NewServer(rt)
 	t.Cleanup(func() {
 		close(shutdown) // ends the SSE handlers before the server waits on them
 		api.Close()
 	})
-	return &azE2EEnv{rt: rt, api: api, fake: fake, backend: fs, secrets: secrets, orgKeys: orgKeys, orgSvc: orgSvc}
+	return &azE2EEnv{rt: rt, api: api, fake: fake, backend: store, secrets: secrets, orgKeys: orgKeys, orgSvc: orgSvc}
 }
 
 // bearer issues an access token for userID.

@@ -78,9 +78,12 @@ func (s *SystemService) UpdateSettings(ctx context.Context, settings models.AppS
 	return nil
 }
 
+// GetUserSettings returns userID's own settings from the server store. An empty userID is the one local user of a
+// deployment without accounts (the caller's key scope): their settings are the deployment's, as on the desktop, since
+// a database has no users row to keep them under.
 func (s *SystemService) GetUserSettings(ctx context.Context, userID string) (settings *models.AppSettings, err error) {
 	defer logger.Guard("SystemService.GetUserSettings", &err)
-	if s.backend == nil {
+	if s.backend == nil || userID == "" {
 		return s.GetSettings(ctx)
 	}
 	ifaceSettings, err := s.backend.LoadUserSettings(ctx, userID)
@@ -90,9 +93,10 @@ func (s *SystemService) GetUserSettings(ctx context.Context, userID string) (set
 	return settingsToModel(ifaceSettings), nil
 }
 
+// UpdateUserSettings saves userID's own settings; an empty userID saves the deployment's (see GetUserSettings).
 func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, settings models.AppSettings) (err error) {
 	defer logger.Guard("SystemService.UpdateUserSettings", &err)
-	if s.backend == nil {
+	if s.backend == nil || userID == "" {
 		return s.UpdateSettings(ctx, settings)
 	}
 	if err := s.backend.SaveUserSettings(ctx, userID, settingsFromModel(&settings)); err != nil {

@@ -111,6 +111,7 @@ func TestRuleProfileResolver_DisabledRulesAreNotCompiled(t *testing.T) {
 // other rule. A wholesale replace would silently drop them.
 func TestRuleProfileResolver_SettingsMergePerRule(t *testing.T) {
 	b := testutil.NewFakeBackend()
+	b.Orgs = map[string]*storageif.Organisation{"org-a": {ID: "org-a"}} // org settings reference their org
 	deployment := deploymentSettings(map[string]models.RuleConfig{
 		"rule-x": {Enabled: false, Severity: "info"},
 		"rule-y": {Enabled: true, Severity: "warning"},

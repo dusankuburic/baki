@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"pad-analyzer/internal/sso"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 )
 
 // fakeSSOClient stands in for the OIDC relying party: AuthCodeURL returns a
@@ -39,13 +39,10 @@ func (f *fakeSSOClient) Exchange(_ context.Context, code, pkceVerifier, nonce st
 
 func newSSOTestRig(t *testing.T) (*Router, *fakeSSOClient, *memIdentityStore) {
 	t.Helper()
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("create local storage: %v", err)
-	}
+	store := testutil.NewFakeBackend()
 	client := &fakeSSOClient{identities: map[string]*sso.Identity{}}
 	ids := newMemIdentityStore()
-	rt := newTestRouterSSO(fs, true, client, ids)
+	rt := newTestRouterSSO(store, true, client, ids)
 	return rt, client, ids
 }
 

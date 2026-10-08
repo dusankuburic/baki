@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pad-analyzer/internal/storage/filesystem"
+	"pad-analyzer/internal/testutil"
 )
 
 // load-path and load-folder read server-local filesystem paths, so in cloud
@@ -27,11 +27,8 @@ func TestFlowLocalPathEndpoints_ForbiddenInCloud(t *testing.T) {
 // In local/desktop mode (JWTEnabled = false) the same endpoints stay available
 // and successfully load a real on-disk flow.
 func TestFlowLocalPathEndpoints_AvailableInLocal(t *testing.T) {
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("storage: %v", err)
-	}
-	rt := newTestRouter(fs, false) // local mode
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, false) // local mode
 
 	// A minimal valid PAD flow (one subflow with one action).
 	flow := "#Region \"Main\"\n    Display.ShowMessageBox Message: $'''hi'''\n#EndRegion\n"

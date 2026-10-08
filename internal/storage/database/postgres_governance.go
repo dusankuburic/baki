@@ -18,57 +18,55 @@ import (
 // no unbounded query).
 const govAlertListDefaultLimit = 50
 
-// govAlertVisible restricts gov_alerts rows to those whose parent flow userID can see (owner,
-// collaborator, or org member) plus its bind arg; empty clause for an empty userID (local mode).
+// govAlertVisible restricts gov_alerts rows to those whose parent flow the caller can see (owner, collaborator,
+// or org member); user is the placeholder the caller's id is bound at.
 // It mirrors rls_gov_alerts_visible in migration v12 line for line — THE TWO MUST STAY IN SYNC — and IS the
 // application-layer tenant boundary: the handlers do no authz of their own, and RLS is inert under a
 // BYPASSRLS role. The old target_user_id-only scoping was never a boundary — with RLS off one
 // MarkAllGovernanceAlertsRead cleared every org's badge; that clause survives below only as a narrowing.
-func govAlertVisible(userID string, n int) (string, []any) {
-	if userID == "" {
-		return "", nil
-	}
+func govAlertVisible(user string) string {
 	return fmt.Sprintf(`EXISTS (
 		    SELECT 1 FROM flows f
 		    WHERE f.id = gov_alerts.flow_id
-		      AND (f.owner_id = $%d
-		           OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = $%d)
-		           OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = $%d)))`,
-		n, n, n), []any{userID}
+		      AND (f.owner_id = %[1]s
+		           OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = %[1]s)
+		           OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = %[1]s)))`,
+		user)
 }
 
 // govAlertWhere assembles the full row-visibility WHERE fragment for one caller: the flow-visibility scope
 // (the tenant boundary) AND the target_user_id narrowing (personal vs team-wide), shared by every read and mutation.
-func govAlertWhere(userID string, n int) (string, []any) {
-	target := fmt.Sprintf("(target_user_id = '' OR target_user_id = $%d)", n)
+// userID is bound on args.
+func govAlertWhere(userID string, args *sqlArgs) string {
 	if userID == "" {
 		// Local mode: no claims, single tenant. Only team-wide alerts exist.
-		return "target_user_id = ''", nil
+		return "target_user_id = ''"
 	}
-	visible, args := govAlertVisible(userID, n)
-	return "(" + target + " AND " + visible + ")", args
+	user := args.add(userID)
+	return "((target_user_id = '' OR target_user_id = " + user + ") AND " + govAlertVisible(user) + ")"
 }
 
 // govVisibleFlows yields the ids of every flow userID can see (the same three
 // access paths govAlertVisible tests, index-backed). Reads use it as
 // `gov_alerts.flow_id IN (…)` so Postgres starts from the caller's flows — the
 // badge is polled every minute per tab — and the semi-join returns an alert once.
-func govVisibleFlows(n int) string {
-	return fmt.Sprintf(`SELECT id FROM flows WHERE owner_id = $%d
+func govVisibleFlows(user string) string {
+	return fmt.Sprintf(`SELECT id FROM flows WHERE owner_id = %[1]s
 			    UNION ALL
-			    SELECT f.id FROM flows f WHERE f.org_id IN (SELECT om.org_id FROM org_members om WHERE om.user_id = $%d)
+			    SELECT f.id FROM flows f WHERE f.org_id IN (SELECT om.org_id FROM org_members om WHERE om.user_id = %[1]s)
 			    UNION ALL
-			    SELECT fc.flow_id FROM flow_collaborators fc WHERE fc.user_id = $%d`, n, n, n)
+			    SELECT fc.flow_id FROM flow_collaborators fc WHERE fc.user_id = %[1]s`, user)
 }
 
 // govAlertReadWhere is govAlertWhere for the two read queries: the same target_user_id narrowing, with the
 // flow scope expressed through govVisibleFlows. Mutations keep govAlertWhere: keyed by alert id or rare.
-func govAlertReadWhere(userID string, n int) (string, []any) {
+func govAlertReadWhere(userID string, args *sqlArgs) string {
 	if userID == "" {
 		// Local mode: no claims, single tenant. Only team-wide alerts exist.
-		return "target_user_id = ''", nil
+		return "target_user_id = ''"
 	}
-	return fmt.Sprintf("((target_user_id = '' OR target_user_id = $%d) AND flow_id IN (%s))", n, govVisibleFlows(n)), []any{userID}
+	user := args.add(userID)
+	return "((target_user_id = '' OR target_user_id = " + user + ") AND flow_id IN (" + govVisibleFlows(user) + "))"
 }
 
 // listGovAlertsSQL is the ListGovernanceAlerts statement (exposed for the
@@ -82,25 +80,23 @@ func listGovAlertsSQL(filter storageif.GovernanceAlertFilter, limit int) (string
 	// WHERE assembly: the dismissed toggle AND row visibility (govAlertReadWhere
 	// — the team-wide/targeted narrowing AND the flow scope).
 	where := []string{}
-	args := []any{}
+	args := sqlArgs{}
 	if !filter.IncludeDismissed {
 		where = append(where, "dismissed_at IS NULL")
 	}
-	visClause, visArgs := govAlertReadWhere(filter.UserID, len(args)+1)
-	where = append(where, visClause)
-	args = append(args, visArgs...)
+	where = append(where, govAlertReadWhere(filter.UserID, &args))
 	q += " WHERE " + strings.Join(where, " AND ")
 	// `id` as final tiebreaker: LIMIT/OFFSET paging with created_at ties (one
 	// scanner tick stamps several alerts alike) otherwise drops and repeats rows.
-	q += fmt.Sprintf(` ORDER BY created_at DESC, id ASC LIMIT $%d OFFSET $%d`, len(args)+1, len(args)+2)
-	args = append(args, limit, filter.Offset)
+	q += ` ORDER BY created_at DESC, id ASC LIMIT ` + args.add(limit) + ` OFFSET ` + args.add(filter.Offset)
 	return q, args
 }
 
 // unreadGovAlertCountSQL is the UnreadGovernanceAlertCountFor statement
 // (exposed for the plan tests).
 func unreadGovAlertCountSQL(userID string) (string, []any) {
-	vis, args := govAlertReadWhere(userID, 1)
+	var args sqlArgs
+	vis := govAlertReadWhere(userID, &args)
 	return `SELECT COUNT(*) FROM gov_alerts
 		 WHERE read_at IS NULL AND dismissed_at IS NULL AND ` + vis, args
 }
@@ -170,18 +166,19 @@ func (b *PostgresStorageBackend) UnreadGovernanceAlertCountFor(ctx context.Conte
 func (b *PostgresStorageBackend) MarkGovernanceAlertRead(ctx context.Context, userID, alertID string) error {
 	// Explicit visibility predicate IN ADDITION to RLS — the application-layer
 	// tenant boundary (RLS is inert under a BYPASSRLS role; see govAlertVisible).
-	vis, args := govAlertWhere(userID, 2)
+	args := sqlArgs{alertID}
+	vis := govAlertWhere(userID, &args)
 	_, err := b.query(ctx).ExecContext(ctx,
 		`UPDATE gov_alerts SET read_at = NOW()
-		 WHERE id = $1 AND read_at IS NULL AND `+vis,
-		append([]any{alertID}, args...)...)
+		 WHERE id = $1 AND read_at IS NULL AND `+vis, args...)
 	return err
 }
 
 // MarkAllGovernanceAlertsRead clears the badge: stamps read_at on every visible
 // unread alert. RLS scopes the UPDATE to the caller's visible rows.
 func (b *PostgresStorageBackend) MarkAllGovernanceAlertsRead(ctx context.Context, userID string) error {
-	vis, args := govAlertWhere(userID, 1)
+	var args sqlArgs
+	vis := govAlertWhere(userID, &args)
 	_, err := b.query(ctx).ExecContext(ctx,
 		`UPDATE gov_alerts SET read_at = NOW()
 		 WHERE read_at IS NULL AND dismissed_at IS NULL AND `+vis, args...)
@@ -190,11 +187,11 @@ func (b *PostgresStorageBackend) MarkAllGovernanceAlertsRead(ctx context.Context
 
 // DismissGovernanceAlert stamps dismissed_at on one alert. Idempotent.
 func (b *PostgresStorageBackend) DismissGovernanceAlert(ctx context.Context, userID, alertID string) error {
-	vis, args := govAlertWhere(userID, 2)
+	args := sqlArgs{alertID}
+	vis := govAlertWhere(userID, &args)
 	_, err := b.query(ctx).ExecContext(ctx,
 		`UPDATE gov_alerts SET dismissed_at = NOW()
-		 WHERE id = $1 AND dismissed_at IS NULL AND `+vis,
-		append([]any{alertID}, args...)...)
+		 WHERE id = $1 AND dismissed_at IS NULL AND `+vis, args...)
 	return err
 }
 
@@ -203,7 +200,8 @@ func (b *PostgresStorageBackend) DismissGovernanceAlert(ctx context.Context, use
 func (b *PostgresStorageBackend) ClearGovernanceAlerts(ctx context.Context, userID string) error {
 	// The most destructive of the six: an unscoped predicate here DELETED other
 	// orgs' dismissed alerts, and needed no identifier to do it.
-	vis, args := govAlertWhere(userID, 1)
+	var args sqlArgs
+	vis := govAlertWhere(userID, &args)
 	_, err := b.query(ctx).ExecContext(ctx,
 		`DELETE FROM gov_alerts
 		 WHERE dismissed_at IS NOT NULL AND `+vis, args...)

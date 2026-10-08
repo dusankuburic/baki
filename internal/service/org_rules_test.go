@@ -82,6 +82,7 @@ func TestOrgRuleService_InvalidatesProfileOnChange(t *testing.T) {
 
 func TestOrgRuleService_OrgSettings(t *testing.T) {
 	b := testutil.NewFakeBackend()
+	b.Orgs = map[string]*storageif.Organisation{"org-a": {ID: "org-a"}} // org settings reference their org
 	want := &storageif.AppSettings{Version: 1}
 	want.Analysis.Rules = map[string]storageif.RuleConfig{"deep-nesting": {Enabled: false}}
 	if err := b.SaveOrgSettings(context.Background(), "org-a", want); err != nil {

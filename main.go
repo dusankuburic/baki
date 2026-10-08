@@ -29,6 +29,7 @@ import (
 	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/di"
@@ -39,6 +40,8 @@ import (
 	"pad-analyzer/internal/migration"
 	"pad-analyzer/internal/notify"
 	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/platform/lock"
+	"pad-analyzer/internal/platform/reqtx"
 	"pad-analyzer/internal/redisx"
 	"pad-analyzer/internal/scanner"
 	"pad-analyzer/internal/service"
@@ -209,7 +212,7 @@ func (a mailSvcAdapter) SendAlert(ctx context.Context, to, subject, plainBody, h
 // missing backend leaves it disabled (opt-in, cloud-only). The env-level
 // notifier is optional: alerts always record in-app and route to each org's own
 // channels; PAD_NOTIFY_* only adds a deployment-wide sink.
-func provideScanner(cfg *config.Config, backend storageif.StorageBackend, analysisSvc *service.AnalysisService, notifier *notify.Dispatcher, eventMgr *api.EventManager, ruleProfiles *service.RuleProfileResolver) *scanner.Scanner {
+func provideScanner(cfg *config.Config, backend storageif.StorageBackend, locker lock.GlobalLocker, analysisSvc *service.AnalysisService, notifier *notify.Dispatcher, eventMgr *api.EventManager, ruleProfiles *service.RuleProfileResolver) *scanner.Scanner {
 	var analyze scanner.AnalyzeFunc
 	if analysisSvc != nil {
 		// Background, not AnalyzeFlow: the sweep's context carries no user, so
@@ -217,7 +220,7 @@ func provideScanner(cfg *config.Config, backend storageif.StorageBackend, analys
 		// broadcast of every scanned flow's progress.
 		analyze = analysisSvc.AnalyzeFlowBackground
 	}
-	s := scanner.New(backend, analyze, notifier, scanInterval(cfg.Governance.ScanInterval), egressPolicy(cfg))
+	s := scanner.New(backend, locker, analyze, notifier, scanInterval(cfg.Governance.ScanInterval), egressPolicy(cfg))
 	// Real-time SSE push: a newly-detected alert pings connected clients who
 	// can see the flow. EventManager is always non-nil in the fx graph; safe
 	// even in local mode.
@@ -258,25 +261,23 @@ func initScanner(lc fx.Lifecycle, s *scanner.Scanner) {
 }
 
 // provideMigrationRunner wires the optional local→cloud data migration runner:
-// it needs BOTH a source filesystem backend (PAD_DATA_DIR at a legacy
-// filesystem-backed server's data directory) and the active cloud (Postgres)
+// it needs BOTH a source (PAD_DATA_DIR at a legacy filesystem-backed server's
+// data directory, opened read-only) and the active cloud (Postgres)
 // destination. With either absent the runner is nil and the admin endpoint
 // reports 503. Cloud mode only.
-func provideMigrationRunner(cfg *config.Config, dst storageif.StorageBackend) *api.MigrationRunner {
+func provideMigrationRunner(cfg *config.Config, dst storageif.StorageBackend, locker lock.GlobalLocker) *api.MigrationRunner {
 	if dst == nil || cfg.Mode != config.ModeCloud || cfg.Storage.DataDir == "" {
 		return api.NewMigrationRunner(nil)
 	}
-	src, err := filesystem.NewLocalStorageBackend(cfg.Storage.DataDir)
+	src, err := filesystem.OpenLegacySource(cfg.Storage.DataDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: migration source unavailable (%s): %v; migration disabled\n", cfg.Storage.DataDir, err)
 		return api.NewMigrationRunner(nil)
 	}
-	m := migration.New(src, dst).
-		WithConversationsDir(filepath.Join(cfg.Storage.DataDir, "conversations"))
-	runner := api.NewMigrationRunner(m)
+	runner := api.NewMigrationRunner(migration.New(src, dst))
 	// Cross-replica single-run guard: without the Postgres advisory lock two
 	// pods could both pass the in-process guard and run the same migration.
-	if locker, ok := dst.(api.GlobalLocker); ok {
+	if locker != nil {
 		runner = runner.WithLocker(locker)
 	}
 	return runner
@@ -308,7 +309,7 @@ func parseGovernanceDuration(env, val string) time.Duration {
 // initRetentionPurge periodically purges expired tokens/invites and aged-out
 // audit rows (GDPR data-minimisation); disabled with no interval or backend.
 // An immediate sweep runs on start so a fresh instance clears stale rows.
-func initRetentionPurge(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) {
+func initRetentionPurge(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend, locker lock.GlobalLocker) {
 	interval := parseGovernanceDuration("PAD_RETENTION_PURGE_INTERVAL", cfg.Governance.RetentionPurgeInterval)
 	// Cloud only: the filesystem backend's purge is a no-op, and with the
 	// interval defaulting on, desktop would log a "purge complete" line of
@@ -321,7 +322,7 @@ func initRetentionPurge(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 	// this one — cannot close the pool under a sweep still deleting.
 	var loop lifecycle.TickerLoop
 	days := cfg.Governance.AuditRetentionDays
-	sweep := func(ctx context.Context) { runRetentionSweep(ctx, backend, days) }
+	sweep := func(ctx context.Context) { runRetentionSweep(ctx, backend, locker, days) }
 	lc.Append(fx.Hook{
 		OnStart: func(context.Context) error {
 			loop.Start(interval, true, sweep, func(r any) {
@@ -347,9 +348,8 @@ var fieldEncryptionBackfill = lifecycle.NewBounded("field_encryption_backfill", 
 // initFieldEncryption encrypts secret columns at rest (org notification channel URLs and signing secrets) with the
 // keystore's key and, once per boot across replicas, seals the rows written in plaintext before. It runs before
 // the server starts, so no request of this process writes plaintext. Desktop mode has no server store.
-func initFieldEncryption(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) error {
-	fe, ok := backend.(storagedb.FieldEncryptor)
-	if !ok {
+func initFieldEncryption(lc fx.Lifecycle, cfg *config.Config, fe storagedb.FieldEncryptor, locker lock.GlobalLocker) error {
+	if fe == nil {
 		return nil
 	}
 	key := keystoreKey(cfg.Auth)
@@ -364,7 +364,7 @@ func initFieldEncryption(lc fx.Lifecycle, cfg *config.Config, backend storageif.
 		fieldEncryptionBackfill.Go(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
-			if locker, ok := backend.(api.GlobalLocker); ok {
+			if locker != nil {
 				release, acquired, err := locker.TryGlobalLock(ctx, fieldEncryptionLockKey)
 				if err != nil {
 					logger.Warn("field encryption backfill skipped: lock unavailable", "error", err)
@@ -395,9 +395,9 @@ const retentionSweepTimeout = 10 * time.Minute
 
 // runRetentionSweep performs one retention purge. One sweep at a time ACROSS
 // replicas (Postgres advisory lock; without it N replicas raced the same
-// DELETEs; a backend without one sweeps as before). Recovers its own panics so
+// DELETEs; with no locker it sweeps alone). Recovers its own panics so
 // a bad sweep is retried next tick, not the end of the loop.
-func runRetentionSweep(ctx context.Context, backend storageif.StorageBackend, auditRetentionDays int) {
+func runRetentionSweep(ctx context.Context, backend storageif.StorageBackend, locker lock.GlobalLocker, auditRetentionDays int) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("retention purge panicked", "err", r)
@@ -405,7 +405,7 @@ func runRetentionSweep(ctx context.Context, backend storageif.StorageBackend, au
 	}()
 	ctx, cancel := context.WithTimeout(ctx, retentionSweepTimeout)
 	defer cancel()
-	if locker, ok := backend.(api.GlobalLocker); ok {
+	if locker != nil {
 		release, acquired, err := locker.TryGlobalLock(ctx, retentionLockKey)
 		switch {
 		case err != nil:
@@ -444,7 +444,7 @@ func runRetentionSweep(ctx context.Context, backend storageif.StorageBackend, au
 	padmetrics.RecordBackgroundLoopTick("retention_purge")
 }
 
-func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend, redisClient *redis.Client) (*auth.Manager, error) {
+func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, pool storagedb.SQLProvider, redisClient *redis.Client) (*auth.Manager, error) {
 	token := cfg.Auth.Secret
 	if token == "" {
 		// loadConfig resolves it (config.ResolveRuntimeSecrets); empty means a caller skipped that, so fail
@@ -454,7 +454,7 @@ func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 
 	var blacklist auth.BlacklistStore
 	if cfg.Auth.Enabled {
-		if sqlBackend, ok := backend.(storagedb.SQLProvider); ok && sqlBackend != nil {
+		if pool != nil {
 			// The Postgres table stays the shared source of truth; the cache
 			// answers the per-request revocation check from a local copy
 			// instead of a SELECT each. With the Redis backplane a revocation
@@ -466,7 +466,7 @@ func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 				ps := redisx.NewPubSub(redisClient)
 				opts.Publisher, opts.Subscriber = ps, ps
 			}
-			cached := auth.NewCachedBlacklist(storagedb.NewPostgresBlacklist(sqlBackend.DB()), opts)
+			cached := auth.NewCachedBlacklist(storagedb.NewPostgresBlacklist(pool.DB()), opts)
 			blacklist = cached
 			// Lifetime context for the cache's loops (fx's OnStart ctx only
 			// bounds the start); OnStop cancels it then stops the cache, which
@@ -498,10 +498,11 @@ func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 	return auth.NewManager(token, blacklist), nil
 }
 
-func provideOrgService(backend storageif.StorageBackend, bus *eventbus.Bus) *collaboration.OrgService {
+// provideOrgService keeps organisations in the server store; without one (the desktop) in memory.
+func provideOrgService(cfg *config.Config, backend storageif.StorageBackend, bus *eventbus.Bus) *collaboration.OrgService {
 	orgStore := collaboration.NewMemOrgStore()
-	if s, ok := backend.(collaboration.OrgStore); ok {
-		orgStore = s
+	if capability.Of(cfg).Has(capability.ServerStore) {
+		orgStore = backend
 	}
 	return collaboration.NewOrgService(orgStore, collaboration.WithEventBus(bus))
 }
@@ -553,9 +554,22 @@ func initTelemetry(lc fx.Lifecycle, cfg *config.Config) {
 	})
 }
 
+// StorageResult is the storage backend and what only the database offers beyond its role interfaces, each an fx
+// value of its own that is nil without a database (the desktop): consumers take the one they need instead of
+// type-asserting the backend.
 type StorageResult struct {
 	fx.Out
-	Backend storageif.StorageBackend
+	Backend       storageif.StorageBackend
+	Locker        lock.GlobalLocker
+	Pool          storagedb.SQLProvider
+	KeyStores     storagedb.KeyStoreProvider
+	FieldCrypto   storagedb.FieldEncryptor
+	AuditOrgs     audit.OrgBackfiller
+	Blob          service.BlobHealthChecker
+	AzureRegistry storagedb.AzureRegistryProvider
+	// RequestTx and Idempotency need an authenticated caller to scope to, so they are nil with auth off too.
+	RequestTx   reqtx.Opener
+	Idempotency storageif.IdempotencyStore
 }
 
 // vectorIndexBuildTimeout bounds the background HNSW build of the knowledge
@@ -663,16 +677,23 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, 
 		},
 	})
 
-	return StorageResult{Backend: pgBackend}, nil
+	res := StorageResult{
+		Backend:       pgBackend,
+		Locker:        pgBackend,
+		Pool:          pgBackend,
+		KeyStores:     pgBackend,
+		FieldCrypto:   pgBackend,
+		AuditOrgs:     pgBackend,
+		Blob:          pgBackend,
+		AzureRegistry: pgBackend,
+	}
+	if capability.Of(cfg).Has(capability.RowLevelSecurity) {
+		res.RequestTx = storagedb.RequestTx(pgBackend)
+		res.Idempotency = pgBackend
+	}
+	return res, nil
 }
 
-// provideKeyStore builds the provider-API-key secret store: an encrypted,
-// database-backed keystore in cloud+database mode (preferring a dedicated
-// PAD_ENCRYPTION_KEY over PAD_AUTH_SECRET so rotating the JWT secret doesn't
-// brick stored provider keys), falling back to the OS-keyring default
-// everywhere else. A plain fx provider (not an Invoke mutating a global), so
-// consumers get the same DAG-resolved value and failures surface as provider
-// errors.
 // keystoreKey picks the database keystore's encryption key: the dedicated PAD_ENCRYPTION_KEY, else an
 // operator-provided auth secret (legacy fallback). A secret minted for this process never qualifies: provider
 // keys encrypted with it would be unreadable after a restart.
@@ -686,32 +707,46 @@ func keystoreKey(a config.AuthConfig) string {
 	return a.Secret
 }
 
-func provideKeyStore(cfg *config.Config, backend storageif.StorageBackend) (service.KeyStore, error) {
-	if cfg.Storage.Backend != config.StorageDatabase || backend == nil {
-		return storage.NewKeyringSecretStore(), nil
-	}
-	ksBackend, ok := backend.(storagedb.KeyStoreProvider)
-	if !ok {
-		return storage.NewKeyringSecretStore(), nil
+// KeyStoreResult is the provider-key keystore and what only the encrypted database keystore offers beyond it, each an
+// fx value that is nil with the OS keyring: the organisations' shared credentials and the listing of a user's key
+// families.
+type KeyStoreResult struct {
+	fx.Out
+	Keys        service.KeyStore
+	OrgKeys     service.OrgKeyStore
+	KeyFamilies storageif.SecretFamilyLister
+}
+
+// provideKeyStore builds the provider-API-key secret store: an encrypted,
+// database-backed keystore with a database (preferring a dedicated
+// PAD_ENCRYPTION_KEY over PAD_AUTH_SECRET so rotating the JWT secret doesn't
+// brick stored provider keys), falling back to the OS-keyring default
+// everywhere else. A plain fx provider (not an Invoke mutating a global), so
+// consumers get the same DAG-resolved value and failures surface as provider
+// errors.
+func provideKeyStore(cfg *config.Config, keyStores storagedb.KeyStoreProvider) (KeyStoreResult, error) {
+	keyring := KeyStoreResult{Keys: storage.NewKeyringSecretStore()}
+	if keyStores == nil {
+		return keyring, nil
 	}
 	encKey := keystoreKey(cfg.Auth)
 	switch {
 	case encKey == "" && cfg.Auth.SecretEphemeral:
 		logger.Warn("database storage without PAD_ENCRYPTION_KEY or PAD_AUTH_SECRET: provider keys stay in the OS keyring, " +
 			"because a per-process secret would make them unreadable after a restart. Set PAD_ENCRYPTION_KEY to store them encrypted in the database.")
-		return storage.NewKeyringSecretStore(), nil
+		return keyring, nil
 	case encKey == "":
-		return storage.NewKeyringSecretStore(), nil
+		return keyring, nil
 	case cfg.Auth.EncryptionKey == "":
 		logger.Warn("PAD_ENCRYPTION_KEY unset — falling back to PAD_AUTH_SECRET for keystore. " +
 			"Set a dedicated PAD_ENCRYPTION_KEY so rotating the JWT secret doesn't brick stored provider keys.")
 	}
-	ks, err := ksBackend.NewEncryptedKeyStore([]byte(encKey))
+	ks, err := keyStores.NewEncryptedKeyStore([]byte(encKey))
 	if err != nil {
-		return nil, fmt.Errorf("failed to init encrypted keystore: %w", err)
+		return KeyStoreResult{}, fmt.Errorf("failed to init encrypted keystore: %w", err)
 	}
 	logger.Info("encrypted database keystore enabled")
-	return ks, nil
+	return KeyStoreResult{Keys: ks, OrgKeys: ks, KeyFamilies: ks}, nil
 }
 
 // initAuditTrail constructs the audit recorder early, so its pool starts before the hooks registered after it

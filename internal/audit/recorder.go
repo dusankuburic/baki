@@ -165,6 +165,15 @@ func (r *Recorder) Record(ctx context.Context, e Entry) {
 	r.submit(NewEvent(ctx, e))
 }
 
+type erasedActorKey struct{}
+
+// WithErasedActor marks ctx's actor as erased: the account was deleted earlier in this request, so the rows the
+// request records afterwards (the deletion itself, the credentials it disabled) keep the action and its resource but
+// none of the actor's identity (user, email, address, user agent, token), as erasure left the actor's earlier rows.
+func WithErasedActor(ctx context.Context) context.Context {
+	return context.WithValue(ctx, erasedActorKey{}, true)
+}
+
 // NewEvent builds the row Record writes for e.
 func NewEvent(ctx context.Context, e Entry) *storageif.AuditEvent {
 	ev := &storageif.AuditEvent{
@@ -186,6 +195,9 @@ func NewEvent(ctx context.Context, e Entry) *storageif.AuditEvent {
 	}
 	if info := reqinfo.From(ctx); info != nil {
 		ev.IP, ev.UserAgent = info.ClientIP, info.UserAgent
+	}
+	if erased, _ := ctx.Value(erasedActorKey{}).(bool); erased {
+		ev.UserID, ev.Email, ev.IP, ev.UserAgent, ev.TokenID = "", "", "", "", ""
 	}
 	return ev
 }
@@ -278,8 +290,7 @@ func waitWithBudget(wg *sync.WaitGroup, d time.Duration) bool {
 	}
 }
 
-// batchSink is an optional store capability: persisting a batch of audit events in one round-trip. Postgres
-// implements it; stores that don't fall back to per-event writes.
+// batchSink persists a batch of audit events in one round trip (storageif.AuditStore's SaveAuditEvents).
 type batchSink interface {
 	SaveAuditEvents(ctx context.Context, events []*storageif.AuditEvent) error
 }
@@ -291,7 +302,6 @@ type writer interface {
 
 func (r *Recorder) worker() {
 	defer r.workers.Done()
-	sink, _ := r.store.(batchSink)
 	var buf []*storageif.AuditEvent
 
 	// On an unrecoverable panic outside the flush path, divert buffered-but-unflushed events to the fallback
@@ -325,7 +335,7 @@ func (r *Recorder) worker() {
 				salvageBatch(r.store, batch)
 			}
 		}()
-		writeBatch(r.store, sink, batch)
+		writeBatch(r.store, r.store, batch)
 	}
 	for {
 		select {
@@ -395,16 +405,14 @@ func (r *Recorder) replaySpilled() {
 	}
 }
 
-// writeBatch persists a batch with a bounded retry: a single batched write when the store supports it, falling
-// back to per-event writes so a bad row can't poison the batch. Events still failing after retry go to the log
-// fallback sink (pad_audit_dropped_total{reason="write_failed"}).
+// writeBatch persists a batch with a bounded retry: a single batched write, falling back to per-event writes so
+// a bad row can't poison the batch. Events still failing after retry go to the log fallback sink
+// (pad_audit_dropped_total{reason="write_failed"}).
 func writeBatch(w writer, sink batchSink, events []*storageif.AuditEvent) {
-	if sink != nil {
-		if err := saveBatchWithRetry(sink, events); err == nil {
-			return
-		}
-		// Batch failed (likely one bad row) — isolate via per-event writes below.
+	if err := saveBatchWithRetry(sink, events); err == nil {
+		return
 	}
+	// Batch failed (likely one bad row) — isolate via per-event writes below.
 	for _, ev := range events {
 		writeOne(w, ev)
 	}

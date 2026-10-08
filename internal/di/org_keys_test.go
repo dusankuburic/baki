@@ -43,25 +43,3 @@ func TestMemberKeyLookup_MapsNotFoundOnly(t *testing.T) {
 		t.Errorf("missing org key = (%q, %v), want (\"\", nil)", v, err)
 	}
 }
-
-// The org store is the deployment keystore when it can hold one (the
-// encrypted database keystore), nil otherwise (the OS keyring, a plain
-// per-user fake).
-func TestProvideOrgKeyStore(t *testing.T) {
-	if got := ProvideOrgKeyStore(testutil.NewFakeSecretStore()); got != nil {
-		t.Errorf("a per-user-only keystore must yield no org store, got %T", got)
-	}
-	if got := ProvideOrgKeyStore(storage.NewKeyringSecretStore()); got != nil {
-		t.Errorf("the OS keyring must yield no org store, got %T", got)
-	}
-	if got := ProvideOrgKeyStore(&bothKeys{}); got == nil {
-		t.Error("a keystore implementing the org methods must be exposed as the org store")
-	}
-}
-
-// bothKeys implements both interfaces structurally, as the database
-// keystore does.
-type bothKeys struct {
-	testutil.FakeSecretStore
-	testutil.FakeOrgSecretStore
-}

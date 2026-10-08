@@ -43,8 +43,7 @@ func (b *canBackend) LoadUserByID(_ context.Context, id string) (*storageif.User
 	return nil, storageif.ErrNotFound
 }
 
-// canOrgStore counts organisation reads (the in-memory store answers MemberRole from LoadOrg too); fail, when set,
-// fails every read.
+// canOrgStore counts organisation reads, the roster and the membership row alike; fail, when set, fails every read.
 type canOrgStore struct {
 	collaboration.OrgStore
 	loads atomic.Int64
@@ -57,6 +56,14 @@ func (s *canOrgStore) LoadOrg(ctx context.Context, id string) (*storageif.Organi
 		return nil, s.fail
 	}
 	return s.OrgStore.LoadOrg(ctx, id)
+}
+
+func (s *canOrgStore) OrgMemberRole(ctx context.Context, orgID, userID string) (auth.Role, bool, error) {
+	s.loads.Add(1)
+	if s.fail != nil {
+		return "", false, s.fail
+	}
+	return s.OrgStore.OrgMemberRole(ctx, orgID, userID)
 }
 
 type canFixture struct {
@@ -338,8 +345,8 @@ func TestCan_OrgDecisionsShareTheMemo(t *testing.T) {
 	}
 }
 
-// pointLookupOrgStore adds the Postgres store's membership point lookup (storageif.OrgMembershipReader) to
-// canOrgStore, counted apart from the roster reads.
+// pointLookupOrgStore counts the membership point lookups apart from canOrgStore's roster reads, and answers an
+// unknown organisation as Postgres does.
 type pointLookupOrgStore struct {
 	*canOrgStore
 	points atomic.Int64

@@ -183,31 +183,19 @@ func (s *OrgService) IsMember(ctx context.Context, orgID, userID string) bool {
 	return err == nil
 }
 
-// MemberRole returns the role of userID in orgID: the organisation's load
-// error when it does not exist, ErrMemberNotFound when userID is not in it.
-// This backs every flow-authz org check (and IsMember/IsAdmin), so when the
-// store offers a point lookup (interfaces.OrgMembershipReader — the Postgres
-// backend) it answers from one indexed row instead of loading the roster.
+// MemberRole returns the role of userID in orgID: the store's not-found
+// error when the organisation does not exist, ErrMemberNotFound when userID is
+// not in it. This backs every flow-authz org check (and IsMember/IsAdmin), so
+// it is the store's point lookup, not a load of the roster.
 func (s *OrgService) MemberRole(ctx context.Context, orgID, userID string) (auth.Role, error) {
-	if r, ok := s.store.(interfaces.OrgMembershipReader); ok {
-		role, member, err := r.OrgMemberRole(ctx, orgID, userID)
-		if err != nil {
-			return "", err
-		}
-		if !member {
-			return "", ErrMemberNotFound
-		}
-		return role, nil
-	}
-	org, err := s.store.LoadOrg(ctx, orgID)
+	role, member, err := s.store.OrgMemberRole(ctx, orgID, userID)
 	if err != nil {
 		return "", err
 	}
-	_, m := findMember(org, userID)
-	if m == nil {
+	if !member {
 		return "", ErrMemberNotFound
 	}
-	return m.Role, nil
+	return role, nil
 }
 
 // ListMembers returns all members of the given organisation.

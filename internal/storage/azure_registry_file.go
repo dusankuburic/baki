@@ -33,8 +33,8 @@ const azureRegistryFileVersion = 1
 //
 //   - Every read-modify-write holds one process mutex and re-reads the file inside it, so writers in this
 //     process never lose each other's work.
-//   - Writes go to a unique temp file (mode 0600) renamed over the target, with the filesystem backend's
-//     bounded retry over a Windows reader's transient sharing conflict.
+//   - Writes go to a unique temp file (mode 0600) renamed over the target, with atomicfile's bounded retry
+//     over a Windows reader's transient sharing conflict.
 //   - The file carries a revision counter, compared again right before the rename: a second process sharing
 //     the directory that wrote meanwhile turns this write into ErrAzureRegistryConflict instead of silently
 //     discarding its write (the compare and rename are not atomic, but the counter closes the window a

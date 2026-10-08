@@ -74,26 +74,8 @@ func (s *AccountLifecycleService) finalize(ctx context.Context, userID, keyScope
 	s.bus.Publish(ctx, events.AccountErased{UserID: userID, KeyScope: keyScope})
 }
 
-// userDataStreamer is implemented by backends that can stream a data-subject export incrementally; backends
-// without it use the buffered path.
-type userDataStreamer interface {
-	ExportUserDataTo(ctx context.Context, userID string, w io.Writer) error
-}
-
-// StreamsExport reports whether the store can stream the export (StreamExport) instead of building it in memory
-// (Export).
-func (s *AccountLifecycleService) StreamsExport() bool {
-	_, ok := s.users.(userDataStreamer)
-	return ok
-}
-
-// StreamExport writes userID's data-subject export to w; ErrNotFound if the user does not exist. Only valid when
-// StreamsExport.
+// StreamExport writes userID's data-subject export to w; ErrNotFound if the user does not exist. After an error w
+// holds partial JSON.
 func (s *AccountLifecycleService) StreamExport(ctx context.Context, userID string, w io.Writer) error {
-	return s.users.(userDataStreamer).ExportUserDataTo(ctx, userID, w)
-}
-
-// Export assembles userID's data-subject export; ErrNotFound if the user does not exist.
-func (s *AccountLifecycleService) Export(ctx context.Context, userID string) (*storageif.UserDataExport, error) {
-	return s.users.ExportUserData(ctx, userID)
+	return s.users.ExportUserDataTo(ctx, userID, w)
 }

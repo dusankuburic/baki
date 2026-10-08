@@ -3,7 +3,6 @@ package storage
 import (
 	"bytes"
 	"context"
-	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -198,30 +197,6 @@ func TestSettingsStore_Load_CorruptFile_EmitsErrorLog(t *testing.T) {
 	}
 }
 
-func TestMigrate_NoOp_OnCurrentVersion(t *testing.T) {
-	s := models.DefaultSettings() // Version == CurrentSettingsVersion
-	before := s.Version
-	if err := migrate(s); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	if s.Version != before {
-		t.Errorf("version changed from %d to %d; should be a no-op on current version", before, s.Version)
-	}
-}
-
-func TestMigrate_AdvancesVersion(t *testing.T) {
-	s := models.DefaultSettings()
-	s.Version = 0 // Pretend it's an older settings file.
-
-	if err := migrate(s); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-
-	if s.Version != CurrentSettingsVersion {
-		t.Errorf("version after migrate = %d, want %d", s.Version, CurrentSettingsVersion)
-	}
-}
-
 func TestSettingsStore_Load_NonErrNotExist_ReturnsError(t *testing.T) {
 	// Point the store at a directory path — os.ReadFile on a dir is not ErrNotExist.
 	dir := t.TempDir()
@@ -253,33 +228,6 @@ func TestNewSettingsStoreAt_LoadError_ReturnsError(t *testing.T) {
 	_, err := NewSettingsStoreAt(dir)
 	if err == nil {
 		t.Error("expected error when path is a directory, got nil")
-	}
-}
-
-func TestMigrate_MigrationFunctionError(t *testing.T) {
-	// Temporarily register a failing migration at v1 (current version), then
-	// run migrate on a v0 settings object. The error path in migrate is covered.
-	orig, hadOrig := migrations[1]
-	migrations[1] = func(s *models.AppSettings) error {
-		return errors.New("deliberate test failure")
-	}
-	defer func() {
-		if hadOrig {
-			migrations[1] = orig
-		} else {
-			delete(migrations, 1)
-		}
-	}()
-
-	s := models.DefaultSettings()
-	s.Version = 0 // triggers the v1 migration
-
-	err := migrate(s)
-	if err == nil {
-		t.Error("expected error from failing migration, got nil")
-	}
-	if !strings.Contains(err.Error(), "migration to v1") {
-		t.Errorf("error should mention migration version, got: %v", err)
 	}
 }
 

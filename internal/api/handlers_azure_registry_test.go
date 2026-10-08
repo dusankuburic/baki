@@ -27,7 +27,6 @@ import (
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -60,7 +59,7 @@ const azRegBase = "/api/providers/azure-foundry"
 type azRegEnv struct {
 	t        *testing.T
 	rt       *Router
-	fs       *filesystem.LocalStorageBackend
+	store    *testutil.FakeBackend
 	secrets  *testutil.FakeSecretStore
 	orgKeys  *testutil.FakeOrgSecretStore
 	registry *testutil.FakeAzureRegistry
@@ -74,12 +73,9 @@ type azRegEnv struct {
 
 func newAzRegEnv(t *testing.T) *azRegEnv {
 	t.Helper()
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("filesystem backend: %v", err)
-	}
+	store := testutil.NewFakeBackend()
 	e := &azRegEnv{
-		t: t, rt: newTestRouter(fs, true), fs: fs, foundry: newAzRegFoundry(t),
+		t: t, rt: newTestRouter(store, true), store: store, foundry: newAzRegFoundry(t),
 		secrets: testutil.NewFakeSecretStore(), orgKeys: testutil.NewFakeOrgSecretStore(), registry: testutil.NewFakeAzureRegistry(),
 	}
 	e.factory = ai.NewProviderFactory(func(scope, provider string) (string, error) {
@@ -100,7 +96,7 @@ func newAzRegEnv(t *testing.T) *azRegEnv {
 func (e *azRegEnv) wire(adjust func(*testAzureModelsDeps)) {
 	d := testAzureModelsDeps{
 		Registry: e.registry, Secrets: e.secrets, OrgKeys: e.orgKeys, Factory: e.factory,
-		Orgs: e.rt.security.OrgSvc, Users: e.fs, PerUser: true,
+		Orgs: e.rt.security.OrgSvc, Users: e.store, PerUser: true,
 	}
 	if adjust != nil {
 		adjust(&d)
@@ -114,7 +110,7 @@ func (e *azRegEnv) wire(adjust func(*testAzureModelsDeps)) {
 func (e *azRegEnv) install(providerAzure, systemAzure *service.AzureModelService) {
 	e.svc = service.NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), e.factory, e.secrets, e.orgKeys, providerAzure)
 	bus := eventbus.New(nil, 0)
-	e.sys = service.NewSystemService(storage.NewInMemorySettingsStore(), e.secrets, &mockNotifier{}, e.fs, config.ModeCloud, systemAzure, bus)
+	e.sys = service.NewSystemService(storage.NewInMemorySettingsStore(), e.secrets, &mockNotifier{}, e.store, config.ModeCloud, systemAzure, bus)
 	service.SubscribeModelCache(bus, e.svc)
 	moduleOf[*ProviderHandler](e.t, e.rt).providerSvc = e.svc
 	moduleOf[*OrgHandler](e.t, e.rt).providers = e.svc

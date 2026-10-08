@@ -35,6 +35,15 @@ func (f *fakeWriter) SaveAuditEvent(_ context.Context, e *storageif.AuditEvent) 
 	return nil
 }
 
+func (f *fakeWriter) SaveAuditEvents(ctx context.Context, events []*storageif.AuditEvent) error {
+	for _, e := range events {
+		if err := f.SaveAuditEvent(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (f *fakeWriter) ListAuditEvents(context.Context, storageif.AuditFilter) ([]*storageif.AuditEvent, error) {
 	return nil, nil
 }
@@ -88,16 +97,6 @@ func TestWriteBatch_UsesBatchSink(t *testing.T) {
 	}
 	if len(s.batch) != 3 {
 		t.Errorf("batch persisted %d events, want 3", len(s.batch))
-	}
-}
-
-// Without a batch sink, events are written one-by-one.
-func TestWriteBatch_PerEventWhenNoSink(t *testing.T) {
-	w := &fakeWriter{}
-	writeBatch(w, nil, events(3))
-
-	if w.count() != 3 {
-		t.Errorf("SaveAuditEvent calls = %d, want 3", w.count())
 	}
 }
 

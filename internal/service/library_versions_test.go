@@ -88,11 +88,14 @@ func TestLibraryService_FlowVersions(t *testing.T) {
 func TestFlowService_UpdateFlowTags(t *testing.T) {
 	fake := testutil.NewFakeBackend()
 	svc := NewFlowService(nil, nil, nil, fake, nil, nil)
+	if err := fake.SaveFlow(context.Background(), &storageif.FlowDocument{ID: "flow-1", Name: "F", OwnerID: "u1"}); err != nil {
+		t.Fatalf("seed flow: %v", err)
+	}
 	if err := svc.UpdateFlowTags(context.Background(), "flow-1", []string{"Finance", "finance", "ops"}); err != nil {
 		t.Fatalf("UpdateFlowTags: %v", err)
 	}
 	want, _ := storageif.NormalizeFlowTags([]string{"Finance", "finance", "ops"})
-	if got := fake.FlowTags["flow-1"]; len(got) != len(want) {
+	if got := fake.Flows["flow-1"].Tags; len(got) != len(want) {
 		t.Fatalf("stored tags = %v, want %v", got, want)
 	}
 }

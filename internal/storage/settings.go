@@ -1,25 +1,39 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
+	"pad-analyzer/internal/storage/settingsdoc"
 	"pad-core/logger"
 	"pad-core/models"
 )
 
+// CurrentSettingsVersion is the document's own version (AppSettings.Version). It stays 1: the sections carry the
+// versions that change (settingsdoc).
 const CurrentSettingsVersion = 1
+
+// sectionVersionsKey records each section's version in the settings file. A file without it, as the releases
+// before section versions wrote it, holds every section at settingsdoc.LegacyVersion; those releases ignore it.
+const sectionVersionsKey = "sectionVersions"
 
 type SettingsStore struct {
 	mu      sync.RWMutex
 	path    string
 	current *models.AppSettings
+	// stored is the file's sections as last read or written, with their versions and whatever a newer binary
+	// stored that this one does not know (fields, whole sections), so a write keeps it.
+	stored map[string]settingsdoc.Stored
+	// sections declares the document's sections; nil = settingsdoc.Default (tests swap in their own).
+	sections *settingsdoc.Registry
 }
 
 func NewSettingsStore() (*SettingsStore, error) {
@@ -69,11 +83,16 @@ func (s *SettingsStore) Get() *models.AppSettings {
 func (s *SettingsStore) Update(_ context.Context, updated models.AppSettings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := migrate(&updated); err != nil {
-		return err
-	}
+	updated.Version = max(updated.Version, CurrentSettingsVersion)
 	s.current = &updated
 	return s.persistLocked()
+}
+
+func (s *SettingsStore) registry() *settingsdoc.Registry {
+	if s.sections != nil {
+		return s.sections
+	}
+	return settingsdoc.Default
 }
 
 func (s *SettingsStore) load() error {
@@ -93,11 +112,11 @@ func (s *SettingsStore) load() error {
 		return err
 	}
 
-	var loaded models.AppSettings
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		// The settings file is unparseable (partial write or bad manual edit):
-		// quarantine it, fall back to defaults, and log at error so the
-		// recovery is visible in ops dashboards.
+	loaded, stored, err := s.decodeFile(data)
+	if err != nil {
+		// The settings file is unparseable (partial write, bad manual edit, a
+		// section that does not decode or upgrade): quarantine it, fall back to
+		// defaults, and log at error so the recovery is visible in ops dashboards.
 		backup := s.path + ".corrupt-" + time.Now().Format("20060102T150405")
 		if renameErr := os.Rename(s.path, backup); renameErr != nil {
 			logger.Error("settings: failed to quarantine corrupt file",
@@ -107,15 +126,103 @@ func (s *SettingsStore) load() error {
 				"path", s.path, "backup", backup, "parse_error", err)
 		}
 		s.current = models.DefaultSettings()
+		s.stored = nil
 		return s.persistLocked()
 	}
 
-	if err := migrate(&loaded); err != nil {
-		return err
+	s.current = loaded
+	s.stored = stored
+	return nil
+}
+
+// decodeFile reads the file's sections, each upgraded to the version this binary knows (settingsdoc.Decode).
+func (s *SettingsStore) decodeFile(data []byte) (*models.AppSettings, map[string]settingsdoc.Stored, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return nil, nil, err
+	}
+	var versions map[string]int
+	if raw, ok := top[sectionVersionsKey]; ok {
+		if err := json.Unmarshal(raw, &versions); err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", sectionVersionsKey, err)
+		}
+	}
+	loaded := &models.AppSettings{}
+	if raw, ok := top[settingsdoc.DocVersionKey]; ok {
+		if err := json.Unmarshal(raw, &loaded.Version); err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", settingsdoc.DocVersionKey, err)
+		}
+	}
+	sections := make(map[string]settingsdoc.Stored, len(top))
+	for key, raw := range top {
+		if key == settingsdoc.DocVersionKey || key == sectionVersionsKey {
+			continue
+		}
+		sections[key] = settingsdoc.Stored{Version: max(versions[key], settingsdoc.LegacyVersion), Data: raw}
+	}
+	stored, err := s.registry().Decode(sections, loaded)
+	if err != nil {
+		return nil, nil, err
+	}
+	loaded.Version = max(loaded.Version, CurrentSettingsVersion)
+	return loaded, stored, nil
+}
+
+// encodeFile lays the file out as the releases before did (the document's keys in field order, indented), with
+// the sections this binary does not know after them and the section versions last.
+func (s *SettingsStore) encodeFile() ([]byte, map[string]settingsdoc.Stored, error) {
+	sections, err := s.registry().Encode(s.current, s.stored)
+	if err != nil {
+		return nil, nil, err
+	}
+	var unknown []string
+	for key, st := range s.stored {
+		if _, ok := sections[key]; !ok {
+			sections[key] = st
+			unknown = append(unknown, key)
+		}
+	}
+	slices.Sort(unknown)
+	versions := make(map[string]int, len(sections))
+	for key, st := range sections {
+		versions[key] = st.Version
 	}
 
-	s.current = &loaded
-	return nil
+	var buf bytes.Buffer
+	write := func(key string, value []byte) {
+		if buf.Len() == 0 {
+			buf.WriteByte('{')
+		} else {
+			buf.WriteByte(',')
+		}
+		k, _ := json.Marshal(key)
+		buf.Write(k)
+		buf.WriteByte(':')
+		buf.Write(value)
+	}
+	for _, key := range settingsdoc.DocumentKeys(s.current) {
+		if key == settingsdoc.DocVersionKey {
+			v, _ := json.Marshal(s.current.Version)
+			write(key, v)
+		} else if st, ok := sections[key]; ok {
+			write(key, st.Data)
+		}
+	}
+	for _, key := range unknown {
+		write(key, sections[key].Data)
+	}
+	v, err := json.Marshal(versions)
+	if err != nil {
+		return nil, nil, err
+	}
+	write(sectionVersionsKey, v)
+	buf.WriteByte('}')
+
+	var out bytes.Buffer
+	if err := json.Indent(&out, buf.Bytes(), "", "  "); err != nil {
+		return nil, nil, err
+	}
+	return out.Bytes(), sections, nil
 }
 
 // persistLocked writes the current settings durably: a unique temp file in the
@@ -127,7 +234,7 @@ func (s *SettingsStore) persistLocked() error {
 		return nil // memory-only store
 	}
 
-	data, err := json.MarshalIndent(s.current, "", "  ")
+	data, stored, err := s.encodeFile()
 	if err != nil {
 		return err
 	}
@@ -163,6 +270,7 @@ func (s *SettingsStore) persistLocked() error {
 		cleanup()
 		return err
 	}
+	s.stored = stored
 	return nil
 }
 
@@ -179,18 +287,4 @@ func (s *SettingsStore) RemoveRecentFile(path string) error {
 // ClearRecentFiles empties the recent-files list.
 func (s *SettingsStore) ClearRecentFiles() error {
 	return ClearRecentFiles(s)
-}
-
-var migrations = map[int]func(*models.AppSettings) error{}
-
-func migrate(s *models.AppSettings) error {
-	for v := s.Version + 1; v <= CurrentSettingsVersion; v++ {
-		if fn, ok := migrations[v]; ok {
-			if err := fn(s); err != nil {
-				return fmt.Errorf("migration to v%d: %w", v, err)
-			}
-		}
-		s.Version = v
-	}
-	return nil
 }

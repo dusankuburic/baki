@@ -95,7 +95,7 @@ func TestReadinessProbe_503AfterNConsecutiveRedisFailures(t *testing.T) {
 	// Use FakeBackend (always-healthy Ping) so the backend check passes and we
 	// isolate the Redis check failure path.
 	h := &SystemHandler{
-		health:      service.NewHealthService(testutil.NewFakeBackend()),
+		health:      service.NewHealthService(testutil.NewFakeBackend(), nil),
 		redisPinger: failingRedisPinger{err: errors.New("redis: connection refused")},
 	}
 	for i := 1; i <= readinessFailureThreshold; i++ {
@@ -126,8 +126,8 @@ func TestReadinessProbe_NilRedisPingerSkipsCheck(t *testing.T) {
 }
 
 // TestAdminSystemHealth_AdminGetsBreakdown verifies the admin health endpoint
-// returns a structured per-subsystem payload. The JWT test router uses a
-// filesystem backend, so DB=ok, blob=skipped (filesystem has no blob backend),
+// returns a structured per-subsystem payload. The JWT test router uses the
+// fake backend, so DB=ok, blob=skipped (the fake has no blob container),
 // Redis=skipped (nil pinger), overall=ok.
 func TestAdminSystemHealth_AdminGetsBreakdown(t *testing.T) {
 	rt := newJWTTestRouter(t)
@@ -144,7 +144,7 @@ func TestAdminSystemHealth_AdminGetsBreakdown(t *testing.T) {
 		t.Errorf("database status = %q, want ok", resp.Database.Status)
 	}
 	if resp.Blob.Status != "skipped" {
-		t.Errorf("blob status = %q, want skipped (filesystem has no blob)", resp.Blob.Status)
+		t.Errorf("blob status = %q, want skipped (the fake has no blob)", resp.Blob.Status)
 	}
 	if resp.Redis.Status != "skipped" {
 		t.Errorf("redis status = %q, want skipped (no pinger wired)", resp.Redis.Status)

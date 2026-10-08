@@ -33,10 +33,6 @@ type SSOClient interface {
 	Exchange(ctx context.Context, code, pkceVerifier, nonce string) (*sso.Identity, error)
 }
 
-// IdentityStore is the optional storage capability for SSO identity links, implemented by the
-// Postgres backend; the service.IdentityService owns it.
-type IdentityStore = service.IdentityLinkStore
-
 // ssoFlowCookie carries the per-login CSRF state, OIDC nonce and PKCE verifier between the /start
 // redirect and the /callback, signed (auth.Manager.IssueSSOFlow) so the browser holding it cannot
 // change its link target. HttpOnly — the SPA never sees it.

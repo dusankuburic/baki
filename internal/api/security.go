@@ -7,6 +7,7 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
+	"pad-analyzer/internal/platform/reqtx"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -19,6 +20,10 @@ type SecurityConfig struct {
 	Backend        storageif.StorageBackend
 	OrgSvc         *collaboration.OrgService
 	TrustedProxies []string
+	// RequestTx opens each authenticated request's row-level-security transaction and Idempotency keeps the
+	// Idempotency-Key responses inside it; both are nil without row-level security (desktop, auth off).
+	RequestTx   reqtx.Opener
+	Idempotency storageif.IdempotencyStore
 	// Features gates optional product behaviour (read-only, env-sourced).
 	Features FeatureFlags
 }

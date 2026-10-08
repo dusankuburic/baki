@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/storage/filesystem"
+	"pad-analyzer/internal/testutil"
 )
 
 // createOrg: the owner is always the router's local user ("local" in test routers).
@@ -93,8 +93,8 @@ func TestHandleOrgDelete_OK(t *testing.T) {
 }
 
 func TestHandleOrgMemberRemove_OK(t *testing.T) {
-	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	rt := newTestRouter(fs, false)
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, false)
 	orgID := createOrg(t, rt, "Team")
 	seedUserWithRole(t, rt, "member1", "member1@example.com", "member")
 
@@ -120,8 +120,8 @@ func TestHandleOrgMemberRemove_UnknownOrgReturns404(t *testing.T) {
 }
 
 func TestHandleOrgMemberSetRole_OK(t *testing.T) {
-	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	rt := newTestRouter(fs, false)
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, false)
 	orgID := createOrg(t, rt, "Team")
 	seedUserWithRole(t, rt, "member1", "member1@example.com", "member")
 

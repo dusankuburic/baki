@@ -10,7 +10,7 @@ import (
 )
 
 func TestAPITokenEndpoints_FullLifecycle(t *testing.T) {
-	rt, _ := newLibraryTestRouter(t) // filesystem backend, JWT enabled
+	rt, _ := newLibraryTestRouter(t) // fake backend, JWT enabled
 	// The PAT auth path resolves the owning user, so the user must exist.
 	seedUserWithRole(t, rt, "alice", "alice@example.com", auth.RoleMember)
 	bearer := jwtBearer(t, rt, "alice", "alice@example.com")

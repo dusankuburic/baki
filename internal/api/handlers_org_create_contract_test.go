@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/storage/filesystem"
+	"pad-analyzer/internal/testutil"
 )
 
 // TestOrgCreate_IsSelfServeForAnyAuthenticatedUser pins a contract that a stale
@@ -24,10 +24,7 @@ import (
 // this fails and forces them to update the UI and the docs in the same change,
 // instead of silently 403-ing a button the product still shows.
 func TestOrgCreate_IsSelfServeForAnyAuthenticatedUser(t *testing.T) {
-	backend, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("backend: %v", err)
-	}
+	backend := testutil.NewFakeBackend()
 	rt := newTestRouter(backend, true) // cloud / JWT mode
 
 	for _, role := range []auth.Role{auth.RoleMember, auth.RoleViewer} {

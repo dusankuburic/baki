@@ -51,16 +51,8 @@ func alertingFlows(t *testing.T, n int) (*healthBackend, map[string]*models.Anal
 	reports := map[string]*models.AnalysisReport{}
 	for i := 0; i < n; i++ {
 		id := "flow-" + string(rune('a'+i%26)) + string(rune('0'+i/26))
-		seedFlow(t, b, id)
 		// Org-scoped, which is what routes the alert to the org's channels.
-		doc, err := b.LoadFlow(context.Background(), id)
-		if err != nil {
-			t.Fatalf("load seeded flow %s: %v", id, err)
-		}
-		doc.OrganizationID = "org-1"
-		if err := b.SaveFlow(context.Background(), doc); err != nil {
-			t.Fatal(err)
-		}
+		seedOrgFlow(t, b, id, "org-1")
 		// A baseline containing only r1:b1 means r2:b2 in the report below is a
 		// NEW finding — which is what actually raises an alert. Without the
 		// baseline the sweep is silent and a fan-out test asserts nothing.
@@ -107,7 +99,7 @@ func TestScanOnce_ReusesOneNotifierPerOrgPerSweep(t *testing.T) {
 	}
 
 	global := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 	s.Stop() // drains in-flight deliveries
 
@@ -144,7 +136,7 @@ func TestScanner_StopWaitsForInFlightDeliveries(t *testing.T) {
 	}
 
 	global := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	// Let the delivery finish once Stop is already waiting.
@@ -188,7 +180,7 @@ func TestScanOnce_BoundsConcurrentDeliveries(t *testing.T) {
 	}
 
 	global := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 	s.Stop()
 

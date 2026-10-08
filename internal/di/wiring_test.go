@@ -8,9 +8,11 @@ import (
 
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/platform/reqtx"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/redisx"
 	"pad-analyzer/internal/service"
+	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -60,8 +62,9 @@ func TestServiceModule_BuildsInEveryMode(t *testing.T) {
 					m.backend,
 					func() service.EventNotifier { return service.NilNotifier{} },
 					func() *collaboration.OrgService { return nil },
-					func() service.KeyStore { return testutil.NewFakeSecretStore() },
 				),
+				noDatabase(),
+				fakeKeyStore(),
 				ServiceModule,
 				redisx.Module,
 				fx.Populate(&analysis, &azure, &budget, &chat, &dashboard, &knowledge, &library, &providers, &system),
@@ -80,4 +83,26 @@ func TestServiceModule_BuildsInEveryMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fakeKeyStore provides what main.go's provideKeyStore provides, on the test keystore: the keys and the listing of
+// their families (as the database keystore does), no organisation credential store.
+func fakeKeyStore() fx.Option {
+	keys := testutil.NewFakeSecretStore()
+	return fx.Provide(
+		func() service.KeyStore { return keys },
+		func() storageif.SecretFamilyLister { return keys },
+		func() service.OrgKeyStore { return nil },
+	)
+}
+
+// noDatabase provides what main.go's provideStorageBackend provides beside the backend, as it does without a
+// database: none of the database's own capabilities (the fake stands in for the backend's role interfaces only).
+func noDatabase() fx.Option {
+	return fx.Provide(
+		func() storagedb.AzureRegistryProvider { return nil },
+		func() service.BlobHealthChecker { return nil },
+		func() reqtx.Opener { return nil },
+		func() storageif.IdempotencyStore { return nil },
+	)
 }

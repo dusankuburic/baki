@@ -52,8 +52,11 @@ func (b *PostgresStorageBackend) SaveUser(ctx context.Context, user *interfaces.
 	return nil
 }
 
-// CreateUser atomically inserts a new user; an empty users table promotes the insert to
-// RoleAdmin (single SERIALIZABLE transaction, retried on race). ErrEmailExists on a unique violation.
+// bootstrapLockKey serializes the registrations that may make the first user the admin.
+const bootstrapLockKey int64 = 0x62616b69626f6f74 // "bakiboot"
+
+// CreateUser atomically inserts a new user; on an empty users table a registration (auth.WithAllowBootstrap)
+// becomes the RoleAdmin. ErrEmailExists on a unique violation.
 func (b *PostgresStorageBackend) CreateUser(ctx context.Context, user *interfaces.User) error {
 	now := time.Now().UTC()
 	if user.CreatedAt.IsZero() {
@@ -61,57 +64,56 @@ func (b *PostgresStorageBackend) CreateUser(ctx context.Context, user *interface
 	}
 	user.UpdatedAt = now
 
-	const maxRetries = 5
-	for range maxRetries {
-		err := b.tryCreateUser(ctx, user)
-		if err == nil {
-			return nil
+	var role auth.Role
+	var emailVerified bool
+	err := b.withOwnTx(ctx, sql.LevelDefault, func(_ context.Context, tx *sql.Tx) error {
+		// EXISTS, not COUNT(*): the question is only "is this the first user".
+		anyUser := func() (bool, error) {
+			var any bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users)`).Scan(&any); err != nil {
+				return false, fmt.Errorf("check for existing users: %w", err)
+			}
+			return any, nil
 		}
-		if isPgErrCode(err, pgErrSerializationFailure) {
-			continue
+		exists, err := anyUser()
+		if err != nil {
+			return err
 		}
-		return err
-	}
-	return fmt.Errorf("create user: serialization conflict after %d retries", maxRetries)
-}
+		// Only a registration on an apparently empty table takes the bootstrap lock and asks again: of two
+		// concurrent first registrations the second sees the first's committed row. Every other registration runs at
+		// READ COMMITTED with no lock: under SERIALIZABLE the emptiness read made a burst of sign-ups fail.
+		if !exists && auth.AllowBootstrap(ctx) {
+			if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, bootstrapLockKey); err != nil {
+				return fmt.Errorf("bootstrap lock: %w", err)
+			}
+			if exists, err = anyUser(); err != nil {
+				return err
+			}
+		}
+		// Bootstrap: the very first user becomes admin — but ONLY with auth.WithAllowBootstrap (the
+		// registration path); SSO JIT provisioning must not claim admin on a fresh deployment.
+		role = user.Role
+		emailVerified = user.EmailVerified
+		if !exists && auth.AllowBootstrap(ctx) {
+			role = auth.RoleAdmin
+			// The bootstrap admin is email-verified: nobody to impersonate on an empty deployment,
+			// and a no-SMTP deployment would otherwise lock out its own first administrator.
+			emailVerified = true
+		}
 
-func (b *PostgresStorageBackend) tryCreateUser(ctx context.Context, user *interfaces.User) error {
-	tx, err := b.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	// EXISTS, not COUNT(*): the question is only "is this the first user" (the SIRead lock still
-	// makes two concurrent first registrations conflict; one retries).
-	var anyUser bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users)`).Scan(&anyUser); err != nil {
-		return fmt.Errorf("check for existing users: %w", err)
-	}
-	// Bootstrap: the very first user becomes admin — but ONLY with auth.WithAllowBootstrap (the
-	// registration path); SSO JIT provisioning must not claim admin on a fresh deployment.
-	role := user.Role
-	emailVerified := user.EmailVerified
-	if !anyUser && auth.AllowBootstrap(ctx) {
-		role = auth.RoleAdmin
-		// The bootstrap admin is email-verified: nobody to impersonate on an empty deployment,
-		// and a no-SMTP deployment would otherwise lock out its own first administrator.
-		emailVerified = true
-	}
-
-	if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 		INSERT INTO users (id, email, password, role, email_verified, failed_login_attempts, locked_until, display_name, avatar_url, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		user.ID, user.Email, user.Password, string(role), emailVerified, user.FailedLoginAttempts, user.LockedUntil, user.DisplayName, user.AvatarURL, user.CreatedAt, user.UpdatedAt,
-	); err != nil {
-		if isPgErrCode(err, pgErrUniqueViolation) {
-			return interfaces.ErrEmailExists
+			user.ID, user.Email, user.Password, string(role), emailVerified, user.FailedLoginAttempts, user.LockedUntil, user.DisplayName, user.AvatarURL, user.CreatedAt, user.UpdatedAt,
+		); err != nil {
+			if isPgErrCode(err, pgErrUniqueViolation) {
+				return interfaces.ErrEmailExists
+			}
+			return fmt.Errorf("insert user: %w", err)
 		}
-		return fmt.Errorf("insert user: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		// Commit may surface the serialization failure for a SERIALIZABLE tx.
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	user.Role = role
@@ -281,21 +283,19 @@ func (b *PostgresStorageBackend) QueryUsers(ctx context.Context, q interfaces.Us
 	}
 	offset := max(q.Offset, 0)
 
-	args := []any{}
+	args := sqlArgs{}
 	where := []string{}
 	if needle := strings.ToLower(strings.TrimSpace(q.Q)); needle != "" {
 		// strpos rather than LIKE: the needle is data, so nothing to escape.
-		args = append(args, needle)
-		n := len(args)
-		where = append(where, fmt.Sprintf("(strpos(lower(email), $%d) > 0 OR strpos(lower(display_name), $%d) > 0)", n, n))
+		p := args.add(needle)
+		where = append(where, "(strpos(lower(email), "+p+") > 0 OR strpos(lower(display_name), "+p+") > 0)")
 	}
 	switch q.Role {
 	case "":
 	case interfaces.UserRoleNone:
 		where = append(where, "role NOT IN "+validRolesSQL)
 	default:
-		args = append(args, q.Role)
-		where = append(where, fmt.Sprintf("role = $%d", len(args)))
+		where = append(where, "role = "+args.add(q.Role))
 	}
 	clause := ""
 	if len(where) > 0 {
@@ -308,12 +308,10 @@ func (b *PostgresStorageBackend) QueryUsers(ctx context.Context, q interfaces.Us
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`+clause, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count users: %w", err)
 	}
-	pageArgs := append(append([]any{}, args...), limit, offset)
+	pageArgs := append(sqlArgs{}, args...)
+	page := " ORDER BY created_at DESC, id ASC LIMIT " + pageArgs.add(limit) + " OFFSET " + pageArgs.add(offset)
 	// #nosec G202 -- see above.
-	rows, err := db.QueryContext(ctx,
-		`SELECT `+listedUserColumns+` FROM users`+clause+
-			fmt.Sprintf(" ORDER BY created_at DESC, id ASC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2),
-		pageArgs...)
+	rows, err := db.QueryContext(ctx, `SELECT `+listedUserColumns+` FROM users`+clause+page, pageArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query users: %w", err)
 	}
@@ -610,26 +608,18 @@ func (b *PostgresStorageBackend) SaveAuditEvents(ctx context.Context, events []*
 	}
 	// Chunk larger batches and run every chunk in one transaction so the
 	// whole write stays all-or-nothing.
-	tx, err := b.db.BeginTx(ctx, nil)
+	err := b.withOwnTx(ctx, sql.LevelDefault, func(_ context.Context, tx *sql.Tx) error {
+		for _, batch := range chunkAuditEvents(events, auditInsertBatchRows) {
+			query, args := buildAuditInsert(batch)
+			if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("save audit events (%d): begin tx: %w", len(events), err)
+		return fmt.Errorf("save audit events (%d): %w", len(events), err)
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-	for _, batch := range chunkAuditEvents(events, auditInsertBatchRows) {
-		query, args := buildAuditInsert(batch)
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("save audit events (%d): %w", len(events), err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("save audit events commit (%d): %w", len(events), err)
-	}
-	committed = true
 	return nil
 }
 
@@ -675,30 +665,22 @@ const auditEventOrder = "ORDER BY created_at DESC, id ASC"
 // admin log): events written WHILE an operator pages shift later rows down and the boundary skips one per new
 // event; fixing that needs a keyset cursor in the AuditFilter contract, deliberately out of scope.
 func listAuditEventsSQL(filter interfaces.AuditFilter, limit, offset int, after *auditCursor) (string, []any) {
-	args := []any{}
+	args := sqlArgs{}
 	// Predicates every arm carries, after the arm's own key.
 	common := []string{}
-	n := 1
-	userArg := 0
+	userArg := ""
 	if filter.UserID != "" {
-		args = append(args, filter.UserID)
-		userArg = n
-		n++
+		userArg = args.add(filter.UserID)
 	}
 	if filter.Action != "" {
-		common = append(common, fmt.Sprintf("action = $%d", n))
-		args = append(args, filter.Action)
-		n++
+		common = append(common, "action = "+args.add(filter.Action))
 	}
 	if filter.Since != nil {
-		common = append(common, fmt.Sprintf("created_at >= $%d", n))
-		args = append(args, filter.Since.UTC())
-		n++
+		common = append(common, "created_at >= "+args.add(filter.Since.UTC()))
 	}
 	if after != nil {
-		common = append(common, fmt.Sprintf("created_at <= $%d AND (created_at < $%d OR id > $%d)", n, n, n+1))
-		args = append(args, after.createdAt.UTC(), after.id)
-		n += 2
+		at, id := args.add(after.createdAt.UTC()), args.add(after.id)
+		common = append(common, "created_at <= "+at+" AND (created_at < "+at+" OR id > "+id+")")
 		offset = 0
 	}
 	where := func(key ...string) string {
@@ -708,36 +690,29 @@ func listAuditEventsSQL(filter interfaces.AuditFilter, limit, offset int, after 
 		}
 		return " WHERE " + strings.Join(preds, " AND ")
 	}
-	page := func(limitArg int) string {
-		if after != nil {
-			return fmt.Sprintf(" %s LIMIT $%d", auditEventOrder, limitArg)
-		}
-		return fmt.Sprintf(" %s LIMIT $%d OFFSET $%d", auditEventOrder, limitArg, limitArg+1)
-	}
 
 	// #nosec G202 -- only generated "$N" placeholders and whitelisted column
 	// names are concatenated; all values are parameterized args.
 	var q string
 	switch {
-	case userArg != 0 && filter.IncludeSubject:
+	case userArg != "" && filter.IncludeSubject:
 		// Each arm keeps the first LIMIT+OFFSET rows of its own ordered walk:
 		// any row of the final page is within that prefix of its arm.
-		armLimit := n
-		args = append(args, limit+offset)
-		n++
+		armLimit := args.add(limit + offset)
 		q = "SELECT " + auditEventColumns + " FROM (" +
-			"(SELECT " + auditEventColumns + " FROM audit_events" + where(fmt.Sprintf("user_id = $%d", userArg)) + " " + auditEventOrder + fmt.Sprintf(" LIMIT $%d)", armLimit) +
+			"(SELECT " + auditEventColumns + " FROM audit_events" + where("user_id = "+userArg) + " " + auditEventOrder + " LIMIT " + armLimit + ")" +
 			" UNION ALL " +
-			"(SELECT " + auditEventColumns + " FROM audit_events" + where(fmt.Sprintf("resource_type = 'user' AND resource_id = $%d AND user_id <> $%d", userArg, userArg)) + " " + auditEventOrder + fmt.Sprintf(" LIMIT $%d)", armLimit) +
-			") u" + page(n)
-	case userArg != 0:
-		q = "SELECT " + auditEventColumns + " FROM audit_events" + where(fmt.Sprintf("user_id = $%d", userArg)) + page(n)
+			"(SELECT " + auditEventColumns + " FROM audit_events" + where("resource_type = 'user' AND resource_id = "+userArg+" AND user_id <> "+userArg) + " " + auditEventOrder + " LIMIT " + armLimit + ")" +
+			") u"
+	case userArg != "":
+		q = "SELECT " + auditEventColumns + " FROM audit_events" + where("user_id = "+userArg)
 	default:
-		q = "SELECT " + auditEventColumns + " FROM audit_events" + where() + page(n)
+		q = "SELECT " + auditEventColumns + " FROM audit_events" + where()
 	}
-	args = append(args, limit)
+	// The page binds last, after every predicate and the arms' limit.
+	q += " " + auditEventOrder + " LIMIT " + args.add(limit)
 	if after == nil {
-		args = append(args, offset)
+		q += " OFFSET " + args.add(offset)
 	}
 	return q, args
 }

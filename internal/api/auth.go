@@ -25,10 +25,6 @@ import (
 	"pad-core/logger"
 )
 
-// RefreshTokenStore tracks issued refresh tokens so they can be rotated and
-// revoked (cloud mode); the service.SessionService owns it.
-type RefreshTokenStore = service.RefreshTokenStore
-
 type AuthHandler struct {
 	// sessions owns the refresh tokens; not Enabled without a token store.
 	sessions *service.SessionService

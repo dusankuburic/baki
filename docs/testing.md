@@ -17,10 +17,11 @@ Conventions:
 
 ## root (package main)
 
-End-to-end CLI/backend wiring: retention sweep, build stamp, main startup.
+End-to-end CLI/backend wiring: retention sweep, build stamp, main startup, the legacy migration source.
 
 - **buildstamp*** (1): `buildstamp_test.go`
 - **main*** (1): `main_test.go`
+- **migration_source*** (1): `migration_source_test.go`
 - **retention_sweep*** (1): `retention_sweep_test.go`
 
 ## cmd/bakicli
@@ -39,6 +40,7 @@ The bakicli binary: gate, fix, rules, folder loading, CI surface, binary-level r
 - **load*** (1): `load_test.go`
 - **loadfolder*** (1): `loadfolder_test.go`
 - **main*** (1): `main_test.go`
+- **migration_source*** (1): `migration_source_test.go`
 - **parity*** (1): `parity_test.go`
 - **rules*** (2): `rules_init_test.go`, `rules_test_cmd_test.go`
 - **suppressions*** (1): `suppressions_test.go`
@@ -46,7 +48,8 @@ The bakicli binary: gate, fix, rules, folder loading, CI surface, binary-level r
 
 ## internal/api
 
-HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, security.
+HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, security. Test routers run on
+`testutil.FakeBackend`; the RLS and transaction tests use Postgres (`DATABASE_URL`).
 
 - **audit_actions*** (1): `audit_actions_test.go`
 - **audit_shutdown*** (1): `audit_shutdown_test.go`
@@ -95,6 +98,7 @@ HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, se
 - **knowledge*** (1): `knowledge_reindex_resume_test.go`
 - **local*** (1): `local_config_test.go`
 - **main*** (1): `main_test.go`
+- **migration_source*** (1): `migration_source_test.go`
 - **metrics*** (1): `metrics_probe_test.go`
 - **middleware*** (2): `middleware_chain_panic_test.go`, `middleware_chain_test.go`
 - **migration_runner*** (1): `migration_runner_test.go`
@@ -108,6 +112,7 @@ HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, se
 - **route*** (1): `route_path_test.go`
 - **router*** (1): `router_test.go`
 - **security*** (1): `security_integration_test.go`
+- **settings*** (1): `settings_localdb_pg_test.go`
 - **sse*** (1): `sse_byte_budget_test.go`
 - **views*** (1): `views_wire_shape_test.go`
 
@@ -213,7 +218,7 @@ Domain services: chat streaming, flows, analysis, providers, dashboard, authz, s
 - **ruleconfig*** (1): `ruleconfig_test.go`
 - **rulesummary*** (1): `rulesummary_test.go`
 - **settings*** (2): `settings_backend_test.go`, `settings_bridge_test.go`
-- **system*** (4): `system_error_report_test.go`, `system_logerror_test.go`, `system_org_notify_test.go`, `system_test.go`
+- **system*** (5): `system_error_report_test.go`, `system_logerror_test.go`, `system_org_notify_test.go`, `system_settings_scope_test.go`, `system_test.go`
 - **webhook*** (1): `webhook_test.go`
 
 ## internal/ai
@@ -278,7 +283,7 @@ AI providers: Azure Foundry/Entra, Claude, OpenAI-compat, Copilot, Gemini, local
 
 ## internal/storage/database
 
-Postgres backend: statement shapes, RLS policies, migrations, plans, retention, knowledge.
+Postgres backend: statement shapes, RLS policies, migrations, plans, the data lifecycle (export, erasure, retention), knowledge.
 
 - **analytics*** (1): `analytics_history_baseline_test.go`
 - **audit_limit*** (1): `audit_limit_test.go`
@@ -293,7 +298,9 @@ Postgres backend: statement shapes, RLS policies, migrations, plans, retention, 
 - **governance*** (1): `governance_tenancy_test.go`
 - **keystore*** (2): `keystore_family_integration_test.go`, `keystore_test.go`
 - **knowledge*** (6): `knowledge_documents_paging_test.go`, `knowledge_ranking_test.go`, `knowledge_reindex_pages_integration_test.go`, `knowledge_reindex_test.go`, `knowledge_sample_integration_test.go`, `knowledge_search_parity_test.go`
+- **lifecycle*** (3): `lifecycle_erase_test.go`, `lifecycle_export_test.go`, `lifecycle_test.go`
 - **main*** (1): `main_test.go`
+- **migration_source*** (1): `migration_source_test.go`
 - **migration_v27*** (1): `migration_v27_test.go`
 - **migration_v28*** (1): `migration_v28_test.go`
 - **migration_v29*** (1): `migration_v29_test.go`
@@ -303,34 +310,40 @@ Postgres backend: statement shapes, RLS policies, migrations, plans, retention, 
 - **perf_statements*** (1): `perf_statements_test.go`
 - **plans_audit*** (1): `plans_audit_knowledge_test.go`
 - **plans_flows*** (1): `plans_flows_test.go`
-- **policy*** (1): `policy_timestamps_test.go`
+- **policy*** (2): `policy_timestamps_test.go`, `policy_waivers_test.go`
 - **postgres*** (25): `postgres_analytics_e2e_test.go`, `postgres_audit_test.go`, `postgres_azure_registry_test.go`, `postgres_baselines_batch_test.go`, `postgres_blacklist_test.go`, `postgres_blob_e2e_test.go`, `postgres_blob_test.go`, `postgres_dashboard_e2e_test.go`, `postgres_flowversion_test.go`, `postgres_lock_test.go`, `postgres_migrations_checksum_test.go`, `postgres_migrations_down_test.go`, `postgres_migrations_guard_test.go`, `postgres_migrations_lock_test.go`, `postgres_migrations_test.go`, `postgres_migrations_v25_test.go`, `postgres_orgs_pgvector_test.go`, `postgres_orgs_test.go`, `postgres_pgvector_integration_test.go`, `postgres_retention_coverage_test.go`, `postgres_retention_test.go`, `postgres_statement_timeout_test.go`, `postgres_storage_test.go`, `postgres_users_test.go`, `postgres_vector_index_test.go`
 - **retention_purge*** (1): `retention_purge_batches_test.go`
 - **rls_delegation*** (1): `rls_delegation_test.go`
 - **rls_knowledge*** (1): `rls_knowledge_chunks_test.go`
 - **rls_lazy*** (2): `rls_lazy_cancel_test.go`, `rls_lazy_test.go`
 - **rls_role*** (1): `rls_role_test.go`
+- **rls_scoped*** (1): `rls_scoped_methods_test.go`
 - **rls_second*** (1): `rls_second_conn_test.go`
 - **rls*** (1): `rls_test.go`
 - **settings*** (1): `settings_tx_test.go`
+- **sqlargs*** (1): `sqlargs_test.go`
 - **sslmode*** (1): `sslmode_test.go`
 - **usage*** (1): `usage_served_model_integration_test.go`
 - **user*** (1): `user_settings_defaults_test.go`
+- **withtx*** (2): `withtx_hooks_test.go`, `withtx_variants_test.go`
 
 ## internal/storage/filesystem
 
-Local filesystem backend: flows, sharing, pagination, race behavior.
+The read-only legacy source the migrator reads, on raw files laid out as old builds wrote them: the contract suite
+`contract.RunLegacySourceSuite`, the keyset walk (every flow once, changes during the walk, determinism), external
+edits, the full flow source, path segments.
 
-- **index*** (1): `index_retention_test.go`
-- **list*** (1): `list_ordering_test.go`
+- **legacy*** (1): `legacy_source_test.go`
 - **listing*** (1): `listing_bench_test.go`
-- **local*** (2): `local_storage_race_test.go`, `local_storage_test.go`
 - **pagination*** (1): `pagination_stability_test.go`
 - **pathsafety*** (1): `pathsafety_test.go`
-- **policy*** (1): `policy_stub_test.go`
+
+## internal/storage/atomicfile
+
+The retry predicates of the atomic rename and the tolerant read (Windows sharing violations), which the Azure registry
+file and the legacy source use.
+
 - **sharing*** (2): `sharing_other_test.go`, `sharing_windows_test.go`
-- **usertokens*** (1): `usertokens_test.go`
-- **versions*** (1): `versions_test.go`
 
 ## internal/storage (root)
 
@@ -428,9 +441,10 @@ Notification channels: email, webhook, Slack/Teams fan-out, channel construction
 
 ## internal/migration
 
-Legacy-server migration: validator, rerun cost.
+Legacy-server migration over the read-only filesystem source: steps, idempotent reruns, read-only data dir, a
+Postgres destination (DB-gated), validator, rerun cost.
 
-- **migrator*** (2): `migrator_rerun_cost_test.go`, `migrator_test.go`
+- **migrator*** (3): `migrator_pg_test.go`, `migrator_rerun_cost_test.go`, `migrator_test.go`
 - **validator*** (1): `validator_test.go`
 
 ## internal/mail

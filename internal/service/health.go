@@ -12,8 +12,9 @@ import (
 // a network call). Failures are never cached: replaying one would count it N times.
 const blobCheckCacheTTL = 15 * time.Second
 
-// blobHealthChecker is implemented by storage backends that offload content to blob storage.
-type blobHealthChecker interface {
+// BlobHealthChecker reports whether the blob storage that flow content is offloaded to is reachable (nil when
+// none is configured). The database backend provides it; nil without a database.
+type BlobHealthChecker interface {
 	CheckBlob(ctx context.Context) error
 }
 
@@ -21,17 +22,17 @@ type blobHealthChecker interface {
 // store (desktop) HasStore is false; the methods are safe on a nil service.
 type HealthService struct {
 	store storageif.HealthChecker
-	blob  blobHealthChecker
+	blob  BlobHealthChecker
 
 	blobCheckMu   sync.Mutex
 	blobCheckedAt time.Time // zero when the last check failed (never cache failures)
 }
 
-func NewHealthService(backend storageif.StorageBackend) *HealthService {
-	s := &HealthService{}
+// NewHealthService probes backend and blob; either may be nil.
+func NewHealthService(backend storageif.StorageBackend, blob BlobHealthChecker) *HealthService {
+	s := &HealthService{blob: blob}
 	if backend != nil {
 		s.store = backend
-		s.blob, _ = backend.(blobHealthChecker)
 	}
 	return s
 }
@@ -42,7 +43,7 @@ func (s *HealthService) HasStore() bool { return s != nil && s.store != nil }
 // PingStore checks the storage backend is reachable.
 func (s *HealthService) PingStore(ctx context.Context) error { return s.store.Ping(ctx) }
 
-// HasBlob reports whether the backend offloads content to blob storage.
+// HasBlob reports whether there is a blob checker to probe.
 func (s *HealthService) HasBlob() bool { return s != nil && s.blob != nil }
 
 // CheckBlob returns the blob reachability status, reusing a successful result for blobCheckCacheTTL (failures

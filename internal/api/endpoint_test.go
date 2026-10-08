@@ -20,8 +20,8 @@ import (
 	"pad-analyzer/internal/platform/reqinfo"
 	"pad-analyzer/internal/service"
 	storagedb "pad-analyzer/internal/storage/database"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 )
 
 // Test-only typed endpoints, mounted with mountTestRoutes so they run through the router's real chain and policy.
@@ -193,11 +193,8 @@ func TestJSONEndpoint_OversizedBodyAnswersAsDecodeBody(t *testing.T) {
 // fn runs on the request's own context: the actor jwtAuth authenticated, the request's reqinfo.Info with the
 // route's policy, and the request's lazy RLS scope, which fn's first store access begins.
 func TestTypedEndpoint_RunsOnTheRequestContext(t *testing.T) {
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	backend := &rlsProbeBackend{StorageBackend: fs}
+	store := testutil.NewFakeBackend()
+	backend := &rlsProbeBackend{StorageBackend: store}
 	rt := newTestRouterSSO(backend, true, nil, nil)
 	var actor *auth.Actor
 	var info *reqinfo.Info
@@ -443,12 +440,9 @@ func TestTypedEndpoint_AuthorizeFlow(t *testing.T) {
 	}
 
 	t.Run("local mode", func(t *testing.T) {
-		fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-		if err != nil {
-			t.Fatal(err)
-		}
-		rt := newTestRouter(fs, false)
-		authz := service.NewAuthzService(fs, rt.security.OrgSvc)
+		store := testutil.NewFakeBackend()
+		rt := newTestRouter(store, false)
+		authz := service.NewAuthzService(store, rt.security.OrgSvc)
 		ran := false
 		mountTestRoutes(t, rt, func(rb *route.Builder) {
 			rb.Post("/api/typed-probe/flow-read", JSON(func(ctx context.Context, req probeFlowBody) (probeResponse, error) {

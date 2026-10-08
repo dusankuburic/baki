@@ -40,15 +40,32 @@ through `SetAzureModels`, so it became a constructor parameter.
 | `AnalysisService.SetCustomRules` / `SetRuleProfileResolver` / `SetAuthEnabled` (`decorateAnalysisService`) | `NewAnalysisService(..., AnalysisOptions{...})` via `di.ProvideAnalysisService` | No cycle (the resolver takes the rules, not the service) |
 | `factory.SetOrgKeyLookup` (an `fx.Decorate` on `*ai.ProviderFactory`) | Called inside `ProvideAI`, which now takes the `OrgKeyStore` | No cycle. It configures the factory where it is built. |
 | `factory.SetEmbeddingDimensions` (in `ProvideAI`) | Unchanged | Configures the object its own provider builds. `ai.NewProviderFactory` has about 65 test call sites. |
-| `src.SetAzureExportConfigSource(svc.ExportConnectionConfigs)` (in `ProvideAzureModelService`) | Unchanged | **Cycle.** The backend's data-subject export reads Azure connection configs from `AzureModelService`, which is built on the backend. Phase 3's data-lifecycle registry replaces the central export. |
+| `src.SetAzureExportConfigSource(svc.ExportConnectionConfigs)` (in `ProvideAzureModelService`) | Unchanged; `src` is the database's `storagedb.AzureRegistryProvider` fx value, no longer a type assertion on the backend | **Cycle.** The backend's data-subject export reads Azure connection configs from `AzureModelService`, which is built on the backend. Phase 3's data-lifecycle registry replaces the central export. |
 | `AuthHandler.SetProviderService(provider)` (`fx.Decorate`) | `NewAccountLifecycleService(users, provider, bus)` | No cycle: a constructor parameter. |
 | `FlowService.SetRuleProfileResolver(resolver)` (`fx.Decorate`) | Unchanged | **Deferred.** No cycle, but `NewFlowService` has about 55 test call sites. |
+
+## What only the database offers: fx values, not type assertions
+
+`main.go`'s `provideStorageBackend` provides the backend and, beside it, each database-only capability as an fx
+value of its own, nil without a database (ADR 0010): the cross-replica lock (`lock.GlobalLocker`), the pool for the
+token blacklist, the keystore constructor, field encryption, the audit org backfill, the blob probe, the Azure
+registry and the request transaction with its Idempotency-Key store (`reqtx.Opener`, `storageif.IdempotencyStore`,
+nil without row-level security). A consumer takes the one it needs as a parameter and tests it for nil; nothing
+type-asserts the backend to find out (`TestArch_StorageTypeAssertionsRatchet`). Test graphs that build
+`ServiceModule` or `APIModule` without `main.go` add `noDatabase()` (`internal/di/wiring_test.go`).
+
+The keystore works the same way: `provideKeyStore` provides the keys (`service.KeyStore`) and, only with the
+encrypted database keystore, the organisation credential store (`service.OrgKeyStore`) and the key-family lister
+(`storageif.SecretFamilyLister`), nil with the OS keyring. Test graphs add `fakeKeyStore()`.
+
+The roles every backend has are not fx values of their own: the services take the backend through the narrow role
+interface in their constructor (refresh tokens and identity links included, adapted in `internal/di/api.go`).
 
 ## Wiring outside `internal/di` (not ratcheted)
 
 | Where | Setter | Why it stays |
 |---|---|---|
-| `main.go` `provideScanner` | `scanner.SetEventNotifier(eventMgr)`, `SetRuleSetDigest(...)` | **Deferred.** No cycle, so these can become `scanner.New` parameters. |
+| `main.go` `provideScanner` | `scanner.SetEventNotifier(eventMgr)`, `SetRuleSetDigest(...)` | **Deferred.** No cycle, so these can become `scanner.New` parameters (its cross-replica lock already is one). |
 | `api.NewRouter` | `EventManager.SetOriginChecker` / `SetClientKeyFunc` / `SetRevocationChecker` | The router owns the origin, client-key and revocation policy it hands out, so these are wiring inside one component. (The modules' `SetFlowNotifier(hub)` is gone: the `ws-flow-changed` subscriber of `FlowChanged` reaches the hub through `Router.FlowViewers`.) |
 | `ProvideAI` | `ai.ConfigureAzureFoundry`, `ai.ConfigureLocalModels` | Process-wide egress settings of the `ai` package, set once at boot |
 | `main.go` | `logger.SetPanicHook`, `logger.SetContextAttrs` | Process-wide settings, set once at boot. (The audit spill directory is resolved inside `audit.Provide`.) |

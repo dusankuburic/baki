@@ -6,27 +6,31 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 	"pad-core/models"
 )
 
-// memberBackend overrides the FakeBackend's org listing with a fixed
-// membership set (org "org-A" has user "user-1"; nobody else).
+// memberBackend overrides the FakeBackend's memberships with a fixed set
+// (org "org-A" has user "user-1"; nobody else). readErr fails every read.
 type memberBackend struct {
 	testutil.FakeBackend
-	listErr error
+	readErr error
 }
 
-func (m *memberBackend) ListOrgsForUser(_ context.Context, userID string) ([]*interfaces.Organisation, error) {
-	if m.listErr != nil {
-		return nil, m.listErr
+func (m *memberBackend) OrgMemberRole(_ context.Context, orgID, userID string) (auth.Role, bool, error) {
+	if m.readErr != nil {
+		return "", false, m.readErr
+	}
+	if orgID != "org-A" {
+		return "", false, interfaces.ErrNotFound
 	}
 	if userID == "user-1" {
-		return []*interfaces.Organisation{{ID: "org-A"}}, nil
+		return auth.RoleMember, true, nil
 	}
-	return nil, nil
+	return "", false, nil
 }
 
 // recordingKeyFactory counts embedder resolutions so tests can prove whether
@@ -63,7 +67,7 @@ func TestIsOrgMember(t *testing.T) {
 		t.Error("empty userID (local mode) should fail closed")
 	}
 
-	failing := &ChatService{backend: &memberBackend{listErr: errors.New("store down")}}
+	failing := &ChatService{backend: &memberBackend{readErr: errors.New("store down")}}
 	if failing.isOrgMember(context.Background(), "org-A", "user-1") {
 		t.Error("store error should fail closed, not open the gate")
 	}

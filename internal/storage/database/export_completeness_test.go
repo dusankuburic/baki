@@ -11,9 +11,11 @@ import (
 )
 
 // TestPostgres_UserScopedWalk_CompleteUnderConcurrentSave protects the
-// enumeration ExportUserData and ExportUserDataStream depend on.
+// id-ordered ListFlows walk the data-subject export used before it got its own
+// owned-flows keyset (TestPostgres_Lifecycle_OwnedFlowWalkCompleteUnderConcurrentSave
+// pins that one); other whole-library walkers still page this way.
 //
-// Those two page through one user's flows with LIMIT/OFFSET, and the contract
+// The export paged through one user's flows with LIMIT/OFFSET, and the contract
 // they state about themselves is absolute: "A data-subject export must be
 // complete or fail." Ordering that walk on updated_at — a MUTABLE column —
 // broke it: a flow saved while the export ran jumped to the front of the
@@ -23,13 +25,9 @@ import (
 // of its own checks and was still short a flow. The user in another tab, or a
 // collaborator on a shared flow, is enough to cause it.
 //
-// SCOPE: this reproduces the export's walk — same user-scoped filter, same
-// ordering, a save interleaved BETWEEN pages — rather than calling
-// ExportUserData itself. Interleaving is the whole mechanism, and there is no
-// hook to inject a write midway through that function; a goroutine racing it
-// would be timing-dependent and would pass or fail for the wrong reasons. What
-// this pins is that the ordering those functions now request cannot be
-// perturbed by a concurrent write.
+// SCOPE: this reproduces that walk — the user-scoped filter, the id
+// ordering, a save interleaved BETWEEN pages. What this pins is that the
+// ordering cannot be perturbed by a concurrent write.
 func TestPostgres_UserScopedWalk_CompleteUnderConcurrentSave(t *testing.T) {
 	b := openTestDB(t)
 	ctx := context.Background()
@@ -75,7 +73,7 @@ func TestPostgres_UserScopedWalk_CompleteUnderConcurrentSave(t *testing.T) {
 		if pages > maxPages {
 			t.Fatalf("pagination did not terminate after %d pages", maxPages)
 		}
-		// The filter ExportUserData uses, including its ordering.
+		// The user-scoped filter and the id ordering.
 		page, err := b.ListFlows(ctx, interfaces.FlowFilter{
 			UserID: user.ID, SortBy: interfaces.FlowSortIDAsc,
 			Limit: pageSize, Offset: offset,

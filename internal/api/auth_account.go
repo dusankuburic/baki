@@ -48,9 +48,10 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 
 	// The account service prepares (reads what the cascade removes), deletes, and finalizes (releases the user's
 	// own credential, disables the org credentials they lent as an admin, drops the in-process caches); each
-	// disabled credential is audited here.
+	// disabled credential is audited here, like the deletion, without the erased account's identity.
+	erased := audit.WithErasedActor(r.Context())
 	if err := h.accounts.DeleteAccount(r.Context(), claims.UserID, h.security.KeyScope(r), func(ref storageif.OrgKeyRef) {
-		auditLentCredentialDisabled(r.Context(), h.audit, ref.OrgID, ref.Provider, claims.UserID, lenderReasonAccountDeleted)
+		auditLentCredentialDisabled(erased, h.audit, ref.OrgID, ref.Provider, claims.UserID, lenderReasonAccountDeleted)
 	}); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -62,7 +63,7 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionAccountDelete, ResourceType: "user", ResourceID: claims.UserID})
+	h.audit.Record(erased, audit.Entry{Action: audit.ActionAccountDelete, ResourceType: "user", ResourceID: claims.UserID})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -80,28 +81,11 @@ func (h *AuthHandler) handleAuthExportAccount(w http.ResponseWriter, r *http.Req
 	}
 	filename := fmt.Sprintf("baki-account-export-%s.json", claims.UserID)
 
-	// When the backend can stream, build the export into a temp file: peak memory is one page of flows
-	// and nothing reaches the client until the whole export succeeded (a mid-stream error stays a clean 4xx/5xx).
-	if h.accounts.StreamsExport() {
-		if h.exportAccountStreamed(w, r, claims.UserID, filename) {
-			h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionDataExport, ResourceType: "user", ResourceID: claims.UserID})
-		}
-		return
+	// The export is built into a temp file: peak memory is one page of flows, and nothing reaches the client
+	// until the whole export succeeded (a mid-stream error stays a clean 4xx/5xx).
+	if h.exportAccountStreamed(w, r, claims.UserID, filename) {
+		h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionDataExport, ResourceType: "user", ResourceID: claims.UserID})
 	}
-
-	export, err := h.accounts.Export(r.Context(), claims.UserID)
-	if err != nil {
-		if errors.Is(err, storageif.ErrNotFound) {
-			render.Error(w, err, http.StatusNotFound)
-			return
-		}
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionDataExport, ResourceType: "user", ResourceID: claims.UserID})
-
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	render.JSON(w, export)
 }
 
 // exportAccountStreamed builds the export into a temp file and forwards it

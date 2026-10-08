@@ -30,9 +30,9 @@ func (s *rosterCountingOrgStore) LoadOrg(ctx context.Context, id string) (*stora
 	return s.OrgStore.LoadOrg(ctx, id)
 }
 
-// pointLookupOrgStore adds the Postgres backend's point membership lookup
-// (storageif.OrgMembershipReader) to rosterCountingOrgStore, counted
-// separately, so a route can be shown to use it instead of the roster.
+// pointLookupOrgStore counts the point membership lookups apart from
+// rosterCountingOrgStore's roster loads, so a route can be shown to use the
+// lookup instead of the roster.
 type pointLookupOrgStore struct {
 	*rosterCountingOrgStore
 	memberRole atomic.Int64

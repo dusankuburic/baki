@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"testing"
 
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -265,11 +264,11 @@ func TestBaseline_SetGetClear(t *testing.T) {
 	}
 }
 
-// atomicityBackend wraps a filesystem backend and lets a test force
+// atomicityBackend wraps the fake backend and lets a test force
 // BatchSetFindingStatus to fail at a specific item index — proving the atomic
 // contract: items 0..K-1 must NOT persist when item K fails.
 type atomicityBackend struct {
-	*filesystem.LocalStorageBackend
+	*testutil.FakeBackend
 	failAt    int // 0 means "never fail"
 	failCalls int
 }
@@ -278,14 +277,12 @@ func (b *atomicityBackend) BatchSetFindingStatus(ctx context.Context, flowID, us
 	if b.failAt > 0 {
 		b.failCalls++
 		if b.failCalls == 1 {
-			// Inject failure at item b.failAt: temporarily swap the
-			// underlying backend's failure flag to trigger the rollback path
-			// on the (real) filesystem implementation. We emulate this by
-			// failing BEFORE the call so no item is persisted.
+			// Fail the first batch BEFORE the store sees it, as a rolled-back
+			// transaction leaves it: no item is persisted.
 			return errInjectedBatchFailure
 		}
 	}
-	return b.LocalStorageBackend.BatchSetFindingStatus(ctx, flowID, userID, items)
+	return b.FakeBackend.BatchSetFindingStatus(ctx, flowID, userID, items)
 }
 
 var errInjectedBatchFailure = &injectedErr{"injected batch failure"}
@@ -299,11 +296,8 @@ func (e *injectedErr) Error() string { return e.msg }
 // previous per-item loop silently committed items 1..K-1 on a failure at K,
 // leaving the audit log's "updated: N" out of sync with reality).
 func TestTriage_SetBatch_AtomicityGuarantee(t *testing.T) {
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("create local storage: %v", err)
-	}
-	bk := &atomicityBackend{LocalStorageBackend: fs, failAt: 1}
+	store := testutil.NewFakeBackend()
+	bk := &atomicityBackend{FakeBackend: store, failAt: 1}
 	rt := newTestRouter(bk, true)
 	seedAnalyzableFlow(t, rt, "flowA", "alice")
 	bearer := jwtBearer(t, rt, "alice", "alice@example.com")

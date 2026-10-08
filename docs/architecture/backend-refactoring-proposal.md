@@ -1,10 +1,77 @@
 # Backend refactoring proposal: making Baki extensible (revision 3, two review passes applied)
 
-## Status (2026-10-07)
+## Status (2026-10-08)
 
 **Fix first:** R1–R6 and S1–S3 are done. R7 and R8 come with Phase 4c.
 
-**Phase 2b: done** (2026-10-07, uncommitted).
+**Phase 3: done** (2026-10-08, uncommitted). Migrations 0034–0036, all `expand`.
+
+*Delivered:*
+- **The test fake meets the storage contract** with no known divergences, strict mode included: real users (email
+  uniqueness, the bootstrap-admin rule), collaborators, versions, comments, policies, refresh tokens, sessions and
+  identity links, invitations and `MutateOrg`, per-user and per-org settings, the flow filter and its sort and limits,
+  optimistic versions, foreign keys, and the lifecycle semantics below. 35 new contract scenarios (`semantics.go`,
+  `lookups.go`, `lifecycle.go`, `bugs.go`, `comments.go`) pass on Postgres and the fake.
+- **The filesystem backend is gone as a store.** 66 test files moved onto the fake (API, DI and service tests), and
+  `internal/storage/filesystem` is only `OpenLegacySource`: read-only (never creates, writes or renames), no index,
+  with its own contract (`contract.RunLegacySourceSuite`). The legacy migrator runs on it through a declared step list
+  and copies flows with their original timestamps (`FlowStore.ImportFlow`).
+- **Storage capabilities** (ADR 0010): the domain capabilities are methods of the role interfaces (finding status,
+  API token owner, org role and memberships, the library page, audit batches, the export stream, refresh tokens,
+  identity links, `MutateOrg`, invitations); Postgres-only ones are fx values, nil without a database (one
+  `lock.GlobalLocker`, `reqtx.Opener` for the request transaction, the keystore's org and family capabilities, field
+  encryption, the audit backfiller, the blob probe, the Azure registry). Type assertions on stores: 30 → 0, pinned by
+  `TestArch_StorageTypeAssertionsRatchet`; `internal/api` no longer imports the database package.
+- **Tenant scoping** (ADR 0013): row-level security on `flow_analysis` and `share_tokens` (0034); collaborator
+  statements reach their grants through the RLS-protected `flows`; an empty author can no longer delete a comment
+  (moderation is its own method); the cross-tenant system reads are pinned to the scanner; every table without RLS is
+  listed with its reason.
+- **Data-lifecycle registry** (ADR 0011, `docs/architecture/data-lifecycle.md`): each domain claims its tables and
+  declares what export, account erasure, organisation delete, retention and legacy migration do with them, in
+  explicit phases; a coverage test fails on an unclaimed table or a cascade claim no deleting parent backs; an erasure
+  sweep scans every column of every table for the erased user.
+- **Settings in versioned sections** (ADR 0012, 0035): one row per scope and section with its own version, upgraded
+  on read, never downgraded or truncated on write (unknown fields survive); written alongside the whole-document blob
+  for one release, with a digest so a blob changed by the previous release after a rollback wins.
+- **Per-domain files**: the storage interfaces (24 files), the contract scenarios, the knowledge store; an SQL argument
+  builder (`sqlArgs`) replaces the hand-kept `$n` counters with identical SQL text; transactions opened outside
+  `withTx`/`withTxAs`/`withOwnTx`: 12 → 6 (`docs/architecture/transactions.md`; no public `Tx`, since requests share one
+  transaction and `reqtx.Opener` serves the rest).
+
+*Bugs fixed on the way:*
+- **Account erasure (GDPR):** left the conversations of the user's own flows (no foreign key); ran inside the
+  departing user's own RLS scope, so it missed their rows on flows they could no longer open; kept their identity on
+  other people's rows (comment author, assignee, share-link creator, alert target, inviter, org owner, credential
+  editor), on failed logins for their address, and on the audit rows the deletion request itself wrote.
+- **Export:** carried flows shared with the user (it claims the user's own data), other members of each organisation,
+  and ignored a settings read error.
+- **Organisation delete:** left its knowledge base, policies, channels and custom rules, and its flows pointing at it.
+- **Policies** saved on Postgres lost their waivers and severity budgets (0036). A library page past the end
+  reported 0 flows. Local mode on a database answered 500 to a settings save. `perUserDailyBudget` was dropped by
+  every cloud settings save. A tag filter treated `_` as a wildcard. A rejected migration start changed who adopts
+  the running migration's flows. Comments with the same timestamp came back in no fixed order.
+- **Tests touching the developer's machine:** the API test router used the real desktop settings file and the OS
+  keychain (a test deleted the stored Copilot token); two DI tests opened the real settings file. Both packages now run
+  on a temporary config home and go-keyring's mock.
+
+*Found in review and fixed:* the erasure's alert rewrite matched substrings and display names across every tenant
+(it now matches whole messages on flows the user reached, including ones they have since lost); a settings save and
+an account or org delete could deadlock (the save now locks the owner row, the blob, then the sections, the
+delete's order); the next-release settings plan would have brought back stale sections after a rollback (ADR 0012
+amended); the coverage test accepted cascades through tables the operation only updates; the DeleteFlow and
+comment-delete scenarios passed on broken stores; a burst of sign-ups failed about a quarter of the time on
+SERIALIZABLE conflicts (registration now runs at READ COMMITTED, with an advisory lock only while the table may be
+empty).
+
+*Open:* orgs left without an admin by an erasure keep no owner (product decision); the user's flows inside an
+organisation are deleted with the account, as before; several personal tables are not exported yet (identity links,
+usage, share links the user created, version history); an anonymised comment shows no author in the UI; the frontend
+`Policy` type lacks waivers and budgets; local mode on a database keeps deployment settings in the desktop settings
+file (the provider checks the mode, not the server store); SSO sign-up writes the user and the identity link in two
+transactions; a knowledge upload can leave a document without chunks after a crash; removing a non-member or changing
+a non-member's role answers 500 instead of 404; the contract `KnownDivergence` machinery has no user left.
+
+**Phase 2b: done** (2026-10-07).
 
 *Delivered:*
 - **Domain events** (ADR 0009): typed events in `internal/events` (imports nothing of the module) and an in-process

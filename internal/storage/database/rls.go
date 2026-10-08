@@ -230,9 +230,10 @@ func RLSHookRunner(base context.Context, b RLSBeginner, userID string) txhook.Ru
 
 // withTx runs fn inside a transaction, JOINING the request's RLS transaction when ctx carries a scope
 // (starting it on this first use) and opening (and committing) its own otherwise. Every write method that
-// opens a transaction must go through this. fn gets the context to use inside the transaction: ctx itself
-// when joining, and when withTx opens its own, a context carrying that transaction and a post-commit registry
-// (txhook), committed after the transaction commits and aborted when it rolls back.
+// opens a transaction must go through this or one of its variants (withTxAs, withOwnTx). fn gets the context to
+// use inside the transaction: ctx itself when joining, and when withTx opens its own, a context carrying that
+// transaction and a post-commit registry (txhook), committed after the transaction commits and aborted when it
+// rolls back.
 //
 // Calling b.db.BeginTx unconditionally takes a SECOND pooled connection while the RLS middleware still
 // holds the first for the whole request — a self-deadlock (with the default pool of 25, 13 concurrent
@@ -240,15 +241,60 @@ func RLSHookRunner(base context.Context, b RLSBeginner, userID string) txhook.Ru
 // (its write survives the middleware's rollback), and the second connection carries no app.current_user_id,
 // so the RLS policies short-circuit to allow-all for exactly the writes that most need them.
 func (b *PostgresStorageBackend) withTx(ctx context.Context, fn func(txCtx context.Context, tx *sql.Tx) error) error {
-	rtx, ok, err := rlsTxFromContext(ctx)
-	if err != nil {
-		return err
+	return b.inTx(ctx, txOptions{join: true}, fn)
+}
+
+// withTxAs is withTx for a write whose row-level policies must hold outside a request too: the transaction it
+// opens itself runs as userID (app.current_user_id set, as in the request's), so a WITH CHECK policy is evaluated
+// instead of short-circuiting to allow on a bare pool connection, and its post-commit hooks get a fresh scope for
+// the same user. userID is "" only in non-authenticated local mode.
+func (b *PostgresStorageBackend) withTxAs(ctx context.Context, userID string, fn func(txCtx context.Context, tx *sql.Tx) error) error {
+	return b.inTx(ctx, txOptions{join: true, asUser: true, userID: userID}, fn)
+}
+
+// withOwnTx runs fn in a transaction of its own on the pool, never in the request's: for writes that must be
+// durable even when the request rolls back (registration, the audit trail), on tables without row-level security.
+// At sql.LevelSerializable a serialization failure reruns fn in a new transaction, up to serializableAttempts
+// times in all.
+func (b *PostgresStorageBackend) withOwnTx(ctx context.Context, isolation sql.IsolationLevel, fn func(txCtx context.Context, tx *sql.Tx) error) error {
+	o := txOptions{isolation: isolation}
+	if isolation != sql.LevelSerializable {
+		return b.inTx(ctx, o, fn)
 	}
-	if ok {
-		// The middleware owns commit, rollback and the post-commit registry; joining is all we do.
-		return fn(ctx, rtx)
+	var err error
+	for range serializableAttempts {
+		if err = b.inTx(ctx, o, fn); !isPgErrCode(err, pgErrSerializationFailure) {
+			return err
+		}
 	}
-	tx, err := b.db.BeginTx(ctx, nil)
+	return fmt.Errorf("serialization conflict after %d attempts: %w", serializableAttempts, err)
+}
+
+// serializableAttempts bounds withOwnTx's runs of a SERIALIZABLE transaction that keeps losing races.
+const serializableAttempts = 5
+
+// txOptions says how inTx runs fn.
+type txOptions struct {
+	join      bool // run in the request's RLS transaction when ctx carries one
+	asUser    bool // open the own transaction as userID (withTxAs)
+	userID    string
+	isolation sql.IsolationLevel // of the own transaction
+}
+
+// inTx is withTx and its variants: it joins the request's transaction when o.join says so and ctx has one, and
+// otherwise opens, commits and runs the post-commit hooks of a transaction of its own.
+func (b *PostgresStorageBackend) inTx(ctx context.Context, o txOptions, fn func(txCtx context.Context, tx *sql.Tx) error) error {
+	if o.join {
+		rtx, ok, err := rlsTxFromContext(ctx)
+		if err != nil {
+			return err
+		}
+		if ok {
+			// The middleware owns commit, rollback and the post-commit registry; joining is all we do.
+			return fn(ctx, rtx)
+		}
+	}
+	tx, err := b.openTx(ctx, o)
 	if err != nil {
 		return err
 	}
@@ -267,7 +313,11 @@ func (b *PostgresStorageBackend) withTx(ctx context.Context, fn func(txCtx conte
 		return err
 	}
 	committed = true
-	hooks.Commit(txhook.Detached(ctx))
+	runner := txhook.Detached(ctx)
+	if o.asUser {
+		runner = RLSHookRunner(ctx, b, o.userID)
+	}
+	hooks.Commit(runner)
 	return nil
 }
 
@@ -297,14 +347,28 @@ func (b *PostgresStorageBackend) query(ctx context.Context) DBTX {
 // can filter rows by the calling user; read-write, because a wrapped request's writes must see the GUC.
 // The caller commits or rolls it back.
 func (b *PostgresStorageBackend) BeginRLS(ctx context.Context, userID string) (*sql.Tx, error) {
-	tx, err := b.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	return b.openTx(ctx, txOptions{asUser: true, userID: userID})
+}
+
+// openTx starts a transaction on the pool. inTx's own transactions and BeginRLS (so the request's scope too) all
+// come here; only the migration runner opens others, on its locked connection. With o.asUser, app.current_user_id
+// is o.userID inside it, so the row-level policies filter as they do in a request; without, app_rls_active() is
+// false and they allow every row.
+func (b *PostgresStorageBackend) openTx(ctx context.Context, o txOptions) (*sql.Tx, error) {
+	tx, err := b.db.BeginTx(ctx, &sql.TxOptions{Isolation: o.isolation})
 	if err != nil {
-		return nil, fmt.Errorf("rls: begin tx: %w", err)
+		if o.asUser {
+			return nil, fmt.Errorf("rls: begin tx: %w", err)
+		}
+		return nil, err
+	}
+	if !o.asUser {
+		return tx, nil
 	}
 	// SET LOCAL cannot be parameterized (utility statement, not a planned query), so set_config(...,
 	// is_local => true) is used instead — it accepts a bind parameter and is scoped to this transaction.
-	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_user_id', $1, true)`, userID); err != nil {
-		tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_user_id', $1, true)`, o.userID); err != nil {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("rls: set user id: %w", err)
 	}
 	return tx, nil

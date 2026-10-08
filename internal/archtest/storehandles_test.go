@@ -11,8 +11,7 @@ import (
 )
 
 // TestArch_HandlerStoreHandleCallsRatchet is TestArch_HandlerStorageCallsRatchet for the store handles that are not
-// called `backend`: a refresh-token store, an identity store, a capability asserted out of the backend, raw
-// database/sql. It needs types, so it type-checks internal/api. A call counts when its receiver is
+// called `backend`: a refresh-token store, an identity store, an injected capability, raw database/sql. It needs types, so it type-checks internal/api. A call counts when its receiver is
 //   - a type of database/sql;
 //   - a type declared under internal/storage, through a method taking a context (a stored value's own helpers,
 //     such as a cursor's IsZero, don't count);
@@ -136,5 +135,5 @@ var handlerStoreHandleCalls = map[string]int{
 	"internal/api/handlers_system.go":  2, // health probe (Redis): infrastructure
 	"internal/api/idempotency.go":      2, // the Idempotency-Key store: infrastructure
 	"internal/api/migration_runner.go": 1, // the migration's global lock: infrastructure
-	"internal/api/router.go":           3, // PAT authentication: infrastructure
+	"internal/api/router.go":           1, // PAT authentication: infrastructure
 }

@@ -74,8 +74,8 @@ func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, r
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/system/settings [get]
 func (h *SystemHandler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	userID := h.security.CallerID(r)
-	settings, err := h.sysSvc.GetUserSettings(r.Context(), userID)
+	// The key scope: the caller's own settings with accounts, the deployment's without (local mode, also on Postgres).
+	settings, err := h.sysSvc.GetUserSettings(r.Context(), h.security.KeyScope(r))
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -100,7 +100,7 @@ func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Requ
 	}
 
 	userID := h.security.CallerID(r)
-	if err := h.sysSvc.UpdateUserSettings(r.Context(), userID, req); err != nil {
+	if err := h.sysSvc.UpdateUserSettings(r.Context(), h.security.KeyScope(r), req); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

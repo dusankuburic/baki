@@ -457,7 +457,8 @@ func TestAzureModels_DeletesSpareAKeySavedAgain(t *testing.T) {
 	orphan := "azure-foundry/oldorphan1"
 	_ = e.secrets.Save("u1", orphan, azmLegacyDoc(""))
 	e.secrets.SetUpdatedAt("u1", orphan, now.Add(-2*time.Hour))
-	e.svc.secrets = &resaveOnDelete{FakeSecretStore: e.secrets, key: orphan}
+	resave := &resaveOnDelete{FakeSecretStore: e.secrets, key: orphan}
+	e.svc.secrets, e.svc.keyFamilies = resave, resave
 	if _, err := e.svc.ListConnections(ctx, azmUser); err != nil {
 		t.Fatal(err)
 	}

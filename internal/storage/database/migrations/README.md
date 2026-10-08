@@ -36,6 +36,15 @@ or `-- baki:compat breaking`.
 Prefer expand/contract over breaking steps. First ship an expand step plus code that works with both shapes.
 Ship the contract step (the drop) one release later, after no deployed code reads the old shape.
 
+### Pending contract steps
+
+- **v35 `settings_sections`** ([ADR 0012](../../../../docs/adr/0012-settings-sections-with-versions.md)). This
+  release writes both the settings blobs (`app_settings`, `user_settings`, `org_settings`) and the section rows.
+  The next release backfills rows for blobs that have none, reconciles rows whose `legacy_digest` no longer matches
+  their blob (a change made after a rollback to the release before), stops writing the blobs (rows get a NULL
+  `legacy_digest`) and reads a blob only for a section without a row. The release after drops the blob tables and
+  `legacy_digest` in a `breaking` step, once no non-NULL digest remains.
+
 ## Long-running work
 
 Each step runs with a `lock_timeout` (`SET LOCAL`, 5 s) and is retried with a growing pause when a table lock is

@@ -12,16 +12,15 @@ import (
 	"pad-analyzer/internal/testutil"
 )
 
-// memoCountingOrgStore counts the roster loads behind OrgService.MemberRole
-// (the in-memory store has no point lookup, so each role question is one).
+// memoCountingOrgStore counts the membership reads behind OrgService.MemberRole.
 type memoCountingOrgStore struct {
 	collaboration.OrgStore
-	loadOrg atomic.Int64
+	roles atomic.Int64
 }
 
-func (s *memoCountingOrgStore) LoadOrg(ctx context.Context, id string) (*storageif.Organisation, error) {
-	s.loadOrg.Add(1)
-	return s.OrgStore.LoadOrg(ctx, id)
+func (s *memoCountingOrgStore) OrgMemberRole(ctx context.Context, orgID, userID string) (auth.Role, bool, error) {
+	s.roles.Add(1)
+	return s.OrgStore.OrgMemberRole(ctx, orgID, userID)
 }
 
 // memoCollabBackend is a FakeBackend whose collaborator read is counted and
@@ -50,7 +49,7 @@ func newMemoAuthz(t *testing.T) (*AuthzService, *memoCountingOrgStore, *memoColl
 		t.Fatalf("add member: %v", err)
 	}
 	backend := &memoCollabBackend{FakeBackend: testutil.NewFakeBackend()}
-	store.loadOrg.Store(0)
+	store.roles.Store(0)
 	return NewAuthzService(backend, orgSvc), store, backend, org.ID
 }
 
@@ -79,14 +78,14 @@ func TestFlowAuthzMemo_OneReadOfEach(t *testing.T) {
 	a, store, backend, orgID := newMemoAuthz(t)
 
 	decide(t, a, context.Background(), orgID)
-	if roles, collabs := store.loadOrg.Load(), backend.listCollabs.Load(); roles != 3 || collabs != 2 {
+	if roles, collabs := store.roles.Load(), backend.listCollabs.Load(); roles != 3 || collabs != 2 {
 		t.Fatalf("plain context: roles=%d collabs=%d, want 3 and 2 (no memo, every decision reads)", roles, collabs)
 	}
 
-	store.loadOrg.Store(0)
+	store.roles.Store(0)
 	backend.listCollabs.Store(0)
 	decide(t, a, WithFlowAuthzMemo(context.Background()), orgID)
-	if roles, collabs := store.loadOrg.Load(), backend.listCollabs.Load(); roles != 1 || collabs != 1 {
+	if roles, collabs := store.roles.Load(), backend.listCollabs.Load(); roles != 1 || collabs != 1 {
 		t.Fatalf("memo context: roles=%d collabs=%d, want 1 and 1", roles, collabs)
 	}
 }
@@ -102,7 +101,7 @@ func TestFlowAuthzMemo_NonMemberMemoised(t *testing.T) {
 			t.Fatal("non-member, non-collaborator was allowed")
 		}
 	}
-	if n := store.loadOrg.Load(); n != 1 {
+	if n := store.roles.Load(); n != 1 {
 		t.Fatalf("non-member role asked %d times; want 1", n)
 	}
 }

@@ -15,7 +15,6 @@ import (
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 	wshub "pad-analyzer/internal/websocket"
@@ -171,20 +170,17 @@ func TestProvideFlowAccessChecker_NilBackend(t *testing.T) {
 func TestFlowAccessChecker_TranslatesServiceErrors(t *testing.T) {
 	t.Parallel()
 
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
+	store := testutil.NewFakeBackend()
 	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
-	authz := service.NewAuthzService(fs, orgSvc)
-	checker := ProvideFlowAccessChecker(authz, fs)
+	authz := service.NewAuthzService(store, orgSvc)
+	checker := ProvideFlowAccessChecker(authz, store)
 	if checker == nil {
 		t.Fatal("expected non-nil checker with backend")
 	}
 
 	ctx := context.Background()
 	doc := &storageif.FlowDocument{ID: "f1", Name: "f", OwnerID: "alice"}
-	if err := fs.SaveFlow(ctx, doc); err != nil {
+	if err := store.SaveFlow(ctx, doc); err != nil {
 		t.Fatalf("seed flow: %v", err)
 	}
 	org, err := orgSvc.Create(ctx, "acme", "alice")
@@ -192,7 +188,7 @@ func TestFlowAccessChecker_TranslatesServiceErrors(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	orgDoc := &storageif.FlowDocument{ID: "f2", Name: "f", OwnerID: "alice", OrganizationID: org.ID}
-	if err := fs.SaveFlow(ctx, orgDoc); err != nil {
+	if err := store.SaveFlow(ctx, orgDoc); err != nil {
 		t.Fatalf("seed org flow: %v", err)
 	}
 	if err := orgSvc.AddMember(ctx, org.ID, "bob", auth.RoleViewer); err != nil {

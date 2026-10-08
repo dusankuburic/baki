@@ -83,8 +83,17 @@ func TestUserAdminService_ChangeRole(t *testing.T) {
 
 // A store without refresh tokens still changes the role.
 func TestUserAdminService_ChangeRole_NoSessionStore(t *testing.T) {
-	if err := NewUserAdminService(testutil.NewFakeBackend()).ChangeRole(context.Background(), "u1", auth.RoleMember); err != nil {
+	ctx := context.Background()
+	fake := testutil.NewFakeBackend()
+	if err := fake.SaveUser(ctx, &storageif.User{ID: "u1", Email: "u1@example.com", Role: auth.RoleViewer}); err != nil {
+		t.Fatal(err)
+	}
+	// The bare interface hides the fake's refresh-token methods.
+	if err := NewUserAdminService(struct{ storageif.StorageBackend }{fake}).ChangeRole(ctx, "u1", auth.RoleMember); err != nil {
 		t.Errorf("ChangeRole: %v", err)
+	}
+	if u, err := fake.LoadUserByID(ctx, "u1"); err != nil || u.Role != auth.RoleMember {
+		t.Errorf("stored user = %+v, %v; want the member role", u, err)
 	}
 }
 

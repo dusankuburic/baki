@@ -1108,10 +1108,12 @@ func (s *ProviderService) PrepareAccountErasure(scope string) (release func()) {
 	var docs []string
 	if s.secrets != nil {
 		var ids []string
+		var families storageif.SecretFamilyLister
 		if s.azure != nil {
 			ids = s.azure.registryConnectionIDs(context.Background(), s.azure.userOwner(scope))
+			families = s.azure.keyFamilies
 		}
-		docs = userAzureDocuments(s.secrets, scope, ids)
+		docs = userAzureDocuments(s.secrets, families, scope, ids)
 	}
 	return func() {
 		for _, raw := range docs {

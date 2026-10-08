@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/storage/filesystem"
 	"pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 )
 
 // TestRegister_DisabledSignUp_Returns403 verifies the PAD_FEATURE_DISABLE_SIGNUP flag blocks self-registration with a clear 403 while existing users still log in normally.
@@ -139,8 +139,8 @@ func (b *createUserErrBackend) CreateUser(_ context.Context, _ *interfaces.User)
 // TestHandleAuthRegister_GenericBackendErrorReturns500 guards the regression where every Register error was hard-coded to 409, masking DB outages as
 // "email already in use". The render layer's auto-map keeps ErrEmailExists→409 (covered by TestHandleAuthRegister_DuplicateReturns409); any unrecognized error must surface as 500.
 func TestHandleAuthRegister_GenericBackendErrorReturns500(t *testing.T) {
-	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	wrapped := &createUserErrBackend{StorageBackend: fs, err: errors.New("connection refused")}
+	store := testutil.NewFakeBackend()
+	wrapped := &createUserErrBackend{StorageBackend: store, err: errors.New("connection refused")}
 	rt := newTestRouter(wrapped, true)
 
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
@@ -434,8 +434,8 @@ func TestHandleAuthRefresh_DeletedUser_Returns401(t *testing.T) {
 	checkStatus(t, rr, http.StatusUnauthorized)
 }
 
-// O1: Filesystem SaveFlow must enforce OCC and return ErrVersionConflict on stale versions.
-func TestLocalStorage_SaveFlow_VersionConflict(t *testing.T) {
+// O1: the backend's SaveFlow must enforce OCC and return ErrVersionConflict on stale versions.
+func TestSaveFlow_VersionConflict(t *testing.T) {
 	rt := newJWTTestRouter(t)
 
 	// Create and save a new flow — version stays 0 for new flows

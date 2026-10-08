@@ -57,6 +57,10 @@ func newAzureModelsEnv(t *testing.T, mutate ...func(*AzureModelServiceDeps)) *az
 	for _, m := range mutate {
 		m(&deps)
 	}
+	if deps.KeyFamilies == nil {
+		// As provideKeyStore wires the database keystore: a keystore that lists its key families is the lister too.
+		deps.KeyFamilies, _ = deps.Secrets.(storageif.SecretFamilyLister)
+	}
 	e.svc = NewAzureModelService(deps)
 	noNetwork := func(what string) error {
 		t.Errorf("unexpected %s: tests stub the Azure calls they expect", what)
@@ -107,6 +111,24 @@ func (d *azmOrgDir) ListOrgsForUser(_ context.Context, userID string) ([]*storag
 		}
 	}
 	return out, nil
+}
+
+func (d *azmOrgDir) OrgMemberRole(_ context.Context, orgID, userID string) (auth.Role, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.err != nil {
+		return "", false, d.err
+	}
+	o, ok := d.orgs[orgID]
+	if !ok {
+		return "", false, storageif.ErrNotFound
+	}
+	for _, m := range o.Members {
+		if m.UserID == userID {
+			return m.Role, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 func (d *azmOrgDir) LoadOrg(_ context.Context, id string) (*storageif.Organisation, error) {

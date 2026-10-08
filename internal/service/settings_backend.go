@@ -66,7 +66,7 @@ const (
 )
 
 // BackendSettingsProvider is the cloud-mode SettingsProvider: deployment-wide settings
-// live in the storage backend (Postgres app_settings), not on local disk — closing the
+// live in the storage backend (Postgres, ADR 0012), not on local disk — closing the
 // split-brain the desktop-only store left behind (two writers, system settings → Postgres
 // and rule config → a local store recreated from defaults on every container start, with
 // every analysis reader on the local store, so an admin who raised the daily budget to

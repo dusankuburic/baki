@@ -37,10 +37,11 @@ func (g *GLMProvider) ID() string           { return "glm" }
 func (g *GLMProvider) Name() string         { return "GLM (z.ai)" }
 func (g *GLMProvider) ContextLimit() int    { return 200000 }
 func (g *GLMProvider) DefaultModel() string { return "glm-5.2" }
+
 // No free GLM model remains in the catalog since the 4.7 family was dropped;
 // empty matches the other pay-only providers (the connection test then uses
 // the default model alone).
-func (g *GLMProvider) FreeModel() string    { return "" }
+func (g *GLMProvider) FreeModel() string { return "" }
 
 // PricePerMillionTokens is the fallback price used to meter out-of-catalog
 // models (audited.record). It must mirror the default model's catalog entry:

@@ -12,7 +12,6 @@ import (
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -111,10 +110,13 @@ func TestRecord_WritesLogAuditsColumns(t *testing.T) {
 func TestRecord_RowsThroughTheFullChain(t *testing.T) {
 	trusted := []string{"10.0.0.0/8"}
 	withProxies := func(c *config.Config) { c.Server.TrustedProxies = trusted }
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := testutil.NewFakeBackend()
+	// The session's user has a row, as every account does; the settings row needs it.
+	store.Users = map[string]*storageif.User{"u-1": {ID: "u-1", Email: "u@example.com"}}
+	// The settings write stores a row for the caller, which must be a user; nothing creates the "local" user a
+	// deployment without accounts writes as (on Postgres the write fails), and that is not what this test pins.
+	local := testutil.NewFakeBackend()
+	local.Users = map[string]*storageif.User{"local": {ID: "local"}}
 	for _, tc := range []struct {
 		name       string
 		rt         *Router
@@ -122,9 +124,9 @@ func TestRecord_RowsThroughTheFullChain(t *testing.T) {
 		user, mail string
 		resourceID string
 	}{
-		{"local+db", newTestRouterSSO(testutil.NewFakeBackend(), false, nil, nil, withProxies),
+		{"local+db", newTestRouterSSO(local, false, nil, nil, withProxies),
 			func(*Router) string { return "Bearer " + testToken }, "", "", "local"},
-		{"cloud", newTestRouterSSO(fs, true, nil, nil, withProxies),
+		{"cloud", newTestRouterSSO(store, true, nil, nil, withProxies),
 			func(rt *Router) string { return jwtBearer(t, rt, "u-1", "u@example.com") }, "u-1", "u@example.com", "u-1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

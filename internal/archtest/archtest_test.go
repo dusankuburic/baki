@@ -127,7 +127,8 @@ func checkRatchet(t *testing.T, what string, got, allowed map[string]int) {
 }
 
 // TestArch_APIDoesNotImportStorageDatabase: handlers reach storage through services and interfaces, never the
-// Postgres package (post-commit work goes through internal/platform/txhook). One exception is left.
+// Postgres package (post-commit work goes through internal/platform/txhook, the request transaction through
+// internal/platform/reqtx, which di provides).
 func TestArch_APIDoesNotImportStorageDatabase(t *testing.T) {
 	got := map[string]int{}
 	for _, f := range sourceFiles(t) {
@@ -135,9 +136,7 @@ func TestArch_APIDoesNotImportStorageDatabase(t *testing.T) {
 			got[f.path] = 1
 		}
 	}
-	checkRatchet(t, "internal/api importing storage/database", got, map[string]int{
-		"internal/api/rls_middleware.go": 1, // the RLS scope and its hook runner; Phase 3 injects them instead
-	})
+	checkRatchet(t, "internal/api importing storage/database", got, map[string]int{})
 }
 
 // TestArch_ServiceDoesNotImportAPI: the service layer must stay usable without HTTP (jobs, CLI, workers).
@@ -190,20 +189,19 @@ func TestArch_EventsStayLeaves(t *testing.T) {
 }
 
 // TestArch_TransactionsOpenedOnlyWhereAllowed: a transaction opened beside the request's RLS transaction takes a
-// second pooled connection and runs without app.current_user_id (RLS allow-all). New writes go through withTx.
+// second pooled connection and runs without app.current_user_id (RLS allow-all). New writes go through withTx or
+// its variants (withTxAs, withOwnTx), which open their own transactions through openTx; openTx is counted with
+// BeginTx and BeginRLS, so no other file reaches the pool primitive either.
 func TestArch_TransactionsOpenedOnlyWhereAllowed(t *testing.T) {
 	got := map[string]int{}
 	for _, f := range sourceFiles(t) {
-		if n := countCalls(f.ast, methodCall("BeginTx", "BeginRLS")); n > 0 {
+		if n := countCalls(f.ast, methodCall("BeginTx", "BeginRLS", "openTx")); n > 0 {
 			got[f.path] = n
 		}
 	}
-	checkRatchet(t, "BeginTx/BeginRLS calls", got, map[string]int{
-		"internal/storage/database/rls.go":                 3, // withTx fallback, BeginRLS itself, the lazy scope
+	checkRatchet(t, "BeginTx/BeginRLS/openTx calls", got, map[string]int{
+		"internal/storage/database/rls.go":                 4, // openTx's BeginTx, its callers inTx and BeginRLS, the lazy scope
 		"internal/storage/database/postgres_migrations.go": 2, // one transaction per step, up and down
-		"internal/storage/database/postgres_users.go":      2, // serializable CreateUser, audit batch
-		"internal/storage/database/postgres_orgs.go":       4, // self-managed RLS transactions
-		"internal/storage/database/postgres_triage.go":     1,
 	})
 }
 

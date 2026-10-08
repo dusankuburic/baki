@@ -12,7 +12,8 @@ import (
 // TriageService owns a flow's persistent, team-shared finding triage state and its accepted-findings
 // baseline, plus what the triage and comment notifications read and write: the finding's assignee,
 // the personal in-app alert, and the user lookups behind the alert and email copy. Authorization is
-// the caller's. Its writes publish FindingStatusChanged, and a new assignment FindingAssigned.
+// the caller's, and the writes need FlowEdit: the database lets any viewer of the flow through (ADR 0013).
+// Its writes publish FindingStatusChanged, and a new assignment FindingAssigned.
 type TriageService struct {
 	store  storageif.TriageStore
 	alerts storageif.GovernanceAlertStore
@@ -90,21 +91,10 @@ func (s *TriageService) ClearStatus(ctx context.Context, flow FlowRef, findingKe
 }
 
 // Assignee returns the finding's current assignee, "" when it has no state or the lookup fails (the
-// callers then notify, the safe direction). One primary-key row when the store offers it, else the
-// flow's whole list.
+// callers then notify, the safe direction). One primary-key row, not the flow's whole list.
 func (s *TriageService) Assignee(ctx context.Context, flowID, findingKey string) string {
-	if g, ok := s.store.(storageif.FindingStatusGetter); ok {
-		if st, err := g.GetFindingStatus(ctx, flowID, findingKey); err == nil && st != nil {
-			return st.AssigneeID
-		}
-		return ""
-	}
-	if statuses, err := s.store.ListFindingStatuses(ctx, flowID); err == nil {
-		for _, st := range statuses {
-			if st.FindingKey == findingKey {
-				return st.AssigneeID
-			}
-		}
+	if st, err := s.store.GetFindingStatus(ctx, flowID, findingKey); err == nil && st != nil {
+		return st.AssigneeID
 	}
 	return ""
 }

@@ -13,8 +13,7 @@ import (
 	"pad-analyzer/internal/testutil"
 )
 
-// triageBackend adds the users the notification lookups resolve and, when getter is set, the
-// one-row FindingStatusGetter the real backends offer (FakeBackend has only the list).
+// triageBackend adds the users the notification lookups resolve; getterBackend counts its one-row status reads.
 type triageBackend struct {
 	*testutil.FakeBackend
 	users      map[string]*storageif.User
@@ -56,24 +55,18 @@ func newTriageBackend(t *testing.T) *triageBackend {
 func TestTriageService_Assignee(t *testing.T) {
 	ctx := context.Background()
 	b := newTriageBackend(t)
-	for name, svc := range map[string]*TriageService{
-		"list fallback": NewTriageService(b, b, b, nil),
-		"point lookup":  NewTriageService(getterBackend{b}, b, b, nil),
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := svc.Assignee(ctx, "f1", "rule-a:b1"); got != "u-named" {
-				t.Errorf("assigned finding = %q, want u-named", got)
-			}
-			if got := svc.Assignee(ctx, "f1", "rule-a:b2"); got != "" {
-				t.Errorf("unassigned finding = %q, want empty", got)
-			}
-			if got := svc.Assignee(ctx, "f1", "rule-a:missing"); got != "" {
-				t.Errorf("finding without state = %q, want empty", got)
-			}
-		})
+	svc := NewTriageService(getterBackend{b}, b, b, nil)
+	if got := svc.Assignee(ctx, "f1", "rule-a:b1"); got != "u-named" {
+		t.Errorf("assigned finding = %q, want u-named", got)
+	}
+	if got := svc.Assignee(ctx, "f1", "rule-a:b2"); got != "" {
+		t.Errorf("unassigned finding = %q, want empty", got)
+	}
+	if got := svc.Assignee(ctx, "f1", "rule-a:missing"); got != "" {
+		t.Errorf("finding without state = %q, want empty", got)
 	}
 	if b.getterHits != 3 {
-		t.Errorf("point lookups = %d, want 3 (the getter is preferred over the list)", b.getterHits)
+		t.Errorf("point lookups = %d, want 3 (one row per question)", b.getterHits)
 	}
 }
 

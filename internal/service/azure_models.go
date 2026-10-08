@@ -151,6 +151,9 @@ type AzureSettingsLoader interface {
 type AzureModelServiceDeps struct {
 	Registry storageif.AzureRegistryStore
 	Secrets  KeyStore
+	// KeyFamilies lists and conditionally deletes Secrets' Azure key family (the database keystore); nil where the
+	// keystore cannot enumerate its keys (the OS keyring): no orphan sweep, deletes are unconditional.
+	KeyFamilies storageif.SecretFamilyLister
 	// OrgKeys holds organisations' shared credentials (cloud); nil disables org registries (ErrOrgKeyStoreUnavailable).
 	OrgKeys OrgKeyStore
 	// Factory builds the providers the picker sizes models with and the KB embeds with; nil = no provider-derived windows.
@@ -172,6 +175,7 @@ type AzureModelServiceDeps struct {
 type AzureModelService struct {
 	registry                  storageif.AzureRegistryStore
 	secrets                   KeyStore
+	keyFamilies               storageif.SecretFamilyLister
 	orgKeys                   OrgKeyStore
 	factory                   *ai.ProviderFactory
 	settings                  SettingsProvider
@@ -207,6 +211,7 @@ func NewAzureModelService(deps AzureModelServiceDeps) *AzureModelService {
 	return &AzureModelService{
 		registry:                  deps.Registry,
 		secrets:                   deps.Secrets,
+		keyFamilies:               deps.KeyFamilies,
 		orgKeys:                   deps.OrgKeys,
 		factory:                   deps.Factory,
 		settings:                  deps.Settings,

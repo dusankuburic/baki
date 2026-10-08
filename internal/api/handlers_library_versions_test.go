@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"testing"
 
-	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 	"pad-core/models"
 )
 
@@ -29,33 +29,30 @@ func makeFlowContent(t *testing.T, names ...string) json.RawMessage {
 	return b
 }
 
-// seedVersionedFlow creates a filesystem-backed JWT router, seeds a flow owned
+// seedVersionedFlow creates a JWT router on the fake backend, seeds a flow owned
 // by ownerID with the given content, and returns the router + backend so the
 // test can mutate content directly between snapshots.
-func seedVersionedFlow(t *testing.T, id, ownerID string, content json.RawMessage) (*Router, *filesystem.LocalStorageBackend) {
+func seedVersionedFlow(t *testing.T, id, ownerID string, content json.RawMessage) (*Router, *testutil.FakeBackend) {
 	t.Helper()
-	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
-	if err != nil {
-		t.Fatalf("create local storage: %v", err)
-	}
-	rt := newTestRouter(fs, true)
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, true)
 	doc := &storageif.FlowDocument{ID: id, Name: "test", OwnerID: ownerID, Content: content}
-	if err := fs.SaveFlow(context.Background(), doc); err != nil {
+	if err := store.SaveFlow(context.Background(), doc); err != nil {
 		t.Fatalf("seed flow %s: %v", id, err)
 	}
-	return rt, fs
+	return rt, store
 }
 
 // setFlowContent updates a seeded flow's content in place (respecting OCC by
 // loading the current version first).
-func setFlowContent(t *testing.T, fs *filesystem.LocalStorageBackend, id string, content json.RawMessage) {
+func setFlowContent(t *testing.T, store *testutil.FakeBackend, id string, content json.RawMessage) {
 	t.Helper()
-	doc, err := fs.LoadFlow(context.Background(), id)
+	doc, err := store.LoadFlow(context.Background(), id)
 	if err != nil {
 		t.Fatalf("load flow %s: %v", id, err)
 	}
 	doc.Content = content
-	if err := fs.SaveFlow(context.Background(), doc); err != nil {
+	if err := store.SaveFlow(context.Background(), doc); err != nil {
 		t.Fatalf("update flow content: %v", err)
 	}
 }
@@ -63,14 +60,14 @@ func setFlowContent(t *testing.T, fs *filesystem.LocalStorageBackend, id string,
 // TestDiffFlowVersion_ReturnsChanges verifies GET /versions/{vn}/diff reports
 // blocks added since the snapshot.
 func TestDiffFlowVersion_ReturnsChanges(t *testing.T) {
-	rt, fs := seedVersionedFlow(t, "flow1", "alice", makeFlowContent(t, "A"))
+	rt, store := seedVersionedFlow(t, "flow1", "alice", makeFlowContent(t, "A"))
 	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
 
 	// Snapshot v1 = content with block "A".
 	checkStatus(t, doRequestWithAuth(t, rt, http.MethodPost, "/api/library/flow1/versions", bearer, map[string]any{"comment": "v1"}), http.StatusCreated)
 
 	// Current now has "A" + "B".
-	setFlowContent(t, fs, "flow1", makeFlowContent(t, "A", "B"))
+	setFlowContent(t, store, "flow1", makeFlowContent(t, "A", "B"))
 
 	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/library/flow1/versions/1/diff", bearer, nil)
 	checkStatus(t, rr, http.StatusOK)
@@ -92,13 +89,13 @@ func TestDiffFlowVersion_ReturnsChanges(t *testing.T) {
 // TestRestoreFlowVersion_RevertsContent verifies POST /versions/{vn}/restore
 // reverts the current content to the snapshot and is reflected on /content.
 func TestRestoreFlowVersion_RevertsContent(t *testing.T) {
-	rt, fs := seedVersionedFlow(t, "flow1", "alice", makeFlowContent(t, "A"))
+	rt, store := seedVersionedFlow(t, "flow1", "alice", makeFlowContent(t, "A"))
 	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
 
 	// Snapshot v1 = "A".
 	checkStatus(t, doRequestWithAuth(t, rt, http.MethodPost, "/api/library/flow1/versions", bearer, map[string]any{"comment": "v1"}), http.StatusCreated)
 	// Current now = "A" + "B" + "C".
-	setFlowContent(t, fs, "flow1", makeFlowContent(t, "A", "B", "C"))
+	setFlowContent(t, store, "flow1", makeFlowContent(t, "A", "B", "C"))
 
 	// Restore v1 → content reverts to "A".
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/library/flow1/versions/1/restore", bearer, nil)
