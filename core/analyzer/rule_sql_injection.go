@@ -43,7 +43,9 @@ func (r *SqlInjectionRiskRule) Check(block *models.Block, ctx *RuleContext) []mo
 
 	// Property keys preserve source case (PascalCase in PAD, e.g. "Sql"), so
 	// compare case-insensitively instead of looking up lowercase keys.
-	for key, sqlText := range block.Properties {
+	var keys [16]string
+	for _, key := range sortedPropertyKeys(keys[:0], block.Properties) {
+		sqlText := block.Properties[key]
 		keyLower := strings.ToLower(key)
 		if keyLower != "sql" && keyLower != "query" && keyLower != "statement" && keyLower != "command" {
 			continue
@@ -90,14 +92,14 @@ func (r *SqlInjectionRiskRule) Check(block *models.Block, ctx *RuleContext) []mo
 
 // varTaintedByUntrusted reports whether vn derives from an untrusted source
 // (HTTP/Web/FTP) or a SET chain referencing one — conservative: it only
-// confirms a taint trail, never clears one. O(1) lookup into ctx.TaintedVars
-// (computed once per analysis by buildTaintedVars); nil answers false, exactly
-// as the old walk did.
+// confirms a taint trail, never clears one. O(1) lookup into TaintedVars
+// (computed once per analysis by buildTaintedVars); a nil context answers
+// false, exactly as the old walk did.
 func varTaintedByUntrusted(ctx *RuleContext, vn string) bool {
-	if ctx == nil || ctx.TaintedVars == nil {
+	if ctx == nil {
 		return false
 	}
-	return ctx.TaintedVars[vn]
+	return ctx.TaintedVars()[vn]
 }
 
 // isTaintSourceType reports whether a writer block of this raw type produces
@@ -169,4 +171,12 @@ func buildTaintedVars(ctx *RuleContext) map[string]bool {
 	return tainted
 }
 
-func init() { registerRule(&SqlInjectionRiskRule{}) }
+func init() {
+	registerRule(&SqlInjectionRiskRule{}, RuleMeta{
+		Confidence:   models.ConfidenceHigh,
+		AutoFix:      "parameterize-sql",
+		IntroducedIn: 1,
+		Revision:     2,
+		Stage:        StageStable,
+	})
+}

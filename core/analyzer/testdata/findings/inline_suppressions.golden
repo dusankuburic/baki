@@ -1,0 +1,167 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: inline_suppressions
+document: subflows=2 blocks=17 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":7,"info":6,"blocksAnalyzed":16,"rulesRun":45,"rulesSkipped":0,"suppressed":9}
+progress: events=15 final=720/720 last="Loop body is too large"
+metrics: {"avgCognitive":1,"avgCyclomatic":2,"healthScore":66,"maxCognitive":2,"maxCyclomatic":3,"subflowCount":2,"totalBlocks":11,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":7,"cognitiveComplexity":2,"cyclomaticComplexity":3,"fanIn":0,"fanOut":1,"maxNestingDepth":1,"variableCount":0}
+  subflow Helper: {"blockCount":4,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":1,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=16
+  raw findings: empty-branch=1 file-op-no-error-handler=4 hardcoded-filepath=4 hardcoded-url=1 insecure-http-url=1 missing-retry=1 missing-timeout=1 subflow-no-error-handler=2 unhandled-error=5 uninitialized-variable=1 unused-variable=1
+inventory: 5
+  {"line":2,"rule":"unhandled-error","blockLabel":"Read Text","blockType":"ACTION","subflow":"Main","stale":false}
+  {"line":4,"rule":"missing-delay","blockLabel":"Show Message Box","blockType":"ACTION","subflow":"Main","stale":true,"reason":"no rule currently fires on this block"}
+  {"line":6,"rule":"*","blockLabel":"Navigate To","blockType":"ACTION","subflow":"Main","stale":false}
+  {"line":10,"rule":"empty-branch","blockLabel":"Else","blockType":"ELSE","subflow":"Main","stale":false}
+  {"line":16,"rule":"subflow-no-error-handler","blockLabel":"Write Text","blockType":"ACTION","subflow":"Helper","stale":false}
+findings: 13
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=file-op-no-error-handler:bcd0990c7a40ca1d
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.ReadTextFromFile.ReadText"}
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Helper#1 sf=Helper fp=file-op-no-error-handler:fa5c43c77df20e48
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.WriteText"}
+F-003 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Helper#2 sf=Helper fp=file-op-no-error-handler:edd41e6f5210cd9b
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.Delete"}
+F-004 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Helper#3 sf=Helper fp=file-op-no-error-handler:e119185c60967fa1
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.Delete"}
+F-005 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#1 sf=Main fp=hardcoded-filepath:a114086865043e4b
+    title: Hardcoded file path
+    desc: Property 'File' contains an absolute path: C:\data\in.txt
+    meta: {"path":"C:\\data\\in.txt","property":"File"}
+F-006 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Helper#1 sf=Helper fp=hardcoded-filepath:129e4d5e8885deaa
+    title: Hardcoded file path
+    desc: Property 'File' contains an absolute path: C:\data\out.txt
+    meta: {"path":"C:\\data\\out.txt","property":"File"}
+F-007 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Helper#2 sf=Helper fp=hardcoded-filepath:e70189a308c9bc24
+    title: Hardcoded file path
+    desc: Property 'Files' contains an absolute path: C:\data\tmp.txt
+    meta: {"path":"C:\\data\\tmp.txt","property":"Files"}
+F-008 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Helper#3 sf=Helper fp=hardcoded-filepath:639354568be73078
+    title: Hardcoded file path
+    desc: Property 'Files' contains an absolute path: C:\data\a.txt
+    meta: {"path":"C:\\data\\a.txt","property":"Files"}
+F-009 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:bcd0990c7a40ca1d
+    title: Subflow without error handler
+    desc: Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-010 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Helper#1 sf=Helper fp=unhandled-error:fa5c43c77df20e48
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-011 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Helper#2 sf=Helper fp=unhandled-error:edd41e6f5210cd9b
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-012 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Helper#3 sf=Helper fp=unhandled-error:e119185c60967fa1
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-013 info/low unused-variable [Style] fix=remove-block @Main#7 sf=Main fp=unused-variable:77bce551cb9b7e6b
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Seen"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":7,"info":6,"blocksAnalyzed":16,"rulesRun":45,"rulesSkipped":0,"suppressed":9}
+progress: events=15 final=720/720 last="Loop body is too large"
+metrics: as default, healthScore=66
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=16
+  raw findings: empty-branch=1 file-op-no-error-handler=4 hardcoded-filepath=4 hardcoded-url=1 insecure-http-url=1 missing-retry=1 missing-timeout=1 subflow-no-error-handler=2 unhandled-error=5 uninitialized-variable=1 unused-variable=1
+inventory: 5
+  {"line":2,"rule":"unhandled-error","blockLabel":"Read Text","blockType":"ACTION","subflow":"Main","stale":false}
+  {"line":4,"rule":"missing-delay","blockLabel":"Show Message Box","blockType":"ACTION","subflow":"Main","stale":true,"reason":"no rule currently fires on this block"}
+  {"line":6,"rule":"*","blockLabel":"Navigate To","blockType":"ACTION","subflow":"Main","stale":false}
+  {"line":10,"rule":"empty-branch","blockLabel":"Else","blockType":"ELSE","subflow":"Main","stale":false}
+  {"line":16,"rule":"subflow-no-error-handler","blockLabel":"Write Text","blockType":"ACTION","subflow":"Helper","stale":false}
+findings: 13
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":7,"info":7,"blocksAnalyzed":16,"rulesRun":45,"rulesSkipped":0,"suppressed":9}
+progress: events=15 final=720/720 last="Loop body is too large"
+metrics: as default, healthScore=65
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=16
+  raw findings: empty-branch=1 file-op-no-error-handler=4 hardcoded-filepath=4 hardcoded-url=1 insecure-http-url=1 large-subflow=1 missing-retry=1 missing-timeout=1 subflow-no-error-handler=2 unhandled-error=5 uninitialized-variable=1 unused-variable=1
+inventory: 5
+  {"line":2,"rule":"unhandled-error","blockLabel":"Read Text","blockType":"ACTION","subflow":"Main","stale":false}
+  {"line":4,"rule":"missing-delay","blockLabel":"Show Message Box","blockType":"ACTION","subflow":"Main","stale":true,"reason":"no rule currently fires on this block"}
+  {"line":6,"rule":"*","blockLabel":"Navigate To","blockType":"ACTION","subflow":"Main","stale":false}
+  {"line":10,"rule":"empty-branch","blockLabel":"Else","blockType":"ELSE","subflow":"Main","stale":false}
+  {"line":16,"rule":"subflow-no-error-handler","blockLabel":"Write Text","blockType":"ACTION","subflow":"Helper","stale":false}
+findings: 14
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=file-op-no-error-handler:bcd0990c7a40ca1d
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Helper#1 sf=Helper fp=file-op-no-error-handler:fa5c43c77df20e48
+F-003 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Helper#2 sf=Helper fp=file-op-no-error-handler:edd41e6f5210cd9b
+F-004 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Helper#3 sf=Helper fp=file-op-no-error-handler:e119185c60967fa1
+F-005 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#1 sf=Main fp=hardcoded-filepath:a114086865043e4b
+F-006 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Helper#1 sf=Helper fp=hardcoded-filepath:129e4d5e8885deaa
+F-007 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Helper#2 sf=Helper fp=hardcoded-filepath:e70189a308c9bc24
+F-008 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Helper#3 sf=Helper fp=hardcoded-filepath:639354568be73078
+F-009 info/low large-subflow [Style] fix=- @Main#1 sf=Main fp=large-subflow:bcd0990c7a40ca1d
+    title: Large subflow
+    desc: Subflow 'Main' has 7 blocks (threshold: 5).
+F-010 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:bcd0990c7a40ca1d
+F-011 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Helper#1 sf=Helper fp=unhandled-error:fa5c43c77df20e48
+F-012 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Helper#2 sf=Helper fp=unhandled-error:edd41e6f5210cd9b
+F-013 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Helper#3 sf=Helper fp=unhandled-error:e119185c60967fa1
+F-014 info/low unused-variable [Style] fix=remove-block @Main#7 sf=Main fp=unused-variable:77bce551cb9b7e6b
+
+=== disabled
+stats: {"errors":0,"warnings":4,"info":5,"blocksAnalyzed":16,"rulesRun":37,"rulesSkipped":0,"suppressed":5}
+progress: events=12 final=592/592 last="Loop body is too large"
+metrics: as default, healthScore=79
+profiles: rules=37 order=f7de49357acad250 blocksChecked=16
+  raw findings: empty-branch=1 file-op-no-error-handler=4 hardcoded-filepath=4 hardcoded-url=1 insecure-http-url=1 missing-retry=1 missing-timeout=1 unused-variable=1
+inventory: 5
+  {"line":2,"rule":"unhandled-error","blockLabel":"Read Text","blockType":"ACTION","subflow":"Main","stale":true,"reason":"rule does not currently fire here"}
+  {"line":4,"rule":"missing-delay","blockLabel":"Show Message Box","blockType":"ACTION","subflow":"Main","stale":true,"reason":"no rule currently fires on this block"}
+  {"line":6,"rule":"*","blockLabel":"Navigate To","blockType":"ACTION","subflow":"Main","stale":false}
+  {"line":10,"rule":"empty-branch","blockLabel":"Else","blockType":"ELSE","subflow":"Main","stale":false}
+  {"line":16,"rule":"subflow-no-error-handler","blockLabel":"Write Text","blockType":"ACTION","subflow":"Helper","stale":true,"reason":"rule does not currently fire here"}
+findings: 9
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=file-op-no-error-handler:bcd0990c7a40ca1d
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Helper#1 sf=Helper fp=file-op-no-error-handler:fa5c43c77df20e48
+F-003 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Helper#2 sf=Helper fp=file-op-no-error-handler:edd41e6f5210cd9b
+F-004 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Helper#3 sf=Helper fp=file-op-no-error-handler:e119185c60967fa1
+F-005 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#1 sf=Main fp=hardcoded-filepath:a114086865043e4b
+F-006 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Helper#1 sf=Helper fp=hardcoded-filepath:129e4d5e8885deaa
+F-007 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Helper#2 sf=Helper fp=hardcoded-filepath:e70189a308c9bc24
+F-008 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Helper#3 sf=Helper fp=hardcoded-filepath:639354568be73078
+F-009 info/low unused-variable [Style] fix=remove-block @Main#7 sf=Main fp=unused-variable:77bce551cb9b7e6b
+
+=== severity
+stats: {"errors":4,"warnings":4,"info":5,"blocksAnalyzed":16,"rulesRun":45,"rulesSkipped":0,"suppressed":9}
+progress: events=15 final=720/720 last="Loop body is too large"
+metrics: as default, healthScore=31
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=16
+  raw findings: empty-branch=1 file-op-no-error-handler=4 hardcoded-filepath=4 hardcoded-url=1 insecure-http-url=1 missing-retry=1 missing-timeout=1 subflow-no-error-handler=2 unhandled-error=5 uninitialized-variable=1 unused-variable=1
+inventory: 5
+  {"line":2,"rule":"unhandled-error","blockLabel":"Read Text","blockType":"ACTION","subflow":"Main","stale":false}
+  {"line":4,"rule":"missing-delay","blockLabel":"Show Message Box","blockType":"ACTION","subflow":"Main","stale":true,"reason":"no rule currently fires on this block"}
+  {"line":6,"rule":"*","blockLabel":"Navigate To","blockType":"ACTION","subflow":"Main","stale":false}
+  {"line":10,"rule":"empty-branch","blockLabel":"Else","blockType":"ELSE","subflow":"Main","stale":false}
+  {"line":16,"rule":"subflow-no-error-handler","blockLabel":"Write Text","blockType":"ACTION","subflow":"Helper","stale":false}
+findings: 13
+  as default; severity changes: F-009 info->error, F-010 warning->error, F-011 warning->error, F-012 warning->error
+
+=== autofixable
+stats: {"errors":0,"warnings":7,"info":6,"blocksAnalyzed":16,"rulesRun":32,"rulesSkipped":0,"suppressed":9}
+progress: events=11 final=512/512 last="Wait zero"
+metrics: as default, healthScore=66
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=16
+  raw findings: empty-branch=1 file-op-no-error-handler=4 hardcoded-filepath=4 hardcoded-url=1 insecure-http-url=1 missing-retry=1 missing-timeout=1 subflow-no-error-handler=2 unhandled-error=5 uninitialized-variable=1 unused-variable=1
+inventory: 5
+  {"line":2,"rule":"unhandled-error","blockLabel":"Read Text","blockType":"ACTION","subflow":"Main","stale":false}
+  {"line":4,"rule":"missing-delay","blockLabel":"Show Message Box","blockType":"ACTION","subflow":"Main","stale":true,"reason":"no rule currently fires on this block"}
+  {"line":6,"rule":"*","blockLabel":"Navigate To","blockType":"ACTION","subflow":"Main","stale":false}
+  {"line":10,"rule":"empty-branch","blockLabel":"Else","blockType":"ELSE","subflow":"Main","stale":false}
+  {"line":16,"rule":"subflow-no-error-handler","blockLabel":"Write Text","blockType":"ACTION","subflow":"Helper","stale":false}
+findings: 13
+  as default; severity changes: none

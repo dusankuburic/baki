@@ -40,4 +40,12 @@ func (r *EmptyHandlerRule) Check(block *models.Block, ctx *RuleContext) []models
 	}}
 }
 
-func init() { registerRule(&EmptyHandlerRule{}) }
+func init() {
+	registerRule(&EmptyHandlerRule{}, RuleMeta{
+		Confidence:   models.ConfidenceHigh,
+		AutoFix:      "insert-handler-log",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

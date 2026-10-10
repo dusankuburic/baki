@@ -23,7 +23,6 @@ import (
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/ai/scrubber"
-	"pad-core/cache"
 	"pad-core/logger"
 	"pad-core/models"
 
@@ -279,7 +278,7 @@ type ChatService struct {
 
 	// chatCtxCache memoises the scrubbed doc + built context; keys embed the flow's generation in chatCtxGen,
 	// which InvalidateChatContext bumps and which fences the fills (chat_context.go).
-	chatCtxCache cache.Cache
+	chatCtxCache *chatContextCache
 	chatCtxGen   eventbus.Gen[string]
 
 	// azure resolves foundry model ids before the stream starts; nil keeps single-document behaviour.

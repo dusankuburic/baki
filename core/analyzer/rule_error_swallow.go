@@ -93,4 +93,12 @@ func handlerDoesSomething(handler *models.Block) bool {
 	return found
 }
 
-func init() { registerRule(&ErrorSwallowRule{}) }
+func init() {
+	registerRule(&ErrorSwallowRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "insert-error-log",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

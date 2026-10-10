@@ -725,11 +725,11 @@ func TestAnaCacheFill_BoundedByEntryCap(t *testing.T) {
 		svc.anaCacheFill(context.Background(), fmt.Sprintf("user-1\x00q%d", i), &models.DashboardAnalyticsData{}, svc.beginAnaFill("user-1"))
 	}
 
-	svc.dashMu.Lock()
-	size := len(svc.anaCache)
-	_, newestResident := svc.anaCache[fmt.Sprintf("user-1\x00q%d", anaCacheMaxEntries+extra-1)]
-	_, oldestResident := svc.anaCache["user-1\x00q0"]
-	svc.dashMu.Unlock()
+	svc.ana.mu.Lock()
+	size := len(svc.ana.m)
+	_, newestResident := svc.ana.m[fmt.Sprintf("user-1\x00q%d", anaCacheMaxEntries+extra-1)]
+	_, oldestResident := svc.ana.m["user-1\x00q0"]
+	svc.ana.mu.Unlock()
 
 	if size > anaCacheMaxEntries {
 		t.Errorf("cache size = %d after %d distinct inserts, want ≤ %d", size, anaCacheMaxEntries+extra, anaCacheMaxEntries)

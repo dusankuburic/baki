@@ -1,0 +1,516 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: folder_padframework
+document: subflows=13 blocks=116 parseErrors=1 folder=true
+
+=== default
+stats: {"errors":0,"warnings":19,"info":44,"blocksAnalyzed":106,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=96 final=4770/4770 last="Loop body is too large"
+metrics: {"avgCognitive":1.3076923076923077,"avgCyclomatic":2,"healthScore":0,"maxCognitive":8,"maxCyclomatic":5,"subflowCount":13,"totalBlocks":93,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":24,"cognitiveComplexity":1,"cyclomaticComplexity":2,"fanIn":0,"fanOut":11,"maxNestingDepth":2,"variableCount":0}
+  subflow Framework_CloseAllApplications: {"blockCount":0,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":3,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+  subflow Framework_GetTransactionData: {"blockCount":0,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":1,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+  subflow Framework_InitAllApplications: {"blockCount":3,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":3,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+  subflow Framework_InitAllSettings: {"blockCount":24,"cognitiveComplexity":2,"cyclomaticComplexity":3,"fanIn":2,"fanOut":0,"maxNestingDepth":1,"variableCount":0}
+  subflow Framework_KillAllProcesses: {"blockCount":0,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":2,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+  subflow Framework_LogMessage: {"blockCount":10,"cognitiveComplexity":8,"cyclomaticComplexity":5,"fanIn":2,"fanOut":0,"maxNestingDepth":4,"variableCount":0}
+  subflow Framework_Process: {"blockCount":0,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":1,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+  subflow Framework_ProcessErrorHandler: {"blockCount":7,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":1,"fanOut":3,"maxNestingDepth":1,"variableCount":0}
+  subflow Framework_SetTransactionItem: {"blockCount":4,"cognitiveComplexity":2,"cyclomaticComplexity":3,"fanIn":1,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+  subflow Framework_SetTransactionStatus: {"blockCount":16,"cognitiveComplexity":4,"cyclomaticComplexity":5,"fanIn":1,"fanOut":1,"maxNestingDepth":2,"variableCount":0}
+  subflow Framework_TakeScreenshot: {"blockCount":1,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+  subflow Framework_TestBench: {"blockCount":4,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":1,"fanOut":3,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=106
+  raw findings: disabled-block=1 duplicate-action=3 empty-subflow=4 error-swallow=2 file-op-no-error-handler=3 parse-error=1 subflow-no-error-handler=4 uncalled-subflow=1 unhandled-error=12 unused-variable=32
+inventory: none
+findings: 63
+F-001 info/medium disabled-block [Style] fix=remove-block @Main#2 sf=Main fp=disabled-block:88e7d80bc05ebc2f
+    title: Disabled block
+    desc: Block 'Call Framework_TestBench (disabled)' is disabled.
+F-002 info/medium duplicate-action [Style] fix=remove-block @Main#6 sf=Main fp=duplicate-action:fbc2ae191c6729d6
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":4}
+F-003 info/medium duplicate-action [Style] fix=remove-block @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=duplicate-action:f71cdfebb14017d9
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":3}
+F-004 info/medium duplicate-action [Style] fix=remove-block @Framework_TestBench#1 sf=Framework_TestBench fp=duplicate-action:ed3dbfdfd715e350
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":3}
+F-005 info/medium empty-subflow [Style] fix=- @Framework_CloseAllApplications#0 sf=Framework_CloseAllApplications fp=empty-subflow:cdfe62d5bf52168a
+    title: Empty subflow
+    desc: Subflow 'Framework_CloseAllApplications' contains no actionable blocks.
+    meta: {"subflow":"Framework_CloseAllApplications"}
+F-006 info/medium empty-subflow [Style] fix=- @Framework_GetTransactionData#0 sf=Framework_GetTransactionData fp=empty-subflow:b62ee3931fe8779b
+    title: Empty subflow
+    desc: Subflow 'Framework_GetTransactionData' contains no actionable blocks.
+    meta: {"subflow":"Framework_GetTransactionData"}
+F-007 info/medium empty-subflow [Style] fix=- @Framework_KillAllProcesses#0 sf=Framework_KillAllProcesses fp=empty-subflow:c84b2a1a7f636a30
+    title: Empty subflow
+    desc: Subflow 'Framework_KillAllProcesses' contains no actionable blocks.
+    meta: {"subflow":"Framework_KillAllProcesses"}
+F-008 info/medium empty-subflow [Style] fix=- @Framework_Process#0 sf=Framework_Process fp=empty-subflow:d14a757b5bdec615
+    title: Empty subflow
+    desc: Subflow 'Framework_Process' contains no actionable blocks.
+    meta: {"subflow":"Framework_Process"}
+F-009 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#13 sf=Main fp=error-swallow:61f04be9ea526364
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-010 warning/medium error-swallow [Reliability] fix=insert-error-log @Framework_ProcessErrorHandler#3 sf=Framework_ProcessErrorHandler fp=error-swallow:5c57fd4fdef72e68
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-011 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#5 sf=Framework_LogMessage fp=file-op-no-error-handler:3b4d6394c5be2fe1
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.WriteText"}
+F-012 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#8 sf=Framework_LogMessage fp=file-op-no-error-handler:c5d2d56a69535ead
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.WriteText"}
+F-013 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#10 sf=Framework_LogMessage fp=file-op-no-error-handler:e9d14dc720c7bccd
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.WriteText"}
+F-014 warning/high parse-error [Syntax] fix=- @Main#0 sf=Main fp=parse-error:3c6f58486cd3838f
+    title: Parse error (line 24)
+    desc: ELSE outside IF
+    meta: {"column":1,"line":24,"snippet":"ELSE"}
+F-015 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=subflow-no-error-handler:9856e30edb8328eb
+    title: Subflow without error handler
+    desc: Subflow "Framework_InitAllSettings" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-016 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#1 sf=Framework_LogMessage fp=subflow-no-error-handler:07258f2acf390899
+    title: Subflow without error handler
+    desc: Subflow "Framework_LogMessage" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-017 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=subflow-no-error-handler:f71cdfebb14017d9
+    title: Subflow without error handler
+    desc: Subflow "Framework_SetTransactionStatus" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-018 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_TestBench#1 sf=Framework_TestBench fp=subflow-no-error-handler:ed3dbfdfd715e350
+    title: Subflow without error handler
+    desc: Subflow "Framework_TestBench" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-019 warning/medium uncalled-subflow [Logic] fix=- @Framework_TakeScreenshot#0 sf=Framework_TakeScreenshot fp=uncalled-subflow:28e2f788951932ee
+    title: Uncalled subflow
+    desc: Subflow 'Framework_TakeScreenshot' is never called by any other subflow and is not the entry point. It is dead code at the flow level.
+    meta: {"subflow":"Framework_TakeScreenshot"}
+F-020 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllApplications#1 sf=Framework_InitAllApplications fp=unhandled-error:5d42c02779249f27
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-021 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllApplications#2 sf=Framework_InitAllApplications fp=unhandled-error:77db45aad209b763
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-022 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllApplications#3 sf=Framework_InitAllApplications fp=unhandled-error:b71e432b2da4f81e
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-023 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#8 sf=Framework_InitAllSettings fp=unhandled-error:55c182d7279f3b6d
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-024 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#9 sf=Framework_InitAllSettings fp=unhandled-error:e38ac981b4d5620b
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-025 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#13 sf=Framework_InitAllSettings fp=unhandled-error:518ca48a778c8eb9
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-026 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#22 sf=Framework_InitAllSettings fp=unhandled-error:930d6f20636e1c1b
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-027 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#23 sf=Framework_InitAllSettings fp=unhandled-error:f9c3dbd6556447c3
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-028 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#27 sf=Framework_InitAllSettings fp=unhandled-error:6365e19bfe964130
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-029 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#5 sf=Framework_LogMessage fp=unhandled-error:3b4d6394c5be2fe1
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-030 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#8 sf=Framework_LogMessage fp=unhandled-error:c5d2d56a69535ead
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-031 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#10 sf=Framework_LogMessage fp=unhandled-error:e9d14dc720c7bccd
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-032 info/low unused-variable [Style] fix=remove-block @Main#1 sf=Main fp=unused-variable:ca18c4eff4b10a5d
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"PathToConfig"}
+F-033 info/low unused-variable [Style] fix=remove-block @Main#4 sf=Main fp=unused-variable:05a81310d363e32d
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-034 info/low unused-variable [Style] fix=remove-block @Main#5 sf=Main fp=unused-variable:bcaf666d7d45344f
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-035 info/low unused-variable [Style] fix=remove-block @Main#22 sf=Main fp=unused-variable:8cd8f1fc6065548f
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-036 info/low unused-variable [Style] fix=remove-block @Main#23 sf=Main fp=unused-variable:c6c5b826f92ce02f
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-037 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=unused-variable:65bb66a5474496f4
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Config"}
+F-038 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#3 sf=Framework_InitAllSettings fp=unused-variable:7c1b8b5c36ef07cd
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"TransactionNumber"}
+F-039 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#4 sf=Framework_InitAllSettings fp=unused-variable:93d5b534780416db
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-040 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#5 sf=Framework_InitAllSettings fp=unused-variable:212d8f90d7ac7e70
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-041 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#6 sf=Framework_InitAllSettings fp=unused-variable:68280398cbe8f644
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"SystemException"}
+F-042 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#7 sf=Framework_InitAllSettings fp=unused-variable:5ae6b2560b2259a8
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"BusinessException"}
+F-043 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#11 sf=Framework_InitAllSettings fp=unused-variable:417e185b03787d7b
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Config[CurrentItem['Name']]"}
+F-044 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#15 sf=Framework_InitAllSettings fp=unused-variable:ae5114d435c03f54
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Config"}
+F-045 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#17 sf=Framework_InitAllSettings fp=unused-variable:27174303c5439e21
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"TransactionNumber"}
+F-046 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#18 sf=Framework_InitAllSettings fp=unused-variable:fa1e96cbda6965d2
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-047 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#19 sf=Framework_InitAllSettings fp=unused-variable:20b596a8670f5b13
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-048 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#20 sf=Framework_InitAllSettings fp=unused-variable:5ee7e3e50e70d9d6
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"SystemException"}
+F-049 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#21 sf=Framework_InitAllSettings fp=unused-variable:7e18bd7d3f665d7e
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"BusinessException"}
+F-050 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#25 sf=Framework_InitAllSettings fp=unused-variable:6db7221598196b65
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Config[CurrentItem['Name']]"}
+F-051 info/low unused-variable [Style] fix=remove-block @Framework_ProcessErrorHandler#2 sf=Framework_ProcessErrorHandler fp=unused-variable:f120f117f19a8676
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"SystemException"}
+F-052 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionItem#2 sf=Framework_SetTransactionItem fp=unused-variable:098182903b7cd7f9
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"TransactionItem"}
+F-053 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionItem#4 sf=Framework_SetTransactionItem fp=unused-variable:ea4ef0adc7c7dd12
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"TransactionItem"}
+F-054 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#1 sf=Framework_SetTransactionStatus fp=unused-variable:f8eace5cec9bd793
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-055 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#2 sf=Framework_SetTransactionStatus fp=unused-variable:a1fdd184bed130e1
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-056 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#4 sf=Framework_SetTransactionStatus fp=unused-variable:792a36bd1f7c4be9
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-057 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#5 sf=Framework_SetTransactionStatus fp=unused-variable:6f2efc8916b0d7f9
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-058 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#8 sf=Framework_SetTransactionStatus fp=unused-variable:b40d98dbb2ba1655
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-059 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#9 sf=Framework_SetTransactionStatus fp=unused-variable:a4f8588638af3ae1
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-060 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#12 sf=Framework_SetTransactionStatus fp=unused-variable:a17de862c3560268
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-061 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#13 sf=Framework_SetTransactionStatus fp=unused-variable:a3abf8717cf388a4
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-062 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#16 sf=Framework_SetTransactionStatus fp=unused-variable:d010bdbec60cdaab
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"SystemException"}
+F-063 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#17 sf=Framework_SetTransactionStatus fp=unused-variable:ce3fcb6f7bd84df7
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"BusinessException"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":19,"info":44,"blocksAnalyzed":106,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=96 final=4770/4770 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=106
+  raw findings: disabled-block=1 duplicate-action=3 empty-subflow=4 error-swallow=2 file-op-no-error-handler=3 parse-error=1 subflow-no-error-handler=4 uncalled-subflow=1 unhandled-error=12 unused-variable=32
+inventory: none
+findings: 63
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":19,"info":55,"blocksAnalyzed":106,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=96 final=4770/4770 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=106
+  raw findings: deep-nesting=3 disabled-block=1 duplicate-action=6 empty-subflow=4 error-swallow=2 file-op-no-error-handler=3 large-subflow=5 parse-error=1 subflow-no-error-handler=4 uncalled-subflow=1 unhandled-error=12 unused-variable=32
+inventory: none
+findings: 74
+F-001 info/low deep-nesting [Style] fix=- @Framework_LogMessage#8 sf=Framework_LogMessage fp=deep-nesting:c5d2d56a69535ead
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-002 info/low deep-nesting [Style] fix=- @Framework_LogMessage#9 sf=Framework_LogMessage fp=deep-nesting:a813c92e93bd1b56
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-003 info/low deep-nesting [Style] fix=- @Framework_LogMessage#10 sf=Framework_LogMessage fp=deep-nesting:e9d14dc720c7bccd
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-004 info/medium disabled-block [Style] fix=remove-block @Main#2 sf=Main fp=disabled-block:88e7d80bc05ebc2f
+F-005 info/medium duplicate-action [Style] fix=remove-block @Main#6 sf=Main fp=duplicate-action:fbc2ae191c6729d6
+F-006 info/medium duplicate-action [Style] fix=remove-block @Main#16 sf=Main fp=duplicate-action:10d2178579acce37
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-007 info/medium duplicate-action [Style] fix=remove-block @Main#18 sf=Main fp=duplicate-action:8450b25f2245449d
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-008 info/medium duplicate-action [Style] fix=remove-block @Framework_ProcessErrorHandler#5 sf=Framework_ProcessErrorHandler fp=duplicate-action:d2e57389a3ded0b1
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-009 info/medium duplicate-action [Style] fix=remove-block @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=duplicate-action:f71cdfebb14017d9
+F-010 info/medium duplicate-action [Style] fix=remove-block @Framework_TestBench#1 sf=Framework_TestBench fp=duplicate-action:ed3dbfdfd715e350
+F-011 info/medium empty-subflow [Style] fix=- @Framework_CloseAllApplications#0 sf=Framework_CloseAllApplications fp=empty-subflow:cdfe62d5bf52168a
+F-012 info/medium empty-subflow [Style] fix=- @Framework_GetTransactionData#0 sf=Framework_GetTransactionData fp=empty-subflow:b62ee3931fe8779b
+F-013 info/medium empty-subflow [Style] fix=- @Framework_KillAllProcesses#0 sf=Framework_KillAllProcesses fp=empty-subflow:c84b2a1a7f636a30
+F-014 info/medium empty-subflow [Style] fix=- @Framework_Process#0 sf=Framework_Process fp=empty-subflow:d14a757b5bdec615
+F-015 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#13 sf=Main fp=error-swallow:61f04be9ea526364
+F-016 warning/medium error-swallow [Reliability] fix=insert-error-log @Framework_ProcessErrorHandler#3 sf=Framework_ProcessErrorHandler fp=error-swallow:5c57fd4fdef72e68
+F-017 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#5 sf=Framework_LogMessage fp=file-op-no-error-handler:3b4d6394c5be2fe1
+F-018 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#8 sf=Framework_LogMessage fp=file-op-no-error-handler:c5d2d56a69535ead
+F-019 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#10 sf=Framework_LogMessage fp=file-op-no-error-handler:e9d14dc720c7bccd
+F-020 info/low large-subflow [Style] fix=- @Main#1 sf=Main fp=large-subflow:5f3b92b9eef362d2
+    title: Large subflow
+    desc: Subflow 'Main' has 24 blocks (threshold: 5).
+F-021 info/low large-subflow [Style] fix=- @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=large-subflow:9856e30edb8328eb
+    title: Large subflow
+    desc: Subflow 'Framework_InitAllSettings' has 24 blocks (threshold: 5).
+F-022 info/low large-subflow [Style] fix=- @Framework_LogMessage#1 sf=Framework_LogMessage fp=large-subflow:07258f2acf390899
+    title: Large subflow
+    desc: Subflow 'Framework_LogMessage' has 10 blocks (threshold: 5).
+F-023 info/low large-subflow [Style] fix=- @Framework_ProcessErrorHandler#1 sf=Framework_ProcessErrorHandler fp=large-subflow:edb070cc21ec45b4
+    title: Large subflow
+    desc: Subflow 'Framework_ProcessErrorHandler' has 7 blocks (threshold: 5).
+F-024 info/low large-subflow [Style] fix=- @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=large-subflow:f71cdfebb14017d9
+    title: Large subflow
+    desc: Subflow 'Framework_SetTransactionStatus' has 16 blocks (threshold: 5).
+F-025 warning/high parse-error [Syntax] fix=- @Main#0 sf=Main fp=parse-error:3c6f58486cd3838f
+F-026 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=subflow-no-error-handler:9856e30edb8328eb
+F-027 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#1 sf=Framework_LogMessage fp=subflow-no-error-handler:07258f2acf390899
+F-028 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=subflow-no-error-handler:f71cdfebb14017d9
+F-029 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_TestBench#1 sf=Framework_TestBench fp=subflow-no-error-handler:ed3dbfdfd715e350
+F-030 warning/medium uncalled-subflow [Logic] fix=- @Framework_TakeScreenshot#0 sf=Framework_TakeScreenshot fp=uncalled-subflow:28e2f788951932ee
+F-031 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllApplications#1 sf=Framework_InitAllApplications fp=unhandled-error:5d42c02779249f27
+F-032 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllApplications#2 sf=Framework_InitAllApplications fp=unhandled-error:77db45aad209b763
+F-033 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllApplications#3 sf=Framework_InitAllApplications fp=unhandled-error:b71e432b2da4f81e
+F-034 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#8 sf=Framework_InitAllSettings fp=unhandled-error:55c182d7279f3b6d
+F-035 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#9 sf=Framework_InitAllSettings fp=unhandled-error:e38ac981b4d5620b
+F-036 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#13 sf=Framework_InitAllSettings fp=unhandled-error:518ca48a778c8eb9
+F-037 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#22 sf=Framework_InitAllSettings fp=unhandled-error:930d6f20636e1c1b
+F-038 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#23 sf=Framework_InitAllSettings fp=unhandled-error:f9c3dbd6556447c3
+F-039 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#27 sf=Framework_InitAllSettings fp=unhandled-error:6365e19bfe964130
+F-040 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#5 sf=Framework_LogMessage fp=unhandled-error:3b4d6394c5be2fe1
+F-041 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#8 sf=Framework_LogMessage fp=unhandled-error:c5d2d56a69535ead
+F-042 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#10 sf=Framework_LogMessage fp=unhandled-error:e9d14dc720c7bccd
+F-043 info/low unused-variable [Style] fix=remove-block @Main#1 sf=Main fp=unused-variable:ca18c4eff4b10a5d
+F-044 info/low unused-variable [Style] fix=remove-block @Main#4 sf=Main fp=unused-variable:05a81310d363e32d
+F-045 info/low unused-variable [Style] fix=remove-block @Main#5 sf=Main fp=unused-variable:bcaf666d7d45344f
+F-046 info/low unused-variable [Style] fix=remove-block @Main#22 sf=Main fp=unused-variable:8cd8f1fc6065548f
+F-047 info/low unused-variable [Style] fix=remove-block @Main#23 sf=Main fp=unused-variable:c6c5b826f92ce02f
+F-048 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=unused-variable:65bb66a5474496f4
+F-049 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#3 sf=Framework_InitAllSettings fp=unused-variable:7c1b8b5c36ef07cd
+F-050 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#4 sf=Framework_InitAllSettings fp=unused-variable:93d5b534780416db
+F-051 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#5 sf=Framework_InitAllSettings fp=unused-variable:212d8f90d7ac7e70
+F-052 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#6 sf=Framework_InitAllSettings fp=unused-variable:68280398cbe8f644
+F-053 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#7 sf=Framework_InitAllSettings fp=unused-variable:5ae6b2560b2259a8
+F-054 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#11 sf=Framework_InitAllSettings fp=unused-variable:417e185b03787d7b
+F-055 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#15 sf=Framework_InitAllSettings fp=unused-variable:ae5114d435c03f54
+F-056 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#17 sf=Framework_InitAllSettings fp=unused-variable:27174303c5439e21
+F-057 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#18 sf=Framework_InitAllSettings fp=unused-variable:fa1e96cbda6965d2
+F-058 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#19 sf=Framework_InitAllSettings fp=unused-variable:20b596a8670f5b13
+F-059 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#20 sf=Framework_InitAllSettings fp=unused-variable:5ee7e3e50e70d9d6
+F-060 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#21 sf=Framework_InitAllSettings fp=unused-variable:7e18bd7d3f665d7e
+F-061 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#25 sf=Framework_InitAllSettings fp=unused-variable:6db7221598196b65
+F-062 info/low unused-variable [Style] fix=remove-block @Framework_ProcessErrorHandler#2 sf=Framework_ProcessErrorHandler fp=unused-variable:f120f117f19a8676
+F-063 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionItem#2 sf=Framework_SetTransactionItem fp=unused-variable:098182903b7cd7f9
+F-064 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionItem#4 sf=Framework_SetTransactionItem fp=unused-variable:ea4ef0adc7c7dd12
+F-065 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#1 sf=Framework_SetTransactionStatus fp=unused-variable:f8eace5cec9bd793
+F-066 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#2 sf=Framework_SetTransactionStatus fp=unused-variable:a1fdd184bed130e1
+F-067 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#4 sf=Framework_SetTransactionStatus fp=unused-variable:792a36bd1f7c4be9
+F-068 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#5 sf=Framework_SetTransactionStatus fp=unused-variable:6f2efc8916b0d7f9
+F-069 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#8 sf=Framework_SetTransactionStatus fp=unused-variable:b40d98dbb2ba1655
+F-070 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#9 sf=Framework_SetTransactionStatus fp=unused-variable:a4f8588638af3ae1
+F-071 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#12 sf=Framework_SetTransactionStatus fp=unused-variable:a17de862c3560268
+F-072 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#13 sf=Framework_SetTransactionStatus fp=unused-variable:a3abf8717cf388a4
+F-073 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#16 sf=Framework_SetTransactionStatus fp=unused-variable:d010bdbec60cdaab
+F-074 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#17 sf=Framework_SetTransactionStatus fp=unused-variable:ce3fcb6f7bd84df7
+
+=== disabled
+stats: {"errors":0,"warnings":6,"info":40,"blocksAnalyzed":106,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=79 final=3922/3922 last="Loop body is too large"
+metrics: as default, healthScore=36
+profiles: rules=37 order=f7de49357acad250 blocksChecked=106
+  raw findings: disabled-block=1 duplicate-action=3 empty-subflow=4 error-swallow=2 file-op-no-error-handler=3 uncalled-subflow=1 unused-variable=32
+inventory: none
+findings: 46
+F-001 info/medium disabled-block [Style] fix=remove-block @Main#2 sf=Main fp=disabled-block:88e7d80bc05ebc2f
+F-002 info/medium duplicate-action [Style] fix=remove-block @Main#6 sf=Main fp=duplicate-action:fbc2ae191c6729d6
+F-003 info/medium duplicate-action [Style] fix=remove-block @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=duplicate-action:f71cdfebb14017d9
+F-004 info/medium duplicate-action [Style] fix=remove-block @Framework_TestBench#1 sf=Framework_TestBench fp=duplicate-action:ed3dbfdfd715e350
+F-005 info/medium empty-subflow [Style] fix=- @Framework_CloseAllApplications#0 sf=Framework_CloseAllApplications fp=empty-subflow:cdfe62d5bf52168a
+F-006 info/medium empty-subflow [Style] fix=- @Framework_GetTransactionData#0 sf=Framework_GetTransactionData fp=empty-subflow:b62ee3931fe8779b
+F-007 info/medium empty-subflow [Style] fix=- @Framework_KillAllProcesses#0 sf=Framework_KillAllProcesses fp=empty-subflow:c84b2a1a7f636a30
+F-008 info/medium empty-subflow [Style] fix=- @Framework_Process#0 sf=Framework_Process fp=empty-subflow:d14a757b5bdec615
+F-009 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#13 sf=Main fp=error-swallow:61f04be9ea526364
+F-010 warning/medium error-swallow [Reliability] fix=insert-error-log @Framework_ProcessErrorHandler#3 sf=Framework_ProcessErrorHandler fp=error-swallow:5c57fd4fdef72e68
+F-011 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#5 sf=Framework_LogMessage fp=file-op-no-error-handler:3b4d6394c5be2fe1
+F-012 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#8 sf=Framework_LogMessage fp=file-op-no-error-handler:c5d2d56a69535ead
+F-013 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#10 sf=Framework_LogMessage fp=file-op-no-error-handler:e9d14dc720c7bccd
+F-014 warning/medium uncalled-subflow [Logic] fix=- @Framework_TakeScreenshot#0 sf=Framework_TakeScreenshot fp=uncalled-subflow:28e2f788951932ee
+F-015 info/low unused-variable [Style] fix=remove-block @Main#1 sf=Main fp=unused-variable:ca18c4eff4b10a5d
+F-016 info/low unused-variable [Style] fix=remove-block @Main#4 sf=Main fp=unused-variable:05a81310d363e32d
+F-017 info/low unused-variable [Style] fix=remove-block @Main#5 sf=Main fp=unused-variable:bcaf666d7d45344f
+F-018 info/low unused-variable [Style] fix=remove-block @Main#22 sf=Main fp=unused-variable:8cd8f1fc6065548f
+F-019 info/low unused-variable [Style] fix=remove-block @Main#23 sf=Main fp=unused-variable:c6c5b826f92ce02f
+F-020 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=unused-variable:65bb66a5474496f4
+F-021 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#3 sf=Framework_InitAllSettings fp=unused-variable:7c1b8b5c36ef07cd
+F-022 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#4 sf=Framework_InitAllSettings fp=unused-variable:93d5b534780416db
+F-023 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#5 sf=Framework_InitAllSettings fp=unused-variable:212d8f90d7ac7e70
+F-024 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#6 sf=Framework_InitAllSettings fp=unused-variable:68280398cbe8f644
+F-025 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#7 sf=Framework_InitAllSettings fp=unused-variable:5ae6b2560b2259a8
+F-026 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#11 sf=Framework_InitAllSettings fp=unused-variable:417e185b03787d7b
+F-027 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#15 sf=Framework_InitAllSettings fp=unused-variable:ae5114d435c03f54
+F-028 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#17 sf=Framework_InitAllSettings fp=unused-variable:27174303c5439e21
+F-029 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#18 sf=Framework_InitAllSettings fp=unused-variable:fa1e96cbda6965d2
+F-030 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#19 sf=Framework_InitAllSettings fp=unused-variable:20b596a8670f5b13
+F-031 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#20 sf=Framework_InitAllSettings fp=unused-variable:5ee7e3e50e70d9d6
+F-032 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#21 sf=Framework_InitAllSettings fp=unused-variable:7e18bd7d3f665d7e
+F-033 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#25 sf=Framework_InitAllSettings fp=unused-variable:6db7221598196b65
+F-034 info/low unused-variable [Style] fix=remove-block @Framework_ProcessErrorHandler#2 sf=Framework_ProcessErrorHandler fp=unused-variable:f120f117f19a8676
+F-035 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionItem#2 sf=Framework_SetTransactionItem fp=unused-variable:098182903b7cd7f9
+F-036 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionItem#4 sf=Framework_SetTransactionItem fp=unused-variable:ea4ef0adc7c7dd12
+F-037 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#1 sf=Framework_SetTransactionStatus fp=unused-variable:f8eace5cec9bd793
+F-038 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#2 sf=Framework_SetTransactionStatus fp=unused-variable:a1fdd184bed130e1
+F-039 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#4 sf=Framework_SetTransactionStatus fp=unused-variable:792a36bd1f7c4be9
+F-040 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#5 sf=Framework_SetTransactionStatus fp=unused-variable:6f2efc8916b0d7f9
+F-041 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#8 sf=Framework_SetTransactionStatus fp=unused-variable:b40d98dbb2ba1655
+F-042 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#9 sf=Framework_SetTransactionStatus fp=unused-variable:a4f8588638af3ae1
+F-043 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#12 sf=Framework_SetTransactionStatus fp=unused-variable:a17de862c3560268
+F-044 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#13 sf=Framework_SetTransactionStatus fp=unused-variable:a3abf8717cf388a4
+F-045 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#16 sf=Framework_SetTransactionStatus fp=unused-variable:d010bdbec60cdaab
+F-046 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#17 sf=Framework_SetTransactionStatus fp=unused-variable:ce3fcb6f7bd84df7
+
+=== severity
+stats: {"errors":16,"warnings":7,"info":40,"blocksAnalyzed":106,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=96 final=4770/4770 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=106
+  raw findings: disabled-block=1 duplicate-action=3 empty-subflow=4 error-swallow=2 file-op-no-error-handler=3 parse-error=1 subflow-no-error-handler=4 uncalled-subflow=1 unhandled-error=12 unused-variable=32
+inventory: none
+findings: 63
+  as default; severity changes: F-015 info->error, F-016 info->error, F-017 info->error, F-018 info->error, F-020 warning->error, F-021 warning->error, F-022 warning->error, F-023 warning->error, F-024 warning->error, F-025 warning->error, F-026 warning->error, F-027 warning->error, F-028 warning->error, F-029 warning->error, F-030 warning->error, F-031 warning->error
+
+=== autofixable
+stats: {"errors":0,"warnings":18,"info":40,"blocksAnalyzed":106,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=68 final=3392/3392 last="Wait zero"
+metrics: as default, healthScore=0
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=106
+  raw findings: disabled-block=1 duplicate-action=3 error-swallow=2 file-op-no-error-handler=3 subflow-no-error-handler=4 unhandled-error=12 unused-variable=32
+inventory: none
+findings: 58
+F-001 info/medium disabled-block [Style] fix=remove-block @Main#2 sf=Main fp=disabled-block:88e7d80bc05ebc2f
+F-002 info/medium duplicate-action [Style] fix=remove-block @Main#6 sf=Main fp=duplicate-action:fbc2ae191c6729d6
+F-003 info/medium duplicate-action [Style] fix=remove-block @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=duplicate-action:f71cdfebb14017d9
+F-004 info/medium duplicate-action [Style] fix=remove-block @Framework_TestBench#1 sf=Framework_TestBench fp=duplicate-action:ed3dbfdfd715e350
+F-005 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#13 sf=Main fp=error-swallow:61f04be9ea526364
+F-006 warning/medium error-swallow [Reliability] fix=insert-error-log @Framework_ProcessErrorHandler#3 sf=Framework_ProcessErrorHandler fp=error-swallow:5c57fd4fdef72e68
+F-007 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#5 sf=Framework_LogMessage fp=file-op-no-error-handler:3b4d6394c5be2fe1
+F-008 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#8 sf=Framework_LogMessage fp=file-op-no-error-handler:c5d2d56a69535ead
+F-009 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#10 sf=Framework_LogMessage fp=file-op-no-error-handler:e9d14dc720c7bccd
+F-010 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=subflow-no-error-handler:9856e30edb8328eb
+F-011 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#1 sf=Framework_LogMessage fp=subflow-no-error-handler:07258f2acf390899
+F-012 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=subflow-no-error-handler:f71cdfebb14017d9
+F-013 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_TestBench#1 sf=Framework_TestBench fp=subflow-no-error-handler:ed3dbfdfd715e350
+F-014 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllApplications#1 sf=Framework_InitAllApplications fp=unhandled-error:5d42c02779249f27
+F-015 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllApplications#2 sf=Framework_InitAllApplications fp=unhandled-error:77db45aad209b763
+F-016 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllApplications#3 sf=Framework_InitAllApplications fp=unhandled-error:b71e432b2da4f81e
+F-017 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#8 sf=Framework_InitAllSettings fp=unhandled-error:55c182d7279f3b6d
+F-018 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#9 sf=Framework_InitAllSettings fp=unhandled-error:e38ac981b4d5620b
+F-019 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#13 sf=Framework_InitAllSettings fp=unhandled-error:518ca48a778c8eb9
+F-020 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#22 sf=Framework_InitAllSettings fp=unhandled-error:930d6f20636e1c1b
+F-021 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#23 sf=Framework_InitAllSettings fp=unhandled-error:f9c3dbd6556447c3
+F-022 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#27 sf=Framework_InitAllSettings fp=unhandled-error:6365e19bfe964130
+F-023 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#5 sf=Framework_LogMessage fp=unhandled-error:3b4d6394c5be2fe1
+F-024 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#8 sf=Framework_LogMessage fp=unhandled-error:c5d2d56a69535ead
+F-025 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#10 sf=Framework_LogMessage fp=unhandled-error:e9d14dc720c7bccd
+F-026 info/low unused-variable [Style] fix=remove-block @Main#1 sf=Main fp=unused-variable:ca18c4eff4b10a5d
+F-027 info/low unused-variable [Style] fix=remove-block @Main#4 sf=Main fp=unused-variable:05a81310d363e32d
+F-028 info/low unused-variable [Style] fix=remove-block @Main#5 sf=Main fp=unused-variable:bcaf666d7d45344f
+F-029 info/low unused-variable [Style] fix=remove-block @Main#22 sf=Main fp=unused-variable:8cd8f1fc6065548f
+F-030 info/low unused-variable [Style] fix=remove-block @Main#23 sf=Main fp=unused-variable:c6c5b826f92ce02f
+F-031 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=unused-variable:65bb66a5474496f4
+F-032 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#3 sf=Framework_InitAllSettings fp=unused-variable:7c1b8b5c36ef07cd
+F-033 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#4 sf=Framework_InitAllSettings fp=unused-variable:93d5b534780416db
+F-034 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#5 sf=Framework_InitAllSettings fp=unused-variable:212d8f90d7ac7e70
+F-035 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#6 sf=Framework_InitAllSettings fp=unused-variable:68280398cbe8f644
+F-036 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#7 sf=Framework_InitAllSettings fp=unused-variable:5ae6b2560b2259a8
+F-037 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#11 sf=Framework_InitAllSettings fp=unused-variable:417e185b03787d7b
+F-038 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#15 sf=Framework_InitAllSettings fp=unused-variable:ae5114d435c03f54
+F-039 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#17 sf=Framework_InitAllSettings fp=unused-variable:27174303c5439e21
+F-040 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#18 sf=Framework_InitAllSettings fp=unused-variable:fa1e96cbda6965d2
+F-041 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#19 sf=Framework_InitAllSettings fp=unused-variable:20b596a8670f5b13
+F-042 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#20 sf=Framework_InitAllSettings fp=unused-variable:5ee7e3e50e70d9d6
+F-043 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#21 sf=Framework_InitAllSettings fp=unused-variable:7e18bd7d3f665d7e
+F-044 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#25 sf=Framework_InitAllSettings fp=unused-variable:6db7221598196b65
+F-045 info/low unused-variable [Style] fix=remove-block @Framework_ProcessErrorHandler#2 sf=Framework_ProcessErrorHandler fp=unused-variable:f120f117f19a8676
+F-046 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionItem#2 sf=Framework_SetTransactionItem fp=unused-variable:098182903b7cd7f9
+F-047 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionItem#4 sf=Framework_SetTransactionItem fp=unused-variable:ea4ef0adc7c7dd12
+F-048 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#1 sf=Framework_SetTransactionStatus fp=unused-variable:f8eace5cec9bd793
+F-049 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#2 sf=Framework_SetTransactionStatus fp=unused-variable:a1fdd184bed130e1
+F-050 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#4 sf=Framework_SetTransactionStatus fp=unused-variable:792a36bd1f7c4be9
+F-051 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#5 sf=Framework_SetTransactionStatus fp=unused-variable:6f2efc8916b0d7f9
+F-052 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#8 sf=Framework_SetTransactionStatus fp=unused-variable:b40d98dbb2ba1655
+F-053 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#9 sf=Framework_SetTransactionStatus fp=unused-variable:a4f8588638af3ae1
+F-054 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#12 sf=Framework_SetTransactionStatus fp=unused-variable:a17de862c3560268
+F-055 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#13 sf=Framework_SetTransactionStatus fp=unused-variable:a3abf8717cf388a4
+F-056 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#16 sf=Framework_SetTransactionStatus fp=unused-variable:d010bdbec60cdaab
+F-057 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#17 sf=Framework_SetTransactionStatus fp=unused-variable:ce3fcb6f7bd84df7
+F-058 warning/high parse-error [-] fix=- @- sf=Main fp=parse-error:
+    title: Parse error (line 24)
+    desc: ELSE outside IF
+    meta: {"column":1,"line":24,"snippet":"ELSE"}

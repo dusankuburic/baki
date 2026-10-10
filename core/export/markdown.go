@@ -2,11 +2,22 @@ package export
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
 	"pad-core/models"
 )
+
+func init() {
+	Register(Format{
+		ID: "markdown", Label: "Markdown", MIME: "text/markdown; charset=utf-8", Ext: ".md", Order: 60,
+		Render: func(w io.Writer, in Input, _ Options) error {
+			_, err := io.WriteString(w, ReportToMarkdown(in.Report, in.Doc))
+			return err
+		},
+	})
+}
 
 func ReportToMarkdown(report *models.AnalysisReport, doc *models.FlowDocument) string {
 	var sb strings.Builder
@@ -82,11 +93,17 @@ func ReportToMarkdown(report *models.AnalysisReport, doc *models.FlowDocument) s
 // groupFindingsBySeverity buckets findings by severity in ONE pass (index
 // slices — no Finding copies). Previously every renderer ran
 // filterBySeverity once per tier: three full passes, each copying every
-// matched ~200-byte Finding into a fresh slice.
+// matched ~200-byte Finding into a fresh slice. A finding of an unknown
+// severity goes with the errors, as every gate counts it, instead of out of
+// the document.
 func groupFindingsBySeverity(findings []models.Finding) map[models.Severity][]int {
 	grouped := make(map[models.Severity][]int, 3)
 	for i := range findings {
-		grouped[findings[i].Severity] = append(grouped[findings[i].Severity], i)
+		sev := findings[i].Severity
+		if !sev.Valid() {
+			sev = models.SeverityError
+		}
+		grouped[sev] = append(grouped[sev], i)
 	}
 	return grouped
 }

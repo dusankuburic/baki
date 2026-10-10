@@ -12,6 +12,16 @@ export type Severity = 'error' | 'warning' | 'info'
 // Drives severity×confidence triage ordering.
 export type Confidence = 'high' | 'medium' | 'low'
 
+// A rule's release stage (core/analyzer Stage). A preview rule runs and reports,
+// but its findings never gate (CI, policies) and stay out of the health score.
+export const RULE_STAGES = ['stable', 'preview'] as const
+export type RuleStage = (typeof RULE_STAGES)[number]
+
+// What a rule checks (core/analyzer RuleKind): each block, the whole flow once,
+// or summaries of many flows ('library': desktop folder analysis only).
+export const RULE_KINDS = ['block', 'flow', 'library'] as const
+export type RuleKind = (typeof RULE_KINDS)[number]
+
 export interface Finding {
   id: string
   // Stable, content-derived identity from the backend (rule + subflow/name/line/
@@ -35,6 +45,8 @@ export interface Finding {
   autoFix?: string
   category?: string
   metadata?: Record<string, unknown>
+  /** 'preview' when a preview rule found it; absent for stable rules (and from servers before Phase 4a). */
+  stage?: Tolerant<RuleStage>
 }
 
 // Triage lifecycle for a finding. Mirrors the backend's validTriageStatuses.
@@ -80,10 +92,18 @@ export interface FlowBaseline {
   keys: string[]
   createdBy?: string
   createdAt: string
+  // The digest ("rs1:<sha256>") of the rule set the keys were taken under;
+  // absent for a baseline set before rule sets were recorded (findings of
+  // newer rules then count as a notice, not drift). The set itself stays on
+  // the server.
+  ruleSetDigest?: string
 }
 
 // Drift report: findings introduced since the accepted baseline. When
-// hasBaseline is false, every finding is "new" by construction.
+// hasBaseline is false, every finding is "new" by construction. With a
+// baseline, newFromNewRules of the new findings come from rules newer than the
+// baseline's rule set (newRuleIds) and preview from preview rules; `new` and
+// its counts include both.
 export interface BaselineDrift {
   flowId: string
   hasBaseline: boolean
@@ -91,6 +111,9 @@ export interface BaselineDrift {
   newErrors: number
   newWarnings: number
   newInfo: number
+  newRuleIds?: string[]
+  newFromNewRules?: number
+  preview?: number
 }
 
 // A team-shared review comment on a finding, keyed by the finding's stable key.
@@ -296,6 +319,11 @@ export interface Rule {
   autoFix?: string
   /** Numeric thresholds the rule honours (maxDepth, minRepeats, maxBlocks), as currently configured. */
   options?: Record<string, number>
+  /** Release stage; absent from servers before Phase 4a (read as stable). */
+  stage?: Tolerant<RuleStage>
+  /** The rule-set version that shipped the rule; absent for custom rules. */
+  introducedIn?: number
+  kind?: Tolerant<RuleKind>
 }
 
 export interface RuleConfig {
@@ -333,4 +361,7 @@ export interface PolicyResult {
   warnings: number
   info: number
   evaluated: number
+  // Findings of the policy's rules set aside because a preview rule produced
+  // them: never evaluated, waived or violating.
+  preview?: number
 }

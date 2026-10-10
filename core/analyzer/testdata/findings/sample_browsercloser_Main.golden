@@ -1,0 +1,179 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_browsercloser_Main
+document: subflows=1 blocks=38 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":5,"info":6,"blocksAnalyzed":31,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=28 final=1395/1395 last="Loop body is too large"
+metrics: {"avgCognitive":17,"avgCyclomatic":8,"healthScore":74,"maxCognitive":17,"maxCyclomatic":8,"subflowCount":1,"totalBlocks":30,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":30,"cognitiveComplexity":17,"cyclomaticComplexity":8,"fanIn":0,"fanOut":0,"maxNestingDepth":4,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=31
+  raw findings: dead-code=1 duplicate-action=2 empty-handler=1 error-swallow=1 goto-antipattern=2 missing-timeout=1 unused-variable=3
+inventory: none
+findings: 11
+F-001 info/medium dead-code [Style] fix=remove-block @Main#33 sf=Main fp=dead-code:7051dd95ff4f1eb0
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-002 info/medium duplicate-action [Style] fix=remove-block @Main#18 sf=Main fp=duplicate-action:a5d72b0de6cd3b59
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":3}
+F-003 info/medium duplicate-action [Style] fix=remove-block @Main#26 sf=Main fp=duplicate-action:48440addde26d68b
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":3}
+F-004 warning/high empty-handler [Reliability] fix=insert-handler-log @Main#8 sf=Main fp=empty-handler:bbb65301b60de8c2
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-005 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#8 sf=Main fp=error-swallow:bbb65301b60de8c2
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-006 warning/medium goto-antipattern [Logic] fix=- @Main#12 sf=Main fp=goto-antipattern:16978560da08b65e
+    title: GOTO breaks scope boundary
+    desc: This GOTO jumps to a label outside its current scope (across loop/condition/switch boundaries), which creates fragile and hard-to-maintain control flow.
+    meta: {"targetLabel":"Exit"}
+F-007 warning/medium goto-antipattern [Logic] fix=- @Main#29 sf=Main fp=goto-antipattern:63ce805a84ce3fbb
+    title: GOTO breaks scope boundary
+    desc: This GOTO jumps to a label outside its current scope (across loop/condition/switch boundaries), which creates fragile and hard-to-maintain control flow.
+    meta: {"targetLabel":"Exit"}
+F-008 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:702424eeadcea8e4
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.CloseWebBrowser"}
+F-009 info/low unused-variable [Style] fix=remove-block @Main#0 sf=Main fp=unused-variable:c94d5cc590228f2d
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Output_Status"}
+F-010 info/low unused-variable [Style] fix=remove-block @Main#25 sf=Main fp=unused-variable:5b1e4b02552616d9
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Output_Message"}
+F-011 info/low unused-variable [Style] fix=remove-block @Main#36 sf=Main fp=unused-variable:a201fdd84941aa19
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Output_Status"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":5,"info":6,"blocksAnalyzed":31,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=28 final=1395/1395 last="Loop body is too large"
+metrics: as default, healthScore=74
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=31
+  raw findings: dead-code=1 duplicate-action=2 empty-handler=1 error-swallow=1 goto-antipattern=2 missing-timeout=1 unused-variable=3
+inventory: none
+findings: 11
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":5,"info":20,"blocksAnalyzed":31,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=28 final=1395/1395 last="Loop body is too large"
+metrics: as default, healthScore=60
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=31
+  raw findings: dead-code=1 deep-nesting=13 duplicate-action=2 empty-handler=1 error-swallow=1 goto-antipattern=2 large-subflow=1 missing-timeout=1 unused-variable=3
+inventory: none
+findings: 25
+F-001 info/medium dead-code [Style] fix=remove-block @Main#33 sf=Main fp=dead-code:7051dd95ff4f1eb0
+F-002 info/low deep-nesting [Style] fix=- @Main#7 sf=Main fp=deep-nesting:702424eeadcea8e4
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-003 info/low deep-nesting [Style] fix=- @Main#8 sf=Main fp=deep-nesting:bbb65301b60de8c2
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-004 info/low deep-nesting [Style] fix=- @Main#10 sf=Main fp=deep-nesting:22228fec5e4a6ccc
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-005 info/low deep-nesting [Style] fix=- @Main#11 sf=Main fp=deep-nesting:1ec64ad40d38fb38
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-006 info/low deep-nesting [Style] fix=- @Main#12 sf=Main fp=deep-nesting:16978560da08b65e
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-007 info/low deep-nesting [Style] fix=- @Main#19 sf=Main fp=deep-nesting:7eec489fc0829149
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-008 info/low deep-nesting [Style] fix=- @Main#21 sf=Main fp=deep-nesting:61c365ca21255fb6
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-009 info/low deep-nesting [Style] fix=- @Main#23 sf=Main fp=deep-nesting:90538b0e267aa024
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-010 info/low deep-nesting [Style] fix=- @Main#25 sf=Main fp=deep-nesting:fb0be2e7d3c22513
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-011 info/low deep-nesting [Style] fix=- @Main#26 sf=Main fp=deep-nesting:48440addde26d68b
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-012 info/low deep-nesting [Style] fix=- @Main#27 sf=Main fp=deep-nesting:d3d5a8a8c9889d6b
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-013 info/low deep-nesting [Style] fix=- @Main#28 sf=Main fp=deep-nesting:ad4268918a8457fd
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-014 info/low deep-nesting [Style] fix=- @Main#29 sf=Main fp=deep-nesting:63ce805a84ce3fbb
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-015 info/medium duplicate-action [Style] fix=remove-block @Main#18 sf=Main fp=duplicate-action:a5d72b0de6cd3b59
+F-016 info/medium duplicate-action [Style] fix=remove-block @Main#26 sf=Main fp=duplicate-action:48440addde26d68b
+F-017 warning/high empty-handler [Reliability] fix=insert-handler-log @Main#8 sf=Main fp=empty-handler:bbb65301b60de8c2
+F-018 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#8 sf=Main fp=error-swallow:bbb65301b60de8c2
+F-019 warning/medium goto-antipattern [Logic] fix=- @Main#12 sf=Main fp=goto-antipattern:16978560da08b65e
+F-020 warning/medium goto-antipattern [Logic] fix=- @Main#29 sf=Main fp=goto-antipattern:63ce805a84ce3fbb
+F-021 info/low large-subflow [Style] fix=- @Main#0 sf=Main fp=large-subflow:7afed7352371bc0e
+    title: Large subflow
+    desc: Subflow 'Main' has 30 blocks (threshold: 5).
+F-022 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:702424eeadcea8e4
+F-023 info/low unused-variable [Style] fix=remove-block @Main#0 sf=Main fp=unused-variable:c94d5cc590228f2d
+F-024 info/low unused-variable [Style] fix=remove-block @Main#25 sf=Main fp=unused-variable:5b1e4b02552616d9
+F-025 info/low unused-variable [Style] fix=remove-block @Main#36 sf=Main fp=unused-variable:a201fdd84941aa19
+
+=== disabled
+stats: {"errors":0,"warnings":5,"info":6,"blocksAnalyzed":31,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=23 final=1147/1147 last="Loop body is too large"
+metrics: as default, healthScore=74
+profiles: rules=37 order=f7de49357acad250 blocksChecked=31
+  raw findings: dead-code=1 duplicate-action=2 empty-handler=1 error-swallow=1 goto-antipattern=2 missing-timeout=1 unused-variable=3
+inventory: none
+findings: 11
+  as default; severity changes: none
+
+=== severity
+stats: {"errors":0,"warnings":6,"info":5,"blocksAnalyzed":31,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=28 final=1395/1395 last="Loop body is too large"
+metrics: as default, healthScore=71
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=31
+  raw findings: dead-code=1 duplicate-action=2 empty-handler=1 error-swallow=1 goto-antipattern=2 missing-timeout=1 unused-variable=3
+inventory: none
+findings: 11
+  as default; severity changes: F-001 info->warning
+
+=== autofixable
+stats: {"errors":0,"warnings":3,"info":6,"blocksAnalyzed":31,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=20 final=992/992 last="Wait zero"
+metrics: as default, healthScore=82
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=31
+  raw findings: dead-code=1 duplicate-action=2 empty-handler=1 error-swallow=1 missing-timeout=1 unused-variable=3
+inventory: none
+findings: 9
+F-001 info/medium dead-code [Style] fix=remove-block @Main#33 sf=Main fp=dead-code:7051dd95ff4f1eb0
+F-002 info/medium duplicate-action [Style] fix=remove-block @Main#18 sf=Main fp=duplicate-action:a5d72b0de6cd3b59
+F-003 info/medium duplicate-action [Style] fix=remove-block @Main#26 sf=Main fp=duplicate-action:48440addde26d68b
+F-004 warning/high empty-handler [Reliability] fix=insert-handler-log @Main#8 sf=Main fp=empty-handler:bbb65301b60de8c2
+F-005 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#8 sf=Main fp=error-swallow:bbb65301b60de8c2
+F-006 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:702424eeadcea8e4
+F-007 info/low unused-variable [Style] fix=remove-block @Main#0 sf=Main fp=unused-variable:c94d5cc590228f2d
+F-008 info/low unused-variable [Style] fix=remove-block @Main#25 sf=Main fp=unused-variable:5b1e4b02552616d9
+F-009 info/low unused-variable [Style] fix=remove-block @Main#36 sf=Main fp=unused-variable:a201fdd84941aa19

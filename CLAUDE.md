@@ -27,8 +27,9 @@ database; the recipe is in [docs/architecture/safety-nets.md](docs/architecture/
 
 ## Rules the tests enforce
 
-- Layering, transactions, direct storage calls in handlers, and `os.Getenv` outside `internal/config` are
-  ratcheted in `internal/archtest`. Don't add exceptions; lower the pinned numbers when you remove one.
+- Layering, transactions, direct storage calls in handlers, `os.Getenv` outside `internal/config`, and caches
+  built without a `cache.Declare` spec are ratcheted in `internal/archtest`. Don't add exceptions; lower the pinned
+  numbers when you remove one.
 - Migrations from v32 on are `.sql` files in `internal/storage/database/migrations/`, each with a
   `-- baki:compat expand|breaking` line. Never edit a shipped step.
 - Ask `capability.Of(cfg)` what a deployment can do instead of checking `cfg.Mode` or a nil backend.
@@ -40,6 +41,9 @@ go test ./internal/api/ -run TestRoutePolicy_Golden -update-route-policy
 go test ./internal/api/ -run TestRoutePolicyDeclared_Golden -update-route-policy-declared
 go test ./internal/api/ -run TestAuthzMatrix_Golden -update-authz-matrix
 go test ./internal/storage/database/ -run TestMigrationChecksums_Golden -update-migration-checksums
+go test ./internal/di/ -run TestCacheRegistry_Golden -update-caches
+go test ./core/analyzer/ -run TestFindingsGolden -update-findings
+go test ./core/export/ -run TestExportGolden -update-export-golden   # also after analyzer output changes
 ```
 
 ## Windows checkouts

@@ -38,4 +38,12 @@ func (r *DisabledBlockRule) Check(block *models.Block, ctx *RuleContext) []model
 	}}
 }
 
-func init() { registerRule(&DisabledBlockRule{}) }
+func init() {
+	registerRule(&DisabledBlockRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "remove-block",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

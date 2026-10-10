@@ -89,16 +89,33 @@ func runReport(args []string) {
 		os.Exit(2)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		fmt.Fprintf(os.Stderr, "bakicli report: server returned %s: %s\n", resp.Status, strings.TrimSpace(string(respBody)))
 		os.Exit(2)
 	}
-	fmt.Fprintf(os.Stdout, "%s\n", bytes.TrimSpace(respBody))
 
-	if *format == "sarif" {
+	// SARIF is an export document, streamed as it came (it has no size
+	// bound: about 1.2 KB per finding). The server normalises the format and
+	// answers every other value with the verdict, so every other value gates
+	// (a "Summary" or "json" must not exit 0 on a failure).
+	if strings.ToLower(strings.TrimSpace(*format)) == "sarif" {
+		if err := copyEndingInNewline(os.Stdout, resp.Body); err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli report: reading the SARIF response: %v\n", err)
+			os.Exit(2)
+		}
 		return
 	}
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxVerdictBytes+1))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli report: reading the response: %v\n", err)
+		os.Exit(2)
+	}
+	if len(respBody) > maxVerdictBytes {
+		fmt.Fprintf(os.Stderr, "bakicli report: the server's verdict is larger than %d bytes\n", maxVerdictBytes)
+		os.Exit(2)
+	}
+	fmt.Fprintf(os.Stdout, "%s\n", bytes.TrimSpace(respBody))
 	var verdict struct {
 		FlowName string `json:"flowName"`
 		Passed   *bool  `json:"passed"`
@@ -122,6 +139,36 @@ func runReport(args []string) {
 	if !*verdict.Passed {
 		os.Exit(1)
 	}
+}
+
+// maxVerdictBytes bounds the gate verdict `bakicli report` reads into memory.
+const maxVerdictBytes = 16 << 20
+
+// copyEndingInNewline copies r to w and ends the output with a newline when r
+// did not.
+func copyEndingInNewline(w io.Writer, r io.Reader) error {
+	buf := make([]byte, 64<<10)
+	var last byte = '\n'
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			last = buf[n-1]
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if last != '\n' {
+		_, err := io.WriteString(w, "\n")
+		return err
+	}
+	return nil
 }
 
 // ciWebhookURL accepts either the server origin or the full route.

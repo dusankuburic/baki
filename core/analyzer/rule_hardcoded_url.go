@@ -32,7 +32,9 @@ func (r *HardcodedURLRule) Check(block *models.Block, ctx *RuleContext) []models
 	// zero or one URL, and this Check runs for every (block, rule) pair.
 	var seen map[string]bool
 
-	for key, val := range block.Properties {
+	var keys [16]string
+	for _, key := range sortedPropertyKeys(keys[:0], block.Properties) {
+		val := block.Properties[key]
 		if padVariableRef.MatchString(val) {
 			continue
 		}
@@ -68,4 +70,12 @@ func (r *HardcodedURLRule) Check(block *models.Block, ctx *RuleContext) []models
 	return findings
 }
 
-func init() { registerRule(&HardcodedURLRule{}) }
+func init() {
+	registerRule(&HardcodedURLRule{}, RuleMeta{
+		Confidence:   models.ConfidenceLow,
+		AutoFix:      "replace-with-variable",
+		IntroducedIn: 1,
+		Revision:     2,
+		Stage:        StageStable,
+	})
+}

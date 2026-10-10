@@ -7,6 +7,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/testutil"
+	"pad-core/cache"
 )
 
 // newOrgProviderService is newProviderServiceWithFakeSecrets with an
@@ -91,11 +92,11 @@ func TestDynamicModels_SharedListingCachedUnderOrgScope(t *testing.T) {
 	if _, _, ok := svc.dynamicModels(context.Background(), ls, "glm"); !ok {
 		t.Fatal("listing on the org credential failed")
 	}
-	key := ai.OrgScope("org-1") + "\x00glm"
+	key := modelListingKey(ai.OrgScope("org-1"), "glm")
 	if _, cached := svc.modelCache[key]; !cached {
 		t.Fatalf("listing not cached under %q: %v", key, keysOf(svc.modelCache))
 	}
-	if _, cached := svc.modelCache["u-none\x00glm"]; cached {
+	if _, cached := svc.modelCache[modelListingKey("u-none", "glm")]; cached {
 		t.Error("a shared listing must not be cached under the member's scope")
 	}
 	svc.InvalidateScope(ai.OrgScope("org-1"))
@@ -111,10 +112,10 @@ func TestDynamicModels_SharedListingCachedUnderOrgScope(t *testing.T) {
 	}
 }
 
-func keysOf(m map[string]modelCacheEntry) []string {
+func keysOf(m map[cache.Key]modelCacheEntry) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
-		out = append(out, k)
+		out = append(out, k.String())
 	}
 	return out
 }
@@ -176,12 +177,12 @@ func TestOrgAzureFoundryConfig_SaveMergeKeepsSecret_DeleteForgets(t *testing.T) 
 	}
 
 	// A save invalidates the org's cached listings (every member's).
-	svc.modelCache[ai.OrgScope("org-1")+"\x00glm"] = modelCacheEntry{}
+	svc.modelCache[modelListingKey(ai.OrgScope("org-1"), "glm")] = modelCacheEntry{}
 	rotated := ai.AzureFoundryConfig{Endpoint: "https://" + azureTestHost, Auth: ai.AzureFoundryAuth{Mode: "api_key", Key: "k2"}, ChatDeployment: "chat2"}
 	if _, err := svc.SaveOrgAzureFoundryConfig("org-1", "admin-2", at2, rotated); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
-	if _, cached := svc.modelCache[ai.OrgScope("org-1")+"\x00glm"]; cached {
+	if _, cached := svc.modelCache[modelListingKey(ai.OrgScope("org-1"), "glm")]; cached {
 		t.Error("save must invalidate the org scope's listings")
 	}
 
@@ -189,14 +190,14 @@ func TestOrgAzureFoundryConfig_SaveMergeKeepsSecret_DeleteForgets(t *testing.T) 
 	if pub, _ := svc.GetOrgAzureFoundryConfig("org-2"); pub.Configured {
 		t.Error("configuration leaked across orgs")
 	}
-	svc.modelCache[ai.OrgScope("org-1")+"\x00glm"] = modelCacheEntry{}
+	svc.modelCache[modelListingKey(ai.OrgScope("org-1"), "glm")] = modelCacheEntry{}
 	if err := svc.DeleteOrgAzureFoundryConfig("org-1"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if has, _ := orgKeys.HasOrg("org-1", "azure-foundry"); has {
 		t.Error("delete left the row")
 	}
-	if _, cached := svc.modelCache[ai.OrgScope("org-1")+"\x00glm"]; cached {
+	if _, cached := svc.modelCache[modelListingKey(ai.OrgScope("org-1"), "glm")]; cached {
 		t.Error("delete must invalidate the org scope's listings")
 	}
 	if pub, _ := svc.GetOrgAzureFoundryConfig("org-1"); pub.Configured || pub.Shared {

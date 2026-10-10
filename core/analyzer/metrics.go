@@ -32,11 +32,12 @@ func ComputeFlowMetrics(doc *models.FlowDocument, report *models.AnalysisReport)
 	return assembleFlowMetrics(subflowMetrics, len(doc.Subflows), circular, report)
 }
 
-// ComputeFlowMetricsFromCtx assembles the report metrics from the artifacts
-// buildContext already computed, so the graph/metrics phase runs once per
-// analysis instead of twice.
+// ComputeFlowMetricsFromCtx assembles the report metrics from the context's
+// subflow graph (shared with the subflow rules), so the graph/metrics phase
+// runs once per analysis instead of twice.
 func ComputeFlowMetricsFromCtx(ctx *RuleContext, report *models.AnalysisReport) *models.FlowMetrics {
-	return assembleFlowMetrics(ctx.subflowMetrics, len(ctx.Flow.Subflows), ctx.circularDeps, report)
+	g := ctx.subflowGraph()
+	return assembleFlowMetrics(g.metrics, len(ctx.Flow.Subflows), g.circular, report)
 }
 
 // assembleFlowMetrics reduces per-subflow metrics into the aggregate
@@ -178,35 +179,61 @@ func buildCallGraph(doc *models.FlowDocument) map[string]map[string]bool {
 	return graph
 }
 
+// detectCircularDeps returns every subflow on a call cycle (a strongly
+// connected component of two or more subflows, or a subflow calling itself),
+// once each, in document order. Tarjan's SCCs do not depend on the call
+// graph's map order; the old DFS kept only back-edge paths, so whether a
+// subflow on a cycle was reported depended on that order.
 func detectCircularDeps(doc *models.FlowDocument, callGraph map[string]map[string]bool) []string {
-	visited := make(map[string]int)
-	var cycles []string
-	var path []string
+	index := make(map[string]int, len(callGraph))
+	low := make(map[string]int, len(callGraph))
+	onStack := make(map[string]bool)
+	onCycle := make(map[string]bool)
+	var stack []string
+	next := 0
 
-	var dfs func(node string)
-	dfs = func(node string) {
-		visited[node] = 1
-		path = append(path, node)
-		for target := range callGraph[node] {
-			if visited[target] == 1 {
-				for i, p := range path {
-					if p == target {
-						cycles = append(cycles, path[i:]...)
-						break
-					}
-				}
-			} else if visited[target] == 0 {
-				dfs(target)
+	var connect func(v string)
+	connect = func(v string) {
+		index[v], low[v] = next, next
+		next++
+		stack = append(stack, v)
+		onStack[v] = true
+		for w := range callGraph[v] {
+			if _, seen := index[w]; !seen {
+				connect(w)
+				low[v] = min(low[v], low[w])
+			} else if onStack[w] {
+				low[v] = min(low[v], index[w])
 			}
 		}
-		path = path[:len(path)-1]
-		visited[node] = 2
+		if low[v] != index[v] {
+			return
+		}
+		top := len(stack) - 1
+		for stack[top] != v {
+			top--
+		}
+		scc := stack[top:]
+		stack = stack[:top]
+		cyclic := len(scc) > 1 || callGraph[v][v]
+		for _, w := range scc {
+			onStack[w] = false
+			if cyclic {
+				onCycle[w] = true
+			}
+		}
 	}
 
 	for i := range doc.Subflows {
-		sf := &doc.Subflows[i]
-		if visited[sf.ID] == 0 {
-			dfs(sf.ID)
+		if _, seen := index[doc.Subflows[i].ID]; !seen {
+			connect(doc.Subflows[i].ID)
+		}
+	}
+	var cycles []string
+	for i := range doc.Subflows {
+		if id := doc.Subflows[i].ID; onCycle[id] {
+			cycles = append(cycles, id)
+			delete(onCycle, id)
 		}
 	}
 	return cycles
@@ -216,11 +243,23 @@ func computeHealthScore(report *models.AnalysisReport, maxCyclo int, maxCog int,
 	if report == nil {
 		return 100
 	}
+	return healthScore(report.Findings, maxCyclo, maxCog, len(circular) > 0)
+}
 
+// healthScore is 100 minus 12 per error, 4 per warning and 1 per info finding
+// that gates (a preview rule never moves health; an unknown severity counts as
+// an error), minus the complexity terms, clamped to [0, 100]. HealthOf exposes
+// it for like-for-like comparisons.
+func healthScore(findings []models.Finding, maxCyclo, maxCog int, circular bool) int {
 	score := 100.0
 
-	for _, f := range report.Findings {
-		switch f.Severity {
+	metas := metaTable()
+	for i := range findings {
+		f := &findings[i]
+		if !gates(metas, f) {
+			continue
+		}
+		switch gateSeverity(f.Severity) {
 		case models.SeverityError:
 			score -= 12
 		case models.SeverityWarning:
@@ -236,7 +275,7 @@ func computeHealthScore(report *models.AnalysisReport, maxCyclo int, maxCog int,
 	if maxCog > 30 {
 		score -= float64(maxCog-30) * 1.5
 	}
-	if len(circular) > 0 {
+	if circular {
 		score -= 10
 	}
 

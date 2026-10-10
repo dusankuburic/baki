@@ -1,5 +1,13 @@
 import {describe, it, expect, beforeEach, vi} from 'vitest'
-import {useAnalysisStore, findingKey, findingsByBlockOf, MAX_RETAINED_FINDINGS} from './analysisStore'
+import {
+  useAnalysisStore,
+  findingKey,
+  findingsByBlockOf,
+  viewHiddenCategories,
+  FINDING_CATEGORIES,
+  MAX_RETAINED_FINDINGS,
+  type SavedFilterView,
+} from './analysisStore'
 import {unknownValue} from '@/testing/testHelpers'
 import type {Finding, AnalysisReport} from '@/types'
 
@@ -11,10 +19,13 @@ vi.mock('@/api', () => ({
     setFindingStatusBatch: vi.fn().mockResolvedValue({updated: 0}),
     clearFindingStatus: vi.fn().mockResolvedValue(undefined),
     listFindingStatuses: vi.fn().mockResolvedValue([]),
+    getBaseline: vi.fn().mockResolvedValue(null),
+    baselineDrift: vi.fn(),
   },
 }))
 
 import {analysisApi} from '@/api'
+import {useFlowStore} from './flowStore'
 
 function makeFinding(id: string, over: Partial<Finding> = {}): Finding {
   return {
@@ -114,11 +125,18 @@ describe('filters', () => {
     expect(useAnalysisStore.getState().severityFilter.has('error')).toBe(true)
   })
 
-  it('toggleCategoryFilter removes and re-adds a category', () => {
-    useAnalysisStore.getState().toggleCategoryFilter('Security')
-    expect(useAnalysisStore.getState().categoryFilter.has('Security')).toBe(false)
-    useAnalysisStore.getState().toggleCategoryFilter('Security')
-    expect(useAnalysisStore.getState().categoryFilter.has('Security')).toBe(true)
+  it('toggleCategory hides and shows a category; nothing is hidden by default', () => {
+    expect(useAnalysisStore.getState().hiddenCategories.size).toBe(0)
+    useAnalysisStore.getState().toggleCategory('Security')
+    expect(useAnalysisStore.getState().hiddenCategories.has('Security')).toBe(true)
+    useAnalysisStore.getState().toggleCategory('Security')
+    expect(useAnalysisStore.getState().hiddenCategories.has('Security')).toBe(false)
+  })
+
+  it('knows every category the built-in rules use, Portability and Syntax included', () => {
+    expect([...FINDING_CATEGORIES].sort()).toEqual(
+      ['Logic', 'Performance', 'Portability', 'Reliability', 'Security', 'Style', 'Syntax'].sort(),
+    )
   })
 })
 
@@ -254,15 +272,56 @@ describe('reset', () => {
 })
 
 describe('saved filter views', () => {
-  it('saveCurrentView stores the current severity + category filters', () => {
+  it('saveCurrentView stores the current severity + hidden categories, and the shown ones for older bundles', () => {
     const s = useAnalysisStore.getState()
     s.setSeverityFilter(new Set(['error', 'warning']))
-    s.saveCurrentView('Errors+Warnings', new Set(['error', 'warning']), new Set(['Security']))
+    s.saveCurrentView('Errors+Warnings', new Set(['error', 'warning']), new Set(['Style', 'Compliance']))
     const views = useAnalysisStore.getState().savedViews
     expect(views.some(v => v.name === 'Errors+Warnings')).toBe(true)
     const view = views.find(v => v.name === 'Errors+Warnings')!
     expect(view.severities).toEqual(['error', 'warning'])
-    expect(view.categories).toEqual(['Security'])
+    expect(view.hiddenCategories).toEqual(['Style', 'Compliance'])
+    // Older bundles know five categories: the compatibility field lists only those.
+    expect(view.categories).toEqual(['Security', 'Reliability', 'Performance', 'Logic'])
+    expect([...viewHiddenCategories(view)]).toEqual(['Style', 'Compliance'])
+  })
+
+  // An older bundle applies `categories` as its shown set and offers "All" while
+  // that set has fewer than five entries; categories it has no chip for must not
+  // be in it, or it would show findings it can never hide again.
+  it('saveCurrentView writes the compatibility categories out of the legacy five only', () => {
+    const s = useAnalysisStore.getState()
+    s.saveCurrentView('NoSecurity', new Set(['error']), new Set(['Security']))
+    s.saveCurrentView('NoPortability', new Set(['error']), new Set(['Portability', 'Syntax']))
+    const views = useAnalysisStore.getState().savedViews
+    expect(views.find(v => v.name === 'NoSecurity')!.categories).toEqual([
+      'Reliability',
+      'Performance',
+      'Style',
+      'Logic',
+    ])
+    expect(views.find(v => v.name === 'NoPortability')!.categories).toEqual([
+      'Security',
+      'Reliability',
+      'Performance',
+      'Style',
+      'Logic',
+    ])
+    // The new bundle reads the hidden set, not the compatibility field.
+    expect([...viewHiddenCategories(views.find(v => v.name === 'NoPortability')!)]).toEqual(['Portability', 'Syntax'])
+  })
+
+  // Views saved before the filter hid categories list the SHOWN ones out of the
+  // five that bundle knew: a category outside those five was never theirs to hide.
+  it('reads a view saved by an older bundle as hiding only the legacy categories it left out', () => {
+    const legacy = (categories: string[]) => ({name: 'old', severities: ['error'], categories}) as SavedFilterView
+    expect([...viewHiddenCategories(legacy(['Security', 'Reliability', 'Performance', 'Style', 'Logic']))]).toEqual([])
+    expect([...viewHiddenCategories(legacy(['Security']))].sort()).toEqual(
+      ['Logic', 'Performance', 'Reliability', 'Style'].sort(),
+    )
+    expect(viewHiddenCategories(legacy([])).size).toBe(5)
+    // A malformed entry (hand-edited storage) hides nothing.
+    expect(viewHiddenCategories({name: 'x', severities: []} as unknown as SavedFilterView).size).toBe(0)
   })
 
   it('saveCurrentView replaces an existing view with the same name', () => {
@@ -470,5 +529,37 @@ describe('triageFindingsBatch (U4.4)', () => {
     await vi.waitFor(() => {
       expect(useAnalysisStore.getState().triageMap.get(findingKey(f1()))?.status ?? 'open').toBe('open')
     })
+  })
+})
+
+describe('loadBaseline', () => {
+  // The toolbar's "N new" is drift: new-rule and preview findings are in the
+  // drift's `new` list but raise no drift.
+  it('counts new findings minus those of new rules and preview rules', async () => {
+    useFlowStore.setState({document: {id: 'flow-1'} as never})
+    vi.mocked(analysisApi.baselineDrift).mockResolvedValue({
+      flowId: 'flow-1',
+      hasBaseline: true,
+      new: [makeFinding('a'), makeFinding('b'), makeFinding('c'), makeFinding('d')],
+      newErrors: 0,
+      newWarnings: 0,
+      newInfo: 4,
+      newFromNewRules: 2,
+      preview: 1,
+    })
+    await useAnalysisStore.getState().loadBaseline('flow-1')
+    expect(useAnalysisStore.getState().baselineNewCount).toBe(1)
+
+    // A server from before rule sets sends neither count.
+    vi.mocked(analysisApi.baselineDrift).mockResolvedValue({
+      flowId: 'flow-1',
+      hasBaseline: true,
+      new: [makeFinding('a'), makeFinding('b')],
+      newErrors: 0,
+      newWarnings: 0,
+      newInfo: 2,
+    })
+    await useAnalysisStore.getState().loadBaseline('flow-1')
+    expect(useAnalysisStore.getState().baselineNewCount).toBe(2)
   })
 })

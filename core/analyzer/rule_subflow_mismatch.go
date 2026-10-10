@@ -145,4 +145,12 @@ func providesInputs(block *models.Block, target *models.Subflow) bool {
 	return true
 }
 
-func init() { registerRule(&SubflowMismatchRule{}) }
+func init() {
+	registerRule(&SubflowMismatchRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		DirectFixes:  []string{"append-output"},
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

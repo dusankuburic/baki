@@ -1,0 +1,67 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_padframework_Framework_KillAllProcesses
+document: subflows=1 blocks=1 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":1,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=1 final=45/45 last="Loop body is too large"
+metrics: {"avgCognitive":0,"avgCyclomatic":1,"healthScore":99,"maxCognitive":0,"maxCyclomatic":1,"subflowCount":1,"totalBlocks":0,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Framework_KillAllProcesses: {"blockCount":0,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=1
+  raw findings: empty-subflow=1
+inventory: none
+findings: 1
+F-001 info/medium empty-subflow [Style] fix=- @Framework_KillAllProcesses#0 sf=Framework_KillAllProcesses fp=empty-subflow:c84b2a1a7f636a30
+    title: Empty subflow
+    desc: Subflow 'Framework_KillAllProcesses' contains no actionable blocks.
+    meta: {"subflow":"Framework_KillAllProcesses"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":1,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=1 final=45/45 last="Loop body is too large"
+metrics: as default, healthScore=99
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=1
+  raw findings: empty-subflow=1
+inventory: none
+findings: 1
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":1,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=1 final=45/45 last="Loop body is too large"
+metrics: as default, healthScore=99
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=1
+  raw findings: empty-subflow=1
+inventory: none
+findings: 1
+  as default; severity changes: none
+
+=== disabled
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":1,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=1 final=37/37 last="Loop body is too large"
+metrics: as default, healthScore=99
+profiles: rules=37 order=f7de49357acad250 blocksChecked=1
+  raw findings: empty-subflow=1
+inventory: none
+findings: 1
+  as default; severity changes: none
+
+=== severity
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":1,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=1 final=45/45 last="Loop body is too large"
+metrics: as default, healthScore=99
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=1
+  raw findings: empty-subflow=1
+inventory: none
+findings: 1
+  as default; severity changes: none
+
+=== autofixable
+stats: {"errors":0,"warnings":0,"info":0,"blocksAnalyzed":1,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=1 final=32/32 last="Wait zero"
+metrics: as default, healthScore=100
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=1
+inventory: none
+findings: 0

@@ -1,0 +1,73 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_padframework_Framework_SetTransactionItem
+document: subflows=1 blocks=6 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":0,"info":2,"blocksAnalyzed":5,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=225/225 last="Loop body is too large"
+metrics: {"avgCognitive":2,"avgCyclomatic":3,"healthScore":98,"maxCognitive":2,"maxCyclomatic":3,"subflowCount":1,"totalBlocks":4,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Framework_SetTransactionItem: {"blockCount":4,"cognitiveComplexity":2,"cyclomaticComplexity":3,"fanIn":0,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=5
+  raw findings: unused-variable=2
+inventory: none
+findings: 2
+F-001 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionItem#2 sf=Framework_SetTransactionItem fp=unused-variable:098182903b7cd7f9
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"TransactionItem"}
+F-002 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionItem#4 sf=Framework_SetTransactionItem fp=unused-variable:ea4ef0adc7c7dd12
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"TransactionItem"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":0,"info":2,"blocksAnalyzed":5,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=225/225 last="Loop body is too large"
+metrics: as default, healthScore=98
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=5
+  raw findings: unused-variable=2
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":0,"info":2,"blocksAnalyzed":5,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=225/225 last="Loop body is too large"
+metrics: as default, healthScore=98
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=5
+  raw findings: unused-variable=2
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== disabled
+stats: {"errors":0,"warnings":0,"info":2,"blocksAnalyzed":5,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=4 final=185/185 last="Loop body is too large"
+metrics: as default, healthScore=98
+profiles: rules=37 order=f7de49357acad250 blocksChecked=5
+  raw findings: unused-variable=2
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== severity
+stats: {"errors":0,"warnings":0,"info":2,"blocksAnalyzed":5,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=225/225 last="Loop body is too large"
+metrics: as default, healthScore=98
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=5
+  raw findings: unused-variable=2
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== autofixable
+stats: {"errors":0,"warnings":0,"info":2,"blocksAnalyzed":5,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=4 final=160/160 last="Wait zero"
+metrics: as default, healthScore=98
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=5
+  raw findings: unused-variable=2
+inventory: none
+findings: 2
+  as default; severity changes: none

@@ -1,7 +1,9 @@
 // Package scanner runs the continuous-governance loop: on an interval it
 // re-analyzes every stored flow, compares against the accepted baseline
 // (drift) and last recorded health (regression), and alerts on anything new.
-// Best-effort, read-only, cloud-only.
+// Findings of rules newer than the baseline's or snapshot's rule set raise one
+// "new rules" notice per scope instead (ADR 0016). Best-effort, read-only,
+// cloud-only.
 package scanner
 
 import (
@@ -11,9 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +46,10 @@ type AnalyzeFunc func(ctx context.Context, doc *models.FlowDocument) (*models.An
 // applies to a flow's org, or "" — without one the scanner re-analyzes every flow every sweep.
 type RuleSetDigestFunc func(ctx context.Context, orgID string) string
 
+// HealthRecorder records a flow's analysis as its health snapshot (DashboardService.RecordAnalysis): what an
+// interactive analysis or a CI run records, with the rule set it was scored under.
+type HealthRecorder func(ctx context.Context, doc *models.FlowDocument, report *models.AnalysisReport)
+
 // SSENotifier pushes real-time events to connected frontend clients; nil disables
 // push. Defined here so the scanner stays decoupled from the service layer.
 type SSENotifier interface {
@@ -64,8 +68,10 @@ type Scanner struct {
 	mu      sync.Mutex
 	lastSig map[string]string // (flowID|eventType) -> last alert signature, for dedup
 	// lastScan maps flowID -> the scanInputs key of its last complete scan
-	// (guarded by mu); an unchanged key skips the flow.
-	lastScan map[string]string
+	// (guarded by mu); an unchanged key skips the flow. lastNotes holds the
+	// "new rules" note that scan made, if any, which a skip notes again.
+	lastScan  map[string]string
+	lastNotes map[string]*noticeNote
 
 	// ruleSetDigest is optional; nil disables skipping. ruleDigests memoizes
 	// it per org for the current sweep (under orgChMu, reset with orgNotifiers).
@@ -79,6 +85,19 @@ type Scanner struct {
 	// orgRosters caches each org's member user IDs for the current sweep
 	// (alertRecipients), under orgChMu.
 	orgRosters map[string][]string
+	// ruleSets caches the recorded rule sets resolved by digest for the
+	// current sweep (notices.go), under orgChMu.
+	ruleSets map[string]resolvedRuleSet
+
+	// singleTenant: a deployment without accounts, whose notices are all the
+	// deployment's ("app" scope) rather than an org's or a user's.
+	singleTenant bool
+	// recordHealth re-records a legacy health snapshot under the current rules (nil: none is).
+	recordHealth HealthRecorder
+	// noticeMu guards notices: the current sweep's "new rules" notices, by
+	// notice id, flushed after every page (notices.go).
+	noticeMu sync.Mutex
+	notices  map[string]*pendingNotice
 
 	// notifyPolicy decides whether org-channel deliveries may reach loopback/
 	// private addresses; the zero value blocks them (safe default).
@@ -107,6 +126,7 @@ func New(backend storageif.StorageBackend, locker lock.GlobalLocker, analyze Ana
 		interval:      interval,
 		lastSig:       make(map[string]string),
 		lastScan:      make(map[string]string),
+		lastNotes:     make(map[string]*noticeNote),
 		notifyPolicy:  notifyPolicy,
 		channelClient: notify.NewChannelClient(notifyPolicy),
 		deliverySem:   make(chan struct{}, maxConcurrentDeliveries),
@@ -128,6 +148,18 @@ func (s *Scanner) SetEventNotifier(n SSENotifier) { s.sse = n }
 // SetRuleSetDigest injects the rule-set digest that lets a sweep skip flows
 // whose scan inputs have not changed. Call before Start.
 func (s *Scanner) SetRuleSetDigest(fn RuleSetDigestFunc) { s.ruleSetDigest = fn }
+
+// SetHealthRecorder injects the recorder that replaces a legacy health snapshot, which the regression check does
+// not compare, with the sweep's analysis, so the next change of the flow is compared like for like. Without one a
+// legacy snapshot stays until an interactive analysis or a CI run records the flow. Call before Start.
+func (s *Scanner) SetHealthRecorder(fn HealthRecorder) { s.recordHealth = fn }
+
+// SetSingleTenant marks a deployment without accounts: every "new rules"
+// notice is the deployment's, visible to its one user. Call before Start.
+func (s *Scanner) SetSingleTenant(single bool) { s.singleTenant = single }
+
+// SingleTenant reports what SetSingleTenant set.
+func (s *Scanner) SingleTenant() bool { return s.singleTenant }
 
 // enabled reports whether periodic scanning should run: a backend, an analyzer
 // and a positive interval; PAD_NOTIFY_* is NOT required (in-app alerts still record).
@@ -202,7 +234,12 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 	s.orgNotifiers = nil
 	s.ruleDigests = nil
 	s.orgRosters = nil
+	s.ruleSets = nil
 	s.orgChMu.Unlock()
+	s.resetNotices()
+	// Whatever the sweep noted and no page flush stored, also when the tick's
+	// context ends mid-page; before the lock is released.
+	defer s.flushNoticesDetached(ctx)
 	const pageSize = 100
 	after := ""
 	seen := make(map[string]struct{})
@@ -251,6 +288,7 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 			s.scanFlow(fctx, f, page)
 			cancel()
 		}
+		s.flushNotices(ctx, false)
 		after = flows[len(flows)-1].ID
 		if len(flows) < pageSize {
 			break // last page
@@ -279,6 +317,11 @@ func (s *Scanner) pruneLastSig(seen map[string]struct{}) {
 			delete(s.lastScan, flowID)
 		}
 	}
+	for flowID := range s.lastNotes {
+		if _, present := seen[flowID]; !present {
+			delete(s.lastNotes, flowID)
+		}
+	}
 	for key := range s.lastSig {
 		flowID, _, ok := strings.Cut(key, "|")
 		if !ok {
@@ -301,10 +344,14 @@ func (s *Scanner) scanFlow(ctx context.Context, hdr *storageif.FlowDocument, pag
 
 	// Skip a flow whose inputs match its last complete scan: the analysis and
 	// its events would be identical, and every event was already de-duplicated.
-	// A skipped flow's content is never read.
+	// A skipped flow's content is never read. The notice it fed is still
+	// raised: noting it again keeps the notice from the retention sweep.
 	in := page.inputsFor(ctx, s, hdr)
-	if in.key != "" && s.lastScanKey(hdr.ID) == in.key {
-		return
+	if in.key != "" {
+		if key, note := s.lastScanOf(hdr.ID); key == in.key {
+			s.addNote(hdr.ID, note, true)
+			return
+		}
 	}
 	// Forget the previous key until this scan completes: a scan that fails or
 	// panics part-way must not leave a key a later sweep matches.
@@ -343,26 +390,51 @@ func (s *Scanner) scanFlow(ctx context.Context, hdr *storageif.FlowDocument, pag
 		return
 	}
 
-	for _, ev := range s.events(lf, report, in) {
-		if s.shouldAlert(lf.ID, ev) {
-			// Persist to the in-app inbox (best-effort); the system context
-			// bypasses RLS.
-			s.recordAlert(ctx, lf, ev)
-			// Ping connected clients who can see this flow so the bell updates.
-			s.pushAlertSSE(ctx, lf, ev)
-			s.notifier.Dispatch(ctx, ev)
-			// The flow's org ALSO routes to its own configured destinations.
-			s.dispatchOrgChannels(ctx, lf, ev)
-		}
+	events, newRules, compared := s.events(ctx, lf, report, in, page)
+	complete := compared
+	if compared && s.recordHealth != nil && in.health != nil && in.health.RuleSetDigest == "" &&
+		report.RuleSet != nil && report.Metrics != nil {
+		// A legacy snapshot is not compared (events): replace it with this analysis, scored under the current
+		// rules, so the regression check resumes for flows nobody analyzes interactively.
+		s.recordHealth(ctx, doc, report)
 	}
-	s.setLastScanKey(lf.ID, in.key)
+	for _, ev := range events {
+		if !s.shouldAlert(lf.ID, ev) {
+			continue
+		}
+		// Persist to the in-app inbox; the system context bypasses RLS.
+		inserted, err := s.recordAlert(ctx, lf, ev)
+		if err != nil {
+			// Not in the inbox, so not delivered: the next sweep scans the flow
+			// again and retries.
+			s.forgetAlert(lf.ID, ev)
+			complete = false
+			continue
+		}
+		if !inserted {
+			// Already in the inbox, so already delivered when it was recorded:
+			// by this process before a restart, or by another replica.
+			continue
+		}
+		// Ping connected clients who can see this flow so the bell updates.
+		s.pushAlertSSE(ctx, lf, ev)
+		s.notifier.Dispatch(ctx, ev)
+		// The flow's org ALSO routes to its own configured destinations.
+		s.dispatchOrgChannels(ctx, lf, ev)
+	}
+	note := s.newRulesNote(lf, report.RuleSet, newRules)
+	s.addNote(lf.ID, note, false)
+	if complete {
+		s.setLastScan(lf.ID, in.key, note)
+	}
 }
 
 // scanInputs holds one flow's non-analysis inputs (baseline, last health).
 // key identifies the FULL input set — flow ID/version/owner/org, the org's
-// rule-set digest, the baseline's keys, the last health score — so equal keys
-// mean an identical analysis and the flow is skipped; key "" never skips or
-// records (unreadable input or no digest wired).
+// rule-set digest, the baseline's keys and recorded rule set, the last health
+// score and its rule set — so equal keys mean an identical analysis and the
+// flow is skipped; key "" never skips or records (unreadable input or no
+// digest wired).
 type scanInputs struct {
 	baseline *storageif.FlowBaseline
 	health   *storageif.HealthSnapshot
@@ -468,11 +540,13 @@ func (p pageInputs) keyOf(ctx context.Context, s *Scanner, hdr *storageif.FlowDo
 		for _, k := range in.baseline.Keys {
 			field(k)
 		}
+		field(in.baseline.RuleSetDigest)
 	}
 	if in.health == nil {
 		field("no-health")
 	} else {
 		fmt.Fprintf(h, "health:%d;", in.health.HealthScore)
+		field(in.health.RuleSetDigest)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -500,55 +574,43 @@ func (s *Scanner) ruleDigestFor(ctx context.Context, orgID string) string {
 }
 
 func (s *Scanner) lastScanKey(flowID string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.lastScan[flowID]
+	key, _ := s.lastScanOf(flowID)
+	return key
 }
 
-// setLastScanKey records key as flowID's last complete scan; "" forgets it.
-func (s *Scanner) setLastScanKey(flowID, key string) {
+// lastScanOf returns flowID's last complete scan: its key and its note.
+func (s *Scanner) lastScanOf(flowID string) (string, *noticeNote) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastScan[flowID], s.lastNotes[flowID]
+}
+
+// setLastScanKey records key as flowID's last complete scan, without a note;
+// "" forgets it.
+func (s *Scanner) setLastScanKey(flowID, key string) { s.setLastScan(flowID, key, nil) }
+
+// setLastScan records key and note (nil: none) as flowID's last complete
+// scan; key "" forgets it.
+func (s *Scanner) setLastScan(flowID, key string, note *noticeNote) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if key == "" {
 		delete(s.lastScan, flowID)
+		delete(s.lastNotes, flowID)
 		return
 	}
 	s.lastScan[flowID] = key
+	if note == nil {
+		delete(s.lastNotes, flowID)
+		return
+	}
+	s.lastNotes[flowID] = note
 }
 
-// DigestRuleSet digests an analysis configuration for RuleSetDigestFunc: rule
-// IDs (each with its RuleDigest, as the analyzer's cache key does) and the
-// per-rule settings as JSON, so any change counts.
+// DigestRuleSet digests an analysis configuration for RuleSetDigestFunc: analyzer.ProfileDigest, the digest the
+// analyzer's cache keys carry, so any change of rules, their configuration or their settings counts.
 func DigestRuleSet(settings *models.AppSettings, rules []analyzer.Rule) string {
-	ids := make([]string, 0, len(rules))
-	for _, r := range rules {
-		if d, ok := r.(analyzer.RuleDigester); ok {
-			ids = append(ids, r.ID()+"@"+d.RuleDigest())
-			continue
-		}
-		ids = append(ids, r.ID())
-	}
-	sort.Strings(ids)
-	h := sha256.New()
-	writeLenPrefixed(h, fmt.Sprintf("rules:%d", len(ids)))
-	for _, id := range ids {
-		writeLenPrefixed(h, id)
-	}
-	if settings == nil {
-		writeLenPrefixed(h, "no-settings")
-	} else {
-		// encoding/json sorts map keys, so equal settings encode equally.
-		b, err := json.Marshal(settings.Analysis.Rules)
-		if err != nil {
-			return ""
-		}
-		writeLenPrefixed(h, string(b))
-	}
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-func writeLenPrefixed(h hash.Hash, v string) {
-	fmt.Fprintf(h, "%d:%s;", len(v), v)
+	return analyzer.ProfileDigest(settings, rules)
 }
 
 // pushAlertSSE delivers a lightweight "governance:alert" SSE event to every
@@ -632,13 +694,11 @@ func (s *Scanner) orgRoster(ctx context.Context, orgID string) []string {
 	return roster
 }
 
-// recordAlert writes a governance event to the in-app alert store (best-effort).
-// The ID derives from (flowID|eventType|signature) so a re-alert reuses the
-// same row (ON CONFLICT DO NOTHING); one acknowledgement sticks.
-func (s *Scanner) recordAlert(ctx context.Context, lf *storageif.FlowDocument, ev notify.Event) {
-	if s.backend == nil {
-		return
-	}
+// recordAlert writes a governance event to the in-app alert store and reports
+// whether it is new there. The ID derives from (flowID|eventType|signature) so
+// a re-alert reuses the same row (ON CONFLICT DO NOTHING); one acknowledgement
+// sticks, and one delivery: only an inserted alert is dispatched.
+func (s *Scanner) recordAlert(ctx context.Context, lf *storageif.FlowDocument, ev notify.Event) (bool, error) {
 	alert := &storageif.GovernanceAlert{
 		ID:          fmt.Sprintf("%s|%s|%s", lf.ID, ev.Type, signature(ev)),
 		FlowID:      lf.ID,
@@ -654,9 +714,11 @@ func (s *Scanner) recordAlert(ctx context.Context, lf *storageif.FlowDocument, e
 		PrevHealth:  ev.PrevHealth,
 		CreatedAt:   time.Now().UTC(),
 	}
-	if err := s.backend.RecordGovernanceAlert(ctx, alert); err != nil {
+	inserted, err := s.backend.InsertGovernanceAlert(ctx, alert)
+	if err != nil {
 		logger.Warn("scanner: persist governance alert failed", "flowId", lf.ID, "type", ev.Type, "err", err)
 	}
+	return inserted, err
 }
 
 // alertSeverity maps an event to an inbox severity: drift with new errors (or
@@ -669,9 +731,13 @@ func alertSeverity(ev notify.Event) string {
 }
 
 // events derives the alerts for one freshly-analyzed flow: drift (new findings
-// since the accepted baseline) and health regression (health below last recorded).
-func (s *Scanner) events(lf *storageif.FlowDocument, report *models.AnalysisReport, in scanInputs) []notify.Event {
-	var events []notify.Event
+// since the accepted baseline) and health regression (health below last
+// recorded), over the rules the baseline knew and the rules the snapshot's
+// score counted (unscoredRules). newRules are
+// the rules newer than either that report findings (the flow's part of a
+// "new rules" notice); preview rules raise nothing (ADR 0016). compared is
+// false when a recorded rule set could not be read: nothing is raised then.
+func (s *Scanner) events(ctx context.Context, lf *storageif.FlowDocument, report *models.AnalysisReport, in scanInputs, page pageInputs) (events []notify.Event, newRules []string, compared bool) {
 	name := lf.Name
 
 	// Drift vs. accepted baseline. Only meaningful once a baseline exists;
@@ -681,36 +747,120 @@ func (s *Scanner) events(lf *storageif.FlowDocument, report *models.AnalysisRepo
 		if keys == nil {
 			keys = []string{}
 		}
-		drift := analyzer.ComputeDrift(lf.ID, report, keys)
-		if len(drift.New) > 0 {
-			events = append(events, notify.Event{
-				Type:        notify.EventDrift,
-				FlowID:      lf.ID,
-				FlowName:    name,
-				Title:       fmt.Sprintf("New findings in %s", flowLabel(lf)),
-				Message:     fmt.Sprintf("%d new finding(s) since baseline (%d error, %d warning).", len(drift.New), drift.NewErrors, drift.NewWarnings),
-				NewErrors:   drift.NewErrors,
-				NewWarnings: drift.NewWarnings,
-			})
+		if drift := analyzer.ComputeDrift(lf.ID, report, keys); len(drift.New) > 0 {
+			recorded, ok := s.recordedRuleSet(ctx, page, bl.RuleSetDigest, bl.RuleSet, report.RuleSet)
+			if !ok {
+				return nil, nil, false
+			}
+			split := analyzer.SplitDrift(drift.New, analyzer.NewRuleAge(recorded, report.RuleSet))
+			newRules = append(newRules, split.NewRuleIDs...)
+			if len(split.Drift) > 0 {
+				c := analyzer.CountGating(split.Drift)
+				events = append(events, notify.Event{
+					Type:        notify.EventDrift,
+					FlowID:      lf.ID,
+					FlowName:    name,
+					Title:       fmt.Sprintf("New findings in %s", flowLabel(lf)),
+					Message:     fmt.Sprintf("%d new finding(s) since baseline (%d error, %d warning).", len(split.Drift), c.Errors, c.Warnings),
+					NewErrors:   c.Errors,
+					NewWarnings: c.Warnings,
+				})
+			}
 		}
 	}
 
 	// Health regression vs. last recorded snapshot. Requires metrics (a parsed,
-	// analyzable flow) and a prior snapshot to compare against.
-	if report.Metrics != nil {
-		if prior := in.health; prior != nil && report.Metrics.HealthScore < prior.HealthScore {
+	// analyzable flow) and a prior snapshot to compare against. The current
+	// score leaves out the rules the snapshot's score did not count: a rule it
+	// did not have lowers the score without the flow having changed. A legacy
+	// snapshot (no rule set: recorded before rule sets, or rewritten by the
+	// previous release) is not compared at all: its release graded severities
+	// differently (Phase 4a: hardcoded-credential's default, parse errors and
+	// tainted SQL under settings) without moving a fingerprint or a revision, so
+	// every unchanged flow would "regress" on the first sweep. The sweep records
+	// this analysis as the flow's snapshot instead (SetHealthRecorder), so the
+	// next change is compared like for like; its new-rule findings still join
+	// the notice.
+	if prior := in.health; report.Metrics != nil && prior != nil {
+		legacySnapshot := prior.RuleSetDigest == "" && report.RuleSet != nil
+		full, cur := report.Metrics.HealthScore, report.Metrics.HealthScore
+		if rs := report.RuleSet; rs != nil && prior.RuleSetDigest != rs.Digest {
+			recorded, ok := s.recordedRuleSet(ctx, page, prior.RuleSetDigest, nil, rs)
+			if !ok {
+				return nil, nil, false
+			}
+			newRules = append(newRules, analyzer.SplitDrift(report.Findings, analyzer.NewRuleAge(recorded, rs)).NewRuleIDs...)
+			if unscored := unscoredRules(recorded, rs); len(unscored) > 0 {
+				kept := make([]models.Finding, 0, len(report.Findings))
+				for _, f := range report.Findings {
+					if !unscored[f.RuleID] {
+						kept = append(kept, f)
+					}
+				}
+				if len(kept) < len(report.Findings) {
+					cur = analyzer.HealthOf(kept, report.Metrics)
+				}
+			}
+		}
+		if cur < prior.HealthScore && !legacySnapshot {
+			msg := fmt.Sprintf("Health score dropped from %d to %d.", prior.HealthScore, cur)
+			if full != cur {
+				msg = fmt.Sprintf("Health score dropped from %d to %d over the rules it was last recorded with (%d with the newer ones).", prior.HealthScore, cur, full)
+			}
 			events = append(events, notify.Event{
 				Type:        notify.EventHealthRegression,
 				FlowID:      lf.ID,
 				FlowName:    name,
 				Title:       fmt.Sprintf("Health regressed in %s", flowLabel(lf)),
-				Message:     fmt.Sprintf("Health score dropped from %d to %d.", prior.HealthScore, report.Metrics.HealthScore),
-				HealthScore: report.Metrics.HealthScore,
+				Message:     msg,
+				HealthScore: cur,
 				PrevHealth:  prior.HealthScore,
 			})
 		}
 	}
-	return events
+	return events, newRules, true
+}
+
+// unscoredRules lists the current rules whose findings a snapshot's score did
+// not count, for the like-for-like regression check: those the recorded set
+// lacks by ID, or has as a preview rule. A revised rule or an edited custom
+// rule is not among them: the snapshot counted its earlier revision, and
+// leaving it out of the current score only would hide a regression by up to
+// that penalty. A legacy record (nil, or rules that do not hash to its digest)
+// counted every custom rule and every built-in of rule-set version 1. Two
+// refs under one ID are unscored only if both are. nil when all count.
+func unscoredRules(recorded, current *models.RuleSet) map[string]bool {
+	if current == nil || (recorded != nil && recorded.Digest == current.Digest) {
+		return nil
+	}
+	legacy := recorded == nil || analyzer.NewRuleSet(recorded.Rules).Digest != recorded.Digest
+	inRecord := map[string]bool{}
+	if !legacy {
+		for _, r := range recorded.Rules {
+			if r.Stage != string(analyzer.StagePreview) {
+				inRecord[r.ID] = true
+			}
+		}
+	}
+	counted := make(map[string]bool, len(current.Rules))
+	for _, ref := range current.Rules {
+		c := inRecord[ref.ID]
+		if legacy {
+			m, builtin := analyzer.LookupMeta(ref.ID)
+			c = analyzer.KnownToLegacyRecords(ref) || (builtin && m.IntroducedIn <= 1)
+		}
+		counted[ref.ID] = counted[ref.ID] || c
+	}
+	var out map[string]bool
+	for id, c := range counted {
+		if !c {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[id] = true
+		}
+	}
+	return out
 }
 
 // shouldAlert de-duplicates: true only when the event's signature differs from
@@ -726,6 +876,17 @@ func (s *Scanner) shouldAlert(flowID string, ev notify.Event) bool {
 	}
 	s.lastSig[key] = sig
 	return true
+}
+
+// forgetAlert undoes shouldAlert for an alert that could not be recorded, so
+// the next sweep raises it again.
+func (s *Scanner) forgetAlert(flowID string, ev notify.Event) {
+	key := flowID + "|" + string(ev.Type)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastSig[key] == signature(ev) {
+		delete(s.lastSig, key)
+	}
 }
 
 func signature(ev notify.Event) string {

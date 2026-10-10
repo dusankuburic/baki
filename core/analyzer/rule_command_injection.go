@@ -48,7 +48,9 @@ func (r *CommandInjectionRiskRule) Check(block *models.Block, ctx *RuleContext) 
 	// the shell. PAD refs are %Name%; %% is a literal percent escape, so match
 	// the same %VarName% pattern the SanitizeCommandVarsPatch fixer targets —
 	// otherwise '100%% complete' is a false positive the fixer can't resolve.
-	for _, val := range block.Properties {
+	var keys [16]string
+	for _, key := range sortedPropertyKeys(keys[:0], block.Properties) {
+		val := block.Properties[key]
 		if sqlVarRef.MatchString(val) {
 			return []models.Finding{{
 				RuleID:      r.ID(),
@@ -64,4 +66,12 @@ func (r *CommandInjectionRiskRule) Check(block *models.Block, ctx *RuleContext) 
 	return nil
 }
 
-func init() { registerRule(&CommandInjectionRiskRule{}) }
+func init() {
+	registerRule(&CommandInjectionRiskRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "sanitize-command-vars",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

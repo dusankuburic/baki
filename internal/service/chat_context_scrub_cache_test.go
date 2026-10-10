@@ -132,12 +132,12 @@ func TestCachedContextCore_HugeCloneIsNotPinned(t *testing.T) {
 	if n := scrubs.Load(); n != 2 {
 		t.Fatalf("a huge clone was pinned: %d scrubs for two turns, want 2", n)
 	}
-	cc := svc.chatCtxCache.(*chatContextCache)
-	if _, held := cc.docs.Get(context.Background(), scrubbedDocKey("s", "huge", 0)); held {
+	cc := svc.chatCtxCache
+	if _, held := cc.docs.Get(scrubbedDocKey("s", "huge", 0)); held {
 		t.Fatal("the doc cache holds a clone above the ceiling")
 	}
 	key := svc.chatContextKeyAt("s", "huge", 0, req, provider.ID(), req.Model, nil, "")
-	if _, ok := cc.texts.Get(context.Background(), key); !ok {
+	if _, ok := cc.texts.Get(key); !ok {
 		t.Fatal("the text entry was not cached")
 	}
 }
@@ -167,9 +167,9 @@ func TestCachedContextCore_TextEntriesDoNotPinClones(t *testing.T) {
 		}
 		clones = append(clones, weak.Make(cv.scrubbedDoc))
 	}
-	cc := svc.chatCtxCache.(*chatContextCache)
+	cc := svc.chatCtxCache
 	for g := 0; g < generations; g++ {
-		if _, ok := cc.texts.Get(context.Background(), svc.chatContextKeyAt("s", doc.ID, uint64(g), req, provider.ID(), req.Model, nil, "")); !ok {
+		if _, ok := cc.texts.Get(svc.chatContextKeyAt("s", doc.ID, uint64(g), req, provider.ID(), req.Model, nil, "")); !ok {
 			t.Fatalf("generation %d: its text entry was evicted; the texts LRU no longer covers every generation", g)
 		}
 	}

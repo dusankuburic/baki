@@ -1,0 +1,76 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_goto_label
+document: subflows=1 blocks=10 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":1,"info":1,"blocksAnalyzed":9,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=9 final=405/405 last="Loop body is too large"
+metrics: {"avgCognitive":1,"avgCyclomatic":2,"healthScore":95,"maxCognitive":1,"maxCyclomatic":2,"subflowCount":1,"totalBlocks":9,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":9,"cognitiveComplexity":1,"cyclomaticComplexity":2,"fanIn":0,"fanOut":0,"maxNestingDepth":1,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=9
+  raw findings: goto-antipattern=1 subflow-no-error-handler=1
+inventory: none
+findings: 2
+F-001 warning/medium goto-antipattern [Logic] fix=- @Main#4 sf=Main fp=goto-antipattern:2a92d3cc149cdb8a
+    title: GOTO breaks scope boundary
+    desc: This GOTO jumps to a label outside its current scope (across loop/condition/switch boundaries), which creates fragile and hard-to-maintain control flow.
+    meta: {"targetLabel":"Start"}
+F-002 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:2628d5beb13d645c
+    title: Subflow without error handler
+    desc: Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+
+=== nil-settings
+stats: {"errors":0,"warnings":1,"info":1,"blocksAnalyzed":9,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=9 final=405/405 last="Loop body is too large"
+metrics: as default, healthScore=95
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=9
+  raw findings: goto-antipattern=1 subflow-no-error-handler=1
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":1,"info":2,"blocksAnalyzed":9,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=9 final=405/405 last="Loop body is too large"
+metrics: as default, healthScore=94
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=9
+  raw findings: goto-antipattern=1 large-subflow=1 subflow-no-error-handler=1
+inventory: none
+findings: 3
+F-001 warning/medium goto-antipattern [Logic] fix=- @Main#4 sf=Main fp=goto-antipattern:2a92d3cc149cdb8a
+F-002 info/low large-subflow [Style] fix=- @Main#0 sf=Main fp=large-subflow:2628d5beb13d645c
+    title: Large subflow
+    desc: Subflow 'Main' has 9 blocks (threshold: 5).
+F-003 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:2628d5beb13d645c
+
+=== disabled
+stats: {"errors":0,"warnings":1,"info":0,"blocksAnalyzed":9,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=7 final=333/333 last="Loop body is too large"
+metrics: as default, healthScore=96
+profiles: rules=37 order=f7de49357acad250 blocksChecked=9
+  raw findings: goto-antipattern=1
+inventory: none
+findings: 1
+F-001 warning/medium goto-antipattern [Logic] fix=- @Main#4 sf=Main fp=goto-antipattern:2a92d3cc149cdb8a
+
+=== severity
+stats: {"errors":1,"warnings":1,"info":0,"blocksAnalyzed":9,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=9 final=405/405 last="Loop body is too large"
+metrics: as default, healthScore=84
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=9
+  raw findings: goto-antipattern=1 subflow-no-error-handler=1
+inventory: none
+findings: 2
+  as default; severity changes: F-002 info->error
+
+=== autofixable
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":9,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=6 final=288/288 last="Wait zero"
+metrics: as default, healthScore=99
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=9
+  raw findings: subflow-no-error-handler=1
+inventory: none
+findings: 1
+F-001 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:2628d5beb13d645c

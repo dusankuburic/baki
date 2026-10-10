@@ -1,0 +1,27 @@
+{
+  "flowId": "flow-clean",
+  "generatedAt": "2026-10-08T09:30:00Z",
+  "findings": [],
+  "stats": {
+    "errors": 0,
+    "warnings": 0,
+    "info": 0,
+    "blocksAnalyzed": 3,
+    "rulesRun": 45,
+    "rulesSkipped": 0,
+    "suppressed": 0
+  },
+  "durationMs": 7,
+  "metrics": {
+    "subflows": null,
+    "totalBlocks": 3,
+    "totalVariables": 0,
+    "maxCyclomatic": 0,
+    "avgCyclomatic": 0,
+    "maxCognitive": 0,
+    "avgCognitive": 0,
+    "healthScore": 100,
+    "variableDensity": 0,
+    "subflowCount": 1
+  }
+}

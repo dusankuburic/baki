@@ -1,0 +1,348 @@
+bytes: 30392 sha256: 112a43288e3ec81093e338c90c2d1ce26efda549d2d18eb37fc1e984a3a979ae
+pages: 4
+--- page 1
+0 J
+0 j
+0.57 w
+0.000 G
+0.000 g
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 20.00 Tf ET
+BT 31.19 790.53 Td "PAD Analyzer"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 11.00 Tf ET
+BT 31.19 779.06 Td "Analysis Report"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 10.00 Tf ET
+BT 31.19 746.76 Td "Flow: =Invoices+Ops"Tj ET
+BT 31.19 732.59 Td "Generated: 2026-10-08 09:30:00"Tj ET
+BT 31.19 718.41 Td "Duration: 1234ms"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 14.00 Tf ET
+BT 31.19 684.62 Td "Summary"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 10.00 Tf ET
+BT 31.19 667.39 Td "Blocks analyzed: 8"Tj ET
+BT 31.19 653.22 Td "Rules run: 45"Tj ET
+BT 31.19 639.04 Td "Errors: 0  |  Warnings: 18  |  Info: 8"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 14.00 Tf ET
+BT 31.19 605.25 Td "Findings (26)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 12.00 Tf ET
+BT 31.19 578.92 Td "Warnings (18)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 559.67 Td "1. File operation without error handler"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 544.38 Td "Rule: file-op-no-error-handler  |  Block: b-009"Tj ET
+0.000 Tw
+BT 0 Tw 31.19 533.04 Td ["This" -27.533" " "file/folder" -27.533" " "operation" -27.533" " "can" -27.533" " "fail" -27.533" " "due" -27.533" " "to" -27.533" " "missing" -27.533" " "files," -27.533" " "permission" -27.533" " "issues," -27.533" " "or" -27.533" " "file" -27.533" " "locks" -27.533" " "but" -27.533" " "has" ] TJ ET
+BT 31.19 521.71 Td "no error handler."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+1.286 Tw
+BT 0 Tw 31.19 504.70 Td ["Suggestion:" -158.071" " "Wrap" -158.071" " "this" -158.071" " "action" -158.071" " "in" -158.071" " "an" -158.071" " "'On" -158.071" " "Block" -158.071" " "Error'" -158.071" " "handler" -158.071" " "to" -158.071" " "manage" -158.071" " "missing" -158.071" " "files," -158.071" " "permission" ] TJ ET
+0 Tw
+BT 31.19 493.36 Td "errors, and file lock issues gracefully."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 471.80 Td "2. Network operation without timeout"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 456.51 Td "Rule: missing-timeout  |  Block: b-004"Tj ET
+5.250 Tw
+BT 0 Tw 31.19 445.17 Td ["This" -634.417" " "network/UI" -634.417" " "automation" -634.417" " "action" -634.417" " "has" -634.417" " "no" -634.417" " "explicit" -634.417" " "timeout" -634.417" " "configured." -634.417" " "If" -634.417" " "the" -634.417" " "target" -634.417" " "is" ] TJ ET
+0 Tw
+BT 31.19 433.83 Td "unresponsive, the flow will hang indefinitely."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.077 Tw
+BT 0 Tw 31.19 416.82 Td ["Suggestion:" -262.538" " "Set" -262.538" " "an" -262.538" " "explicit" -262.538" " "timeout" -262.538" " "value" -262.538" " "in" -262.538" " "the" -262.538" " "action's" -262.538" " "properties." -262.538" " "For" -262.538" " "web" -262.538" " "automation," -262.538" " "use" ] TJ ET
+0 Tw
+BT 31.19 405.49 Td "'Wait for element' with a timeout instead of relying on default behavior."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 383.93 Td "3. Network operation without timeout"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 368.64 Td "Rule: missing-timeout  |  Block: b-005"Tj ET
+5.250 Tw
+BT 0 Tw 31.19 357.30 Td ["This" -634.417" " "network/UI" -634.417" " "automation" -634.417" " "action" -634.417" " "has" -634.417" " "no" -634.417" " "explicit" -634.417" " "timeout" -634.417" " "configured." -634.417" " "If" -634.417" " "the" -634.417" " "target" -634.417" " "is" ] TJ ET
+0 Tw
+BT 31.19 345.96 Td "unresponsive, the flow will hang indefinitely."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.077 Tw
+BT 0 Tw 31.19 328.95 Td ["Suggestion:" -262.538" " "Set" -262.538" " "an" -262.538" " "explicit" -262.538" " "timeout" -262.538" " "value" -262.538" " "in" -262.538" " "the" -262.538" " "action's" -262.538" " "properties." -262.538" " "For" -262.538" " "web" -262.538" " "automation," -262.538" " "use" ] TJ ET
+0 Tw
+BT 31.19 317.61 Td "'Wait for element' with a timeout instead of relying on default behavior."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 296.05 Td "4. Network operation without timeout"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 280.76 Td "Rule: missing-timeout  |  Block: b-007"Tj ET
+5.250 Tw
+BT 0 Tw 31.19 269.42 Td ["This" -634.417" " "network/UI" -634.417" " "automation" -634.417" " "action" -634.417" " "has" -634.417" " "no" -634.417" " "explicit" -634.417" " "timeout" -634.417" " "configured." -634.417" " "If" -634.417" " "the" -634.417" " "target" -634.417" " "is" ] TJ ET
+0 Tw
+BT 31.19 258.08 Td "unresponsive, the flow will hang indefinitely."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.077 Tw
+BT 0 Tw 31.19 241.08 Td ["Suggestion:" -262.538" " "Set" -262.538" " "an" -262.538" " "explicit" -262.538" " "timeout" -262.538" " "value" -262.538" " "in" -262.538" " "the" -262.538" " "action's" -262.538" " "properties." -262.538" " "For" -262.538" " "web" -262.538" " "automation," -262.538" " "use" ] TJ ET
+0 Tw
+BT 31.19 229.74 Td "'Wait for element' with a timeout instead of relying on default behavior."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 208.18 Td "5. Resource opened but never closed"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 192.89 Td "Rule: resource-leak  |  Block: b-002"Tj ET
+1.286 Tw
+BT 0 Tw 31.19 181.55 Td ["This" -158.071" " "action" -158.071" " "opens" -158.071" " "a" -158.071" " "Excel" -158.071" " "instance" -158.071" " "(stored" -158.071" " "in" -158.071" " "%ExcelInstance%)" -158.071" " "but" -158.071" " "no" -158.071" " "matching" -158.071" " "close" -158.071" " "action" -158.071" " "was" ] TJ ET
+0 Tw
+BT 31.19 170.21 Td "found in the flow."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.571 Tw
+BT 0 Tw 31.19 153.20 Td ["Suggestion:" -286.643" " "Add" -286.643" " "a" -286.643" " "'Excel.Close'" -286.643" " "action" -286.643" " "to" -286.643" " "release" -286.643" " "the" -286.643" " "resource." -286.643" " "Place" -286.643" " "it" -286.643" " "inside" -286.643" " "an" -286.643" " "'On" -286.643" " "Block" ] TJ ET
+0 Tw
+BT 31.19 141.86 Td "Error' handler to guarantee cleanup even on failure."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 120.30 Td "6. Resource opened but never closed"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 105.01 Td "Rule: resource-leak  |  Block: b-007"Tj ET
+0.692 Tw
+BT 0 Tw 31.19 93.67 Td ["This" -124.077" " "action" -124.077" " "opens" -124.077" " "a" -124.077" " "database" -124.077" " "connection" -124.077" " "(stored" -124.077" " "in" -124.077" " "%SQLConnection%)" -124.077" " "but" -124.077" " "no" -124.077" " "matching" -124.077" " "close" -124.077" " "action" ] TJ ET
+0 Tw
+BT 31.19 82.34 Td "was found in the flow."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+1.286 Tw
+BT 0 Tw 31.19 65.33 Td ["Suggestion:" -158.071" " "Add" -158.071" " "a" -158.071" " "'Database.Close'" -158.071" " "action" -158.071" " "to" -158.071" " "release" -158.071" " "the" -158.071" " "resource." -158.071" " "Place" -158.071" " "it" -158.071" " "inside" -158.071" " "an" -158.071" " "'On" -158.071" " "Block" ] TJ ET
+0 Tw
+
+--- page 2
+0 J
+0 j
+0.57 w
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.000 G
+0.000 g
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 805.17 Td "Error' handler to guarantee cleanup even on failure."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 783.61 Td "7. UI automation in tight loop"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 768.32 Td "Rule: slow-pattern  |  Block: b-003"Tj ET
+1.385 Tw
+BT 0 Tw 31.19 756.98 Td ["This" -216.385" " "loop" -216.385" " "contains" -216.385" " "UI/web" -216.385" " "automation" -216.385" " "actions" -216.385" " "without" -216.385" " "any" -216.385" " "delay," -216.385" " "which" -216.385" " "can" -216.385" " "overwhelm" -216.385" " "the" -216.385" " "target" ] TJ ET
+0 Tw
+BT 31.19 745.64 Td "application."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+4.200 Tw
+BT 0 Tw 31.19 728.64 Td ["Suggestion:" -467.533" " "Add" -467.533" " "a" -467.533" " "'Wait'" -467.533" " "or" -467.533" " "'Delay'" -467.533" " "action" -467.533" " "inside" -467.533" " "the" -467.533" " "loop" -467.533" " "to" -467.533" " "reduce" -467.533" " "load" -467.533" " "on" -467.533" " "the" -467.533" " "target" ] TJ ET
+0 Tw
+BT 31.19 717.30 Td "application."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 695.74 Td "8. SQL injection risk"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 680.45 Td "Rule: sql-injection-risk  |  Block: b-008"Tj ET
+BT 31.19 669.11 Td "SQL statement interpolates variables directly. A malicious value could alter the query."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+4.500 Tw
+BT 0 Tw 31.19 652.10 Td ["Suggestion:" -581.300" " "Use" -581.300" " "parameterized" -581.300" " "queries" -581.300" " "(@paramName" -581.300" " "or" -581.300" " "?" -581.300" " "placeholders)" -581.300" " "instead" -581.300" " "of" -581.300" " "embedding" ] TJ ET
+0 Tw
+BT 31.19 640.76 Td "%variables% directly in the SQL string."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 619.20 Td "9. Unhandled error in fallible action"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 603.91 Td "Rule: unhandled-error  |  Block: b-002"Tj ET
+BT 31.19 592.57 Td "This action commonly fails but has no error handler in its surrounding scope."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.400 Tw
+BT 0 Tw 31.19 575.56 Td ["Suggestion:" -267.533" " "Wrap" -267.533" " "this" -267.533" " "action" -267.533" " "in" -267.533" " "a" -267.533" " "Try/Catch" -267.533" " "block" -267.533" " "or" -267.533" " "add" -267.533" " "error" -267.533" " "handler" -267.533" " "logic" -267.533" " "to" -267.533" " "recover" -267.533" " "from" ] TJ ET
+0 Tw
+BT 31.19 564.23 Td "failures."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 542.67 Td "10. Unhandled error in fallible action"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 527.38 Td "Rule: unhandled-error  |  Block: b-004"Tj ET
+BT 31.19 516.04 Td "This action commonly fails but has no error handler in its surrounding scope."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.400 Tw
+BT 0 Tw 31.19 499.03 Td ["Suggestion:" -267.533" " "Wrap" -267.533" " "this" -267.533" " "action" -267.533" " "in" -267.533" " "a" -267.533" " "Try/Catch" -267.533" " "block" -267.533" " "or" -267.533" " "add" -267.533" " "error" -267.533" " "handler" -267.533" " "logic" -267.533" " "to" -267.533" " "recover" -267.533" " "from" ] TJ ET
+0 Tw
+BT 31.19 487.69 Td "failures."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 466.13 Td "11. Unhandled error in fallible action"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 450.84 Td "Rule: unhandled-error  |  Block: b-005"Tj ET
+BT 31.19 439.50 Td "This action commonly fails but has no error handler in its surrounding scope."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.400 Tw
+BT 0 Tw 31.19 422.49 Td ["Suggestion:" -267.533" " "Wrap" -267.533" " "this" -267.533" " "action" -267.533" " "in" -267.533" " "a" -267.533" " "Try/Catch" -267.533" " "block" -267.533" " "or" -267.533" " "add" -267.533" " "error" -267.533" " "handler" -267.533" " "logic" -267.533" " "to" -267.533" " "recover" -267.533" " "from" ] TJ ET
+0 Tw
+BT 31.19 411.15 Td "failures."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 389.60 Td "12. Unhandled error in fallible action"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 374.30 Td "Rule: unhandled-error  |  Block: b-007"Tj ET
+BT 31.19 362.97 Td "This action commonly fails but has no error handler in its surrounding scope."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.400 Tw
+BT 0 Tw 31.19 345.96 Td ["Suggestion:" -267.533" " "Wrap" -267.533" " "this" -267.533" " "action" -267.533" " "in" -267.533" " "a" -267.533" " "Try/Catch" -267.533" " "block" -267.533" " "or" -267.533" " "add" -267.533" " "error" -267.533" " "handler" -267.533" " "logic" -267.533" " "to" -267.533" " "recover" -267.533" " "from" ] TJ ET
+0 Tw
+BT 31.19 334.62 Td "failures."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 313.06 Td "13. Unhandled error in fallible action"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 297.77 Td "Rule: unhandled-error  |  Block: b-008"Tj ET
+BT 31.19 286.43 Td "This action commonly fails but has no error handler in its surrounding scope."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.400 Tw
+BT 0 Tw 31.19 269.42 Td ["Suggestion:" -267.533" " "Wrap" -267.533" " "this" -267.533" " "action" -267.533" " "in" -267.533" " "a" -267.533" " "Try/Catch" -267.533" " "block" -267.533" " "or" -267.533" " "add" -267.533" " "error" -267.533" " "handler" -267.533" " "logic" -267.533" " "to" -267.533" " "recover" -267.533" " "from" ] TJ ET
+0 Tw
+BT 31.19 258.08 Td "failures."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 236.52 Td "14. Unhandled error in fallible action"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 221.23 Td "Rule: unhandled-error  |  Block: b-009"Tj ET
+BT 31.19 209.90 Td "This action commonly fails but has no error handler in its surrounding scope."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.400 Tw
+BT 0 Tw 31.19 192.89 Td ["Suggestion:" -267.533" " "Wrap" -267.533" " "this" -267.533" " "action" -267.533" " "in" -267.533" " "a" -267.533" " "Try/Catch" -267.533" " "block" -267.533" " "or" -267.533" " "add" -267.533" " "error" -267.533" " "handler" -267.533" " "logic" -267.533" " "to" -267.533" " "recover" -267.533" " "from" ] TJ ET
+0 Tw
+BT 31.19 181.55 Td "failures."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 159.99 Td "15. Variable potentially uninitialized"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 144.70 Td "Rule: uninitialized-variable  |  Block: b-003"Tj ET
+BT 31.19 133.36 Td "Variable 'ExcelData' is used here but doesn't seem to be assigned anywhere in the flow."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.400 Tw
+BT 0 Tw 31.19 116.35 Td ["Suggestion:" -307.533" " "Ensure" -307.533" " "the" -307.533" " "variable" -307.533" " "is" -307.533" " "initialized" -307.533" " "with" -307.533" " "a" -307.533" " "SET" -307.533" " "action" -307.533" " "or" -307.533" " "as" -307.533" " "an" -307.533" " "output" -307.533" " "of" -307.533" " "another" ] TJ ET
+0 Tw
+BT 31.19 105.01 Td "action."Tj ET
+
+--- page 3
+0 J
+0 j
+0.57 w
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.000 G
+0.000 g
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 803.45 Td "16. Variable potentially uninitialized"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 788.16 Td "Rule: uninitialized-variable  |  Block: b-003"Tj ET
+BT 31.19 776.82 Td "Variable 'CurrentRow' is used here but doesn't seem to be assigned anywhere in the flow."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.400 Tw
+BT 0 Tw 31.19 759.82 Td ["Suggestion:" -307.533" " "Ensure" -307.533" " "the" -307.533" " "variable" -307.533" " "is" -307.533" " "initialized" -307.533" " "with" -307.533" " "a" -307.533" " "SET" -307.533" " "action" -307.533" " "or" -307.533" " "as" -307.533" " "an" -307.533" " "output" -307.533" " "of" -307.533" " "another" ] TJ ET
+0 Tw
+BT 31.19 748.48 Td "action."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 726.92 Td "17. Variable potentially uninitialized"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 711.63 Td "Rule: uninitialized-variable  |  Block: b-004"Tj ET
+BT 31.19 700.29 Td "Variable 'Browser' is used here but doesn't seem to be assigned anywhere in the flow."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.400 Tw
+BT 0 Tw 31.19 683.28 Td ["Suggestion:" -307.533" " "Ensure" -307.533" " "the" -307.533" " "variable" -307.533" " "is" -307.533" " "initialized" -307.533" " "with" -307.533" " "a" -307.533" " "SET" -307.533" " "action" -307.533" " "or" -307.533" " "as" -307.533" " "an" -307.533" " "output" -307.533" " "of" -307.533" " "another" ] TJ ET
+0 Tw
+BT 31.19 671.94 Td "action."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 650.38 Td "18. Variable potentially uninitialized"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 635.09 Td "Rule: uninitialized-variable  |  Block: b-008"Tj ET
+BT 31.19 623.75 Td "Variable 'InvoiceId' is used here but doesn't seem to be assigned anywhere in the flow."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.400 Tw
+BT 0 Tw 31.19 606.75 Td ["Suggestion:" -307.533" " "Ensure" -307.533" " "the" -307.533" " "variable" -307.533" " "is" -307.533" " "initialized" -307.533" " "with" -307.533" " "a" -307.533" " "SET" -307.533" " "action" -307.533" " "or" -307.533" " "as" -307.533" " "an" -307.533" " "output" -307.533" " "of" -307.533" " "another" ] TJ ET
+0 Tw
+BT 31.19 595.41 Td "action."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 12.00 Tf ET
+BT 31.19 570.41 Td "Info (8)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 551.17 Td "1. Hardcoded file path"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 535.88 Td "Rule: hardcoded-filepath  |  Block: b-009"Tj ET
+BT 31.19 524.54 Td "Property 'Files' contains an absolute path: /home/ops/tmp/invoice.csv"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+3.857 Tw
+BT 0 Tw 31.19 507.53 Td ["Suggestion:" -458.071" " "Use" -458.071" " "a" -458.071" " "relative" -458.071" " "path" -458.071" " "or" -458.071" " "store" -458.071" " "the" -458.071" " "base" -458.071" " "directory" -458.071" " "in" -458.071" " "a" -458.071" " "variable" -458.071" " "configured" -458.071" " "per" ] TJ ET
+0 Tw
+BT 31.19 496.19 Td "environment."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 474.63 Td "2. Hardcoded IP address"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 459.34 Td "Rule: hardcoded-ip  |  Block: b-007"Tj ET
+BT 31.19 448.01 Td "Property 'ConnectionString' contains a hardcoded IP address: 10.0.0.5"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 431.00 Td "Suggestion: Store the IP address in a variable so it can be changed per environment."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 409.44 Td "3. Web action without wait"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 394.15 Td "Rule: missing-delay  |  Block: b-005"Tj ET
+2.769 Tw
+BT 0 Tw 31.19 382.81 Td ["Two" -354.846" " "consecutive" -354.846" " "web/UI" -354.846" " "automation" -354.846" " "actions" -354.846" " "with" -354.846" " "no" -354.846" " "wait" -354.846" " "between" -354.846" " "them," -354.846" " "which" -354.846" " "can" -354.846" " "cause" -354.846" " "timing" ] TJ ET
+0 Tw
+BT 31.19 371.47 Td "failures."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+1.929 Tw
+BT 0 Tw 31.19 354.46 Td ["Suggestion:" -243.786" " "Add" -243.786" " "a" -243.786" " "'Wait" -243.786" " "for" -243.786" " "element'" -243.786" " "or" -243.786" " "'Delay'" -243.786" " "action" -243.786" " "between" -243.786" " "UI" -243.786" " "automation" -243.786" " "steps" -243.786" " "to" -243.786" " "improve" ] TJ ET
+0 Tw
+BT 31.19 343.12 Td "reliability."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 321.56 Td "4. Transient operation without retry"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 306.27 Td "Rule: missing-retry  |  Block: b-004"Tj ET
+3.273 Tw
+BT 0 Tw 31.19 294.93 Td ["This" -419.364" " "network/external" -419.364" " "service" -419.364" " "action" -419.364" " "is" -419.364" " "prone" -419.364" " "to" -419.364" " "transient" -419.364" " "failures" -419.364" " "(timeouts," -419.364" " "rate" -419.364" " "limits," ] TJ ET
+0 Tw
+BT 31.19 283.60 Td "connection resets) but has no retry mechanism or error handler."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.500 Tw
+BT 0 Tw 31.19 266.59 Td ["Suggestion:" -56.278" " "Wrap" -56.278" " "this" -56.278" " "action" -56.278" " "in" -56.278" " "a" -56.278" " "loop" -56.278" " "with" -56.278" " "a" -56.278" " "retry" -56.278" " "counter" -56.278" " "and" -56.278" " "delay," -56.278" " "or" -56.278" " "add" -56.278" " "an" -56.278" " "'On" -56.278" " "Block" -56.278" " "Error'" ] TJ ET
+0 Tw
+BT 31.19 255.25 Td "handler that implements retry logic."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 233.69 Td "5. Transient operation without retry"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 218.40 Td "Rule: missing-retry  |  Block: b-005"Tj ET
+3.273 Tw
+BT 0 Tw 31.19 207.06 Td ["This" -419.364" " "network/external" -419.364" " "service" -419.364" " "action" -419.364" " "is" -419.364" " "prone" -419.364" " "to" -419.364" " "transient" -419.364" " "failures" -419.364" " "(timeouts," -419.364" " "rate" -419.364" " "limits," ] TJ ET
+0 Tw
+BT 31.19 195.72 Td "connection resets) but has no retry mechanism or error handler."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.500 Tw
+BT 0 Tw 31.19 178.71 Td ["Suggestion:" -56.278" " "Wrap" -56.278" " "this" -56.278" " "action" -56.278" " "in" -56.278" " "a" -56.278" " "loop" -56.278" " "with" -56.278" " "a" -56.278" " "retry" -56.278" " "counter" -56.278" " "and" -56.278" " "delay," -56.278" " "or" -56.278" " "add" -56.278" " "an" -56.278" " "'On" -56.278" " "Block" -56.278" " "Error'" ] TJ ET
+0 Tw
+BT 31.19 167.38 Td "handler that implements retry logic."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 145.82 Td "6. Transient operation without retry"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 130.53 Td "Rule: missing-retry  |  Block: b-007"Tj ET
+3.273 Tw
+BT 0 Tw 31.19 119.19 Td ["This" -419.364" " "network/external" -419.364" " "service" -419.364" " "action" -419.364" " "is" -419.364" " "prone" -419.364" " "to" -419.364" " "transient" -419.364" " "failures" -419.364" " "(timeouts," -419.364" " "rate" -419.364" " "limits," ] TJ ET
+0 Tw
+BT 31.19 107.85 Td "connection resets) but has no retry mechanism or error handler."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.500 Tw
+BT 0 Tw 31.19 90.84 Td ["Suggestion:" -56.278" " "Wrap" -56.278" " "this" -56.278" " "action" -56.278" " "in" -56.278" " "a" -56.278" " "loop" -56.278" " "with" -56.278" " "a" -56.278" " "retry" -56.278" " "counter" -56.278" " "and" -56.278" " "delay," -56.278" " "or" -56.278" " "add" -56.278" " "an" -56.278" " "'On" -56.278" " "Block" -56.278" " "Error'" ] TJ ET
+0 Tw
+BT 31.19 79.50 Td "handler that implements retry logic."Tj ET
+
+--- page 4
+0 J
+0 j
+0.57 w
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.000 G
+0.000 g
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 803.45 Td "7. Transient operation without retry"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 788.16 Td "Rule: missing-retry  |  Block: b-008"Tj ET
+3.273 Tw
+BT 0 Tw 31.19 776.82 Td ["This" -419.364" " "network/external" -419.364" " "service" -419.364" " "action" -419.364" " "is" -419.364" " "prone" -419.364" " "to" -419.364" " "transient" -419.364" " "failures" -419.364" " "(timeouts," -419.364" " "rate" -419.364" " "limits," ] TJ ET
+0 Tw
+BT 31.19 765.49 Td "connection resets) but has no retry mechanism or error handler."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.500 Tw
+BT 0 Tw 31.19 748.48 Td ["Suggestion:" -56.278" " "Wrap" -56.278" " "this" -56.278" " "action" -56.278" " "in" -56.278" " "a" -56.278" " "loop" -56.278" " "with" -56.278" " "a" -56.278" " "retry" -56.278" " "counter" -56.278" " "and" -56.278" " "delay," -56.278" " "or" -56.278" " "add" -56.278" " "an" -56.278" " "'On" -56.278" " "Block" -56.278" " "Error'" ] TJ ET
+0 Tw
+BT 31.19 737.14 Td "handler that implements retry logic."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 715.58 Td "8. Subflow without error handler"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 700.29 Td "Rule: subflow-no-error-handler  |  Block: b-001"Tj ET
+1.385 Tw
+BT 0 Tw 31.19 688.95 Td ["Subflow" -170.231" " "\"Main\"" -170.231" " "has" -170.231" " "action" -170.231" " "blocks" -170.231" " "but" -170.231" " "no" -170.231" " "error" -170.231" " "handler." -170.231" " "Unhandled" -170.231" " "errors" -170.231" " "will" -170.231" " "silently" -170.231" " "terminate" ] TJ ET
+0 Tw
+BT 31.19 677.61 Td "the subflow."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 660.60 Td "Suggestion: Add a Try/Catch or On Block Error handler to protect against unexpected failures."Tj ET
+

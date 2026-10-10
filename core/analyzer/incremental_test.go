@@ -276,7 +276,7 @@ func TestAnalyzeRuleDependencies_IsLabelledEditorial(t *testing.T) {
 	for _, r := range AllRules() {
 		catalog[r.ID()] = true
 	}
-	for _, d := range relatedRules {
+	for _, d := range RelatedRules() {
 		if !catalog[d.FromRuleID] || !catalog[d.ToRuleID] {
 			t.Errorf("related-rules entry names a rule not in the catalog: %+v", d)
 		}

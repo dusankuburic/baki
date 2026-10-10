@@ -30,7 +30,7 @@ func redundantSets(n int) string {
 // passes — independent of what the fixes do to the source. The wrapped rule
 // keeps its ID, so the loop still dispatches it (AutoFixableRules keys on ID).
 type passCancelRule struct {
-	Rule
+	BlockRule
 	cancel func()
 	onPass int
 	mu     sync.Mutex
@@ -46,14 +46,14 @@ func (r *passCancelRule) Check(b *models.Block, ctx *RuleContext) []models.Findi
 		}
 	}
 	r.mu.Unlock()
-	return r.Rule.Check(b, ctx)
+	return r.BlockRule.Check(b, ctx)
 }
 
 func rulesCancellingOnPass(cancel func(), pass int) []Rule {
 	rules := AllRules()
 	for i, r := range rules {
 		if r.ID() == "redundant-action" {
-			rules[i] = &passCancelRule{Rule: r, cancel: cancel, onPass: pass, seen: map[*models.FlowDocument]bool{}}
+			rules[i] = &passCancelRule{BlockRule: r.(BlockRule), cancel: cancel, onPass: pass, seen: map[*models.FlowDocument]bool{}}
 		}
 	}
 	return rules

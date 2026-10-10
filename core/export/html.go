@@ -3,11 +3,22 @@ package export
 import (
 	"fmt"
 	"html"
+	"io"
 	"strings"
 	"time"
 
 	"pad-core/models"
 )
+
+func init() {
+	Register(Format{
+		ID: "html", Label: "HTML", MIME: "text/html; charset=utf-8", Ext: ".html", Order: 50,
+		Render: func(w io.Writer, in Input, _ Options) error {
+			_, err := io.WriteString(w, ReportToHTML(in.Report, in.Doc))
+			return err
+		},
+	})
+}
 
 func esc(s string) string { return html.EscapeString(s) }
 

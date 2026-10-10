@@ -38,7 +38,7 @@ func TestOrgRuleService_InvalidatesProfileOnChange(t *testing.T) {
 
 	warm()
 	rule := &storageif.OrgCustomRule{ID: "r1", OrgID: "org-a", RuleID: "x", Config: []byte(`{}`), Enabled: true}
-	if err := svc.Save(ctx, rule); err != nil {
+	if err := svc.save(ctx, rule); err != nil {
 		t.Fatal(err)
 	}
 	if resolver.cachedFor("org-a") != nil {
@@ -64,7 +64,7 @@ func TestOrgRuleService_InvalidatesProfileOnChange(t *testing.T) {
 
 	failing := NewOrgRuleService(failingRuleStore{FakeBackend: b, err: errors.New("db down")}, b, bus)
 	warm()
-	if err := failing.Save(ctx, rule); err == nil {
+	if err := failing.save(ctx, rule); err == nil {
 		t.Fatal("Save swallowed the store error")
 	}
 	if err := failing.Delete(ctx, "org-a", "r1"); err == nil {
@@ -75,7 +75,7 @@ func TestOrgRuleService_InvalidatesProfileOnChange(t *testing.T) {
 	}
 
 	// Without a bus (tests) writes still work.
-	if err := NewOrgRuleService(b, b, nil).Save(ctx, rule); err != nil {
+	if err := NewOrgRuleService(b, b, nil).save(ctx, rule); err != nil {
 		t.Fatal(err)
 	}
 }

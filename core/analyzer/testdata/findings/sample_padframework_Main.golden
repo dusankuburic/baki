@@ -1,0 +1,136 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_padframework_Main
+document: subflows=1 blocks=25 parseErrors=1 folder=false
+
+=== default
+stats: {"errors":0,"warnings":2,"info":7,"blocksAnalyzed":25,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=23 final=1125/1125 last="Loop body is too large"
+metrics: {"avgCognitive":1,"avgCyclomatic":2,"healthScore":85,"maxCognitive":1,"maxCyclomatic":2,"subflowCount":1,"totalBlocks":24,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":24,"cognitiveComplexity":1,"cyclomaticComplexity":2,"fanIn":0,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=25
+  raw findings: disabled-block=1 duplicate-action=1 error-swallow=1 parse-error=1 unused-variable=5
+inventory: none
+findings: 9
+F-001 info/medium disabled-block [Style] fix=remove-block @Main#2 sf=Main fp=disabled-block:88e7d80bc05ebc2f
+    title: Disabled block
+    desc: Block 'Call Framework_TestBench (disabled)' is disabled.
+F-002 info/medium duplicate-action [Style] fix=remove-block @Main#6 sf=Main fp=duplicate-action:fbc2ae191c6729d6
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":4}
+F-003 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#13 sf=Main fp=error-swallow:61f04be9ea526364
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-004 warning/high parse-error [Syntax] fix=- @Main#0 sf=Main fp=parse-error:3c6f58486cd3838f
+    title: Parse error (line 24)
+    desc: ELSE outside IF
+    meta: {"column":1,"line":24,"snippet":"ELSE"}
+F-005 info/low unused-variable [Style] fix=remove-block @Main#1 sf=Main fp=unused-variable:ca18c4eff4b10a5d
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"PathToConfig"}
+F-006 info/low unused-variable [Style] fix=remove-block @Main#4 sf=Main fp=unused-variable:05a81310d363e32d
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-007 info/low unused-variable [Style] fix=remove-block @Main#5 sf=Main fp=unused-variable:bcaf666d7d45344f
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-008 info/low unused-variable [Style] fix=remove-block @Main#22 sf=Main fp=unused-variable:8cd8f1fc6065548f
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-009 info/low unused-variable [Style] fix=remove-block @Main#23 sf=Main fp=unused-variable:c6c5b826f92ce02f
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":2,"info":7,"blocksAnalyzed":25,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=23 final=1125/1125 last="Loop body is too large"
+metrics: as default, healthScore=85
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=25
+  raw findings: disabled-block=1 duplicate-action=1 error-swallow=1 parse-error=1 unused-variable=5
+inventory: none
+findings: 9
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":2,"info":10,"blocksAnalyzed":25,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=23 final=1125/1125 last="Loop body is too large"
+metrics: as default, healthScore=82
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=25
+  raw findings: disabled-block=1 duplicate-action=3 error-swallow=1 large-subflow=1 parse-error=1 unused-variable=5
+inventory: none
+findings: 12
+F-001 info/medium disabled-block [Style] fix=remove-block @Main#2 sf=Main fp=disabled-block:88e7d80bc05ebc2f
+F-002 info/medium duplicate-action [Style] fix=remove-block @Main#6 sf=Main fp=duplicate-action:fbc2ae191c6729d6
+F-003 info/medium duplicate-action [Style] fix=remove-block @Main#16 sf=Main fp=duplicate-action:10d2178579acce37
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-004 info/medium duplicate-action [Style] fix=remove-block @Main#18 sf=Main fp=duplicate-action:8450b25f2245449d
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-005 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#13 sf=Main fp=error-swallow:61f04be9ea526364
+F-006 info/low large-subflow [Style] fix=- @Main#1 sf=Main fp=large-subflow:5f3b92b9eef362d2
+    title: Large subflow
+    desc: Subflow 'Main' has 24 blocks (threshold: 5).
+F-007 warning/high parse-error [Syntax] fix=- @Main#0 sf=Main fp=parse-error:3c6f58486cd3838f
+F-008 info/low unused-variable [Style] fix=remove-block @Main#1 sf=Main fp=unused-variable:ca18c4eff4b10a5d
+F-009 info/low unused-variable [Style] fix=remove-block @Main#4 sf=Main fp=unused-variable:05a81310d363e32d
+F-010 info/low unused-variable [Style] fix=remove-block @Main#5 sf=Main fp=unused-variable:bcaf666d7d45344f
+F-011 info/low unused-variable [Style] fix=remove-block @Main#22 sf=Main fp=unused-variable:8cd8f1fc6065548f
+F-012 info/low unused-variable [Style] fix=remove-block @Main#23 sf=Main fp=unused-variable:c6c5b826f92ce02f
+
+=== disabled
+stats: {"errors":0,"warnings":1,"info":7,"blocksAnalyzed":25,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=19 final=925/925 last="Loop body is too large"
+metrics: as default, healthScore=89
+profiles: rules=37 order=f7de49357acad250 blocksChecked=25
+  raw findings: disabled-block=1 duplicate-action=1 error-swallow=1 unused-variable=5
+inventory: none
+findings: 8
+F-001 info/medium disabled-block [Style] fix=remove-block @Main#2 sf=Main fp=disabled-block:88e7d80bc05ebc2f
+F-002 info/medium duplicate-action [Style] fix=remove-block @Main#6 sf=Main fp=duplicate-action:fbc2ae191c6729d6
+F-003 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#13 sf=Main fp=error-swallow:61f04be9ea526364
+F-004 info/low unused-variable [Style] fix=remove-block @Main#1 sf=Main fp=unused-variable:ca18c4eff4b10a5d
+F-005 info/low unused-variable [Style] fix=remove-block @Main#4 sf=Main fp=unused-variable:05a81310d363e32d
+F-006 info/low unused-variable [Style] fix=remove-block @Main#5 sf=Main fp=unused-variable:bcaf666d7d45344f
+F-007 info/low unused-variable [Style] fix=remove-block @Main#22 sf=Main fp=unused-variable:8cd8f1fc6065548f
+F-008 info/low unused-variable [Style] fix=remove-block @Main#23 sf=Main fp=unused-variable:c6c5b826f92ce02f
+
+=== severity
+stats: {"errors":0,"warnings":2,"info":7,"blocksAnalyzed":25,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=23 final=1125/1125 last="Loop body is too large"
+metrics: as default, healthScore=85
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=25
+  raw findings: disabled-block=1 duplicate-action=1 error-swallow=1 parse-error=1 unused-variable=5
+inventory: none
+findings: 9
+  as default; severity changes: none
+
+=== autofixable
+stats: {"errors":0,"warnings":2,"info":7,"blocksAnalyzed":25,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=16 final=800/800 last="Wait zero"
+metrics: as default, healthScore=85
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=25
+  raw findings: disabled-block=1 duplicate-action=1 error-swallow=1 unused-variable=5
+inventory: none
+findings: 9
+F-001 info/medium disabled-block [Style] fix=remove-block @Main#2 sf=Main fp=disabled-block:88e7d80bc05ebc2f
+F-002 info/medium duplicate-action [Style] fix=remove-block @Main#6 sf=Main fp=duplicate-action:fbc2ae191c6729d6
+F-003 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#13 sf=Main fp=error-swallow:61f04be9ea526364
+F-004 info/low unused-variable [Style] fix=remove-block @Main#1 sf=Main fp=unused-variable:ca18c4eff4b10a5d
+F-005 info/low unused-variable [Style] fix=remove-block @Main#4 sf=Main fp=unused-variable:05a81310d363e32d
+F-006 info/low unused-variable [Style] fix=remove-block @Main#5 sf=Main fp=unused-variable:bcaf666d7d45344f
+F-007 info/low unused-variable [Style] fix=remove-block @Main#22 sf=Main fp=unused-variable:8cd8f1fc6065548f
+F-008 info/low unused-variable [Style] fix=remove-block @Main#23 sf=Main fp=unused-variable:c6c5b826f92ce02f
+F-009 warning/high parse-error [-] fix=- @- sf=Main fp=parse-error:
+    title: Parse error (line 24)
+    desc: ELSE outside IF
+    meta: {"column":1,"line":24,"snippet":"ELSE"}

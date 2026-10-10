@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"pad-core/analyzer"
 	"pad-core/models"
 )
 
@@ -269,30 +270,53 @@ func TestVerifySignature_RejectsTamperedTimestamp(t *testing.T) {
 }
 
 func TestGatePasses(t *testing.T) {
-	stats := func(e, w, i int) models.AnalysisStats {
-		return models.AnalysisStats{Errors: e, Warnings: w, Info: i}
+	counts := func(e, w, i int) analyzer.GateCounts {
+		return analyzer.GateCounts{Errors: e, Warnings: w, Info: i}
 	}
 	cases := []struct {
-		name  string
-		stats models.AnalysisStats
-		gate  string
-		want  bool
+		name   string
+		counts analyzer.GateCounts
+		gate   string
+		want   bool
 	}{
-		{"none always passes", stats(5, 5, 5), "none", true},
-		{"error gate: zero errors passes", stats(0, 5, 5), "error", true},
-		{"error gate: errors fail", stats(1, 0, 0), "error", false},
-		{"warning gate: warnings fail", stats(0, 1, 0), "warning", false},
-		{"warning gate: errors also fail", stats(1, 0, 0), "warning", false},
-		{"info gate: info fails", stats(0, 0, 1), "info", false},
-		{"info gate: clean passes", stats(0, 0, 0), "info", true},
-		{"unknown gate defaults to error behavior", stats(1, 0, 0), "bogus", false},
+		{"none always passes", counts(5, 5, 5), "none", true},
+		{"error gate: zero errors passes", counts(0, 5, 5), "error", true},
+		{"error gate: errors fail", counts(1, 0, 0), "error", false},
+		{"warning gate: warnings fail", counts(0, 1, 0), "warning", false},
+		{"warning gate: errors also fail", counts(1, 0, 0), "warning", false},
+		{"info gate: info fails", counts(0, 0, 1), "info", false},
+		{"info gate: clean passes", counts(0, 0, 0), "info", true},
+		{"unknown gate defaults to error behavior", counts(1, 0, 0), "bogus", false},
+		{"empty gate is the error gate", counts(1, 0, 0), "", false},
+		{"preview findings are not counted", analyzer.GateCounts{Preview: 3}, "info", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			rep := &models.AnalysisReport{Stats: c.stats}
-			if got := gatePasses(rep, c.gate); got != c.want {
+			if got := gatePasses(c.counts, c.gate); got != c.want {
 				t.Errorf("gatePasses(gate=%q) = %v, want %v", c.gate, got, c.want)
 			}
 		})
+	}
+}
+
+// The webhook gates on analyzer.CountGating, so a preview rule's error neither fails the gate nor
+// leaves the severity counts: stamped "preview", or unstamped from a rule that is a preview built-in
+// (an older report). A stable rule's error still fails, an unknown stamp included (fail closed).
+func TestGatePasses_PreviewFindingsNeverGate(t *testing.T) {
+	m, _ := analyzer.LookupMeta("insecure-http-url")
+	m.Stage = analyzer.StagePreview
+	defer analyzer.SetRuleMetaForTesting("insecure-http-url", m)()
+
+	findings := []models.Finding{
+		{RuleID: "hardcoded-credential", Severity: models.SeverityError, Stage: "preview"},
+		{RuleID: "insecure-http-url", Severity: models.SeverityError},
+	}
+	c := analyzer.CountGating(findings)
+	if !gatePasses(c, "info") || c.Preview != 2 {
+		t.Errorf("preview errors gated: counts %+v", c)
+	}
+	findings = append(findings, models.Finding{RuleID: "hardcoded-credential", Severity: models.SeverityError, Stage: "beta"})
+	if c := analyzer.CountGating(findings); gatePasses(c, "error") {
+		t.Errorf("a stable rule's error with an unknown stamp passed the gate: counts %+v", c)
 	}
 }

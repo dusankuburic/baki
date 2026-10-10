@@ -144,17 +144,10 @@ func (s *AzureModelService) sweepDue(owner storageif.AzureOwner) bool {
 	s.memoMu.Lock()
 	defer s.memoMu.Unlock()
 	now := s.now()
-	if at, ok := s.sweptMemo[owner]; ok && now.Sub(at) < azureSweepInterval {
+	if s.sweptMemo.fresh(owner, now, azureSweepInterval) {
 		return false
 	}
-	if len(s.sweptMemo) >= azureMemoPrune {
-		for o, at := range s.sweptMemo {
-			if now.Sub(at) >= azureSweepInterval {
-				delete(s.sweptMemo, o)
-			}
-		}
-	}
-	s.sweptMemo[owner] = now
+	s.sweptMemo.record(owner, now, azureSweepInterval)
 	return true
 }
 

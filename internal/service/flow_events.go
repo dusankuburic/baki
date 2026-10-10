@@ -10,6 +10,7 @@ import (
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-core/analyzer"
+	"pad-core/cache"
 	"pad-core/models"
 )
 
@@ -19,6 +20,18 @@ type FlowOption func(*FlowService)
 // WithFlowEvents makes the service announce every flow it changes as events.FlowChanged on bus.
 func WithFlowEvents(bus *eventbus.Bus) FlowOption {
 	return func(s *FlowService) { s.bus = bus }
+}
+
+// WithAnalyzer gives the service the process's cached analyzer, the one AnalysisService serves reports from, so the
+// flow changes it makes reach those reports.
+func WithAnalyzer(a *analyzer.CachedAnalyzer) FlowOption {
+	return func(s *FlowService) { s.analyzer = a }
+}
+
+// ResetSessionAnalytics drops the local user's cached reports: opening a base folder on the desktop starts a new
+// analytics session.
+func (s *FlowService) ResetSessionAnalytics() {
+	s.analyzer.ResetTenant(cache.Local())
 }
 
 // publishDesktopChange announces that a desktop flow's files were rewritten: no store, so no version and no
@@ -48,7 +61,7 @@ func (s *FlowService) ReimportFlow(ctx context.Context, doc *models.FlowDocument
 	if err != nil {
 		return nil, err
 	}
-	analyzer.DefaultCache.Invalidate(analyzer.StableFlowID(fresh))
+	s.analyzer.InvalidateFlow(analyzer.StableFlowID(fresh))
 	s.publishDesktopChange(ctx, fresh)
 	return fresh, nil
 }
@@ -90,7 +103,7 @@ func FlowCacheSubscribers(flows *FlowService, dashboard *DashboardService, chat 
 			}
 		})},
 		{"analyzer-report-cache", deleted(func(e events.FlowChanged) {
-			analyzer.DefaultCache.Invalidate(cmp.Or(e.StableID, e.FlowID))
+			flows.analyzer.InvalidateFlow(cmp.Or(e.StableID, e.FlowID))
 		})},
 	}
 }

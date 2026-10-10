@@ -17,6 +17,7 @@ import {useFindingComments} from './hooks/useFindingComments'
 import {useFindingFix} from './hooks/useFindingFix'
 import {isTauri} from '@/platform/guards'
 import {useSuppressReasonPrompt} from './hooks/useSuppressReasonPrompt'
+import PreviewBadge from '@/components/analyzer/PreviewBadge'
 
 interface Props {
   finding: Finding
@@ -101,6 +102,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
                 {finding.confidence}
               </span>
             )}
+            {finding.stage === 'preview' && <PreviewBadge of="finding" />}
           </div>
           {subflowLabel && <span className="text-2xs text-text-tertiary ml-2">in {subflowLabel}</span>}
         </div>

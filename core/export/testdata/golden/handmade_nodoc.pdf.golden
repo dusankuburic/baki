@@ -1,0 +1,60 @@
+bytes: 24569 sha256: 179cb237b6cca97c7311d734aab0afd079cae4c05fca4b9c3d60585fc9dd1c57
+pages: 1
+--- page 1
+0 J
+0 j
+0.57 w
+0.000 G
+0.000 g
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 20.00 Tf ET
+BT 31.19 790.53 Td "PAD Analyzer"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 11.00 Tf ET
+BT 31.19 779.06 Td "Analysis Report"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 10.00 Tf ET
+BT 31.19 746.76 Td "Flow: (unknown)"Tj ET
+BT 31.19 732.59 Td "Generated: 2026-10-08 09:30:00"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 14.00 Tf ET
+BT 31.19 698.79 Td "Summary"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 10.00 Tf ET
+BT 31.19 681.56 Td "Blocks analyzed: 7"Tj ET
+BT 31.19 667.39 Td "Rules run: 46"Tj ET
+BT 31.19 653.22 Td "Errors: 1  |  Warnings: 2  |  Info: 1"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 14.00 Tf ET
+BT 31.19 619.42 Td "Findings (5)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 12.00 Tf ET
+BT 31.19 593.09 Td "Errors (2)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 573.85 Td "1. Parse error (line 3)"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 558.56 Td "Rule: parse-error  |  Block: "Tj ET
+BT 31.19 547.22 Td "malformed line"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 528.49 Td "2. Legacy severity"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 513.20 Td "Rule: org-legacy  |  Block: blk-4"Tj ET
+BT 31.19 501.86 Td "A severity no consumer knows."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 12.00 Tf ET
+BT 31.19 479.70 Td "Warnings (2)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 460.46 Td "1. =HYPERLINK(\"http://x\")"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 445.17 Td "Rule: org-no-msgbox  |  Block: blk-1"Tj ET
+BT 31.19 433.83 Td "Line one"Tj ET
+BT 31.19 422.49 Td "Line two <b>&amp;</b> 'quoted' \"dq\""Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 405.49 Td "Suggestion: @risk: use a log action"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 383.93 Td "2. Unhandled error in fallible action"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 368.64 Td "Rule: unhandled-error  |  Block: blk-3"Tj ET
+BT 31.19 357.30 Td "This action can fail at runtime."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 340.29 Td "Suggestion: Wrap it in ON BLOCK ERROR."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 12.00 Tf ET
+BT 31.19 315.29 Td "Info (1)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 296.05 Td "1. TODO in comment"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 280.76 Td "Rule: todo-in-comment  |  Block: blk-2"Tj ET
+BT 31.19 269.42 Td "Ünïcödé — 日本語 TODO"Tj ET
+

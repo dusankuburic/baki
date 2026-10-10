@@ -246,14 +246,14 @@ func TestDisableOrgAzureFoundryConfigSavedBy(t *testing.T) {
 	if has, _ := orgKeys.HasOrg("org-1", "azure-foundry"); !has {
 		t.Fatal("a non-lender's departure removed the credential")
 	}
-	svc.modelCache[ai.OrgScope("org-1")+"\x00glm"] = modelCacheEntry{}
+	svc.modelCache[modelListingKey(ai.OrgScope("org-1"), "glm")] = modelCacheEntry{}
 	if disabled, err := svc.DisableOrgAzureFoundryConfigSavedBy("org-1", "lender"); err != nil || !disabled {
 		t.Fatalf("lender's departure: disabled=%v err=%v", disabled, err)
 	}
 	if has, _ := orgKeys.HasOrg("org-1", "azure-foundry"); has {
 		t.Error("the lender's credential is still stored")
 	}
-	if _, cached := svc.modelCache[ai.OrgScope("org-1")+"\x00glm"]; cached {
+	if _, cached := svc.modelCache[modelListingKey(ai.OrgScope("org-1"), "glm")]; cached {
 		t.Error("disabling must drop the org's cached listings")
 	}
 	if disabled, _ := svc.DisableOrgAzureFoundryConfigSavedBy("org-1", "lender"); disabled {
@@ -336,17 +336,17 @@ func TestPrepareOrgDeletionAndAccountErasure_DropCaches(t *testing.T) {
 
 	release := svc.PrepareOrgDeletion("org-1")
 	_ = orgKeys.DeleteOrg("org-1", "azure-foundry") // the cascade
-	svc.modelCache[ai.OrgScope("org-1")+"\x00glm"] = modelCacheEntry{}
+	svc.modelCache[modelListingKey(ai.OrgScope("org-1"), "glm")] = modelCacheEntry{}
 	release()
-	if _, cached := svc.modelCache[ai.OrgScope("org-1")+"\x00glm"]; cached {
+	if _, cached := svc.modelCache[modelListingKey(ai.OrgScope("org-1"), "glm")]; cached {
 		t.Error("org deletion must drop the org's cached listings")
 	}
 
 	releaseOwn := svc.PrepareAccountErasure("u1")
 	_ = secrets.Delete("u1", "azure-foundry")
-	svc.modelCache["u1\x00glm"] = modelCacheEntry{}
+	svc.modelCache[modelListingKey("u1", "glm")] = modelCacheEntry{}
 	releaseOwn()
-	if _, cached := svc.modelCache["u1\x00glm"]; cached {
+	if _, cached := svc.modelCache[modelListingKey("u1", "glm")]; cached {
 		t.Error("account erasure must drop the user's cached listings")
 	}
 }

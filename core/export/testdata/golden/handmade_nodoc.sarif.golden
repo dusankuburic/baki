@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "PAD Analyzer",
+          "version": "0.1.0",
+          "rules": [
+            {
+              "id": "org-no-msgbox",
+              "shortDescription": {
+                "text": "=HYPERLINK(\"http://x\")"
+              },
+              "help": {
+                "text": "Line one\nLine two \u003cb\u003e\u0026amp;\u003c/b\u003e 'quoted' \"dq\"\n\nRun `bakicli rules org-no-msgbox` for the full rule description.",
+                "markdown": "Line one\nLine two \u003cb\u003e\u0026amp;\u003c/b\u003e 'quoted' \"dq\"\n\nRun `bakicli rules org-no-msgbox` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Custom"
+              }
+            },
+            {
+              "id": "parse-error",
+              "name": "Parse error",
+              "shortDescription": {
+                "text": "Parse error"
+              },
+              "fullDescription": {
+                "text": "Syntax errors detected during parsing (unclosed blocks, malformed lines, nesting violations)."
+              },
+              "help": {
+                "text": "Syntax errors detected during parsing (unclosed blocks, malformed lines, nesting violations).\n\nRun `bakicli rules parse-error` for the full rule description.",
+                "markdown": "Syntax errors detected during parsing (unclosed blocks, malformed lines, nesting violations).\n\nRun `bakicli rules parse-error` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "category": "Syntax",
+                "confidence": "high"
+              }
+            },
+            {
+              "id": "todo-in-comment",
+              "name": "TODO in comment",
+              "shortDescription": {
+                "text": "TODO in comment"
+              },
+              "fullDescription": {
+                "text": "COMMENT blocks containing TODO, FIXME, XXX, or HACK markers that signal unfinished work."
+              },
+              "help": {
+                "text": "COMMENT blocks containing TODO, FIXME, XXX, or HACK markers that signal unfinished work.\n\nAuto-fix available: remove-block (apply with `bakicli fix`).\n\nRun `bakicli rules todo-in-comment` for the full rule description.",
+                "markdown": "COMMENT blocks containing TODO, FIXME, XXX, or HACK markers that signal unfinished work.\n\nAuto-fix available: remove-block (apply with `bakicli fix`).\n\nRun `bakicli rules todo-in-comment` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Style",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "unhandled-error",
+              "name": "Unhandled error in fallible action",
+              "shortDescription": {
+                "text": "Unhandled error in fallible action"
+              },
+              "fullDescription": {
+                "text": "Actions that commonly fail (network, file, UI automation) where no error handler exists in the surrounding scope."
+              },
+              "help": {
+                "text": "Actions that commonly fail (network, file, UI automation) where no error handler exists in the surrounding scope.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules unhandled-error` for the full rule description.",
+                "markdown": "Actions that commonly fail (network, file, UI automation) where no error handler exists in the surrounding scope.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules unhandled-error` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "org-legacy",
+              "shortDescription": {
+                "text": "Legacy severity"
+              },
+              "help": {
+                "text": "A severity no consumer knows.\n\nRun `bakicli rules org-legacy` for the full rule description.",
+                "markdown": "A severity no consumer knows.\n\nRun `bakicli rules org-legacy` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              }
+            }
+          ]
+        }
+      },
+      "automationDetails": {
+        "id": "pad-analysis"
+      },
+      "invocations": [
+        {
+          "executionSuccessful": true
+        }
+      ],
+      "results": [
+        {
+          "ruleId": "org-no-msgbox",
+          "ruleIndex": 0,
+          "level": "warning",
+          "message": {
+            "text": "Line one\nLine two \u003cb\u003e\u0026amp;\u003c/b\u003e 'quoted' \"dq\"\n\nSuggestion: @risk: use a log action"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flow.txt"
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "blk-1",
+                  "fullyQualifiedName": "sf-1/blk-1",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "adc9d3312de53b69"
+          }
+        },
+        {
+          "ruleId": "parse-error",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "malformed line"
+          },
+          "partialFingerprints": {
+            "padFindingId/v1": "97f6fe611a4a1bb0"
+          }
+        },
+        {
+          "ruleId": "todo-in-comment",
+          "ruleIndex": 2,
+          "level": "note",
+          "message": {
+            "text": "Ünïcödé — 日本語 TODO"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flow.txt"
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "blk-2",
+                  "fullyQualifiedName": "sf-1/blk-2",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "2b5a2e2c882ca784"
+          }
+        },
+        {
+          "ruleId": "unhandled-error",
+          "ruleIndex": 3,
+          "level": "warning",
+          "message": {
+            "text": "This action can fail at runtime.\n\nSuggestion: Wrap it in ON BLOCK ERROR."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flow.txt"
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "blk-3",
+                  "fullyQualifiedName": "sf-1/blk-3",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "cf87988f46588238"
+          }
+        },
+        {
+          "ruleId": "org-legacy",
+          "ruleIndex": 4,
+          "level": "warning",
+          "message": {
+            "text": "A severity no consumer knows."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flow.txt"
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "blk-4",
+                  "fullyQualifiedName": "sf-2/blk-4",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "5ed7c39696f6079d"
+          }
+        }
+      ]
+    }
+  ]
+}

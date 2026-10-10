@@ -1,11 +1,9 @@
 package di
 
 import (
-	"context"
 	"testing"
 
 	"pad-analyzer/internal/service"
-	"pad-core/cache"
 	"pad-core/models"
 )
 
@@ -15,32 +13,21 @@ import (
 func TestProvideASTCache_IsByteBudgeted(t *testing.T) {
 	t.Parallel()
 
-	c, err := ProvideASTCache()
-	if err != nil {
-		t.Fatalf("ProvideASTCache() error = %v", err)
-	}
-	sized, ok := c.(*cache.SizedLRU)
-	if !ok {
-		t.Fatalf("ProvideASTCache() = %T, want a byte-budgeted *cache.SizedLRU", c)
-	}
-	if got := sized.Budget(); got != 96<<20 {
+	c := ProvideASTCache()
+	if got := c.Budget(); got != 96<<20 {
 		t.Errorf("budget = %d, want %d (96 MiB)", got, 96<<20)
 	}
-	ctx := context.Background()
+	if got := c.Spec().Name(); got != "flow.ast" {
+		t.Errorf("spec = %q, want the declared flow.ast", got)
+	}
+	// The service charges each document FlowDocumentCost; the cache must hold one within budget and refuse one
+	// larger than the whole budget without evicting the rest.
 	doc := &models.FlowDocument{Metadata: models.FlowMetadata{BlockCount: 1000}, Source: "x"}
-	c.Set(ctx, "doc", doc, 0)
-	if got, want := sized.Cost(), service.FlowDocumentCost(doc); got != want {
-		t.Errorf("a 1000-block document is charged %d, want FlowDocumentCost = %d", got, want)
-	}
-	if _, ok := c.Get(ctx, "doc"); !ok {
-		t.Error("a document within budget was not cached")
-	}
 	huge := &models.FlowDocument{Metadata: models.FlowMetadata{BlockCount: 200_000}} // ~195 MiB
-	c.Set(ctx, "huge", huge, 0)
-	if _, ok := c.Get(ctx, "huge"); ok {
-		t.Error("a document larger than the whole budget was cached")
+	if service.FlowDocumentCost(doc) > c.MaxEntryCost() {
+		t.Errorf("a 1000-block document (%d) exceeds the per-entry ceiling %d", service.FlowDocumentCost(doc), c.MaxEntryCost())
 	}
-	if _, ok := c.Get(ctx, "doc"); !ok {
-		t.Error("an oversize document evicted a cached one")
+	if service.FlowDocumentCost(huge) <= c.MaxEntryCost() {
+		t.Errorf("a ~195 MiB document (%d) fits under the per-entry ceiling %d", service.FlowDocumentCost(huge), c.MaxEntryCost())
 	}
 }

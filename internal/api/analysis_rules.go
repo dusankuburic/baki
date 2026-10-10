@@ -4,17 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/platform/apperr"
 	"pad-analyzer/internal/service"
 	"pad-core/analyzer"
 	"pad-core/models"
 )
 
 // @Summary      List analysis rules
-// @Description  Returns all available analysis rules and their current configuration.
+// @Description  Returns all available analysis rules and their current configuration, with each rule's stage (stable, preview), introducedIn and kind (block, flow, library; library rules are listed only where desktop folder analysis runs them).
 // @Tags         analysis
 // @Produce      json
 // @Success      200 {object} []map[string]interface{} "OK"
@@ -42,13 +44,14 @@ func (h *AnalysisHandler) catalogOrg(w http.ResponseWriter, r *http.Request) (st
 }
 
 // handleValidateCustomRules validates a custom-rules payload without loading
-// it — the same checks `bakicli rules test` applies.
+// it — the same strict checks a save and `bakicli rules test` apply, per entry.
 // @Summary      Validate custom rules
-// @Description  Validates custom-rule JSON without installing it: per-entry validity, errors, and skip warnings.
+// @Description  Validates custom-rule JSON (an array, one rule with an id, or {"rules": either}) strictly, without installing it. Each entry reports valid, its first error with field and reason, and every problem (problems; warning: true for one the rule runs with). A malformed document is a 400.
 // @Tags         analysis
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "Results"
+// @Failure      400 {object} render.ErrorResponse "Not a custom-rule document"
 // @Router       /api/analysis/custom-rules/validate [post]
 func (h *AnalysisHandler) handleValidateCustomRules(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -56,42 +59,43 @@ func (h *AnalysisHandler) handleValidateCustomRules(w http.ResponseWriter, r *ht
 	if !decodeBody(w, r, &raw) {
 		return
 	}
-	// Accept a raw array, a single object, or the {"rules": …} envelope.
-	var payload struct {
-		Rules json.RawMessage `json:"rules"`
-	}
-	inner := raw
-	if err := json.Unmarshal(raw, &payload); err == nil && len(payload.Rules) > 0 {
-		inner = payload.Rules
-	}
-	var configs []analyzer.CustomRuleConfig
-	if err := json.Unmarshal(inner, &configs); err != nil {
-		var one analyzer.CustomRuleConfig
-		if err2 := json.Unmarshal(inner, &one); err2 != nil || one.ID == "" {
-			render.Error(w, fmt.Errorf("not a custom-rule JSON array or object"), http.StatusBadRequest)
-			return
-		}
-		configs = []analyzer.CustomRuleConfig{one}
+	entries, err := analyzer.DecodeCustomRuleDocument(raw)
+	if err != nil {
+		render.Error(w, apperr.Invalid("", err.Error()).WithDetails(map[string]any{"reason": analyzer.ReasonInvalidJSON}), 0)
+		return
 	}
 	type entryResult struct {
-		Index  int    `json:"index"`
-		ID     string `json:"id"`
-		Valid  bool   `json:"valid"`
-		Error  string `json:"error,omitempty"`
-		Loaded bool   `json:"loaded"`
+		Index    int                    `json:"index"`
+		ID       string                 `json:"id"`
+		Valid    bool                   `json:"valid"`
+		Error    string                 `json:"error,omitempty"`
+		Field    string                 `json:"field,omitempty"`
+		Reason   string                 `json:"reason,omitempty"`
+		Problems []customRuleProblemOut `json:"problems,omitempty"`
+		Loaded   bool                   `json:"loaded"`
 	}
-	out := make([]entryResult, len(configs))
+	out := make([]entryResult, len(entries))
 	valid := 0
-	for i, cfg := range configs {
-		out[i] = entryResult{Index: i, ID: cfg.ID}
-		if _, err := analyzer.NewCustomRule(cfg); err != nil {
-			out[i].Error = err.Error()
-			continue
+	for i, e := range entries {
+		problems := []*analyzer.CustomRuleError{e.Err}
+		if e.Err == nil {
+			problems = analyzer.CheckCustomRule(e.Config, analyzer.CustomRuleStrict)
 		}
-		out[i].Valid = true
-		valid++
+		out[i] = entryResult{Index: e.Index, ID: e.Config.ID, Valid: true, Problems: toCustomRuleProblems(problems)}
+		if e.Err != nil {
+			out[i].ID = e.Err.RuleID
+		}
+		for _, p := range problems {
+			if !p.Warning {
+				out[i].Valid, out[i].Error, out[i].Field, out[i].Reason = false, p.Error(), p.Field, p.Reason
+				break
+			}
+		}
+		if out[i].Valid {
+			valid++
+		}
 	}
-	render.JSON(w, map[string]any{"entries": out, "valid": valid, "invalid": len(configs) - valid})
+	render.JSON(w, map[string]any{"entries": out, "valid": valid, "invalid": len(entries) - valid})
 }
 
 // @Summary      Enable/disable analysis rule
@@ -137,12 +141,12 @@ func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Re
 // handleTestCustomRule runs a CANDIDATE rule against one of the caller's flows and reports what it
 // would match — validate answers "does this compile", this "does it do anything". Member-level, stores nothing.
 // @Summary      Test a candidate custom rule against a flow
-// @Description  Runs one unsaved rule against a flow and returns the findings it would produce.
+// @Description  Runs one unsaved rule, checked strictly, against a flow and returns the findings it would produce. The body is {rule, flowId} and nothing else; a rule the strict check refuses is a 400 with details.field ("rule.<field>") and details.reason.
 // @Tags         analysis
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "Matches"
-// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      400 {object} render.ErrorResponse "Bad Request"
 // @Router       /api/analysis/custom-rules/test [post]
 func (h *AnalysisHandler) handleTestCustomRule(w http.ResponseWriter, r *http.Request) {
 	if !requireInstancePerm(w, r, h.security, service.InstanceWrite) {
@@ -152,11 +156,8 @@ func (h *AnalysisHandler) handleTestCustomRule(w http.ResponseWriter, r *http.Re
 		Rule   analyzer.CustomRuleConfig `json:"rule"`
 		FlowID string                    `json:"flowId"`
 	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if req.Rule.ID == "" {
-		render.Error(w, fmt.Errorf("rule.id is required"), http.StatusBadRequest)
+	if err := decodeStrictJSON(r.Body, &req); err != nil {
+		render.Error(w, err, 0)
 		return
 	}
 	if req.FlowID == "" {
@@ -171,8 +172,9 @@ func (h *AnalysisHandler) handleTestCustomRule(w http.ResponseWriter, r *http.Re
 	}
 	findings, err := h.analysisSvc.TestRule(r.Context(), doc, req.Rule)
 	if err != nil {
-		// A rule that does not compile is the AUTHOR's error, not a server fault — same 400 as the save endpoint.
-		render.Error(w, err, http.StatusBadRequest)
+		// A rule that does not compile is the AUTHOR's error, not a server fault — same 400 as the save endpoint,
+		// with details.field "rule.<field>".
+		render.Error(w, customRuleError(err, "rule."), http.StatusBadRequest)
 		return
 	}
 	render.JSON(w, map[string]any{
@@ -213,6 +215,15 @@ func (h *AnalysisHandler) handleUpdateRuleConfig(w http.ResponseWriter, r *http.
 	if req.ID == "" {
 		render.Error(w, fmt.Errorf("ruleId is required"), http.StatusBadRequest)
 		return
+	}
+	// The engine reads an unknown severity as error; refuse one here, where an
+	// admin sees the answer.
+	if sev := models.Severity(strings.ToLower(strings.TrimSpace(req.Config.Severity))); sev != "" {
+		if !sev.Valid() {
+			render.Error(w, fmt.Errorf("config.severity must be one of error, warning, info"), http.StatusBadRequest)
+			return
+		}
+		req.Config.Severity = string(sev)
 	}
 	if err := h.analysisSvc.UpdateRuleConfig(r.Context(), req.ID, req.Config); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)

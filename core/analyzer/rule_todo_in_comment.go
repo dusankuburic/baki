@@ -41,4 +41,12 @@ func (r *TodoInCommentRule) Check(block *models.Block, ctx *RuleContext) []model
 	}}
 }
 
-func init() { registerRule(&TodoInCommentRule{}) }
+func init() {
+	registerRule(&TodoInCommentRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "remove-block",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

@@ -1,0 +1,420 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "PAD Analyzer",
+          "version": "0.1.0",
+          "rules": [
+            {
+              "id": "file-op-no-error-handler",
+              "name": "File operation without error handler",
+              "shortDescription": {
+                "text": "File operation without error handler"
+              },
+              "fullDescription": {
+                "text": "File/Folder operations that commonly fail (locks, permissions, missing paths) without an error handler."
+              },
+              "help": {
+                "text": "File/Folder operations that commonly fail (locks, permissions, missing paths) without an error handler.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules file-op-no-error-handler` for the full rule description.",
+                "markdown": "File/Folder operations that commonly fail (locks, permissions, missing paths) without an error handler.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules file-op-no-error-handler` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "hardcoded-credential",
+              "name": "Hardcoded credential detected",
+              "shortDescription": {
+                "text": "Hardcoded credential detected"
+              },
+              "fullDescription": {
+                "text": "String values matching credential patterns, and credential-typed action properties (Password, ApiKey, Token, …) set to a literal."
+              },
+              "help": {
+                "text": "String values matching credential patterns, and credential-typed action properties (Password, ApiKey, Token, …) set to a literal.\n\nAuto-fix available: replace-with-variable (apply with `bakicli fix`).\n\nRun `bakicli rules hardcoded-credential` for the full rule description.",
+                "markdown": "String values matching credential patterns, and credential-typed action properties (Password, ApiKey, Token, …) set to a literal.\n\nAuto-fix available: replace-with-variable (apply with `bakicli fix`).\n\nRun `bakicli rules hardcoded-credential` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "category": "Security",
+                "confidence": "high"
+              }
+            },
+            {
+              "id": "hardcoded-filepath",
+              "name": "Hardcoded file path",
+              "shortDescription": {
+                "text": "Hardcoded file path"
+              },
+              "fullDescription": {
+                "text": "Absolute file paths that break when the flow runs on a different machine."
+              },
+              "help": {
+                "text": "Absolute file paths that break when the flow runs on a different machine.\n\nAuto-fix available: replace-with-variable (apply with `bakicli fix`).\n\nRun `bakicli rules hardcoded-filepath` for the full rule description.",
+                "markdown": "Absolute file paths that break when the flow runs on a different machine.\n\nAuto-fix available: replace-with-variable (apply with `bakicli fix`).\n\nRun `bakicli rules hardcoded-filepath` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Portability",
+                "confidence": "low"
+              }
+            },
+            {
+              "id": "subflow-no-error-handler",
+              "name": "Subflow without error handler",
+              "shortDescription": {
+                "text": "Subflow without error handler"
+              },
+              "fullDescription": {
+                "text": "Non-trivial subflows that contain no error handler block."
+              },
+              "help": {
+                "text": "Non-trivial subflows that contain no error handler block.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules subflow-no-error-handler` for the full rule description.",
+                "markdown": "Non-trivial subflows that contain no error handler block.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules subflow-no-error-handler` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "todo-in-comment",
+              "name": "TODO in comment",
+              "shortDescription": {
+                "text": "TODO in comment"
+              },
+              "fullDescription": {
+                "text": "COMMENT blocks containing TODO, FIXME, XXX, or HACK markers that signal unfinished work."
+              },
+              "help": {
+                "text": "COMMENT blocks containing TODO, FIXME, XXX, or HACK markers that signal unfinished work.\n\nAuto-fix available: remove-block (apply with `bakicli fix`).\n\nRun `bakicli rules todo-in-comment` for the full rule description.",
+                "markdown": "COMMENT blocks containing TODO, FIXME, XXX, or HACK markers that signal unfinished work.\n\nAuto-fix available: remove-block (apply with `bakicli fix`).\n\nRun `bakicli rules todo-in-comment` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Style",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "unused-variable",
+              "name": "Variable declared but never used",
+              "shortDescription": {
+                "text": "Variable declared but never used"
+              },
+              "fullDescription": {
+                "text": "Variables that are declared but never referenced."
+              },
+              "help": {
+                "text": "Variables that are declared but never referenced.\n\nAuto-fix available: remove-block (apply with `bakicli fix`).\n\nRun `bakicli rules unused-variable` for the full rule description.",
+                "markdown": "Variables that are declared but never referenced.\n\nAuto-fix available: remove-block (apply with `bakicli fix`).\n\nRun `bakicli rules unused-variable` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Style",
+                "confidence": "low"
+              }
+            },
+            {
+              "id": "wait-zero",
+              "name": "Wait zero",
+              "shortDescription": {
+                "text": "Wait zero"
+              },
+              "fullDescription": {
+                "text": "WAIT 0 actions that are effectively no-ops and add unnecessary clutter."
+              },
+              "help": {
+                "text": "WAIT 0 actions that are effectively no-ops and add unnecessary clutter.\n\nAuto-fix available: remove-block (apply with `bakicli fix`).\n\nRun `bakicli rules wait-zero` for the full rule description.",
+                "markdown": "WAIT 0 actions that are effectively no-ops and add unnecessary clutter.\n\nAuto-fix available: remove-block (apply with `bakicli fix`).\n\nRun `bakicli rules wait-zero` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Style",
+                "confidence": "medium"
+              }
+            }
+          ]
+        }
+      },
+      "automationDetails": {
+        "id": "pad-analysis"
+      },
+      "invocations": [
+        {
+          "executionSuccessful": true
+        }
+      ],
+      "results": [
+        {
+          "ruleId": "file-op-no-error-handler",
+          "ruleIndex": 0,
+          "level": "warning",
+          "message": {
+            "text": "This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.\n\nSuggestion: Wrap this action in an 'On Block Error' handler to manage missing files, permission errors, and file lock issues gracefully."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-002",
+                  "fullyQualifiedName": "sf-1/b-002",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "c79d4138e9fc38fd"
+          }
+        },
+        {
+          "ruleId": "hardcoded-credential",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "Variable 'Password' has a name that suggests it holds a credential and is assigned a literal string value.\n\nSuggestion: Store credentials in a secured vault, Windows Credential Manager, or use a PAD input variable instead of a literal string in the flow."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 8
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-007",
+                  "fullyQualifiedName": "sf-1/b-007",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "5104289541c42e04"
+          }
+        },
+        {
+          "ruleId": "hardcoded-filepath",
+          "ruleIndex": 2,
+          "level": "note",
+          "message": {
+            "text": "Property 'File' contains an absolute path: C:\\data\\in.txt\n\nSuggestion: Use a relative path or store the base directory in a variable configured per environment."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-002",
+                  "fullyQualifiedName": "sf-1/b-002",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "9ec4de64190e7da4"
+          }
+        },
+        {
+          "ruleId": "subflow-no-error-handler",
+          "ruleIndex": 3,
+          "level": "note",
+          "message": {
+            "text": "Subflow \"Main\" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.\n\nSuggestion: Add a Try/Catch or On Block Error handler to protect against unexpected failures."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-002",
+                  "fullyQualifiedName": "sf-1/b-002",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "6311c019bd553527"
+          }
+        },
+        {
+          "ruleId": "todo-in-comment",
+          "ruleIndex": 4,
+          "level": "note",
+          "message": {
+            "text": "This comment contains a TODO marker: \"TODO: remove the =SUM(A1) hack\"\n\nSuggestion: Resolve the TODO or convert it to a tracked issue."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 12
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-011",
+                  "fullyQualifiedName": "sf-1/b-011",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "fc311ae134c87f7b"
+          }
+        },
+        {
+          "ruleId": "unused-variable",
+          "ruleIndex": 5,
+          "level": "note",
+          "message": {
+            "text": "This variable is set but never referenced elsewhere in the flow.\n\nSuggestion: Remove the unused variable or add a reference to it."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 8
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-007",
+                  "fullyQualifiedName": "sf-1/b-007",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "cc2d665dbed0659d"
+          }
+        },
+        {
+          "ruleId": "unused-variable",
+          "ruleIndex": 5,
+          "level": "note",
+          "message": {
+            "text": "This variable is set but never referenced elsewhere in the flow.\n\nSuggestion: Remove the unused variable or add a reference to it."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 10
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-009",
+                  "fullyQualifiedName": "sf-1/b-009",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "ad02c3f36531348d"
+          }
+        },
+        {
+          "ruleId": "wait-zero",
+          "ruleIndex": 6,
+          "level": "note",
+          "message": {
+            "text": "This WAIT action has a duration of 0, making it a no-op.\n\nSuggestion: Remove the WAIT 0 action or increase the duration."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 13
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-012",
+                  "fullyQualifiedName": "sf-1/b-012",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "1920c190462643b7"
+          }
+        }
+      ]
+    }
+  ]
+}

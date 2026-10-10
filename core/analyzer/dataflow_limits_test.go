@@ -127,7 +127,7 @@ func refDeadDataPaths(ctx *RuleContext) []models.DeadDataPath {
 			continue
 		}
 
-		if !ctx.UsedVariables[outVar] {
+		if !ctx.UsedVariables()[outVar] {
 			continue
 		}
 

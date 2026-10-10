@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"pad-core/logger"
 	"path/filepath"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/lifecycle"
@@ -23,8 +25,6 @@ import (
 	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
-	"pad-core/cache"
-	"pad-core/models"
 )
 
 func ProvideDocumentProvider(mode config.DeploymentMode, storageBackend storageif.StorageBackend) service.DocumentProvider {
@@ -83,19 +83,11 @@ func ProvideConfigDir(mode config.DeploymentMode) (string, error) {
 // recent files. In cloud mode FlowService keeps no AST cache (NewFlowService).
 const astCacheBudget int64 = 96 << 20
 
-// ProvideASTCache builds the parsed-document cache, charged per document by
-// the memory-audit cost model (blocks × 1 KiB + the source it carries).
-func ProvideASTCache() (cache.Cache, error) {
-	return cache.NewSizedLRU(astCacheBudget, cache.WithCostFunc(astEntryCost)), nil
-}
-
-// astEntryCost is the AST cache's cost function: a document's estimated heap,
-// or a nominal 1 for anything else stored in it.
-func astEntryCost(value any) int64 {
-	if doc, ok := value.(*models.FlowDocument); ok {
-		return service.FlowDocumentCost(doc)
-	}
-	return 1
+// ProvideASTCache builds the parsed-document cache (declared "flow.ast"), each
+// document charged by the memory-audit cost model (blocks × 1 KiB + the source
+// it carries).
+func ProvideASTCache() *service.ASTCache {
+	return service.NewASTCache(astCacheBudget)
 }
 
 // ProvideHistoryStore persists per-flow analysis trend snapshots under the
@@ -184,9 +176,15 @@ func orgKeyLookup(keys service.OrgKeyStore) func(orgID, provider string) (string
 	}
 }
 
+// ProvideAnalyzer is the process's one cached analyzer (ADR 0017): the analysis service serves its reports and
+// inventories, and the flow service drops them when a flow is reimported or deleted, or the desktop opens a folder.
+func ProvideAnalyzer() *analyzer.CachedAnalyzer {
+	return service.NewDefaultAnalyzer()
+}
+
 // ProvideAnalysisService builds the AnalysisService on the deployment's custom rules and the per-org rule
 // resolver (the resolver takes the same compiled slice, ProvideDeploymentCustomRules).
-func ProvideAnalysisService(notifier service.EventNotifier, settings service.SettingsProvider, history *analyzer.HistoryStore, cfg *config.Config, rules service.DeploymentCustomRules, resolver *service.RuleProfileResolver, bus *eventbus.Bus) (*service.AnalysisService, error) {
+func ProvideAnalysisService(notifier service.EventNotifier, settings service.SettingsProvider, history *analyzer.HistoryStore, cfg *config.Config, rules service.DeploymentCustomRules, resolver *service.RuleProfileResolver, bus *eventbus.Bus, a *analyzer.CachedAnalyzer) (*service.AnalysisService, error) {
 	return service.NewAnalysisService(notifier, settings, history, service.AnalysisOptions{
 		CustomRules: rules,
 		Profiles:    resolver,
@@ -194,6 +192,9 @@ func ProvideAnalysisService(notifier service.EventNotifier, settings service.Set
 		// broadcast progress to every connected client.
 		AuthEnabled: cfg.Auth.Enabled,
 		Bus:         bus,
+		Analyzer:    a,
+		// Folder batch analysis, which runs the library rules, is refused with accounts.
+		LibraryRules: !capability.Of(cfg).Has(capability.Accounts),
 	})
 }
 
@@ -355,6 +356,7 @@ var ServiceModule = fx.Options(
 		ProvideSettingsStore,
 		ProvideConfigDir,
 		ProvideASTCache,
+		ProvideAnalyzer,
 		ProvideHistoryStore,
 		ProvideAI,
 		ProvideSettingsProvider,
@@ -491,23 +493,32 @@ var ServiceModule = fx.Options(
 	fx.Invoke(SubscribeSettingsAndCredentialCaches),
 )
 
-// ProvideDeploymentCustomRules compiles PAD_CUSTOM_RULES once at boot.
-// Invalid entries are SKIPPED WITH A WARNING EACH, never silently: R0-5 was
-// motivated by exactly that failure mode — a typo'd regex quietly removed a
-// rule the operator believed was enforcing. A missing/unset path is a no-op.
+// ProvideDeploymentCustomRules compiles PAD_CUSTOM_RULES once at boot, tolerantly (ADR 0015): an unknown field, a
+// missing id or a built-in rule's id is a warning and the rule loads; an entry with an error (an invalid value, a
+// kind or schemaVersion this build cannot run) is SKIPPED WITH A WARNING EACH, never silently: R0-5 was
+// motivated by exactly that failure mode — a typo'd regex quietly removed a rule the operator believed was
+// enforcing. A named file that does not exist is a WARN, not a silent no-op; an unset path is.
 func ProvideDeploymentCustomRules(cfg *config.Config) service.DeploymentCustomRules {
 	path := cfg.Server.CustomRulesPath
 	if path == "" {
 		return nil
 	}
-	rules, warnings, err := analyzer.LoadCustomRules(path)
+	rules, problems, err := analyzer.LoadCustomRuleFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		logger.Warn("custom rules file not found; continuing with built-in rules only", "path", path)
+		return nil
+	}
 	if err != nil {
-		// Don't fail boot: the deployment still has its 44 built-in rules.
+		// Don't fail boot: the deployment still has its built-in rules.
 		logger.Error("custom rules load failed; continuing with built-in rules only", "path", path, "error", err)
 		return nil
 	}
-	for _, w := range warnings {
-		logger.Warn("custom rule skipped", "file", path, "detail", w)
+	for _, p := range problems {
+		msg := "custom rule skipped"
+		if p.Warning {
+			msg = "custom rule warning"
+		}
+		logger.Warn(msg, "file", path, "index", p.Index, "rule", p.RuleID, "field", p.Field, "reason", p.Reason, "detail", p.Error())
 	}
 	return rules
 }

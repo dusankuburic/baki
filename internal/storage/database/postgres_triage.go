@@ -145,12 +145,18 @@ func (b *PostgresStorageBackend) DeleteFindingStatus(ctx context.Context, flowID
 	return err
 }
 
+// baselineRuleSetColumns selects a baseline's rule set and digest, NULL unless they were written with its keys
+// (rule_set_at = created_at; migration 0037): a row the release before rewrote reads as legacy.
+const baselineRuleSetColumns = `CASE WHEN rule_set_at = created_at THEN rule_set END,
+		CASE WHEN rule_set_at = created_at THEN rule_set_digest END`
+
 func (b *PostgresStorageBackend) GetFlowBaseline(ctx context.Context, flowID string) (*interfaces.FlowBaseline, error) {
 	var bl interfaces.FlowBaseline
-	var keysJSON []byte
+	var keysJSON, ruleSetJSON []byte
+	var digest sql.NullString
 	err := b.query(ctx).QueryRowContext(ctx,
-		`SELECT flow_id, keys, created_by, created_at FROM flow_baselines WHERE flow_id = $1`, flowID).
-		Scan(&bl.FlowID, &keysJSON, &bl.CreatedBy, &bl.CreatedAt)
+		`SELECT flow_id, keys, created_by, created_at, `+baselineRuleSetColumns+` FROM flow_baselines WHERE flow_id = $1`, flowID).
+		Scan(&bl.FlowID, &keysJSON, &bl.CreatedBy, &bl.CreatedAt, &ruleSetJSON, &digest)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -165,6 +171,7 @@ func (b *PostgresStorageBackend) GetFlowBaseline(ctx context.Context, flowID str
 	if bl.Keys == nil {
 		bl.Keys = []string{}
 	}
+	bl.RuleSet, bl.RuleSetDigest = decodeRuleSet(ruleSetJSON, digest)
 	return &bl, nil
 }
 
@@ -177,14 +184,23 @@ func (b *PostgresStorageBackend) SetFlowBaseline(ctx context.Context, bl *interf
 	if err != nil {
 		return err
 	}
+	ruleSet, digest, err := encodeRuleSet(bl.RuleSet)
+	if err != nil {
+		return err
+	}
+	// rule_set_at takes the statement's NOW(), the value created_at gets, so the rule set counts until a writer that
+	// does not know it rewrites the keys.
 	_, err = b.query(ctx).ExecContext(ctx, `
-		INSERT INTO flow_baselines (flow_id, keys, created_by, created_at)
-		VALUES ($1, $2, $3, NOW())
+		INSERT INTO flow_baselines (flow_id, keys, created_by, created_at, rule_set, rule_set_digest, rule_set_at)
+		VALUES ($1, $2, $3, NOW(), $4::jsonb, $5::text, CASE WHEN $5::text IS NULL THEN NULL ELSE NOW() END)
 		ON CONFLICT (flow_id) DO UPDATE SET
 			keys = EXCLUDED.keys,
 			created_by = EXCLUDED.created_by,
-			created_at = NOW()`,
-		bl.FlowID, keysJSON, bl.CreatedBy)
+			created_at = NOW(),
+			rule_set = EXCLUDED.rule_set,
+			rule_set_digest = EXCLUDED.rule_set_digest,
+			rule_set_at = EXCLUDED.rule_set_at`,
+		bl.FlowID, keysJSON, bl.CreatedBy, ruleSet, digest)
 	return err
 }
 

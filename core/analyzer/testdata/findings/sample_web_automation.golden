@@ -1,0 +1,246 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_web_automation
+document: subflows=1 blocks=16 parseErrors=1 folder=false
+
+=== default
+stats: {"errors":1,"warnings":16,"info":12,"blocksAnalyzed":15,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=14 final=675/675 last="Loop body is too large"
+metrics: {"avgCognitive":2,"avgCyclomatic":3,"healthScore":12,"maxCognitive":2,"maxCyclomatic":3,"subflowCount":1,"totalBlocks":15,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":15,"cognitiveComplexity":2,"cyclomaticComplexity":3,"fanIn":0,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=15
+  raw findings: hardcoded-credential=1 hardcoded-url=1 missing-delay=3 missing-retry=7 missing-timeout=7 parse-error=1 subflow-no-error-handler=1 unhandled-error=7 uninitialized-variable=1
+inventory: none
+findings: 29
+F-001 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#15 sf=Main fp=hardcoded-credential:3b11e50bcb62a7af
+    title: Credential variable set to literal value
+    desc: Variable 'Password' has a name that suggests it holds a credential and is assigned a literal string value.
+    meta: {"variable":"Password"}
+F-002 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#1 sf=Main fp=hardcoded-url:d87d6c845fddeb46
+    title: Hardcoded URL
+    desc: Property 'Url' contains a hardcoded URL: https://example.com
+    meta: {"property":"Url","url":"https://example.com"}
+F-003 info/medium missing-delay [Reliability] fix=insert-delay @Main#3 sf=Main fp=missing-delay:149c3ce3b18474f9
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-004 info/medium missing-delay [Reliability] fix=insert-delay @Main#4 sf=Main fp=missing-delay:e993b0ac860e13f9
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-005 info/medium missing-delay [Reliability] fix=insert-delay @Main#8 sf=Main fp=missing-delay:14d481cfc809e708
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-006 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#1 sf=Main fp=missing-retry:94e2a71adde13026
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.LaunchFirefox"}
+F-007 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#2 sf=Main fp=missing-retry:2edd075cfd36ab83
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.FillTextByText"}
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#3 sf=Main fp=missing-retry:149c3ce3b18474f9
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.FillTextByText"}
+F-009 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#4 sf=Main fp=missing-retry:e993b0ac860e13f9
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.ClickByText"}
+F-010 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#6 sf=Main fp=missing-retry:273d11495d15217f
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.GetElementByText"}
+F-011 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#7 sf=Main fp=missing-retry:070f03f7d1cc1986
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.ClickByText"}
+F-012 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#8 sf=Main fp=missing-retry:14d481cfc809e708
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.GetDetailsOfElement"}
+F-013 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#1 sf=Main fp=missing-timeout:94e2a71adde13026
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.LaunchFirefox"}
+F-014 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#2 sf=Main fp=missing-timeout:2edd075cfd36ab83
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.FillTextByText"}
+F-015 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#3 sf=Main fp=missing-timeout:149c3ce3b18474f9
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.FillTextByText"}
+F-016 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#4 sf=Main fp=missing-timeout:e993b0ac860e13f9
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.ClickByText"}
+F-017 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#6 sf=Main fp=missing-timeout:273d11495d15217f
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.GetElementByText"}
+F-018 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:070f03f7d1cc1986
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.ClickByText"}
+F-019 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#8 sf=Main fp=missing-timeout:14d481cfc809e708
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.GetDetailsOfElement"}
+F-020 warning/high parse-error [Syntax] fix=- @Main#0 sf=Main fp=parse-error:fedfc6e4c7ae32fb
+    title: Parse error (line 11)
+    desc: malformed line
+    meta: {"column":0,"line":11,"snippet":"WebAutomation.CloseWindow"}
+F-021 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:fedfc6e4c7ae32fb
+    title: Subflow without error handler
+    desc: Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-022 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:94e2a71adde13026
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-023 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=unhandled-error:2edd075cfd36ab83
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-024 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=unhandled-error:149c3ce3b18474f9
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-025 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:e993b0ac860e13f9
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-026 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=unhandled-error:273d11495d15217f
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-027 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=unhandled-error:070f03f7d1cc1986
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-028 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=unhandled-error:14d481cfc809e708
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-029 warning/low uninitialized-variable [Logic] fix=init-variable @Main#8 sf=Main fp=uninitialized-variable:a38cd179f260e230
+    title: Variable potentially uninitialized
+    desc: Variable 'DashboardUrl' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"DashboardUrl"}
+
+=== nil-settings
+stats: {"errors":1,"warnings":16,"info":12,"blocksAnalyzed":15,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=14 final=675/675 last="Loop body is too large"
+metrics: as default, healthScore=12
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=15
+  raw findings: hardcoded-credential=1 hardcoded-url=1 missing-delay=3 missing-retry=7 missing-timeout=7 parse-error=1 subflow-no-error-handler=1 unhandled-error=7 uninitialized-variable=1
+inventory: none
+findings: 29
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":1,"warnings":16,"info":13,"blocksAnalyzed":15,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=14 final=675/675 last="Loop body is too large"
+metrics: as default, healthScore=11
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=15
+  raw findings: hardcoded-credential=1 hardcoded-url=1 large-subflow=1 missing-delay=3 missing-retry=7 missing-timeout=7 parse-error=1 subflow-no-error-handler=1 unhandled-error=7 uninitialized-variable=1
+inventory: none
+findings: 30
+F-001 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#15 sf=Main fp=hardcoded-credential:3b11e50bcb62a7af
+F-002 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#1 sf=Main fp=hardcoded-url:d87d6c845fddeb46
+F-003 info/low large-subflow [Style] fix=- @Main#0 sf=Main fp=large-subflow:fedfc6e4c7ae32fb
+    title: Large subflow
+    desc: Subflow 'Main' has 15 blocks (threshold: 5).
+F-004 info/medium missing-delay [Reliability] fix=insert-delay @Main#3 sf=Main fp=missing-delay:149c3ce3b18474f9
+F-005 info/medium missing-delay [Reliability] fix=insert-delay @Main#4 sf=Main fp=missing-delay:e993b0ac860e13f9
+F-006 info/medium missing-delay [Reliability] fix=insert-delay @Main#8 sf=Main fp=missing-delay:14d481cfc809e708
+F-007 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#1 sf=Main fp=missing-retry:94e2a71adde13026
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#2 sf=Main fp=missing-retry:2edd075cfd36ab83
+F-009 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#3 sf=Main fp=missing-retry:149c3ce3b18474f9
+F-010 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#4 sf=Main fp=missing-retry:e993b0ac860e13f9
+F-011 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#6 sf=Main fp=missing-retry:273d11495d15217f
+F-012 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#7 sf=Main fp=missing-retry:070f03f7d1cc1986
+F-013 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#8 sf=Main fp=missing-retry:14d481cfc809e708
+F-014 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#1 sf=Main fp=missing-timeout:94e2a71adde13026
+F-015 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#2 sf=Main fp=missing-timeout:2edd075cfd36ab83
+F-016 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#3 sf=Main fp=missing-timeout:149c3ce3b18474f9
+F-017 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#4 sf=Main fp=missing-timeout:e993b0ac860e13f9
+F-018 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#6 sf=Main fp=missing-timeout:273d11495d15217f
+F-019 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:070f03f7d1cc1986
+F-020 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#8 sf=Main fp=missing-timeout:14d481cfc809e708
+F-021 warning/high parse-error [Syntax] fix=- @Main#0 sf=Main fp=parse-error:fedfc6e4c7ae32fb
+F-022 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:fedfc6e4c7ae32fb
+F-023 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:94e2a71adde13026
+F-024 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=unhandled-error:2edd075cfd36ab83
+F-025 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=unhandled-error:149c3ce3b18474f9
+F-026 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:e993b0ac860e13f9
+F-027 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=unhandled-error:273d11495d15217f
+F-028 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=unhandled-error:070f03f7d1cc1986
+F-029 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=unhandled-error:14d481cfc809e708
+F-030 warning/low uninitialized-variable [Logic] fix=init-variable @Main#8 sf=Main fp=uninitialized-variable:a38cd179f260e230
+
+=== disabled
+stats: {"errors":0,"warnings":7,"info":8,"blocksAnalyzed":15,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=12 final=555/555 last="Loop body is too large"
+metrics: as default, healthScore=64
+profiles: rules=37 order=f7de49357acad250 blocksChecked=15
+  raw findings: hardcoded-url=1 missing-retry=7 missing-timeout=7
+inventory: none
+findings: 15
+F-001 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#1 sf=Main fp=hardcoded-url:d87d6c845fddeb46
+F-002 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#1 sf=Main fp=missing-retry:94e2a71adde13026
+F-003 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#2 sf=Main fp=missing-retry:2edd075cfd36ab83
+F-004 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#3 sf=Main fp=missing-retry:149c3ce3b18474f9
+F-005 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#4 sf=Main fp=missing-retry:e993b0ac860e13f9
+F-006 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#6 sf=Main fp=missing-retry:273d11495d15217f
+F-007 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#7 sf=Main fp=missing-retry:070f03f7d1cc1986
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#8 sf=Main fp=missing-retry:14d481cfc809e708
+F-009 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#1 sf=Main fp=missing-timeout:94e2a71adde13026
+F-010 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#2 sf=Main fp=missing-timeout:2edd075cfd36ab83
+F-011 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#3 sf=Main fp=missing-timeout:149c3ce3b18474f9
+F-012 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#4 sf=Main fp=missing-timeout:e993b0ac860e13f9
+F-013 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#6 sf=Main fp=missing-timeout:273d11495d15217f
+F-014 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:070f03f7d1cc1986
+F-015 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#8 sf=Main fp=missing-timeout:14d481cfc809e708
+
+=== severity
+stats: {"errors":9,"warnings":12,"info":8,"blocksAnalyzed":15,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=14 final=675/675 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=15
+  raw findings: hardcoded-credential=1 hardcoded-url=1 missing-delay=3 missing-retry=7 missing-timeout=7 parse-error=1 subflow-no-error-handler=1 unhandled-error=7 uninitialized-variable=1
+inventory: none
+findings: 29
+  as default; severity changes: F-002 info->warning, F-003 info->warning, F-004 info->warning, F-005 info->warning, F-021 info->error, F-022 warning->error, F-023 warning->error, F-024 warning->error, F-025 warning->error, F-026 warning->error, F-027 warning->error, F-028 warning->error, F-029 warning->info
+
+=== autofixable
+stats: {"errors":1,"warnings":16,"info":12,"blocksAnalyzed":15,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=10 final=480/480 last="Wait zero"
+metrics: as default, healthScore=12
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=15
+  raw findings: hardcoded-credential=1 hardcoded-url=1 missing-delay=3 missing-retry=7 missing-timeout=7 subflow-no-error-handler=1 unhandled-error=7 uninitialized-variable=1
+inventory: none
+findings: 29
+F-001 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#15 sf=Main fp=hardcoded-credential:3b11e50bcb62a7af
+F-002 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#1 sf=Main fp=hardcoded-url:d87d6c845fddeb46
+F-003 info/medium missing-delay [Reliability] fix=insert-delay @Main#3 sf=Main fp=missing-delay:149c3ce3b18474f9
+F-004 info/medium missing-delay [Reliability] fix=insert-delay @Main#4 sf=Main fp=missing-delay:e993b0ac860e13f9
+F-005 info/medium missing-delay [Reliability] fix=insert-delay @Main#8 sf=Main fp=missing-delay:14d481cfc809e708
+F-006 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#1 sf=Main fp=missing-retry:94e2a71adde13026
+F-007 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#2 sf=Main fp=missing-retry:2edd075cfd36ab83
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#3 sf=Main fp=missing-retry:149c3ce3b18474f9
+F-009 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#4 sf=Main fp=missing-retry:e993b0ac860e13f9
+F-010 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#6 sf=Main fp=missing-retry:273d11495d15217f
+F-011 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#7 sf=Main fp=missing-retry:070f03f7d1cc1986
+F-012 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#8 sf=Main fp=missing-retry:14d481cfc809e708
+F-013 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#1 sf=Main fp=missing-timeout:94e2a71adde13026
+F-014 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#2 sf=Main fp=missing-timeout:2edd075cfd36ab83
+F-015 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#3 sf=Main fp=missing-timeout:149c3ce3b18474f9
+F-016 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#4 sf=Main fp=missing-timeout:e993b0ac860e13f9
+F-017 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#6 sf=Main fp=missing-timeout:273d11495d15217f
+F-018 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:070f03f7d1cc1986
+F-019 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#8 sf=Main fp=missing-timeout:14d481cfc809e708
+F-020 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:fedfc6e4c7ae32fb
+F-021 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:94e2a71adde13026
+F-022 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=unhandled-error:2edd075cfd36ab83
+F-023 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=unhandled-error:149c3ce3b18474f9
+F-024 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:e993b0ac860e13f9
+F-025 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=unhandled-error:273d11495d15217f
+F-026 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=unhandled-error:070f03f7d1cc1986
+F-027 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=unhandled-error:14d481cfc809e708
+F-028 warning/low uninitialized-variable [Logic] fix=init-variable @Main#8 sf=Main fp=uninitialized-variable:a38cd179f260e230
+F-029 warning/high parse-error [-] fix=- @- sf=Main fp=parse-error:
+    title: Parse error (line 11)
+    desc: malformed line
+    meta: {"column":0,"line":11,"snippet":"WebAutomation.CloseWindow"}

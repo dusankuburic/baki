@@ -16,6 +16,7 @@ import (
 	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/cache"
 	"pad-core/logger"
 )
 
@@ -191,11 +192,11 @@ type AzureModelService struct {
 
 	memoMu sync.Mutex
 	// importedMemo remembers owners whose import marker was seen (60 s, recorded only after the commit that made it durable).
-	importedMemo map[storageif.AzureOwner]time.Time
+	importedMemo ownerMemo
 	// sweptMemo rate-limits the orphan sweep (hourly per owner).
-	sweptMemo map[storageif.AzureOwner]time.Time
+	sweptMemo ownerMemo
 	// deferredMemo remembers owners whose legacy import waits for a free slot or name; retried at most once per TTL.
-	deferredMemo map[storageif.AzureOwner]time.Time
+	deferredMemo ownerMemo
 
 	// refresher refreshes stale project listings in the background.
 	refresher *azureListingRefresher
@@ -204,6 +205,83 @@ type AzureModelService struct {
 	probeResource func(ctx context.Context, raw string) error
 	probeModel    func(ctx context.Context, raw string, m ai.AzureRegisteredModel) error
 	discover      func(ctx context.Context, raw string, registered []ai.AzureRegisteredModel) (ai.AzureDiscovery, error)
+}
+
+// azureOwnerMemos are the registry service's per-owner timestamps (ADR 0017): whose import marker was seen, whose
+// legacy import waits, whose orphan sweep ran. Each belongs to one registry owner (a user's or an organisation's),
+// the tenant; the memo is the Param.
+var azureOwnerMemos = cache.Declare("azure.owner-memos",
+	cache.Keys(cache.KindTenant, cache.KindParam),
+	cache.ReplicaLocal("a 60 s memo of a durable marker and two rate limits; another replica reads the marker and keeps its own limits"))
+
+// ownerMemo is one of those memos: when each owner's event last happened, by the service's clock (tests move it).
+// Callers hold memoMu.
+type ownerMemo struct {
+	name string
+	at   map[cache.Key]time.Time
+}
+
+func newOwnerMemo(name string) ownerMemo {
+	return ownerMemo{name: name, at: map[cache.Key]time.Time{}}
+}
+
+// azureOwnerTenant is the cache tenant of a registry owner (the desktop's personal owner has no id: the local user).
+func azureOwnerTenant(o storageif.AzureOwner) cache.Part {
+	if o.Kind == storageif.AzureOwnerOrg {
+		return cache.Org(o.ID)
+	}
+	return callerTenant(o.ID)
+}
+
+func (m ownerMemo) key(o storageif.AzureOwner) (cache.Key, bool) {
+	t := azureOwnerTenant(o)
+	if t.IsZero() {
+		return cache.Key{}, false
+	}
+	k, err := azureOwnerMemos.Key(t, cache.Param("memo", m.name))
+	return k, err == nil
+}
+
+// fresh reports whether o's event happened less than ttl before now.
+func (m ownerMemo) fresh(o storageif.AzureOwner, now time.Time, ttl time.Duration) bool {
+	k, ok := m.key(o)
+	if !ok {
+		return false
+	}
+	if at, hit := m.at[k]; hit && now.Sub(at) < ttl {
+		azureOwnerMemos.RecordHit()
+		return true
+	}
+	azureOwnerMemos.RecordMiss()
+	return false
+}
+
+// record notes o's event at now; at azureMemoPrune entries an insert first drops those older than ttl.
+func (m ownerMemo) record(o storageif.AzureOwner, now time.Time, ttl time.Duration) {
+	k, ok := m.key(o)
+	if !ok {
+		return
+	}
+	if len(m.at) >= azureMemoPrune {
+		for other, at := range m.at {
+			if now.Sub(at) >= ttl {
+				delete(m.at, other)
+				azureOwnerMemos.RecordEviction(cache.EvictExpired)
+			}
+		}
+	}
+	m.at[k] = now
+	azureOwnerMemos.RecordStore()
+}
+
+// forget drops o's entry.
+func (m ownerMemo) forget(o storageif.AzureOwner) {
+	if k, ok := m.key(o); ok {
+		if _, had := m.at[k]; had {
+			delete(m.at, k)
+			azureOwnerMemos.RecordEviction(cache.EvictDeleted)
+		}
+	}
 }
 
 // NewAzureModelService builds the registry service.
@@ -222,9 +300,9 @@ func NewAzureModelService(deps AzureModelServiceDeps) *AzureModelService {
 		perUserOwners:             deps.PerUserOwners,
 		knowledgeEmbeddingEnabled: deps.KnowledgeEmbeddingEnabled,
 		now:                       time.Now,
-		importedMemo:              map[storageif.AzureOwner]time.Time{},
-		sweptMemo:                 map[storageif.AzureOwner]time.Time{},
-		deferredMemo:              map[storageif.AzureOwner]time.Time{},
+		importedMemo:              newOwnerMemo("import-marker"),
+		sweptMemo:                 newOwnerMemo("orphan-sweep"),
+		deferredMemo:              newOwnerMemo("import-deferred"),
 		refresher:                 newAzureListingRefresher(ai.RefreshAzureFoundryListing),
 		probeResource:             ai.ProbeAzureFoundryResource,
 		probeModel:                ai.ProbeAzureFoundryModel,

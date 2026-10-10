@@ -3,6 +3,8 @@ package interfaces
 import (
 	"context"
 	"time"
+
+	"pad-core/models"
 )
 
 // DashboardStore covers the persisted flow-health snapshots and the dashboard rollup queries.
@@ -10,7 +12,7 @@ type DashboardStore interface {
 	SaveFlowAnalysis(ctx context.Context, fa *FlowAnalysis) error
 	// LoadFlowHealth returns the flow's latest persisted analysis snapshot or (nil, nil) when never analyzed; caller-side authorization.
 	LoadFlowHealth(ctx context.Context, flowID string) (*HealthSnapshot, error)
-	// LoadFlowHealthBatch resolves many flows' snapshots in one query; map omits never-analyzed flows, never nil; caller-side authorization.
+	// LoadFlowHealthBatch resolves many flows' snapshots in one query; map omits never-analyzed flows, never nil; caller-side authorization. Also the portfolio read: a snapshot carries its rule set's digest only.
 	LoadFlowHealthBatch(ctx context.Context, flowIDs []string) (map[string]*HealthSnapshot, error)
 	FlowDashboardData(ctx context.Context, ownerID string, days int) (*DashboardData, error)
 	// FlowDashboardAdvanced returns trend, cost-by-provider, rule-frequency, activity, complexity-scatter, and security-posture data.
@@ -33,6 +35,9 @@ type HealthSnapshot struct {
 	Warnings    int       `json:"warnings"`
 	Info        int       `json:"info"`
 	AnalyzedAt  time.Time `json:"analyzedAt"`
+	// RuleSetDigest is the digest of the rule set the analysis ran (ADR 0016), "" when unknown (a legacy snapshot);
+	// RuleSetsByDigest resolves it. Not part of the flow GET.
+	RuleSetDigest string `json:"-"`
 }
 
 // FlowAnalysis is the upserted summary of a flow's latest analysis (aggregates survive restarts); owner/org scoping is resolved by JOINing flows at read time — no denormalized ownership.
@@ -51,6 +56,8 @@ type FlowAnalysis struct {
 	AutoFixableCount int `json:"autoFixableCount,omitempty"`
 	// TotalFindings is the sum of Errors+Warnings+Info, denormalized for org-wide SUMs.
 	TotalFindings int `json:"totalFindings,omitempty"`
+	// RuleSet is the rule set the analysis ran (AnalysisReport.RuleSet); nil records none.
+	RuleSet *models.RuleSet `json:"-"`
 }
 
 // RecentFlowHealth is one row of the dashboard's "recent flows" list: a flow with its latest health score (nil when never analyzed).

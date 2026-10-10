@@ -129,4 +129,12 @@ func walkLoopBody(loop *models.Block, fn func(*models.Block)) {
 	walk(loop)
 }
 
-func init() { registerRule(&InfiniteLoopRiskRule{}) }
+func init() {
+	registerRule(&InfiniteLoopRiskRule{}, RuleMeta{
+		Confidence:   models.ConfidenceHigh,
+		AutoFix:      "insert-exit-condition",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

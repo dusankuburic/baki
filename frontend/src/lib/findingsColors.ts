@@ -4,6 +4,8 @@ export const categoryColors: Record<string, string> = {
   Performance: 'text-orange-400',
   Style: 'text-purple-400',
   Logic: 'text-cyan-400',
+  Portability: 'text-teal-400',
+  Syntax: 'text-pink-400',
 }
 
 export const categoryBackgrounds: Record<string, string> = {
@@ -12,6 +14,8 @@ export const categoryBackgrounds: Record<string, string> = {
   Performance: 'bg-orange-500/10',
   Style: 'bg-purple-500/10',
   Logic: 'bg-cyan-500/10',
+  Portability: 'bg-teal-500/10',
+  Syntax: 'bg-pink-500/10',
 }
 
 export const categoryBadgeClass = (category?: string): string => {

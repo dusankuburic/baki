@@ -1,0 +1,75 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_actions_GenerateRandomNumber
+document: subflows=1 blocks=9 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":2,"info":0,"blocksAnalyzed":8,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=8 final=360/360 last="Loop body is too large"
+metrics: {"avgCognitive":0,"avgCyclomatic":1,"healthScore":92,"maxCognitive":0,"maxCyclomatic":1,"subflowCount":1,"totalBlocks":8,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow GenerateRandomNumber: {"blockCount":8,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=8
+  raw findings: empty-handler=1 error-swallow=1
+inventory: none
+findings: 2
+F-001 warning/high empty-handler [Reliability] fix=insert-handler-log @GenerateRandomNumber#4 sf=GenerateRandomNumber fp=empty-handler:434df32abab44c14
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-002 warning/medium error-swallow [Reliability] fix=insert-error-log @GenerateRandomNumber#4 sf=GenerateRandomNumber fp=error-swallow:434df32abab44c14
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+
+=== nil-settings
+stats: {"errors":0,"warnings":2,"info":0,"blocksAnalyzed":8,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=8 final=360/360 last="Loop body is too large"
+metrics: as default, healthScore=92
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=8
+  raw findings: empty-handler=1 error-swallow=1
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":2,"info":1,"blocksAnalyzed":8,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=8 final=360/360 last="Loop body is too large"
+metrics: as default, healthScore=91
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=8
+  raw findings: empty-handler=1 error-swallow=1 large-subflow=1
+inventory: none
+findings: 3
+F-001 warning/high empty-handler [Reliability] fix=insert-handler-log @GenerateRandomNumber#4 sf=GenerateRandomNumber fp=empty-handler:434df32abab44c14
+F-002 warning/medium error-swallow [Reliability] fix=insert-error-log @GenerateRandomNumber#4 sf=GenerateRandomNumber fp=error-swallow:434df32abab44c14
+F-003 info/low large-subflow [Style] fix=- @GenerateRandomNumber#0 sf=GenerateRandomNumber fp=large-subflow:3816259059a35622
+    title: Large subflow
+    desc: Subflow 'GenerateRandomNumber' has 8 blocks (threshold: 5).
+
+=== disabled
+stats: {"errors":0,"warnings":2,"info":0,"blocksAnalyzed":8,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=6 final=296/296 last="Loop body is too large"
+metrics: as default, healthScore=92
+profiles: rules=37 order=f7de49357acad250 blocksChecked=8
+  raw findings: empty-handler=1 error-swallow=1
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== severity
+stats: {"errors":0,"warnings":2,"info":0,"blocksAnalyzed":8,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=8 final=360/360 last="Loop body is too large"
+metrics: as default, healthScore=92
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=8
+  raw findings: empty-handler=1 error-swallow=1
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== autofixable
+stats: {"errors":0,"warnings":2,"info":0,"blocksAnalyzed":8,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=6 final=256/256 last="Wait zero"
+metrics: as default, healthScore=92
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=8
+  raw findings: empty-handler=1 error-swallow=1
+inventory: none
+findings: 2
+  as default; severity changes: none

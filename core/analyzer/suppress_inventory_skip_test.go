@@ -38,7 +38,7 @@ func TestSuppressionInventory_NoDirectiveRunsNoRules(t *testing.T) {
 	if n := calls.Load(); n != 0 {
 		t.Fatalf("no directive: inventory ran %d rule checks, want 0", n)
 	}
-	if got := SuppressionInventoryCached(flow, rules, nil); got != nil {
+	if got := newTestAnalyzer().SuppressionInventory(localIn(flow, rules, nil, nil)); got != nil {
 		t.Fatalf("no directive (cached): got %+v, want nil", got)
 	}
 	if n := calls.Load(); n != 0 {

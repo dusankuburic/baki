@@ -9,7 +9,6 @@ import (
 
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
-	"pad-core/analyzer"
 	"pad-core/models"
 )
 
@@ -304,33 +303,14 @@ func TestDashboardService_BuildHome_AdvancedFailureMarksSecurityUnavailable(t *t
 }
 
 // buildLocal must count a flow once even when it was analyzed under multiple
-// content hashes (e.g. after editing): the cache's Put replaces the flow's
-// prior entry, so the newest report wins.
+// content hashes (e.g. after editing): the analyzer keeps one report per flow,
+// so the newest report wins.
 func TestDashboardService_BuildLocal_DeduplicatesFlows(t *testing.T) {
-	// Start from an empty session cache: entries put via CachedAnalysis key on
-	// the path-derived StableFlowID, which Invalidate(report.FlowID) misses.
-	analyzer.DefaultCache.Clear()
+	analysisSvc := newDesktopAnalysisService(t)
+	// The same desktop file, analyzed before and after an edit: two parses, two contents, one flow.
+	analyzeLocal(t, analysisSvc, desktopDoc("Old", "/flows/dup-flow.txt", "Set X"))
+	analyzeLocal(t, analysisSvc, desktopDoc("New", "/flows/dup-flow.txt", "Set Y"))
 
-	t1 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	t2 := t1.Add(time.Hour)
-	// Insert two reports for the same flow (different GeneratedAt)
-	analyzer.DefaultCache.Put("dup-flow", "hash-old", &models.AnalysisReport{
-		FlowID:      "dup-flow",
-		FlowName:    "Old",
-		GeneratedAt: t1,
-		Findings:    []models.Finding{},
-		Stats:       models.AnalysisStats{Errors: 1, Warnings: 0, Info: 0},
-	})
-	analyzer.DefaultCache.Put("dup-flow", "hash-new", &models.AnalysisReport{
-		FlowID:      "dup-flow",
-		FlowName:    "New",
-		GeneratedAt: t2,
-		Findings:    []models.Finding{},
-		Stats:       models.AnalysisStats{Errors: 2, Warnings: 0, Info: 0},
-	})
-	t.Cleanup(func() { analyzer.DefaultCache.Invalidate("dup-flow") })
-
-	analysisSvc := &AnalysisService{}
 	svc := NewDashboardService(nil, analysisSvc, nil, nil)
 
 	home := svc.BuildHome(context.Background(), "user-1")
@@ -472,32 +452,22 @@ func TestDashboardService_BuildHome_CloudWorkflowEmpty(t *testing.T) {
 // and fix availability from findings, and the health histogram from metrics.
 // SeverityTrend stays empty (no per-day time series locally).
 func TestDashboardService_BuildLocal_V3Analytics(t *testing.T) {
-	// Start from an empty session cache: entries put via CachedAnalysis key on
-	// the path-derived StableFlowID, which Invalidate(report.FlowID) misses.
-	analyzer.DefaultCache.Clear()
-	analyzer.DefaultCache.Put("local-1", "h1", &models.AnalysisReport{
-		FlowID:   "local-1",
-		FlowName: "Local One",
-		Metrics:  &models.FlowMetrics{HealthScore: 90, TotalBlocks: 10},
-		Findings: []models.Finding{
-			{RuleID: "missing-timeout", Severity: models.SeverityWarning, Confidence: models.ConfidenceMedium, AutoFix: "set-timeout"},
-			{RuleID: "hardcoded-url", Severity: models.SeverityInfo, Confidence: models.ConfidenceLow},
-		},
-	})
-	analyzer.DefaultCache.Put("local-2", "h2", &models.AnalysisReport{
-		FlowID:   "local-2",
-		FlowName: "Local Two",
-		Metrics:  &models.FlowMetrics{HealthScore: 30, TotalBlocks: 5},
-		Findings: []models.Finding{
-			{RuleID: "resource-leak", Severity: models.SeverityWarning, Confidence: models.ConfidenceHigh, AutoFix: "insert-close"},
-		},
-	})
-	t.Cleanup(func() {
-		analyzer.DefaultCache.Invalidate("local-1")
-		analyzer.DefaultCache.Invalidate("local-2")
-	})
+	analysisSvc := newDesktopAnalysisService(t)
+	// Two analyzed desktop files whose cached reports (the analyzer hands out its own pointers) the test then
+	// gives known findings and metrics.
+	one := analyzeLocal(t, analysisSvc, desktopDoc("Local One", "/flows/local-1.txt", "Set X"))
+	one.Metrics = &models.FlowMetrics{HealthScore: 90, TotalBlocks: 10}
+	one.Findings = []models.Finding{
+		{RuleID: "missing-timeout", Severity: models.SeverityWarning, Confidence: models.ConfidenceMedium, AutoFix: "set-timeout"},
+		{RuleID: "hardcoded-url", Severity: models.SeverityInfo, Confidence: models.ConfidenceLow},
+	}
+	two := analyzeLocal(t, analysisSvc, desktopDoc("Local Two", "/flows/local-2.txt", "Set Y"))
+	two.Metrics = &models.FlowMetrics{HealthScore: 30, TotalBlocks: 5}
+	two.Findings = []models.Finding{
+		{RuleID: "resource-leak", Severity: models.SeverityWarning, Confidence: models.ConfidenceHigh, AutoFix: "insert-close"},
+	}
 
-	svc := NewDashboardService(nil, &AnalysisService{}, nil, nil)
+	svc := NewDashboardService(nil, analysisSvc, nil, nil)
 	home := svc.BuildHome(context.Background(), "user-1")
 
 	// Confidence: 1 high + 1 medium + 1 low.
@@ -531,7 +501,7 @@ func TestDashboardService_BuildLocal_V3Analytics(t *testing.T) {
 // file (parser mints a fresh doc UUID each load) must update the flow's single
 // dashboard entry, not add a second one.
 func TestDashboardService_BuildLocal_ReloadedFileCountsOnce(t *testing.T) {
-	analyzer.DefaultCache.Clear()
+	analysisSvc := newDesktopAnalysisService(t)
 	block := models.Block{ID: "b1", SubflowID: "sf1", Name: "Set X", Type: models.BlockTypeAction, RawType: "SetVariable.Set"}
 	mkDoc := func(uuid string) *models.FlowDocument {
 		return &models.FlowDocument{
@@ -539,11 +509,10 @@ func TestDashboardService_BuildLocal_ReloadedFileCountsOnce(t *testing.T) {
 			Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{block}}},
 		}
 	}
-	analyzer.CachedAnalysis(mkDoc("reload-uuid-1"), analyzer.AllRules(), nil, nil)
-	analyzer.CachedAnalysis(mkDoc("reload-uuid-2"), analyzer.AllRules(), nil, nil)
-	t.Cleanup(analyzer.DefaultCache.Clear)
+	analyzeLocal(t, analysisSvc, mkDoc("reload-uuid-1"))
+	analyzeLocal(t, analysisSvc, mkDoc("reload-uuid-2"))
 
-	svc := NewDashboardService(nil, &AnalysisService{}, nil, nil)
+	svc := NewDashboardService(nil, analysisSvc, nil, nil)
 	home := svc.BuildHome(context.Background(), "user-1")
 
 	if home.Overview.TotalFlows != 1 {
@@ -552,4 +521,32 @@ func TestDashboardService_BuildLocal_ReloadedFileCountsOnce(t *testing.T) {
 	if len(home.Complexity) != 1 {
 		t.Errorf("complexity scatter must have one point, got %d", len(home.Complexity))
 	}
+}
+
+// newDesktopAnalysisService is the desktop's analysis service (accounts off) on its own analyzer.
+func newDesktopAnalysisService(t *testing.T) *AnalysisService {
+	t.Helper()
+	svc, err := NewAnalysisService(NilNotifier{}, nilSettings{}, nil, AnalysisOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc
+}
+
+// desktopDoc is a one-block desktop file named name at path.
+func desktopDoc(name, path, blockName string) *models.FlowDocument {
+	doc := makeAnalyzableDoc("doc-"+name,
+		models.Block{ID: "b-" + name, SubflowID: "main", Name: blockName, Type: models.BlockTypeAction, RawType: "SetVariable.Set", LineNumber: 1})
+	doc.Name, doc.FilePath = name, path
+	return doc
+}
+
+// analyzeLocal analyzes doc as the desktop does and returns the report the session analytics now hold.
+func analyzeLocal(t *testing.T, svc *AnalysisService, doc *models.FlowDocument) *models.AnalysisReport {
+	t.Helper()
+	r, err := svc.AnalyzeFlow(context.Background(), doc)
+	if err != nil || r == nil {
+		t.Fatalf("analyze %s: %v", doc.Name, err)
+	}
+	return r
 }

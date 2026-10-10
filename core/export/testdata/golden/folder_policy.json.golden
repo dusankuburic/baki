@@ -1,0 +1,925 @@
+{
+  "flowId": "doc-folder",
+  "flowName": "=Invoices+Ops",
+  "generatedAt": "2026-10-08T09:30:00Z",
+  "findings": [
+    {
+      "id": "F-001",
+      "fingerprint": "file-op-no-error-handler:026024392b68f0a9",
+      "ruleId": "file-op-no-error-handler",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "File operation without error handler",
+      "description": "This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.",
+      "blockId": "b-009",
+      "subflowId": "sf-2",
+      "suggestion": "Wrap this action in an 'On Block Error' handler to manage missing files, permission errors, and file lock issues gracefully.",
+      "autoFix": "wrap-error-handler",
+      "category": "Reliability",
+      "metadata": {
+        "rawType": "File.Delete"
+      }
+    },
+    {
+      "id": "F-002",
+      "fingerprint": "hardcoded-filepath:375d88985bc141cb",
+      "ruleId": "hardcoded-filepath",
+      "severity": "info",
+      "confidence": "low",
+      "title": "Hardcoded file path",
+      "description": "Property 'Files' contains an absolute path: /home/ops/tmp/invoice.csv",
+      "blockId": "b-009",
+      "subflowId": "sf-2",
+      "suggestion": "Use a relative path or store the base directory in a variable configured per environment.",
+      "autoFix": "replace-with-variable",
+      "category": "Portability",
+      "metadata": {
+        "path": "/home/ops/tmp/invoice.csv",
+        "property": "Files"
+      }
+    },
+    {
+      "id": "F-003",
+      "fingerprint": "hardcoded-ip:37c4cc3ff1bf28cf",
+      "ruleId": "hardcoded-ip",
+      "severity": "info",
+      "confidence": "low",
+      "title": "Hardcoded IP address",
+      "description": "Property 'ConnectionString' contains a hardcoded IP address: 10.0.0.5",
+      "blockId": "b-007",
+      "subflowId": "sf-2",
+      "suggestion": "Store the IP address in a variable so it can be changed per environment.",
+      "autoFix": "replace-with-variable",
+      "category": "Portability",
+      "metadata": {
+        "ip": "10.0.0.5",
+        "property": "ConnectionString"
+      }
+    },
+    {
+      "id": "F-004",
+      "fingerprint": "missing-delay:c5394a5641e19cfb",
+      "ruleId": "missing-delay",
+      "severity": "info",
+      "confidence": "medium",
+      "title": "Web action without wait",
+      "description": "Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.",
+      "blockId": "b-005",
+      "subflowId": "sf-1",
+      "suggestion": "Add a 'Wait for element' or 'Delay' action between UI automation steps to improve reliability.",
+      "autoFix": "insert-delay",
+      "category": "Reliability"
+    },
+    {
+      "id": "F-005",
+      "fingerprint": "missing-retry:e37ea40c853277ad",
+      "ruleId": "missing-retry",
+      "severity": "info",
+      "confidence": "medium",
+      "title": "Transient operation without retry",
+      "description": "This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.",
+      "blockId": "b-004",
+      "subflowId": "sf-1",
+      "suggestion": "Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.",
+      "autoFixHint": "Wrap the action: SET %RetryCount% = 0 \u003e LOOP while %RetryCount% \u003c 3 \u003e [action] \u003e ON ERROR: Wait 2s, SET %RetryCount% = %RetryCount% + 1 \u003e END LOOP.",
+      "autoFix": "wrap-in-retry",
+      "category": "Reliability",
+      "metadata": {
+        "rawType": "WebAutomation.Click.Click"
+      }
+    },
+    {
+      "id": "F-006",
+      "fingerprint": "missing-retry:c5394a5641e19cfb",
+      "ruleId": "missing-retry",
+      "severity": "info",
+      "confidence": "medium",
+      "title": "Transient operation without retry",
+      "description": "This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.",
+      "blockId": "b-005",
+      "subflowId": "sf-1",
+      "suggestion": "Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.",
+      "autoFixHint": "Wrap the action: SET %RetryCount% = 0 \u003e LOOP while %RetryCount% \u003c 3 \u003e [action] \u003e ON ERROR: Wait 2s, SET %RetryCount% = %RetryCount% + 1 \u003e END LOOP.",
+      "autoFix": "wrap-in-retry",
+      "category": "Reliability",
+      "metadata": {
+        "rawType": "WebAutomation.Click.Click"
+      }
+    },
+    {
+      "id": "F-007",
+      "fingerprint": "missing-retry:ac485254ddea42e6",
+      "ruleId": "missing-retry",
+      "severity": "info",
+      "confidence": "medium",
+      "title": "Transient operation without retry",
+      "description": "This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.",
+      "blockId": "b-007",
+      "subflowId": "sf-2",
+      "suggestion": "Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.",
+      "autoFixHint": "Wrap the action: SET %RetryCount% = 0 \u003e LOOP while %RetryCount% \u003c 3 \u003e [action] \u003e ON ERROR: Wait 2s, SET %RetryCount% = %RetryCount% + 1 \u003e END LOOP.",
+      "autoFix": "wrap-in-retry",
+      "category": "Reliability",
+      "metadata": {
+        "rawType": "Database.Connect"
+      }
+    },
+    {
+      "id": "F-008",
+      "fingerprint": "missing-retry:eedc6965a57fc41c",
+      "ruleId": "missing-retry",
+      "severity": "info",
+      "confidence": "medium",
+      "title": "Transient operation without retry",
+      "description": "This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.",
+      "blockId": "b-008",
+      "subflowId": "sf-2",
+      "suggestion": "Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.",
+      "autoFixHint": "Wrap the action: SET %RetryCount% = 0 \u003e LOOP while %RetryCount% \u003c 3 \u003e [action] \u003e ON ERROR: Wait 2s, SET %RetryCount% = %RetryCount% + 1 \u003e END LOOP.",
+      "autoFix": "wrap-in-retry",
+      "category": "Reliability",
+      "metadata": {
+        "rawType": "Database.ExecuteSqlStatement.Execute"
+      }
+    },
+    {
+      "id": "F-009",
+      "fingerprint": "missing-timeout:e37ea40c853277ad",
+      "ruleId": "missing-timeout",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Network operation without timeout",
+      "description": "This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.",
+      "blockId": "b-004",
+      "subflowId": "sf-1",
+      "suggestion": "Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior.",
+      "autoFix": "set-timeout",
+      "category": "Reliability",
+      "metadata": {
+        "rawType": "WebAutomation.Click.Click"
+      }
+    },
+    {
+      "id": "F-010",
+      "fingerprint": "missing-timeout:c5394a5641e19cfb",
+      "ruleId": "missing-timeout",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Network operation without timeout",
+      "description": "This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.",
+      "blockId": "b-005",
+      "subflowId": "sf-1",
+      "suggestion": "Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior.",
+      "autoFix": "set-timeout",
+      "category": "Reliability",
+      "metadata": {
+        "rawType": "WebAutomation.Click.Click"
+      }
+    },
+    {
+      "id": "F-011",
+      "fingerprint": "missing-timeout:ac485254ddea42e6",
+      "ruleId": "missing-timeout",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Network operation without timeout",
+      "description": "This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.",
+      "blockId": "b-007",
+      "subflowId": "sf-2",
+      "suggestion": "Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior.",
+      "autoFix": "set-timeout",
+      "category": "Reliability",
+      "metadata": {
+        "rawType": "Database.Connect"
+      }
+    },
+    {
+      "id": "F-012",
+      "fingerprint": "resource-leak:df6508c6119fc0d0",
+      "ruleId": "resource-leak",
+      "severity": "warning",
+      "confidence": "high",
+      "title": "Resource opened but never closed",
+      "description": "This action opens a Excel instance (stored in %ExcelInstance%) but no matching close action was found in the flow.",
+      "blockId": "b-002",
+      "subflowId": "sf-1",
+      "suggestion": "Add a 'Excel.Close' action to release the resource. Place it inside an 'On Block Error' handler to guarantee cleanup even on failure.",
+      "autoFix": "insert-close",
+      "category": "Reliability",
+      "metadata": {
+        "resource": "Excel instance",
+        "variable": "ExcelInstance"
+      }
+    },
+    {
+      "id": "F-013",
+      "fingerprint": "resource-leak:8f1e8e927ff4cc2e",
+      "ruleId": "resource-leak",
+      "severity": "warning",
+      "confidence": "high",
+      "title": "Resource opened but never closed",
+      "description": "This action opens a database connection (stored in %SQLConnection%) but no matching close action was found in the flow.",
+      "blockId": "b-007",
+      "subflowId": "sf-2",
+      "suggestion": "Add a 'Database.Close' action to release the resource. Place it inside an 'On Block Error' handler to guarantee cleanup even on failure.",
+      "autoFix": "insert-close",
+      "category": "Reliability",
+      "metadata": {
+        "resource": "database connection",
+        "variable": "SQLConnection"
+      }
+    },
+    {
+      "id": "F-014",
+      "fingerprint": "slow-pattern:6349cf2a51e6b657",
+      "ruleId": "slow-pattern",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "UI automation in tight loop",
+      "description": "This loop contains UI/web automation actions without any delay, which can overwhelm the target application.",
+      "blockId": "b-003",
+      "subflowId": "sf-1",
+      "suggestion": "Add a 'Wait' or 'Delay' action inside the loop to reduce load on the target application.",
+      "autoFix": "insert-delay-in-loop",
+      "category": "Performance"
+    },
+    {
+      "id": "F-015",
+      "fingerprint": "sql-injection-risk:9a73feb1fe61b5b2",
+      "ruleId": "sql-injection-risk",
+      "severity": "warning",
+      "confidence": "high",
+      "title": "SQL injection risk",
+      "description": "SQL statement interpolates variables directly. A malicious value could alter the query.",
+      "blockId": "b-008",
+      "subflowId": "sf-2",
+      "suggestion": "Use parameterized queries (@paramName or ? placeholders) instead of embedding %variables% directly in the SQL string.",
+      "autoFix": "parameterize-sql",
+      "category": "Security",
+      "metadata": {
+        "property": "Statement",
+        "tainted": false
+      }
+    },
+    {
+      "id": "F-016",
+      "fingerprint": "subflow-no-error-handler:3939f18b329c2ac7",
+      "ruleId": "subflow-no-error-handler",
+      "severity": "info",
+      "confidence": "medium",
+      "title": "Subflow without error handler",
+      "description": "Subflow \"Main\" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.",
+      "blockId": "b-001",
+      "subflowId": "sf-1",
+      "suggestion": "Add a Try/Catch or On Block Error handler to protect against unexpected failures.",
+      "autoFix": "wrap-error-handler",
+      "category": "Reliability"
+    },
+    {
+      "id": "F-017",
+      "fingerprint": "unhandled-error:43a56869d38f03a9",
+      "ruleId": "unhandled-error",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Unhandled error in fallible action",
+      "description": "This action commonly fails but has no error handler in its surrounding scope.",
+      "blockId": "b-002",
+      "subflowId": "sf-1",
+      "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+      "autoFix": "wrap-error-handler",
+      "category": "Reliability"
+    },
+    {
+      "id": "F-018",
+      "fingerprint": "unhandled-error:e37ea40c853277ad",
+      "ruleId": "unhandled-error",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Unhandled error in fallible action",
+      "description": "This action commonly fails but has no error handler in its surrounding scope.",
+      "blockId": "b-004",
+      "subflowId": "sf-1",
+      "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+      "autoFix": "wrap-error-handler",
+      "category": "Reliability"
+    },
+    {
+      "id": "F-019",
+      "fingerprint": "unhandled-error:c5394a5641e19cfb",
+      "ruleId": "unhandled-error",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Unhandled error in fallible action",
+      "description": "This action commonly fails but has no error handler in its surrounding scope.",
+      "blockId": "b-005",
+      "subflowId": "sf-1",
+      "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+      "autoFix": "wrap-error-handler",
+      "category": "Reliability"
+    },
+    {
+      "id": "F-020",
+      "fingerprint": "unhandled-error:ac485254ddea42e6",
+      "ruleId": "unhandled-error",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Unhandled error in fallible action",
+      "description": "This action commonly fails but has no error handler in its surrounding scope.",
+      "blockId": "b-007",
+      "subflowId": "sf-2",
+      "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+      "autoFix": "wrap-error-handler",
+      "category": "Reliability"
+    },
+    {
+      "id": "F-021",
+      "fingerprint": "unhandled-error:eedc6965a57fc41c",
+      "ruleId": "unhandled-error",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Unhandled error in fallible action",
+      "description": "This action commonly fails but has no error handler in its surrounding scope.",
+      "blockId": "b-008",
+      "subflowId": "sf-2",
+      "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+      "autoFix": "wrap-error-handler",
+      "category": "Reliability"
+    },
+    {
+      "id": "F-022",
+      "fingerprint": "unhandled-error:026024392b68f0a9",
+      "ruleId": "unhandled-error",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Unhandled error in fallible action",
+      "description": "This action commonly fails but has no error handler in its surrounding scope.",
+      "blockId": "b-009",
+      "subflowId": "sf-2",
+      "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+      "autoFix": "wrap-error-handler",
+      "category": "Reliability"
+    },
+    {
+      "id": "F-023",
+      "fingerprint": "uninitialized-variable:871ce6760fd194ef",
+      "ruleId": "uninitialized-variable",
+      "severity": "warning",
+      "confidence": "low",
+      "title": "Variable potentially uninitialized",
+      "description": "Variable 'ExcelData' is used here but doesn't seem to be assigned anywhere in the flow.",
+      "blockId": "b-003",
+      "subflowId": "sf-1",
+      "suggestion": "Ensure the variable is initialized with a SET action or as an output of another action.",
+      "autoFix": "init-variable",
+      "category": "Logic",
+      "metadata": {
+        "variable": "ExcelData"
+      }
+    },
+    {
+      "id": "F-024",
+      "fingerprint": "uninitialized-variable:f822c7321ce86112",
+      "ruleId": "uninitialized-variable",
+      "severity": "warning",
+      "confidence": "low",
+      "title": "Variable potentially uninitialized",
+      "description": "Variable 'CurrentRow' is used here but doesn't seem to be assigned anywhere in the flow.",
+      "blockId": "b-003",
+      "subflowId": "sf-1",
+      "suggestion": "Ensure the variable is initialized with a SET action or as an output of another action.",
+      "autoFix": "init-variable",
+      "category": "Logic",
+      "metadata": {
+        "variable": "CurrentRow"
+      }
+    },
+    {
+      "id": "F-025",
+      "fingerprint": "uninitialized-variable:3bca9419861c9e3e",
+      "ruleId": "uninitialized-variable",
+      "severity": "warning",
+      "confidence": "low",
+      "title": "Variable potentially uninitialized",
+      "description": "Variable 'Browser' is used here but doesn't seem to be assigned anywhere in the flow.",
+      "blockId": "b-004",
+      "subflowId": "sf-1",
+      "suggestion": "Ensure the variable is initialized with a SET action or as an output of another action.",
+      "autoFix": "init-variable",
+      "category": "Logic",
+      "metadata": {
+        "variable": "Browser"
+      }
+    },
+    {
+      "id": "F-026",
+      "fingerprint": "uninitialized-variable:1f1f9b6cf760cb68",
+      "ruleId": "uninitialized-variable",
+      "severity": "warning",
+      "confidence": "low",
+      "title": "Variable potentially uninitialized",
+      "description": "Variable 'InvoiceId' is used here but doesn't seem to be assigned anywhere in the flow.",
+      "blockId": "b-008",
+      "subflowId": "sf-2",
+      "suggestion": "Ensure the variable is initialized with a SET action or as an output of another action.",
+      "autoFix": "init-variable",
+      "category": "Logic",
+      "metadata": {
+        "variable": "InvoiceId"
+      }
+    }
+  ],
+  "stats": {
+    "errors": 0,
+    "warnings": 18,
+    "info": 8,
+    "blocksAnalyzed": 8,
+    "rulesRun": 45,
+    "rulesSkipped": 0,
+    "suppressed": 0
+  },
+  "durationMs": 1234,
+  "metrics": {
+    "subflows": [
+      {
+        "subflowId": "sf-1",
+        "subflowName": "Main",
+        "blockCount": 5,
+        "cyclomaticComplexity": 2,
+        "cognitiveComplexity": 1,
+        "maxNestingDepth": 1,
+        "variableCount": 0,
+        "fanIn": 0,
+        "fanOut": 1
+      },
+      {
+        "subflowId": "sf-2",
+        "subflowName": "Billing",
+        "blockCount": 3,
+        "cyclomaticComplexity": 1,
+        "cognitiveComplexity": 0,
+        "maxNestingDepth": 0,
+        "variableCount": 0,
+        "fanIn": 1,
+        "fanOut": 0
+      }
+    ],
+    "totalBlocks": 8,
+    "totalVariables": 0,
+    "maxCyclomatic": 2,
+    "avgCyclomatic": 1.5,
+    "maxCognitive": 1,
+    "avgCognitive": 0.5,
+    "healthScore": 20,
+    "variableDensity": 0,
+    "subflowCount": 2
+  },
+  "ruleProfiles": [
+    {
+      "ruleId": "dead-data",
+      "ruleName": "Dead data path",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "circular-subflow-dependency",
+      "ruleName": "Circular subflow dependency",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "command-injection-risk",
+      "ruleName": "Command or script injection risk",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "dead-code",
+      "ruleName": "Unreachable code",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "deep-nesting",
+      "ruleName": "Deeply nested logic",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "disabled-block",
+      "ruleName": "Disabled block",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "duplicate-action",
+      "ruleName": "Repeated action pattern",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "duplicate-label",
+      "ruleName": "Duplicate label",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "duplicate-subflow-name",
+      "ruleName": "Duplicate subflow name",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "empty-branch",
+      "ruleName": "Empty condition branch",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "empty-handler",
+      "ruleName": "Error handler is empty",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "empty-subflow",
+      "ruleName": "Empty subflow",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "error-swallow",
+      "ruleName": "Error handler swallows errors",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "file-op-no-error-handler",
+      "ruleName": "File operation without error handler",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "goto-antipattern",
+      "ruleName": "GOTO anti-pattern detected",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "hardcoded-credential",
+      "ruleName": "Hardcoded credential detected",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "hardcoded-filepath",
+      "ruleName": "Hardcoded file path",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "hardcoded-ip",
+      "ruleName": "Hardcoded IP address",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "hardcoded-ui-coordinates",
+      "ruleName": "Hardcoded UI coordinates",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "hardcoded-url",
+      "ruleName": "Hardcoded URL",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "high-cyclomatic-complexity",
+      "ruleName": "High cyclomatic complexity",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "infinite-loop-risk",
+      "ruleName": "Loop may run forever",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "insecure-http-url",
+      "ruleName": "Insecure HTTP URL",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "large-subflow",
+      "ruleName": "Large subflow",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "missing-delay",
+      "ruleName": "Web action without wait",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "missing-retry",
+      "ruleName": "Transient operation without retry",
+      "durationMs": 0,
+      "findingCount": 4,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "missing-timeout",
+      "ruleName": "Network operation without timeout",
+      "durationMs": 0,
+      "findingCount": 3,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "parse-error",
+      "ruleName": "Parse error",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "path-traversal-risk",
+      "ruleName": "Path traversal risk",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "redundant-action",
+      "ruleName": "Redundant action detected",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "resource-leak",
+      "ruleName": "Resource opened but never closed",
+      "durationMs": 0,
+      "findingCount": 2,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "sensitive-exposure",
+      "ruleName": "Sensitive data exposure",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "slow-pattern",
+      "ruleName": "UI automation in tight loop",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "sql-injection-risk",
+      "ruleName": "SQL injection risk",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "subflow-mismatch",
+      "ruleName": "Subflow call parameter mismatch",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "subflow-no-error-handler",
+      "ruleName": "Subflow without error handler",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "switch-no-default",
+      "ruleName": "Switch without default case",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "tainted-sink",
+      "ruleName": "Tainted data in dangerous sink",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "todo-in-comment",
+      "ruleName": "TODO in comment",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "uncalled-subflow",
+      "ruleName": "Uncalled subflow",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "unhandled-error",
+      "ruleName": "Unhandled error in fallible action",
+      "durationMs": 0,
+      "findingCount": 6,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "uninitialized-variable",
+      "ruleName": "Variable used before being initialized",
+      "durationMs": 0,
+      "findingCount": 5,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "unused-variable",
+      "ruleName": "Variable declared but never used",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "wait-zero",
+      "ruleName": "Wait zero",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    },
+    {
+      "ruleId": "wide-loop",
+      "ruleName": "Loop body is too large",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 8
+    }
+  ],
+  "policy": {
+    "policyId": "pol-release",
+    "policyName": "Release gate \u003cv2\u003e",
+    "passed": false,
+    "violations": [
+      {
+        "id": "F-002",
+        "fingerprint": "hardcoded-filepath:375d88985bc141cb",
+        "ruleId": "hardcoded-filepath",
+        "severity": "info",
+        "confidence": "low",
+        "title": "Hardcoded file path",
+        "description": "Property 'Files' contains an absolute path: /home/ops/tmp/invoice.csv",
+        "blockId": "b-009",
+        "subflowId": "sf-2",
+        "suggestion": "Use a relative path or store the base directory in a variable configured per environment.",
+        "autoFix": "replace-with-variable",
+        "category": "Portability",
+        "metadata": {
+          "path": "/home/ops/tmp/invoice.csv",
+          "property": "Files"
+        }
+      },
+      {
+        "id": "F-015",
+        "fingerprint": "sql-injection-risk:9a73feb1fe61b5b2",
+        "ruleId": "sql-injection-risk",
+        "severity": "error",
+        "confidence": "high",
+        "title": "SQL injection risk",
+        "description": "SQL statement interpolates variables directly. A malicious value could alter the query.",
+        "blockId": "b-008",
+        "subflowId": "sf-2",
+        "suggestion": "Use parameterized queries (@paramName or ? placeholders) instead of embedding %variables% directly in the SQL string.",
+        "autoFix": "parameterize-sql",
+        "category": "Security",
+        "metadata": {
+          "property": "Statement",
+          "tainted": false
+        }
+      },
+      {
+        "id": "F-017",
+        "fingerprint": "unhandled-error:43a56869d38f03a9",
+        "ruleId": "unhandled-error",
+        "severity": "warning",
+        "confidence": "medium",
+        "title": "Unhandled error in fallible action",
+        "description": "This action commonly fails but has no error handler in its surrounding scope.",
+        "blockId": "b-002",
+        "subflowId": "sf-1",
+        "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+        "autoFix": "wrap-error-handler",
+        "category": "Reliability"
+      },
+      {
+        "id": "F-018",
+        "fingerprint": "unhandled-error:e37ea40c853277ad",
+        "ruleId": "unhandled-error",
+        "severity": "warning",
+        "confidence": "medium",
+        "title": "Unhandled error in fallible action",
+        "description": "This action commonly fails but has no error handler in its surrounding scope.",
+        "blockId": "b-004",
+        "subflowId": "sf-1",
+        "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+        "autoFix": "wrap-error-handler",
+        "category": "Reliability"
+      },
+      {
+        "id": "F-019",
+        "fingerprint": "unhandled-error:c5394a5641e19cfb",
+        "ruleId": "unhandled-error",
+        "severity": "warning",
+        "confidence": "medium",
+        "title": "Unhandled error in fallible action",
+        "description": "This action commonly fails but has no error handler in its surrounding scope.",
+        "blockId": "b-005",
+        "subflowId": "sf-1",
+        "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+        "autoFix": "wrap-error-handler",
+        "category": "Reliability"
+      },
+      {
+        "id": "F-020",
+        "fingerprint": "unhandled-error:ac485254ddea42e6",
+        "ruleId": "unhandled-error",
+        "severity": "warning",
+        "confidence": "medium",
+        "title": "Unhandled error in fallible action",
+        "description": "This action commonly fails but has no error handler in its surrounding scope.",
+        "blockId": "b-007",
+        "subflowId": "sf-2",
+        "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+        "autoFix": "wrap-error-handler",
+        "category": "Reliability"
+      },
+      {
+        "id": "F-021",
+        "fingerprint": "unhandled-error:eedc6965a57fc41c",
+        "ruleId": "unhandled-error",
+        "severity": "warning",
+        "confidence": "medium",
+        "title": "Unhandled error in fallible action",
+        "description": "This action commonly fails but has no error handler in its surrounding scope.",
+        "blockId": "b-008",
+        "subflowId": "sf-2",
+        "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+        "autoFix": "wrap-error-handler",
+        "category": "Reliability"
+      },
+      {
+        "id": "F-022",
+        "fingerprint": "unhandled-error:026024392b68f0a9",
+        "ruleId": "unhandled-error",
+        "severity": "warning",
+        "confidence": "medium",
+        "title": "Unhandled error in fallible action",
+        "description": "This action commonly fails but has no error handler in its surrounding scope.",
+        "blockId": "b-009",
+        "subflowId": "sf-2",
+        "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+        "autoFix": "wrap-error-handler",
+        "category": "Reliability"
+      }
+    ],
+    "errors": 1,
+    "warnings": 6,
+    "info": 2,
+    "evaluated": 9,
+    "waived": 0
+  }
+}

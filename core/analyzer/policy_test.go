@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -246,3 +248,102 @@ var (
 	timeNow  = func() time.Time { return time.Now() }
 	timeHour = time.Hour
 )
+
+// TestEvaluatePolicy_PreviewNeverGates pins D3 for policies: a preview finding
+// of an enabled rule is counted in Preview only, whatever the gate, the
+// severity override, a waiver or a per-rule budget says.
+func TestEvaluatePolicy_PreviewNeverGates(t *testing.T) {
+	withPreviewRule(t, "wait-zero")
+	report := policyReport(
+		models.Finding{RuleID: "wait-zero", BlockID: "b1", Severity: models.SeverityError, Fingerprint: "fp-wz1"},
+		models.Finding{RuleID: "wait-zero", BlockID: "b2", Severity: models.SeverityWarning, Fingerprint: "fp-wz2"},
+		models.Finding{RuleID: "dead-code", BlockID: "b3", Severity: models.SeverityError, Stage: "preview", Fingerprint: "fp-dc1"},
+		models.Finding{RuleID: "dead-code", BlockID: "b4", Severity: models.SeverityInfo, Fingerprint: "fp-dc2"},
+		models.Finding{RuleID: "dead-code", BlockID: "b5", Severity: models.SeverityInfo, Fingerprint: "fp-dc3"},
+		models.Finding{RuleID: "unhandled-error", BlockID: "b6", Severity: models.SeverityError, Stage: "preview"},
+	)
+	policy := models.Policy{
+		ID: "p", Name: "Strict",
+		Rules: []models.PolicyRule{
+			{RuleID: "wait-zero", Enabled: true, Severity: models.SeverityError},
+			{RuleID: "dead-code", Enabled: true, MaxCount: intPtr(1)},
+		},
+		GateSeverity: models.SeverityInfo,
+		Waivers:      []models.PolicyWaiver{{FindingKey: "fp-wz1"}},
+	}
+
+	res := EvaluatePolicy(report, policy)
+	// unhandled-error is not in the policy: neither evaluated nor counted.
+	if res.Preview != 3 || res.Waived != 0 || res.Evaluated != 2 {
+		t.Errorf("want Preview 3, Waived 0, Evaluated 2, got %+v", res)
+	}
+	if res.Errors != 0 || res.Warnings != 0 || res.Info != 2 {
+		t.Errorf("preview findings must not reach the severity counts: %+v", res)
+	}
+	// The dead-code budget of 1 is spent by b4, not by the preview b3, so b5
+	// alone violates.
+	if res.Passed || len(res.Violations) != 1 || res.Violations[0].BlockID != "b5" {
+		t.Fatalf("want b5 as the lone violation, got %+v", res.Violations)
+	}
+
+	onlyPreview := policy
+	onlyPreview.Rules = onlyPreview.Rules[:1]
+	if res := EvaluatePolicy(report, onlyPreview); !res.Passed || res.Preview != 2 || res.Evaluated != 0 {
+		t.Errorf("a policy over a preview rule alone must pass: %+v", res)
+	}
+}
+
+func TestPolicyResult_PreviewOmittedWhenZero(t *testing.T) {
+	b, err := json.Marshal(models.PolicyResult{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "preview") {
+		t.Errorf("a zero Preview must not change the wire shape: %s", b)
+	}
+	b, _ = json.Marshal(models.PolicyResult{Preview: 2})
+	if !strings.Contains(string(b), `"preview":2`) {
+		t.Errorf("Preview missing: %s", b)
+	}
+}
+
+// TestEvaluatePolicy_UnknownSeverityFailsClosed: an unknown finding or
+// override severity ranks as an error, even at an info gate (it ranked below
+// every gate and the policy passed).
+func TestEvaluatePolicy_UnknownSeverityFailsClosed(t *testing.T) {
+	report := policyReport(
+		models.Finding{RuleID: "dead-code", BlockID: "b1", Severity: "critical"},
+		models.Finding{RuleID: "missing-delay", BlockID: "b2", Severity: models.SeverityInfo},
+	)
+	policy := models.Policy{
+		Rules: []models.PolicyRule{
+			{RuleID: "dead-code", Enabled: true},
+			{RuleID: "missing-delay", Enabled: true, Severity: "blocker"},
+		},
+		GateSeverity: models.SeverityError,
+	}
+	res := EvaluatePolicy(report, policy)
+	if res.Passed || len(res.Violations) != 2 || res.Errors != 2 {
+		t.Errorf("both findings must violate as errors: %+v", res)
+	}
+}
+
+// s2-3: a policy's severities read like settings severities: case and spacing are ignored, so a "Warning"
+// override downgrades the rule (it used to count as an unknown severity, an error) and an "Error" gate gates.
+func TestEvaluatePolicy_SeveritiesIgnoreCaseAndSpacing(t *testing.T) {
+	report := policyReport(models.Finding{RuleID: "dead-code", BlockID: "b1", Severity: models.SeverityError})
+	downgraded := EvaluatePolicy(report, models.Policy{
+		Rules:        []models.PolicyRule{{RuleID: "dead-code", Enabled: true, Severity: " Warning"}},
+		GateSeverity: models.SeverityError,
+	})
+	if !downgraded.Passed || downgraded.Warnings != 1 || downgraded.Errors != 0 {
+		t.Errorf("a \" Warning\" override must downgrade the finding: %+v", downgraded)
+	}
+	gated := EvaluatePolicy(report, models.Policy{
+		Rules:        []models.PolicyRule{{RuleID: "dead-code", Enabled: true}},
+		GateSeverity: "Error",
+	})
+	if gated.Passed {
+		t.Errorf("an \"Error\" gate must gate, not report only: %+v", gated)
+	}
+}

@@ -6,6 +6,7 @@ import {
   AZURE_REGISTRY_STATES,
   AZURE_STATUSES,
   PROVIDER_IDS,
+  RULE_STAGES,
   isKnown,
   type AnalysisReport,
   type AppSettings,
@@ -17,12 +18,13 @@ import {
   type FlowDocument,
   type PagedResponse,
   type ProviderInfo,
+  type RuleStage,
   type Tolerant,
   type UnknownEnumValue,
 } from '@/types'
 import {PURPOSE_PRESETS} from '@/lib/modelPurpose'
 import type {AdminUser} from './admin'
-import type {GovernanceAlertSeverity, GovernanceAlertType} from './governance'
+import type {GovernanceAlertSeverity, GovernanceAlertType, GovernanceNoticeScope} from './governance'
 import type {LibraryFlow} from './library'
 
 // A Go server serialises a nil slice (or map) as null — an empty list on the
@@ -124,6 +126,8 @@ export function buildSchemas() {
       subflowId: z.string().optional(),
       suggestion: z.string().optional(),
       category: z.string().optional(),
+      // 'preview' from a preview rule; a stage a newer server adds parses as itself.
+      stage: tolerantEnum<RuleStage>(RULE_STAGES).optional(),
     })
     .passthrough()
 
@@ -325,7 +329,13 @@ export function buildSchemas() {
       flowId: z.string(),
       flowName: z.string().optional(),
       orgId: z.string().optional(),
-      type: tolerantEnum<GovernanceAlertType>(['drift', 'health_regression', 'finding_assigned', 'comment_added']),
+      type: tolerantEnum<GovernanceAlertType>([
+        'drift',
+        'health_regression',
+        'finding_assigned',
+        'comment_added',
+        'new_rules',
+      ]),
       title: z.string(),
       message: z.string().optional(),
       severity: tolerantEnum<GovernanceAlertSeverity>(['error', 'warning']),
@@ -339,6 +349,9 @@ export function buildSchemas() {
       readAt: z.string().nullish(),
       dismissedAt: z.string().nullish(),
       targetUser: z.string().optional(),
+      ruleIds: z.array(z.string()).optional(),
+      scope: tolerantEnum<GovernanceNoticeScope>(['org', 'user', 'app']).optional(),
+      flowCount: z.number().optional(),
     })
     .passthrough()
 

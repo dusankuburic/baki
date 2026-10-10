@@ -38,7 +38,7 @@ func redundantSetsSrc(name string, n int) string {
 // exactly two fixes, whatever those fixes did to the source. The wrapped rule
 // keeps its ID, so the loop still dispatches it.
 type passCancelRule struct {
-	analyzer.Rule
+	analyzer.BlockRule
 	cancel   func()
 	onPass   int
 	flowName string
@@ -57,7 +57,7 @@ func (r *passCancelRule) Check(b *models.Block, ctx *analyzer.RuleContext) []mod
 		}
 		r.mu.Unlock()
 	}
-	return r.Rule.Check(b, ctx)
+	return r.BlockRule.Check(b, ctx)
 }
 
 // cancellingResolver is a rule-profile resolver pre-resolved for org "" (the
@@ -68,12 +68,13 @@ func cancellingResolver(cancel func(), pass int, flowName string) *RuleProfileRe
 	rules := analyzer.AllRules()
 	for i, r := range rules {
 		if r.ID() == "redundant-action" {
-			rules[i] = &passCancelRule{Rule: r, cancel: cancel, onPass: pass, flowName: flowName, seen: map[*models.FlowDocument]bool{}}
+			rules[i] = &passCancelRule{BlockRule: r.(analyzer.BlockRule), cancel: cancel, onPass: pass, flowName: flowName, seen: map[*models.FlowDocument]bool{}}
 		}
 	}
-	return &RuleProfileResolver{cached: map[string]*cachedProfile{
-		"": {profile: &RuleProfile{Settings: nil, Rules: rules}, resolved: time.Now()},
-	}}
+	r := NewRuleProfileResolver(nil, nil, nil)
+	k, _ := deploymentProfile.Key()
+	r.store.m[k] = &cachedProfile{profile: &RuleProfile{Settings: nil, Rules: rules}, resolved: time.Now()}
+	return r
 }
 
 func countSets(s string) int { return strings.Count(s, "\nSET ") }

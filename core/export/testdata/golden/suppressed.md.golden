@@ -1,0 +1,112 @@
+# PAD Analyzer — Analysis Report
+
+**Flow:** Invoices <Q3> & "Ops"
+**File:** flows/invoices/Main.txt
+**Generated:** Thu, 08 Oct 2026 09:30:00 UTC
+**Duration:** 1234ms
+
+## Summary
+
+| Metric | Count |
+|---|---|
+| Blocks analyzed | 11 |
+| Rules run | 45 |
+| Errors | 1 |
+| Warnings | 1 |
+| Info | 6 |
+| Suppressed inline | 7 |
+
+## Errors (1)
+
+### 1. Credential variable set to literal value
+
+- **Rule:** `hardcoded-credential`
+- **Severity:** error
+- **Block:** b-007
+- **Subflow:** sf-1
+
+Variable 'Password' has a name that suggests it holds a credential and is assigned a literal string value.
+
+> **Suggestion:** Store credentials in a secured vault, Windows Credential Manager, or use a PAD input variable instead of a literal string in the flow.
+
+## Warnings (1)
+
+### 1. File operation without error handler
+
+- **Rule:** `file-op-no-error-handler`
+- **Severity:** warning
+- **Block:** b-002
+- **Subflow:** sf-1
+
+This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+
+> **Suggestion:** Wrap this action in an 'On Block Error' handler to manage missing files, permission errors, and file lock issues gracefully.
+
+## Info (6)
+
+### 1. Hardcoded file path
+
+- **Rule:** `hardcoded-filepath`
+- **Severity:** info
+- **Block:** b-002
+- **Subflow:** sf-1
+
+Property 'File' contains an absolute path: C:\data\in.txt
+
+> **Suggestion:** Use a relative path or store the base directory in a variable configured per environment.
+
+### 2. Subflow without error handler
+
+- **Rule:** `subflow-no-error-handler`
+- **Severity:** info
+- **Block:** b-002
+- **Subflow:** sf-1
+
+Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+
+> **Suggestion:** Add a Try/Catch or On Block Error handler to protect against unexpected failures.
+
+### 3. TODO in comment
+
+- **Rule:** `todo-in-comment`
+- **Severity:** info
+- **Block:** b-011
+- **Subflow:** sf-1
+
+This comment contains a TODO marker: "TODO: remove the =SUM(A1) hack"
+
+> **Suggestion:** Resolve the TODO or convert it to a tracked issue.
+
+### 4. Variable declared but never used
+
+- **Rule:** `unused-variable`
+- **Severity:** info
+- **Block:** b-007
+- **Subflow:** sf-1
+
+This variable is set but never referenced elsewhere in the flow.
+
+> **Suggestion:** Remove the unused variable or add a reference to it.
+
+### 5. Variable declared but never used
+
+- **Rule:** `unused-variable`
+- **Severity:** info
+- **Block:** b-009
+- **Subflow:** sf-1
+
+This variable is set but never referenced elsewhere in the flow.
+
+> **Suggestion:** Remove the unused variable or add a reference to it.
+
+### 6. Wait zero
+
+- **Rule:** `wait-zero`
+- **Severity:** info
+- **Block:** b-012
+- **Subflow:** sf-1
+
+This WAIT action has a duration of 0, making it a no-op.
+
+> **Suggestion:** Remove the WAIT 0 action or increase the duration.
+

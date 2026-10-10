@@ -208,4 +208,42 @@ describe('RulesPanel thresholds', () => {
     await screen.findByText('Deeply nested logic')
     expect(screen.queryByTestId('thresholds-deep-nesting')).toBeNull()
   })
+
+  it('marks a preview library rule, which toggles like any other', async () => {
+    getRules.mockResolvedValue([
+      {
+        id: 'deep-nesting',
+        name: 'Deeply nested logic',
+        description: 'Detects deep nesting.',
+        defaultSeverity: 'info',
+        category: 'Style',
+        enabled: true,
+        stage: 'stable',
+        kind: 'block',
+      },
+      {
+        id: 'duplicate-subflow-across-flows',
+        name: 'Duplicate subflow across flows',
+        description: 'Same subflow body in two flows.',
+        defaultSeverity: 'info',
+        category: 'Style',
+        enabled: true,
+        stage: 'preview',
+        kind: 'library',
+      },
+    ])
+    setRuleEnabled.mockResolvedValue(undefined)
+    renderPanel()
+    await screen.findByText('Duplicate subflow across flows')
+    expect(screen.getAllByText('Preview')).toHaveLength(1)
+    expect(screen.getAllByText('Across flows')).toHaveLength(1)
+    const row = screen.getByText('Duplicate subflow across flows').closest('div.p-4') as HTMLElement
+    expect(row).toHaveTextContent('Preview')
+    expect(row).toHaveTextContent('Across flows')
+
+    // Switches: auto-analyze, deep-nesting, then the library rule.
+    const switches = screen.getAllByRole('switch')
+    fireEvent.click(switches[switches.length - 1]!)
+    await waitFor(() => expect(setRuleEnabled).toHaveBeenCalledWith('duplicate-subflow-across-flows', false))
+  })
 })

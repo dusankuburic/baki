@@ -1,0 +1,178 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: probe_circular
+document: subflows=5 blocks=11 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":4,"warnings":11,"info":7,"blocksAnalyzed":11,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=10 final=495/495 last="Loop body is too large"
+metrics: {"avgCognitive":0,"avgCyclomatic":1,"healthScore":0,"maxCognitive":0,"maxCyclomatic":1,"subflowCount":5,"totalBlocks":11,"totalVariables":0,"variableDensity":0} circular=["A","B","C","D"]
+  subflow A: {"blockCount":4,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":1,"fanOut":3,"maxNestingDepth":0,"variableCount":0}
+  subflow B: {"blockCount":2,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":1,"fanOut":1,"maxNestingDepth":0,"variableCount":0}
+  subflow C: {"blockCount":2,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":2,"fanOut":1,"maxNestingDepth":0,"variableCount":0}
+  subflow D: {"blockCount":2,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":1,"maxNestingDepth":0,"variableCount":0}
+  subflow E: {"blockCount":1,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":1,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=11
+  raw findings: circular-subflow-dependency=4 duplicate-action=1 missing-retry=5 missing-timeout=5 subflow-no-error-handler=1 uncalled-subflow=1 unhandled-error=5
+inventory: none
+findings: 22
+F-001 error/high circular-subflow-dependency [Logic] fix=- @A#0 sf=A fp=circular-subflow-dependency:325b9b51e134b7b0
+    title: Circular subflow dependency
+    desc: Subflow 'A' is part of a circular call chain. This will cause infinite recursion at runtime.
+    meta: {"subflow":"A"}
+F-002 error/high circular-subflow-dependency [Logic] fix=- @B#0 sf=B fp=circular-subflow-dependency:0cd7f5bde3da86bc
+    title: Circular subflow dependency
+    desc: Subflow 'B' is part of a circular call chain. This will cause infinite recursion at runtime.
+    meta: {"subflow":"B"}
+F-003 error/high circular-subflow-dependency [Logic] fix=- @C#0 sf=C fp=circular-subflow-dependency:7e318c2d7d62ba75
+    title: Circular subflow dependency
+    desc: Subflow 'C' is part of a circular call chain. This will cause infinite recursion at runtime.
+    meta: {"subflow":"C"}
+F-004 error/high circular-subflow-dependency [Logic] fix=- @D#0 sf=D fp=circular-subflow-dependency:53ce92ad21ba94dd
+    title: Circular subflow dependency
+    desc: Subflow 'D' is part of a circular call chain. This will cause infinite recursion at runtime.
+    meta: {"subflow":"D"}
+F-005 info/medium duplicate-action [Style] fix=remove-block @A#1 sf=A fp=duplicate-action:171a93f13a60b1f5
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":3}
+F-006 info/medium missing-retry [Reliability] fix=wrap-in-retry @A#0 sf=A fp=missing-retry:325b9b51e134b7b0
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-007 info/medium missing-retry [Reliability] fix=wrap-in-retry @B#0 sf=B fp=missing-retry:0cd7f5bde3da86bc
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @C#0 sf=C fp=missing-retry:7e318c2d7d62ba75
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-009 info/medium missing-retry [Reliability] fix=wrap-in-retry @D#0 sf=D fp=missing-retry:53ce92ad21ba94dd
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-010 info/medium missing-retry [Reliability] fix=wrap-in-retry @E#0 sf=E fp=missing-retry:d1c42239497ab10a
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-011 warning/medium missing-timeout [Reliability] fix=set-timeout @A#0 sf=A fp=missing-timeout:325b9b51e134b7b0
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-012 warning/medium missing-timeout [Reliability] fix=set-timeout @B#0 sf=B fp=missing-timeout:0cd7f5bde3da86bc
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-013 warning/medium missing-timeout [Reliability] fix=set-timeout @C#0 sf=C fp=missing-timeout:7e318c2d7d62ba75
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-014 warning/medium missing-timeout [Reliability] fix=set-timeout @D#0 sf=D fp=missing-timeout:53ce92ad21ba94dd
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-015 warning/medium missing-timeout [Reliability] fix=set-timeout @E#0 sf=E fp=missing-timeout:d1c42239497ab10a
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-016 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @A#0 sf=A fp=subflow-no-error-handler:325b9b51e134b7b0
+    title: Subflow without error handler
+    desc: Subflow "A" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-017 warning/medium uncalled-subflow [Logic] fix=- @D#0 sf=D fp=uncalled-subflow:53ce92ad21ba94dd
+    title: Uncalled subflow
+    desc: Subflow 'D' is never called by any other subflow and is not the entry point. It is dead code at the flow level.
+    meta: {"subflow":"D"}
+F-018 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @A#0 sf=A fp=unhandled-error:325b9b51e134b7b0
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-019 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @B#0 sf=B fp=unhandled-error:0cd7f5bde3da86bc
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-020 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @C#0 sf=C fp=unhandled-error:7e318c2d7d62ba75
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-021 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @D#0 sf=D fp=unhandled-error:53ce92ad21ba94dd
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-022 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @E#0 sf=E fp=unhandled-error:d1c42239497ab10a
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+
+=== nil-settings
+stats: {"errors":4,"warnings":11,"info":7,"blocksAnalyzed":11,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=10 final=495/495 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=11
+  raw findings: circular-subflow-dependency=4 duplicate-action=1 missing-retry=5 missing-timeout=5 subflow-no-error-handler=1 uncalled-subflow=1 unhandled-error=5
+inventory: none
+findings: 22
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":4,"warnings":11,"info":7,"blocksAnalyzed":11,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=10 final=495/495 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=11
+  raw findings: circular-subflow-dependency=4 duplicate-action=1 missing-retry=5 missing-timeout=5 subflow-no-error-handler=1 uncalled-subflow=1 unhandled-error=5
+inventory: none
+findings: 22
+  as default; severity changes: none
+
+=== disabled
+stats: {"errors":0,"warnings":6,"info":6,"blocksAnalyzed":11,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=9 final=407/407 last="Loop body is too large"
+metrics: as default, healthScore=60
+profiles: rules=37 order=f7de49357acad250 blocksChecked=11
+  raw findings: duplicate-action=1 missing-retry=5 missing-timeout=5 uncalled-subflow=1
+inventory: none
+findings: 12
+F-001 info/medium duplicate-action [Style] fix=remove-block @A#1 sf=A fp=duplicate-action:171a93f13a60b1f5
+F-002 info/medium missing-retry [Reliability] fix=wrap-in-retry @A#0 sf=A fp=missing-retry:325b9b51e134b7b0
+F-003 info/medium missing-retry [Reliability] fix=wrap-in-retry @B#0 sf=B fp=missing-retry:0cd7f5bde3da86bc
+F-004 info/medium missing-retry [Reliability] fix=wrap-in-retry @C#0 sf=C fp=missing-retry:7e318c2d7d62ba75
+F-005 info/medium missing-retry [Reliability] fix=wrap-in-retry @D#0 sf=D fp=missing-retry:53ce92ad21ba94dd
+F-006 info/medium missing-retry [Reliability] fix=wrap-in-retry @E#0 sf=E fp=missing-retry:d1c42239497ab10a
+F-007 warning/medium missing-timeout [Reliability] fix=set-timeout @A#0 sf=A fp=missing-timeout:325b9b51e134b7b0
+F-008 warning/medium missing-timeout [Reliability] fix=set-timeout @B#0 sf=B fp=missing-timeout:0cd7f5bde3da86bc
+F-009 warning/medium missing-timeout [Reliability] fix=set-timeout @C#0 sf=C fp=missing-timeout:7e318c2d7d62ba75
+F-010 warning/medium missing-timeout [Reliability] fix=set-timeout @D#0 sf=D fp=missing-timeout:53ce92ad21ba94dd
+F-011 warning/medium missing-timeout [Reliability] fix=set-timeout @E#0 sf=E fp=missing-timeout:d1c42239497ab10a
+F-012 warning/medium uncalled-subflow [Logic] fix=- @D#0 sf=D fp=uncalled-subflow:53ce92ad21ba94dd
+
+=== severity
+stats: {"errors":10,"warnings":6,"info":6,"blocksAnalyzed":11,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=10 final=495/495 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=11
+  raw findings: circular-subflow-dependency=4 duplicate-action=1 missing-retry=5 missing-timeout=5 subflow-no-error-handler=1 uncalled-subflow=1 unhandled-error=5
+inventory: none
+findings: 22
+  as default; severity changes: F-016 info->error, F-018 warning->error, F-019 warning->error, F-020 warning->error, F-021 warning->error, F-022 warning->error
+
+=== autofixable
+stats: {"errors":0,"warnings":10,"info":7,"blocksAnalyzed":11,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=8 final=352/352 last="Wait zero"
+metrics: as default, healthScore=43
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=11
+  raw findings: duplicate-action=1 missing-retry=5 missing-timeout=5 subflow-no-error-handler=1 unhandled-error=5
+inventory: none
+findings: 17
+F-001 info/medium duplicate-action [Style] fix=remove-block @A#1 sf=A fp=duplicate-action:171a93f13a60b1f5
+F-002 info/medium missing-retry [Reliability] fix=wrap-in-retry @A#0 sf=A fp=missing-retry:325b9b51e134b7b0
+F-003 info/medium missing-retry [Reliability] fix=wrap-in-retry @B#0 sf=B fp=missing-retry:0cd7f5bde3da86bc
+F-004 info/medium missing-retry [Reliability] fix=wrap-in-retry @C#0 sf=C fp=missing-retry:7e318c2d7d62ba75
+F-005 info/medium missing-retry [Reliability] fix=wrap-in-retry @D#0 sf=D fp=missing-retry:53ce92ad21ba94dd
+F-006 info/medium missing-retry [Reliability] fix=wrap-in-retry @E#0 sf=E fp=missing-retry:d1c42239497ab10a
+F-007 warning/medium missing-timeout [Reliability] fix=set-timeout @A#0 sf=A fp=missing-timeout:325b9b51e134b7b0
+F-008 warning/medium missing-timeout [Reliability] fix=set-timeout @B#0 sf=B fp=missing-timeout:0cd7f5bde3da86bc
+F-009 warning/medium missing-timeout [Reliability] fix=set-timeout @C#0 sf=C fp=missing-timeout:7e318c2d7d62ba75
+F-010 warning/medium missing-timeout [Reliability] fix=set-timeout @D#0 sf=D fp=missing-timeout:53ce92ad21ba94dd
+F-011 warning/medium missing-timeout [Reliability] fix=set-timeout @E#0 sf=E fp=missing-timeout:d1c42239497ab10a
+F-012 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @A#0 sf=A fp=subflow-no-error-handler:325b9b51e134b7b0
+F-013 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @A#0 sf=A fp=unhandled-error:325b9b51e134b7b0
+F-014 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @B#0 sf=B fp=unhandled-error:0cd7f5bde3da86bc
+F-015 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @C#0 sf=C fp=unhandled-error:7e318c2d7d62ba75
+F-016 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @D#0 sf=D fp=unhandled-error:53ce92ad21ba94dd
+F-017 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @E#0 sf=E fp=unhandled-error:d1c42239497ab10a

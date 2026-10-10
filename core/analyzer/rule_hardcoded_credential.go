@@ -16,7 +16,7 @@ func (r *HardcodedCredentialRule) Name() string { return "Hardcoded credential d
 func (r *HardcodedCredentialRule) Description() string {
 	return "String values matching credential patterns, and credential-typed action properties (Password, ApiKey, Token, …) set to a literal."
 }
-func (r *HardcodedCredentialRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
+func (r *HardcodedCredentialRule) DefaultSeverity() models.Severity { return models.SeverityError }
 func (r *HardcodedCredentialRule) Category() string                 { return "Security" }
 
 // Patterns use [^%"'\s] for the secret value portion to exclude PAD variable
@@ -61,7 +61,9 @@ func (r *HardcodedCredentialRule) Check(block *models.Block, ctx *RuleContext) [
 		patternFlagged[key] = true
 	}
 
-	for key, val := range block.Properties {
+	var keys [16]string
+	for _, key := range sortedPropertyKeys(keys[:0], block.Properties) {
+		val := block.Properties[key]
 		for _, pat := range credentialPatterns {
 			if pat.MatchString(val) {
 				flag(key)
@@ -246,4 +248,12 @@ func shannonEntropy(s string) float64 {
 	return entropy
 }
 
-func init() { registerRule(&HardcodedCredentialRule{}) }
+func init() {
+	registerRule(&HardcodedCredentialRule{}, RuleMeta{
+		Confidence:   models.ConfidenceHigh,
+		AutoFix:      "replace-with-variable",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

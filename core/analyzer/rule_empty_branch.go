@@ -87,4 +87,13 @@ func blockTypeLabel(t models.BlockType) string {
 	}
 }
 
-func init() { registerRule(&EmptyBranchRule{}) }
+func init() {
+	registerRule(&EmptyBranchRule{}, RuleMeta{
+		Confidence:   models.ConfidenceHigh,
+		AutoFix:      "remove-block",
+		Related:      []Related{{To: "dead-code", Reason: "empty branches may indicate dead code paths"}},
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

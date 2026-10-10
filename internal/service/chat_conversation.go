@@ -15,6 +15,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/storage/atomicfile"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
@@ -88,7 +89,8 @@ func (s *ChatService) GetConversation(ctx context.Context, flowID, provider stri
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path) // #nosec G304 -- path derived from configDir+provider+flowID, not raw user input
+	// Tolerant: on Windows a read racing a save's rename fails transiently (a 500 to a polling reload).
+	data, err := atomicfile.ReadFileTolerant(path) // #nosec G304 -- path derived from configDir+provider+flowID, not raw user input
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []models.ChatMessage{}, nil

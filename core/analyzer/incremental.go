@@ -7,25 +7,10 @@ import (
 	"pad-core/models"
 )
 
-// relatedRules is an EDITORIAL map: a hand-maintained list of rule pairs
-// whose findings are worth reviewing together, each with a one-line reason —
-// what GET /api/analysis/dependencies serves. Nothing in the engine consumes
-// it (rules are independent; TopoOrder is presentation, not execution). Add a
-// pair only when one rule's finding is a genuine reason to look at the other.
-var relatedRules = []models.RuleDependency{
-	{FromRuleID: "dead-code", ToRuleID: "unused-variable", Reason: "dead code may produce unused variable findings"},
-	{FromRuleID: "deep-nesting", ToRuleID: "infinite-loop-risk", Reason: "deep nesting increases loop complexity"},
-	{FromRuleID: "unhandled-error", ToRuleID: "error-swallow", Reason: "error handling must be checked before swallow detection"},
-	{FromRuleID: "file-op-no-error-handler", ToRuleID: "unhandled-error", Reason: "file operations are a subset of error handling"},
-	{FromRuleID: "missing-retry", ToRuleID: "missing-timeout", Reason: "retry and timeout checks are related reliability concerns"},
-	{FromRuleID: "subflow-no-error-handler", ToRuleID: "unhandled-error", Reason: "subflow error handling relates to general error handling"},
-	{FromRuleID: "empty-branch", ToRuleID: "dead-code", Reason: "empty branches may indicate dead code paths"},
-	{FromRuleID: "goto-antipattern", ToRuleID: "infinite-loop-risk", Reason: "goto can create hidden loop structures"},
-	{FromRuleID: "sensitive-exposure", ToRuleID: "hardcoded-credential", Reason: "sensitive exposure may involve hardcoded credentials"},
-}
-
 // RelatedRulesDescription travels with the map so every consumer (API, UI,
-// CLI) can tell the user what it is and is not.
+// CLI) can tell the user what it is and is not. The map is each rule's
+// RuleMeta.Related (RelatedRules): add a pair only when one rule's finding is
+// a genuine reason to look at the other; nothing in the engine consumes it.
 const RelatedRulesDescription = "Hand-maintained editorial map of rules whose findings are worth reviewing together. " +
 	"It is not derived from the analyzer: rules run independently, and this map affects neither evaluation order nor results."
 
@@ -41,7 +26,7 @@ func AnalyzeRuleDependencies() *models.DependencyAnalysis {
 	}
 
 	var active []models.RuleDependency
-	for _, dep := range relatedRules {
+	for _, dep := range RelatedRules() {
 		if ruleIDs[dep.FromRuleID] && ruleIDs[dep.ToRuleID] {
 			active = append(active, dep)
 		}

@@ -86,7 +86,7 @@ func (r *ResourceLeakRule) Check(block *models.Block, ctx *RuleContext) []models
 	// ClosedResourceVars precomputes, per close prefix, the variables referenced
 	// by matching blocks (see buildClosedResourceVars) — O(1) instead of an
 	// O(blocks) scan per open action.
-	if closed := ctx.ClosedResourceVars[matched.closePrefix]; closed[outputVar] {
+	if closed := ctx.ClosedResourceVars()[matched.closePrefix]; closed[outputVar] {
 		return nil
 	}
 
@@ -159,4 +159,12 @@ func buildClosedResourceVars(ctx *RuleContext) map[string]map[string]bool {
 	return out
 }
 
-func init() { registerRule(&ResourceLeakRule{}) }
+func init() {
+	registerRule(&ResourceLeakRule{}, RuleMeta{
+		Confidence:   models.ConfidenceHigh,
+		AutoFix:      "insert-close",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

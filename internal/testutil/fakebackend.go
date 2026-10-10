@@ -108,6 +108,10 @@ type FakeBackend struct {
 	// GovernanceAlerts backs the governance-alert inbox methods (id -> alert).
 	// Lazily initialized; the methods are in-memory mirrors of the real store.
 	GovernanceAlerts map[string]*interfaces.GovernanceAlert
+	// RuleNotices backs the "new rules" notices (id -> notice, fakebackend_notices.go). Lazily initialized.
+	RuleNotices map[string]*interfaces.RuleNotice
+	// snapshotRuleSets holds the rule set each FlowHealth snapshot recorded (flowID -> set), for RuleSetsByDigest.
+	snapshotRuleSets map[string]*models.RuleSet
 	// Orgs backs the organisation store (id -> org, members inline). Lazily initialized.
 	Orgs map[string]*interfaces.Organisation
 	// OrgInvites backs the invitation store (id -> invite, fakebackend_orgs.go). Lazily initialized.
@@ -137,6 +141,7 @@ type FakeBackend struct {
 	LoadFlowHealthBatchCalls   atomic.Int64
 	LoadOrgCalls               atomic.Int64
 	ListCollaboratorsCalls     atomic.Int64
+	RuleSetsByDigestCalls      atomic.Int64
 	listFlowsFilters           []interfaces.FlowFilter // guarded by readsMu
 	readsMu                    sync.Mutex
 }
@@ -445,6 +450,7 @@ func (m *FakeBackend) deleteFlowLocked(id string) {
 	delete(m.Flows, id)
 	delete(m.FlowVersions, id)
 	delete(m.FlowHealth, id)
+	delete(m.snapshotRuleSets, id)
 	delete(m.FindingStatuses, id)
 	delete(m.Baselines, id)
 	delete(m.Collaborators, id)
@@ -860,9 +866,9 @@ func (m *FakeBackend) UpdateUserProfile(_ context.Context, id, displayName, avat
 // the fake keeps: the owned flows go with their conversations and their cascade; the user's id is cleared where
 // rows stay with other people's content (versions, triage updater and assignee, baselines, comment author id and
 // name, share links, invitations sent, organisations owned) and teammates' comment and assignment alerts naming the
-// user say "a teammate"; alerts addressed to the user, sessions, usage rows, memberships, invitations to the user's
-// email, settings, tokens and grants go; audit rows are anonymised, and pre-auth rows naming the user's address lose
-// it. Organisations stay with their other members. A missing user is not an error.
+// user say "a teammate"; alerts addressed to the user, the user's notices, sessions, usage rows, memberships,
+// invitations to the user's email, settings, tokens and grants go; audit rows are anonymised, and pre-auth rows
+// naming the user's address lose it. Organisations stay with their other members. A missing user is not an error.
 func (m *FakeBackend) DeleteUser(_ context.Context, id string) error {
 	m.idem.deleteUser(id)
 	m.identityLinks.deleteUser(id)
@@ -921,6 +927,9 @@ func (m *FakeBackend) DeleteUser(_ context.Context, id string) error {
 		}
 	}
 	maps.DeleteFunc(m.GovernanceAlerts, func(_ string, a *interfaces.GovernanceAlert) bool { return a.TargetUser == id })
+	maps.DeleteFunc(m.RuleNotices, func(_ string, n *interfaces.RuleNotice) bool {
+		return n.Scope == interfaces.RuleNoticeScopeUser && n.ScopeID == id
+	})
 	maps.DeleteFunc(m.refreshTokens, func(_ string, t *fakeRefreshToken) bool { return t.info.UserID == id })
 	for orgID, org := range m.Orgs {
 		member := slices.ContainsFunc(org.Members, func(mem interfaces.OrgMember) bool { return mem.UserID == id })
@@ -1110,6 +1119,7 @@ func (m *FakeBackend) PurgeExpiredData(_ context.Context, auditRetentionDays int
 	}
 	cutoff := now.AddDate(0, 0, -auditRetentionDays)
 	out.GovAlerts = deleteWhere(m.GovernanceAlerts, func(a *interfaces.GovernanceAlert) bool { return a.CreatedAt.Before(cutoff) })
+	out.RuleNotices = deleteWhere(m.RuleNotices, func(n *interfaces.RuleNotice) bool { return n.UpdatedAt.Before(cutoff) })
 	m.mu.Unlock()
 
 	m.usageMu.Lock()
@@ -1205,9 +1215,9 @@ func (m *FakeBackend) ListOrgsForUser(_ context.Context, userID string) ([]*inte
 }
 
 // DeleteOrg deletes the organisation as Postgres's org-delete steps do (internal/storage/database/lifecycle_*.go), for
-// the rows the fake keeps: its knowledge documents (with their chunks), policies, channels and custom rules go, its
-// flows lose the org id, and the organisation goes with its members, invitations and settings; alerts, usage and
-// audit rows keep the id as history. Idempotent.
+// the rows the fake keeps: its knowledge documents (with their chunks), policies, channels, custom rules and notices
+// go, its flows lose the org id, and the organisation goes with its members, invitations and settings; alerts, usage
+// and audit rows keep the id as history. Idempotent.
 func (m *FakeBackend) DeleteOrg(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1219,6 +1229,9 @@ func (m *FakeBackend) DeleteOrg(_ context.Context, id string) error {
 	maps.DeleteFunc(m.Policies, func(_ string, p *models.Policy) bool { return p.OrgID == id })
 	maps.DeleteFunc(m.OrgChannels, func(_ string, ch *interfaces.OrgChannel) bool { return ch.OrgID == id })
 	maps.DeleteFunc(m.OrgCustomRules, func(_ string, r *interfaces.OrgCustomRule) bool { return r.OrgID == id })
+	maps.DeleteFunc(m.RuleNotices, func(_ string, n *interfaces.RuleNotice) bool {
+		return n.Scope == interfaces.RuleNoticeScopeOrg && n.ScopeID == id
+	})
 	for _, f := range m.Flows {
 		if f.OrganizationID == id {
 			f.OrganizationID = ""
@@ -1352,7 +1365,7 @@ func (m *FakeBackend) GetDailyUsage(_ context.Context, _, _ string) (float64, er
 
 // ---- Dashboard ----
 
-// SaveFlowAnalysis upserts the flow's health snapshot (AnalyzedAt defaults to now).
+// SaveFlowAnalysis upserts the flow's health snapshot (AnalyzedAt defaults to now) and the rule set it records.
 func (m *FakeBackend) SaveFlowAnalysis(_ context.Context, fa *interfaces.FlowAnalysis) error {
 	at := fa.AnalyzedAt
 	if at.IsZero() {
@@ -1363,9 +1376,18 @@ func (m *FakeBackend) SaveFlowAnalysis(_ context.Context, fa *interfaces.FlowAna
 	if m.FlowHealth == nil {
 		m.FlowHealth = make(map[string]*interfaces.HealthSnapshot)
 	}
-	m.FlowHealth[fa.FlowID] = &interfaces.HealthSnapshot{
+	snap := &interfaces.HealthSnapshot{
 		HealthScore: fa.HealthScore, Errors: fa.Errors, Warnings: fa.Warnings, Info: fa.Info, AnalyzedAt: at,
 	}
+	delete(m.snapshotRuleSets, fa.FlowID)
+	if fa.RuleSet != nil {
+		if m.snapshotRuleSets == nil {
+			m.snapshotRuleSets = make(map[string]*models.RuleSet)
+		}
+		m.snapshotRuleSets[fa.FlowID] = cloneRuleSet(fa.RuleSet)
+		snap.RuleSetDigest = fa.RuleSet.Digest
+	}
+	m.FlowHealth[fa.FlowID] = snap
 	return nil
 }
 
@@ -1927,6 +1949,7 @@ func cloneBaseline(b *interfaces.FlowBaseline) *interfaces.FlowBaseline {
 	if cp.Keys == nil {
 		cp.Keys = []string{}
 	}
+	cp.RuleSet = cloneRuleSet(b.RuleSet)
 	return &cp
 }
 
@@ -1948,13 +1971,16 @@ func (m *FakeBackend) GetFlowBaselinesBatch(_ context.Context, flowIDs []string)
 	defer m.mu.RUnlock()
 	for _, id := range flowIDs {
 		if b, ok := m.Baselines[id]; ok {
-			out[id] = cloneBaseline(b)
+			cp := cloneBaseline(b)
+			cp.RuleSet = nil // a batch read carries the digest only
+			out[id] = cp
 		}
 	}
 	return out, nil
 }
 
-// SetFlowBaseline replaces the flow's baseline, stamping CreatedAt with the current time on every save.
+// SetFlowBaseline replaces the flow's baseline, stamping CreatedAt with the current time on every save and deriving
+// RuleSetDigest from the rule set it records.
 func (m *FakeBackend) SetFlowBaseline(_ context.Context, b *interfaces.FlowBaseline) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1963,6 +1989,10 @@ func (m *FakeBackend) SetFlowBaseline(_ context.Context, b *interfaces.FlowBasel
 	}
 	cp := cloneBaseline(b)
 	cp.CreatedAt = time.Now().UTC()
+	cp.RuleSetDigest = ""
+	if cp.RuleSet != nil {
+		cp.RuleSetDigest = cp.RuleSet.Digest
+	}
 	m.Baselines[b.FlowID] = cp
 	return nil
 }
@@ -2476,9 +2506,15 @@ func (m *FakeBackend) flowReachableLocked(flowID, userID string) bool {
 }
 
 // RecordGovernanceAlert stores a new alert (CreatedAt defaults to now, on a); a known ID is left as it is.
-func (m *FakeBackend) RecordGovernanceAlert(_ context.Context, a *interfaces.GovernanceAlert) error {
+func (m *FakeBackend) RecordGovernanceAlert(ctx context.Context, a *interfaces.GovernanceAlert) error {
+	_, err := m.InsertGovernanceAlert(ctx, a)
+	return err
+}
+
+// InsertGovernanceAlert is RecordGovernanceAlert reporting whether the alert was new.
+func (m *FakeBackend) InsertGovernanceAlert(_ context.Context, a *interfaces.GovernanceAlert) (bool, error) {
 	if a == nil || a.ID == "" {
-		return fmt.Errorf("governance alert requires an id")
+		return false, fmt.Errorf("governance alert requires an id")
 	}
 	if a.CreatedAt.IsZero() {
 		a.CreatedAt = time.Now().UTC()
@@ -2486,12 +2522,12 @@ func (m *FakeBackend) RecordGovernanceAlert(_ context.Context, a *interfaces.Gov
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.govAlertsLocked()[a.ID]; ok {
-		return nil
+		return false, nil
 	}
 	cp := *a
 	cp.ReadAt, cp.DismissedAt = nil, nil
 	m.GovernanceAlerts[a.ID] = &cp
-	return nil
+	return true, nil
 }
 
 // ListGovernanceAlerts returns the caller's visible alerts newest first (id breaking ties); a limit <= 0 is 50.
@@ -2583,12 +2619,23 @@ func (m *FakeBackend) ClearGovernanceAlerts(_ context.Context, userID string) er
 // SaveOrgCustomRule backs the per-org custom-rule store in memory (R4 tests).
 // The (OrgID, RuleID) uniqueness and the org-ownership guard mirror the
 // Postgres upsert exactly — a fake laxer than the real backend would report
-// success on precisely the cross-tenant write the real one rejects (B8).
+// success on precisely the cross-tenant write the real one rejects (B8). So do
+// the rename guard and the refusal of a config that is not JSON (JSONB).
 func (m *FakeBackend) SaveOrgCustomRule(_ context.Context, rule *interfaces.OrgCustomRule) error {
+	if rule == nil || rule.ID == "" || rule.OrgID == "" || rule.RuleID == "" {
+		return errors.New("org custom rule requires id, orgId and ruleId")
+	}
+	if !json.Valid(rule.Config) {
+		return errors.New("save org custom rule: config is not JSON")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.OrgCustomRules == nil {
 		m.OrgCustomRules = make(map[string]*interfaces.OrgCustomRule)
+	}
+	// A row of this org under another rule id is a rename, refused before anything changes.
+	if existing, ok := m.OrgCustomRules[rule.ID]; ok && existing.OrgID == rule.OrgID && existing.RuleID != rule.RuleID {
+		return interfaces.ErrOrgCustomRuleRenamed
 	}
 	// Composite key wins: re-saving the same (org, ruleID) replaces in place.
 	for _, existing := range m.OrgCustomRules {

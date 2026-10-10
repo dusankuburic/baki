@@ -14,38 +14,33 @@ func (r *UncalledSubflowRule) Description() string {
 func (r *UncalledSubflowRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
 func (r *UncalledSubflowRule) Category() string                 { return "Logic" }
 
-func (r *UncalledSubflowRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	if ctx.SubflowFanIn == nil {
-		return nil
+func (r *UncalledSubflowRule) CheckFlow(ctx *RuleContext) []models.Finding {
+	fanIn := ctx.SubflowFanIn()
+	var out []models.Finding
+	for i := range ctx.Flow.Subflows {
+		sf := &ctx.Flow.Subflows[i]
+		// The entry-point subflow (first in document order) is the default
+		// caller target — never flag it even with fan-in 0.
+		if fanIn[sf.ID] > 0 || isEntryPoint(sf, ctx) {
+			continue
+		}
+		// One finding per subflow, on its first block.
+		anchor := subflowAnchor(ctx, sf)
+		if anchor == nil {
+			continue
+		}
+		out = append(out, models.Finding{
+			RuleID:      r.ID(),
+			Severity:    r.DefaultSeverity(),
+			Title:       "Uncalled subflow",
+			Description: "Subflow '" + sf.Name + "' is never called by any other subflow and is not the entry point. It is dead code at the flow level.",
+			BlockID:     anchor.ID,
+			SubflowID:   sf.ID,
+			Suggestion:  "Remove this subflow if it is no longer needed, or add a call to it from the entry point.",
+			Metadata:    map[string]interface{}{"subflow": sf.Name},
+		})
 	}
-	if ctx.SubflowFanIn[block.SubflowID] > 0 {
-		return nil
-	}
-
-	subflow := ctx.SubflowByID[block.SubflowID]
-	if subflow == nil {
-		return nil
-	}
-	// The entry-point subflow (first in document order) is the default caller
-	// target — never flag it even with fan-in 0.
-	if isEntryPoint(subflow, ctx) {
-		return nil
-	}
-	// Only emit once per subflow — on the first block.
-	if len(subflow.Blocks) == 0 || block.ID != subflow.Blocks[0].ID {
-		return nil
-	}
-
-	return []models.Finding{{
-		RuleID:      r.ID(),
-		Severity:    r.DefaultSeverity(),
-		Title:       "Uncalled subflow",
-		Description: "Subflow '" + subflow.Name + "' is never called by any other subflow and is not the entry point. It is dead code at the flow level.",
-		BlockID:     block.ID,
-		SubflowID:   block.SubflowID,
-		Suggestion:  "Remove this subflow if it is no longer needed, or add a call to it from the entry point.",
-		Metadata:    map[string]interface{}{"subflow": subflow.Name},
-	}}
+	return out
 }
 
 // isEntryPoint returns true for the first subflow in document order (typically
@@ -58,4 +53,13 @@ func isEntryPoint(sf *models.Subflow, ctx *RuleContext) bool {
 	return sf.Name == "Main" || sf.Name == "main"
 }
 
-func init() { registerRule(&UncalledSubflowRule{}) }
+// No AutoFix: remove-block would strip one action per iteration, and
+// subflows may be invoked dynamically.
+func init() {
+	registerRule(&UncalledSubflowRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

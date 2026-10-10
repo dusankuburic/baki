@@ -55,7 +55,7 @@ func TestHandleGetRules_UninitializedAppReturnsJSON(t *testing.T) {
 // silently disabling all finding-assignment/comment email notifications.
 func TestNewAnalysisHandler_EmailWired(t *testing.T) {
 	svc := mailer.NewService(config.EmailConfig{}, config.ModeLocal)
-	h := NewAnalysisHandler(nil, nil, nil, nil, nil, nil, svc, "", nil, nil, nil, nil, nil, nil)
+	h := NewAnalysisHandler(nil, nil, nil, nil, nil, nil, svc, "", nil, nil, nil, nil, nil, nil, nil)
 	if h.email == nil {
 		t.Fatal("email field is nil — notifications are dead code; assign email in the constructor")
 	}
@@ -107,4 +107,24 @@ func TestHandleValidateCustomRules(t *testing.T) {
 		rr := doRequest(t, rt, http.MethodPost, "/api/analysis/custom-rules/validate", map[string]any{"rules": "not-rules"})
 		checkStatus(t, rr, http.StatusBadRequest)
 	})
+}
+
+// An unknown severity is refused where the admin sees the answer (the engine
+// would read it as error); case and spacing are accepted.
+func TestHandleUpdateRuleConfig_ValidatesSeverity(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	for _, tc := range []struct {
+		severity string
+		want     int
+	}{
+		{"critical", http.StatusBadRequest},
+		{"Error ", http.StatusOK},
+		{"", http.StatusOK},
+	} {
+		rr := doRequest(t, rt, http.MethodPost, "/api/analysis/rule/config",
+			map[string]any{"ruleId": "dead-code", "config": map[string]any{"enabled": true, "severity": tc.severity}})
+		if rr.Code != tc.want {
+			t.Errorf("severity %q: %d, want %d (%s)", tc.severity, rr.Code, tc.want, rr.Body.String())
+		}
+	}
 }

@@ -210,7 +210,7 @@ func buildToolRegistry() map[string]registeredTool {
 		label: "Listing findings",
 		def: ToolDefinition{
 			Name:        "list_findings",
-			Description: "List analysis findings, optionally filtered by category (e.g. Security, Reliability, Performance) and/or subflow ID. Each line carries the ruleId, the finding key (usable as a finding:<key> link for the user), and the fix type when auto-fixable — use those with propose_fix/apply_fix. Results are paginated: pass offset to page through everything. Requires analysis to be available.",
+			Description: "List analysis findings, optionally filtered by category (e.g. Security, Reliability, Performance) and/or subflow ID. Each line carries the ruleId, the finding key (usable as a finding:<key> link for the user), and the fix type when auto-fixable — use those with propose_fix/apply_fix. A line marked stage=preview comes from a preview rule: reported, but it never fails a CI gate or policy and is left out of the health score. Results are paginated: pass offset to page through everything. Requires analysis to be available.",
 			InputSchema: schema(`{"type":"object","properties":{"category":{"type":"string"},"subflowId":{"type":"string"},"offset":{"type":"integer","description":"Skip the first N matching findings (pagination)"}}}`),
 		},
 		handler: toolListFindings,
@@ -434,6 +434,9 @@ func toolListFindings(tctx ToolContext, input json.RawMessage) (string, error) {
 		}
 		if f.AutoFix != "" {
 			line += fmt.Sprintf(" fix=%s", f.AutoFix)
+		}
+		if !analyzer.Gates(&f) {
+			line += " stage=preview"
 		}
 		matching = append(matching, line)
 	}

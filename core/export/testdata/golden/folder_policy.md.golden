@@ -1,0 +1,308 @@
+# PAD Analyzer — Analysis Report
+
+**Flow:** =Invoices+Ops
+**File:** flows/teamA
+**Generated:** Thu, 08 Oct 2026 09:30:00 UTC
+**Duration:** 1234ms
+
+## Summary
+
+| Metric | Count |
+|---|---|
+| Blocks analyzed | 8 |
+| Rules run | 45 |
+| Errors | 0 |
+| Warnings | 18 |
+| Info | 8 |
+| Suppressed inline | 0 |
+
+## Warnings (18)
+
+### 1. File operation without error handler
+
+- **Rule:** `file-op-no-error-handler`
+- **Severity:** warning
+- **Block:** b-009
+- **Subflow:** sf-2
+
+This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+
+> **Suggestion:** Wrap this action in an 'On Block Error' handler to manage missing files, permission errors, and file lock issues gracefully.
+
+### 2. Network operation without timeout
+
+- **Rule:** `missing-timeout`
+- **Severity:** warning
+- **Block:** b-004
+- **Subflow:** sf-1
+
+This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+
+> **Suggestion:** Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior.
+
+### 3. Network operation without timeout
+
+- **Rule:** `missing-timeout`
+- **Severity:** warning
+- **Block:** b-005
+- **Subflow:** sf-1
+
+This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+
+> **Suggestion:** Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior.
+
+### 4. Network operation without timeout
+
+- **Rule:** `missing-timeout`
+- **Severity:** warning
+- **Block:** b-007
+- **Subflow:** sf-2
+
+This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+
+> **Suggestion:** Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior.
+
+### 5. Resource opened but never closed
+
+- **Rule:** `resource-leak`
+- **Severity:** warning
+- **Block:** b-002
+- **Subflow:** sf-1
+
+This action opens a Excel instance (stored in %ExcelInstance%) but no matching close action was found in the flow.
+
+> **Suggestion:** Add a 'Excel.Close' action to release the resource. Place it inside an 'On Block Error' handler to guarantee cleanup even on failure.
+
+### 6. Resource opened but never closed
+
+- **Rule:** `resource-leak`
+- **Severity:** warning
+- **Block:** b-007
+- **Subflow:** sf-2
+
+This action opens a database connection (stored in %SQLConnection%) but no matching close action was found in the flow.
+
+> **Suggestion:** Add a 'Database.Close' action to release the resource. Place it inside an 'On Block Error' handler to guarantee cleanup even on failure.
+
+### 7. UI automation in tight loop
+
+- **Rule:** `slow-pattern`
+- **Severity:** warning
+- **Block:** b-003
+- **Subflow:** sf-1
+
+This loop contains UI/web automation actions without any delay, which can overwhelm the target application.
+
+> **Suggestion:** Add a 'Wait' or 'Delay' action inside the loop to reduce load on the target application.
+
+### 8. SQL injection risk
+
+- **Rule:** `sql-injection-risk`
+- **Severity:** warning
+- **Block:** b-008
+- **Subflow:** sf-2
+
+SQL statement interpolates variables directly. A malicious value could alter the query.
+
+> **Suggestion:** Use parameterized queries (@paramName or ? placeholders) instead of embedding %variables% directly in the SQL string.
+
+### 9. Unhandled error in fallible action
+
+- **Rule:** `unhandled-error`
+- **Severity:** warning
+- **Block:** b-002
+- **Subflow:** sf-1
+
+This action commonly fails but has no error handler in its surrounding scope.
+
+> **Suggestion:** Wrap this action in a Try/Catch block or add error handler logic to recover from failures.
+
+### 10. Unhandled error in fallible action
+
+- **Rule:** `unhandled-error`
+- **Severity:** warning
+- **Block:** b-004
+- **Subflow:** sf-1
+
+This action commonly fails but has no error handler in its surrounding scope.
+
+> **Suggestion:** Wrap this action in a Try/Catch block or add error handler logic to recover from failures.
+
+### 11. Unhandled error in fallible action
+
+- **Rule:** `unhandled-error`
+- **Severity:** warning
+- **Block:** b-005
+- **Subflow:** sf-1
+
+This action commonly fails but has no error handler in its surrounding scope.
+
+> **Suggestion:** Wrap this action in a Try/Catch block or add error handler logic to recover from failures.
+
+### 12. Unhandled error in fallible action
+
+- **Rule:** `unhandled-error`
+- **Severity:** warning
+- **Block:** b-007
+- **Subflow:** sf-2
+
+This action commonly fails but has no error handler in its surrounding scope.
+
+> **Suggestion:** Wrap this action in a Try/Catch block or add error handler logic to recover from failures.
+
+### 13. Unhandled error in fallible action
+
+- **Rule:** `unhandled-error`
+- **Severity:** warning
+- **Block:** b-008
+- **Subflow:** sf-2
+
+This action commonly fails but has no error handler in its surrounding scope.
+
+> **Suggestion:** Wrap this action in a Try/Catch block or add error handler logic to recover from failures.
+
+### 14. Unhandled error in fallible action
+
+- **Rule:** `unhandled-error`
+- **Severity:** warning
+- **Block:** b-009
+- **Subflow:** sf-2
+
+This action commonly fails but has no error handler in its surrounding scope.
+
+> **Suggestion:** Wrap this action in a Try/Catch block or add error handler logic to recover from failures.
+
+### 15. Variable potentially uninitialized
+
+- **Rule:** `uninitialized-variable`
+- **Severity:** warning
+- **Block:** b-003
+- **Subflow:** sf-1
+
+Variable 'ExcelData' is used here but doesn't seem to be assigned anywhere in the flow.
+
+> **Suggestion:** Ensure the variable is initialized with a SET action or as an output of another action.
+
+### 16. Variable potentially uninitialized
+
+- **Rule:** `uninitialized-variable`
+- **Severity:** warning
+- **Block:** b-003
+- **Subflow:** sf-1
+
+Variable 'CurrentRow' is used here but doesn't seem to be assigned anywhere in the flow.
+
+> **Suggestion:** Ensure the variable is initialized with a SET action or as an output of another action.
+
+### 17. Variable potentially uninitialized
+
+- **Rule:** `uninitialized-variable`
+- **Severity:** warning
+- **Block:** b-004
+- **Subflow:** sf-1
+
+Variable 'Browser' is used here but doesn't seem to be assigned anywhere in the flow.
+
+> **Suggestion:** Ensure the variable is initialized with a SET action or as an output of another action.
+
+### 18. Variable potentially uninitialized
+
+- **Rule:** `uninitialized-variable`
+- **Severity:** warning
+- **Block:** b-008
+- **Subflow:** sf-2
+
+Variable 'InvoiceId' is used here but doesn't seem to be assigned anywhere in the flow.
+
+> **Suggestion:** Ensure the variable is initialized with a SET action or as an output of another action.
+
+## Info (8)
+
+### 1. Hardcoded file path
+
+- **Rule:** `hardcoded-filepath`
+- **Severity:** info
+- **Block:** b-009
+- **Subflow:** sf-2
+
+Property 'Files' contains an absolute path: /home/ops/tmp/invoice.csv
+
+> **Suggestion:** Use a relative path or store the base directory in a variable configured per environment.
+
+### 2. Hardcoded IP address
+
+- **Rule:** `hardcoded-ip`
+- **Severity:** info
+- **Block:** b-007
+- **Subflow:** sf-2
+
+Property 'ConnectionString' contains a hardcoded IP address: 10.0.0.5
+
+> **Suggestion:** Store the IP address in a variable so it can be changed per environment.
+
+### 3. Web action without wait
+
+- **Rule:** `missing-delay`
+- **Severity:** info
+- **Block:** b-005
+- **Subflow:** sf-1
+
+Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+
+> **Suggestion:** Add a 'Wait for element' or 'Delay' action between UI automation steps to improve reliability.
+
+### 4. Transient operation without retry
+
+- **Rule:** `missing-retry`
+- **Severity:** info
+- **Block:** b-004
+- **Subflow:** sf-1
+
+This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+
+> **Suggestion:** Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.
+
+### 5. Transient operation without retry
+
+- **Rule:** `missing-retry`
+- **Severity:** info
+- **Block:** b-005
+- **Subflow:** sf-1
+
+This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+
+> **Suggestion:** Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.
+
+### 6. Transient operation without retry
+
+- **Rule:** `missing-retry`
+- **Severity:** info
+- **Block:** b-007
+- **Subflow:** sf-2
+
+This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+
+> **Suggestion:** Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.
+
+### 7. Transient operation without retry
+
+- **Rule:** `missing-retry`
+- **Severity:** info
+- **Block:** b-008
+- **Subflow:** sf-2
+
+This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+
+> **Suggestion:** Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.
+
+### 8. Subflow without error handler
+
+- **Rule:** `subflow-no-error-handler`
+- **Severity:** info
+- **Block:** b-001
+- **Subflow:** sf-1
+
+Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+
+> **Suggestion:** Add a Try/Catch or On Block Error handler to protect against unexpected failures.
+

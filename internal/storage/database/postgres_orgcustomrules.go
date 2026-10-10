@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -24,6 +25,11 @@ import (
 // not be updatable from this org's endpoint. B8.2 was exactly that bug on
 // org_channels (ON CONFLICT (id) with no org predicate let an admin retarget
 // another tenant's row), so the guard is carried forward here by construction.
+// Such an id collides with the primary key instead, which is ErrNotFound here.
+//
+// A row id of this org stored under another rule id is a rename: the guard
+// inserts nothing and it is ErrOrgCustomRuleRenamed (it used to be a primary-key
+// violation, a 500, or with the new id taken an overwrite of that other rule).
 func (b *PostgresStorageBackend) SaveOrgCustomRule(ctx context.Context, rule *storageif.OrgCustomRule) error {
 	if rule == nil || rule.ID == "" || rule.OrgID == "" || rule.RuleID == "" {
 		return errors.New("org custom rule requires id, orgId and ruleId")
@@ -31,7 +37,10 @@ func (b *PostgresStorageBackend) SaveOrgCustomRule(ctx context.Context, rule *st
 	var savedID string
 	err := b.query(ctx).QueryRowContext(ctx, `
 		INSERT INTO org_custom_rules (id, org_id, rule_id, config, enabled, created_at, updated_at)
-		VALUES ($1, $2, $3, $4::jsonb, $5, NOW(), NOW())
+		SELECT $1::text, $2::text, $3::text, $4::jsonb, $5::boolean, NOW(), NOW()
+		WHERE NOT EXISTS (
+			SELECT 1 FROM org_custom_rules WHERE id = $1::text AND org_id = $2::text AND rule_id <> $3::text
+		)
 		ON CONFLICT (org_id, rule_id) DO UPDATE SET
 			config     = EXCLUDED.config,
 			enabled    = EXCLUDED.enabled,
@@ -39,7 +48,12 @@ func (b *PostgresStorageBackend) SaveOrgCustomRule(ctx context.Context, rule *st
 		RETURNING id`,
 		rule.ID, rule.OrgID, rule.RuleID, string(rule.Config), rule.Enabled,
 	).Scan(&savedID)
-	if err != nil {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return storageif.ErrOrgCustomRuleRenamed
+	case isPgErrCode(err, pgErrUniqueViolation):
+		return fmt.Errorf("save org custom rule: id %q is not one of this org's rules: %w", rule.ID, storageif.ErrNotFound)
+	case err != nil:
 		return fmt.Errorf("save org custom rule: %w", err)
 	}
 	// The upsert may have matched an existing row, whose surrogate id wins.

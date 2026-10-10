@@ -81,22 +81,31 @@ func extractGotoTarget(block *models.Block) string {
 	return ""
 }
 
+// labelIndex is the LabelByName / LabelNameCount fact group.
+type labelIndex struct {
+	byName map[string]*models.Block
+	count  map[string]int
+}
+
 // buildLabelIndex maps each label name (lowercased, so lookups are
 // case-insensitive like the previous EqualFold scan) to its first LABEL block
 // in document order — deterministic under duplicate names, where the old
 // per-GOTO map scan picked an arbitrary one.
-func buildLabelIndex(ctx *RuleContext) map[string]*models.Block {
-	idx := make(map[string]*models.Block)
+func buildLabelIndex(ctx *RuleContext) *labelIndex {
+	idx := &labelIndex{byName: make(map[string]*models.Block), count: make(map[string]int)}
+	if ctx.Flow == nil {
+		return idx
+	}
 	walkBlocks(ctx.Flow, func(b *models.Block) {
 		if b.RawType == "LABEL" {
 			key := strings.ToLower(b.Name)
-			if _, ok := idx[key]; !ok {
-				idx[key] = b
+			if _, ok := idx.byName[key]; !ok {
+				idx.byName[key] = b
 			}
 			// Count per (lowercased) name in the same pass — duplicate-label
 			// reads this instead of re-scanning AllBlocks per LABEL block
 			// (was O(labels × blocks)).
-			ctx.LabelNameCount[key]++
+			idx.count[key]++
 		}
 	})
 	return idx
@@ -105,7 +114,7 @@ func buildLabelIndex(ctx *RuleContext) map[string]*models.Block {
 func isScopeBreakingGoto(gotoBlock *models.Block, targetLabel string, ctx *RuleContext) bool {
 	gotoDepth := ctx.BlockDepth[gotoBlock.ID]
 
-	labelBlock := ctx.LabelByName[strings.ToLower(targetLabel)]
+	labelBlock := ctx.LabelByName()[strings.ToLower(targetLabel)]
 	if labelBlock == nil {
 		return false
 	}
@@ -165,4 +174,12 @@ func isScopeContainer(b *models.Block) bool {
 	return false
 }
 
-func init() { registerRule(&GotoAntipatternRule{}) }
+func init() {
+	registerRule(&GotoAntipatternRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		Related:      []Related{{To: "infinite-loop-risk", Reason: "goto can create hidden loop structures"}},
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

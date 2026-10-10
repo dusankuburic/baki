@@ -1,25 +1,27 @@
 package analyzer
 
 import (
+	"context"
 	"testing"
 
+	"pad-core/cache"
 	"pad-core/models"
 )
 
 func TestAnalysisCache(t *testing.T) {
 	t.Run("cache miss returns nil", func(t *testing.T) {
-		cache := NewAnalysisCache(10)
-		got := cache.Get("flow1", "hash1")
+		c := newReportCache(10, 0)
+		got := c.testGet("flow1", "hash1")
 		if got != nil {
 			t.Fatal("expected nil on cache miss")
 		}
 	})
 
 	t.Run("cache put then get returns report", func(t *testing.T) {
-		cache := NewAnalysisCache(10)
+		c := newReportCache(10, 0)
 		report := &models.AnalysisReport{FlowID: "flow1", DurationMs: 42}
-		cache.Put("flow1", "hash1", report)
-		got := cache.Get("flow1", "hash1")
+		c.testPut("flow1", "hash1", report)
+		got := c.testGet("flow1", "hash1")
 		if got == nil {
 			t.Fatal("expected cached report, got nil")
 		}
@@ -29,24 +31,24 @@ func TestAnalysisCache(t *testing.T) {
 	})
 
 	t.Run("different hash returns nil", func(t *testing.T) {
-		cache := NewAnalysisCache(10)
+		c := newReportCache(10, 0)
 		report := &models.AnalysisReport{FlowID: "flow1"}
-		cache.Put("flow1", "hash1", report)
-		got := cache.Get("flow1", "hash2")
+		c.testPut("flow1", "hash1", report)
+		got := c.testGet("flow1", "hash2")
 		if got != nil {
 			t.Fatal("expected nil for different hash")
 		}
 	})
 
 	t.Run("eviction drops oldest entry", func(t *testing.T) {
-		cache := NewAnalysisCache(2)
-		cache.Put("f1", "h1", &models.AnalysisReport{FlowID: "f1", DurationMs: 1})
-		cache.Put("f2", "h1", &models.AnalysisReport{FlowID: "f2", DurationMs: 2})
-		cache.Put("f3", "h1", &models.AnalysisReport{FlowID: "f3", DurationMs: 3})
-		if cache.Get("f1", "h1") != nil {
+		c := newReportCache(2, 0)
+		c.testPut("f1", "h1", &models.AnalysisReport{FlowID: "f1", DurationMs: 1})
+		c.testPut("f2", "h1", &models.AnalysisReport{FlowID: "f2", DurationMs: 2})
+		c.testPut("f3", "h1", &models.AnalysisReport{FlowID: "f3", DurationMs: 3})
+		if c.testGet("f1", "h1") != nil {
 			t.Fatal("expected f1 to be evicted")
 		}
-		if cache.Get("f3", "h1") == nil {
+		if c.testGet("f3", "h1") == nil {
 			t.Fatal("expected f3 to be present")
 		}
 	})
@@ -189,19 +191,19 @@ func TestCustomRule(t *testing.T) {
 	})
 }
 
-func TestCachedAnalysis(t *testing.T) {
+func TestCachedAnalyzer_Analyze(t *testing.T) {
 	t.Run("second call returns cached result", func(t *testing.T) {
-		DefaultCache = NewAnalysisCache(10)
+		a := newTestAnalyzer()
 		b := makeBlock("b1", "Set X", models.BlockTypeAction, "SetVariable.Set", 0)
 		b.SubflowID = "sf1"
 		doc := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
-		r1 := CachedAnalysis(doc, AllRules(), nil, nil)
-		r2 := CachedAnalysis(doc, AllRules(), nil, nil)
+		r1 := a.Analyze(context.Background(), localIn(doc, AllRules(), nil, nil))
+		r2 := a.Analyze(context.Background(), localIn(doc, AllRules(), nil, nil))
 		if r1 == nil || r2 == nil {
 			t.Fatal("expected non-nil reports")
 		}
-		if r1.DurationMs != r2.DurationMs {
-			t.Errorf("second call should return cached report")
+		if r1 != r2 {
+			t.Errorf("second call should return the cached report")
 		}
 	})
 
@@ -209,14 +211,14 @@ func TestCachedAnalysis(t *testing.T) {
 	// cache on the second call. This relies on FlowHash being deterministic;
 	// before the key-sort fix the second call recomputed instead of hitting.
 	t.Run("multi-property flow hits cache on second call", func(t *testing.T) {
-		DefaultCache = NewAnalysisCache(10)
+		a := newTestAnalyzer()
 		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "HTTPClient.InvokeService", 0)
 		b.SubflowID = "sf1"
 		b.Properties = map[string]string{"url": "https://x", "method": "GET", "timeout": "30", "body": "{}"}
 		doc := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
-		r1 := CachedAnalysis(doc, AllRules(), nil, nil)
-		r2 := CachedAnalysis(doc, AllRules(), nil, nil)
-		// On a cache hit, CachedAnalysis returns the exact stored pointer.
+		r1 := a.Analyze(context.Background(), localIn(doc, AllRules(), nil, nil))
+		r2 := a.Analyze(context.Background(), localIn(doc, AllRules(), nil, nil))
+		// On a cache hit, Analyze returns the exact stored pointer.
 		if r1 != r2 {
 			t.Error("expected the same cached report pointer on the second call (cache miss implies non-deterministic hash)")
 		}
@@ -266,25 +268,34 @@ func TestRuleProfiling(t *testing.T) {
 	})
 }
 
-func TestAnalysisCache_Clear(t *testing.T) {
-	cache := NewAnalysisCache(10)
-	cache.Put("f1", "h1", &models.AnalysisReport{FlowID: "f1"})
-	cache.Put("f2", "h1", &models.AnalysisReport{FlowID: "f2"})
-	if len(cache.AllReports()) != 2 {
-		t.Fatalf("setup: expected 2 reports, got %d", len(cache.AllReports()))
+func TestCachedAnalyzer_ResetTenant(t *testing.T) {
+	a := newTestAnalyzer()
+	other := cache.User("someone-else")
+	a.reports.testPut("f1", "h1", &models.AnalysisReport{FlowID: "f1"})
+	a.reports.testPut("f2", "h1", &models.AnalysisReport{FlowID: "f2"})
+	otherKey, err := reportSpec.Key(other, cache.Resource("f1"), analyzerVersionPart, cache.RuleProfile("p"), cache.Content("h1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.reports.put(reportKey{key: otherKey, tenant: other, flow: "f1"}, &models.AnalysisReport{FlowID: "f1-other"})
+	if got := len(a.Reports(cache.Local())); got != 2 {
+		t.Fatalf("setup: expected 2 local reports, got %d", got)
 	}
 
-	cache.Clear()
+	a.ResetTenant(cache.Local())
 
-	if got := len(cache.AllReports()); got != 0 {
-		t.Errorf("after Clear: expected 0 reports, got %d", got)
+	if got := len(a.Reports(cache.Local())); got != 0 {
+		t.Errorf("after ResetTenant: expected 0 local reports, got %d", got)
 	}
-	if cache.Get("f1", "h1") != nil {
-		t.Error("after Clear: expected cache miss for f1")
+	if a.reports.testGet("f1", "h1") != nil {
+		t.Error("after ResetTenant: expected cache miss for f1")
 	}
-	// Cache stays usable after clearing.
-	cache.Put("f3", "h1", &models.AnalysisReport{FlowID: "f3"})
-	if cache.Get("f3", "h1") == nil {
-		t.Error("expected f3 present after re-Put following Clear")
+	if got := a.Reports(other); len(got) != 1 || got[0].FlowID != "f1-other" {
+		t.Errorf("ResetTenant(local) touched another tenant's entry: %+v", got)
+	}
+	// Cache stays usable after the reset.
+	a.reports.testPut("f3", "h1", &models.AnalysisReport{FlowID: "f3"})
+	if a.reports.testGet("f3", "h1") == nil {
+		t.Error("expected f3 present after a put following the reset")
 	}
 }

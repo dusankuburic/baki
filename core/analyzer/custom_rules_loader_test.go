@@ -3,6 +3,7 @@ package analyzer
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -64,15 +65,37 @@ func TestLoadCustomRules_SkipsInvalidRules(t *testing.T) {
 	  {"id": "bad-regex", "name": "Bad", "rawTypeMatch": "[invalid"}
 	]`
 	os.WriteFile(path, []byte(content), 0644)
-	rules, _, err := LoadCustomRules(path)
+	rules, warnings, err := LoadCustomRules(path)
 	if err != nil {
 		t.Fatalf("LoadCustomRules: %v", err)
 	}
 	if len(rules) != 1 {
-		t.Fatalf("expected 1 valid rule (invalid silently skipped), got %d", len(rules))
+		t.Fatalf("expected 1 valid rule (the invalid one skipped with a warning), got %d", len(rules))
 	}
 	if rules[0].ID() != "valid-rule" {
 		t.Errorf("expected valid-rule, got %s", rules[0].ID())
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], `entry 1 (rule "bad-regex") skipped`) {
+		t.Errorf("warnings = %v, want one naming the skipped entry", warnings)
+	}
+}
+
+// TestLoadCustomRules_OtherDocumentShapes: a rules file may also be one rule object or the {"rules": …} envelope
+// the validate endpoint accepts (both used to fail the whole file).
+func TestLoadCustomRules_OtherDocumentShapes(t *testing.T) {
+	for _, content := range []string{
+		`{"id": "one", "nameMatch": "x"}`,
+		`{"rules": [{"id": "one", "nameMatch": "x"}]}`,
+		`{"rules": {"id": "one", "nameMatch": "x"}}`,
+	} {
+		path := filepath.Join(t.TempDir(), "rules.json")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rules, warnings, err := LoadCustomRules(path)
+		if err != nil || len(rules) != 1 || rules[0].ID() != "one" || len(warnings) != 0 {
+			t.Errorf("%s: rules %d, warnings %v, err %v", content, len(rules), warnings, err)
+		}
 	}
 }
 

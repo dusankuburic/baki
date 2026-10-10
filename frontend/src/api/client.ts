@@ -224,7 +224,7 @@ async function doFetch(
 const AUTH_PATHS = ['/api/auth/refresh', '/api/auth/login', '/api/auth/register']
 
 // On 401, one deduplicated token refresh + refetch. Shared by request() and
-// requestBlob().
+// the raw downloads (requestBlob, requestText).
 async function fetchWithRefresh(
   path: string,
   body: unknown,
@@ -437,6 +437,15 @@ function offlineMutation(method: string): boolean {
   return !READ_METHODS.has(method.toUpperCase()) && typeof navigator !== 'undefined' && navigator.onLine === false
 }
 
+// errorFor maps a non-ok response's envelope to the error the caller sees:
+// PermissionDenied/VersionConflict for 403/409, ApiError otherwise.
+async function errorFor(response: Response): Promise<ApiError> {
+  const env = await parseErrorEnvelope(response)
+  if (response.status === 403) return new PermissionDeniedError(env.message, env.code, env.requestId, env.details)
+  if (response.status === 409) return new VersionConflictError(env.message, env.code, env.requestId, env.details)
+  return new ApiError(env.message, response.status, env.code, env.requestId, env.details)
+}
+
 async function doRequest(path: string, opts: RequestOptions): Promise<ParsedBody> {
   const {body, method = 'POST', timeoutMs = DEFAULT_TIMEOUT_MS} = opts
   if (offlineMutation(method)) {
@@ -446,16 +455,7 @@ async function doRequest(path: string, opts: RequestOptions): Promise<ParsedBody
 
   const response = await fetchWithRetry(path, body, method, timeoutMs, opts.signal)
 
-  if (!response.ok) {
-    const env = await parseErrorEnvelope(response)
-    if (response.status === 403) {
-      throw new PermissionDeniedError(env.message, env.code, env.requestId, env.details)
-    }
-    if (response.status === 409) {
-      throw new VersionConflictError(env.message, env.code, env.requestId, env.details)
-    }
-    throw new ApiError(env.message, response.status, env.code, env.requestId, env.details)
-  }
+  if (!response.ok) throw await errorFor(response)
 
   // Read as text so the body's size is known for the cache gate; a 200 with
   // a non-JSON body (misconfigured proxy) must throw a clean Error.
@@ -528,23 +528,36 @@ export async function requestValidated<T>(path: string, schema: z.ZodType<T>, op
   return result.data
 }
 
-// Binary/file downloads — same refresh/retry behaviour, Blob result.
-export async function requestBlob(
-  path: string,
-  opts: {method?: string; timeoutMs?: number; signal?: AbortSignal} = {},
-): Promise<Blob> {
-  const {method = 'GET', timeoutMs = DEFAULT_BLOB_TIMEOUT_MS} = opts
+export interface RawRequestOptions {
+  /** JSON-serialized request body, for a download behind a POST (the findings exports). */
+  body?: unknown
+  /** HTTP method. Defaults to 'GET', or 'POST' when a body is given. */
+  method?: string
+  /** Abort/timeout in ms. Defaults to DEFAULT_BLOB_TIMEOUT_MS (90s). */
+  timeoutMs?: number
+  signal?: AbortSignal
+}
+
+// Downloads whose body is not JSON (files, XML, SARIF text): the same
+// refresh/retry and error-envelope mapping as request(), the body untouched.
+// Not offline-guarded: a download changes nothing on the server.
+async function requestRaw(path: string, opts: RawRequestOptions): Promise<Response> {
+  const {body, method = body === undefined ? 'GET' : 'POST', timeoutMs = DEFAULT_BLOB_TIMEOUT_MS} = opts
   await ensureFreshToken(path)
-  const response = await fetchWithRetry(path, undefined, method, timeoutMs, opts.signal)
-  if (!response.ok) {
-    // Shared envelope→error mapping: blob downloads deserve the same
-    // PermissionDenied/VersionConflict specialization as JSON requests.
-    const env = await parseErrorEnvelope(response)
-    if (response.status === 403) throw new PermissionDeniedError(env.message, env.code, env.requestId, env.details)
-    if (response.status === 409) throw new VersionConflictError(env.message, env.code, env.requestId, env.details)
-    throw new ApiError(env.message, response.status, env.code, env.requestId, env.details)
-  }
-  return response.blob()
+  const response = await fetchWithRetry(path, body, method, timeoutMs, opts.signal)
+  if (!response.ok) throw await errorFor(response)
+  return response
+}
+
+// Binary/file downloads, Blob result.
+export async function requestBlob(path: string, opts: RawRequestOptions = {}): Promise<Blob> {
+  return (await requestRaw(path, opts)).blob()
+}
+
+// Text downloads, the body exactly as the server sent it: request() would
+// JSON-parse it, which fails for XML and re-serializes JSON documents.
+export async function requestText(path: string, opts: RawRequestOptions = {}): Promise<string> {
+  return (await requestRaw(path, opts)).text()
 }
 
 /**

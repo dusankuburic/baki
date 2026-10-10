@@ -1,0 +1,113 @@
+bytes: 24264 sha256: 723ea9c91305842ebff457fc8708b667402a4fb192942c422f200c2fab6073b5
+pages: 2
+--- page 1
+0 J
+0 j
+0.57 w
+0.000 G
+0.000 g
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 20.00 Tf ET
+BT 31.19 790.53 Td "PAD Analyzer"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 11.00 Tf ET
+BT 31.19 779.06 Td "Analysis Report"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 10.00 Tf ET
+BT 31.19 746.76 Td "Flow: Invoices <Q3> & \"Ops\""Tj ET
+BT 31.19 732.59 Td "Generated: 2026-10-08 09:30:00"Tj ET
+BT 31.19 718.41 Td "Duration: 1234ms"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 14.00 Tf ET
+BT 31.19 684.62 Td "Summary"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 10.00 Tf ET
+BT 31.19 667.39 Td "Blocks analyzed: 11"Tj ET
+BT 31.19 653.22 Td "Rules run: 45"Tj ET
+BT 31.19 639.04 Td "Errors: 1  |  Warnings: 1  |  Info: 6"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 14.00 Tf ET
+BT 31.19 605.25 Td "Findings (8)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 12.00 Tf ET
+BT 31.19 578.92 Td "Errors (1)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 559.67 Td "1. Credential variable set to literal value"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 544.38 Td "Rule: hardcoded-credential  |  Block: b-007"Tj ET
+2.400 Tw
+BT 0 Tw 31.19 533.04 Td ["Variable" -267.533" " "'Password'" -267.533" " "has" -267.533" " "a" -267.533" " "name" -267.533" " "that" -267.533" " "suggests" -267.533" " "it" -267.533" " "holds" -267.533" " "a" -267.533" " "credential" -267.533" " "and" -267.533" " "is" -267.533" " "assigned" -267.533" " "a" -267.533" " "literal" ] TJ ET
+0 Tw
+BT 31.19 521.71 Td "string value."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.643 Tw
+BT 0 Tw 31.19 504.70 Td ["Suggestion:" -115.214" " "Store" -115.214" " "credentials" -115.214" " "in" -115.214" " "a" -115.214" " "secured" -115.214" " "vault," -115.214" " "Windows" -115.214" " "Credential" -115.214" " "Manager," -115.214" " "or" -115.214" " "use" -115.214" " "a" -115.214" " "PAD" -115.214" " "input" ] TJ ET
+0 Tw
+BT 31.19 493.36 Td "variable instead of a literal string in the flow."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 12.00 Tf ET
+BT 31.19 468.37 Td "Warnings (1)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 449.12 Td "1. File operation without error handler"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 433.83 Td "Rule: file-op-no-error-handler  |  Block: b-002"Tj ET
+0.000 Tw
+BT 0 Tw 31.19 422.49 Td ["This" -27.533" " "file/folder" -27.533" " "operation" -27.533" " "can" -27.533" " "fail" -27.533" " "due" -27.533" " "to" -27.533" " "missing" -27.533" " "files," -27.533" " "permission" -27.533" " "issues," -27.533" " "or" -27.533" " "file" -27.533" " "locks" -27.533" " "but" -27.533" " "has" ] TJ ET
+BT 31.19 411.15 Td "no error handler."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+1.286 Tw
+BT 0 Tw 31.19 394.15 Td ["Suggestion:" -158.071" " "Wrap" -158.071" " "this" -158.071" " "action" -158.071" " "in" -158.071" " "an" -158.071" " "'On" -158.071" " "Block" -158.071" " "Error'" -158.071" " "handler" -158.071" " "to" -158.071" " "manage" -158.071" " "missing" -158.071" " "files," -158.071" " "permission" ] TJ ET
+0 Tw
+BT 31.19 382.81 Td "errors, and file lock issues gracefully."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 12.00 Tf ET
+BT 31.19 357.81 Td "Info (6)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 338.57 Td "1. Hardcoded file path"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 323.28 Td "Rule: hardcoded-filepath  |  Block: b-002"Tj ET
+BT 31.19 311.94 Td "Property 'File' contains an absolute path: C:\\data\\in.txt"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+3.857 Tw
+BT 0 Tw 31.19 294.93 Td ["Suggestion:" -458.071" " "Use" -458.071" " "a" -458.071" " "relative" -458.071" " "path" -458.071" " "or" -458.071" " "store" -458.071" " "the" -458.071" " "base" -458.071" " "directory" -458.071" " "in" -458.071" " "a" -458.071" " "variable" -458.071" " "configured" -458.071" " "per" ] TJ ET
+0 Tw
+BT 31.19 283.60 Td "environment."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 262.04 Td "2. Subflow without error handler"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 246.75 Td "Rule: subflow-no-error-handler  |  Block: b-002"Tj ET
+1.385 Tw
+BT 0 Tw 31.19 235.41 Td ["Subflow" -170.231" " "\"Main\"" -170.231" " "has" -170.231" " "action" -170.231" " "blocks" -170.231" " "but" -170.231" " "no" -170.231" " "error" -170.231" " "handler." -170.231" " "Unhandled" -170.231" " "errors" -170.231" " "will" -170.231" " "silently" -170.231" " "terminate" ] TJ ET
+0 Tw
+BT 31.19 224.07 Td "the subflow."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 207.06 Td "Suggestion: Add a Try/Catch or On Block Error handler to protect against unexpected failures."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 185.50 Td "3. TODO in comment"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 170.21 Td "Rule: todo-in-comment  |  Block: b-011"Tj ET
+BT 31.19 158.87 Td "This comment contains a TODO marker: \"TODO: remove the =SUM(A1) hack\""Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 141.86 Td "Suggestion: Resolve the TODO or convert it to a tracked issue."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 120.30 Td "4. Variable declared but never used"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 105.01 Td "Rule: unused-variable  |  Block: b-007"Tj ET
+BT 31.19 93.67 Td "This variable is set but never referenced elsewhere in the flow."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 76.67 Td "Suggestion: Remove the unused variable or add a reference to it."Tj ET
+
+--- page 2
+0 J
+0 j
+0.57 w
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.000 G
+0.000 g
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 803.45 Td "5. Variable declared but never used"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 788.16 Td "Rule: unused-variable  |  Block: b-009"Tj ET
+BT 31.19 776.82 Td "This variable is set but never referenced elsewhere in the flow."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 759.82 Td "Suggestion: Remove the unused variable or add a reference to it."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 738.26 Td "6. Wait zero"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 722.97 Td "Rule: wait-zero  |  Block: b-012"Tj ET
+BT 31.19 711.63 Td "This WAIT action has a duration of 0, making it a no-op."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 694.62 Td "Suggestion: Remove the WAIT 0 action or increase the duration."Tj ET
+

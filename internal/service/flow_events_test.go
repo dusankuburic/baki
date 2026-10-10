@@ -92,7 +92,7 @@ func TestFlowCaches_LibraryAndFlowMutationsInvalidateTheSameCaches(t *testing.T)
 	dropped := func(what string, doc *models.FlowDocument) {
 		t.Helper()
 		builds, scrubbed := store.builds.Load(), scrubs.Load()
-		if _, ok := flows.idxCache.Get(ctx, id); ok {
+		if _, ok := flows.idxCache.Get(searchIndexKey(t, id)); ok {
 			t.Errorf("%s: the search index survived", what)
 		}
 		dashboard.BuildHome(ctx, "u1")
@@ -110,7 +110,7 @@ func TestFlowCaches_LibraryAndFlowMutationsInvalidateTheSameCaches(t *testing.T)
 		builds, scrubbed := store.builds.Load(), scrubs.Load()
 		dashboard.BuildHome(ctx, "u1")
 		chat.cachedContextCore(ctx, "u1", ctxCacheStubProvider{}, doc, nil, req)
-		if _, ok := flows.idxCache.Get(ctx, id); !ok || store.builds.Load() != builds || scrubs.Load() != scrubbed {
+		if _, ok := flows.idxCache.Get(searchIndexKey(t, id)); !ok || store.builds.Load() != builds || scrubs.Load() != scrubbed {
 			t.Fatal("fixture: the caches did not hold the fill")
 		}
 	}
@@ -141,7 +141,7 @@ func TestFlowCaches_LibraryAndFlowMutationsInvalidateTheSameCaches(t *testing.T)
 func TestDashboardFill_ReadBeforeACommittedInvalidationIsRefused(t *testing.T) {
 	store := &gatedDashStore{FakeBackend: testutil.NewFakeBackend(), gate: make(chan struct{}), entered: make(chan struct{})}
 	dashboard := NewDashboardService(store, nil, nil, nil)
-	bus := subscribedBus(&FlowService{idxCache: newChatContextCache()}, dashboard, &ChatService{})
+	bus := subscribedBus(&FlowService{}, dashboard, &ChatService{})
 
 	txCtx, reg := txhook.With(context.Background())
 	bus.Publish(txCtx, events.FlowChanged{FlowID: "f1", OwnerID: "u1", Kind: events.FlowUpdated})
@@ -188,7 +188,7 @@ func TestAnalyticsFill_OrgFlowChangeDropsAndFencesMemberViews(t *testing.T) {
 	scope := &gatedScope{stubScope: stubScope{ids: []string{"A"}, orgIDs: []string{"org-1"}}}
 	dashboard := NewDashboardService(newAnaStub(), nil, nil, nil)
 	dashboard.scope = scope
-	bus := subscribedBus(&FlowService{idxCache: newChatContextCache()}, dashboard, &ChatService{})
+	bus := subscribedBus(&FlowService{}, dashboard, &ChatService{})
 	build := func(user string) {
 		t.Helper()
 		if _, err := dashboard.BuildAnalytics(context.Background(), user, AnalyticsCaller{}, q); err != nil {
@@ -248,7 +248,7 @@ func TestFlowCaches_ARequestThatPublishedDoesNotFill(t *testing.T) {
 	dashboard.scope = scope
 	scrubs := countScrubs(t)
 	chat := &ChatService{chatCtxCache: newChatContextCache()}
-	bus := subscribedBus(&FlowService{idxCache: newChatContextCache()}, dashboard, chat)
+	bus := subscribedBus(&FlowService{}, dashboard, chat)
 	doc := toolLoopDoc()
 	req := models.ChatRequest{Model: "m1", UserMessage: "q"}
 	q := anaQuery(30)
@@ -312,12 +312,12 @@ func TestChatContextFill_StaleDocumentAndOverlappedBuildAreNotServed(t *testing.
 	gen := chat.chatCtxGen.Load(other.ID)
 	chat.cachedContextCore(context.Background(), "s", ctxCacheStubProvider{}, other, nil, req)
 	scrubDocument = orig
-	cc := chat.chatCtxCache.(*chatContextCache)
+	cc := chat.chatCtxCache
 	key := chat.chatContextKeyAt("s", other.ID, gen, req, ctxCacheStubProvider{}.ID(), req.Model, nil, "")
-	if _, ok := cc.texts.Get(context.Background(), key); ok {
+	if _, ok := cc.texts.Get(key); ok {
 		t.Error("an overlapped build stored its texts")
 	}
-	if _, ok := cc.docs.Get(context.Background(), scrubbedDocKey("s", other.ID, gen)); ok {
+	if _, ok := cc.docs.Get(scrubbedDocKey("s", other.ID, gen)); ok {
 		t.Error("an overlapped build stored its clone")
 	}
 }

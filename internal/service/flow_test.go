@@ -1,11 +1,8 @@
 package service
 
 import (
-	"context"
 	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"pad-core/cache"
 	"pad-core/models"
@@ -36,8 +33,18 @@ func makeTestDoc(t *testing.T, text string) (*FlowService, *models.FlowDocument)
 		t.Fatalf("ParseText: %v", err)
 	}
 	svc := &FlowService{}
-	svc.idxCache, _ = cache.NewLRUCache(maxSearchIndexCache)
+	svc.idxCache = newSearchIndexCache()
 	return svc, doc
+}
+
+// searchIndexKey is the search-index cache's key of flowID.
+func searchIndexKey(t *testing.T, flowID string) cache.Key {
+	t.Helper()
+	k, err := searchIndexes.Key(cache.Resource(flowID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
 }
 
 func TestFlowService_FindBlockByID_empty_id(t *testing.T) {
@@ -141,61 +148,48 @@ func TestFlowService_RecentFiles_nil_settings(t *testing.T) {
 // evicts once it reaches its cap, so a long-lived process can't grow it without
 // limit (the OOM risk the production-readiness review flagged).
 func TestFlowService_SearchIndexCacheIsBounded(t *testing.T) {
-	svc := &FlowService{}
-	svc.idxCache, _ = cache.NewLRUCache(2)
-	ctx := context.Background()
-
-	svc.idxCache.Set(ctx, "a", "a", 0)
-	svc.idxCache.Set(ctx, "b", "b", 0)
-	// Touch "a" so "b" becomes least-recently-used, then overflow the cap.
-	if _, ok := svc.idxCache.Get(ctx, "a"); !ok {
-		t.Fatal("expected key a present")
+	svc := &FlowService{idxCache: cache.New[*searchIndexEntry](searchIndexes, 1<<30, cache.WithMaxEntries(2))}
+	docs := map[string]*models.FlowDocument{}
+	for _, id := range []string{"a", "b", "c"} {
+		doc, err := parser.ParseText(simpleFlow, "test.txt", int64(len(simpleFlow)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc.ID = id
+		docs[id] = doc
 	}
-	svc.idxCache.Set(ctx, "c", "c", 0)
+	cached := func(id string) bool {
+		e, ok := svc.idxCache.Get(searchIndexKey(t, id))
+		return ok && e.doc.Value() == docs[id]
+	}
 
-	if _, ok := svc.idxCache.Get(ctx, "b"); ok {
+	svc.searchIndexFor(docs["a"])
+	svc.searchIndexFor(docs["b"])
+	// Touch "a" so "b" becomes least-recently-used, then overflow the cap.
+	if !cached("a") {
+		t.Fatal("expected a's index present")
+	}
+	svc.searchIndexFor(docs["c"])
+
+	if cached("b") {
 		t.Error("expected LRU to evict b after overflow, but it was present")
 	}
-	if _, ok := svc.idxCache.Get(ctx, "a"); !ok {
+	if !cached("a") {
 		t.Error("expected recently-used a to survive")
 	}
-	if _, ok := svc.idxCache.Get(ctx, "c"); !ok {
+	if !cached("c") {
 		t.Error("expected newly-added c to be present")
 	}
 }
 
-// countingIndexCache wraps a Cache and counts writes, to assert that a burst
-// of concurrent cold searches builds the index once.
-type countingIndexCache struct {
-	cache.Cache
-	sets atomic.Int32
-}
-
-func (c *countingIndexCache) Set(ctx context.Context, key string, value any, ttl time.Duration) {
-	c.sets.Add(1)
-	c.Cache.Set(ctx, key, value, ttl)
-}
-
-func (c *countingIndexCache) SetWithCost(ctx context.Context, key string, value any, cost int64, ttl time.Duration) {
-	c.sets.Add(1)
-	if sized, ok := c.Cache.(cache.SizedCache); ok {
-		sized.SetWithCost(ctx, key, value, cost, ttl)
-		return
-	}
-	c.Cache.Set(ctx, key, value, ttl)
-}
-
 // Concurrent cold searches for one flow must share a single index build
 // (idxFlights): each build tokenizes the whole flow, and N racers would also
-// overwrite each other's cache entry.
+// overwrite each other's cache entry. Counted through the cache's statistics
+// (no test in this package runs in parallel with it).
 func TestFlowService_SearchIndex_ConcurrentMissBuildsOnce(t *testing.T) {
 	svc, doc := makeTestDoc(t, simpleFlow)
-	lru, err := cache.NewLRUCache(maxSearchIndexCache)
-	if err != nil {
-		t.Fatalf("NewLRUCache: %v", err)
-	}
-	cc := &countingIndexCache{Cache: lru}
-	svc.idxCache = cc
+	stores := func() uint64 { return searchIndexes.Info().Stats.Stores }
+	before := stores()
 
 	const racers = 24
 	var wg sync.WaitGroup
@@ -209,7 +203,7 @@ func TestFlowService_SearchIndex_ConcurrentMissBuildsOnce(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if got := cc.sets.Load(); got != 1 {
+	if got := stores() - before; got != 1 {
 		t.Errorf("index cached %d times for %d concurrent cold searches, want 1", got, racers)
 	}
 }

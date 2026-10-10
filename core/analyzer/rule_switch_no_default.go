@@ -34,4 +34,12 @@ func (r *SwitchNoDefaultRule) Check(block *models.Block, ctx *RuleContext) []mod
 	}}
 }
 
-func init() { registerRule(&SwitchNoDefaultRule{}) }
+func init() {
+	registerRule(&SwitchNoDefaultRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "insert-default",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

@@ -125,7 +125,7 @@ func TestSfNeedsErrorHandler_NestedActions_CountedRecursively(t *testing.T) {
 	}
 }
 
-// ---- SubflowNoErrorHandlerRule.Check ---------------------------------------
+// ---- SubflowNoErrorHandlerRule.CheckFlow ------------------------------------
 
 func TestSubflowNoErrorHandlerRule_TrivialSubflow_NoFinding(t *testing.T) {
 	rule := &SubflowNoErrorHandlerRule{}
@@ -136,7 +136,7 @@ func TestSubflowNoErrorHandlerRule_TrivialSubflow_NoFinding(t *testing.T) {
 
 	var findings []models.Finding
 	for _, b := range ctx.AllBlocks {
-		findings = append(findings, rule.Check(b, ctx)...)
+		findings = append(findings, findingsAt(rule, ctx, b)...)
 	}
 	if len(findings) != 0 {
 		t.Errorf("expected 0 findings for trivial subflow, got %d", len(findings))
@@ -152,7 +152,7 @@ func TestSubflowNoErrorHandlerRule_NonTrivialNoHandler_EmitsFinding(t *testing.T
 
 	var findings []models.Finding
 	for _, b := range ctx.AllBlocks {
-		findings = append(findings, rule.Check(b, ctx)...)
+		findings = append(findings, findingsAt(rule, ctx, b)...)
 	}
 	if len(findings) != 1 {
 		t.Fatalf("expected 1 finding, got %d", len(findings))
@@ -175,7 +175,7 @@ func TestSubflowNoErrorHandlerRule_HasTopLevelHandler_NoFinding(t *testing.T) {
 
 	var findings []models.Finding
 	for _, b := range ctx.AllBlocks {
-		findings = append(findings, rule.Check(b, ctx)...)
+		findings = append(findings, findingsAt(rule, ctx, b)...)
 	}
 	if len(findings) != 0 {
 		t.Errorf("expected 0 findings when error handler present, got %d", len(findings))
@@ -199,7 +199,7 @@ func TestSubflowNoErrorHandlerRule_HasNestedHandler_NoFinding(t *testing.T) {
 
 	var findings []models.Finding
 	for _, b := range ctx.AllBlocks {
-		findings = append(findings, rule.Check(b, ctx)...)
+		findings = append(findings, findingsAt(rule, ctx, b)...)
 	}
 	if len(findings) != 0 {
 		t.Errorf("expected 0 findings when nested error handler present, got %d", len(findings))
@@ -216,7 +216,7 @@ func TestSubflowNoErrorHandlerRule_OnlyOneFindingPerSubflow(t *testing.T) {
 
 	var findings []models.Finding
 	for _, b := range ctx.AllBlocks {
-		findings = append(findings, rule.Check(b, ctx)...)
+		findings = append(findings, findingsAt(rule, ctx, b)...)
 	}
 	if len(findings) != 1 {
 		t.Errorf("expected exactly 1 finding, got %d", len(findings))
@@ -234,7 +234,7 @@ func TestSubflowNoErrorHandlerRule_MultipleSubflows_IndependentFindings(t *testi
 
 	var findings []models.Finding
 	for _, b := range ctx.AllBlocks {
-		findings = append(findings, rule.Check(b, ctx)...)
+		findings = append(findings, findingsAt(rule, ctx, b)...)
 	}
 	if len(findings) != 2 {
 		t.Errorf("expected 2 findings (one per subflow), got %d", len(findings))
@@ -254,7 +254,7 @@ func TestSubflowNoErrorHandlerRule_SurvivesDedup_MultipleSubflows(t *testing.T) 
 
 	var findings []models.Finding
 	for _, b := range ctx.AllBlocks {
-		findings = append(findings, rule.Check(b, ctx)...)
+		findings = append(findings, findingsAt(rule, ctx, b)...)
 	}
 	if len(findings) != 2 {
 		t.Fatalf("expected 2 raw findings, got %d", len(findings))
@@ -283,7 +283,7 @@ func TestSubflowNoErrorHandlerRule_CommentOnlySubflow_NoFinding(t *testing.T) {
 
 	var findings []models.Finding
 	for _, b := range ctx.AllBlocks {
-		findings = append(findings, rule.Check(b, ctx)...)
+		findings = append(findings, findingsAt(rule, ctx, b)...)
 	}
 	if len(findings) != 0 {
 		t.Errorf("expected 0 findings for comment-only subflow, got %d", len(findings))
@@ -298,7 +298,7 @@ func TestSubflowNoErrorHandlerRule_EmptySubflow_NoFinding(t *testing.T) {
 
 	var findings []models.Finding
 	for _, b := range ctx.AllBlocks {
-		findings = append(findings, rule.Check(b, ctx)...)
+		findings = append(findings, findingsAt(rule, ctx, b)...)
 	}
 	if len(findings) != 0 {
 		t.Errorf("expected 0 findings for empty subflow, got %d", len(findings))

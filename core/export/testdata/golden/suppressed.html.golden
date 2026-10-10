@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PAD Analyzer — Analysis Report</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0 auto; max-width: 960px; padding: 2rem 1rem; line-height: 1.5; color: #1f2937; background: #f9fafb; }
+h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
+h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; }
+.meta { color: #6b7280; font-size: .875rem; margin-bottom: 1.5rem; }
+.meta div { margin-top: .125rem; }
+.cards { display: flex; flex-wrap: wrap; gap: .75rem; margin-bottom: 1.5rem; }
+.card { flex: 1 1 8rem; background: #fff; border: 1px solid #e5e7eb; border-radius: .5rem; padding: .75rem 1rem; }
+.card .num { font-size: 1.5rem; font-weight: 700; }
+.card .lbl { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #6b7280; }
+.card.err .num { color: #dc2626; }
+.card.warn .num { color: #d97706; }
+.card.info .num { color: #2563eb; }
+.finding { background: #fff; border: 1px solid #e5e7eb; border-left-width: .25rem; border-left-style: solid; border-radius: .375rem; padding: .75rem 1rem; margin-bottom: .75rem; }
+.finding.err { border-left-color: #dc2626; }
+.finding.warn { border-left-color: #d97706; }
+.finding.info { border-left-color: #2563eb; }
+.finding h3 { margin: 0 0 .25rem; font-size: 1rem; }
+.badge { display: inline-block; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; border-radius: .25rem; padding: .1rem .4rem; color: #fff; }
+.badge.err { background: #dc2626; }
+.badge.warn { background: #d97706; }
+.badge.info { background: #2563eb; }
+.health { display: inline-block; border-radius: .25rem; padding: .1rem .5rem; font-size: .8rem; font-weight: 700; margin-bottom: 1rem; }
+.health.good { background: #d1fae5; color: #065f46; }
+.health.warn { background: #fef3c7; color: #92400e; }
+.health.bad { background: #fee2e2; color: #991b1b; }
+.props { font-size: .8rem; color: #6b7280; margin: .25rem 0 .5rem; }
+.props code { background: #f3f4f6; border-radius: .2rem; padding: 0 .25rem; }
+.suggestion { background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: .375rem; padding: .5rem .75rem; margin-top: .5rem; font-size: .9rem; }
+.ok { background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: .5rem; padding: 1rem; color: #065f46; }
+@media (prefers-color-scheme: dark) {
+	body { background: #111827; color: #e5e7eb; }
+	.card, .finding { background: #1f2937; border-color: #374151; }
+	.props, .meta, .card .lbl { color: #9ca3af; }
+	.props code { background: #374151; }
+	.health.good { background: #065f46; color: #6ee7b7; }
+	.health.warn { background: #713f12; color: #fbbf24; }
+	.health.bad { background: #7f1d1d; color: #fca5a5; }
+}
+</style>
+</head>
+<body>
+<h1>PAD Analyzer — Analysis Report</h1>
+<div class="meta">
+<div>Flow: Invoices &lt;Q3&gt; &amp; &#34;Ops&#34;</div>
+<div>File: flows/invoices/Main.txt</div>
+<div>Generated: Thu, 08 Oct 2026 09:30:00 UTC</div>
+<div>Duration: 1234ms</div>
+</div>
+<div class="health good">Health Score: 78/100</div>
+<div class="cards">
+<div class="card err"><div class="num">1</div><div class="lbl">Errors</div></div>
+<div class="card warn"><div class="num">1</div><div class="lbl">Warnings</div></div>
+<div class="card info"><div class="num">6</div><div class="lbl">Info</div></div>
+<div class="card"><div class="num">11</div><div class="lbl">Blocks analyzed</div></div>
+<div class="card"><div class="num">45</div><div class="lbl">Rules run</div></div>
+<div class="card"><div class="num">7</div><div class="lbl">Suppressed inline</div></div>
+</div>
+<h2>Errors <span class="badge err">1</span></h2>
+<div class="finding err">
+<h3>Credential variable set to literal value</h3>
+<div><span class="badge err">error</span></div>
+<div class="props"><span>Rule: <code>hardcoded-credential</code></span> &middot; <span>Category: Security</span> &middot; <span>Block: <code>b-007</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>Line: 8</span></div>
+<p>Variable &#39;Password&#39; has a name that suggests it holds a credential and is assigned a literal string value.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Store credentials in a secured vault, Windows Credential Manager, or use a PAD input variable instead of a literal string in the flow.</div>
+</div>
+<h2>Warnings <span class="badge warn">1</span></h2>
+<div class="finding warn">
+<h3>File operation without error handler</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>file-op-no-error-handler</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-002</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>Line: 3</span></div>
+<p>This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Wrap this action in an &#39;On Block Error&#39; handler to manage missing files, permission errors, and file lock issues gracefully.</div>
+</div>
+<h2>Info <span class="badge info">6</span></h2>
+<div class="finding info">
+<h3>Hardcoded file path</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>hardcoded-filepath</code></span> &middot; <span>Category: Portability</span> &middot; <span>Block: <code>b-002</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>Line: 3</span></div>
+<p>Property &#39;File&#39; contains an absolute path: C:\data\in.txt</p>
+<div class="suggestion"><strong>Suggestion:</strong> Use a relative path or store the base directory in a variable configured per environment.</div>
+</div>
+<div class="finding info">
+<h3>Subflow without error handler</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>subflow-no-error-handler</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-002</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>Line: 3</span></div>
+<p>Subflow &#34;Main&#34; has action blocks but no error handler. Unhandled errors will silently terminate the subflow.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Add a Try/Catch or On Block Error handler to protect against unexpected failures.</div>
+</div>
+<div class="finding info">
+<h3>TODO in comment</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>todo-in-comment</code></span> &middot; <span>Category: Style</span> &middot; <span>Block: <code>b-011</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>Line: 12</span></div>
+<p>This comment contains a TODO marker: &#34;TODO: remove the =SUM(A1) hack&#34;</p>
+<div class="suggestion"><strong>Suggestion:</strong> Resolve the TODO or convert it to a tracked issue.</div>
+</div>
+<div class="finding info">
+<h3>Variable declared but never used</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>unused-variable</code></span> &middot; <span>Category: Style</span> &middot; <span>Block: <code>b-007</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>Line: 8</span></div>
+<p>This variable is set but never referenced elsewhere in the flow.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Remove the unused variable or add a reference to it.</div>
+</div>
+<div class="finding info">
+<h3>Variable declared but never used</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>unused-variable</code></span> &middot; <span>Category: Style</span> &middot; <span>Block: <code>b-009</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>Line: 10</span></div>
+<p>This variable is set but never referenced elsewhere in the flow.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Remove the unused variable or add a reference to it.</div>
+</div>
+<div class="finding info">
+<h3>Wait zero</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>wait-zero</code></span> &middot; <span>Category: Style</span> &middot; <span>Block: <code>b-012</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>Line: 13</span></div>
+<p>This WAIT action has a duration of 0, making it a no-op.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Remove the WAIT 0 action or increase the duration.</div>
+</div>
+</body>
+</html>

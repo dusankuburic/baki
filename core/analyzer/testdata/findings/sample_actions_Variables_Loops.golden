@@ -1,0 +1,90 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_actions_Variables_Loops
+document: subflows=1 blocks=19 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":2,"warnings":0,"info":2,"blocksAnalyzed":14,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=630/630 last="Loop body is too large"
+metrics: {"avgCognitive":5,"avgCyclomatic":6,"healthScore":74,"maxCognitive":5,"maxCyclomatic":6,"subflowCount":1,"totalBlocks":14,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Loops: {"blockCount":14,"cognitiveComplexity":5,"cyclomaticComplexity":6,"fanIn":0,"fanOut":0,"maxNestingDepth":1,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=14
+  raw findings: infinite-loop-risk=2 subflow-no-error-handler=1 unused-variable=1
+inventory: none
+findings: 4
+F-001 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#8 sf=Loops fp=infinite-loop-risk:18b13b59002446e7
+    title: Loop may run forever
+    desc: This loop has no recognizable exit condition such as Exit Loop, Break, or modifications to the loop variable.
+F-002 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#11 sf=Loops fp=infinite-loop-risk:139e639656a78da3
+    title: Loop may run forever
+    desc: This loop has no recognizable exit condition such as Exit Loop, Break, or modifications to the loop variable.
+F-003 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Loops#0 sf=Loops fp=subflow-no-error-handler:bf3c371e4e6a343f
+    title: Subflow without error handler
+    desc: Subflow "Loops" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-004 info/low unused-variable [Style] fix=remove-block @Loops#1 sf=Loops fp=unused-variable:cc68bbf1c8e372c1
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"num"}
+
+=== nil-settings
+stats: {"errors":2,"warnings":0,"info":2,"blocksAnalyzed":14,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=630/630 last="Loop body is too large"
+metrics: as default, healthScore=74
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=14
+  raw findings: infinite-loop-risk=2 subflow-no-error-handler=1 unused-variable=1
+inventory: none
+findings: 4
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":2,"warnings":0,"info":4,"blocksAnalyzed":14,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=630/630 last="Loop body is too large"
+metrics: as default, healthScore=72
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=14
+  raw findings: duplicate-action=1 infinite-loop-risk=2 large-subflow=1 subflow-no-error-handler=1 unused-variable=1
+inventory: none
+findings: 6
+F-001 info/medium duplicate-action [Style] fix=remove-block @Loops#8 sf=Loops fp=duplicate-action:18b13b59002446e7
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-002 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#8 sf=Loops fp=infinite-loop-risk:18b13b59002446e7
+F-003 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#11 sf=Loops fp=infinite-loop-risk:139e639656a78da3
+F-004 info/low large-subflow [Style] fix=- @Loops#0 sf=Loops fp=large-subflow:bf3c371e4e6a343f
+    title: Large subflow
+    desc: Subflow 'Loops' has 14 blocks (threshold: 5).
+F-005 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Loops#0 sf=Loops fp=subflow-no-error-handler:bf3c371e4e6a343f
+F-006 info/low unused-variable [Style] fix=remove-block @Loops#1 sf=Loops fp=unused-variable:cc68bbf1c8e372c1
+
+=== disabled
+stats: {"errors":2,"warnings":0,"info":1,"blocksAnalyzed":14,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=518/518 last="Loop body is too large"
+metrics: as default, healthScore=75
+profiles: rules=37 order=f7de49357acad250 blocksChecked=14
+  raw findings: infinite-loop-risk=2 unused-variable=1
+inventory: none
+findings: 3
+F-001 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#8 sf=Loops fp=infinite-loop-risk:18b13b59002446e7
+F-002 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#11 sf=Loops fp=infinite-loop-risk:139e639656a78da3
+F-003 info/low unused-variable [Style] fix=remove-block @Loops#1 sf=Loops fp=unused-variable:cc68bbf1c8e372c1
+
+=== severity
+stats: {"errors":3,"warnings":0,"info":1,"blocksAnalyzed":14,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=630/630 last="Loop body is too large"
+metrics: as default, healthScore=63
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=14
+  raw findings: infinite-loop-risk=2 subflow-no-error-handler=1 unused-variable=1
+inventory: none
+findings: 4
+  as default; severity changes: F-003 info->error
+
+=== autofixable
+stats: {"errors":2,"warnings":0,"info":2,"blocksAnalyzed":14,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=9 final=448/448 last="Wait zero"
+metrics: as default, healthScore=74
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=14
+  raw findings: infinite-loop-risk=2 subflow-no-error-handler=1 unused-variable=1
+inventory: none
+findings: 4
+  as default; severity changes: none

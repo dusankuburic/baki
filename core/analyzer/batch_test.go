@@ -3,6 +3,7 @@ package analyzer
 import (
 	"testing"
 
+	"pad-core/cache"
 	"pad-core/models"
 )
 
@@ -28,7 +29,7 @@ func TestBatchAnalysis(t *testing.T) {
 			}),
 		}
 
-		batch := RunBatchAnalysis(docs, rules, settings)
+		batch := newTestAnalyzer().Batch(docs, Input{Rules: rules, Settings: settings, Tenant: cache.Local()})
 		if batch.TotalFlows != 2 {
 			t.Fatalf("expected 2 flows, got %d", batch.TotalFlows)
 		}
@@ -47,7 +48,7 @@ func TestBatchAnalysis(t *testing.T) {
 	})
 
 	t.Run("empty_batch", func(t *testing.T) {
-		batch := RunBatchAnalysis(nil, rules, settings)
+		batch := newTestAnalyzer().Batch(nil, Input{Rules: rules, Settings: settings, Tenant: cache.Local()})
 		if batch.TotalFlows != 0 {
 			t.Fatalf("expected 0 flows, got %d", batch.TotalFlows)
 		}
@@ -65,7 +66,7 @@ func TestBatchAnalysis(t *testing.T) {
 			}),
 		}
 
-		batch := RunBatchAnalysis(docs, rules, settings)
+		batch := newTestAnalyzer().Batch(docs, Input{Rules: rules, Settings: settings, Tenant: cache.Local()})
 		r := batch.Results[0].Report
 		expected := r.Stats.Errors + r.Stats.Warnings + r.Stats.Info
 		if batch.TotalFindings != expected {

@@ -1,45 +1,11 @@
 package analyzer
 
 import (
-	"context"
 	"sort"
 	"strings"
 
-	"golang.org/x/sync/singleflight"
-
-	"pad-core/cache"
 	"pad-core/models"
 )
-
-// suppressInvCache memoizes inventories by the same content identity the
-// analysis cache uses — the inventory is a pure function of that identity,
-// so entries never go stale; the cache saves re-running the ENTIRE rule set
-// on every governance view. Bounded like the sibling caches; the shared
-// slice is handed to callers read-only.
-var suppressInvCache, _ = cache.NewLRUCache(64) // size > 0 ⇒ error impossible
-var suppressInvSF singleflight.Group
-
-// SuppressionInventoryCached is SuppressionInventory behind the content-keyed
-// cache above, with singleflight collapsing concurrent cold builds (same
-// shape as CachedAnalysisCtx).
-func SuppressionInventoryCached(flow *models.FlowDocument, rules []Rule, settings *models.AppSettings) []SuppressionEntry {
-	if flow == nil || !hasPadIgnoreDirective(flow) {
-		return nil
-	}
-	key := "inv:" + analyzerVersion + ":" + FlowHash(flow) + ":" + settingsDigest(settings) + ":" + ruleSetDigest(rules)
-	if v, ok := suppressInvCache.Get(context.Background(), key); ok {
-		return v.([]SuppressionEntry)
-	}
-	v, _, _ := suppressInvSF.Do(key, func() (any, error) {
-		entries := SuppressionInventory(flow, rules, settings)
-		suppressInvCache.Set(context.Background(), key, entries, 0)
-		return entries, nil
-	})
-	if v == nil {
-		return SuppressionInventory(flow, rules, settings)
-	}
-	return v.([]SuppressionEntry)
-}
 
 // SuppressionEntry is one inline `# pad-ignore` directive, located and
 // audited: Stale marks a directive whose rule no longer fires on its target
@@ -61,15 +27,15 @@ type SuppressionEntry struct {
 // header has two targets (the next concrete block AND the block-less
 // findings the header scope covers) and is live if either fires.
 func SuppressionInventory(flow *models.FlowDocument, rules []Rule, settings *models.AppSettings) []SuppressionEntry {
-	// No directive, no entries: the full single-threaded rule pass below
-	// costs more than a cold parallel analysis and returns nothing on a
-	// directive-free flow (the common case), so the cheap pre-check skips it.
+	// No directive, no entries: the full rule pass below costs about as much
+	// as a cold analysis and returns nothing on a directive-free flow (the
+	// common case), so the cheap pre-check skips it.
 	if flow == nil || !hasPadIgnoreDirective(flow) {
 		return nil
 	}
-	// Unsuppressed findings: dispatch every rule over the SAME context the
-	// engine builds (runAnalysisCore applies inline suppression at the end;
-	// we want the pre-suppression truth). One buildContext + one walk.
+	// Unsuppressed findings: the engine's own dispatcher over the same context
+	// (runAnalysisWalk applies inline suppression at the end; we want the
+	// pre-suppression truth), recorded on the block each finding names.
 	firing := map[string]map[string]bool{}    // blockID -> ruleID set
 	blockless := map[string]map[string]bool{} // subflowID -> ruleID set, findings with no block
 	record := func(m map[string]map[string]bool, key, rule string) {
@@ -78,54 +44,13 @@ func SuppressionInventory(flow *models.FlowDocument, rules []Rule, settings *mod
 		}
 		m[key][rule] = true
 	}
-	ctx := buildContext(flow, settings)
-	var check func(blocks []models.Block)
-	check = func(blocks []models.Block) {
-		for i := range blocks {
-			b := &blocks[i]
-			if b.Type != models.BlockTypeEnd {
-				for _, rule := range rules {
-					if settings != nil {
-						if rc, ok := settings.Analysis.Rules[rule.ID()]; ok && !rc.Enabled {
-							continue
-						}
-					}
-					for _, f := range rule.Check(b, ctx) {
-						if f.BlockID == "" {
-							record(blockless, f.SubflowID, f.RuleID)
-							continue
-						}
-						record(firing, b.ID, f.RuleID)
-					}
-				}
-			}
-			if len(b.Children) > 0 {
-				check(b.Children)
-			}
+	visitUnsuppressed(buildContext(flow, settings), rules, settings, func(f *models.Finding) {
+		if f.BlockID == "" {
+			record(blockless, f.SubflowID, f.RuleID)
+		} else {
+			record(firing, f.BlockID, f.RuleID)
 		}
-	}
-	for i := range flow.Subflows {
-		check(flow.Subflows[i].Blocks)
-	}
-	// Mirror the engine's document-level parse-error fallback (engine.go): when
-	// no block produced a parse-error finding, the errors are reported with an
-	// empty BlockID against the first subflow.
-	if len(flow.ParseErrors) > 0 && parseErrorRuleEnabled(settings) {
-		fired := false
-		for _, set := range firing {
-			if set["parse-error"] {
-				fired = true
-				break
-			}
-		}
-		if !fired {
-			sfID := ""
-			if len(flow.Subflows) > 0 {
-				sfID = flow.Subflows[0].ID
-			}
-			record(blockless, sfID, "parse-error")
-		}
-	}
+	})
 
 	// setFires reports whether rule ("*" = any) fires within set.
 	setFires := func(set map[string]bool, rule string) bool {

@@ -1,4 +1,4 @@
-import {request, requestValidated} from './client'
+import {request, requestText, requestValidated} from './client'
 import {useFlowStore} from '@/stores/flowStore'
 import {getAnalysisReportSchema} from './schemas'
 
@@ -116,13 +116,15 @@ export const analysisApi = {
   // PDF/Markdown/HTML
   // that omitted the save-dialog path).
 
-  exportSARIF: (flowId: string = activeFlowId() ?? ''): Promise<unknown> =>
-    request('/api/analysis/export/sarif', {body: {flowId}}),
+  // Server-rendered SARIF 2.1.0 and JUnit XML, as text: the saved file is the
+  // server's bytes (request() would JSON-parse them, which fails for XML). CSV
+  // is built client-side from the visible findings, so there is no server CSV
+  // wrapper.
+  exportSARIF: (flowId: string = activeFlowId() ?? ''): Promise<string> =>
+    requestText('/api/analysis/export/sarif', {body: {flowId}}),
 
-  // Server-rendered JUnit XML, shaped by the backend serializer. CSV is built
-  // client-side from the visible findings, so there is no server CSV wrapper.
   exportJUnit: (flowId: string = activeFlowId() ?? ''): Promise<string> =>
-    request('/api/analysis/export/junit', {body: {flowId}}),
+    requestText('/api/analysis/export/junit', {body: {flowId}}),
 
   // Inline pad-ignore directives in the flow, with stale ones flagged. The
   // audit ran only in the CLI (`bakicli suppressions`) before this route.
@@ -194,12 +196,27 @@ export const analysisApi = {
     request('/api/analysis/policy/evaluate-by-id', {body: {flowId, orgId, id}}),
 }
 
-/** Per-entry result from POST /api/analysis/custom-rules/validate. */
+/** One problem of a validated custom rule: an error, or a warning the rule still runs with. */
+export interface CustomRuleProblem {
+  /** The rule's JSON field (`severity`, `nameMatch`, an unknown key); absent for the rule as a whole. */
+  field?: string
+  /** The analyzer's reason code, e.g. UNKNOWN_FIELD, RESERVED_ID, INVALID_PATTERN, NO_MATCHER. */
+  reason: string
+  message: string
+  warning?: boolean
+}
+
+/** Per-entry result from POST /api/analysis/custom-rules/validate (checked strictly, as a save is). */
 export interface CustomRuleValidationEntry {
   index: number
   id: string
   valid: boolean
+  /** The first error, with its field and reason. */
   error?: string
+  field?: string
+  reason?: string
+  /** Every error and warning, in check order. */
+  problems?: CustomRuleProblem[]
   loaded: boolean
 }
 

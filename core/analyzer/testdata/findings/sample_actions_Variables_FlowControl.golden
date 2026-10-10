@@ -1,0 +1,130 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_actions_Variables_FlowControl
+document: subflows=1 blocks=20 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":0,"info":12,"blocksAnalyzed":15,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=14 final=675/675 last="Loop body is too large"
+metrics: {"avgCognitive":1,"avgCyclomatic":2,"healthScore":88,"maxCognitive":1,"maxCyclomatic":2,"subflowCount":1,"totalBlocks":14,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow FlowControl: {"blockCount":14,"cognitiveComplexity":1,"cyclomaticComplexity":2,"fanIn":0,"fanOut":0,"maxNestingDepth":1,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=15
+  raw findings: dead-code=10 duplicate-action=1 subflow-no-error-handler=1
+inventory: none
+findings: 12
+F-001 info/medium dead-code [Style] fix=remove-block @FlowControl#6 sf=FlowControl fp=dead-code:d5172e2fcd3de1a5
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-002 info/medium dead-code [Style] fix=remove-block @FlowControl#7 sf=FlowControl fp=dead-code:b1837148400554d5
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-003 info/medium dead-code [Style] fix=remove-block @FlowControl#9 sf=FlowControl fp=dead-code:619ecfd44512102e
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-004 info/medium dead-code [Style] fix=remove-block @FlowControl#10 sf=FlowControl fp=dead-code:a3755302aa1b5366
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-005 info/medium dead-code [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=dead-code:ad0b222c2ec389f3
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-006 info/medium dead-code [Style] fix=remove-block @FlowControl#12 sf=FlowControl fp=dead-code:94ef5158cfda5a79
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-007 info/medium dead-code [Style] fix=remove-block @FlowControl#13 sf=FlowControl fp=dead-code:1aa55a2302f4f7c1
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-008 info/medium dead-code [Style] fix=remove-block @FlowControl#14 sf=FlowControl fp=dead-code:8ba5025dbcc90636
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-009 info/medium dead-code [Style] fix=remove-block @FlowControl#16 sf=FlowControl fp=dead-code:070726d38756adf1
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-010 info/medium dead-code [Style] fix=remove-block @FlowControl#18 sf=FlowControl fp=dead-code:7080d6be4712ae39
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-011 info/medium duplicate-action [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=duplicate-action:ad0b222c2ec389f3
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":6}
+F-012 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @FlowControl#0 sf=FlowControl fp=subflow-no-error-handler:d54c39ed7d05fe4b
+    title: Subflow without error handler
+    desc: Subflow "FlowControl" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+
+=== nil-settings
+stats: {"errors":0,"warnings":0,"info":12,"blocksAnalyzed":15,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=14 final=675/675 last="Loop body is too large"
+metrics: as default, healthScore=88
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=15
+  raw findings: dead-code=10 duplicate-action=1 subflow-no-error-handler=1
+inventory: none
+findings: 12
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":0,"info":14,"blocksAnalyzed":15,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=14 final=675/675 last="Loop body is too large"
+metrics: as default, healthScore=86
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=15
+  raw findings: dead-code=10 duplicate-action=2 large-subflow=1 subflow-no-error-handler=1
+inventory: none
+findings: 14
+F-001 info/medium dead-code [Style] fix=remove-block @FlowControl#6 sf=FlowControl fp=dead-code:d5172e2fcd3de1a5
+F-002 info/medium dead-code [Style] fix=remove-block @FlowControl#7 sf=FlowControl fp=dead-code:b1837148400554d5
+F-003 info/medium dead-code [Style] fix=remove-block @FlowControl#9 sf=FlowControl fp=dead-code:619ecfd44512102e
+F-004 info/medium dead-code [Style] fix=remove-block @FlowControl#10 sf=FlowControl fp=dead-code:a3755302aa1b5366
+F-005 info/medium dead-code [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=dead-code:ad0b222c2ec389f3
+F-006 info/medium dead-code [Style] fix=remove-block @FlowControl#12 sf=FlowControl fp=dead-code:94ef5158cfda5a79
+F-007 info/medium dead-code [Style] fix=remove-block @FlowControl#13 sf=FlowControl fp=dead-code:1aa55a2302f4f7c1
+F-008 info/medium dead-code [Style] fix=remove-block @FlowControl#14 sf=FlowControl fp=dead-code:8ba5025dbcc90636
+F-009 info/medium dead-code [Style] fix=remove-block @FlowControl#16 sf=FlowControl fp=dead-code:070726d38756adf1
+F-010 info/medium dead-code [Style] fix=remove-block @FlowControl#18 sf=FlowControl fp=dead-code:7080d6be4712ae39
+F-011 info/medium duplicate-action [Style] fix=remove-block @FlowControl#7 sf=FlowControl fp=duplicate-action:b1837148400554d5
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-012 info/medium duplicate-action [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=duplicate-action:ad0b222c2ec389f3
+F-013 info/low large-subflow [Style] fix=- @FlowControl#0 sf=FlowControl fp=large-subflow:d54c39ed7d05fe4b
+    title: Large subflow
+    desc: Subflow 'FlowControl' has 14 blocks (threshold: 5).
+F-014 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @FlowControl#0 sf=FlowControl fp=subflow-no-error-handler:d54c39ed7d05fe4b
+
+=== disabled
+stats: {"errors":0,"warnings":0,"info":11,"blocksAnalyzed":15,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=12 final=555/555 last="Loop body is too large"
+metrics: as default, healthScore=89
+profiles: rules=37 order=f7de49357acad250 blocksChecked=15
+  raw findings: dead-code=10 duplicate-action=1
+inventory: none
+findings: 11
+F-001 info/medium dead-code [Style] fix=remove-block @FlowControl#6 sf=FlowControl fp=dead-code:d5172e2fcd3de1a5
+F-002 info/medium dead-code [Style] fix=remove-block @FlowControl#7 sf=FlowControl fp=dead-code:b1837148400554d5
+F-003 info/medium dead-code [Style] fix=remove-block @FlowControl#9 sf=FlowControl fp=dead-code:619ecfd44512102e
+F-004 info/medium dead-code [Style] fix=remove-block @FlowControl#10 sf=FlowControl fp=dead-code:a3755302aa1b5366
+F-005 info/medium dead-code [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=dead-code:ad0b222c2ec389f3
+F-006 info/medium dead-code [Style] fix=remove-block @FlowControl#12 sf=FlowControl fp=dead-code:94ef5158cfda5a79
+F-007 info/medium dead-code [Style] fix=remove-block @FlowControl#13 sf=FlowControl fp=dead-code:1aa55a2302f4f7c1
+F-008 info/medium dead-code [Style] fix=remove-block @FlowControl#14 sf=FlowControl fp=dead-code:8ba5025dbcc90636
+F-009 info/medium dead-code [Style] fix=remove-block @FlowControl#16 sf=FlowControl fp=dead-code:070726d38756adf1
+F-010 info/medium dead-code [Style] fix=remove-block @FlowControl#18 sf=FlowControl fp=dead-code:7080d6be4712ae39
+F-011 info/medium duplicate-action [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=duplicate-action:ad0b222c2ec389f3
+
+=== severity
+stats: {"errors":1,"warnings":10,"info":1,"blocksAnalyzed":15,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=14 final=675/675 last="Loop body is too large"
+metrics: as default, healthScore=47
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=15
+  raw findings: dead-code=10 duplicate-action=1 subflow-no-error-handler=1
+inventory: none
+findings: 12
+  as default; severity changes: F-001 info->warning, F-002 info->warning, F-003 info->warning, F-004 info->warning, F-005 info->warning, F-006 info->warning, F-007 info->warning, F-008 info->warning, F-009 info->warning, F-010 info->warning, F-012 info->error
+
+=== autofixable
+stats: {"errors":0,"warnings":0,"info":12,"blocksAnalyzed":15,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=10 final=480/480 last="Wait zero"
+metrics: as default, healthScore=88
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=15
+  raw findings: dead-code=10 duplicate-action=1 subflow-no-error-handler=1
+inventory: none
+findings: 12
+  as default; severity changes: none

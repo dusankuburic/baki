@@ -9,6 +9,9 @@ import (
 type GovernanceAlertStore interface {
 	// RecordGovernanceAlert persists a new alert (ID and CreatedAt stamped by the scanner); a duplicate ID is a no-op (retry-safe).
 	RecordGovernanceAlert(ctx context.Context, a *GovernanceAlert) error
+	// InsertGovernanceAlert is RecordGovernanceAlert reporting whether the alert was new (false: its ID was known), so
+	// the scanner delivers an alert once across restarts and replicas.
+	InsertGovernanceAlert(ctx context.Context, a *GovernanceAlert) (inserted bool, err error)
 	// ListGovernanceAlerts returns alerts visible to the caller, newest first, per the filter's pagination + include-dismissed flag; never nil.
 	ListGovernanceAlerts(ctx context.Context, filter GovernanceAlertFilter) ([]*GovernanceAlert, error)
 	// UnreadGovernanceAlertCount returns the number of visible unacknowledged alerts (read_at IS NULL and not dismissed).
@@ -31,7 +34,7 @@ type GovernanceAlert struct {
 	FlowID      string     `json:"flowId"`
 	FlowName    string     `json:"flowName,omitempty"`
 	OrgID       string     `json:"orgId,omitempty"`
-	Type        string     `json:"type"` // "drift" | "health_regression" | "finding_assigned" | "comment_added"
+	Type        string     `json:"type"` // "drift" | "health_regression" | "finding_assigned" | "comment_added" | "new_rules"
 	Title       string     `json:"title"`
 	Message     string     `json:"message,omitempty"`
 	Severity    string     `json:"severity"` // "error" | "warning"
@@ -44,6 +47,10 @@ type GovernanceAlert struct {
 	DismissedAt *time.Time `json:"dismissedAt,omitempty"`
 	// TargetUser is the delivery target for PERSONAL alerts (assignment/comment notifications): visible only to that user; empty = team-wide.
 	TargetUser string `json:"targetUser,omitempty"`
+	// A "new_rules" entry is a RuleNotice in the inbox (FlowID ""): its rule ids, its scope and the flows it covers.
+	RuleIDs   []string `json:"ruleIds,omitempty"`
+	Scope     string   `json:"scope,omitempty"`
+	FlowCount int      `json:"flowCount,omitempty"`
 }
 
 // GovernanceAlertFilter narrows ListGovernanceAlerts: Limit/Offset paginate (<=0 ⇒ default cap); an alert matches UserID when TargetUser is empty (team-wide) OR equals it; empty = team-wide only.

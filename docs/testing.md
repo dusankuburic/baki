@@ -11,9 +11,9 @@ Conventions:
 - `internal/storage/database` additionally has `package database_test` files (external, black-box integration).
 - Shared helpers (`helpers_test.go`, `*helpers_test.go`, `main_test.go` with TestMain) are not coverage files.
 - Run everything: `go test ./... ./core/...` (CI also uses `-race`).
-- Cross-cutting safety nets (route-policy and authz goldens, migration checksum golden, architecture ratchets,
-  fake-backend contract, isolated Postgres databases, request-chain benchmark) are described in
-  [architecture/safety-nets.md](architecture/safety-nets.md).
+- Cross-cutting safety nets (route-policy and authz goldens, migration checksum golden, findings, export and caches
+  goldens, architecture ratchets, fake-backend contract, isolated Postgres databases, request-chain benchmark) are
+  described in [architecture/safety-nets.md](architecture/safety-nets.md).
 
 ## root (package main)
 
@@ -22,27 +22,35 @@ End-to-end CLI/backend wiring: retention sweep, build stamp, main startup, the l
 - **buildstamp*** (1): `buildstamp_test.go`
 - **main*** (1): `main_test.go`
 - **migration_source*** (1): `migration_source_test.go`
+- **provide_scanner*** (1): `provide_scanner_test.go`
 - **retention_sweep*** (1): `retention_sweep_test.go`
 
 ## cmd/bakicli
 
-The bakicli binary: gate, fix, rules, folder loading, CI surface, binary-level runs.
+The bakicli binary: gate, fix, rules, folder loading, baselines, custom rules, output formats, several flows and
+the library pass, CI surface, binary-level runs.
 
 - **atomicwrite*** (1): `atomicwrite_test.go`
+- **baseline*** (1): `baseline_test.go`
 - **ci*** (1): `ci_surface_test.go`
 - **cli*** (1): `cli_binary_test.go`
+- **customrules*** (1): `customrules_test.go`
 - **diff*** (1): `diff_test.go`
 - **failclosed*** (1): `failclosed_test.go`
 - **fix*** (2): `fix_config_test.go`, `fix_test.go`
+- **folderset*** (1): `folderset_test.go`
 - **gate*** (1): `gate_test.go`
 - **gitrev*** (1): `gitrev_test.go`
 - **inline*** (1): `inline_rules_test.go`
+- **library*** (1): `library_test.go`
 - **load*** (1): `load_test.go`
 - **loadfolder*** (1): `loadfolder_test.go`
 - **main*** (1): `main_test.go`
-- **migration_source*** (1): `migration_source_test.go`
+- **output*** (1): `output_test.go`
 - **parity*** (1): `parity_test.go`
-- **rules*** (2): `rules_init_test.go`, `rules_test_cmd_test.go`
+- **preview*** (1): `preview_text_test.go`
+- **report*** (1): `report_test.go`
+- **rules*** (3): `rules_init_test.go`, `rules_meta_test.go`, `rules_test_cmd_test.go`
 - **suppressions*** (1): `suppressions_test.go`
 - **watch*** (1): `watch_test.go`
 
@@ -51,16 +59,16 @@ The bakicli binary: gate, fix, rules, folder loading, CI surface, binary-level r
 HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, security. Test routers run on
 `testutil.FakeBackend`; the RLS and transaction tests use Postgres (`DATABASE_URL`).
 
-- **audit_actions*** (1): `audit_actions_test.go`
-- **audit_shutdown*** (1): `audit_shutdown_test.go`
-- **audit_spill*** (1): `audit_spill_test.go`
-- **audit*** (1): `audit_test.go`
+- **audit*** (3): `audit_helpers_test.go`, `audit_record_sites_test.go`, `audit_record_test.go`
 - **auth*** (1): `auth_apitoken_test.go`
 - **authz*** (1): `authz_header_first_test.go`
 - **azure_config*** (2): `azure_config_audit_test.go`, `azure_config_validation_test.go`
 - **azure_foundry*** (2): `azure_foundry_e2e_helpers_test.go`, `azure_foundry_e2e_test.go`
+- **baseline*** (1): `baseline_ruleset_test.go`
 - **dashboard*** (1): `dashboard_params_test.go`
 - **events*** (2): `events_deliver_test.go`, `events_test.go`
+- **export*** (1): `export_routes_test.go`
+- **governance*** (1): `governance_notices_test.go`
 - **handlers_account*** (1): `handlers_account_test.go`
 - **handlers_admin*** (2): `handlers_admin_panic_test.go`, `handlers_admin_test.go`
 - **handlers_alerts*** (2): `handlers_alerts_detached_test.go`, `handlers_alerts_fallback_test.go`
@@ -81,7 +89,7 @@ HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, se
 - **handlers_integrations*** (1): `handlers_integrations_test.go`
 - **handlers_library*** (7): `handlers_library_authz_reads_test.go`, `handlers_library_authz_test.go`, `handlers_library_content_etag_test.go`, `handlers_library_filepath_test.go`, `handlers_library_occ_test.go`, `handlers_library_test.go`, `handlers_library_versions_test.go`
 - **handlers_org*** (6): `handlers_org_channels_test.go`, `handlers_org_create_contract_test.go`, `handlers_org_knowledge_test.go`, `handlers_org_providers_test.go`, `handlers_org_roster_loads_test.go`, `handlers_org_test.go`
-- **handlers_orgrules*** (1): `handlers_orgrules_test.go`
+- **handlers_orgrules*** (2): `handlers_orgrules_schema_test.go`, `handlers_orgrules_test.go`
 - **handlers_policy*** (2): `handlers_policy_crud_test.go`, `handlers_policy_test.go`
 - **handlers_portfolio*** (1): `handlers_portfolio_test.go`
 - **handlers_providers*** (3): `handlers_providers_azure_test.go`, `handlers_providers_local_test.go`, `handlers_providers_test.go`
@@ -98,7 +106,6 @@ HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, se
 - **knowledge*** (1): `knowledge_reindex_resume_test.go`
 - **local*** (1): `local_config_test.go`
 - **main*** (1): `main_test.go`
-- **migration_source*** (1): `migration_source_test.go`
 - **metrics*** (1): `metrics_probe_test.go`
 - **middleware*** (2): `middleware_chain_panic_test.go`, `middleware_chain_test.go`
 - **migration_runner*** (1): `migration_runner_test.go`
@@ -112,6 +119,7 @@ HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, se
 - **route*** (1): `route_path_test.go`
 - **router*** (1): `router_test.go`
 - **security*** (1): `security_integration_test.go`
+- **session*** (1): `session_analytics_test.go`
 - **settings*** (1): `settings_localdb_pg_test.go`
 - **sse*** (1): `sse_byte_budget_test.go`
 - **views*** (1): `views_wire_shape_test.go`
@@ -140,7 +148,7 @@ Response rendering helpers.
 
 Domain services: chat streaming, flows, analysis, providers, dashboard, authz, settings.
 
-- **analysis*** (6): `analysis_budget_gate_test.go`, `analysis_fresh_claim_test.go`, `analysis_progress_scope_test.go`, `analysis_rules_options_test.go`, `analysis_rules_org_test.go`, `analysis_test.go`
+- **analysis*** (8): `analysis_batch_library_test.go`, `analysis_budget_gate_test.go`, `analysis_cache_tenant_test.go`, `analysis_fresh_claim_test.go`, `analysis_progress_scope_test.go`, `analysis_rules_options_test.go`, `analysis_rules_org_test.go`, `analysis_test.go`
 - **analysisdiff*** (1): `analysisdiff_test.go`
 - **authz*** (4): `authz_bench_test.go`, `authz_flowperms_test.go`, `authz_memo_test.go`, `authz_test.go`
 - **azure_models*** (11): `azure_models_import_pending_test.go`, `azure_models_kb_test.go`, `azure_models_legacy_test.go`, `azure_models_lifecycle_test.go`, `azure_models_picker_test.go`, `azure_models_probe_test.go`, `azure_models_resolve_test.go`, `azure_models_runtime_retention_test.go`, `azure_models_test.go`, `azure_models_text_test.go`, `azure_models_writes_test.go`
@@ -182,7 +190,7 @@ Domain services: chat streaming, flows, analysis, providers, dashboard, authz, s
 - **chat_usage*** (1): `chat_usage_memo_test.go`
 - **chatprep*** (1): `chatprep_test.go`
 - **conversation*** (2): `conversation_store_label_test.go`, `conversation_store_test.go`
-- **dashboard*** (3): `dashboard_analytics_test.go`, `dashboard_record_test.go`, `dashboard_test.go`
+- **dashboard*** (5): `dashboard_analytics_test.go`, `dashboard_cache_test.go`, `dashboard_record_test.go`, `dashboard_ruleset_test.go`, `dashboard_test.go`
 - **document*** (3): `document_provider_budget_test.go`, `document_provider_cache_test.go`, `document_provider_filepath_test.go`
 - **export*** (1): `export_test.go`
 - **flow_ast*** (1): `flow_ast_cache_test.go`
@@ -206,6 +214,7 @@ Domain services: chat streaming, flows, analysis, providers, dashboard, authz, s
 - **library*** (2): `library_page_memberships_test.go`, `library_test.go`
 - **loadallfromfolder*** (1): `loadallfromfolder_test.go`
 - **notifier*** (1): `notifier_test.go`
+- **org_rules*** (2): `org_rules_schema_test.go`, `org_rules_test.go`
 - **pathguard*** (1): `pathguard_test.go`
 - **portfolio*** (1): `portfolio_test.go`
 - **providers_azure*** (2): `providers_azure_registry_test.go`, `providers_azure_test.go`
@@ -214,11 +223,12 @@ Domain services: chat streaming, flows, analysis, providers, dashboard, authz, s
 - **providers_org*** (3): `providers_org_lender_test.go`, `providers_org_lifecycle_test.go`, `providers_org_test.go`
 - **providers*** (1): `providers_test.go`
 - **readsourcefiles*** (1): `readsourcefiles_test.go`
-- **rule_profile*** (2): `rule_profile_singleflight_test.go`, `rule_profile_test.go`
+- **rule_profile*** (4): `rule_profile_reader_test.go`, `rule_profile_rls_pg_test.go`, `rule_profile_singleflight_test.go`, `rule_profile_test.go`
+- **rulecatalog*** (1): `rulecatalog_test.go`
 - **ruleconfig*** (1): `ruleconfig_test.go`
 - **rulesummary*** (1): `rulesummary_test.go`
 - **settings*** (2): `settings_backend_test.go`, `settings_bridge_test.go`
-- **system*** (5): `system_error_report_test.go`, `system_logerror_test.go`, `system_org_notify_test.go`, `system_settings_scope_test.go`, `system_test.go`
+- **system*** (4): `system_error_report_test.go`, `system_logerror_test.go`, `system_settings_scope_test.go`, `system_test.go`
 - **webhook*** (1): `webhook_test.go`
 
 ## internal/ai
@@ -278,6 +288,7 @@ AI providers: Azure Foundry/Entra, Claude, OpenAI-compat, Copilot, Gemini, local
 - **tokens*** (2): `tokens_test.go`, `tokens_truncate_test.go`
 - **tools_fixes*** (1): `tools_fixes_test.go`
 - **tools_json*** (1): `tools_json_test.go`
+- **tools_stage*** (1): `tools_stage_test.go`
 - **tools*** (1): `tools_test.go`
 - **tools_unsupported*** (1): `tools_unsupported_test.go`
 
@@ -300,11 +311,11 @@ Postgres backend: statement shapes, RLS policies, migrations, plans, the data li
 - **knowledge*** (6): `knowledge_documents_paging_test.go`, `knowledge_ranking_test.go`, `knowledge_reindex_pages_integration_test.go`, `knowledge_reindex_test.go`, `knowledge_sample_integration_test.go`, `knowledge_search_parity_test.go`
 - **lifecycle*** (3): `lifecycle_erase_test.go`, `lifecycle_export_test.go`, `lifecycle_test.go`
 - **main*** (1): `main_test.go`
-- **migration_source*** (1): `migration_source_test.go`
 - **migration_v27*** (1): `migration_v27_test.go`
 - **migration_v28*** (1): `migration_v28_test.go`
 - **migration_v29*** (1): `migration_v29_test.go`
 - **org*** (3): `org_members_list_test.go`, `org_provider_keys_cas_integration_test.go`, `org_provider_keys_integration_test.go`
+- **orgcustomrules*** (1): `orgcustomrules_rls_test.go`
 - **perf_indexes*** (1): `perf_indexes_v30_test.go`
 - **perf_round4*** (1): `perf_round4_plan_helpers_test.go`
 - **perf_statements*** (1): `perf_statements_test.go`
@@ -316,10 +327,12 @@ Postgres backend: statement shapes, RLS policies, migrations, plans, the data li
 - **rls_delegation*** (1): `rls_delegation_test.go`
 - **rls_knowledge*** (1): `rls_knowledge_chunks_test.go`
 - **rls_lazy*** (2): `rls_lazy_cancel_test.go`, `rls_lazy_test.go`
+- **rls_readfilter*** (1): `rls_readfilter_test.go`
 - **rls_role*** (1): `rls_role_test.go`
 - **rls_scoped*** (1): `rls_scoped_methods_test.go`
 - **rls_second*** (1): `rls_second_conn_test.go`
 - **rls*** (1): `rls_test.go`
+- **rule_sets*** (1): `rule_sets_test.go`
 - **settings*** (1): `settings_tx_test.go`
 - **sqlargs*** (1): `sqlargs_test.go`
 - **sslmode*** (1): `sslmode_test.go`
@@ -409,10 +422,14 @@ Configuration loading and validation.
 
 ## internal/di
 
-Dependency wiring: service construction, AST cache budget.
+Dependency wiring: service construction, AST cache budget, the declared-cache golden, deployment custom rules.
 
 - **analysis*** (1): `analysis_decorate_test.go`
+- **analyzer*** (1): `analyzer_wiring_test.go`
 - **azure_registry*** (1): `azure_registry_test.go`
+- **cache*** (1): `cache_registry_test.go`
+- **catalog*** (1): `catalog_library_test.go`
+- **deployment*** (1): `deployment_custom_rules_test.go`
 - **di*** (1): `di_test.go`
 - **embedding*** (1): `embedding_test.go`
 - **knowledge*** (1): `knowledge_budget_test.go`
@@ -427,9 +444,10 @@ Outbound-egress guard: allowlists, private-IP blocking, proxy verdicts, transpor
 
 ## internal/scanner
 
-Repo scanner: sweep cost, fan-out, advisory locking.
+Repo scanner: sweep cost, fan-out, advisory locking, rule sets (drift split, like-for-like regression, new-rule
+notices).
 
-- **scanner*** (5): `scanner_fanout_test.go`, `scanner_filepath_test.go`, `scanner_lock_test.go`, `scanner_sweep_cost_test.go`, `scanner_test.go`
+- **scanner*** (6): `scanner_fanout_test.go`, `scanner_filepath_test.go`, `scanner_lock_test.go`, `scanner_rules_test.go`, `scanner_sweep_cost_test.go`, `scanner_test.go`
 
 ## internal/notify
 
@@ -471,8 +489,9 @@ Ticker loops and bounded pools.
 
 ## internal/metrics
 
-Prometheus metrics, label cardinality guards.
+Prometheus metrics, label cardinality guards, the cache collector.
 
+- **cache*** (1): `cache_collector_test.go`
 - **cardinality*** (1): `cardinality_test.go`
 - **metrics*** (1): `metrics_test.go`
 - **pool*** (1): `pool_stats_test.go`
@@ -510,9 +529,21 @@ Shared test fakes/fixtures (regular package imported by 130+ test files).
 - **fake*** (1): `fake_azure_registry_test.go`
 - **fakebackend*** (1): `fakebackend_usage_test.go`
 
+## internal/archtest
+
+Architecture ratchets over the source of both modules: layering, storage type assertions, store handles, the
+cross-tenant system reads, declared caches (see [architecture/safety-nets.md](architecture/safety-nets.md)).
+
+- **archtest*** (1): `archtest_test.go`
+- **caches*** (1): `caches_test.go`
+- **storageassert*** (1): `storageassert_test.go`
+- **storehandles*** (1): `storehandles_test.go`
+- **systemreads*** (1): `systemreads_test.go`
+
 ## core/analyzer (pad-core)
 
-Analyzer engine: rules, dataflow, autofix, cache, suppression, incremental.
+Analyzer engine: rules and their metadata, rule kinds and lazy facts, dataflow, autofix, cache, suppression,
+incremental, gates and rule sets, library rules, the findings goldens.
 
 - **apply_fixes*** (5): `apply_fixes_bench_test.go`, `apply_fixes_ctx_test.go`, `apply_fixes_options_test.go`, `apply_fixes_partial_test.go`, `apply_fixes_stall_test.go`
 - **autofix_extra*** (1): `autofix_extra_test.go`
@@ -524,24 +555,33 @@ Analyzer engine: rules, dataflow, autofix, cache, suppression, incremental.
 - **autofix*** (1): `autofix_test.go`
 - **batch*** (1): `batch_test.go`
 - **block*** (2): `block_handler_containment_test.go`, `block_patterns_test.go`
-- **cache*** (10): `cache_bench_test.go`, `cache_budget_test.go`, `cache_cancel_test.go`, `cache_collision_test.go`, `cache_custom_test.go`, `cache_flowhash_test.go`, `cache_identity_test.go`, `cache_lru_test.go`, `cache_ruleset_test.go`, `cache_test.go`
-- **custom*** (2): `custom_rule_severity_test.go`, `custom_rules_loader_test.go`
+- **cache*** (12): `cache_bench_test.go`, `cache_budget_test.go`, `cache_cancel_test.go`, `cache_collision_test.go`, `cache_custom_test.go`, `cache_flowhash_test.go`, `cache_helpers_test.go`, `cache_identity_test.go`, `cache_lru_test.go`, `cache_ruleset_test.go`, `cache_tenant_test.go`, `cache_test.go`
+- **catalog*** (1): `catalog_kind_test.go`
+- **custom*** (3): `custom_rule_schema_test.go`, `custom_rule_severity_test.go`, `custom_rules_loader_test.go`
 - **dashboard*** (1): `dashboard_test.go`
 - **dataflow*** (2): `dataflow_limits_test.go`, `dataflow_test.go`
 - **dedup*** (1): `dedup_test.go`
+- **determinism*** (1): `determinism_test.go`
 - **engine_accessor*** (1): `engine_accessor_test.go`
 - **engine_error*** (1): `engine_error_handler_test.go`
+- **engine_flowrule*** (1): `engine_flowrule_test.go`
 - **engine_index*** (1): `engine_index_context_test.go`
 - **engine_progress*** (1): `engine_progress_test.go`
 - **engine*** (1): `engine_test.go`
+- **findings*** (1): `findings_golden_test.go`
 - **fingerprint*** (1): `fingerprint_test.go`
 - **fix*** (1): `fix_dispatch_test.go`
 - **flowcompare*** (1): `flowcompare_test.go`
+- **flowrule*** (1): `flowrule_oracle_test.go`
 - **fuzz*** (1): `fuzz_test.go`
+- **gate*** (1): `gate_test.go`
 - **history*** (1): `history_test.go`
 - **incremental*** (1): `incremental_test.go`
 - **infinite*** (1): `infinite_loop_taxonomy_test.go`
+- **lazy*** (1): `lazy_facts_test.go`
+- **library*** (3): `library_bench_test.go`, `library_rule_duplicate_subflow_test.go`, `library_test.go`
 - **loop*** (1): `loop_rules_test.go`
+- **meta*** (1): `meta_test.go`
 - **metrics*** (2): `metrics_reuse_test.go`, `metrics_test.go`
 - **onboarding*** (1): `onboarding_sample_test.go`
 - **parallel*** (1): `parallel_dedup_compare_test.go`
@@ -549,7 +589,8 @@ Analyzer engine: rules, dataflow, autofix, cache, suppression, incremental.
 - **perf_adversarial*** (1): `perf_adversarial_test.go`
 - **perf_measure*** (1): `perf_measure_test.go`
 - **policy*** (1): `policy_test.go`
-- **registry*** (1): `registry_pin_test.go`
+- **profile*** (1): `profile_digest_test.go`
+- **registry*** (2): `registry_order_test.go`, `registry_pin_test.go`
 - **related*** (1): `related_findings_test.go`
 - **report*** (2): `report_groups_test.go`, `report_retained_test.go`
 - **rule_dead*** (1): `rule_dead_data_test.go`
@@ -564,22 +605,25 @@ Analyzer engine: rules, dataflow, autofix, cache, suppression, incremental.
 - **rule_tainted*** (1): `rule_tainted_sink_test.go`
 - **rule_uninitialized*** (1): `rule_uninitialized_variable_test.go`
 - **rules*** (8): `rules_extra_test.go`, `rules_new_rules2_test.go`, `rules_new_rules3_test.go`, `rules_new_rules_test.go`, `rules_new_test.go`, `rules_reliability_test.go`, `rules_subflow_test.go`, `rules_test.go`
+- **ruleset*** (1): `ruleset_test.go`
 - **serialize*** (1): `serialize_findings_test.go`
 - **source*** (1): `source_retention_test.go`
 - **subflow*** (1): `subflow_fix_test.go`
 - **suppress*** (5): `suppress_failopen_test.go`, `suppress_inventory_skip_test.go`, `suppress_inventory_test.go`, `suppress_scope_test.go`, `suppress_test.go`
 - **unsafe*** (1): `unsafe_fixes_test.go`
 - **unterminated*** (1): `unterminated_span_test.go`
+- **walk*** (1): `walk_bench_test.go`
 
 ## core/parser (pad-core)
 
-PAD language: tokenizer, parser, serializer, diff, grammar.
+PAD language: tokenizer, parser, serializer, diff, grammar, the folder walker.
 
 - **classifier*** (1): `classifier_test.go`
 - **column*** (1): `column_test.go`
 - **diff*** (1): `diff_test.go`
 - **elseif*** (1): `elseif_test.go`
 - **extractors*** (3): `extractors_edge_test.go`, `extractors_linear_test.go`, `extractors_test.go`
+- **folder*** (1): `folder_test.go`
 - **grammar*** (1): `grammar_test.go`
 - **parser*** (1): `parser_test.go`
 - **progress*** (1): `progress_test.go`
@@ -592,19 +636,23 @@ Domain model types.
 
 - **analysis*** (1): `analysis_test.go`
 - **chat_conversation*** (1): `chat_conversation_key_test.go`
+- **library*** (1): `library_test.go`
 - **models*** (1): `models_test.go`
 - **rebuild*** (1): `rebuild_indexes_test.go`
 
 ## core/export (pad-core)
 
-Report export: SARIF, JUnit, CSV, HTML, Markdown, PDF.
+Report export: the format registry; JSON, SARIF, JUnit, CSV, HTML, Markdown, PDF; byte goldens and preview findings.
 
 - **ci*** (1): `ci_context_test.go`
 - **csv*** (1): `csv_injection_test.go`
+- **export*** (1): `export_golden_test.go`
 - **html*** (1): `html_test.go`
 - **junit*** (1): `junit_csv_test.go`
 - **markdown*** (1): `markdown_test.go`
 - **pdf*** (2): `pdf_compress_test.go`, `pdf_test.go`
+- **preview*** (1): `preview_test.go`
+- **registry*** (1): `registry_test.go`
 - **sarif*** (2): `sarif_test.go`, `sarif_uri_test.go`
 
 ## core/search (pad-core)
@@ -631,10 +679,14 @@ Secret scrubbing: batch and streaming, anchor holds, leak guards.
 
 ## core/cache (pad-core)
 
-Sized LRU cache.
+Sized LRU cache and declared caches: specs, typed key parts (fuzzed), typed storage and fills.
 
+- **key*** (1): `key_fuzz_test.go`
 - **lru*** (1): `lru_test.go`
+- **part*** (1): `part_test.go`
 - **sized_lru*** (1): `sized_lru_test.go`
+- **spec*** (1): `spec_test.go`
+- **typed*** (1): `typed_test.go`
 
 ## core/logger (pad-core)
 

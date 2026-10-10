@@ -9,9 +9,17 @@ import (
 	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/cache"
 	"pad-core/logger"
 	"pad-core/models"
 )
+
+// deploymentSettingsCache is BackendSettingsProvider's cache (ADR 0017): one value, the deployment's settings row. Its
+// storage is the provider's own (it keeps serving the last value read when a refresh fails), so the spec only
+// counts: a hit is a fresh Get, a miss a Get that refreshed, a store a refresh no invalidation overlapped.
+var deploymentSettingsCache = cache.Declare("settings.deployment",
+	cache.Global("one deployment-wide settings row, the same for every caller"),
+	cache.ReplicaLocal("30 s TTL bounds another replica's write; this replica's writes invalidate at once"))
 
 // settingsToModel and settingsFromModel convert between the storage-layer and domain representations via a
 // JSON round-trip: the structs are separate so storage does not depend on pad-core/models, and a hand-written
@@ -129,6 +137,7 @@ func (p *BackendSettingsProvider) refresh(ctx context.Context) (*models.AppSetti
 	if p.gen.FillOK(ctx, settingsGenKey, captured) {
 		p.cached = read
 		p.expires = p.now().Add(backendSettingsTTL)
+		deploymentSettingsCache.RecordStore()
 	}
 	p.mu.Unlock()
 	return read, nil
@@ -162,6 +171,7 @@ func (p *BackendSettingsProvider) Get() *models.AppSettings {
 	cached := p.cached
 	p.mu.RUnlock()
 	if fresh {
+		deploymentSettingsCache.RecordHit()
 		return cached.Clone()
 	}
 
@@ -172,7 +182,10 @@ func (p *BackendSettingsProvider) Get() *models.AppSettings {
 	p.mu.RLock()
 	fresh = p.now().Before(p.expires)
 	p.mu.RUnlock()
-	if !fresh {
+	if fresh {
+		deploymentSettingsCache.RecordHit()
+	} else {
+		deploymentSettingsCache.RecordMiss()
 		read, err := p.refresh(context.Background())
 		if err != nil {
 			logger.Warn("settings: backend load failed, serving last known values", "error", err)

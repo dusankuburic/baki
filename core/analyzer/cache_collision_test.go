@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ import (
 // different callers uploading a "Main.txt" that does not parse collided on the
 // entire cache key.
 //
-// DefaultCache is process-global with no tenant or user in the key, so the
+// The cache was process-global with no tenant or user in the key, so the
 // first caller's report was returned to the second. That report is not a
 // summary: a parse-error finding carries ParseError.Snippet, which is up to 200
 // bytes of the other caller's VERBATIM SOURCE.
@@ -57,7 +58,8 @@ func TestFlowHash_DistinguishesDocumentsThatOnlyDifferInParseErrors(t *testing.T
 
 // TestAnalysisCache_DoesNotServeAnotherCallersReport drives the property
 // end-to-end through the cache itself, so the guarantee does not rest on
-// FlowHash's internals staying the way they are today.
+// FlowHash's internals staying the way they are today. Both callers are the
+// same tenant here: the content alone must keep them apart.
 func TestAnalysisCache_DoesNotServeAnotherCallersReport(t *testing.T) {
 	const secret = "PROD_DB_PASSWORD=hunter2-do-not-share"
 	victim := "CASE '" + secret + "'\n"
@@ -66,9 +68,8 @@ func TestAnalysisCache_DoesNotServeAnotherCallersReport(t *testing.T) {
 	vd, _ := parser.ParseFiles(map[string]string{"Main.txt": victim}, "Main.txt")
 	ad, _ := parser.ParseFiles(map[string]string{"Main.txt": attacker}, "Main.txt")
 
-	cache := NewAnalysisCache(50)
-	vr := RunAnalysis(vd, AllRules(), models.DefaultSettings(), nil)
-	cache.Put(StableFlowID(vd), FlowHash(vd), vr)
+	a := newTestAnalyzer()
+	vr := a.Analyze(context.Background(), localIn(vd, AllRules(), models.DefaultSettings(), nil))
 
 	// Sanity: the victim's report really does carry their source verbatim, or
 	// this test is asserting nothing.
@@ -83,7 +84,7 @@ func TestAnalysisCache_DoesNotServeAnotherCallersReport(t *testing.T) {
 			"cache hit would not disclose anything")
 	}
 
-	if got := cache.Get(StableFlowID(ad), FlowHash(ad)); got != nil {
+	if got := a.Lookup(localIn(ad, AllRules(), models.DefaultSettings(), nil)); got != nil {
 		for _, f := range got.Findings {
 			if snip, ok := f.Metadata["snippet"].(string); ok && strings.Contains(snip, secret) {
 				t.Fatalf("the attacker's lookup returned the victim's report, disclosing %q", snip)

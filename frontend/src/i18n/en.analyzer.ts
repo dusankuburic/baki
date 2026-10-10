@@ -13,6 +13,17 @@ export const enAnalyzer = {
     confidence: 'Confidence: {{confidence}}',
     noMatches: 'No rules match "{{query}}"',
     loadFailed: 'Failed to load rules.',
+    previewCount: '{{count}} in preview',
+    libraryKind: 'Across flows',
+    libraryKindHint: 'Compares the flows of a folder with each other; runs when a folder is analyzed.',
+  },
+  // Preview rules (core/analyzer Stage): reported, but never a gate.
+  stage: {
+    preview: 'Preview',
+    previewRuleHint:
+      'Preview rule: its findings are reported but never fail a CI gate or a policy, and do not count toward the health score.',
+    previewFindingHint:
+      'Found by a preview rule: reported, but it never fails a CI gate or a policy and does not count toward the health score.',
   },
   dependencies: {
     back: '← Back',

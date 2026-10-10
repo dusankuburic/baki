@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"pad-analyzer/internal/api/render"
@@ -49,6 +51,9 @@ type AnalysisHandler struct {
 	// records runs the detached dashboard writes of a fresh analysis: best-effort on the
 	// pool (RLS-exempt, no request transaction) so they can finish after the response.
 	records *lifecycle.Bounded
+	// exports renders the SARIF/JUnit/CSV bodies of analyze-raw, /export and the CI webhook
+	// through the export registry.
+	exports *service.ExportService
 }
 
 // maxConcurrentFindingEmails caps the detached finding emails in flight.
@@ -62,7 +67,7 @@ const maxConcurrentFindingAlerts = 64
 // (pad_background_dropped_total) and the next fresh analyze retries it.
 const maxConcurrentAnalysisRecords = 32
 
-func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, dashboard *service.DashboardService, backend storageif.StorageBackend, security *SecurityConfig, webhook *service.WebhookNotifier, email *mailer.Service, ciSecret CIWebhookSecret, policies *service.PolicyService, governance *service.GovernanceAlertService, triage *service.TriageService, comments *service.CommentService, shares *service.ShareTokenService, recorder *audit.Recorder) *AnalysisHandler {
+func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, dashboard *service.DashboardService, backend storageif.StorageBackend, security *SecurityConfig, webhook *service.WebhookNotifier, email *mailer.Service, ciSecret CIWebhookSecret, policies *service.PolicyService, governance *service.GovernanceAlertService, triage *service.TriageService, comments *service.CommentService, shares *service.ShareTokenService, recorder *audit.Recorder, exports *service.ExportService) *AnalysisHandler {
 	return &AnalysisHandler{
 		analysisSvc: analysisSvc,
 		flowSvc:     flowSvc,
@@ -78,6 +83,7 @@ func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.F
 		webhook:     webhook,
 		email:       email,
 		ciSecret:    ciSecret,
+		exports:     exports,
 		emails:      lifecycle.NewBounded("finding_email", maxConcurrentFindingEmails),
 		alerts:      lifecycle.NewBounded("finding_alert", maxConcurrentFindingAlerts),
 		records:     lifecycle.NewBounded("analysis_record", maxConcurrentAnalysisRecords),
@@ -161,13 +167,15 @@ func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Reque
 }
 
 // @Summary      Analyze raw PAD source
-// @Description  handleAnalyzeRaw analyzes raw PAD flow text WITHOUT requiring a pre-stored flow, so CI pipelines and wrappers can POST flow text and get findings JSON (or SARIF) back in one call — no library upload, no Go CLI install. Works in both modes (auth via PAT in cloud; open in local). Body: {files, name, format?} where format is "json" (default) or "sarif". Nothing is persisted.
+// @Description  handleAnalyzeRaw analyzes raw PAD flow text WITHOUT requiring a pre-stored flow, so CI pipelines and wrappers can POST flow text and get findings back in one call — no library upload, no Go CLI install. Works in both modes (auth via PAT in cloud; open in local). Body: {files, name, format?} where format is "json" (default: the analysis report), "sarif" (SARIF 2.1.0), "junit" (JUnit XML) or "csv"; those three are sent as an attachment named pad-analysis.<ext>. At most 50 files and 2048 KB in total. Nothing is persisted.
 // @Tags         analysis
 // @Accept       json
-// @Produce      json
-// @Success      200 {object} map[string]interface{} "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
+// @Produce      json,application/sarif+json,application/xml,text/csv
+// @Param        request body object true "{files: {name: source}, name, format}"
+// @Success      200 {object} map[string]interface{} "Analysis report (json), or the SARIF, JUnit or CSV document"
+// @Failure      400 {object} map[string]string "Bad Request (no files, unknown format, parse failure)"
 // @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      413 {object} map[string]string "Too many files or payload too large"
 // @Failure      500 {object} map[string]string "Error"
 // @Router       /api/analysis/analyze-raw [post]
 func (h *AnalysisHandler) handleAnalyzeRaw(w http.ResponseWriter, r *http.Request) {
@@ -184,10 +192,8 @@ func (h *AnalysisHandler) handleAnalyzeRaw(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	switch req.Format {
-	case "", "json", "sarif", "junit", "csv":
-	default:
-		render.Error(w, fmt.Errorf("unknown format %q (must be json, sarif, junit, or csv)", req.Format), http.StatusBadRequest)
+	if req.Format != "" && req.Format != "json" && !slices.Contains(analyzeRawFormats, req.Format) {
+		render.Error(w, fmt.Errorf("unknown format %q (must be %s)", req.Format, formatChoices(append([]string{"json"}, analyzeRawFormats...))), http.StatusBadRequest)
 		return
 	}
 
@@ -220,44 +226,46 @@ func (h *AnalysisHandler) handleAnalyzeRaw(w http.ResponseWriter, r *http.Reques
 		render.Error(w, fmt.Errorf("parse failed: %w", err), http.StatusBadRequest)
 		return
 	}
-	report, err := h.analysisSvc.AnalyzeFlow(ctx, doc)
+	report, err := h.analysisSvc.AnalyzeRaw(ctx, doc)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 
-	if req.Format == "sarif" {
-		out, err := export.ReportToSARIF(report, doc)
-		if err != nil {
-			render.Error(w, err, http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/sarif+json")
-		fmt.Fprintf(w, "%s\n", out)
+	if req.Format == "" || req.Format == "json" {
+		render.JSON(w, report)
 		return
 	}
-	if req.Format == "junit" {
-		out, err := export.ReportToJUnit(report, doc)
-		if err != nil {
-			render.Error(w, err, http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-		fmt.Fprintf(w, "%s\n", out)
+	body, f, err := h.exports.Render(req.Format, export.Input{Report: report, Doc: doc}, export.Options{})
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	if req.Format == "csv" {
-		out, err := export.ReportToCSV(report, doc)
-		if err != nil {
-			render.Error(w, err, http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.csv"`)
-		fmt.Fprintf(w, "%s", out)
-		return
+	writeDownload(w, f, body)
+}
+
+// analyzeRawFormats are the registered export formats analyze-raw renders besides its default
+// JSON report. The set is the route's own: the documents (HTML, Markdown, PDF) are not offered on
+// this PAT-authenticated CI endpoint.
+var analyzeRawFormats = []string{"sarif", "junit", "csv"}
+
+// exportBaseName names every report download: pad-analysis plus the format's extension.
+const exportBaseName = "pad-analysis"
+
+// writeDownload sends a rendered export as a file: the format's Content-Type, an attachment
+// named after the format, and the bytes exactly as rendered.
+func writeDownload(w http.ResponseWriter, f export.Format, body []byte) {
+	w.Header().Set("Content-Type", f.MIME)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", exportBaseName+f.Ext))
+	_, _ = w.Write(body)
+}
+
+// formatChoices lists format ids for an error message: "a, b, or c".
+func formatChoices(ids []string) string {
+	if len(ids) < 3 {
+		return strings.Join(ids, " or ")
 	}
-	render.JSON(w, report)
+	return strings.Join(ids[:len(ids)-1], ", ") + ", or " + ids[len(ids)-1]
 }
 
 // @Summary      Batch-analyze a folder
@@ -313,54 +321,42 @@ func (h *AnalysisHandler) handleBatchAnalyze(w http.ResponseWriter, r *http.Requ
 }
 
 // @Summary      Export SARIF report
-// @Description  SARIF 2.1.0 report for GitHub Code Scanning.
+// @Description  SARIF 2.1.0 report of the flow's analysis (GitHub Code Scanning and other SARIF consumers), sent as the attachment pad-analysis.sarif. Analyzes on demand (a fresh analysis records history, as analyze does). An empty flowId means the current document in local mode.
 // @Tags         analysis
 // @Accept       json
-// @Produce      json
-// @Param        request body object true "Flow reference"
-// @Success      200 {object} map[string]interface{} "SARIF document"
+// @Produce      application/sarif+json
+// @Param        request body object false "{flowId}"
+// @Success      200 {string} string "SARIF document"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Flow not found"
+// @Failure      500 {object} map[string]string "Error"
 // @Router       /api/analysis/export/sarif [post]
 func (h *AnalysisHandler) handleExportSARIF(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		FlowID string `json:"flowId"`
-	}
-	if err := decodeOptional(r.Body, &req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
-		return
-	}
-
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
-	if err != nil {
-		render.Error(w, err, 0)
-		return
-	}
-
-	report, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
-	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-
-	out, err := export.ReportToSARIF(report, doc)
-	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowExport, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"format": "sarif"}})
-	w.Header().Set("Content-Type", "application/sarif+json")
-	w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.sarif"`)
-	fmt.Fprintf(w, "%s\n", out)
+	h.serveFlowExport(w, r, "sarif")
 }
 
 // @Summary      Export analysis results as JUnit XML
+// @Description  JUnit XML report of the flow's analysis (CI test-report viewers), sent as the attachment pad-analysis.xml. Analyzes on demand, like the SARIF export. An empty flowId means the current document in local mode.
 // @Tags         export
-// @Produce      json
-// @Success      200 {object} object "OK"
-// @Failure      400 {object} object "Bad Request"
-// @Failure      401 {object} object "Unauthorized"
-// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Accept       json
+// @Produce      application/xml
+// @Param        request body object false "{flowId}"
+// @Success      200 {string} string "JUnit XML document"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Flow not found"
+// @Failure      500 {object} map[string]string "Error"
 // @Router       /api/analysis/export/junit [post]
 func (h *AnalysisHandler) handleExportJUnit(w http.ResponseWriter, r *http.Request) {
+	h.serveFlowExport(w, r, "junit")
+}
+
+// serveFlowExport analyzes the requested flow and sends its report, rendered as the export
+// format id, as a download.
+func (h *AnalysisHandler) serveFlowExport(w http.ResponseWriter, r *http.Request, id string) {
 	var req struct {
 		FlowID string `json:"flowId"`
 	}
@@ -381,15 +377,13 @@ func (h *AnalysisHandler) handleExportJUnit(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	out, err := export.ReportToJUnit(report, doc)
+	body, f, err := h.exports.Render(id, export.Input{Report: report, Doc: doc}, export.Options{})
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowExport, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"format": "junit"}})
-	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.xml"`)
-	fmt.Fprintf(w, "%s\n", out)
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowExport, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"format": f.ID}})
+	writeDownload(w, f, body)
 }
 
 // @Summary      Portfolio dashboard stats

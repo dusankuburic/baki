@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -128,9 +129,11 @@ func ParseText(text, fileName string, fileSize int64) (*models.FlowDocument, err
 // service can memoise per-member parses on folder reload.
 type MemberParser func(text, name string, size int64) (*models.FlowDocument, error)
 
-// ParseFolder reads and parses every .txt member of folderPath into one
-// combined document (Main first, then the rest by name). Equivalent to
-// ParseFolderWith(folderPath, ParseText).
+// ParseFolder reads and parses every .txt member of folderPath (as
+// ExportFolder lists them) into one combined document (Main first, then the
+// rest by name), keeping the desktop's shape: absolute Files[].Path, base-name
+// SourceFile, IsFolder always. Equivalent to ParseFolderWith(folderPath,
+// ParseText).
 func ParseFolder(folderPath string) (*models.FlowDocument, error) {
 	return ParseFolderWith(folderPath, ParseText)
 }
@@ -143,16 +146,13 @@ func ParseFolderWith(folderPath string, parseMember MemberParser) (*models.FlowD
 	if parseMember == nil {
 		parseMember = ParseText
 	}
-	entries, err := os.ReadDir(folderPath)
+	var txtFiles []fs.DirEntry
+	err := walkFolder(folderPath, ExportFolder(), func(_ string, d fs.DirEntry) error {
+		txtFiles = append(txtFiles, d)
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("read folder: %w", err)
-	}
-
-	var txtFiles []os.DirEntry
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".txt") {
-			txtFiles = append(txtFiles, e)
-		}
 	}
 	logger.Debug("Found .txt files", "count", len(txtFiles))
 	if len(txtFiles) == 0 {

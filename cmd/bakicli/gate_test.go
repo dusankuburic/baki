@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"pad-core/analyzer"
 	"pad-core/models"
 )
 
@@ -110,6 +111,8 @@ func TestCountAtOrAbove(t *testing.T) {
 // summary implies: "N findings at or above X" is non-zero exactly when the
 // gate trips at X.
 func TestCountAtOrAbove_AgreesWithShouldFail(t *testing.T) {
+	defer flipToPreview(t, "missing-timeout")()
+	preview := []models.Finding{{RuleID: "missing-timeout", Severity: models.SeverityError}}
 	sets := [][]models.Finding{
 		nil,
 		findingsAt(models.SeverityInfo),
@@ -117,6 +120,10 @@ func TestCountAtOrAbove_AgreesWithShouldFail(t *testing.T) {
 		findingsAt(models.SeverityError),
 		findingsAt(models.SeverityInfo, models.SeverityWarning),
 		findingsAt(models.SeverityWarning, models.SeverityError),
+		findingsAt(models.Severity("critical")),
+		findingsAt(models.SeverityInfo, models.Severity("")),
+		preview,
+		append(findingsAt(models.SeverityInfo), preview...),
 	}
 	for _, threshold := range []string{"error", "warning", "info"} {
 		for i, set := range sets {
@@ -257,5 +264,73 @@ func TestBuildDefaultConfig_CarriesThresholds(t *testing.T) {
 	}
 	if len(cfg.RuleCfg["unhandled-error"].Options) != 0 {
 		t.Error("a rule without thresholds must not get an options block")
+	}
+}
+
+// flipToPreview moves a built-in rule to the preview stage until restore runs.
+// The meta table is process-global: never from a parallel test.
+func flipToPreview(t *testing.T, ruleID string) (restore func()) {
+	t.Helper()
+	m, ok := analyzer.LookupMeta(ruleID)
+	if !ok {
+		t.Fatalf("no built-in rule %q", ruleID)
+	}
+	m.Stage = analyzer.StagePreview
+	return analyzer.SetRuleMetaForTesting(ruleID, m)
+}
+
+// TestShouldFail_PreviewNeverGates: a preview finding (stamped, or unstamped
+// from a rule that is preview now) trips no threshold and is not counted, an
+// unknown severity included; a stable finding beside it still gates.
+func TestShouldFail_PreviewNeverGates(t *testing.T) {
+	defer flipToPreview(t, "missing-timeout")()
+	previewOnly := []models.Finding{
+		{RuleID: "missing-timeout", Severity: models.SeverityError},                     // unstamped, preview rule
+		{RuleID: "org-rule", Severity: models.SeverityError, Stage: "preview"},          // stamped
+		{RuleID: "missing-timeout", Severity: models.Severity("critical")},              // preview, unknown severity
+		{RuleID: "unhandled-error", Severity: models.SeverityWarning, Stage: "preview"}, // stamped stable rule
+	}
+	for _, threshold := range []string{"error", "warning", "info"} {
+		if shouldFail(previewOnly, threshold) {
+			t.Errorf("preview findings tripped -fail-on %s", threshold)
+		}
+		if n := countAtOrAbove(previewOnly, threshold); n != 0 {
+			t.Errorf("countAtOrAbove(preview, %s) = %d, want 0", threshold, n)
+		}
+	}
+	mixed := append([]models.Finding{{RuleID: "unhandled-error", Severity: models.SeverityError}}, previewOnly...)
+	if !shouldFail(mixed, "error") || countAtOrAbove(mixed, "error") != 1 {
+		t.Errorf("the stable error beside preview findings must gate alone: shouldFail=%v count=%d",
+			shouldFail(mixed, "error"), countAtOrAbove(mixed, "error"))
+	}
+	if !shouldFail([]models.Finding{{RuleID: "unhandled-error", Severity: "critical"}}, "error") {
+		t.Error("a stable finding with an unknown severity must still fail closed")
+	}
+}
+
+// TestCountAtOrAbove_UnknownSeverityFailsClosed: the count used in the gate
+// message used to drop an unknown severity while shouldFail failed on it, so
+// "gate FAIL: 0 added finding(s)" was printable.
+func TestCountAtOrAbove_UnknownSeverityFailsClosed(t *testing.T) {
+	fs := findingsAt(models.Severity("critical"), models.SeverityInfo)
+	for threshold, want := range map[string]int{"error": 1, "warning": 1, "info": 2} {
+		if got := countAtOrAbove(fs, threshold); got != want {
+			t.Errorf("countAtOrAbove(min=%q) = %d, want %d", threshold, got, want)
+		}
+	}
+}
+
+func TestPreviewNote(t *testing.T) {
+	defer flipToPreview(t, "missing-timeout")()
+	if got := previewNote(findingsAt(models.SeverityError)); got != "" {
+		t.Errorf("no preview finding: %q, want empty (text output unchanged)", got)
+	}
+	one := []models.Finding{{RuleID: "missing-timeout", Severity: models.SeverityWarning}}
+	if got := previewNote(one); got != " (1 preview finding not gated)" {
+		t.Errorf("one: %q", got)
+	}
+	two := append(one, models.Finding{RuleID: "x", Stage: "preview"})
+	if got := previewNote(two); got != " (2 preview findings not gated)" {
+		t.Errorf("two: %q", got)
 	}
 }

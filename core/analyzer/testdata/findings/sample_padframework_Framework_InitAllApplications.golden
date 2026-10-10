@@ -1,0 +1,72 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_padframework_Framework_InitAllApplications
+document: subflows=1 blocks=4 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":3,"info":0,"blocksAnalyzed":4,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=4 final=180/180 last="Loop body is too large"
+metrics: {"avgCognitive":0,"avgCyclomatic":1,"healthScore":88,"maxCognitive":0,"maxCyclomatic":1,"subflowCount":1,"totalBlocks":3,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Framework_InitAllApplications: {"blockCount":3,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=4
+  raw findings: unhandled-error=3
+inventory: none
+findings: 3
+F-001 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllApplications#1 sf=Framework_InitAllApplications fp=unhandled-error:5d42c02779249f27
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-002 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllApplications#2 sf=Framework_InitAllApplications fp=unhandled-error:77db45aad209b763
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-003 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllApplications#3 sf=Framework_InitAllApplications fp=unhandled-error:b71e432b2da4f81e
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+
+=== nil-settings
+stats: {"errors":0,"warnings":3,"info":0,"blocksAnalyzed":4,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=4 final=180/180 last="Loop body is too large"
+metrics: as default, healthScore=88
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=4
+  raw findings: unhandled-error=3
+inventory: none
+findings: 3
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":3,"info":0,"blocksAnalyzed":4,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=4 final=180/180 last="Loop body is too large"
+metrics: as default, healthScore=88
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=4
+  raw findings: unhandled-error=3
+inventory: none
+findings: 3
+  as default; severity changes: none
+
+=== disabled
+stats: {"errors":0,"warnings":0,"info":0,"blocksAnalyzed":4,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=3 final=148/148 last="Loop body is too large"
+metrics: as default, healthScore=100
+profiles: rules=37 order=f7de49357acad250 blocksChecked=4
+inventory: none
+findings: 0
+
+=== severity
+stats: {"errors":3,"warnings":0,"info":0,"blocksAnalyzed":4,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=4 final=180/180 last="Loop body is too large"
+metrics: as default, healthScore=64
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=4
+  raw findings: unhandled-error=3
+inventory: none
+findings: 3
+  as default; severity changes: F-001 warning->error, F-002 warning->error, F-003 warning->error
+
+=== autofixable
+stats: {"errors":0,"warnings":3,"info":0,"blocksAnalyzed":4,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=3 final=128/128 last="Wait zero"
+metrics: as default, healthScore=88
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=4
+  raw findings: unhandled-error=3
+inventory: none
+findings: 3
+  as default; severity changes: none

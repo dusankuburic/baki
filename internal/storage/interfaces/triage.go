@@ -3,6 +3,8 @@ package interfaces
 import (
 	"context"
 	"time"
+
+	"pad-core/models"
 )
 
 // TriageStore covers finding triage state (status overrides) and per-flow accepted-findings baselines. The writes need FlowEdit, which the caller checks: row-level security scopes these rows to the flow's visibility only (ADR 0013).
@@ -19,9 +21,9 @@ type TriageStore interface {
 	DeleteFindingStatus(ctx context.Context, flowID, findingKey string) error
 	// GetFlowBaseline returns the flow's accepted-findings baseline, or (nil, nil) when none is set.
 	GetFlowBaseline(ctx context.Context, flowID string) (*FlowBaseline, error)
-	// GetFlowBaselinesBatch resolves many flows' baselines in one query; map omits flows without one, never nil. A system read for the governance scanner, which runs without an RLS scope (callers pinned by TestArch_SystemReadsPinned).
+	// GetFlowBaselinesBatch resolves many flows' baselines in one query; map omits flows without one, never nil. Each carries its RuleSetDigest but not its RuleSet (RuleSetsByDigest resolves it). A system read for the governance scanner, which runs without an RLS scope (callers pinned by TestArch_SystemReadsPinned).
 	GetFlowBaselinesBatch(ctx context.Context, flowIDs []string) (map[string]*FlowBaseline, error)
-	// SetFlowBaseline replaces the flow's baseline (one baseline per flow).
+	// SetFlowBaseline replaces the flow's baseline (one baseline per flow), recording b.RuleSet (nil: unknown); b.RuleSetDigest is derived from it.
 	SetFlowBaseline(ctx context.Context, b *FlowBaseline) error
 	// ClearFlowBaseline removes the flow's baseline. Idempotent.
 	ClearFlowBaseline(ctx context.Context, flowID string) error
@@ -45,4 +47,10 @@ type FlowBaseline struct {
 	Keys      []string  `json:"keys"`
 	CreatedBy string    `json:"createdBy,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
+	// RuleSet is the rule set of the analysis the keys came from (ADR 0016), RuleSetDigest its digest. Both are empty
+	// when unknown: a baseline set before rule sets were recorded, or rewritten since by a release that does not
+	// record them, reads as a legacy record. A batch read returns the digest only. The set is never serialised: it
+	// names every enabled org custom rule, and a flow's readers need not be the org's members.
+	RuleSetDigest string          `json:"ruleSetDigest,omitempty"`
+	RuleSet       *models.RuleSet `json:"-"`
 }

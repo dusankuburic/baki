@@ -15,6 +15,19 @@ import (
 // by GitHub code scanning, Azure DevOps and other security dashboards. Only
 // the populated schema subset is modeled here.
 
+// The registered sarif format ends the document with a newline, as every
+// caller has always written it.
+func init() {
+	registerBuiltin(Format{ID: "sarif", Label: "SARIF 2.1.0", MIME: "application/sarif+json", Ext: ".sarif", Order: 20},
+		func(in Input, opts Options) ([]byte, error) {
+			b, err := ReportToSARIFWithOptions(in.Report, in.Doc, opts)
+			if err != nil {
+				return nil, err
+			}
+			return append(b, '\n'), nil
+		})
+}
+
 const (
 	sarifSchema  = "https://json.schemastore.org/sarif-2.1.0.json"
 	sarifVersion = "2.1.0"
@@ -66,17 +79,9 @@ type sarifDriver struct {
 	Rules          []sarifReportingDescriptor `json:"rules"`
 }
 
-// ToolVersion is surfaced in SARIF tool.driver.version for reproducibility;
-// main.go can override it at startup (SetToolVersion) with the build version.
-var ToolVersion = "0.1.0"
-
-// SetToolVersion sets the SARIF tool.driver.version so consumers can
-// correlate results to a specific analyzer build.
-func SetToolVersion(v string) {
-	if v != "" {
-		ToolVersion = v
-	}
-}
+// defaultToolVersion is the SARIF tool.driver.version when Options.ToolVersion
+// is empty.
+const defaultToolVersion = "0.1.0"
 
 type sarifReportingDescriptor struct {
 	ID                   string                   `json:"id"`
@@ -171,21 +176,29 @@ func ReportToSARIFWithOptions(report *models.AnalysisReport, doc *models.FlowDoc
 	ruleMaxRank := make(map[string]int)
 
 	for _, f := range report.Findings {
+		// A preview finding never gates (analyzer.Gates), so it is a note
+		// whatever its severity: code-scanning checks fail on errors and
+		// warnings.
+		preview := !analyzer.Gates(&f)
+		level := sarifLevel(f.Severity)
+		if preview {
+			level = "note"
+		}
 		idx, ok := ruleIndex[f.RuleID]
 		if !ok {
 			idx = len(rules)
 			ruleIndex[f.RuleID] = idx
-			rules = append(rules, ruleDescriptor(f, catalog[f.RuleID]))
-			ruleMaxRank[f.RuleID] = severityRank(sarifLevel(f.Severity))
-		} else if r := severityRank(sarifLevel(f.Severity)); r > ruleMaxRank[f.RuleID] {
+			rules = append(rules, ruleDescriptor(f, catalog[f.RuleID], level))
+			ruleMaxRank[f.RuleID] = severityRank(level)
+		} else if r := severityRank(level); r > ruleMaxRank[f.RuleID] {
 			ruleMaxRank[f.RuleID] = r
-			rules[idx].DefaultConfiguration = &sarifConfiguration{Level: sarifLevel(f.Severity)}
+			rules[idx].DefaultConfiguration = &sarifConfiguration{Level: level}
 		}
 
 		res := sarifResult{
 			RuleID:    f.RuleID,
 			RuleIndex: idx,
-			Level:     sarifLevel(f.Severity),
+			Level:     level,
 			Message:   sarifMessage{Text: messageText(f)},
 			Locations: sarifLocations(f, doc, opts),
 			PartialFingerprints: map[string]string{
@@ -195,11 +208,21 @@ func ReportToSARIFWithOptions(report *models.AnalysisReport, doc *models.FlowDoc
 		if violations[findingKey(f)] {
 			res.Properties = map[string]any{"policyViolation": true}
 		}
+		if preview {
+			if res.Properties == nil {
+				res.Properties = map[string]any{}
+			}
+			res.Properties["stage"] = string(analyzer.StagePreview)
+		}
 		results = append(results, res)
 	}
 
+	version := opts.ToolVersion
+	if version == "" {
+		version = defaultToolVersion
+	}
 	run := sarifRun{
-		Tool:              sarifToolBlock{Driver: sarifDriver{Name: sarifTool, Version: ToolVersion, Rules: rules}},
+		Tool:              sarifToolBlock{Driver: sarifDriver{Name: sarifTool, Version: version, Rules: rules}},
 		AutomationDetails: &sarifAutomationDetails{ID: sarifAutomationID},
 		Results:           results,
 	}
@@ -260,7 +283,7 @@ func policyProperties(res *models.PolicyResult) map[string]any {
 	for _, v := range res.Violations {
 		fps = append(fps, fingerprint(v))
 	}
-	return map[string]any{
+	props := map[string]any{
 		"policyId":              res.PolicyID,
 		"policyName":            res.PolicyName,
 		"passed":                res.Passed,
@@ -272,6 +295,10 @@ func policyProperties(res *models.PolicyResult) map[string]any {
 		"violations":            len(res.Violations),
 		"violationFingerprints": fps,
 	}
+	if res.Preview > 0 {
+		props["preview"] = res.Preview
+	}
+	return props
 }
 
 // policyViolationKeys returns the identity set of a policy's violations so each
@@ -294,10 +321,11 @@ func findingKey(f models.Finding) string {
 	return f.Key()
 }
 
-func ruleDescriptor(f models.Finding, rule analyzer.Rule) sarifReportingDescriptor {
+// ruleDescriptor describes f's rule at level, f's effective result level.
+func ruleDescriptor(f models.Finding, rule analyzer.Rule, level string) sarifReportingDescriptor {
 	d := sarifReportingDescriptor{
 		ID:                   f.RuleID,
-		DefaultConfiguration: &sarifConfiguration{Level: sarifLevel(f.Severity)},
+		DefaultConfiguration: &sarifConfiguration{Level: level},
 		HelpURI:              RuleHelpURL,
 	}
 	name, desc := f.Title, ""

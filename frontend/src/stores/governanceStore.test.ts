@@ -146,6 +146,32 @@ describe('governanceStore', () => {
     expect(st.unreadCount).toBe(2)
   })
 
+  // A "new rules" notice rides in the alert list (type new_rules, no flow):
+  // the inbox reads, acknowledges and dismisses it like an alert, by its id.
+  it('lists a new_rules notice beside the alerts and dismisses it by its id', async () => {
+    const notice = baseAlert({
+      id: 'new_rules|org|org-1|rs1:d',
+      flowId: '',
+      flowName: undefined,
+      type: 'new_rules',
+      title: '2 new rules report findings',
+      severity: 'warning',
+      ruleIds: ['rule-a', 'rule-b'],
+      scope: 'org',
+      flowCount: 4,
+    })
+    mockList.mockResolvedValue([notice, baseAlert({id: 'a1'})])
+    useGovernanceStore.setState({unreadCount: 2})
+    await useGovernanceStore.getState().openPanel()
+    expect(useGovernanceStore.getState().alerts.map(a => a.id)).toEqual([notice.id, 'a1'])
+    expect(useGovernanceStore.getState().unreadCount).toBe(0)
+    expect(mockMarkAllRead).toHaveBeenCalled()
+
+    await useGovernanceStore.getState().dismiss(notice.id)
+    expect(mockDismiss).toHaveBeenCalledWith(notice.id)
+    expect(useGovernanceStore.getState().alerts.map(a => a.id)).toEqual(['a1'])
+  })
+
   it('reset clears state', () => {
     useGovernanceStore.setState({alerts: [baseAlert()], unreadCount: 5, panelOpen: true, showDismissed: true})
     useGovernanceStore.getState().reset()

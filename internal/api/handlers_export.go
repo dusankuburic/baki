@@ -62,16 +62,42 @@ func (h *ExportHandler) handleCompareCurrentWith(w http.ResponseWriter, r *http.
 }
 
 // @Summary      Export flow as Markdown
-// @Description  Exports the specified flow to a Markdown file. Returns base64 encoded data. Only available in local mode.
+// @Description  Renders the flow's current analysis report as Markdown and returns it base64-encoded under `data`. Needs a report (409 until the flow was analyzed). On the desktop a `path` also writes the file there; with accounts the path is ignored.
 // @Tags         export
-// @Param        request body object true "request"
+// @Param        request body object true "{flowId, path}"
 // @Accept       json
 // @Produce      json
-// @Success      200 {object} map[string]interface{} "OK"
+// @Success      200 {object} map[string]interface{} "{status: ok, data: base64 Markdown}"
 // @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Flow not found"
+// @Failure      409 {object} map[string]string "No analysis report"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/export/markdown [post]
 func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Request) {
+	h.serveDocExport(w, r, "markdown")
+}
+
+// @Summary      Export HTML report
+// @Description  Renders the flow's current analysis report as a self-contained HTML page and returns it base64-encoded under `data`. Needs a report (409 until the flow was analyzed). On the desktop a `path` also writes the file there; with accounts the path is ignored.
+// @Tags         export
+// @Param        request body object true "{flowId, path}"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "{status: ok, data: base64 HTML}"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Flow not found"
+// @Failure      409 {object} map[string]string "No analysis report"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/export/html [post]
+func (h *ExportHandler) handleExportHTML(w http.ResponseWriter, r *http.Request) {
+	h.serveDocExport(w, r, "html")
+}
+
+// serveDocExport renders the flow's current report as the export format id into the base64
+// envelope the document exports share: {"status": "ok", "data": <base64>}.
+func (h *ExportHandler) serveDocExport(w http.ResponseWriter, r *http.Request, id string) {
 	var req struct {
 		Path   string `json:"path"`
 		FlowID string `json:"flowId"`
@@ -102,73 +128,25 @@ func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Requ
 	if h.security.JWTEnabled {
 		exportPath = ""
 	}
-	content, err := h.exportSvc.ExportMarkdown(doc, report, exportPath)
+	content, f, err := h.exportSvc.Export(id, doc, report, exportPath)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// Return base64 under `data`, mirroring PDF, so the web download path
-	// (data:...;base64,res.data in export.ts) works consistently.
-	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowExport, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"format": "markdown"}})
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowExport, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"format": f.ID}})
 	render.JSON(w, map[string]any{
 		"status": "ok",
 		"data":   base64.StdEncoding.EncodeToString(content),
 	})
 }
 
-// @Summary      Export HTML report
-// @Description  Self-contained HTML report (base64 response); server-side file write is desktop-only.
-// @Tags         export
-// @Accept       json
-// @Produce      json
-// @Success      200 {object} map[string]interface{} "Base64 HTML"
-// @Failure      409 {object} map[string]string "No analysis report"
-// @Router       /api/export/html [post]
-func (h *ExportHandler) handleExportHTML(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Path   string `json:"path"`
-		FlowID string `json:"flowId"`
-	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
-
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
-	if err != nil {
-		render.Error(w, err, 0)
-		return
-	}
-
-	report, _ := h.analysisSvc.CurrentReport(doc)
-	if report == nil {
-		render.Error(w, fmt.Errorf("no analysis report available — run analysis first"), http.StatusConflict)
-		return
-	}
-
-	// See handleExportMarkdown: the server-side file write is desktop-only.
-	exportPath := req.Path
-	if h.security.JWTEnabled {
-		exportPath = ""
-	}
-	content, err := h.exportSvc.ExportHTML(doc, report, exportPath)
-	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowExport, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"format": "html"}})
-	render.JSON(w, map[string]any{
-		"status": "ok",
-		"data":   base64.StdEncoding.EncodeToString(content),
-	})
-}
-
-// handleSaveClientExport writes a findings export rendered in the browser
-// (CSV of the filtered list, SARIF, JUnit) to the path picked in the desktop
-// native save dialog — the same dialog-then-server-write flow the PDF,
+// handleSaveClientExport writes a findings export the browser holds (its CSV
+// of the filtered list, or the SARIF / JUnit it fetched from /api/analysis/
+// export) to the path picked in the desktop native save dialog — the same dialog-then-server-write flow the PDF,
 // Markdown and HTML exports use. Desktop/local only: in cloud mode a caller
 // must never choose a server path.
 // @Summary      Save a client-rendered findings export
-// @Description  Desktop only. Writes CSV/SARIF/JUnit text rendered by the findings panel to the absolute path chosen in the native save dialog (.csv, .sarif or .xml only). 403 in cloud mode.
+// @Description  Desktop only. Writes the findings panel's CSV, or the SARIF / JUnit text it fetched, to the absolute path chosen in the native save dialog (.csv, .sarif or .xml only). 403 in cloud mode.
 // @Tags         export
 // @Accept       json
 // @Produce      json
@@ -198,51 +176,20 @@ func (h *ExportHandler) handleSaveClientExport(w http.ResponseWriter, r *http.Re
 }
 
 // @Summary      Export flow as PDF
-// @Description  Exports the specified flow to a PDF file. Returns base64 encoded data. Only available in local mode.
+// @Description  Renders the flow's current analysis report as a PDF and returns it base64-encoded under `data`. Needs a report (409 until the flow was analyzed). On the desktop a `path` also writes the file there; with accounts the path is ignored.
 // @Tags         export
-// @Param        request body object true "request"
+// @Param        request body object true "{flowId, path}"
 // @Accept       json
 // @Produce      json
-// @Success      200 {object} map[string]interface{} "OK"
+// @Success      200 {object} map[string]interface{} "{status: ok, data: base64 PDF}"
 // @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Flow not found"
+// @Failure      409 {object} map[string]string "No analysis report"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/export/pdf [post]
 func (h *ExportHandler) handleExportPDF(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Path   string `json:"path"`
-		FlowID string `json:"flowId"`
-	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
-
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, service.FlowRead)
-	if err != nil {
-		render.Error(w, err, 0)
-		return
-	}
-
-	report, _ := h.analysisSvc.CurrentReport(doc)
-	if report == nil {
-		render.Error(w, fmt.Errorf("no analysis report available — run analysis first"), http.StatusConflict)
-		return
-	}
-
-	// See handleExportMarkdown: the server-side file write is desktop-only.
-	exportPath := req.Path
-	if h.security.JWTEnabled {
-		exportPath = ""
-	}
-	content, err := h.exportSvc.ExportPDF(doc, report, exportPath)
-	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowExport, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID, Meta: map[string]string{"format": "pdf"}})
-	render.JSON(w, map[string]any{
-		"status": "ok",
-		"data":   base64.StdEncoding.EncodeToString(content),
-	})
+	h.serveDocExport(w, r, "pdf")
 }
 
 // Mount registers the /api/export group. The document exports render for

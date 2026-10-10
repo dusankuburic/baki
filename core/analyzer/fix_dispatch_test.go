@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"reflect"
 	"testing"
 
 	"pad-core/models"
@@ -10,7 +11,7 @@ import (
 // the right fixer and produces a patch whose op kind matches expectations, plus
 // that an unknown fixType errors. Per-fixer correctness (faithful + effective)
 // is covered by the round-trip gates in autofix_test.go; this test covers the
-// dispatch table itself.
+// fix registry itself, and every registered fix type must have a case here.
 func TestPatchForFix(t *testing.T) {
 	leaf := &models.Block{ID: "b1", Name: "Act", Type: models.BlockTypeAction, RawType: "HTTPClient.InvokeUrl", LineNumber: 1, Indent: 0, Properties: map[string]string{}, Variables: []string{}}
 	cases := []struct {
@@ -47,6 +48,15 @@ func TestPatchForFix(t *testing.T) {
 		{"suppress", "suppress", leaf, "missing-timeout", "", "", false, "insert"},
 		{"unknown fixType errors", "bogus", leaf, "", "", "", true, ""},
 	}
+	covered := map[string]bool{}
+	for _, tc := range cases {
+		covered[tc.fixType] = true
+	}
+	for _, spec := range FixTypes() {
+		if !covered[spec.Type] {
+			t.Errorf("registered fix type %q has no TestPatchForFix case", spec.Type)
+		}
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			patch, err := PatchForFix(tc.block, tc.fixType, tc.ruleID, tc.variable, tc.property)
@@ -68,5 +78,59 @@ func TestPatchForFix(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestFixFlags_DeclareWhatTheBuilderReads keeps the Uses* flags honest: a
+// builder whose patch changes with the variable, property or rule ID argument
+// must declare that it reads it, and a declared argument must matter for some
+// block (the frontend decides which finding metadata to send from them).
+func TestFixFlags_DeclareWhatTheBuilderReads(t *testing.T) {
+	blocks := []*models.Block{
+		{ID: "b1", RawType: "Database.ExecuteSqlStatement", LineNumber: 2, Indent: 4,
+			Properties: map[string]string{"Statement": "SELECT %A% FROM t", "Password": "hunter2", "_output": "Out"},
+			Children:   []models.Block{{LineNumber: 3}}},
+		{ID: "b2", RawType: "Excel.LaunchExcel", LineNumber: 1, Properties: map[string]string{"_output": "ExcelInstance"}},
+	}
+	args := []struct {
+		flag FixFlag
+		name string
+		vary func(in FixInput) FixInput
+	}{
+		{FixUsesVariable, "variable", func(in FixInput) FixInput { in.Variable = "Other"; return in }},
+		{FixUsesProperty, "property", func(in FixInput) FixInput { in.Property = "Password"; return in }},
+		{FixUsesRuleID, "rule ID", func(in FixInput) FixInput { in.RuleID = "other-rule"; return in }},
+	}
+	for _, spec := range FixTypes() {
+		for _, a := range args {
+			matters := false
+			for _, b := range blocks {
+				in := FixInput{Block: b, RuleID: "some-rule", Variable: "Pwd", Property: "Statement"}
+				if !reflect.DeepEqual(spec.Build(in), spec.Build(a.vary(in))) {
+					matters = true
+				}
+			}
+			declared := spec.Flags&a.flag != 0
+			if matters && !declared {
+				t.Errorf("fix %q reads the %s but does not declare it", spec.Type, a.name)
+			}
+			if declared && !matters {
+				t.Errorf("fix %q declares it reads the %s, but its patch never depends on it", spec.Type, a.name)
+			}
+		}
+	}
+}
+
+// TestIsBehaviourChangingFix_Exact pins the opt-in set (unsafe_fixes_test.go
+// covers the fix loop honouring it).
+func TestIsBehaviourChangingFix_Exact(t *testing.T) {
+	want := map[string]bool{"sanitize-command-vars": true, "mask-sensitive-variable": true, "replace-with-variable": true}
+	for _, spec := range FixTypes() {
+		if got := IsBehaviourChangingFix(spec.Type); got != want[spec.Type] {
+			t.Errorf("IsBehaviourChangingFix(%q) = %v, want %v", spec.Type, got, want[spec.Type])
+		}
+	}
+	if IsBehaviourChangingFix("bogus") {
+		t.Error("an unknown fix type must not be behaviour-changing")
 	}
 }

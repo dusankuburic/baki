@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"pad-core/parser"
 )
 
 // gitCmdTimeout bounds every git invocation. A hung git (a prompting credential
@@ -127,12 +129,12 @@ func flowFilesAtRev(target, rev string) (map[string]string, error) {
 		return nil, err
 	}
 	if info.IsDir() {
-		doc, lerr := loadFolder(abs)
+		keys, lerr := parser.ListFolder(abs, parser.TreeFolder())
 		if lerr != nil {
 			return nil, lerr
 		}
-		for i := range doc.Subflows {
-			live[doc.Subflows[i].SourceFile] = ""
+		for _, k := range keys {
+			live[k] = ""
 		}
 	} else {
 		live[filepath.Base(abs)] = ""

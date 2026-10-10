@@ -1,80 +1,128 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"pad-core/export"
 	"pad-core/models"
 	"pad-core/parser"
 )
 
-func TestExportService_ExportMarkdown_NilDoc(t *testing.T) {
+func TestExportService_Export_NilDocAndReport(t *testing.T) {
 	svc := NewExportService(NilNotifier{}, nil, nil)
-	_, err := svc.ExportMarkdown(nil, &models.AnalysisReport{}, "")
-	if err == nil {
-		t.Error("expected error for nil doc")
+	for _, id := range []string{"markdown", "html", "pdf"} {
+		if _, _, err := svc.Export(id, nil, &models.AnalysisReport{}, ""); err == nil || err.Error() != "no flow loaded" {
+			t.Errorf("%s: nil doc: %v", id, err)
+		}
+		if _, _, err := svc.Export(id, &models.FlowDocument{}, nil, ""); err == nil || !strings.Contains(err.Error(), "run analysis first") {
+			t.Errorf("%s: nil report: %v", id, err)
+		}
 	}
 }
 
-func TestExportService_ExportMarkdown_NilReport(t *testing.T) {
-	svc := NewExportService(NilNotifier{}, nil, nil)
-	_, err := svc.ExportMarkdown(&models.FlowDocument{}, nil, "")
-	if err == nil {
-		t.Error("expected error for nil report")
-	}
-}
-
-func TestExportService_ExportMarkdown_GeneratesContent(t *testing.T) {
-	svc := NewExportService(NilNotifier{}, nil, nil)
-
-	doc := &models.FlowDocument{ID: "test", Name: "Test Flow"}
-	report := &models.AnalysisReport{FlowID: "test", FlowName: "Test Flow"}
-
-	content, err := svc.ExportMarkdown(doc, report, "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(content) == 0 {
-		t.Error("expected non-empty markdown content")
-	}
-}
-
-func TestExportService_ExportMarkdown_WritesToFile(t *testing.T) {
-	dir := t.TempDir()
-	outPath := filepath.Join(dir, "report.md")
-
+// Export renders through the registry: the bytes are the format's, and a path (desktop) gets
+// exactly the returned bytes.
+func TestExportService_Export_RendersAndWrites(t *testing.T) {
 	svc := NewExportService(NilNotifier{}, nil, nil)
 	doc := &models.FlowDocument{ID: "test", Name: "Test Flow"}
 	report := &models.AnalysisReport{FlowID: "test", FlowName: "Test Flow"}
-
-	content, err := svc.ExportMarkdown(doc, report, outPath)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	written, err := os.ReadFile(outPath)
-	if err != nil {
-		t.Fatalf("failed to read written file: %v", err)
-	}
-	if string(written) != string(content) {
-		t.Error("file content should match returned content")
+	for _, id := range []string{"markdown", "html", "pdf"} {
+		t.Run(id, func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "report"+map[string]string{"markdown": ".md", "html": ".html", "pdf": ".pdf"}[id])
+			content, f, err := svc.Export(id, doc, report, out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.ID != id || len(content) == 0 {
+				t.Fatalf("format %q, %d bytes", f.ID, len(content))
+			}
+			if id != "pdf" { // PDF bytes carry the render time
+				want, err := export.Bytes(id, export.Input{Report: report, Doc: doc}, export.Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(content, want) {
+					t.Errorf("Export differs from the registry's %s rendering", id)
+				}
+			}
+			written, err := os.ReadFile(out) // #nosec G304 -- test temp dir
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(written, content) {
+				t.Error("file content should match returned content")
+			}
+		})
 	}
 }
 
-func TestExportService_ExportPDF_NilDoc(t *testing.T) {
+func TestExportService_Export_RejectsABadPath(t *testing.T) {
 	svc := NewExportService(NilNotifier{}, nil, nil)
-	_, err := svc.ExportPDF(nil, &models.AnalysisReport{}, "")
-	if err == nil {
-		t.Error("expected error for nil doc")
+	if _, _, err := svc.Export("markdown", &models.FlowDocument{}, &models.AnalysisReport{}, "report\x00.md"); !errors.Is(err, ErrInvalidPath) {
+		t.Errorf("a path with a NUL byte: %v, want ErrInvalidPath", err)
 	}
 }
 
-func TestExportService_ExportPDF_NilReport(t *testing.T) {
-	svc := NewExportService(NilNotifier{}, nil, nil)
-	_, err := svc.ExportPDF(&models.FlowDocument{}, nil, "")
-	if err == nil {
-		t.Error("expected error for nil report")
+// Render stamps this build's version into SARIF (the init()-time global it replaces did the same),
+// an explicit version wins, and an unknown format is invalid input.
+func TestExportService_Render(t *testing.T) {
+	driverVersion := func(b []byte) string {
+		t.Helper()
+		var log struct {
+			Runs []struct {
+				Tool struct {
+					Driver struct {
+						Version string `json:"version"`
+					} `json:"driver"`
+				} `json:"tool"`
+			} `json:"runs"`
+		}
+		if err := json.Unmarshal(b, &log); err != nil {
+			t.Fatal(err)
+		}
+		return log.Runs[0].Tool.Driver.Version
+	}
+	old := Version
+	t.Cleanup(func() { Version = old })
+	Version = "9.8.7"
+
+	var svc *ExportService // stateless: a nil service renders
+	b, f, err := svc.Render("sarif", export.Input{}, export.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.ID != "sarif" || f.MIME != "application/sarif+json" {
+		t.Errorf("format = %+v", f)
+	}
+	if got := driverVersion(b); got != "9.8.7" {
+		t.Errorf("tool.driver.version = %q, want the build version", got)
+	}
+	if b, _, _ = svc.Render("sarif", export.Input{}, export.Options{ToolVersion: "1.2.3"}); driverVersion(b) != "1.2.3" {
+		t.Errorf("an explicit ToolVersion was overridden: %q", driverVersion(b))
+	}
+
+	if _, _, err := svc.Render("docx", export.Input{}, export.Options{}); !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("unknown format: %v, want ErrInvalidInput", err)
+	}
+}
+
+// The save allowlist names only extensions of registered formats, so every file the findings
+// panel saves is a format the server itself can produce.
+func TestClientExportExts_AreRegisteredFormats(t *testing.T) {
+	exts := map[string]string{}
+	for _, f := range export.List() {
+		exts[f.Ext] = f.ID
+	}
+	for ext := range clientExportExts {
+		if _, ok := exts[ext]; !ok {
+			t.Errorf("allowlisted %s is no registered format's extension", ext)
+		}
 	}
 }
 

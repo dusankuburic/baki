@@ -1,0 +1,136 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_padframework_Framework_SetTransactionStatus
+document: subflows=1 blocks=19 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":0,"info":12,"blocksAnalyzed":16,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=15 final=720/720 last="Loop body is too large"
+metrics: {"avgCognitive":4,"avgCyclomatic":5,"healthScore":88,"maxCognitive":4,"maxCyclomatic":5,"subflowCount":1,"totalBlocks":16,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Framework_SetTransactionStatus: {"blockCount":16,"cognitiveComplexity":4,"cyclomaticComplexity":5,"fanIn":0,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=16
+  raw findings: duplicate-action=1 subflow-no-error-handler=1 unused-variable=10
+inventory: none
+findings: 12
+F-001 info/medium duplicate-action [Style] fix=remove-block @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=duplicate-action:f71cdfebb14017d9
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":3}
+F-002 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=subflow-no-error-handler:f71cdfebb14017d9
+    title: Subflow without error handler
+    desc: Subflow "Framework_SetTransactionStatus" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-003 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#1 sf=Framework_SetTransactionStatus fp=unused-variable:f8eace5cec9bd793
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-004 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#2 sf=Framework_SetTransactionStatus fp=unused-variable:a1fdd184bed130e1
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-005 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#4 sf=Framework_SetTransactionStatus fp=unused-variable:792a36bd1f7c4be9
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-006 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#5 sf=Framework_SetTransactionStatus fp=unused-variable:6f2efc8916b0d7f9
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-007 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#8 sf=Framework_SetTransactionStatus fp=unused-variable:b40d98dbb2ba1655
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-008 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#9 sf=Framework_SetTransactionStatus fp=unused-variable:a4f8588638af3ae1
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-009 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#12 sf=Framework_SetTransactionStatus fp=unused-variable:a17de862c3560268
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-010 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#13 sf=Framework_SetTransactionStatus fp=unused-variable:a3abf8717cf388a4
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-011 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#16 sf=Framework_SetTransactionStatus fp=unused-variable:d010bdbec60cdaab
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"SystemException"}
+F-012 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#17 sf=Framework_SetTransactionStatus fp=unused-variable:ce3fcb6f7bd84df7
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"BusinessException"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":0,"info":12,"blocksAnalyzed":16,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=15 final=720/720 last="Loop body is too large"
+metrics: as default, healthScore=88
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=16
+  raw findings: duplicate-action=1 subflow-no-error-handler=1 unused-variable=10
+inventory: none
+findings: 12
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":0,"info":13,"blocksAnalyzed":16,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=15 final=720/720 last="Loop body is too large"
+metrics: as default, healthScore=87
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=16
+  raw findings: duplicate-action=1 large-subflow=1 subflow-no-error-handler=1 unused-variable=10
+inventory: none
+findings: 13
+F-001 info/medium duplicate-action [Style] fix=remove-block @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=duplicate-action:f71cdfebb14017d9
+F-002 info/low large-subflow [Style] fix=- @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=large-subflow:f71cdfebb14017d9
+    title: Large subflow
+    desc: Subflow 'Framework_SetTransactionStatus' has 16 blocks (threshold: 5).
+F-003 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=subflow-no-error-handler:f71cdfebb14017d9
+F-004 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#1 sf=Framework_SetTransactionStatus fp=unused-variable:f8eace5cec9bd793
+F-005 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#2 sf=Framework_SetTransactionStatus fp=unused-variable:a1fdd184bed130e1
+F-006 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#4 sf=Framework_SetTransactionStatus fp=unused-variable:792a36bd1f7c4be9
+F-007 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#5 sf=Framework_SetTransactionStatus fp=unused-variable:6f2efc8916b0d7f9
+F-008 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#8 sf=Framework_SetTransactionStatus fp=unused-variable:b40d98dbb2ba1655
+F-009 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#9 sf=Framework_SetTransactionStatus fp=unused-variable:a4f8588638af3ae1
+F-010 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#12 sf=Framework_SetTransactionStatus fp=unused-variable:a17de862c3560268
+F-011 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#13 sf=Framework_SetTransactionStatus fp=unused-variable:a3abf8717cf388a4
+F-012 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#16 sf=Framework_SetTransactionStatus fp=unused-variable:d010bdbec60cdaab
+F-013 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#17 sf=Framework_SetTransactionStatus fp=unused-variable:ce3fcb6f7bd84df7
+
+=== disabled
+stats: {"errors":0,"warnings":0,"info":11,"blocksAnalyzed":16,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=12 final=592/592 last="Loop body is too large"
+metrics: as default, healthScore=89
+profiles: rules=37 order=f7de49357acad250 blocksChecked=16
+  raw findings: duplicate-action=1 unused-variable=10
+inventory: none
+findings: 11
+F-001 info/medium duplicate-action [Style] fix=remove-block @Framework_SetTransactionStatus#0 sf=Framework_SetTransactionStatus fp=duplicate-action:f71cdfebb14017d9
+F-002 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#1 sf=Framework_SetTransactionStatus fp=unused-variable:f8eace5cec9bd793
+F-003 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#2 sf=Framework_SetTransactionStatus fp=unused-variable:a1fdd184bed130e1
+F-004 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#4 sf=Framework_SetTransactionStatus fp=unused-variable:792a36bd1f7c4be9
+F-005 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#5 sf=Framework_SetTransactionStatus fp=unused-variable:6f2efc8916b0d7f9
+F-006 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#8 sf=Framework_SetTransactionStatus fp=unused-variable:b40d98dbb2ba1655
+F-007 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#9 sf=Framework_SetTransactionStatus fp=unused-variable:a4f8588638af3ae1
+F-008 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#12 sf=Framework_SetTransactionStatus fp=unused-variable:a17de862c3560268
+F-009 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#13 sf=Framework_SetTransactionStatus fp=unused-variable:a3abf8717cf388a4
+F-010 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#16 sf=Framework_SetTransactionStatus fp=unused-variable:d010bdbec60cdaab
+F-011 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#17 sf=Framework_SetTransactionStatus fp=unused-variable:ce3fcb6f7bd84df7
+
+=== severity
+stats: {"errors":1,"warnings":0,"info":11,"blocksAnalyzed":16,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=15 final=720/720 last="Loop body is too large"
+metrics: as default, healthScore=77
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=16
+  raw findings: duplicate-action=1 subflow-no-error-handler=1 unused-variable=10
+inventory: none
+findings: 12
+  as default; severity changes: F-002 info->error
+
+=== autofixable
+stats: {"errors":0,"warnings":0,"info":12,"blocksAnalyzed":16,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=512/512 last="Wait zero"
+metrics: as default, healthScore=88
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=16
+  raw findings: duplicate-action=1 subflow-no-error-handler=1 unused-variable=10
+inventory: none
+findings: 12
+  as default; severity changes: none

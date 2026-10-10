@@ -122,7 +122,7 @@ function setupStores() {
     reports: new Map([['flow-1', mockReport]]),
     isAnalyzing: false,
     severityFilter: new Set(['error', 'warning', 'info']),
-    categoryFilter: new Set(['Security', 'Reliability', 'Performance', 'Style', 'Logic']),
+    hiddenCategories: new Set(),
     suppressedFindings: [],
     findingSearch: '',
   })
@@ -326,5 +326,91 @@ describe('FindingsTab', () => {
       // Still matches; the non-matching finding is filtered out.
       await waitFor(() => expect(screen.queryByText('Dead code')).not.toBeInTheDocument())
     })
+  })
+})
+
+// B2: the category filter used to keep only five known categories, so
+// Portability (hardcoded-filepath/-ip/-url), Syntax (parse-error) and any
+// custom rule's category never showed. It now hides only what the user hid.
+describe('categories and preview findings', () => {
+  const finding = (id: string, title: string, over: Partial<Finding> = {}): Finding => ({
+    id,
+    ruleId: `${id}-rule`,
+    severity: 'info',
+    title,
+    description: 'd',
+    blockId: `blk-${id}`,
+    subflowId: 'sf1',
+    ...over,
+  })
+  const withFindings = (findings: Finding[]) =>
+    useAnalysisStore.setState({reports: new Map([['flow-1', {...mockReport, findings}]])})
+  const titles = ['Hardcoded path', 'Parse error', 'Org naming rule', 'No category', 'Dead code']
+  const mixed = () => [
+    finding('p', 'Hardcoded path', {category: 'Portability'}),
+    finding('s', 'Parse error', {category: 'Syntax', severity: 'error'}),
+    finding('c', 'Org naming rule', {category: 'Compliance'}),
+    finding('n', 'No category'),
+    {...f1},
+  ]
+
+  it('shows findings of every category, known or not, with a chip for each', async () => {
+    withFindings(mixed())
+    await renderTab()
+    for (const title of titles) expect(await screen.findByText(title)).toBeInTheDocument()
+    for (const cat of ['Portability', 'Syntax', 'Compliance', 'Security']) {
+      expect(screen.getByRole('button', {name: cat})).toHaveAttribute('aria-pressed', 'true')
+    }
+  })
+
+  it('hides only the category the user turned off, and shows it again', async () => {
+    withFindings(mixed())
+    await renderTab()
+    await screen.findByText('Hardcoded path')
+
+    fireEvent.click(screen.getByRole('button', {name: 'Portability'}))
+    await waitFor(() => expect(screen.queryByText('Hardcoded path')).not.toBeInTheDocument())
+    for (const title of titles.filter(t => t !== 'Hardcoded path')) expect(screen.getByText(title)).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Portability'})).toHaveAttribute('aria-pressed', 'false')
+
+    fireEvent.click(screen.getByRole('button', {name: 'Compliance'}))
+    await waitFor(() => expect(screen.queryByText('Org naming rule')).not.toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', {name: 'All'}))
+    for (const title of titles) expect(await screen.findByText(title)).toBeInTheDocument()
+  })
+
+  it('applies a view saved by an older bundle without hiding categories it never knew', async () => {
+    withFindings(mixed())
+    useAnalysisStore.setState({
+      savedViews: [
+        {name: 'Old view', severities: ['error', 'warning', 'info'], categories: ['Security', 'Reliability', 'Logic']},
+      ],
+    })
+    await renderTab()
+    await screen.findByText('Dead code')
+
+    fireEvent.click(screen.getByTitle('Saved filter views'))
+    fireEvent.click(await screen.findByText('Old view'))
+    // It showed Security, Reliability and Logic out of its five: Style and Performance go...
+    await waitFor(() => expect(screen.queryByText('Dead code')).not.toBeInTheDocument())
+    // ...and the categories it could not list stay.
+    for (const title of ['Hardcoded path', 'Parse error', 'Org naming rule', 'No category']) {
+      expect(screen.getByText(title)).toBeInTheDocument()
+    }
+  })
+
+  it('marks a preview finding, and only that one, with a Preview badge', async () => {
+    withFindings([
+      finding('pv', 'Preview finding', {category: 'Style', stage: 'preview'}),
+      finding('st', 'Stable finding', {category: 'Style'}),
+      // A stage a newer server added reads as stable.
+      finding('nx', 'Future-stage finding', {category: 'Style', stage: unknownValue('beta')}),
+    ])
+    await renderTab()
+    await screen.findByText('Preview finding')
+    expect(screen.getAllByText('Preview')).toHaveLength(1)
+    const card = screen.getByText('blk-pv').closest('div.group') as HTMLElement
+    expect(card).toHaveTextContent('Preview')
   })
 })

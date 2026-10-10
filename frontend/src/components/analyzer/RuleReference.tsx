@@ -6,6 +6,7 @@ import {useOrgStore} from '@/stores/orgStore'
 import type {Rule} from '@/types/analysis'
 import {Spinner} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
+import PreviewBadge from './PreviewBadge'
 
 const SEVERITY_ICONS: Record<string, React.ReactNode> = {
   error: <AlertTriangle className="w-4 h-4 text-red-400" />,
@@ -50,6 +51,7 @@ export default function RuleReference() {
   }, [rules, filter, query])
 
   const autoFixableCount = rules?.filter((r: Rule) => r.autoFix).length ?? 0
+  const previewCount = rules?.filter((r: Rule) => r.stage === 'preview').length ?? 0
 
   if (isLoading) return <Spinner />
   if (error) return <div className="p-8 text-center text-text-secondary">{t('reference.loadFailed')}</div>
@@ -67,6 +69,7 @@ export default function RuleReference() {
             categories: categories.length - 1,
             autoFixable: autoFixableCount,
           })}
+          {previewCount > 0 && <> · {t('reference.previewCount', {count: previewCount})}</>}
         </p>
       </div>
 
@@ -104,6 +107,7 @@ export default function RuleReference() {
                 <div className="flex items-center gap-2 mb-1">
                   <code className="text-xs font-mono text-accent-blue">{r.id}</code>
                   {SEVERITY_ICONS[r.defaultSeverity]}
+                  {r.stage === 'preview' && <PreviewBadge of="rule" />}
                   {r.autoFix && (
                     <span className="inline-flex items-center gap-1 text-xs text-green-400">
                       <Wrench className="w-3 h-3" />
@@ -117,6 +121,9 @@ export default function RuleReference() {
                   <span>{t('reference.category', {category: r.category})}</span>
                   <span>{t('reference.severity', {severity: r.defaultSeverity})}</span>
                   {r.confidence && <span>{t('reference.confidence', {confidence: r.confidence})}</span>}
+                  {r.kind === 'library' && (
+                    <span title={t('reference.libraryKindHint')}>{t('reference.libraryKind')}</span>
+                  )}
                 </div>
               </div>
             </div>

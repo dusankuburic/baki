@@ -11,7 +11,6 @@ import (
 
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
-	"pad-core/cache"
 	"pad-core/models"
 )
 
@@ -116,7 +115,7 @@ func TestSearchLibrary_CandidatesDoNotEnterTheCaches(t *testing.T) {
 	if provider.cache.Len() != 1 {
 		t.Errorf("the search left %d documents in the document cache, want only the hot one", provider.cache.Len())
 	}
-	if got := svc.idxCache.(*cache.SizedLRU).Len(); got != 1 {
+	if got := svc.idxCache.Len(); got != 1 {
 		t.Errorf("the search left %d search indexes cached, want only the hot document's", got)
 	}
 }

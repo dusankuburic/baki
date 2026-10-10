@@ -11,9 +11,9 @@ import (
 // Only the uncaptured-output pattern is auto-fixable (append-output). The
 // missing-inputs pattern has no deterministic fix.
 //
-// This is a regression test for a bug where the ruleAutoFix map entry
-// "subflow-mismatch": "append-output" caused the engine to stamp AutoFix
-// on BOTH findings (uncaptured-output AND missing-inputs).
+// This is a regression test for a bug where an engine-stamped auto-fix
+// "subflow-mismatch": "append-output" (now RuleMeta.AutoFix) caused the engine
+// to stamp AutoFix on BOTH findings (uncaptured-output AND missing-inputs).
 func TestSubflowMismatch_MissingInputsHasNoAutoFix(t *testing.T) {
 	// Build a CALL block that calls a subflow with input variables.
 	// The call doesn't provide any inputs → missing-inputs finding.
@@ -57,11 +57,15 @@ func TestSubflowMismatch_MissingInputsHasNoAutoFix(t *testing.T) {
 	}
 }
 
-// TestRuleAutoFix_SubflowMismatchNotInMap verifies that subflow-mismatch
-// is NOT in the ruleAutoFix map (the inline AutoFix on uncaptured-output
-// is the sole mechanism, preventing missing-inputs from being stamped).
+// TestRuleAutoFix_SubflowMismatchNotInMap verifies that subflow-mismatch has
+// no engine-stamped AutoFix (the inline AutoFix on uncaptured-output is the
+// sole mechanism, preventing missing-inputs from being stamped); append-output
+// is declared as a direct fix instead.
 func TestRuleAutoFix_SubflowMismatchNotInMap(t *testing.T) {
 	if fix := RuleAutoFix("subflow-mismatch"); fix != "" {
-		t.Errorf("subflow-mismatch should NOT be in ruleAutoFix map (inline only), got %q", fix)
+		t.Errorf("subflow-mismatch should have no engine-stamped AutoFix (inline only), got %q", fix)
+	}
+	if m, _ := LookupMeta("subflow-mismatch"); len(m.DirectFixes) != 1 || m.DirectFixes[0] != "append-output" {
+		t.Errorf("subflow-mismatch DirectFixes = %v, want [append-output]", m.DirectFixes)
 	}
 }

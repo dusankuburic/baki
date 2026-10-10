@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -226,5 +227,76 @@ func TestSizedLRU_ConcurrentUse(t *testing.T) {
 	}
 	if c.Cost() > 5000 || c.Len() > 50 {
 		t.Errorf("bounds violated: cost=%d len=%d", c.Cost(), c.Len())
+	}
+}
+
+// TestSizedLRU_EvictionHookReportsWhy: every entry that leaves is reported once, with its reason; a skipped oversize
+// insert removes nothing and reports nothing.
+func TestSizedLRU_EvictionHookReportsWhy(t *testing.T) {
+	ctx := context.Background()
+	c := NewSizedLRU(100, WithMaxEntryCost(60))
+	var got []EvictReason
+	c.onEvict = func(r EvictReason) { got = append(got, r) }
+	c.SetWithCost(ctx, "a", 1, 50, 0)
+	c.SetWithCost(ctx, "b", 2, 50, 0)
+	c.SetWithCost(ctx, "c", 3, 50, 0) // a: capacity
+	c.SetWithCost(ctx, "b", 4, 10, 0) // b: replaced
+	c.SetWithCost(ctx, "c", 5, 61, 0) // c: replaced by an oversize value, which is not stored
+	c.SetWithCost(ctx, "d", 6, 61, 0) // nothing to drop
+	c.Delete(ctx, "b")                // b: deleted
+	c.Delete(ctx, "b")                // already gone
+	c.SetWithCost(ctx, "e", 7, 1, time.Nanosecond)
+	time.Sleep(2 * time.Millisecond)
+	c.Get(ctx, "e") // e: expired
+	want := []EvictReason{EvictCapacity, EvictReplaced, EvictReplaced, EvictDeleted, EvictExpired}
+	if !slices.Equal(got, want) {
+		t.Errorf("reported %v, want %v", got, want)
+	}
+	if c.Len() != 0 || c.Cost() != 0 {
+		t.Errorf("len=%d cost=%d, want 0/0", c.Len(), c.Cost())
+	}
+}
+
+// TestSizedLRU_DefaultTTL: WithTTL applies to stores with ttl 0; an explicit ttl wins and a negative one never
+// expires.
+func TestSizedLRU_DefaultTTL(t *testing.T) {
+	ctx := context.Background()
+	c := NewSizedLRU(10, WithTTL(time.Nanosecond))
+	c.Set(ctx, "default", 1, 0)
+	c.SetWithCost(ctx, "explicit", 1, 1, time.Hour)
+	c.SetWithCost(ctx, "never", 1, 1, -1)
+	time.Sleep(2 * time.Millisecond)
+	if _, ok := c.Get(ctx, "default"); ok {
+		t.Error("the default TTL did not apply")
+	}
+	for _, k := range []string{"explicit", "never"} {
+		if _, ok := c.Get(ctx, k); !ok {
+			t.Errorf("%s expired", k)
+		}
+	}
+	plain := NewSizedLRU(10)
+	plain.Set(ctx, "k", 1, 0)
+	time.Sleep(2 * time.Millisecond)
+	if _, ok := plain.Get(ctx, "k"); !ok {
+		t.Error("without WithTTL, ttl 0 must never expire")
+	}
+}
+
+// TestSizedLRU_StoreIfRefusedLeavesCache: a refused conditional store changes nothing, the old value included.
+func TestSizedLRU_StoreIfRefusedLeavesCache(t *testing.T) {
+	ctx := context.Background()
+	c := NewSizedLRU(10)
+	c.SetWithCost(ctx, "k", "old", 3, 0)
+	if c.storeIf("k", "new", 4, 0, func() bool { return false }) {
+		t.Error("refused store reported stored")
+	}
+	if v, ok := c.Get(ctx, "k"); !ok || v != "old" || c.Cost() != 3 {
+		t.Errorf("after a refused store: %v, %v, cost %d; want old, true, 3", v, ok, c.Cost())
+	}
+	if !c.storeIf("k", "new", 4, 0, func() bool { return true }) {
+		t.Error("allowed store refused")
+	}
+	if v, _ := c.Get(ctx, "k"); v != "new" || c.Cost() != 4 {
+		t.Errorf("after an allowed store: %v, cost %d", v, c.Cost())
 	}
 }

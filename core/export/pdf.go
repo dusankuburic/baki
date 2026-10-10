@@ -21,6 +21,11 @@ var jetbrainsMonoBoldTTF []byte
 
 const pdfFontFamily = "JetBrainsMono"
 
+func init() {
+	registerBuiltin(Format{ID: "pdf", Label: "PDF", MIME: "application/pdf", Ext: ".pdf", Binary: true, Order: 70},
+		func(in Input, _ Options) ([]byte, error) { return ReportToPDF(in.Report, in.Doc) })
+}
+
 func ReportToPDF(report *models.AnalysisReport, doc *models.FlowDocument) ([]byte, error) {
 	return reportToPDF(report, doc, finishPDF)
 }

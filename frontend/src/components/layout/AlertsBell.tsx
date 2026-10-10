@@ -9,6 +9,7 @@ import {libraryApi} from '@/api/library'
 import {isTauri} from '@/platform/guards'
 import {sevChip} from '@/components/dashboard/SeverityChips'
 import type {FlowDocument} from '@/types'
+import type {GovernanceAlert} from '@/api/governance'
 import {logger} from '@/lib/logger'
 
 // Notifications bell + dropdown panel for the in-app governance alerts inbox.
@@ -91,6 +92,7 @@ function AlertsPanel() {
   const closePanel = useGovernanceStore(s => s.closePanel)
   const setDocument = useFlowStore(s => s.setDocument)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
+  const openSettings = useUIStore(s => s.openSettings)
 
   // Dismissed rows only reach the list while the toggle is on, so Clear is
   // offered exactly when there is something on screen for it to remove.
@@ -106,6 +108,12 @@ function AlertsPanel() {
     } catch (err) {
       logger.warn('governance: open flow from alert failed', err)
     }
+  }
+
+  // A new_rules notice is about rules, not one flow: it opens the rule settings.
+  const openRules = () => {
+    closePanel()
+    openSettings('analysis')
   }
 
   return (
@@ -155,7 +163,7 @@ function AlertsPanel() {
               key={a.id}
               alert={a}
               onDismiss={() => void dismiss(a.id)}
-              onOpenFlow={() => void openFlow(a.flowId)}
+              onOpen={a.type === 'new_rules' ? openRules : () => void openFlow(a.flowId)}
             />
           ))
         )}
@@ -164,26 +172,24 @@ function AlertsPanel() {
   )
 }
 
-function AlertRow({
-  alert,
-  onDismiss,
-  onOpenFlow,
-}: {
-  alert: import('@/api/governance').GovernanceAlert
-  onDismiss: () => void
-  onOpenFlow: () => void
-}) {
+// How many rule ids a notice row shows before "+N more".
+const NOTICE_RULES_SHOWN = 4
+
+function AlertRow({alert, onDismiss, onOpen}: {alert: GovernanceAlert; onDismiss: () => void; onOpen: () => void}) {
   const {t} = useTranslation('shell')
   const isRegression = alert.type === 'health_regression'
+  const isNotice = alert.type === 'new_rules'
   // Personal alert types get a friendlier chip than the raw severity: an
   // assignment is an action item, not an error state.
-  const chip = isRegression
-    ? 'health'
-    : alert.type === 'finding_assigned'
-      ? 'assigned'
-      : alert.type === 'comment_added'
-        ? 'comment'
-        : alert.severity
+  const chip = isNotice
+    ? t('alerts.newRules.chip')
+    : isRegression
+      ? 'health'
+      : alert.type === 'finding_assigned'
+        ? 'assigned'
+        : alert.type === 'comment_added'
+          ? 'comment'
+          : alert.severity
   return (
     <div
       className={clsx(
@@ -195,18 +201,28 @@ function AlertRow({
         <span
           className={clsx(
             'mt-0.5 px-1 py-0.5 rounded text-2xs font-medium shrink-0',
-            alert.type === 'finding_assigned' || alert.type === 'comment_added'
+            alert.type === 'finding_assigned' || alert.type === 'comment_added' || isNotice
               ? 'bg-brand-500/10 text-brand-400'
               : (sevChip[alert.severity] ?? sevChip.warning),
           )}
         >
           {chip}
         </span>
-        <button className="flex-1 text-left" onClick={onOpenFlow}>
+        <button
+          className="flex-1 text-left min-w-0"
+          onClick={onOpen}
+          title={isNotice ? t('alerts.newRules.open') : undefined}
+        >
           <div className="text-xs text-text-primary line-clamp-2">{alert.title}</div>
-          {alert.message && <div className="text-2xs text-text-tertiary mt-0.5 line-clamp-2">{alert.message}</div>}
+          {isNotice ? (
+            <NoticeRules alert={alert} />
+          ) : (
+            alert.message && <div className="text-2xs text-text-tertiary mt-0.5 line-clamp-2">{alert.message}</div>
+          )}
           <div className="flex items-center gap-1 mt-1 text-2xs text-text-disabled">
-            <span className="truncate max-w-[140px]">{alert.flowName || alert.flowId}</span>
+            <span className="truncate max-w-[140px]">
+              {isNotice ? <NoticeScope scope={alert.scope} /> : alert.flowName || alert.flowId}
+            </span>
             <ChevronRight size={9} />
             <span>{timeAgo(alert.createdAt)}</span>
           </div>
@@ -222,4 +238,42 @@ function AlertRow({
       </div>
     </div>
   )
+}
+
+// The rules of a new_rules notice and where they report findings. The ids are
+// data (rule ids), not copy.
+function NoticeRules({alert}: {alert: GovernanceAlert}) {
+  const {t} = useTranslation('shell')
+  const ids = alert.ruleIds ?? []
+  const more = ids.length - NOTICE_RULES_SHOWN
+  return (
+    <div className="mt-0.5">
+      {ids.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {ids.slice(0, NOTICE_RULES_SHOWN).map(id => (
+            <code key={id} className="px-1 rounded bg-surface-3 text-2xs text-text-secondary">
+              {id}
+            </code>
+          ))}
+          {more > 0 && <span className="text-2xs text-text-tertiary">{t('alerts.newRules.more', {count: more})}</span>}
+        </div>
+      )}
+      {alert.flowCount != null && alert.flowCount > 0 && (
+        <div className="text-2xs text-text-tertiary mt-0.5">{t('alerts.newRules.flows', {count: alert.flowCount})}</div>
+      )}
+    </div>
+  )
+}
+
+// Where a notice's flows are: in place of an alert's flow name.
+function NoticeScope({scope}: {scope: GovernanceAlert['scope']}) {
+  const {t} = useTranslation('shell')
+  switch (scope) {
+    case 'org':
+      return <>{t('alerts.newRules.scopeOrg')}</>
+    case 'user':
+      return <>{t('alerts.newRules.scopeUser')}</>
+    default:
+      return <>{t('alerts.newRules.scopeApp')}</>
+  }
 }

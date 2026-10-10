@@ -12,8 +12,10 @@ func (r *DeepNestingRule) Description() string              { return "Blocks nes
 func (r *DeepNestingRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
 func (r *DeepNestingRule) Category() string                 { return "Style" }
 
+var deepNestingMaxDepth = OptionSpec{Key: "maxDepth", Default: 6, Min: 1}
+
 func (r *DeepNestingRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	maxDepth := ruleOptionInt(ctx.Settings, r.ID(), "maxDepth", 6, 1)
+	maxDepth := ruleOption(ctx.Settings, r.ID(), deepNestingMaxDepth)
 
 	depth := ctx.BlockDepth[block.ID]
 	if depth <= maxDepth {
@@ -32,4 +34,13 @@ func (r *DeepNestingRule) Check(block *models.Block, ctx *RuleContext) []models.
 	}}
 }
 
-func init() { registerRule(&DeepNestingRule{}) }
+func init() {
+	registerRule(&DeepNestingRule{}, RuleMeta{
+		Confidence:   models.ConfidenceLow,
+		Options:      []OptionSpec{deepNestingMaxDepth},
+		Related:      []Related{{To: "infinite-loop-risk", Reason: "deep nesting increases loop complexity"}},
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

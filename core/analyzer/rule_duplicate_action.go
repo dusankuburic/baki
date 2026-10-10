@@ -19,8 +19,10 @@ func (r *DuplicateActionRule) Description() string {
 func (r *DuplicateActionRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
 func (r *DuplicateActionRule) Category() string                 { return "Style" }
 
+var duplicateActionMinRepeats = OptionSpec{Key: "minRepeats", Default: 3, Min: 2}
+
 func (r *DuplicateActionRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	minRepeats := ruleOptionInt(ctx.Settings, r.ID(), "minRepeats", 3, 2)
+	minRepeats := ruleOption(ctx.Settings, r.ID(), duplicateActionMinRepeats)
 
 	siblings := GetSiblings(ctx, block)
 	if len(siblings) < minRepeats {
@@ -92,4 +94,13 @@ func blockSignature(b *models.Block) string {
 	return hex.EncodeToString(h[:])
 }
 
-func init() { registerRule(&DuplicateActionRule{}) }
+func init() {
+	registerRule(&DuplicateActionRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "remove-block",
+		Options:      []OptionSpec{duplicateActionMinRepeats},
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

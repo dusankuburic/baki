@@ -29,15 +29,15 @@ func (r *DuplicateLabelRule) Check(block *models.Block, ctx *RuleContext) []mode
 	// goto-antipattern resolver and buildLabelIndex exactly) from the
 	// precomputed LabelNameCount index (was O(labels × blocks)).
 	lower := strings.ToLower(labelName)
-	count := ctx.LabelNameCount[lower]
+	count := ctx.LabelNameCount()[lower]
 	if count <= 1 {
 		return nil
 	}
 
 	// Only emit on the first occurrence (by document order) to avoid N identical
-	// findings. ctx.LabelByName is built in document order by buildLabelIndex
+	// findings. LabelByName is built in document order by buildLabelIndex
 	// (keyed with strings.ToLower), so it deterministically points to the first.
-	first := ctx.LabelByName[lower]
+	first := ctx.LabelByName()[lower]
 	if first != nil && block.ID != first.ID {
 		return nil
 	}
@@ -54,4 +54,11 @@ func (r *DuplicateLabelRule) Check(block *models.Block, ctx *RuleContext) []mode
 	}}
 }
 
-func init() { registerRule(&DuplicateLabelRule{}) }
+func init() {
+	registerRule(&DuplicateLabelRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

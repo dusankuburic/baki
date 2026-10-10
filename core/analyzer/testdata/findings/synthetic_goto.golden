@@ -1,0 +1,69 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: synthetic_goto
+document: subflows=1 blocks=12 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":12,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=540/540 last="Loop body is too large"
+metrics: {"avgCognitive":0,"avgCyclomatic":1,"healthScore":99,"maxCognitive":0,"maxCyclomatic":1,"subflowCount":1,"totalBlocks":12,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":12,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=12
+  raw findings: subflow-no-error-handler=1
+inventory: none
+findings: 1
+F-001 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:3b84c8a647001302
+    title: Subflow without error handler
+    desc: Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+
+=== nil-settings
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":12,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=540/540 last="Loop body is too large"
+metrics: as default, healthScore=99
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=12
+  raw findings: subflow-no-error-handler=1
+inventory: none
+findings: 1
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":0,"info":2,"blocksAnalyzed":12,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=540/540 last="Loop body is too large"
+metrics: as default, healthScore=98
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=12
+  raw findings: large-subflow=1 subflow-no-error-handler=1
+inventory: none
+findings: 2
+F-001 info/low large-subflow [Style] fix=- @Main#0 sf=Main fp=large-subflow:3b84c8a647001302
+    title: Large subflow
+    desc: Subflow 'Main' has 12 blocks (threshold: 5).
+F-002 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:3b84c8a647001302
+
+=== disabled
+stats: {"errors":0,"warnings":0,"info":0,"blocksAnalyzed":12,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=9 final=444/444 last="Loop body is too large"
+metrics: as default, healthScore=100
+profiles: rules=37 order=f7de49357acad250 blocksChecked=12
+inventory: none
+findings: 0
+
+=== severity
+stats: {"errors":1,"warnings":0,"info":0,"blocksAnalyzed":12,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=540/540 last="Loop body is too large"
+metrics: as default, healthScore=88
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=12
+  raw findings: subflow-no-error-handler=1
+inventory: none
+findings: 1
+  as default; severity changes: F-001 info->error
+
+=== autofixable
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":12,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=8 final=384/384 last="Wait zero"
+metrics: as default, healthScore=99
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=12
+  raw findings: subflow-no-error-handler=1
+inventory: none
+findings: 1
+  as default; severity changes: none

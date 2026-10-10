@@ -14,12 +14,14 @@ func (r *WideLoopRule) Description() string {
 func (r *WideLoopRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
 func (r *WideLoopRule) Category() string                 { return "Style" }
 
+var wideLoopMaxBlocks = OptionSpec{Key: "maxBlocks", Default: 20, Min: 1}
+
 func (r *WideLoopRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeLoop {
 		return nil
 	}
 
-	maxBlocks := ruleOptionInt(ctx.Settings, r.ID(), "maxBlocks", 20, 1)
+	maxBlocks := ruleOption(ctx.Settings, r.ID(), wideLoopMaxBlocks)
 
 	// O(1) subtree size from the precomputed DescendantCount index (the old
 	// per-LOOP subtree walk re-visited every nested loop's body once per
@@ -42,4 +44,12 @@ func (r *WideLoopRule) Check(block *models.Block, ctx *RuleContext) []models.Fin
 	}}
 }
 
-func init() { registerRule(&WideLoopRule{}) }
+func init() {
+	registerRule(&WideLoopRule{}, RuleMeta{
+		Confidence:   models.ConfidenceLow,
+		Options:      []OptionSpec{wideLoopMaxBlocks},
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

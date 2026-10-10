@@ -116,7 +116,7 @@ func TestCircularSubflowRule(t *testing.T) {
 		ctx := buildContext(flow, nil)
 		rule := &CircularSubflowRule{}
 
-		got := rule.Check(callB, ctx)
+		got := findingsAt(rule, ctx, callB)
 		if len(got) != 1 {
 			t.Fatalf("expected 1 finding for cyclic subflow A, got %d", len(got))
 		}
@@ -124,7 +124,7 @@ func TestCircularSubflowRule(t *testing.T) {
 			t.Errorf("ruleID = %q", got[0].RuleID)
 		}
 
-		gotB := rule.Check(callA, ctx)
+		gotB := findingsAt(rule, ctx, callA)
 		if len(gotB) != 1 {
 			t.Fatalf("expected 1 finding for cyclic subflow B, got %d", len(gotB))
 		}
@@ -142,7 +142,7 @@ func TestCircularSubflowRule(t *testing.T) {
 
 		ctx := buildContext(flow, nil)
 		rule := &CircularSubflowRule{}
-		got := rule.Check(callB, ctx)
+		got := findingsAt(rule, ctx, callB)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 findings for acyclic graph, got %d", len(got))
 		}
@@ -159,7 +159,7 @@ func TestCircularSubflowRule(t *testing.T) {
 
 		ctx := buildContext(flow, nil)
 		rule := &CircularSubflowRule{}
-		got := rule.Check(extra, ctx)
+		got := findingsAt(rule, ctx, extra)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 findings on non-first block, got %d", len(got))
 		}
@@ -182,7 +182,7 @@ func TestParseErrorRule(t *testing.T) {
 		}
 		ctx := buildContext(flow, nil)
 		rule := &ParseErrorRule{}
-		got := rule.Check(block, ctx)
+		got := findingsAt(rule, ctx, block)
 		if len(got) != 2 {
 			t.Fatalf("expected 2 findings, got %d", len(got))
 		}
@@ -204,7 +204,7 @@ func TestParseErrorRule(t *testing.T) {
 		}
 		ctx := buildContext(flow, nil)
 		rule := &ParseErrorRule{}
-		got := rule.Check(block, ctx)
+		got := findingsAt(rule, ctx, block)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 findings, got %d", len(got))
 		}
@@ -224,7 +224,7 @@ func TestParseErrorRule(t *testing.T) {
 		}
 		ctx := buildContext(flow, nil)
 		rule := &ParseErrorRule{}
-		got := rule.Check(second, ctx)
+		got := findingsAt(rule, ctx, second)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 findings on non-first block, got %d", len(got))
 		}
@@ -244,7 +244,7 @@ func TestParseErrorRule(t *testing.T) {
 		}
 		ctx := buildContext(flow, nil)
 		rule := &ParseErrorRule{}
-		got := rule.Check(block, ctx)
+		got := findingsAt(rule, ctx, block)
 		if len(got) != 3 {
 			t.Fatalf("expected 3 findings, got %d", len(got))
 		}

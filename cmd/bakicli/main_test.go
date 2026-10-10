@@ -56,15 +56,15 @@ func TestLoadPolicy_MissingFile(t *testing.T) {
 // file is NOT an error — it means "no baseline established yet", so the caller
 // gates on all findings and prompts for -update-baseline.
 func TestLoadBaseline_MissingFileReturnsNoBaseline(t *testing.T) {
-	keys, hadBaseline, err := loadBaseline(filepath.Join(t.TempDir(), "absent.json"))
+	bl, err := loadBaseline(filepath.Join(t.TempDir(), "absent.json"))
 	if err != nil {
 		t.Fatalf("missing baseline should not error, got %v", err)
 	}
-	if hadBaseline {
-		t.Error("a missing file must report hadBaseline=false")
+	if bl.Found {
+		t.Error("a missing file must report Found=false")
 	}
-	if keys != nil {
-		t.Errorf("a missing file must return nil keys, got %v", keys)
+	if bl.Keys != nil || bl.RuleSet != nil {
+		t.Errorf("a missing file must return no keys and no rule set, got %+v", bl)
 	}
 }
 
@@ -79,13 +79,14 @@ func TestWriteThenLoadBaseline_RoundTrip(t *testing.T) {
 		{RuleID: "r2", BlockID: "b2", Fingerprint: "r2:bbbb"},
 		{RuleID: "r1", BlockID: "b1", Fingerprint: "r1:aaaa"}, // duplicate fingerprint
 	}}
-	if err := writeBaseline(path, report); err != nil {
+	if err := writeBaseline(path, findingKeys(report)); err != nil {
 		t.Fatalf("writeBaseline: %v", err)
 	}
-	keys, hadBaseline, err := loadBaseline(path)
-	if err != nil || !hadBaseline {
-		t.Fatalf("loadBaseline after write: keys=%v had=%v err=%v", keys, hadBaseline, err)
+	bl, err := loadBaseline(path)
+	if err != nil || !bl.Found {
+		t.Fatalf("loadBaseline after write: %+v err=%v", bl, err)
 	}
+	keys := bl.Keys
 	// Duplicate fingerprint deduped → 2 distinct keys.
 	if len(keys) != 2 {
 		t.Errorf("expected 2 distinct baseline keys, got %d (%v)", len(keys), keys)
@@ -105,11 +106,11 @@ func TestWriteBaseline_FallsBackToKey(t *testing.T) {
 	report := &models.AnalysisReport{Findings: []models.Finding{
 		{RuleID: "r3", BlockID: "b3"}, // no Fingerprint
 	}}
-	if err := writeBaseline(path, report); err != nil {
+	if err := writeBaseline(path, findingKeys(report)); err != nil {
 		t.Fatalf("writeBaseline: %v", err)
 	}
-	keys, _, _ := loadBaseline(path)
-	if len(keys) != 1 || keys[0] != "r3:b3" {
-		t.Errorf("expected fallback to Key() 'r3:b3', got %v", keys)
+	bl, _ := loadBaseline(path)
+	if len(bl.Keys) != 1 || bl.Keys[0] != "r3:b3" {
+		t.Errorf("expected fallback to Key() 'r3:b3', got %v", bl.Keys)
 	}
 }

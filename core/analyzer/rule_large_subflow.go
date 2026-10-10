@@ -18,39 +18,32 @@ func (r *LargeSubflowRule) Category() string                 { return "Style" }
 
 const defaultLargeSubflowThreshold = 50
 
-func (r *LargeSubflowRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	if block.ParentID != "" {
-		return nil
-	}
-	if block.Type == models.BlockTypeComment {
-		return nil
-	}
+var largeSubflowMaxBlocks = OptionSpec{Key: "maxBlocks", Default: defaultLargeSubflowThreshold, Min: 1}
 
-	threshold := ruleOptionInt(ctx.Settings, r.ID(), "maxBlocks", defaultLargeSubflowThreshold, 1)
-
-	sf := ctx.SubflowByID[block.SubflowID]
-	if sf == nil {
-		return nil
+func (r *LargeSubflowRule) CheckFlow(ctx *RuleContext) []models.Finding {
+	threshold := ruleOption(ctx.Settings, r.ID(), largeSubflowMaxBlocks)
+	var out []models.Finding
+	for i := range ctx.Flow.Subflows {
+		sf := &ctx.Flow.Subflows[i]
+		// Fire once per subflow on the first non-comment top-level block (see
+		// actionableAnchor).
+		anchor := actionableAnchor(ctx, sf)
+		if anchor == nil || anchor.ParentID != "" {
+			continue
+		}
+		if count := countAllBlocks(sf.Blocks); count > threshold {
+			out = append(out, models.Finding{
+				RuleID:      r.ID(),
+				Severity:    r.DefaultSeverity(),
+				Title:       "Large subflow",
+				Description: "Subflow '" + sf.Name + "' has " + strconv.Itoa(count) + " blocks (threshold: " + strconv.Itoa(threshold) + ").",
+				BlockID:     anchor.ID,
+				SubflowID:   sf.ID,
+				Suggestion:  "Break the subflow into smaller, focused subflows that each handle a single responsibility.",
+			})
+		}
 	}
-	// Fire once per subflow on the first non-comment top-level block (see
-	// firstActionableBlockID).
-	if firstActionableBlockID(sf.Blocks) != block.ID {
-		return nil
-	}
-	count := countAllBlocks(sf.Blocks)
-	if count > threshold {
-		return []models.Finding{{
-			RuleID:      r.ID(),
-			Severity:    r.DefaultSeverity(),
-			Title:       "Large subflow",
-			Description: "Subflow '" + sf.Name + "' has " + strconv.Itoa(count) + " blocks (threshold: " + strconv.Itoa(threshold) + ").",
-			BlockID:     block.ID,
-			SubflowID:   block.SubflowID,
-			Suggestion:  "Break the subflow into smaller, focused subflows that each handle a single responsibility.",
-		}}
-	}
-
-	return nil
+	return out
 }
 
 func countAllBlocks(blocks []models.Block) int {
@@ -65,19 +58,12 @@ func countAllBlocks(blocks []models.Block) int {
 	return count
 }
 
-// firstActionableBlockID returns the ID of the first top-level block that is
-// neither a comment nor an END marker, or "" if none. Per-subflow rules
-// (large-subflow, subflow-no-error-handler) attach their finding to this block
-// so its line number / inline-suppression target is actionable, not a leading
-// comment (whose BlockID would point at the wrong line).
-func firstActionableBlockID(blocks []models.Block) string {
-	for i := range blocks {
-		t := blocks[i].Type
-		if t != models.BlockTypeComment && t != models.BlockTypeEnd {
-			return blocks[i].ID
-		}
-	}
-	return ""
+func init() {
+	registerRule(&LargeSubflowRule{}, RuleMeta{
+		Confidence:   models.ConfidenceLow,
+		Options:      []OptionSpec{largeSubflowMaxBlocks},
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
 }
-
-func init() { registerRule(&LargeSubflowRule{}) }

@@ -76,16 +76,32 @@ describe('exportFindingsHTML', () => {
 })
 
 describe('exportFindingsSARIF', () => {
-  it('fetches the SARIF report, pretty-prints it, and downloads it', async () => {
-    exportSARIF.mockResolvedValue({version: '2.1.0', runs: []})
+  it('downloads the SARIF text as the server sent it (no re-serialization)', async () => {
+    const body =
+      '{\n  "version": "2.1.0",\n  "runs": [{"results": [{"message": {"text": "\\u003cscript\\u003e"}}]}]\n}\n'
+    exportSARIF.mockResolvedValue(body)
     const {exportFindingsSARIF} = await import('./findingsExport')
     await exportFindingsSARIF('doc1')
 
     expect(exportSARIF).toHaveBeenCalled()
     const [content, mime, filename] = downloadBlob.mock.calls[0]!
-    expect(JSON.parse(content)).toEqual({version: '2.1.0', runs: []})
+    expect(content).toBe(body)
     expect(mime).toBe('application/sarif+json;charset=utf-8;')
     expect(filename).toMatch(/^analysis-doc1-\d{4}-\d{2}-\d{2}\.sarif$/)
+  })
+})
+
+describe('exportFindingsJUnit', () => {
+  it('downloads the JUnit XML as the server sent it', async () => {
+    const xml = '<?xml version="1.0" encoding="UTF-8"?>\n<testsuites></testsuites>\n'
+    exportJUnit.mockResolvedValue(xml)
+    const {exportFindingsJUnit} = await import('./findingsExport')
+    await exportFindingsJUnit('doc1')
+
+    const [content, mime, filename] = downloadBlob.mock.calls[0]!
+    expect(content).toBe(xml)
+    expect(mime).toBe('application/xml;charset=utf-8;')
+    expect(filename).toMatch(/^analysis-doc1-\d{4}-\d{2}-\d{2}\.xml$/)
   })
 })
 
@@ -99,7 +115,7 @@ describe('desktop exports use the native save dialog', () => {
     ['JUnit', async (m: typeof import('./findingsExport')) => m.exportFindingsJUnit('doc1'), 'xml'],
   ])('%s', async (_label, run, ext) => {
     nativeDialogs = true
-    exportSARIF.mockResolvedValue({version: '2.1.0', runs: []})
+    exportSARIF.mockResolvedValue('{"version":"2.1.0","runs":[]}\n')
     exportJUnit.mockResolvedValue('<testsuites/>')
     saveTextExport.mockResolvedValue('/tmp/out')
     await run(await import('./findingsExport'))

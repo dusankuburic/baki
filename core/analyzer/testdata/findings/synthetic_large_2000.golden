@@ -1,0 +1,72 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: synthetic_large_2000
+document: subflows=1 blocks=2000 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":333,"warnings":1385,"info":336,"blocksAnalyzed":2000,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=sharded final=90000/90000 last="Loop body is too large"
+metrics: {"avgCognitive":666,"avgCyclomatic":667,"healthScore":0,"maxCognitive":666,"maxCyclomatic":667,"subflowCount":1,"totalBlocks":2000,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":2000,"cognitiveComplexity":666,"cyclomaticComplexity":667,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=2000
+  raw findings: file-op-no-error-handler=333 high-cyclomatic-complexity=1 infinite-loop-risk=333 large-subflow=1 missing-retry=334 missing-timeout=334 subflow-no-error-handler=1 unhandled-error=667 uninitialized-variable=50
+inventory: none
+findings: 2054
+  by rule: file-op-no-error-handler=333 high-cyclomatic-complexity=1 infinite-loop-risk=333 large-subflow=1 missing-retry=334 missing-timeout=334 subflow-no-error-handler=1 unhandled-error=667 uninitialized-variable=50
+  digest: full=941edaa7f062cd7b ordered-fingerprints=f5cdcb4c5e703901 fingerprint-set=527a7fdcafc504a3
+
+=== nil-settings
+stats: {"errors":333,"warnings":1385,"info":336,"blocksAnalyzed":2000,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=sharded final=90000/90000 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=2000
+  raw findings: file-op-no-error-handler=333 high-cyclomatic-complexity=1 infinite-loop-risk=333 large-subflow=1 missing-retry=334 missing-timeout=334 subflow-no-error-handler=1 unhandled-error=667 uninitialized-variable=50
+inventory: none
+findings: 2054
+  by rule: file-op-no-error-handler=333 high-cyclomatic-complexity=1 infinite-loop-risk=333 large-subflow=1 missing-retry=334 missing-timeout=334 subflow-no-error-handler=1 unhandled-error=667 uninitialized-variable=50
+  digest: full=941edaa7f062cd7b ordered-fingerprints=f5cdcb4c5e703901 fingerprint-set=527a7fdcafc504a3
+
+=== thresholds
+stats: {"errors":333,"warnings":1385,"info":336,"blocksAnalyzed":2000,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=sharded final=90000/90000 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=2000
+  raw findings: file-op-no-error-handler=333 high-cyclomatic-complexity=1 infinite-loop-risk=333 large-subflow=1 missing-retry=334 missing-timeout=334 subflow-no-error-handler=1 unhandled-error=667 uninitialized-variable=50
+inventory: none
+findings: 2054
+  by rule: file-op-no-error-handler=333 high-cyclomatic-complexity=1 infinite-loop-risk=333 large-subflow=1 missing-retry=334 missing-timeout=334 subflow-no-error-handler=1 unhandled-error=667 uninitialized-variable=50
+  digest: full=f3875929fa45d974 ordered-fingerprints=f5cdcb4c5e703901 fingerprint-set=527a7fdcafc504a3
+
+=== disabled
+stats: {"errors":333,"warnings":668,"info":335,"blocksAnalyzed":2000,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=sharded final=74000/74000 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=37 order=f7de49357acad250 blocksChecked=2000
+  raw findings: file-op-no-error-handler=333 high-cyclomatic-complexity=1 infinite-loop-risk=333 large-subflow=1 missing-retry=334 missing-timeout=334
+inventory: none
+findings: 1336
+  by rule: file-op-no-error-handler=333 high-cyclomatic-complexity=1 infinite-loop-risk=333 large-subflow=1 missing-retry=334 missing-timeout=334
+  digest: full=5c4a0e449d271eec ordered-fingerprints=d919fce899cf18fc fingerprint-set=0a08c2ae831e496f
+
+=== severity
+stats: {"errors":1001,"warnings":668,"info":385,"blocksAnalyzed":2000,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=sharded final=90000/90000 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=2000
+  raw findings: file-op-no-error-handler=333 high-cyclomatic-complexity=1 infinite-loop-risk=333 large-subflow=1 missing-retry=334 missing-timeout=334 subflow-no-error-handler=1 unhandled-error=667 uninitialized-variable=50
+inventory: none
+findings: 2054
+  by rule: file-op-no-error-handler=333 high-cyclomatic-complexity=1 infinite-loop-risk=333 large-subflow=1 missing-retry=334 missing-timeout=334 subflow-no-error-handler=1 unhandled-error=667 uninitialized-variable=50
+  digest: full=8bb38747867f81cb ordered-fingerprints=f5cdcb4c5e703901 fingerprint-set=527a7fdcafc504a3
+
+=== autofixable
+stats: {"errors":333,"warnings":1384,"info":335,"blocksAnalyzed":2000,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=sharded final=64000/64000 last="Wait zero"
+metrics: as default, healthScore=0
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=2000
+  raw findings: file-op-no-error-handler=333 infinite-loop-risk=333 missing-retry=334 missing-timeout=334 subflow-no-error-handler=1 unhandled-error=667 uninitialized-variable=50
+inventory: none
+findings: 2052
+  by rule: file-op-no-error-handler=333 infinite-loop-risk=333 missing-retry=334 missing-timeout=334 subflow-no-error-handler=1 unhandled-error=667 uninitialized-variable=50
+  digest: full=445bad521dfed6fd ordered-fingerprints=a5bd10d4ec4c8582 fingerprint-set=140520345939edc8

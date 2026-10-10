@@ -8,6 +8,7 @@ import (
 	"weak"
 
 	"pad-core/models"
+	"pad-core/parser"
 )
 
 // flowHashPinDoc builds a document exercising every FlowHash input: several
@@ -83,9 +84,9 @@ func TestComputeFlowHash_AllocsIndependentOfBlockCount(t *testing.T) {
 	for i := range doc.Subflows[0].Blocks {
 		doc.Subflows[0].Blocks[i].Properties = map[string]string{"b": "2", "a": "1", "c": "3"}
 	}
-	allocs := testing.AllocsPerRun(5, func() { _ = computeFlowHash(doc) })
+	allocs := testing.AllocsPerRun(5, func() { _, _ = computeFlowHashes(doc) })
 	if allocs > 20 {
-		t.Fatalf("computeFlowHash allocated %.0f times for 2000 blocks; want a small constant (<= 20)", allocs)
+		t.Fatalf("computeFlowHashes allocated %.0f times for 2000 blocks; want a small constant (<= 20)", allocs)
 	}
 }
 
@@ -120,20 +121,20 @@ func TestFlowHash_MemoNeverServesStaleHash(t *testing.T) {
 	if FlowHash(&cp) == orig {
 		t.Fatal("edited shallow copy served the original's memoized hash")
 	}
-	if got := FlowHash(&cp); got != computeFlowHash(&cp) {
-		t.Fatalf("copy hash %s != fresh walk %s", got, computeFlowHash(&cp))
+	if got, fresh := FlowHash(&cp), freshFlowHash(&cp); got != fresh {
+		t.Fatalf("copy hash %s != fresh walk %s", got, fresh)
 	}
 
 	// Same object, Subflows reassigned to edited content.
 	doc.Subflows = cp.Subflows
-	if got, want := FlowHash(doc), computeFlowHash(doc); got != want || got == orig {
+	if got, want := FlowHash(doc), freshFlowHash(doc); got != want || got == orig {
 		t.Fatalf("reassigned Subflows: memo returned %s, fresh walk %s (orig %s)", got, want, orig)
 	}
 
 	// Same object, a parse error appended.
 	before := FlowHash(doc)
 	doc.ParseErrors = append(doc.ParseErrors, models.ParseError{Line: 9, Message: "late"})
-	if got := FlowHash(doc); got == before || got != computeFlowHash(doc) {
+	if got := FlowHash(doc); got == before || got != freshFlowHash(doc) {
 		t.Fatalf("appended parse error: memo returned %s (before %s)", got, before)
 	}
 
@@ -207,6 +208,70 @@ func BenchmarkComputeFlowHash(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = computeFlowHash(flow)
+		_, _ = computeFlowHashes(flow)
+	}
+}
+
+// freshFlowHash is FlowHash computed by a fresh walk, bypassing the memo.
+func freshFlowHash(doc *models.FlowDocument) string {
+	h, _ := computeFlowHashes(doc)
+	return h
+}
+
+// TestParseIdentity: the content part's second half. The same document (or a copy of it) keeps it; a re-parse of
+// the same text, a whitespace-only edit (line numbers move, FlowHash does not) and a renamed copy each change it;
+// it is memoized with FlowHash, one walk for both.
+func TestParseIdentity(t *testing.T) {
+	src := "#Region \"Main\"\nSET A TO 1\nIF A = 1 THEN\n    SET B TO 2\nEND\n#EndRegion\n"
+	parse := func(text string) *models.FlowDocument {
+		doc, err := parser.ParseText(text, "Main.txt", int64(len(text)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	doc := parse(src)
+	before := flowHashComputes.Load()
+	id := parseIdentity(doc)
+	_ = FlowHash(doc)
+	if parseIdentity(doc) != id {
+		t.Fatal("parse identity changed between calls on one document")
+	}
+	if n := flowHashComputes.Load() - before; n != 1 {
+		t.Fatalf("FlowHash and parseIdentity walked the document %d times, want 1", n)
+	}
+	cp := *doc
+	if parseIdentity(&cp) != id {
+		t.Error("a shallow copy (same ids) must keep the identity")
+	}
+	renamed := *doc
+	renamed.Name = "Other"
+	if parseIdentity(&renamed) == id {
+		t.Error("the document name is part of the identity")
+	}
+
+	again := parse(src)
+	if FlowHash(again) != FlowHash(doc) || parseIdentity(again) == id {
+		t.Error("a re-parse must keep FlowHash and change the parse identity")
+	}
+	shifted := parse("\n\n" + src)
+	if FlowHash(shifted) != FlowHash(doc) {
+		t.Fatal("fixture rot: blank lines must not change FlowHash")
+	}
+	shifted.ID, shifted.Subflows = doc.ID, append([]models.Subflow(nil), shifted.Subflows...)
+	for i := range shifted.Subflows {
+		shifted.Subflows[i].ID = doc.Subflows[i].ID
+	}
+	copyIDs(shifted.Subflows[0].Blocks, doc.Subflows[0].Blocks)
+	if parseIdentity(shifted) == id {
+		t.Error("moved line numbers (same ids) must change the parse identity")
+	}
+}
+
+// copyIDs gives dst's block tree src's ids (the trees have the same shape).
+func copyIDs(dst, src []models.Block) {
+	for i := range dst {
+		dst[i].ID, dst[i].SubflowID = src[i].ID, src[i].SubflowID
+		copyIDs(dst[i].Children, src[i].Children)
 	}
 }

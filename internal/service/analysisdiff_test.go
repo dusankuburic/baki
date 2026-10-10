@@ -113,3 +113,40 @@ func TestHistoryStore_RecordDedup(t *testing.T) {
 		t.Errorf("latest snapshot errors = %d, want 0", snaps[1].Errors)
 	}
 }
+
+// caches-2: a desktop folder reload re-parses unchanged text with new ids, so its report is a cache miss. It must
+// become the current report (exports need its ids) without pushing the previous distinct run out of the diff.
+func TestAnalyzeFlow_UnchangedReparseKeepsThePreviousRun(t *testing.T) {
+	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil, AnalysisOptions{})
+	if err != nil {
+		t.Fatalf("NewAnalysisService: %v", err)
+	}
+	load := func(id, name string) *models.FlowDocument {
+		doc := makeAnalyzableDoc(id,
+			models.Block{ID: id + "-b1", Type: models.BlockTypeAction, RawType: "Display.ShowMessage", Name: name, SubflowID: "main", LineNumber: 1})
+		doc.FilePath = `C:\flows\reload-test.txt`
+		return doc
+	}
+	r1, err := svc.AnalyzeFlow(context.Background(), load("uuid-1", "Show"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2, err := svc.AnalyzeFlow(context.Background(), load("uuid-2", "Show changed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reload := load("uuid-3", "Show changed")
+	r3, err := svc.AnalyzeFlow(context.Background(), reload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r3 == r2 {
+		t.Fatal("premise: the re-parse (new ids) is a cache miss")
+	}
+	if cur, _ := svc.CurrentReport(reload); cur != r3 {
+		t.Error("the current report must be the re-parse's: its ids are the document's")
+	}
+	if prev, has := svc.PreviousReport(reload); !has || prev != r1 {
+		t.Errorf("PreviousReport = (%p, %t), want the last distinct run %p", prev, has, r1)
+	}
+}

@@ -99,4 +99,12 @@ func hasTimeoutConfigured(block *models.Block) bool {
 	return false
 }
 
-func init() { registerRule(&MissingTimeoutRule{}) }
+func init() {
+	registerRule(&MissingTimeoutRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "set-timeout",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

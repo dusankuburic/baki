@@ -3,8 +3,6 @@ package rag
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
-	"sync"
 	"time"
 
 	"pad-analyzer/internal/ai"
@@ -33,33 +31,57 @@ const (
 	corpusUnknown = -1
 )
 
-// searchCaches are Search's per-service caches: per-org chunk counts (an org with nothing indexed skips
-// the billed query embedding) and recent query embeddings (a regenerated answer embeds once). Bounded LRUs.
+// Search's caches (ADR 0017): per-org chunk counts (an org with nothing indexed skips the billed query
+// embedding) and recent query embeddings (a regenerated answer embeds once).
+var (
+	corpusCounts = cache.Declare("rag.corpus-counts",
+		cache.Keys(cache.KindTenant),
+		cache.ReplicaLocal("30 s TTL bounds another replica's upload; this replica's uploads and deletes invalidate at once"))
+	// The caller is part of an embedding's key on purpose: a shared entry would let one user time whether another
+	// had asked the same question. The query is in the key only as its SHA-256.
+	queryEmbeddings = cache.Declare("rag.query-embeddings",
+		cache.Keys(cache.KindTenant, cache.KindParam, cache.KindContent),
+		cache.ReplicaLocal("10 min TTL; a function of the embedder and the query, recomputed on a miss"))
+)
+
+// searchCaches are Search's per-service caches. Bounded LRUs.
 type searchCaches struct {
-	// mu orders a count fill against InvalidateCorpus: a fill stores its count only when no
-	// invalidation of its org ran since it read gen, so a count read before an upload never overwrites it.
-	mu     sync.Mutex
+	// gen fences a count fill against InvalidateCorpus: a fill stores its count only when no invalidation of its
+	// org ran since it began, so a count read before an upload never overwrites it.
 	gen    eventbus.Gen[string]
-	counts cache.Cache // orgID → total chunks (int)
-	embeds cache.Cache // queryEmbeddingKey → []float32
+	counts *cache.Typed[int]       // total chunks of an org
+	embeds *cache.Typed[[]float32] // a query's embedding
 }
 
 func (s *KnowledgeService) caches() *searchCaches {
 	s.searchOnce.Do(func() {
-		counts, _ := cache.NewLRUCache(corpusCountCacheSize)
-		embeds, _ := cache.NewLRUCache(queryEmbeddingCacheSize)
-		s.search = &searchCaches{counts: counts, embeds: embeds}
+		s.search = &searchCaches{
+			counts: cache.New[int](corpusCounts, corpusCountCacheSize, cache.WithTTL(corpusCountTTL)),
+			embeds: cache.New[[]float32](queryEmbeddings, queryEmbeddingCacheSize, cache.WithTTL(queryEmbeddingTTL)),
+		}
 	})
 	return s.search
 }
 
+// corpusCountKey keys orgID's chunk count; false without an org.
+func corpusCountKey(orgID string) (cache.Key, bool) {
+	if orgID == "" {
+		return cache.Key{}, false
+	}
+	k, err := corpusCounts.Key(cache.Org(orgID))
+	return k, err == nil
+}
+
 // InvalidateCorpus drops the org's cached chunk count. Until re-read the org counts as non-empty.
 func (s *KnowledgeService) InvalidateCorpus(orgID string) {
+	k, ok := corpusCountKey(orgID)
+	if !ok {
+		return
+	}
 	c := s.caches()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	// The fence first: a fill in flight is refused, then the count is replaced by the settle marker.
 	c.gen.Bump(orgID)
-	c.counts.Set(context.Background(), orgID, corpusUnknown, corpusSettleTTL)
+	c.counts.Set(k, corpusUnknown, 1, corpusSettleTTL)
 }
 
 // SubscribeCorpusCache drops s's cached chunk count of an org whenever its corpus changes, and when the
@@ -79,52 +101,54 @@ func SubscribeCorpusCache(bus *eventbus.Bus, s *KnowledgeService) {
 // the cached count when fresh. A count that cannot be read is "not empty":
 // Search then embeds and searches exactly as before.
 func (s *KnowledgeService) corpusEmpty(ctx context.Context, orgID string) bool {
-	c := s.caches()
-	if v, ok := c.counts.Get(ctx, orgID); ok {
-		return v.(int) == 0
+	count := func(ctx context.Context) (int, int64, error) {
+		total, _, err := s.store.CountKnowledgeChunks(ctx, orgID)
+		return total, 1, err
 	}
-	captured := c.gen.Load(orgID)
-	total, _, err := s.store.CountKnowledgeChunks(ctx, orgID)
+	k, ok := corpusCountKey(orgID)
+	if !ok {
+		total, _, err := count(ctx)
+		return err == nil && total == 0
+	}
+	c := s.caches()
+	// One count read per org at a time; stored only if no invalidation of the org ran meanwhile.
+	total, err := c.counts.GetOrFill(ctx, k, count, &c.gen, orgID)
 	if err != nil {
 		return false
 	}
-	c.mu.Lock()
-	if c.gen.FillOK(ctx, orgID, captured) {
-		c.counts.Set(ctx, orgID, total, corpusCountTTL)
-	}
-	c.mu.Unlock()
 	return total == 0
 }
 
-// queryEmbeddingKey keys a query embedding by what produced it (the embedding identity: endpoint, model,
-// width), the caller and the org, and a hash of the scrubbed query — never the text itself. The caller is
-// part of the key on purpose: a shared entry would let one user time whether another had asked the same question.
-func queryEmbeddingKey(identity, scope, orgID, query string) string {
-	h := sha256.New()
-	for _, part := range []string{identity, scope, orgID, query} {
-		h.Write([]byte(part))
-		h.Write([]byte{0})
+// queryEmbeddingKey keys a query embedding by the caller in the org, what produced it (the embedding identity:
+// endpoint, model, width) and the scrubbed query's SHA-256 — never the text itself. The zero Key (uncached)
+// when the caller or the org is missing.
+func queryEmbeddingKey(identity, scope, orgID, query string) cache.Key {
+	tenant := cache.OrgUser(orgID, scope)
+	if tenant.IsZero() {
+		return cache.Key{}
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	sum := sha256.Sum256([]byte(query))
+	k, _ := queryEmbeddings.Key(tenant, cache.Param("embedder", identity), cache.Content(string(sum[:])))
+	return k
 }
 
 // embedQuery embeds the (scrubbed, truncated) query, reusing a recent embedding of the same query by the
 // same embedder. ok is false when the provider answered no vector; a provider with no embedding identity is never cached.
 func (s *KnowledgeService) embedQuery(ctx context.Context, provider ai.Provider, scope, orgID, query string) (vec []float32, ok bool, err error) {
 	identity := ai.EmbeddingIdentity(provider)
-	key := ""
+	var key cache.Key
 	if identity != "" {
 		key = queryEmbeddingKey(identity, scope, orgID, query)
-		if v, hit := s.caches().embeds.Get(ctx, key); hit {
-			return append([]float32(nil), v.([]float32)...), true, nil
+		if v, hit := s.caches().embeds.Get(key); hit {
+			return append([]float32(nil), v...), true, nil
 		}
 	}
 	emb, err := provider.Embed(ctx, []string{query})
 	if err != nil || len(emb) == 0 {
 		return nil, false, err
 	}
-	if key != "" && len(emb[0]) > 0 {
-		s.caches().embeds.Set(ctx, key, append([]float32(nil), emb[0]...), queryEmbeddingTTL)
+	if len(emb[0]) > 0 {
+		s.caches().embeds.Set(key, append([]float32(nil), emb[0]...), 1, 0)
 	}
 	return emb[0], true, nil
 }

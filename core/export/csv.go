@@ -10,6 +10,11 @@ import (
 	"pad-core/models"
 )
 
+func init() {
+	registerBuiltin(Format{ID: "csv", Label: "CSV", MIME: "text/csv; charset=utf-8", Ext: ".csv", Order: 40},
+		func(in Input, _ Options) ([]byte, error) { return ReportToCSV(in.Report, in.Doc) })
+}
+
 // ReportToCSV serializes a report as CSV (RFC 4180): header plus one row per
 // finding; doc may be nil. The first line is a `#` summary comment (skip with
 // csv.Reader.Comment = '#') carrying the counts with no natural column,

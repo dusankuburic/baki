@@ -68,4 +68,13 @@ func isFileOperation(rawType string) bool {
 	return false
 }
 
-func init() { registerRule(&FileOpNoErrorHandlerRule{}) }
+func init() {
+	registerRule(&FileOpNoErrorHandlerRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "wrap-error-handler",
+		Related:      []Related{{To: "unhandled-error", Reason: "file operations are a subset of error handling"}},
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

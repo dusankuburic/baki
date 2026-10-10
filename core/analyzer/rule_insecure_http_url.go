@@ -52,7 +52,9 @@ func (r *InsecureHttpUrlRule) Check(block *models.Block, ctx *RuleContext) []mod
 	if !isNet {
 		return nil
 	}
-	for key, val := range block.Properties {
+	var keys [16]string
+	for _, key := range sortedPropertyKeys(keys[:0], block.Properties) {
+		val := block.Properties[key]
 		if !urlPropertyKeys[strings.ToLower(key)] {
 			continue
 		}
@@ -75,4 +77,12 @@ func (r *InsecureHttpUrlRule) Check(block *models.Block, ctx *RuleContext) []mod
 	return nil
 }
 
-func init() { registerRule(&InsecureHttpUrlRule{}) }
+func init() {
+	registerRule(&InsecureHttpUrlRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "upgrade-to-https",
+		IntroducedIn: 1,
+		Revision:     2,
+		Stage:        StageStable,
+	})
+}

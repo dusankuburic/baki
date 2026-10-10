@@ -156,7 +156,7 @@ func TestListProviders_AzureFoundry_ConfiguredPerUser(t *testing.T) {
 	}
 	// Alias providers cache their own listing (per document, complete only);
 	// the service never pins it.
-	if _, cached := svc.modelCache["u1\x00azure-foundry"]; cached {
+	if _, cached := svc.modelCache[modelListingKey("u1", "azure-foundry")]; cached {
 		t.Error("the service must not cache an alias provider's listing")
 	}
 
@@ -181,7 +181,7 @@ func TestListProviders_AzureFoundry_EmptyListingNotCached(t *testing.T) {
 	if az == nil || !az.Configured || az.Models == nil || len(az.Models) != 0 || az.DefaultModel != "" {
 		t.Errorf("endpoint-only document = %+v, want configured with an empty (non-nil) model list and no default", az)
 	}
-	if _, cached := svc.modelCache["u1\x00azure-foundry"]; cached {
+	if _, cached := svc.modelCache[modelListingKey("u1", "azure-foundry")]; cached {
 		t.Error("an empty listing must not be cached")
 	}
 }
@@ -487,7 +487,7 @@ func TestDynamicModels_CachesOnlyNonEmptyListings(t *testing.T) {
 		t.Errorf("empty listing was not cached briefly: %d upstream calls, want 1", n)
 	}
 	svc.modelMu.Lock()
-	e := svc.modelCache["u1\x00glm"]
+	e := svc.modelCache[modelListingKey("u1", "glm")]
 	svc.modelMu.Unlock()
 	if e.expiresAt.After(start.Add(emptyListingTTL + time.Second)) {
 		t.Errorf("empty listing expires at %v, want within %s", e.expiresAt, emptyListingTTL)
@@ -495,7 +495,7 @@ func TestDynamicModels_CachesOnlyNonEmptyListings(t *testing.T) {
 	// The brief entry expired: the next call retries upstream.
 	svc.modelMu.Lock()
 	e.expiresAt = time.Now().Add(-time.Second)
-	svc.modelCache["u1\x00glm"] = e
+	svc.modelCache[modelListingKey("u1", "glm")] = e
 	svc.modelMu.Unlock()
 	empty.Store(false)
 	_, _, _ = svc.dynamicModels(ctx, personalScope("u1"), "glm")
@@ -504,7 +504,7 @@ func TestDynamicModels_CachesOnlyNonEmptyListings(t *testing.T) {
 		t.Errorf("non-empty listing not cached: %d upstream calls, want 2", n)
 	}
 	svc.modelMu.Lock()
-	e = svc.modelCache["u1\x00glm"]
+	e = svc.modelCache[modelListingKey("u1", "glm")]
 	svc.modelMu.Unlock()
 	if e.expiresAt.Before(start.Add(dynamicModelTTL - time.Minute)) {
 		t.Errorf("non-empty listing expires at %v, want about %s", e.expiresAt, dynamicModelTTL)
@@ -543,7 +543,7 @@ func TestDynamicModels_InvalidateDuringFetchSkipsTheWrite(t *testing.T) {
 		t.Errorf("the in-flight caller still gets its listing: %+v", got)
 	}
 	svc.modelMu.Lock()
-	_, cached := svc.modelCache["u1\x00glm"]
+	_, cached := svc.modelCache[modelListingKey("u1", "glm")]
 	svc.modelMu.Unlock()
 	if cached {
 		t.Error("a listing started before InvalidateModels was written back")
@@ -559,12 +559,12 @@ func TestDeleteApiKey_InvalidatesTheProviderListing(t *testing.T) {
 	sys := NewSystemService(nil, secrets, nil, nil, "", nil, bus)
 	svc := newProviderServiceWithFakeSecrets(t, secrets)
 	SubscribeModelCache(bus, svc)
-	svc.modelCache["u1\x00azure-foundry"] = modelCacheEntry{models: []ai.ModelInfo{{ID: "old"}}, expiresAt: time.Now().Add(time.Hour)}
+	svc.modelCache[modelListingKey("u1", "azure-foundry")] = modelCacheEntry{models: []ai.ModelInfo{{ID: "old"}}, expiresAt: time.Now().Add(time.Hour)}
 	gen := svc.modelGen
 	if err := sys.DeleteApiKey(context.Background(), "u1", "azure-foundry"); err != nil {
 		t.Fatal(err)
 	}
-	if _, cached := svc.modelCache["u1\x00azure-foundry"]; cached || svc.modelGen == gen {
+	if _, cached := svc.modelCache[modelListingKey("u1", "azure-foundry")]; cached || svc.modelGen == gen {
 		t.Error("deleting the key must drop the cached listing and bump the generation")
 	}
 	if has, _ := secrets.Has("u1", "azure-foundry"); has {

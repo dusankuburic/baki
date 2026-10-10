@@ -21,7 +21,7 @@ import (
 type sweepCounts struct {
 	listFlows, contentBytes, loadFlow        int64
 	baseline, baselineBatch, health, healthB int64
-	loadOrg                                  int64
+	loadOrg, ruleSets                        int64
 }
 
 func countsOf(b *healthBackend) sweepCounts {
@@ -29,7 +29,7 @@ func countsOf(b *healthBackend) sweepCounts {
 		listFlows: b.ListFlowsCalls.Load(), contentBytes: b.ListFlowsContentBytes.Load(), loadFlow: b.LoadFlowCalls.Load(),
 		baseline: b.GetFlowBaselineCalls.Load(), baselineBatch: b.GetFlowBaselinesBatchCalls.Load(),
 		health: b.LoadFlowHealthCalls.Load(), healthB: b.LoadFlowHealthBatchCalls.Load(),
-		loadOrg: b.LoadOrgCalls.Load(),
+		loadOrg: b.LoadOrgCalls.Load(), ruleSets: b.RuleSetsByDigestCalls.Load(),
 	}
 }
 
@@ -40,7 +40,7 @@ func (after sweepCounts) delta(before sweepCounts) sweepCounts {
 		loadFlow: after.loadFlow - before.loadFlow,
 		baseline: after.baseline - before.baseline, baselineBatch: after.baselineBatch - before.baselineBatch,
 		health: after.health - before.health, healthB: after.healthB - before.healthB,
-		loadOrg: after.loadOrg - before.loadOrg,
+		loadOrg: after.loadOrg - before.loadOrg, ruleSets: after.ruleSets - before.ruleSets,
 	}
 }
 
@@ -96,6 +96,9 @@ func TestScanOnce_UnchangedFlowsAreNeitherLoadedNorQueriedPerFlow(t *testing.T) 
 	}
 	if second.contentBytes != 0 {
 		t.Fatalf("second sweep's listing shipped %d bytes of flow content, want 0", second.contentBytes)
+	}
+	if first.ruleSets != 0 || second.ruleSets != 0 {
+		t.Fatalf("sweeps without recorded rule sets read rule sets %d and %d times, want 0", first.ruleSets, second.ruleSets)
 	}
 	for i := range flows {
 		if n := h.runsOf(fmt.Sprintf("f%d", i)); n != 1 {

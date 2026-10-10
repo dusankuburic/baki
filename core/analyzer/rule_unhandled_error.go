@@ -64,4 +64,13 @@ func isFallible(rawType string) bool {
 	return false
 }
 
-func init() { registerRule(&UnhandledErrorRule{}) }
+func init() {
+	registerRule(&UnhandledErrorRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "wrap-error-handler",
+		Related:      []Related{{To: "error-swallow", Reason: "error handling must be checked before swallow detection"}},
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

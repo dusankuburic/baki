@@ -15,9 +15,36 @@ import (
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/cache"
 	"pad-core/logger"
 	"pad-core/models"
 )
+
+// modelListings caches a configured provider's live model listing per credential scope (ADR 0017): a listing is
+// what that credential may use, so the scope it ran on (a user's own keys, an org's shared ones, the local user's)
+// is its tenant. The storage is the service's own (per-key and per-scope invalidation marks, a TTL per listing).
+var modelListings = cache.Declare("providers.model-listings",
+	cache.Keys(cache.KindTenant, cache.KindParam),
+	cache.ReplicaLocal("10 min TTL; credential changes on this replica drop the listings at once, another replica's within the TTL"))
+
+// credentialTenant is the cache tenant of a credential scope: an org's shared credential (ai.OrgScope), a user's
+// own keys, or the local user's ("").
+func credentialTenant(scope string) cache.Part {
+	if orgID, ok := strings.CutPrefix(scope, ai.OrgScope("")); ok {
+		return cache.Org(orgID)
+	}
+	return callerTenant(scope)
+}
+
+// modelListingKey keys scope's listing of providerID; the zero Key (never cached) for an org scope without an id.
+func modelListingKey(scope, providerID string) cache.Key {
+	t := credentialTenant(scope)
+	if t.IsZero() {
+		return cache.Key{}
+	}
+	k, _ := modelListings.Key(t, cache.Param("provider", providerID))
+	return k
+}
 
 // dynamicModelTTL bounds how long a CONFIGURED provider's live model list is reused (else every Settings open fans out upstream calls).
 const dynamicModelTTL = 10 * time.Minute
@@ -52,10 +79,10 @@ type ProviderService struct {
 	azure *AzureModelService
 
 	modelMu    sync.Mutex
-	modelCache map[string]modelCacheEntry // key: scope + "\x00" + providerID
+	modelCache map[cache.Key]modelCacheEntry // modelListingKey(scope, providerID)
 	// modelGen is a monotonic stamp bumped by every invalidation; a listing writes back only if not invalidated after its stamp.
 	modelGen         uint64
-	invalidatedKeys  map[string]invalidation
+	invalidatedKeys  map[cache.Key]invalidation
 	invalidatedScope map[string]invalidation
 }
 
@@ -77,9 +104,9 @@ func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factor
 		secrets:     secrets,
 		orgKeys:     orgKeys,
 		azure:       azure,
-		modelCache:  make(map[string]modelCacheEntry),
+		modelCache:  make(map[cache.Key]modelCacheEntry),
 
-		invalidatedKeys:  make(map[string]invalidation),
+		invalidatedKeys:  make(map[cache.Key]invalidation),
 		invalidatedScope: make(map[string]invalidation),
 	}
 }
@@ -120,15 +147,19 @@ func personalScope(scope string) listingScope {
 // dynamicModels returns a configured provider's live list, cached per (scope, provider); alias providers and invalidated runs are never cached.
 func (s *ProviderService) dynamicModels(ctx context.Context, ls listingScope, providerID string) (models []ai.ModelInfo, defaultModel string, ok bool) {
 	scope := ls.cacheScope
-	key := scope + "\x00" + providerID
-	cacheable := !ai.UsesModelAliases(providerID)
+	key := modelListingKey(scope, providerID)
+	cacheable := !ai.UsesModelAliases(providerID) && !key.IsZero()
 	s.modelMu.Lock()
 	if e, hit := s.modelCache[key]; cacheable && hit && time.Now().Before(e.expiresAt) {
 		s.modelMu.Unlock()
+		modelListings.RecordHit()
 		return e.models, e.defaultModel, true
 	}
 	gen := s.modelGen
 	s.modelMu.Unlock()
+	if cacheable {
+		modelListings.RecordMiss()
+	}
 
 	// Member-first: the org's credential exactly when the caller has none.
 	realProvider, err := s.factory.ForOrg(ls.scope, ls.orgID, providerID)
@@ -150,7 +181,11 @@ func (s *ProviderService) dynamicModels(ctx context.Context, ls listingScope, pr
 		if !s.invalidatedSinceLocked(key, scope, gen) {
 			// Insert-time pruning: expired entries are never removed by reads, so a departed user's keys cannot accumulate.
 			s.pruneModelCacheLocked(time.Now())
+			if _, replaced := s.modelCache[key]; replaced {
+				modelListings.RecordEviction(cache.EvictReplaced)
+			}
 			s.modelCache[key] = modelCacheEntry{models: models, defaultModel: defaultModel, expiresAt: time.Now().Add(ttl)}
+			modelListings.RecordStore()
 		}
 		s.modelMu.Unlock()
 	}
@@ -158,7 +193,7 @@ func (s *ProviderService) dynamicModels(ctx context.Context, ls listingScope, pr
 }
 
 // invalidatedSinceLocked reports whether key or its scope was invalidated after gen. Caller holds modelMu.
-func (s *ProviderService) invalidatedSinceLocked(key, scope string, gen uint64) bool {
+func (s *ProviderService) invalidatedSinceLocked(key cache.Key, scope string, gen uint64) bool {
 	if inv, ok := s.invalidatedKeys[key]; ok && inv.gen > gen {
 		return true
 	}
@@ -174,17 +209,20 @@ func (s *ProviderService) pruneModelCacheLocked(now time.Time) {
 	for k, e := range s.modelCache {
 		if !now.Before(e.expiresAt) {
 			delete(s.modelCache, k)
+			modelListings.RecordEviction(cache.EvictExpired)
 		}
 	}
 	s.pruneInvalidationsLocked(now)
 	for len(s.modelCache) >= modelCacheMax {
-		oldest, oldestExp, first := "", time.Time{}, true
+		var oldest cache.Key
+		oldestExp, first := time.Time{}, true
 		for k, e := range s.modelCache {
 			if first || e.expiresAt.Before(oldestExp) {
 				oldest, oldestExp, first = k, e.expiresAt, false
 			}
 		}
 		delete(s.modelCache, oldest)
+		modelListings.RecordEviction(cache.EvictCapacity)
 	}
 }
 
@@ -209,10 +247,11 @@ func (s *ProviderService) InvalidateScope(scope string) {
 	s.pruneInvalidationsLocked(now)
 	s.modelGen++
 	s.invalidatedScope[scope] = invalidation{gen: s.modelGen, at: now}
-	prefix := scope + "\x00"
+	tenant := credentialTenant(scope)
 	for k := range s.modelCache {
-		if strings.HasPrefix(k, prefix) {
+		if parts := k.Parts(); len(parts) > 0 && parts[0] == tenant {
 			delete(s.modelCache, k)
+			modelListings.RecordEviction(cache.EvictDeleted)
 		}
 	}
 	s.modelMu.Unlock()
@@ -220,13 +259,16 @@ func (s *ProviderService) InvalidateScope(scope string) {
 
 // InvalidateModels drops one (scope, provider) cached listing so a config change shows immediately.
 func (s *ProviderService) InvalidateModels(scope, providerID string) {
-	key := scope + "\x00" + providerID
+	key := modelListingKey(scope, providerID)
 	s.modelMu.Lock()
 	now := time.Now()
 	s.pruneInvalidationsLocked(now)
 	s.modelGen++
 	s.invalidatedKeys[key] = invalidation{gen: s.modelGen, at: now}
-	delete(s.modelCache, key)
+	if _, ok := s.modelCache[key]; ok {
+		delete(s.modelCache, key)
+		modelListings.RecordEviction(cache.EvictDeleted)
+	}
 	s.modelMu.Unlock()
 }
 

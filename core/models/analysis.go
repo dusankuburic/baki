@@ -60,6 +60,10 @@ type Finding struct {
 	AutoFix  string                 `json:"autoFix,omitempty"`
 	Category string                 `json:"category,omitempty"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
+	// Stage is "preview" for a finding of a preview rule (engine-stamped; it never
+	// gates and is left out of the health score), empty for a stable one, and
+	// "stable" for a custom rule's finding under a built-in's ID.
+	Stage string `json:"stage,omitempty"`
 }
 
 // Key returns the in-run identity RuleID:BlockID — stable across re-analyses
@@ -85,6 +89,9 @@ type AnalysisReport struct {
 	DurationMs   int           `json:"durationMs"`
 	Metrics      *FlowMetrics  `json:"metrics,omitempty"`
 	RuleProfiles []RuleProfile `json:"ruleProfiles,omitempty"`
+	// RuleSet records the rules this analysis ran (stamped before the report
+	// is cached); baselines and health snapshots keep it. Not serialized.
+	RuleSet *RuleSet `json:"-"`
 }
 
 type AnalysisStats struct {
@@ -151,6 +158,13 @@ type Rule struct {
 	// Options are the rule's numeric thresholds (maxDepth, minRepeats,
 	// maxBlocks) — deployment override when one exists, else built-in default.
 	Options map[string]interface{} `json:"options,omitempty"`
+	// Stage is the rule's release stage ("stable", "preview") and IntroducedIn
+	// the rule-set version that shipped it (analyzer.RuleMeta).
+	Stage        string `json:"stage,omitempty"`
+	IntroducedIn int    `json:"introducedIn,omitempty"`
+	// Kind is what the rule checks: "block" (each block), "flow" (the whole
+	// flow once) or "library" (summaries of many flows; analyzer.RuleKind).
+	Kind string `json:"kind,omitempty"`
 }
 
 // RuleSummary is the catalog-level rollup for the dashboard's "auto-fixable
@@ -220,6 +234,8 @@ type BatchAnalysis struct {
 	TotalInfo      int           `json:"totalInfo"`
 	AvgHealthScore float64       `json:"avgHealthScore"`
 	DurationMs     int           `json:"durationMs"`
+	// Library holds the cross-flow (library rule) findings over the batch.
+	Library *LibraryReport `json:"library,omitempty"`
 }
 
 type AnalysisDiff struct {
@@ -246,6 +262,13 @@ type BaselineDrift struct {
 	NewErrors   int       `json:"newErrors"`
 	NewWarnings int       `json:"newWarnings"`
 	NewInfo     int       `json:"newInfo"`
+	// NewFromNewRules counts the New findings whose rule is newer than the
+	// baseline's rule set (NewRuleIDs, sorted) and Preview those of preview
+	// rules; New and the counts above still include both
+	// (analyzer.DriftSplit.Annotate).
+	NewRuleIDs      []string `json:"newRuleIds,omitempty"`
+	NewFromNewRules int      `json:"newFromNewRules,omitempty"`
+	Preview         int      `json:"preview,omitempty"`
 }
 
 // PortfolioEntry is one flow in the org-wide governance portfolio: latest
@@ -306,7 +329,7 @@ type RuleDependency struct {
 }
 
 // DependencyAnalysis is the payload of GET /api/analysis/dependencies: the
-// analyzer's hand-maintained "related rules" map (see analyzer.relatedRules).
+// analyzer's hand-maintained "related rules" map (see analyzer.RelatedRules).
 type DependencyAnalysis struct {
 	Dependencies []RuleDependency `json:"dependencies"`
 	Cycles       [][]string       `json:"cycles"`

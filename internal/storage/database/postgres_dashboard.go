@@ -40,10 +40,18 @@ func (b *PostgresStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *inter
 	if err != nil {
 		return fmt.Errorf("marshal by_confidence: %w", err)
 	}
+	ruleSet, digest, err := encodeRuleSet(fa.RuleSet)
+	if err != nil {
+		return err
+	}
 	analyzedAt := fa.AnalyzedAt
+	// rule_set_at is analyzed_at's own expression, so the rule set counts until a writer that does not know it
+	// rewrites the snapshot (migration 0037).
 	_, err = b.query(ctx).ExecContext(ctx, `
-		INSERT INTO flow_analysis (flow_id, health_score, errors, warnings, info, by_category, by_rule, by_confidence, auto_fixable_count, total_findings, analyzed_at)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, COALESCE($11, NOW()))
+		INSERT INTO flow_analysis (flow_id, health_score, errors, warnings, info, by_category, by_rule, by_confidence, auto_fixable_count, total_findings, analyzed_at,
+		                           rule_set, rule_set_digest, rule_set_at)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, COALESCE($11, NOW()),
+		        $12::jsonb, $13::text, CASE WHEN $13::text IS NULL THEN NULL ELSE COALESCE($11, NOW()) END)
 		ON CONFLICT (flow_id) DO UPDATE SET
 			health_score       = EXCLUDED.health_score,
 			errors             = EXCLUDED.errors,
@@ -54,8 +62,12 @@ func (b *PostgresStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *inter
 			by_confidence      = EXCLUDED.by_confidence,
 			auto_fixable_count = EXCLUDED.auto_fixable_count,
 			total_findings     = EXCLUDED.total_findings,
-			analyzed_at        = EXCLUDED.analyzed_at`,
+			analyzed_at        = EXCLUDED.analyzed_at,
+			rule_set           = EXCLUDED.rule_set,
+			rule_set_digest    = EXCLUDED.rule_set_digest,
+			rule_set_at        = EXCLUDED.rule_set_at`,
 		fa.FlowID, fa.HealthScore, fa.Errors, fa.Warnings, fa.Info, string(catJSON), string(ruleJSON), string(confJSON), fa.AutoFixableCount, fa.TotalFindings, nullableTime(analyzedAt),
+		ruleSet, digest,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert flow_analysis: %w", err)
@@ -75,6 +87,10 @@ func (b *PostgresStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *inter
 	return nil
 }
 
+// healthRuleSetDigest selects a snapshot's rule-set digest, NULL unless it was written with the snapshot
+// (rule_set_at = analyzed_at; migration 0037). Only the digest: this is also the portfolio's read.
+const healthRuleSetDigest = `CASE WHEN rule_set_at = analyzed_at THEN rule_set_digest END`
+
 // LoadFlowHealthBatch returns each listed flow's latest persisted analysis
 // snapshot; flows never analyzed are absent from the map.
 func (b *PostgresStorageBackend) LoadFlowHealthBatch(ctx context.Context, flowIDs []string) (map[string]*interfaces.HealthSnapshot, error) {
@@ -83,7 +99,7 @@ func (b *PostgresStorageBackend) LoadFlowHealthBatch(ctx context.Context, flowID
 		return out, nil
 	}
 	rows, err := b.query(ctx).QueryContext(ctx, `
-		SELECT flow_id, health_score, errors, warnings, info, analyzed_at
+		SELECT flow_id, health_score, errors, warnings, info, analyzed_at, `+healthRuleSetDigest+`
 		FROM flow_analysis WHERE flow_id = ANY($1)`, flowIDs)
 	if err != nil {
 		return nil, fmt.Errorf("load flow health batch: %w", err)
@@ -92,9 +108,11 @@ func (b *PostgresStorageBackend) LoadFlowHealthBatch(ctx context.Context, flowID
 	for rows.Next() {
 		var id string
 		var h interfaces.HealthSnapshot
-		if err := rows.Scan(&id, &h.HealthScore, &h.Errors, &h.Warnings, &h.Info, &h.AnalyzedAt); err != nil {
+		var digest sql.NullString
+		if err := rows.Scan(&id, &h.HealthScore, &h.Errors, &h.Warnings, &h.Info, &h.AnalyzedAt, &digest); err != nil {
 			return nil, fmt.Errorf("scan flow health batch: %w", err)
 		}
+		h.RuleSetDigest = digest.String
 		hh := h
 		out[id] = &hh
 	}
@@ -103,15 +121,17 @@ func (b *PostgresStorageBackend) LoadFlowHealthBatch(ctx context.Context, flowID
 
 func (b *PostgresStorageBackend) LoadFlowHealth(ctx context.Context, flowID string) (*interfaces.HealthSnapshot, error) {
 	row := b.query(ctx).QueryRowContext(ctx, `
-		SELECT health_score, errors, warnings, info, analyzed_at
+		SELECT health_score, errors, warnings, info, analyzed_at, `+healthRuleSetDigest+`
 		FROM flow_analysis WHERE flow_id = $1`, flowID)
 	var h interfaces.HealthSnapshot
-	if err := row.Scan(&h.HealthScore, &h.Errors, &h.Warnings, &h.Info, &h.AnalyzedAt); err != nil {
+	var digest sql.NullString
+	if err := row.Scan(&h.HealthScore, &h.Errors, &h.Warnings, &h.Info, &h.AnalyzedAt, &digest); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("load flow health: %w", err)
 	}
+	h.RuleSetDigest = digest.String
 	return &h, nil
 }
 

@@ -121,4 +121,12 @@ func isAssignedAnywhere(vname string, ctx *RuleContext) bool {
 	return len(ctx.WritersByVar[vname]) > 0
 }
 
-func init() { registerRule(&UninitializedVariableRule{}) }
+func init() {
+	registerRule(&UninitializedVariableRule{}, RuleMeta{
+		Confidence:   models.ConfidenceLow,
+		AutoFix:      "init-variable",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

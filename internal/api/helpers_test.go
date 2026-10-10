@@ -191,11 +191,13 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore(), collaboration.WithEventBus(bus))
 	authzSvc := service.NewAuthzService(backend, orgSvc)
 
-	// The flow caches subscribe to the same bus below.
-	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, authzSvc, nil, service.WithFlowEvents(bus))
+	// The flow caches subscribe to the same bus below; one analyzer serves the analysis service and is invalidated
+	// by the flow service, as di wires them.
+	cachedAnalyzer := service.NewDefaultAnalyzer()
+	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, authzSvc, nil, service.WithFlowEvents(bus), service.WithAnalyzer(cachedAnalyzer))
 	scopes := service.NewFlowScopeResolver(backend, authzSvc)
 	libSvc := service.NewLibraryService(backend, bus, authzSvc, scopes)
-	analysisSvc, err := service.NewAnalysisService(notifier, settings, nil, service.AnalysisOptions{})
+	analysisSvc, err := service.NewAnalysisService(notifier, settings, nil, service.AnalysisOptions{Analyzer: cachedAnalyzer})
 	if err != nil {
 		// NewAnalysisService keeps an error return for the DI signature but
 		// never fails; this helper isn't t-aware, so panic is acceptable.
@@ -245,7 +247,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	eventbus.Subscribe(bus, eventbus.Async, "lent-credential-revocation", func(ctx context.Context, e events.OrgMemberChanged) {
 		revokeLentCredentials(ctx, auditRec, orgHandler.providers, e)
 	}, eventbus.InlineWhenSaturated())
-	analysisHandler := NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security, service.NewWebhookNotifier(nil), mailer.NewService(config.EmailConfig{}, config.ModeLocal), "", service.NewPolicyService(backend), service.NewGovernanceAlertService(backend), triageSvc, service.NewCommentService(backend, triageSvc, bus), shareSvc, auditRec)
+	analysisHandler := NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security, service.NewWebhookNotifier(nil), mailer.NewService(config.EmailConfig{}, config.ModeLocal), "", service.NewPolicyService(backend), service.NewGovernanceAlertService(backend), triageSvc, service.NewCommentService(backend, triageSvc, bus), shareSvc, auditRec, exportSvc)
 	// The subscriptions internal/di.SubscribeRealtime makes for the handlers.
 	eventbus.Subscribe(bus, eventbus.Async, "finding-comment-fanout", analysisHandler.OnFindingCommented, eventbus.InlineWhenSaturated())
 	eventbus.Subscribe(bus, eventbus.Async, "finding-assignment-fanout", analysisHandler.OnFindingAssigned, eventbus.InlineWhenSaturated())

@@ -212,7 +212,7 @@ func (a mailSvcAdapter) SendAlert(ctx context.Context, to, subject, plainBody, h
 // missing backend leaves it disabled (opt-in, cloud-only). The env-level
 // notifier is optional: alerts always record in-app and route to each org's own
 // channels; PAD_NOTIFY_* only adds a deployment-wide sink.
-func provideScanner(cfg *config.Config, backend storageif.StorageBackend, locker lock.GlobalLocker, analysisSvc *service.AnalysisService, notifier *notify.Dispatcher, eventMgr *api.EventManager, ruleProfiles *service.RuleProfileResolver) *scanner.Scanner {
+func provideScanner(cfg *config.Config, backend storageif.StorageBackend, locker lock.GlobalLocker, analysisSvc *service.AnalysisService, notifier *notify.Dispatcher, eventMgr *api.EventManager, ruleProfiles *service.RuleProfileResolver, dashboard *service.DashboardService) *scanner.Scanner {
 	var analyze scanner.AnalyzeFunc
 	if analysisSvc != nil {
 		// Background, not AnalyzeFlow: the sweep's context carries no user, so
@@ -233,6 +233,13 @@ func provideScanner(cfg *config.Config, backend storageif.StorageBackend, locker
 			p := ruleProfiles.Resolve(ctx, orgID)
 			return scanner.DigestRuleSet(p.Settings, p.Rules)
 		})
+	}
+	// Without accounts every flow is the one local user's: its "new rules"
+	// notices are the deployment's, not a user row's.
+	s.SetSingleTenant(!capability.Of(cfg).Has(capability.Accounts))
+	// A legacy health snapshot (before rule sets) is re-recorded by the sweep, as an interactive analysis would.
+	if dashboard != nil {
+		s.SetHealthRecorder(dashboard.RecordAnalysis)
 	}
 	return s
 }

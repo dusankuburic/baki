@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"reflect"
@@ -16,6 +17,7 @@ import (
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
+	"pad-core/cache"
 )
 
 // newSubscribedService builds the service on a bus with its corpus count cache subscribed, as DI wires it, and
@@ -126,7 +128,7 @@ func TestSearch_UploadInvalidatesCorpusCount(t *testing.T) {
 
 	// After the settle window the count is read again (and is non-zero).
 	before := store.counts.Load()
-	svc.caches().counts.Delete(context.Background(), "org-1")
+	svc.caches().counts.Delete(countKey(t, "org-1"))
 	if svc.corpusEmpty(context.Background(), "org-1") {
 		t.Error("an org with an indexed document reads as empty")
 	}
@@ -196,9 +198,27 @@ func TestSearch_QueryEmbeddingCached(t *testing.T) {
 		t.Errorf("an anonymous embedder was cached (embeds=%d, want 2)", n)
 	}
 
-	if k := queryEmbeddingKey("id", "u1", "org-1", q); strings.Contains(k, "retry") || len(k) != 64 {
-		t.Errorf("cache key %q is not a bare hash", k)
+	k := queryEmbeddingKey("id", "u1", "org-1", q)
+	sum := sha256.Sum256([]byte(q))
+	if parts := k.Parts(); strings.Contains(k.String(), "retry") || len(parts) != 3 || parts[2] != cache.Content(string(sum[:])) {
+		t.Errorf("cache key %q holds the query instead of its hash", k)
 	}
+	if k.Parts()[0] != cache.OrgUser("org-1", "u1") {
+		t.Errorf("cache key %q is not the caller's in the org", k)
+	}
+	if !queryEmbeddingKey("id", "", "org-1", q).IsZero() || !queryEmbeddingKey("id", "u1", "", q).IsZero() {
+		t.Error("a query without a caller or an org is cached")
+	}
+}
+
+// countKey is the corpus-count cache's key of orgID.
+func countKey(t *testing.T, orgID string) cache.Key {
+	t.Helper()
+	k, ok := corpusCountKey(orgID)
+	if !ok {
+		t.Fatalf("no corpus-count key for %q", orgID)
+	}
+	return k
 }
 
 // concurrencyEmbedder records the peak number of Embed calls in flight. Each
@@ -359,10 +379,10 @@ func TestOrgDeleted_InvalidatesCorpusCount(t *testing.T) {
 	svc.corpusEmpty(ctx, "org-2")
 	bus.Publish(ctx, events.OrgMemberChanged{OrgID: "org-1", Kind: events.OrgDeleted})
 	bus.Publish(ctx, events.OrgMemberChanged{OrgID: "org-2", UserID: "u1", Kind: events.OrgMemberRemoved})
-	if v, _ := svc.caches().counts.Get(ctx, "org-1"); v != corpusUnknown {
+	if v, _ := svc.caches().counts.Get(countKey(t, "org-1")); v != corpusUnknown {
 		t.Errorf("deleted org's count = %v, want invalidated", v)
 	}
-	if v, _ := svc.caches().counts.Get(ctx, "org-2"); v != 0 {
+	if v, _ := svc.caches().counts.Get(countKey(t, "org-2")); v != 0 {
 		t.Errorf("another org's count = %v, want its cached 0", v)
 	}
 }

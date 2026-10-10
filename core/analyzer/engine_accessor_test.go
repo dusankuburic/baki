@@ -29,9 +29,9 @@ func TestRuleConfidence_Defaults(t *testing.T) {
 	}
 }
 
-// TestRuleAutoFix_KnownFixers verifies the fixer map is exposed correctly:
+// TestRuleAutoFix_KnownFixers verifies the fixer wiring is exposed correctly:
 // every rule with a deterministic fixer returns its fixType, others return "".
-// The fixTypes must stay in sync with FlowService.ApplyFix dispatch.
+// Every fixType is dispatched through the fix registry (PatchForFix).
 func TestRuleAutoFix_KnownFixers(t *testing.T) {
 	cases := []struct {
 		id, want string

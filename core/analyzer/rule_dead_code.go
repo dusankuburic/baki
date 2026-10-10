@@ -40,4 +40,13 @@ func (r *DeadCodeRule) Check(block *models.Block, ctx *RuleContext) []models.Fin
 	}}
 }
 
-func init() { registerRule(&DeadCodeRule{}) }
+func init() {
+	registerRule(&DeadCodeRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "remove-block",
+		Related:      []Related{{To: "unused-variable", Reason: "dead code may produce unused variable findings"}},
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

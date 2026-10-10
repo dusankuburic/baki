@@ -24,7 +24,9 @@ func (r *HardcodedIPRule) Check(block *models.Block, ctx *RuleContext) []models.
 	var findings []models.Finding
 	seen := make(map[string]bool)
 
-	for key, val := range block.Properties {
+	var keys [16]string
+	for _, key := range sortedPropertyKeys(keys[:0], block.Properties) {
+		val := block.Properties[key]
 		if strings.Contains(val, "%") {
 			continue
 		}
@@ -80,4 +82,12 @@ func isValidIPv4(s string) bool {
 	return true
 }
 
-func init() { registerRule(&HardcodedIPRule{}) }
+func init() {
+	registerRule(&HardcodedIPRule{}, RuleMeta{
+		Confidence:   models.ConfidenceLow,
+		AutoFix:      "replace-with-variable",
+		IntroducedIn: 1,
+		Revision:     2,
+		Stage:        StageStable,
+	})
+}

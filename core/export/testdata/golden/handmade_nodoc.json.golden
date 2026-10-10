@@ -1,0 +1,75 @@
+{
+  "flowId": "flow-handmade",
+  "flowName": "Hand-made \u003cflow\u003e",
+  "generatedAt": "2026-10-08T09:30:00Z",
+  "findings": [
+    {
+      "id": "F-001",
+      "ruleId": "org-no-msgbox",
+      "severity": "warning",
+      "title": "=HYPERLINK(\"http://x\")",
+      "description": "Line one\nLine two \u003cb\u003e\u0026amp;\u003c/b\u003e 'quoted' \"dq\"",
+      "blockId": "blk-1",
+      "subflowId": "sf-1",
+      "suggestion": "@risk: use a log action",
+      "category": "Custom",
+      "metadata": {
+        "property": "Message"
+      }
+    },
+    {
+      "id": "F-002",
+      "fingerprint": "parse-error:",
+      "ruleId": "parse-error",
+      "severity": "error",
+      "title": "Parse error (line 3)",
+      "description": "malformed line",
+      "blockId": "",
+      "subflowId": "",
+      "category": "Syntax"
+    },
+    {
+      "id": "F-003",
+      "fingerprint": "todo-in-comment:0011223344556677",
+      "ruleId": "todo-in-comment",
+      "severity": "info",
+      "title": "TODO in comment",
+      "description": "Ünïcödé — 日本語 TODO",
+      "blockId": "blk-2",
+      "subflowId": "sf-1"
+    },
+    {
+      "id": "F-004",
+      "fingerprint": "unhandled-error:8899aabbccddeeff",
+      "ruleId": "unhandled-error",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Unhandled error in fallible action",
+      "description": "This action can fail at runtime.",
+      "blockId": "blk-3",
+      "subflowId": "sf-1",
+      "suggestion": "Wrap it in ON BLOCK ERROR.",
+      "autoFix": "wrap-error-handler"
+    },
+    {
+      "id": "F-005",
+      "fingerprint": "org-legacy:1234",
+      "ruleId": "org-legacy",
+      "severity": "critical",
+      "title": "Legacy severity",
+      "description": "A severity no consumer knows.",
+      "blockId": "blk-4",
+      "subflowId": "sf-2"
+    }
+  ],
+  "stats": {
+    "errors": 1,
+    "warnings": 2,
+    "info": 1,
+    "blocksAnalyzed": 7,
+    "rulesRun": 46,
+    "rulesSkipped": 0,
+    "suppressed": 2
+  },
+  "durationMs": 0
+}

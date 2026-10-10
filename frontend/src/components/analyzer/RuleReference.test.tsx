@@ -114,6 +114,43 @@ describe('RuleReference', () => {
     expect(screen.getByText(/No rules match/)).toBeInTheDocument()
   })
 
+  it('marks preview rules and library rules, and counts the preview ones', async () => {
+    getRules.mockResolvedValue([
+      ...mockRules.map(r => ({...r, stage: 'stable', kind: 'block', introducedIn: 1})),
+      {
+        id: 'duplicate-subflow-across-flows',
+        name: 'Duplicate subflow across flows',
+        description: 'Same subflow body in two flows',
+        defaultSeverity: 'info',
+        category: 'Style',
+        enabled: true,
+        confidence: 'high',
+        stage: 'preview',
+        kind: 'library',
+        introducedIn: 1,
+      },
+      // A stage and kind a newer server added: shown like a stable per-flow rule.
+      {...mockRules[3]!, id: 'future-rule', stage: 'beta', kind: 'project'},
+    ] as Rule[])
+    render(<RuleReference />)
+    await waitFor(() => expect(screen.getByText('duplicate-subflow-across-flows')).toBeInTheDocument())
+
+    expect(screen.getAllByText('Preview')).toHaveLength(1)
+    expect(screen.getByText(/1 in preview/)).toBeInTheDocument()
+    expect(screen.getAllByText('Across flows')).toHaveLength(1)
+    const card = screen.getByText('duplicate-subflow-across-flows').closest('div.p-4') as HTMLElement
+    expect(card).toHaveTextContent('Preview')
+    expect(card).toHaveTextContent('Across flows')
+    expect(screen.getByText('future-rule')).toBeInTheDocument()
+  })
+
+  it('shows no preview count when no rule is in preview', async () => {
+    render(<RuleReference />)
+    await waitFor(() => expect(screen.getByText('unhandled-error')).toBeInTheDocument())
+    expect(screen.queryByText(/in preview/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Preview')).not.toBeInTheDocument()
+  })
+
   it('shows error state when API fails', async () => {
     getRules.mockRejectedValue(new Error('network down'))
     render(<RuleReference />)

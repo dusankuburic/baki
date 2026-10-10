@@ -4,15 +4,15 @@ import (
 	"context"
 	"golang.org/x/sync/errgroup"
 	"math"
-	"slices"
 	"sort"
-	"sync"
+	"strconv"
 	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/cache"
 	"pad-core/logger"
 	"pad-core/models"
 )
@@ -21,10 +21,21 @@ import (
 // landing page triggers ~16 sequential DB queries, so 30s collapses re-loads.
 const dashboardCacheTTL = 30 * time.Second
 
-type dashCacheEntry struct {
-	data      *models.DashboardHomeData
-	fetchedAt time.Time
-}
+// dashboardHomeMax caps the home cache: one payload per user who opened the page within the TTL.
+const dashboardHomeMax = 1024
+
+// The dashboard's view caches (ADR 0017): each user's home payload, and each user's analytics payloads by query.
+// An analytics payload also depends on whether the caller is an instance admin (the instance-wide security counts),
+// so that flag is part of its key: two sessions of one user, with and without the admin role, never share a view.
+// homeEpoch retires every home entry at once (the Version part).
+var (
+	homeViews = cache.Declare("dashboard.home",
+		cache.Keys(cache.KindTenant, cache.KindVersion),
+		cache.ReplicaLocal("30 s TTL; this replica's flow changes and analyses drop the owner's view at once"))
+	analyticsViews = cache.Declare("dashboard.analytics",
+		cache.Keys(cache.KindTenant, cache.KindParam, cache.KindParam),
+		cache.ReplicaLocal("30 s TTL; this replica's flow changes drop the views of the owner and of the flow's org at once"))
+)
 
 // DashboardService assembles the welcome ("home") dashboard payload and persists per-flow analysis
 // summaries — cloud reads the durable flow_analysis table, local (nil backend) the analyzer cache.
@@ -33,19 +44,14 @@ type DashboardService struct {
 	analysis *AnalysisService
 	flowSvc  *FlowService
 
-	dashMu    sync.Mutex
-	dashCache map[string]*dashCacheEntry
-	// anaCache holds analytics payloads keyed by user + canonical query
-	// (dashboard_analytics.go); shares dashMu and the TTL, empties with the home entry.
-	anaCache map[string]*anaCacheEntry
-	// anaSeq numbers anaCache inserts so entry-cap eviction has a deterministic
-	// tie-break when entries share one fetchedAt; map order otherwise picked the victim.
-	anaSeq uint64
-	anaSF  singleflight.Group
-	scope  ScopeResolver
-	// dashSF collapses concurrent cold-cache builds per user — one buildCloud
-	// run on a miss, not a thundering herd of ~16 DB queries per caller.
-	dashSF singleflight.Group
+	// home holds each user's home payload (cloud) for the TTL; concurrent cold loads of one user share one
+	// buildCloud run instead of each issuing ~16 DB queries. homeEpoch moves on a drop of every view.
+	home      *cache.Typed[*models.DashboardHomeData]
+	homeEpoch atomic.Uint64
+	// ana holds analytics payloads keyed by user, admin flag and canonical query (dashboard_analytics.go).
+	ana   *anaStore
+	anaSF singleflight.Group
+	scope ScopeResolver
 
 	// homeGen fences home fills (keyed by user) and anaGen analytics fills (keyed "u:"+user and "o:"+org) against
 	// the invalidations that ran while they read: a build that read the old rows is not stored after the drop.
@@ -60,12 +66,12 @@ type DashboardService struct {
 // library's FlowScopeResolver; without one BuildAnalytics fails).
 func NewDashboardService(backend storageif.DashboardStore, analysis *AnalysisService, flowSvc *FlowService, scope ScopeResolver) *DashboardService {
 	return &DashboardService{
-		backend:   backend,
-		analysis:  analysis,
-		flowSvc:   flowSvc,
-		scope:     scope,
-		dashCache: make(map[string]*dashCacheEntry),
-		anaCache:  make(map[string]*anaCacheEntry),
+		backend:  backend,
+		analysis: analysis,
+		flowSvc:  flowSvc,
+		scope:    scope,
+		home:     cache.New[*models.DashboardHomeData](homeViews, dashboardHomeMax, cache.WithTTL(dashboardCacheTTL)),
+		ana:      newAnaStore(),
 	}
 }
 
@@ -147,6 +153,8 @@ func (s *DashboardService) RecordAnalysis(ctx context.Context, doc *models.FlowD
 		AutoFixableCount: autoFixable,
 		TotalFindings:    report.Stats.Errors + report.Stats.Warnings + report.Stats.Info,
 		AnalyzedAt:       report.GeneratedAt,
+		// The snapshot remembers the rules it was scored with, so the scanner compares a later health like for like.
+		RuleSet: report.RuleSet,
 	}
 	if err := s.backend.SaveFlowAnalysis(ctx, fa); err != nil {
 		logger.Warn("dashboard: persist flow analysis failed", "flowId", doc.ID, "err", err)
@@ -165,45 +173,35 @@ func (s *DashboardService) BuildHome(ctx context.Context, userID string) *models
 		return out
 	}
 
-	// Check TTL cache before hitting the database (16 queries → 0 on hit).
-	s.dashMu.Lock()
-	if entry, ok := s.dashCache[userID]; ok && time.Since(entry.fetchedAt) < dashboardCacheTTL {
-		s.dashMu.Unlock()
-		// Do NOT mutate entry.data here: it is a shared pointer handed to every
-		// concurrent caller, and writing after unlocking races their JSON marshal.
-		return entry.data
-	}
-	s.dashMu.Unlock()
-
-	// Single-flight the cold build: concurrent cold-cache requests for the same
-	// user share one buildCloud run instead of each issuing ~16 DB queries.
-	res, _, _ := s.dashSF.Do("home:"+userID, func() (any, error) {
-		gen := s.homeGen.Load(userID)
+	build := func(ctx context.Context) (*models.DashboardHomeData, int64, error) {
 		out := s.buildCloud(ctx, userID)
 		out.IsCloud = true
-		// Store in cache (even on partial failure — the emptyHome stub is cheap
-		// to serve for 30s and avoids hammering the DB on a transient error),
-		// unless the user's views were invalidated while it read. Checked under
-		// the lock the invalidation deletes under, so neither can slip between.
-		s.dashMu.Lock()
-		if s.homeGen.FillOK(ctx, userID, gen) {
-			s.dashCache[userID] = &dashCacheEntry{data: out, fetchedAt: time.Now()}
-		}
-		// The TTL governs freshness, not lifetime — sweep entries past it at
-		// write time or the map grows with every distinct user forever.
-		for id, entry := range s.dashCache {
-			if time.Since(entry.fetchedAt) >= dashboardCacheTTL {
-				delete(s.dashCache, id)
-			}
-		}
-		s.dashMu.Unlock()
-		return out, nil
-	})
-	if res != nil {
-		return res.(*models.DashboardHomeData)
+		return out, 1, nil
 	}
-	// Single-flight returned nil (panic/error path); fall back to a valid shape.
-	return emptyHome()
+	k, ok := s.homeKey(userID)
+	if !ok {
+		out, _, _ := build(ctx)
+		return out
+	}
+	// Served from the cache for the TTL (16 queries → 0 on a hit) and stored even on partial failure — the
+	// emptyHome stub is cheap to serve for 30s and avoids hammering the DB on a transient error — unless the
+	// user's views were invalidated while it read. Do NOT mutate the result: it is a shared pointer handed to
+	// every concurrent caller, and writing to it races their JSON marshal.
+	out, err := s.home.GetOrFill(ctx, k, build, &s.homeGen, userID)
+	if err != nil {
+		// Only the caller's own context ending; fall back to a valid shape.
+		return emptyHome()
+	}
+	return out
+}
+
+// homeKey is the home cache's key for userID under the current epoch; false without a user.
+func (s *DashboardService) homeKey(userID string) (cache.Key, bool) {
+	if userID == "" {
+		return cache.Key{}, false
+	}
+	k, err := homeViews.Key(cache.User(userID), cache.Version(strconv.FormatUint(s.homeEpoch.Load(), 10)))
+	return k, err == nil
 }
 
 // InvalidateDashboardCache clears the cached dashboard data for a user (all
@@ -213,12 +211,11 @@ func (s *DashboardService) InvalidateDashboardCache(userID string) {
 		s.InvalidateFlowViews(userID, "")
 		return
 	}
+	// Generations first, so a fill in flight is refused, then every entry is retired.
 	s.homeGen.BumpAll()
 	s.anaGen.BumpAll()
-	s.dashMu.Lock()
-	defer s.dashMu.Unlock()
-	s.dashCache = make(map[string]*dashCacheEntry)
-	s.anaCache = make(map[string]*anaCacheEntry)
+	s.homeEpoch.Add(1)
+	s.ana.clear()
 }
 
 // InvalidateFlowViews drops what a change to a flow of ownerID in orgID ("" for a personal flow) makes stale: the
@@ -236,17 +233,11 @@ func (s *DashboardService) InvalidateFlowViews(ownerID, orgID string) {
 	if ownerID != "" {
 		s.homeGen.Bump(ownerID)
 		s.anaGen.Bump("u:" + ownerID)
-	}
-	s.dashMu.Lock()
-	defer s.dashMu.Unlock()
-	if ownerID != "" {
-		delete(s.dashCache, ownerID)
-	}
-	for k, e := range s.anaCache {
-		if (ownerID != "" && e.userID == ownerID) || (orgID != "" && slices.Contains(e.orgIDs, orgID)) {
-			delete(s.anaCache, k)
+		if k, ok := s.homeKey(ownerID); ok {
+			s.home.Delete(k)
 		}
 	}
+	s.ana.dropViews(ownerID, orgID)
 }
 
 func (s *DashboardService) buildCloud(ctx context.Context, userID string) *models.DashboardHomeData {

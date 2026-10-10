@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"pad-analyzer/internal/storage/atomicfile"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
 )
@@ -329,7 +330,9 @@ func atomicWriteConv(dir, dest string, data []byte) error {
 		cleanup()
 		return fmt.Errorf("close temp conversation file: %w", err)
 	}
-	if err := os.Rename(tmpName, dest); err != nil {
+	// On Windows a GET conversation reading the file at this moment makes the rename fail (no FILE_SHARE_DELETE):
+	// the finished answer was lost. Retry the transient conflict, as the other on-disk stores do.
+	if err := atomicfile.RenameOverOpenReader(tmpName, dest); err != nil {
 		cleanup()
 		return fmt.Errorf("rename conversation file: %w", err)
 	}

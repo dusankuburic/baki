@@ -42,7 +42,7 @@ func TestSearchIndexCache_EvictsByBytes(t *testing.T) {
 	}
 	unit := int64(20) * searchIndexCostPerBlock
 	svc := &FlowService{}
-	idxCache := cache.NewSizedLRU(3*unit, cache.WithMaxEntries(maxSearchIndexCache))
+	idxCache := cache.New[*searchIndexEntry](searchIndexes, 3*unit, cache.WithMaxEntries(maxSearchIndexCache))
 	svc.idxCache = idxCache
 
 	first := svc.searchIndexFor(docs[0])
@@ -98,7 +98,7 @@ func indexAndDrop(t *testing.T, svc *FlowService, seed string) weak.Pointer[mode
 func TestSearchIndexCache_ReleasesTheDocument(t *testing.T) {
 	svc := NewFlowService(nil, nil, NewLocalDocumentProvider(), nil, nil, nil)
 	wp := indexAndDrop(t, svc, "released")
-	if got := svc.idxCache.(*cache.SizedLRU).Len(); got != 1 {
+	if got := svc.idxCache.Len(); got != 1 {
 		t.Fatalf("index not cached: %d entries", got)
 	}
 	if !weakCollected(wp) {

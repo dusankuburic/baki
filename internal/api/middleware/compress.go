@@ -14,7 +14,8 @@ import (
 	"github.com/andybalholm/brotli"
 )
 
-// compressibleTypes is the set of response content types eligible for compression (chi's default allowlist).
+// compressibleTypes is the set of response content types eligible for compression (chi's default allowlist,
+// plus text/xml and the SARIF exports' application/sarif+json).
 // SSE (text/event-stream) is intentionally excluded: compressing it would buffer chunks and defeat token streaming; WebSocket upgrades (101, no content-type) are skipped too.
 var compressibleTypes = map[string]struct{}{
 	"text/html":                {},
@@ -25,6 +26,7 @@ var compressibleTypes = map[string]struct{}{
 	"application/javascript":   {},
 	"application/x-javascript": {},
 	"application/json":         {},
+	"application/sarif+json":   {},
 	"application/atom+xml":     {},
 	"application/rss+xml":      {},
 	"image/svg+xml":            {},

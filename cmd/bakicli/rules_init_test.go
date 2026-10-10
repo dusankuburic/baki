@@ -186,58 +186,6 @@ func TestBuildDefaultConfig(t *testing.T) {
 	}
 }
 
-// ── .bakiignore ───────────────────────────────────────────────────
-
-func TestShouldIgnoreFile_GlobMatch(t *testing.T) {
-	patterns := []string{"*.tmp", "vendor/*", "samples/"}
-	tests := []struct {
-		path     string
-		expected bool
-	}{
-		{"foo.tmp", true},
-		{"dir/foo.tmp", true},
-		{"vendor/flow.txt", true},
-		{"real.txt", false},
-		{"samples/x.txt", true},
-		{"src/main.txt", false},
-	}
-	for _, tc := range tests {
-		if got := shouldIgnoreFile(tc.path, patterns); got != tc.expected {
-			t.Errorf("shouldIgnoreFile(%q) = %v, want %v", tc.path, got, tc.expected)
-		}
-	}
-}
-
-func TestShouldIgnoreFile_EmptyPatterns(t *testing.T) {
-	if shouldIgnoreFile("anything.txt", nil) {
-		t.Error("expected false for nil patterns")
-	}
-	if shouldIgnoreFile("anything.txt", []string{}) {
-		t.Error("expected false for empty patterns")
-	}
-}
-
-func TestLoadIgnorePatterns_ReadsFile(t *testing.T) {
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, ".bakiignore")
-	os.WriteFile(path, []byte("# comment\n*.tmp\nvendor/\n\n"), 0o644)
-
-	patterns := loadIgnorePatterns(tmp)
-	if len(patterns) != 2 {
-		t.Fatalf("expected 2 patterns, got %d: %v", len(patterns), patterns)
-	}
-	if patterns[0] != "*.tmp" || patterns[1] != "vendor/" {
-		t.Errorf("patterns = %v", patterns)
-	}
-}
-
-func TestLoadIgnorePatterns_MissingFileReturnsNil(t *testing.T) {
-	tmp := t.TempDir()
-	if patterns := loadIgnorePatterns(tmp); patterns != nil {
-		t.Errorf("expected nil for missing file, got %v", patterns)
-	}
-}
-
 // ── stdin ─────────────────────────────────────────────────────────
 
 func TestLoad_StdinParsesText(t *testing.T) {

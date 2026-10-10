@@ -1,0 +1,80 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_padframework_Framework_ProcessErrorHandler
+document: subflows=1 blocks=10 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":1,"info":1,"blocksAnalyzed":8,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=8 final=360/360 last="Loop body is too large"
+metrics: {"avgCognitive":0,"avgCyclomatic":1,"healthScore":95,"maxCognitive":0,"maxCyclomatic":1,"subflowCount":1,"totalBlocks":7,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Framework_ProcessErrorHandler: {"blockCount":7,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":1,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=8
+  raw findings: error-swallow=1 unused-variable=1
+inventory: none
+findings: 2
+F-001 warning/medium error-swallow [Reliability] fix=insert-error-log @Framework_ProcessErrorHandler#3 sf=Framework_ProcessErrorHandler fp=error-swallow:5c57fd4fdef72e68
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-002 info/low unused-variable [Style] fix=remove-block @Framework_ProcessErrorHandler#2 sf=Framework_ProcessErrorHandler fp=unused-variable:f120f117f19a8676
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"SystemException"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":1,"info":1,"blocksAnalyzed":8,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=8 final=360/360 last="Loop body is too large"
+metrics: as default, healthScore=95
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=8
+  raw findings: error-swallow=1 unused-variable=1
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":1,"info":3,"blocksAnalyzed":8,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=8 final=360/360 last="Loop body is too large"
+metrics: as default, healthScore=93
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=8
+  raw findings: duplicate-action=1 error-swallow=1 large-subflow=1 unused-variable=1
+inventory: none
+findings: 4
+F-001 info/medium duplicate-action [Style] fix=remove-block @Framework_ProcessErrorHandler#5 sf=Framework_ProcessErrorHandler fp=duplicate-action:d2e57389a3ded0b1
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-002 warning/medium error-swallow [Reliability] fix=insert-error-log @Framework_ProcessErrorHandler#3 sf=Framework_ProcessErrorHandler fp=error-swallow:5c57fd4fdef72e68
+F-003 info/low large-subflow [Style] fix=- @Framework_ProcessErrorHandler#1 sf=Framework_ProcessErrorHandler fp=large-subflow:edb070cc21ec45b4
+    title: Large subflow
+    desc: Subflow 'Framework_ProcessErrorHandler' has 7 blocks (threshold: 5).
+F-004 info/low unused-variable [Style] fix=remove-block @Framework_ProcessErrorHandler#2 sf=Framework_ProcessErrorHandler fp=unused-variable:f120f117f19a8676
+
+=== disabled
+stats: {"errors":0,"warnings":1,"info":1,"blocksAnalyzed":8,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=6 final=296/296 last="Loop body is too large"
+metrics: as default, healthScore=95
+profiles: rules=37 order=f7de49357acad250 blocksChecked=8
+  raw findings: error-swallow=1 unused-variable=1
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== severity
+stats: {"errors":0,"warnings":1,"info":1,"blocksAnalyzed":8,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=8 final=360/360 last="Loop body is too large"
+metrics: as default, healthScore=95
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=8
+  raw findings: error-swallow=1 unused-variable=1
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== autofixable
+stats: {"errors":0,"warnings":1,"info":1,"blocksAnalyzed":8,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=6 final=256/256 last="Wait zero"
+metrics: as default, healthScore=95
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=8
+  raw findings: error-swallow=1 unused-variable=1
+inventory: none
+findings: 2
+  as default; severity changes: none

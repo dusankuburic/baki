@@ -1,0 +1,367 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: synthetic_nested_loop
+document: subflows=1 blocks=16 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":5,"warnings":24,"info":16,"blocksAnalyzed":16,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=15 final=720/720 last="Loop body is too large"
+metrics: {"avgCognitive":15,"avgCyclomatic":6,"healthScore":0,"maxCognitive":15,"maxCyclomatic":6,"subflowCount":1,"totalBlocks":16,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":16,"cognitiveComplexity":15,"cyclomaticComplexity":6,"fanIn":0,"fanOut":0,"maxNestingDepth":5,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=16
+  raw findings: infinite-loop-risk=5 missing-delay=5 missing-retry=10 missing-timeout=10 slow-pattern=4 subflow-no-error-handler=1 unhandled-error=10
+inventory: none
+findings: 45
+F-001 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#0 sf=Main fp=infinite-loop-risk:5bfbb11819343440
+    title: Loop may run forever
+    desc: This loop has no recognizable exit condition such as Exit Loop, Break, or modifications to the loop variable.
+F-002 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#3 sf=Main fp=infinite-loop-risk:caf1c37e0648b27a
+    title: Loop may run forever
+    desc: This loop has no recognizable exit condition such as Exit Loop, Break, or modifications to the loop variable.
+F-003 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#6 sf=Main fp=infinite-loop-risk:12469e9534da0692
+    title: Loop may run forever
+    desc: This loop has no recognizable exit condition such as Exit Loop, Break, or modifications to the loop variable.
+F-004 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#9 sf=Main fp=infinite-loop-risk:3aaeb0cf6b42b96a
+    title: Loop may run forever
+    desc: This loop has no recognizable exit condition such as Exit Loop, Break, or modifications to the loop variable.
+F-005 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#12 sf=Main fp=infinite-loop-risk:5b31d5fb46fcec03
+    title: Loop may run forever
+    desc: This loop has no recognizable exit condition such as Exit Loop, Break, or modifications to the loop variable.
+F-006 info/medium missing-delay [Reliability] fix=insert-delay @Main#2 sf=Main fp=missing-delay:2f78b5d6ae61bf91
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-007 info/medium missing-delay [Reliability] fix=insert-delay @Main#5 sf=Main fp=missing-delay:89b45fb6e3e45a6e
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-008 info/medium missing-delay [Reliability] fix=insert-delay @Main#8 sf=Main fp=missing-delay:8862015834d82091
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-009 info/medium missing-delay [Reliability] fix=insert-delay @Main#11 sf=Main fp=missing-delay:44dfc888fe5184bf
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-010 info/medium missing-delay [Reliability] fix=insert-delay @Main#14 sf=Main fp=missing-delay:b58a545501da03bd
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-011 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#1 sf=Main fp=missing-retry:103b0eac1762d77f
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-012 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#2 sf=Main fp=missing-retry:2f78b5d6ae61bf91
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-013 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#4 sf=Main fp=missing-retry:52401f7c29614a3e
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-014 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#5 sf=Main fp=missing-retry:89b45fb6e3e45a6e
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-015 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#7 sf=Main fp=missing-retry:a54c61eed1a8990a
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-016 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#8 sf=Main fp=missing-retry:8862015834d82091
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-017 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#10 sf=Main fp=missing-retry:71469ac1407b0c20
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-018 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#11 sf=Main fp=missing-retry:44dfc888fe5184bf
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-019 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#13 sf=Main fp=missing-retry:5e1b0aa9d525409a
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-020 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#14 sf=Main fp=missing-retry:b58a545501da03bd
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-021 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#1 sf=Main fp=missing-timeout:103b0eac1762d77f
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-022 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#2 sf=Main fp=missing-timeout:2f78b5d6ae61bf91
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-023 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#4 sf=Main fp=missing-timeout:52401f7c29614a3e
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-024 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#5 sf=Main fp=missing-timeout:89b45fb6e3e45a6e
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-025 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:a54c61eed1a8990a
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-026 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#8 sf=Main fp=missing-timeout:8862015834d82091
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-027 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#10 sf=Main fp=missing-timeout:71469ac1407b0c20
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-028 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#11 sf=Main fp=missing-timeout:44dfc888fe5184bf
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-029 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#13 sf=Main fp=missing-timeout:5e1b0aa9d525409a
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-030 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#14 sf=Main fp=missing-timeout:b58a545501da03bd
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-031 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Main#0 sf=Main fp=slow-pattern:5bfbb11819343440
+    title: UI automation in tight loop
+    desc: This loop contains UI/web automation actions without any delay, which can overwhelm the target application.
+F-032 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Main#3 sf=Main fp=slow-pattern:caf1c37e0648b27a
+    title: UI automation in tight loop
+    desc: This loop contains UI/web automation actions without any delay, which can overwhelm the target application.
+F-033 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Main#6 sf=Main fp=slow-pattern:12469e9534da0692
+    title: UI automation in tight loop
+    desc: This loop contains UI/web automation actions without any delay, which can overwhelm the target application.
+F-034 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Main#9 sf=Main fp=slow-pattern:3aaeb0cf6b42b96a
+    title: UI automation in tight loop
+    desc: This loop contains UI/web automation actions without any delay, which can overwhelm the target application.
+F-035 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:5bfbb11819343440
+    title: Subflow without error handler
+    desc: Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-036 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:103b0eac1762d77f
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-037 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=unhandled-error:2f78b5d6ae61bf91
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-038 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:52401f7c29614a3e
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-039 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#5 sf=Main fp=unhandled-error:89b45fb6e3e45a6e
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-040 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=unhandled-error:a54c61eed1a8990a
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-041 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=unhandled-error:8862015834d82091
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-042 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#10 sf=Main fp=unhandled-error:71469ac1407b0c20
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-043 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#11 sf=Main fp=unhandled-error:44dfc888fe5184bf
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-044 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#13 sf=Main fp=unhandled-error:5e1b0aa9d525409a
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-045 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#14 sf=Main fp=unhandled-error:b58a545501da03bd
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+
+=== nil-settings
+stats: {"errors":5,"warnings":24,"info":16,"blocksAnalyzed":16,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=15 final=720/720 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=16
+  raw findings: infinite-loop-risk=5 missing-delay=5 missing-retry=10 missing-timeout=10 slow-pattern=4 subflow-no-error-handler=1 unhandled-error=10
+inventory: none
+findings: 45
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":5,"warnings":24,"info":35,"blocksAnalyzed":16,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=15 final=720/720 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=16
+  raw findings: deep-nesting=9 duplicate-action=5 infinite-loop-risk=5 large-subflow=1 missing-delay=5 missing-retry=10 missing-timeout=10 slow-pattern=4 subflow-no-error-handler=1 unhandled-error=10 wide-loop=4
+inventory: none
+findings: 64
+F-001 info/low deep-nesting [Style] fix=- @Main#7 sf=Main fp=deep-nesting:a54c61eed1a8990a
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-002 info/low deep-nesting [Style] fix=- @Main#8 sf=Main fp=deep-nesting:8862015834d82091
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-003 info/low deep-nesting [Style] fix=- @Main#9 sf=Main fp=deep-nesting:3aaeb0cf6b42b96a
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-004 info/low deep-nesting [Style] fix=- @Main#10 sf=Main fp=deep-nesting:71469ac1407b0c20
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-005 info/low deep-nesting [Style] fix=- @Main#11 sf=Main fp=deep-nesting:44dfc888fe5184bf
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-006 info/low deep-nesting [Style] fix=- @Main#12 sf=Main fp=deep-nesting:5b31d5fb46fcec03
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-007 info/low deep-nesting [Style] fix=- @Main#13 sf=Main fp=deep-nesting:5e1b0aa9d525409a
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":5,"maxDepth":2}
+F-008 info/low deep-nesting [Style] fix=- @Main#14 sf=Main fp=deep-nesting:b58a545501da03bd
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":5,"maxDepth":2}
+F-009 info/low deep-nesting [Style] fix=- @Main#15 sf=Main fp=deep-nesting:8175b06d85117499
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":5,"maxDepth":2}
+F-010 info/medium duplicate-action [Style] fix=remove-block @Main#1 sf=Main fp=duplicate-action:103b0eac1762d77f
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-011 info/medium duplicate-action [Style] fix=remove-block @Main#4 sf=Main fp=duplicate-action:52401f7c29614a3e
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-012 info/medium duplicate-action [Style] fix=remove-block @Main#7 sf=Main fp=duplicate-action:a54c61eed1a8990a
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-013 info/medium duplicate-action [Style] fix=remove-block @Main#10 sf=Main fp=duplicate-action:71469ac1407b0c20
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-014 info/medium duplicate-action [Style] fix=remove-block @Main#13 sf=Main fp=duplicate-action:5e1b0aa9d525409a
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-015 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#0 sf=Main fp=infinite-loop-risk:5bfbb11819343440
+F-016 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#3 sf=Main fp=infinite-loop-risk:caf1c37e0648b27a
+F-017 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#6 sf=Main fp=infinite-loop-risk:12469e9534da0692
+F-018 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#9 sf=Main fp=infinite-loop-risk:3aaeb0cf6b42b96a
+F-019 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#12 sf=Main fp=infinite-loop-risk:5b31d5fb46fcec03
+F-020 info/low large-subflow [Style] fix=- @Main#0 sf=Main fp=large-subflow:5bfbb11819343440
+    title: Large subflow
+    desc: Subflow 'Main' has 16 blocks (threshold: 5).
+F-021 info/medium missing-delay [Reliability] fix=insert-delay @Main#2 sf=Main fp=missing-delay:2f78b5d6ae61bf91
+F-022 info/medium missing-delay [Reliability] fix=insert-delay @Main#5 sf=Main fp=missing-delay:89b45fb6e3e45a6e
+F-023 info/medium missing-delay [Reliability] fix=insert-delay @Main#8 sf=Main fp=missing-delay:8862015834d82091
+F-024 info/medium missing-delay [Reliability] fix=insert-delay @Main#11 sf=Main fp=missing-delay:44dfc888fe5184bf
+F-025 info/medium missing-delay [Reliability] fix=insert-delay @Main#14 sf=Main fp=missing-delay:b58a545501da03bd
+F-026 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#1 sf=Main fp=missing-retry:103b0eac1762d77f
+F-027 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#2 sf=Main fp=missing-retry:2f78b5d6ae61bf91
+F-028 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#4 sf=Main fp=missing-retry:52401f7c29614a3e
+F-029 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#5 sf=Main fp=missing-retry:89b45fb6e3e45a6e
+F-030 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#7 sf=Main fp=missing-retry:a54c61eed1a8990a
+F-031 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#8 sf=Main fp=missing-retry:8862015834d82091
+F-032 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#10 sf=Main fp=missing-retry:71469ac1407b0c20
+F-033 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#11 sf=Main fp=missing-retry:44dfc888fe5184bf
+F-034 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#13 sf=Main fp=missing-retry:5e1b0aa9d525409a
+F-035 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#14 sf=Main fp=missing-retry:b58a545501da03bd
+F-036 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#1 sf=Main fp=missing-timeout:103b0eac1762d77f
+F-037 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#2 sf=Main fp=missing-timeout:2f78b5d6ae61bf91
+F-038 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#4 sf=Main fp=missing-timeout:52401f7c29614a3e
+F-039 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#5 sf=Main fp=missing-timeout:89b45fb6e3e45a6e
+F-040 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:a54c61eed1a8990a
+F-041 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#8 sf=Main fp=missing-timeout:8862015834d82091
+F-042 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#10 sf=Main fp=missing-timeout:71469ac1407b0c20
+F-043 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#11 sf=Main fp=missing-timeout:44dfc888fe5184bf
+F-044 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#13 sf=Main fp=missing-timeout:5e1b0aa9d525409a
+F-045 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#14 sf=Main fp=missing-timeout:b58a545501da03bd
+F-046 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Main#0 sf=Main fp=slow-pattern:5bfbb11819343440
+F-047 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Main#3 sf=Main fp=slow-pattern:caf1c37e0648b27a
+F-048 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Main#6 sf=Main fp=slow-pattern:12469e9534da0692
+F-049 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Main#9 sf=Main fp=slow-pattern:3aaeb0cf6b42b96a
+F-050 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:5bfbb11819343440
+F-051 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:103b0eac1762d77f
+F-052 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=unhandled-error:2f78b5d6ae61bf91
+F-053 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:52401f7c29614a3e
+F-054 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#5 sf=Main fp=unhandled-error:89b45fb6e3e45a6e
+F-055 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=unhandled-error:a54c61eed1a8990a
+F-056 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=unhandled-error:8862015834d82091
+F-057 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#10 sf=Main fp=unhandled-error:71469ac1407b0c20
+F-058 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#11 sf=Main fp=unhandled-error:44dfc888fe5184bf
+F-059 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#13 sf=Main fp=unhandled-error:5e1b0aa9d525409a
+F-060 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#14 sf=Main fp=unhandled-error:b58a545501da03bd
+F-061 info/low wide-loop [Style] fix=- @Main#0 sf=Main fp=wide-loop:5bfbb11819343440
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":15,"maxBlocks":3}
+F-062 info/low wide-loop [Style] fix=- @Main#3 sf=Main fp=wide-loop:caf1c37e0648b27a
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":12,"maxBlocks":3}
+F-063 info/low wide-loop [Style] fix=- @Main#6 sf=Main fp=wide-loop:12469e9534da0692
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":9,"maxBlocks":3}
+F-064 info/low wide-loop [Style] fix=- @Main#9 sf=Main fp=wide-loop:3aaeb0cf6b42b96a
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":6,"maxBlocks":3}
+
+=== disabled
+stats: {"errors":5,"warnings":14,"info":10,"blocksAnalyzed":16,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=12 final=592/592 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=37 order=f7de49357acad250 blocksChecked=16
+  raw findings: infinite-loop-risk=5 missing-retry=10 missing-timeout=10 slow-pattern=4
+inventory: none
+findings: 29
+F-001 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#0 sf=Main fp=infinite-loop-risk:5bfbb11819343440
+F-002 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#3 sf=Main fp=infinite-loop-risk:caf1c37e0648b27a
+F-003 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#6 sf=Main fp=infinite-loop-risk:12469e9534da0692
+F-004 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#9 sf=Main fp=infinite-loop-risk:3aaeb0cf6b42b96a
+F-005 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Main#12 sf=Main fp=infinite-loop-risk:5b31d5fb46fcec03
+F-006 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#1 sf=Main fp=missing-retry:103b0eac1762d77f
+F-007 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#2 sf=Main fp=missing-retry:2f78b5d6ae61bf91
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#4 sf=Main fp=missing-retry:52401f7c29614a3e
+F-009 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#5 sf=Main fp=missing-retry:89b45fb6e3e45a6e
+F-010 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#7 sf=Main fp=missing-retry:a54c61eed1a8990a
+F-011 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#8 sf=Main fp=missing-retry:8862015834d82091
+F-012 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#10 sf=Main fp=missing-retry:71469ac1407b0c20
+F-013 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#11 sf=Main fp=missing-retry:44dfc888fe5184bf
+F-014 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#13 sf=Main fp=missing-retry:5e1b0aa9d525409a
+F-015 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#14 sf=Main fp=missing-retry:b58a545501da03bd
+F-016 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#1 sf=Main fp=missing-timeout:103b0eac1762d77f
+F-017 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#2 sf=Main fp=missing-timeout:2f78b5d6ae61bf91
+F-018 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#4 sf=Main fp=missing-timeout:52401f7c29614a3e
+F-019 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#5 sf=Main fp=missing-timeout:89b45fb6e3e45a6e
+F-020 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:a54c61eed1a8990a
+F-021 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#8 sf=Main fp=missing-timeout:8862015834d82091
+F-022 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#10 sf=Main fp=missing-timeout:71469ac1407b0c20
+F-023 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#11 sf=Main fp=missing-timeout:44dfc888fe5184bf
+F-024 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#13 sf=Main fp=missing-timeout:5e1b0aa9d525409a
+F-025 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#14 sf=Main fp=missing-timeout:b58a545501da03bd
+F-026 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Main#0 sf=Main fp=slow-pattern:5bfbb11819343440
+F-027 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Main#3 sf=Main fp=slow-pattern:caf1c37e0648b27a
+F-028 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Main#6 sf=Main fp=slow-pattern:12469e9534da0692
+F-029 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Main#9 sf=Main fp=slow-pattern:3aaeb0cf6b42b96a
+
+=== severity
+stats: {"errors":16,"warnings":19,"info":10,"blocksAnalyzed":16,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=15 final=720/720 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=16
+  raw findings: infinite-loop-risk=5 missing-delay=5 missing-retry=10 missing-timeout=10 slow-pattern=4 subflow-no-error-handler=1 unhandled-error=10
+inventory: none
+findings: 45
+  as default; severity changes: F-006 info->warning, F-007 info->warning, F-008 info->warning, F-009 info->warning, F-010 info->warning, F-035 info->error, F-036 warning->error, F-037 warning->error, F-038 warning->error, F-039 warning->error, F-040 warning->error, F-041 warning->error, F-042 warning->error, F-043 warning->error, F-044 warning->error, F-045 warning->error
+
+=== autofixable
+stats: {"errors":5,"warnings":24,"info":16,"blocksAnalyzed":16,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=512/512 last="Wait zero"
+metrics: as default, healthScore=0
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=16
+  raw findings: infinite-loop-risk=5 missing-delay=5 missing-retry=10 missing-timeout=10 slow-pattern=4 subflow-no-error-handler=1 unhandled-error=10
+inventory: none
+findings: 45
+  as default; severity changes: none

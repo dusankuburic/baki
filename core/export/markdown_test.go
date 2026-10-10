@@ -157,10 +157,11 @@ func TestFilterBySeverity(t *testing.T) {
 		{Severity: models.SeverityWarning},
 		{Severity: models.SeverityError},
 		{Severity: models.SeverityInfo},
+		{Severity: "critical"}, // grouped with the errors, not dropped
 	}
 	grouped := groupFindingsBySeverity(findings)
-	if got := len(grouped[models.SeverityError]); got != 2 {
-		t.Errorf("expected 2 errors, got %d", got)
+	if got := len(grouped[models.SeverityError]); got != 3 {
+		t.Errorf("expected 3 errors, got %d", got)
 	}
 	if got := len(grouped[models.SeverityWarning]); got != 1 {
 		t.Errorf("expected 1 warning, got %d", got)

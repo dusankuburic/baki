@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PAD Analyzer — Analysis Report</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0 auto; max-width: 960px; padding: 2rem 1rem; line-height: 1.5; color: #1f2937; background: #f9fafb; }
+h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
+h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; }
+.meta { color: #6b7280; font-size: .875rem; margin-bottom: 1.5rem; }
+.meta div { margin-top: .125rem; }
+.cards { display: flex; flex-wrap: wrap; gap: .75rem; margin-bottom: 1.5rem; }
+.card { flex: 1 1 8rem; background: #fff; border: 1px solid #e5e7eb; border-radius: .5rem; padding: .75rem 1rem; }
+.card .num { font-size: 1.5rem; font-weight: 700; }
+.card .lbl { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #6b7280; }
+.card.err .num { color: #dc2626; }
+.card.warn .num { color: #d97706; }
+.card.info .num { color: #2563eb; }
+.finding { background: #fff; border: 1px solid #e5e7eb; border-left-width: .25rem; border-left-style: solid; border-radius: .375rem; padding: .75rem 1rem; margin-bottom: .75rem; }
+.finding.err { border-left-color: #dc2626; }
+.finding.warn { border-left-color: #d97706; }
+.finding.info { border-left-color: #2563eb; }
+.finding h3 { margin: 0 0 .25rem; font-size: 1rem; }
+.badge { display: inline-block; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; border-radius: .25rem; padding: .1rem .4rem; color: #fff; }
+.badge.err { background: #dc2626; }
+.badge.warn { background: #d97706; }
+.badge.info { background: #2563eb; }
+.health { display: inline-block; border-radius: .25rem; padding: .1rem .5rem; font-size: .8rem; font-weight: 700; margin-bottom: 1rem; }
+.health.good { background: #d1fae5; color: #065f46; }
+.health.warn { background: #fef3c7; color: #92400e; }
+.health.bad { background: #fee2e2; color: #991b1b; }
+.props { font-size: .8rem; color: #6b7280; margin: .25rem 0 .5rem; }
+.props code { background: #f3f4f6; border-radius: .2rem; padding: 0 .25rem; }
+.suggestion { background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: .375rem; padding: .5rem .75rem; margin-top: .5rem; font-size: .9rem; }
+.ok { background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: .5rem; padding: 1rem; color: #065f46; }
+@media (prefers-color-scheme: dark) {
+	body { background: #111827; color: #e5e7eb; }
+	.card, .finding { background: #1f2937; border-color: #374151; }
+	.props, .meta, .card .lbl { color: #9ca3af; }
+	.props code { background: #374151; }
+	.health.good { background: #065f46; color: #6ee7b7; }
+	.health.warn { background: #713f12; color: #fbbf24; }
+	.health.bad { background: #7f1d1d; color: #fca5a5; }
+}
+</style>
+</head>
+<body>
+<h1>PAD Analyzer — Analysis Report</h1>
+<div class="meta">
+<div>Flow: =Invoices+Ops</div>
+<div>File: flows/teamA</div>
+<div>Generated: Thu, 08 Oct 2026 09:30:00 UTC</div>
+<div>Duration: 1234ms</div>
+</div>
+<div class="health bad">Health Score: 20/100</div>
+<div class="cards">
+<div class="card err"><div class="num">0</div><div class="lbl">Errors</div></div>
+<div class="card warn"><div class="num">18</div><div class="lbl">Warnings</div></div>
+<div class="card info"><div class="num">8</div><div class="lbl">Info</div></div>
+<div class="card"><div class="num">8</div><div class="lbl">Blocks analyzed</div></div>
+<div class="card"><div class="num">45</div><div class="lbl">Rules run</div></div>
+<div class="card"><div class="num">0</div><div class="lbl">Suppressed inline</div></div>
+</div>
+<h2>Warnings <span class="badge warn">18</span></h2>
+<div class="finding warn">
+<h3>File operation without error handler</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>file-op-no-error-handler</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-009</code></span> &middot; <span>Subflow: <code>sf-2</code></span> &middot; <span>File: <code>Billing.txt</code></span> &middot; <span>Line: 4</span></div>
+<p>This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Wrap this action in an &#39;On Block Error&#39; handler to manage missing files, permission errors, and file lock issues gracefully.</div>
+</div>
+<div class="finding warn">
+<h3>Network operation without timeout</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>missing-timeout</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-004</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 5</span></div>
+<p>This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Set an explicit timeout value in the action&#39;s properties. For web automation, use &#39;Wait for element&#39; with a timeout instead of relying on default behavior.</div>
+</div>
+<div class="finding warn">
+<h3>Network operation without timeout</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>missing-timeout</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-005</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 6</span></div>
+<p>This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Set an explicit timeout value in the action&#39;s properties. For web automation, use &#39;Wait for element&#39; with a timeout instead of relying on default behavior.</div>
+</div>
+<div class="finding warn">
+<h3>Network operation without timeout</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>missing-timeout</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-007</code></span> &middot; <span>Subflow: <code>sf-2</code></span> &middot; <span>File: <code>Billing.txt</code></span> &middot; <span>Line: 2</span></div>
+<p>This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Set an explicit timeout value in the action&#39;s properties. For web automation, use &#39;Wait for element&#39; with a timeout instead of relying on default behavior.</div>
+</div>
+<div class="finding warn">
+<h3>Resource opened but never closed</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>resource-leak</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-002</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 3</span></div>
+<p>This action opens a Excel instance (stored in %ExcelInstance%) but no matching close action was found in the flow.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Add a &#39;Excel.Close&#39; action to release the resource. Place it inside an &#39;On Block Error&#39; handler to guarantee cleanup even on failure.</div>
+</div>
+<div class="finding warn">
+<h3>Resource opened but never closed</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>resource-leak</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-007</code></span> &middot; <span>Subflow: <code>sf-2</code></span> &middot; <span>File: <code>Billing.txt</code></span> &middot; <span>Line: 2</span></div>
+<p>This action opens a database connection (stored in %SQLConnection%) but no matching close action was found in the flow.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Add a &#39;Database.Close&#39; action to release the resource. Place it inside an &#39;On Block Error&#39; handler to guarantee cleanup even on failure.</div>
+</div>
+<div class="finding warn">
+<h3>UI automation in tight loop</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>slow-pattern</code></span> &middot; <span>Category: Performance</span> &middot; <span>Block: <code>b-003</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 4</span></div>
+<p>This loop contains UI/web automation actions without any delay, which can overwhelm the target application.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Add a &#39;Wait&#39; or &#39;Delay&#39; action inside the loop to reduce load on the target application.</div>
+</div>
+<div class="finding warn">
+<h3>SQL injection risk</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>sql-injection-risk</code></span> &middot; <span>Category: Security</span> &middot; <span>Block: <code>b-008</code></span> &middot; <span>Subflow: <code>sf-2</code></span> &middot; <span>File: <code>Billing.txt</code></span> &middot; <span>Line: 3</span></div>
+<p>SQL statement interpolates variables directly. A malicious value could alter the query.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Use parameterized queries (@paramName or ? placeholders) instead of embedding %variables% directly in the SQL string.</div>
+</div>
+<div class="finding warn">
+<h3>Unhandled error in fallible action</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>unhandled-error</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-002</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 3</span></div>
+<p>This action commonly fails but has no error handler in its surrounding scope.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Wrap this action in a Try/Catch block or add error handler logic to recover from failures.</div>
+</div>
+<div class="finding warn">
+<h3>Unhandled error in fallible action</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>unhandled-error</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-004</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 5</span></div>
+<p>This action commonly fails but has no error handler in its surrounding scope.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Wrap this action in a Try/Catch block or add error handler logic to recover from failures.</div>
+</div>
+<div class="finding warn">
+<h3>Unhandled error in fallible action</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>unhandled-error</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-005</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 6</span></div>
+<p>This action commonly fails but has no error handler in its surrounding scope.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Wrap this action in a Try/Catch block or add error handler logic to recover from failures.</div>
+</div>
+<div class="finding warn">
+<h3>Unhandled error in fallible action</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>unhandled-error</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-007</code></span> &middot; <span>Subflow: <code>sf-2</code></span> &middot; <span>File: <code>Billing.txt</code></span> &middot; <span>Line: 2</span></div>
+<p>This action commonly fails but has no error handler in its surrounding scope.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Wrap this action in a Try/Catch block or add error handler logic to recover from failures.</div>
+</div>
+<div class="finding warn">
+<h3>Unhandled error in fallible action</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>unhandled-error</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-008</code></span> &middot; <span>Subflow: <code>sf-2</code></span> &middot; <span>File: <code>Billing.txt</code></span> &middot; <span>Line: 3</span></div>
+<p>This action commonly fails but has no error handler in its surrounding scope.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Wrap this action in a Try/Catch block or add error handler logic to recover from failures.</div>
+</div>
+<div class="finding warn">
+<h3>Unhandled error in fallible action</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>unhandled-error</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-009</code></span> &middot; <span>Subflow: <code>sf-2</code></span> &middot; <span>File: <code>Billing.txt</code></span> &middot; <span>Line: 4</span></div>
+<p>This action commonly fails but has no error handler in its surrounding scope.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Wrap this action in a Try/Catch block or add error handler logic to recover from failures.</div>
+</div>
+<div class="finding warn">
+<h3>Variable potentially uninitialized</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>uninitialized-variable</code></span> &middot; <span>Category: Logic</span> &middot; <span>Block: <code>b-003</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 4</span></div>
+<p>Variable &#39;ExcelData&#39; is used here but doesn&#39;t seem to be assigned anywhere in the flow.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Ensure the variable is initialized with a SET action or as an output of another action.</div>
+</div>
+<div class="finding warn">
+<h3>Variable potentially uninitialized</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>uninitialized-variable</code></span> &middot; <span>Category: Logic</span> &middot; <span>Block: <code>b-003</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 4</span></div>
+<p>Variable &#39;CurrentRow&#39; is used here but doesn&#39;t seem to be assigned anywhere in the flow.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Ensure the variable is initialized with a SET action or as an output of another action.</div>
+</div>
+<div class="finding warn">
+<h3>Variable potentially uninitialized</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>uninitialized-variable</code></span> &middot; <span>Category: Logic</span> &middot; <span>Block: <code>b-004</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 5</span></div>
+<p>Variable &#39;Browser&#39; is used here but doesn&#39;t seem to be assigned anywhere in the flow.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Ensure the variable is initialized with a SET action or as an output of another action.</div>
+</div>
+<div class="finding warn">
+<h3>Variable potentially uninitialized</h3>
+<div><span class="badge warn">warning</span></div>
+<div class="props"><span>Rule: <code>uninitialized-variable</code></span> &middot; <span>Category: Logic</span> &middot; <span>Block: <code>b-008</code></span> &middot; <span>Subflow: <code>sf-2</code></span> &middot; <span>File: <code>Billing.txt</code></span> &middot; <span>Line: 3</span></div>
+<p>Variable &#39;InvoiceId&#39; is used here but doesn&#39;t seem to be assigned anywhere in the flow.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Ensure the variable is initialized with a SET action or as an output of another action.</div>
+</div>
+<h2>Info <span class="badge info">8</span></h2>
+<div class="finding info">
+<h3>Hardcoded file path</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>hardcoded-filepath</code></span> &middot; <span>Category: Portability</span> &middot; <span>Block: <code>b-009</code></span> &middot; <span>Subflow: <code>sf-2</code></span> &middot; <span>File: <code>Billing.txt</code></span> &middot; <span>Line: 4</span></div>
+<p>Property &#39;Files&#39; contains an absolute path: /home/ops/tmp/invoice.csv</p>
+<div class="suggestion"><strong>Suggestion:</strong> Use a relative path or store the base directory in a variable configured per environment.</div>
+</div>
+<div class="finding info">
+<h3>Hardcoded IP address</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>hardcoded-ip</code></span> &middot; <span>Category: Portability</span> &middot; <span>Block: <code>b-007</code></span> &middot; <span>Subflow: <code>sf-2</code></span> &middot; <span>File: <code>Billing.txt</code></span> &middot; <span>Line: 2</span></div>
+<p>Property &#39;ConnectionString&#39; contains a hardcoded IP address: 10.0.0.5</p>
+<div class="suggestion"><strong>Suggestion:</strong> Store the IP address in a variable so it can be changed per environment.</div>
+</div>
+<div class="finding info">
+<h3>Web action without wait</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>missing-delay</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-005</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 6</span></div>
+<p>Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Add a &#39;Wait for element&#39; or &#39;Delay&#39; action between UI automation steps to improve reliability.</div>
+</div>
+<div class="finding info">
+<h3>Transient operation without retry</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>missing-retry</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-004</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 5</span></div>
+<p>This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Wrap this action in a loop with a retry counter and delay, or add an &#39;On Block Error&#39; handler that implements retry logic.</div>
+</div>
+<div class="finding info">
+<h3>Transient operation without retry</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>missing-retry</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-005</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 6</span></div>
+<p>This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Wrap this action in a loop with a retry counter and delay, or add an &#39;On Block Error&#39; handler that implements retry logic.</div>
+</div>
+<div class="finding info">
+<h3>Transient operation without retry</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>missing-retry</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-007</code></span> &middot; <span>Subflow: <code>sf-2</code></span> &middot; <span>File: <code>Billing.txt</code></span> &middot; <span>Line: 2</span></div>
+<p>This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Wrap this action in a loop with a retry counter and delay, or add an &#39;On Block Error&#39; handler that implements retry logic.</div>
+</div>
+<div class="finding info">
+<h3>Transient operation without retry</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>missing-retry</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-008</code></span> &middot; <span>Subflow: <code>sf-2</code></span> &middot; <span>File: <code>Billing.txt</code></span> &middot; <span>Line: 3</span></div>
+<p>This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Wrap this action in a loop with a retry counter and delay, or add an &#39;On Block Error&#39; handler that implements retry logic.</div>
+</div>
+<div class="finding info">
+<h3>Subflow without error handler</h3>
+<div><span class="badge info">info</span></div>
+<div class="props"><span>Rule: <code>subflow-no-error-handler</code></span> &middot; <span>Category: Reliability</span> &middot; <span>Block: <code>b-001</code></span> &middot; <span>Subflow: <code>sf-1</code></span> &middot; <span>File: <code>Main.txt</code></span> &middot; <span>Line: 2</span></div>
+<p>Subflow &#34;Main&#34; has action blocks but no error handler. Unhandled errors will silently terminate the subflow.</p>
+<div class="suggestion"><strong>Suggestion:</strong> Add a Try/Catch or On Block Error handler to protect against unexpected failures.</div>
+</div>
+</body>
+</html>

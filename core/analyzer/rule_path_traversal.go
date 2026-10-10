@@ -59,7 +59,9 @@ func (r *PathTraversalRiskRule) Check(block *models.Block, ctx *RuleContext) []m
 	if !isFile {
 		return nil
 	}
-	for key, val := range block.Properties {
+	var keys [16]string
+	for _, key := range sortedPropertyKeys(keys[:0], block.Properties) {
+		val := block.Properties[key]
 		if !isPathProperty(key) {
 			continue
 		}
@@ -83,4 +85,11 @@ func (r *PathTraversalRiskRule) Check(block *models.Block, ctx *RuleContext) []m
 	return nil
 }
 
-func init() { registerRule(&PathTraversalRiskRule{}) }
+func init() {
+	registerRule(&PathTraversalRiskRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		IntroducedIn: 1,
+		Revision:     2,
+		Stage:        StageStable,
+	})
+}

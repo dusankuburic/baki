@@ -1,0 +1,237 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: folder_actions_Variables
+document: subflows=5 blocks=72 parseErrors=0 folder=true
+
+=== default
+stats: {"errors":2,"warnings":8,"info":15,"blocksAnalyzed":60,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=54 final=2700/2700 last="Loop body is too large"
+metrics: {"avgCognitive":1.2,"avgCyclomatic":2.2,"healthScore":29,"maxCognitive":5,"maxCyclomatic":6,"subflowCount":5,"totalBlocks":59,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow FlowControl: {"blockCount":14,"cognitiveComplexity":1,"cyclomaticComplexity":2,"fanIn":0,"fanOut":0,"maxNestingDepth":1,"variableCount":0}
+  subflow GenerateRandomNumber: {"blockCount":8,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+  subflow Loops: {"blockCount":14,"cognitiveComplexity":5,"cyclomaticComplexity":6,"fanIn":0,"fanOut":0,"maxNestingDepth":1,"variableCount":0}
+  subflow TruncateNumber: {"blockCount":3,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+  subflow VarActions: {"blockCount":20,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=60
+  raw findings: dead-code=10 duplicate-action=1 empty-handler=2 error-swallow=2 infinite-loop-risk=2 subflow-no-error-handler=2 uncalled-subflow=4 unused-variable=2
+inventory: none
+findings: 25
+F-001 info/medium dead-code [Style] fix=remove-block @FlowControl#6 sf=FlowControl fp=dead-code:d5172e2fcd3de1a5
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-002 info/medium dead-code [Style] fix=remove-block @FlowControl#7 sf=FlowControl fp=dead-code:b1837148400554d5
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-003 info/medium dead-code [Style] fix=remove-block @FlowControl#9 sf=FlowControl fp=dead-code:619ecfd44512102e
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-004 info/medium dead-code [Style] fix=remove-block @FlowControl#10 sf=FlowControl fp=dead-code:a3755302aa1b5366
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-005 info/medium dead-code [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=dead-code:ad0b222c2ec389f3
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-006 info/medium dead-code [Style] fix=remove-block @FlowControl#12 sf=FlowControl fp=dead-code:94ef5158cfda5a79
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-007 info/medium dead-code [Style] fix=remove-block @FlowControl#13 sf=FlowControl fp=dead-code:1aa55a2302f4f7c1
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-008 info/medium dead-code [Style] fix=remove-block @FlowControl#14 sf=FlowControl fp=dead-code:8ba5025dbcc90636
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-009 info/medium dead-code [Style] fix=remove-block @FlowControl#16 sf=FlowControl fp=dead-code:070726d38756adf1
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-010 info/medium dead-code [Style] fix=remove-block @FlowControl#18 sf=FlowControl fp=dead-code:7080d6be4712ae39
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-011 info/medium duplicate-action [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=duplicate-action:ad0b222c2ec389f3
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":6}
+F-012 warning/high empty-handler [Reliability] fix=insert-handler-log @GenerateRandomNumber#4 sf=GenerateRandomNumber fp=empty-handler:434df32abab44c14
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-013 warning/high empty-handler [Reliability] fix=insert-handler-log @VarActions#5 sf=VarActions fp=empty-handler:8eb8a5e57b911b0c
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-014 warning/medium error-swallow [Reliability] fix=insert-error-log @GenerateRandomNumber#4 sf=GenerateRandomNumber fp=error-swallow:434df32abab44c14
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-015 warning/medium error-swallow [Reliability] fix=insert-error-log @VarActions#5 sf=VarActions fp=error-swallow:8eb8a5e57b911b0c
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-016 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#8 sf=Loops fp=infinite-loop-risk:18b13b59002446e7
+    title: Loop may run forever
+    desc: This loop has no recognizable exit condition such as Exit Loop, Break, or modifications to the loop variable.
+F-017 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#11 sf=Loops fp=infinite-loop-risk:139e639656a78da3
+    title: Loop may run forever
+    desc: This loop has no recognizable exit condition such as Exit Loop, Break, or modifications to the loop variable.
+F-018 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @FlowControl#0 sf=FlowControl fp=subflow-no-error-handler:d54c39ed7d05fe4b
+    title: Subflow without error handler
+    desc: Subflow "FlowControl" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-019 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Loops#0 sf=Loops fp=subflow-no-error-handler:bf3c371e4e6a343f
+    title: Subflow without error handler
+    desc: Subflow "Loops" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-020 warning/medium uncalled-subflow [Logic] fix=- @GenerateRandomNumber#0 sf=GenerateRandomNumber fp=uncalled-subflow:3816259059a35622
+    title: Uncalled subflow
+    desc: Subflow 'GenerateRandomNumber' is never called by any other subflow and is not the entry point. It is dead code at the flow level.
+    meta: {"subflow":"GenerateRandomNumber"}
+F-021 warning/medium uncalled-subflow [Logic] fix=- @Loops#0 sf=Loops fp=uncalled-subflow:bf3c371e4e6a343f
+    title: Uncalled subflow
+    desc: Subflow 'Loops' is never called by any other subflow and is not the entry point. It is dead code at the flow level.
+    meta: {"subflow":"Loops"}
+F-022 warning/medium uncalled-subflow [Logic] fix=- @TruncateNumber#0 sf=TruncateNumber fp=uncalled-subflow:e1d6d343b1a14281
+    title: Uncalled subflow
+    desc: Subflow 'TruncateNumber' is never called by any other subflow and is not the entry point. It is dead code at the flow level.
+    meta: {"subflow":"TruncateNumber"}
+F-023 warning/medium uncalled-subflow [Logic] fix=- @VarActions#0 sf=VarActions fp=uncalled-subflow:41e9f7b4c9be7a91
+    title: Uncalled subflow
+    desc: Subflow 'VarActions' is never called by any other subflow and is not the entry point. It is dead code at the flow level.
+    meta: {"subflow":"VarActions"}
+F-024 info/low unused-variable [Style] fix=remove-block @Loops#1 sf=Loops fp=unused-variable:cc68bbf1c8e372c1
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"num"}
+F-025 info/low unused-variable [Style] fix=remove-block @VarActions#18 sf=VarActions fp=unused-variable:84e393db42103653
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"num"}
+
+=== nil-settings
+stats: {"errors":2,"warnings":8,"info":15,"blocksAnalyzed":60,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=54 final=2700/2700 last="Loop body is too large"
+metrics: as default, healthScore=29
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=60
+  raw findings: dead-code=10 duplicate-action=1 empty-handler=2 error-swallow=2 infinite-loop-risk=2 subflow-no-error-handler=2 uncalled-subflow=4 unused-variable=2
+inventory: none
+findings: 25
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":2,"warnings":8,"info":21,"blocksAnalyzed":60,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=54 final=2700/2700 last="Loop body is too large"
+metrics: as default, healthScore=23
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=60
+  raw findings: dead-code=10 duplicate-action=3 empty-handler=2 error-swallow=2 infinite-loop-risk=2 large-subflow=4 subflow-no-error-handler=2 uncalled-subflow=4 unused-variable=2
+inventory: none
+findings: 31
+F-001 info/medium dead-code [Style] fix=remove-block @FlowControl#6 sf=FlowControl fp=dead-code:d5172e2fcd3de1a5
+F-002 info/medium dead-code [Style] fix=remove-block @FlowControl#7 sf=FlowControl fp=dead-code:b1837148400554d5
+F-003 info/medium dead-code [Style] fix=remove-block @FlowControl#9 sf=FlowControl fp=dead-code:619ecfd44512102e
+F-004 info/medium dead-code [Style] fix=remove-block @FlowControl#10 sf=FlowControl fp=dead-code:a3755302aa1b5366
+F-005 info/medium dead-code [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=dead-code:ad0b222c2ec389f3
+F-006 info/medium dead-code [Style] fix=remove-block @FlowControl#12 sf=FlowControl fp=dead-code:94ef5158cfda5a79
+F-007 info/medium dead-code [Style] fix=remove-block @FlowControl#13 sf=FlowControl fp=dead-code:1aa55a2302f4f7c1
+F-008 info/medium dead-code [Style] fix=remove-block @FlowControl#14 sf=FlowControl fp=dead-code:8ba5025dbcc90636
+F-009 info/medium dead-code [Style] fix=remove-block @FlowControl#16 sf=FlowControl fp=dead-code:070726d38756adf1
+F-010 info/medium dead-code [Style] fix=remove-block @FlowControl#18 sf=FlowControl fp=dead-code:7080d6be4712ae39
+F-011 info/medium duplicate-action [Style] fix=remove-block @FlowControl#7 sf=FlowControl fp=duplicate-action:b1837148400554d5
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-012 info/medium duplicate-action [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=duplicate-action:ad0b222c2ec389f3
+F-013 info/medium duplicate-action [Style] fix=remove-block @Loops#8 sf=Loops fp=duplicate-action:18b13b59002446e7
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-014 warning/high empty-handler [Reliability] fix=insert-handler-log @GenerateRandomNumber#4 sf=GenerateRandomNumber fp=empty-handler:434df32abab44c14
+F-015 warning/high empty-handler [Reliability] fix=insert-handler-log @VarActions#5 sf=VarActions fp=empty-handler:8eb8a5e57b911b0c
+F-016 warning/medium error-swallow [Reliability] fix=insert-error-log @GenerateRandomNumber#4 sf=GenerateRandomNumber fp=error-swallow:434df32abab44c14
+F-017 warning/medium error-swallow [Reliability] fix=insert-error-log @VarActions#5 sf=VarActions fp=error-swallow:8eb8a5e57b911b0c
+F-018 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#8 sf=Loops fp=infinite-loop-risk:18b13b59002446e7
+F-019 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#11 sf=Loops fp=infinite-loop-risk:139e639656a78da3
+F-020 info/low large-subflow [Style] fix=- @FlowControl#0 sf=FlowControl fp=large-subflow:d54c39ed7d05fe4b
+    title: Large subflow
+    desc: Subflow 'FlowControl' has 14 blocks (threshold: 5).
+F-021 info/low large-subflow [Style] fix=- @GenerateRandomNumber#0 sf=GenerateRandomNumber fp=large-subflow:3816259059a35622
+    title: Large subflow
+    desc: Subflow 'GenerateRandomNumber' has 8 blocks (threshold: 5).
+F-022 info/low large-subflow [Style] fix=- @Loops#0 sf=Loops fp=large-subflow:bf3c371e4e6a343f
+    title: Large subflow
+    desc: Subflow 'Loops' has 14 blocks (threshold: 5).
+F-023 info/low large-subflow [Style] fix=- @VarActions#0 sf=VarActions fp=large-subflow:41e9f7b4c9be7a91
+    title: Large subflow
+    desc: Subflow 'VarActions' has 20 blocks (threshold: 5).
+F-024 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @FlowControl#0 sf=FlowControl fp=subflow-no-error-handler:d54c39ed7d05fe4b
+F-025 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Loops#0 sf=Loops fp=subflow-no-error-handler:bf3c371e4e6a343f
+F-026 warning/medium uncalled-subflow [Logic] fix=- @GenerateRandomNumber#0 sf=GenerateRandomNumber fp=uncalled-subflow:3816259059a35622
+F-027 warning/medium uncalled-subflow [Logic] fix=- @Loops#0 sf=Loops fp=uncalled-subflow:bf3c371e4e6a343f
+F-028 warning/medium uncalled-subflow [Logic] fix=- @TruncateNumber#0 sf=TruncateNumber fp=uncalled-subflow:e1d6d343b1a14281
+F-029 warning/medium uncalled-subflow [Logic] fix=- @VarActions#0 sf=VarActions fp=uncalled-subflow:41e9f7b4c9be7a91
+F-030 info/low unused-variable [Style] fix=remove-block @Loops#1 sf=Loops fp=unused-variable:cc68bbf1c8e372c1
+F-031 info/low unused-variable [Style] fix=remove-block @VarActions#18 sf=VarActions fp=unused-variable:84e393db42103653
+
+=== disabled
+stats: {"errors":2,"warnings":8,"info":13,"blocksAnalyzed":60,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=45 final=2220/2220 last="Loop body is too large"
+metrics: as default, healthScore=31
+profiles: rules=37 order=f7de49357acad250 blocksChecked=60
+  raw findings: dead-code=10 duplicate-action=1 empty-handler=2 error-swallow=2 infinite-loop-risk=2 uncalled-subflow=4 unused-variable=2
+inventory: none
+findings: 23
+F-001 info/medium dead-code [Style] fix=remove-block @FlowControl#6 sf=FlowControl fp=dead-code:d5172e2fcd3de1a5
+F-002 info/medium dead-code [Style] fix=remove-block @FlowControl#7 sf=FlowControl fp=dead-code:b1837148400554d5
+F-003 info/medium dead-code [Style] fix=remove-block @FlowControl#9 sf=FlowControl fp=dead-code:619ecfd44512102e
+F-004 info/medium dead-code [Style] fix=remove-block @FlowControl#10 sf=FlowControl fp=dead-code:a3755302aa1b5366
+F-005 info/medium dead-code [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=dead-code:ad0b222c2ec389f3
+F-006 info/medium dead-code [Style] fix=remove-block @FlowControl#12 sf=FlowControl fp=dead-code:94ef5158cfda5a79
+F-007 info/medium dead-code [Style] fix=remove-block @FlowControl#13 sf=FlowControl fp=dead-code:1aa55a2302f4f7c1
+F-008 info/medium dead-code [Style] fix=remove-block @FlowControl#14 sf=FlowControl fp=dead-code:8ba5025dbcc90636
+F-009 info/medium dead-code [Style] fix=remove-block @FlowControl#16 sf=FlowControl fp=dead-code:070726d38756adf1
+F-010 info/medium dead-code [Style] fix=remove-block @FlowControl#18 sf=FlowControl fp=dead-code:7080d6be4712ae39
+F-011 info/medium duplicate-action [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=duplicate-action:ad0b222c2ec389f3
+F-012 warning/high empty-handler [Reliability] fix=insert-handler-log @GenerateRandomNumber#4 sf=GenerateRandomNumber fp=empty-handler:434df32abab44c14
+F-013 warning/high empty-handler [Reliability] fix=insert-handler-log @VarActions#5 sf=VarActions fp=empty-handler:8eb8a5e57b911b0c
+F-014 warning/medium error-swallow [Reliability] fix=insert-error-log @GenerateRandomNumber#4 sf=GenerateRandomNumber fp=error-swallow:434df32abab44c14
+F-015 warning/medium error-swallow [Reliability] fix=insert-error-log @VarActions#5 sf=VarActions fp=error-swallow:8eb8a5e57b911b0c
+F-016 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#8 sf=Loops fp=infinite-loop-risk:18b13b59002446e7
+F-017 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#11 sf=Loops fp=infinite-loop-risk:139e639656a78da3
+F-018 warning/medium uncalled-subflow [Logic] fix=- @GenerateRandomNumber#0 sf=GenerateRandomNumber fp=uncalled-subflow:3816259059a35622
+F-019 warning/medium uncalled-subflow [Logic] fix=- @Loops#0 sf=Loops fp=uncalled-subflow:bf3c371e4e6a343f
+F-020 warning/medium uncalled-subflow [Logic] fix=- @TruncateNumber#0 sf=TruncateNumber fp=uncalled-subflow:e1d6d343b1a14281
+F-021 warning/medium uncalled-subflow [Logic] fix=- @VarActions#0 sf=VarActions fp=uncalled-subflow:41e9f7b4c9be7a91
+F-022 info/low unused-variable [Style] fix=remove-block @Loops#1 sf=Loops fp=unused-variable:cc68bbf1c8e372c1
+F-023 info/low unused-variable [Style] fix=remove-block @VarActions#18 sf=VarActions fp=unused-variable:84e393db42103653
+
+=== severity
+stats: {"errors":4,"warnings":18,"info":3,"blocksAnalyzed":60,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=54 final=2700/2700 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=60
+  raw findings: dead-code=10 duplicate-action=1 empty-handler=2 error-swallow=2 infinite-loop-risk=2 subflow-no-error-handler=2 uncalled-subflow=4 unused-variable=2
+inventory: none
+findings: 25
+  as default; severity changes: F-001 info->warning, F-002 info->warning, F-003 info->warning, F-004 info->warning, F-005 info->warning, F-006 info->warning, F-007 info->warning, F-008 info->warning, F-009 info->warning, F-010 info->warning, F-018 info->error, F-019 info->error
+
+=== autofixable
+stats: {"errors":2,"warnings":4,"info":15,"blocksAnalyzed":60,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=39 final=1920/1920 last="Wait zero"
+metrics: as default, healthScore=45
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=60
+  raw findings: dead-code=10 duplicate-action=1 empty-handler=2 error-swallow=2 infinite-loop-risk=2 subflow-no-error-handler=2 unused-variable=2
+inventory: none
+findings: 21
+F-001 info/medium dead-code [Style] fix=remove-block @FlowControl#6 sf=FlowControl fp=dead-code:d5172e2fcd3de1a5
+F-002 info/medium dead-code [Style] fix=remove-block @FlowControl#7 sf=FlowControl fp=dead-code:b1837148400554d5
+F-003 info/medium dead-code [Style] fix=remove-block @FlowControl#9 sf=FlowControl fp=dead-code:619ecfd44512102e
+F-004 info/medium dead-code [Style] fix=remove-block @FlowControl#10 sf=FlowControl fp=dead-code:a3755302aa1b5366
+F-005 info/medium dead-code [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=dead-code:ad0b222c2ec389f3
+F-006 info/medium dead-code [Style] fix=remove-block @FlowControl#12 sf=FlowControl fp=dead-code:94ef5158cfda5a79
+F-007 info/medium dead-code [Style] fix=remove-block @FlowControl#13 sf=FlowControl fp=dead-code:1aa55a2302f4f7c1
+F-008 info/medium dead-code [Style] fix=remove-block @FlowControl#14 sf=FlowControl fp=dead-code:8ba5025dbcc90636
+F-009 info/medium dead-code [Style] fix=remove-block @FlowControl#16 sf=FlowControl fp=dead-code:070726d38756adf1
+F-010 info/medium dead-code [Style] fix=remove-block @FlowControl#18 sf=FlowControl fp=dead-code:7080d6be4712ae39
+F-011 info/medium duplicate-action [Style] fix=remove-block @FlowControl#11 sf=FlowControl fp=duplicate-action:ad0b222c2ec389f3
+F-012 warning/high empty-handler [Reliability] fix=insert-handler-log @GenerateRandomNumber#4 sf=GenerateRandomNumber fp=empty-handler:434df32abab44c14
+F-013 warning/high empty-handler [Reliability] fix=insert-handler-log @VarActions#5 sf=VarActions fp=empty-handler:8eb8a5e57b911b0c
+F-014 warning/medium error-swallow [Reliability] fix=insert-error-log @GenerateRandomNumber#4 sf=GenerateRandomNumber fp=error-swallow:434df32abab44c14
+F-015 warning/medium error-swallow [Reliability] fix=insert-error-log @VarActions#5 sf=VarActions fp=error-swallow:8eb8a5e57b911b0c
+F-016 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#8 sf=Loops fp=infinite-loop-risk:18b13b59002446e7
+F-017 error/high infinite-loop-risk [Reliability] fix=insert-exit-condition @Loops#11 sf=Loops fp=infinite-loop-risk:139e639656a78da3
+F-018 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @FlowControl#0 sf=FlowControl fp=subflow-no-error-handler:d54c39ed7d05fe4b
+F-019 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Loops#0 sf=Loops fp=subflow-no-error-handler:bf3c371e4e6a343f
+F-020 info/low unused-variable [Style] fix=remove-block @Loops#1 sf=Loops fp=unused-variable:cc68bbf1c8e372c1
+F-021 info/low unused-variable [Style] fix=remove-block @VarActions#18 sf=VarActions fp=unused-variable:84e393db42103653

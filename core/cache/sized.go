@@ -29,13 +29,17 @@ type SizedCache interface {
 // Set-only user gets a count bound of `budget` entries. Entries evict
 // least-recently-used first until within budget (and count cap); Get
 // refreshes recency. An entry over the per-entry ceiling (WithMaxEntryCost,
-// default: the budget) is never stored. TTLs expire on access.
+// default: the budget) is never stored. TTLs expire on access; a store with
+// ttl 0 gets the default TTL (WithTTL), none without one, and a negative ttl
+// never expires.
 type SizedLRU struct {
 	mu         sync.Mutex
 	budget     int64
 	maxEntry   int64
 	maxEntries int
+	ttl        time.Duration
 	costOf     func(value any) int64
+	onEvict    func(EvictReason) // called under mu; Typed counts evictions on its spec
 	total      int64
 	ll         *list.List // front = most recently used
 	items      map[string]*list.Element
@@ -69,7 +73,15 @@ func WithCostFunc(fn func(value any) int64) SizedOption {
 	return func(c *SizedLRU) { c.costOf = fn }
 }
 
+// WithTTL sets the expiry of entries stored with ttl 0; d <= 0 means none
+// (the default).
+func WithTTL(d time.Duration) SizedOption {
+	return func(c *SizedLRU) { c.ttl = d }
+}
+
 // NewSizedLRU creates a cache whose entries' summed cost stays within budget.
+// It is a building block, like NewLRUCache: production code declares a Spec
+// and builds its cache with New.
 func NewSizedLRU(budget int64, opts ...SizedOption) *SizedLRU {
 	if budget < 0 {
 		budget = 0
@@ -98,7 +110,7 @@ func (c *SizedLRU) Get(ctx context.Context, key string) (any, bool) {
 	}
 	e := el.Value.(*sizedEntry)
 	if e.expiration > 0 && time.Now().UnixNano() > e.expiration {
-		c.removeElement(el)
+		c.removeElement(el, EvictExpired)
 		return nil, false
 	}
 	c.ll.MoveToFront(el)
@@ -116,8 +128,24 @@ func (c *SizedLRU) Set(ctx context.Context, key string, value any, ttl time.Dura
 }
 
 func (c *SizedLRU) SetWithCost(ctx context.Context, key string, value any, cost int64, ttl time.Duration) {
+	c.store(key, value, cost, ttl)
+}
+
+// store is SetWithCost reporting whether the value was stored (false: over the
+// per-entry ceiling).
+func (c *SizedLRU) store(key string, value any, cost int64, ttl time.Duration) bool {
+	return c.storeIf(key, value, cost, ttl, nil)
+}
+
+// storeIf is store when allow (if not nil) agrees, asked under c.mu so that
+// a Delete cannot run between the check and the store; when it refuses, the
+// cache is left as it was. allow must not call back into c.
+func (c *SizedLRU) storeIf(key string, value any, cost int64, ttl time.Duration, allow func() bool) bool {
 	if cost < 0 {
 		cost = 0
+	}
+	if ttl == 0 {
+		ttl = c.ttl
 	}
 	var expiration int64
 	if ttl > 0 {
@@ -125,13 +153,16 @@ func (c *SizedLRU) SetWithCost(ctx context.Context, key string, value any, cost 
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if allow != nil && !allow() {
+		return false
+	}
 	if el, ok := c.items[key]; ok {
 		// A replacement never leaves the old value behind, whether or not
 		// the new one fits.
-		c.removeElement(el)
+		c.removeElement(el, EvictReplaced)
 	}
 	if cost > c.maxEntry {
-		return
+		return false
 	}
 	el := c.ll.PushFront(&sizedEntry{key: key, value: value, cost: cost, expiration: expiration})
 	c.items[key] = el
@@ -139,15 +170,16 @@ func (c *SizedLRU) SetWithCost(ctx context.Context, key string, value any, cost 
 	// Evict from the LRU end until within budget and count. The new entry is
 	// at the front and fits on its own, so the loop stops before reaching it.
 	for c.ll.Len() > 1 && (c.total > c.budget || (c.maxEntries > 0 && c.ll.Len() > c.maxEntries)) {
-		c.removeElement(c.ll.Back())
+		c.removeElement(c.ll.Back(), EvictCapacity)
 	}
+	return true
 }
 
 func (c *SizedLRU) Delete(ctx context.Context, key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if el, ok := c.items[key]; ok {
-		c.removeElement(el)
+		c.removeElement(el, EvictDeleted)
 	}
 }
 
@@ -175,11 +207,14 @@ func (c *SizedLRU) MaxEntryCost() int64 {
 	return c.maxEntry
 }
 
-// removeElement unlinks el and settles the total. Caller holds c.mu.
-func (c *SizedLRU) removeElement(el *list.Element) {
+// removeElement unlinks el, settles the total and reports why. Caller holds c.mu.
+func (c *SizedLRU) removeElement(el *list.Element, why EvictReason) {
 	e := el.Value.(*sizedEntry)
 	c.ll.Remove(el)
 	delete(c.items, e.key)
 	c.total -= e.cost
 	e.value = nil
+	if c.onEvict != nil {
+		c.onEvict(why)
+	}
 }

@@ -22,7 +22,7 @@ func TestHighCyclomaticComplexityRule(t *testing.T) {
 		sf := models.Subflow{ID: "sf1", Name: "Complex", Blocks: blocks}
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{sf}}
 		ctx := buildContext(flow, nil)
-		got := rule.Check(&blocks[0], ctx)
+		got := findingsAt(rule, ctx, &blocks[0])
 		if len(got) != 1 {
 			t.Fatalf("expected 1 finding, got %d", len(got))
 		}
@@ -37,7 +37,7 @@ func TestHighCyclomaticComplexityRule(t *testing.T) {
 		sf := models.Subflow{ID: "sf1", Name: "Simple", Blocks: []models.Block{*b}}
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{sf}}
 		ctx := buildContext(flow, nil)
-		got := rule.Check(b, ctx)
+		got := findingsAt(rule, ctx, b)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 findings for simple subflow, got %d", len(got))
 		}
@@ -53,7 +53,7 @@ func TestHighCyclomaticComplexityRule(t *testing.T) {
 		sf := models.Subflow{ID: "sf1", Name: "Complex", Blocks: blocks}
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{sf}}
 		ctx := buildContext(flow, nil)
-		got := rule.Check(&blocks[1], ctx)
+		got := findingsAt(rule, ctx, &blocks[1])
 		if len(got) != 0 {
 			t.Fatalf("expected 0 on non-first block, got %d", len(got))
 		}
@@ -75,7 +75,7 @@ func TestUncalledSubflowRule(t *testing.T) {
 		flow := makeFlowWithSubflows(sfMain, sfOrphan)
 
 		ctx := buildContext(flow, nil)
-		got := rule.Check(orphan, ctx)
+		got := findingsAt(rule, ctx, orphan)
 		if len(got) != 1 {
 			t.Fatalf("expected 1 finding for uncalled subflow, got %d", len(got))
 		}
@@ -91,7 +91,7 @@ func TestUncalledSubflowRule(t *testing.T) {
 		flow := makeFlowWithSubflows(sfMain)
 
 		ctx := buildContext(flow, nil)
-		got := rule.Check(entry, ctx)
+		got := findingsAt(rule, ctx, entry)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 for entry subflow, got %d", len(got))
 		}
@@ -109,7 +109,7 @@ func TestUncalledSubflowRule(t *testing.T) {
 		flow := makeFlowWithSubflows(sfMain, sfHelper)
 
 		ctx := buildContext(flow, nil)
-		got := rule.Check(helper, ctx)
+		got := findingsAt(rule, ctx, helper)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 for called subflow, got %d", len(got))
 		}
@@ -131,11 +131,11 @@ func TestDuplicateSubflowNameRule(t *testing.T) {
 		flow := makeFlowWithSubflows(sfA, sfB)
 
 		ctx := buildContext(flow, nil)
-		gotA := rule.Check(b1, ctx)
+		gotA := findingsAt(rule, ctx, b1)
 		if len(gotA) != 1 {
 			t.Fatalf("expected 1 finding for sf-a, got %d", len(gotA))
 		}
-		gotB := rule.Check(b2, ctx)
+		gotB := findingsAt(rule, ctx, b2)
 		if len(gotB) != 1 {
 			t.Fatalf("expected 1 finding for sf-b, got %d", len(gotB))
 		}
@@ -151,7 +151,7 @@ func TestDuplicateSubflowNameRule(t *testing.T) {
 		flow := makeFlowWithSubflows(sfA, sfB)
 
 		ctx := buildContext(flow, nil)
-		got := rule.Check(b1, ctx)
+		got := findingsAt(rule, ctx, b1)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 for unique name, got %d", len(got))
 		}

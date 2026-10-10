@@ -11,6 +11,7 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/testutil"
+	"pad-core/cache"
 	"pad-core/models"
 )
 
@@ -264,21 +265,31 @@ func azureCfgErrCode(t *testing.T, err error) string {
 	return ce.Code
 }
 
-// seedModelCache writes entries directly (the map is the unit under test).
+// seedModelCache writes entries directly (the map is the unit under test), each keyed "scope\x00provider".
 func seedModelCache(svc *ProviderService, entries map[string]modelCacheEntry) {
 	svc.modelMu.Lock()
 	defer svc.modelMu.Unlock()
 	for k, e := range entries {
-		svc.modelCache[k] = e
+		scope, provider, _ := strings.Cut(k, "\x00")
+		svc.modelCache[modelListingKey(scope, provider)] = e
 	}
 }
 
+// modelCacheKeys lists the cached listings as "scope\x00provider".
 func modelCacheKeys(svc *ProviderService) map[string]bool {
 	svc.modelMu.Lock()
 	defer svc.modelMu.Unlock()
 	out := make(map[string]bool, len(svc.modelCache))
 	for k := range svc.modelCache {
-		out[k] = true
+		parts := k.Parts()
+		scope := parts[0].Value()
+		switch parts[0].Name() {
+		case "org":
+			scope = ai.OrgScope(scope)
+		case "local":
+			scope = ""
+		}
+		out[scope+"\x00"+parts[1].Value()] = true
 	}
 	return out
 }
@@ -315,10 +326,10 @@ func TestPruneModelCache_RemovesExpiredKeepsLiveAndCapsSize(t *testing.T) {
 		}
 	}
 	svc.modelMu.Lock()
-	svc.modelCache = map[string]modelCacheEntry{}
-	for k, v := range full {
-		svc.modelCache[k] = v
-	}
+	svc.modelCache = map[cache.Key]modelCacheEntry{}
+	svc.modelMu.Unlock()
+	seedModelCache(svc, full)
+	svc.modelMu.Lock()
 	svc.pruneModelCacheLocked(now)
 	size := len(svc.modelCache)
 	svc.modelMu.Unlock()

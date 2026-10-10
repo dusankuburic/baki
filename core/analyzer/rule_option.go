@@ -6,13 +6,16 @@ import (
 	"pad-core/models"
 )
 
-// ruleOptionInt reads an integer threshold from a rule's Options, falling back
-// to def when the option is absent, non-numeric, or below min. The value's Go
-// type depends on the settings source (JSON-decoded settings carry float64;
-// models.DefaultSettings() and Go callers carry int) — the threshold rules
-// once accepted float64 ONLY, silently ignoring int thresholds, the defaults
-// included.
-func ruleOptionInt(settings *models.AppSettings, ruleID, key string, def, min int) int {
+// ruleOption reads the integer threshold spec declares from a rule's Options,
+// falling back to spec.Default when the option is absent, non-numeric, or
+// below spec.Min. The same spec is listed in the rule's RuleMeta.Options, so
+// the catalog and DefaultRuleConfigs see the default the rule applies. The
+// value's Go type depends on the settings source (JSON-decoded settings carry
+// float64; models.DefaultSettings() and Go callers carry int) — the threshold
+// rules once accepted float64 ONLY, silently ignoring int thresholds, the
+// defaults included.
+func ruleOption(settings *models.AppSettings, ruleID string, spec OptionSpec) int {
+	def := spec.Default
 	if settings == nil {
 		return def
 	}
@@ -20,7 +23,7 @@ func ruleOptionInt(settings *models.AppSettings, ruleID, key string, def, min in
 	if !ok {
 		return def
 	}
-	v, ok := rc.Options[key]
+	v, ok := rc.Options[spec.Key]
 	if !ok {
 		return def
 	}
@@ -45,7 +48,7 @@ func ruleOptionInt(settings *models.AppSettings, ruleID, key string, def, min in
 	default:
 		return def
 	}
-	if n < min {
+	if n < spec.Min {
 		return def
 	}
 	return n

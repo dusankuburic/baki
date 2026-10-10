@@ -1,0 +1,126 @@
+bytes: 24118 sha256: 5cdd4be8ddd26b9a123ea195db0dd81e4604589c05d3a8693f10706583fe7544
+pages: 2
+--- page 1
+0 J
+0 j
+0.57 w
+0.000 G
+0.000 g
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 20.00 Tf ET
+BT 31.19 790.53 Td "PAD Analyzer"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 11.00 Tf ET
+BT 31.19 779.06 Td "Analysis Report"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 10.00 Tf ET
+BT 31.19 746.76 Td "Flow: Preview rules"Tj ET
+BT 31.19 732.59 Td "Generated: 2026-10-08 09:30:00"Tj ET
+BT 31.19 718.41 Td "Duration: 1234ms"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 14.00 Tf ET
+BT 31.19 684.62 Td "Summary"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 10.00 Tf ET
+BT 31.19 667.39 Td "Blocks analyzed: 2"Tj ET
+BT 31.19 653.22 Td "Rules run: 45"Tj ET
+BT 31.19 639.04 Td "Errors: 1  |  Warnings: 4  |  Info: 3"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 14.00 Tf ET
+BT 31.19 605.25 Td "Findings (8)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 12.00 Tf ET
+BT 31.19 578.92 Td "Errors (1)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 559.67 Td "1. Credential variable set to literal value"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 544.38 Td "Rule: hardcoded-credential  |  Block: b-001"Tj ET
+2.400 Tw
+BT 0 Tw 31.19 533.04 Td ["Variable" -267.533" " "'Password'" -267.533" " "has" -267.533" " "a" -267.533" " "name" -267.533" " "that" -267.533" " "suggests" -267.533" " "it" -267.533" " "holds" -267.533" " "a" -267.533" " "credential" -267.533" " "and" -267.533" " "is" -267.533" " "assigned" -267.533" " "a" -267.533" " "literal" ] TJ ET
+0 Tw
+BT 31.19 521.71 Td "string value."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.643 Tw
+BT 0 Tw 31.19 504.70 Td ["Suggestion:" -115.214" " "Store" -115.214" " "credentials" -115.214" " "in" -115.214" " "a" -115.214" " "secured" -115.214" " "vault," -115.214" " "Windows" -115.214" " "Credential" -115.214" " "Manager," -115.214" " "or" -115.214" " "use" -115.214" " "a" -115.214" " "PAD" -115.214" " "input" ] TJ ET
+0 Tw
+BT 31.19 493.36 Td "variable instead of a literal string in the flow."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 12.00 Tf ET
+BT 31.19 468.37 Td "Warnings (4)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 449.12 Td "1. Insecure HTTP URL"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 433.83 Td "Rule: insecure-http-url  |  Block: b-002"Tj ET
+4.500 Tw
+BT 0 Tw 31.19 422.49 Td ["Action" -534.417" " "targets" -534.417" " "a" -534.417" " "cleartext" -534.417" " "http://" -534.417" " "URL." -534.417" " "Any" -534.417" " "data" -534.417" " "sent" -534.417" " "(credentials," -534.417" " "tokens," -534.417" " "PII)" -534.417" " "travels" ] TJ ET
+0 Tw
+BT 31.19 411.15 Td "unencrypted and is interceptable on the wire."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 394.15 Td "Suggestion: Use the https:// scheme for the target endpoint so transport is TLS-encrypted."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 372.59 Td "2. Network operation without timeout"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 357.30 Td "Rule: missing-timeout  |  Block: b-002"Tj ET
+5.250 Tw
+BT 0 Tw 31.19 345.96 Td ["This" -634.417" " "network/UI" -634.417" " "automation" -634.417" " "action" -634.417" " "has" -634.417" " "no" -634.417" " "explicit" -634.417" " "timeout" -634.417" " "configured." -634.417" " "If" -634.417" " "the" -634.417" " "target" -634.417" " "is" ] TJ ET
+0 Tw
+BT 31.19 334.62 Td "unresponsive, the flow will hang indefinitely."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.077 Tw
+BT 0 Tw 31.19 317.61 Td ["Suggestion:" -262.538" " "Set" -262.538" " "an" -262.538" " "explicit" -262.538" " "timeout" -262.538" " "value" -262.538" " "in" -262.538" " "the" -262.538" " "action's" -262.538" " "properties." -262.538" " "For" -262.538" " "web" -262.538" " "automation," -262.538" " "use" ] TJ ET
+0 Tw
+BT 31.19 306.27 Td "'Wait for element' with a timeout instead of relying on default behavior."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 284.71 Td "3. Unhandled error in fallible action"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 269.42 Td "Rule: unhandled-error  |  Block: b-002"Tj ET
+BT 31.19 258.08 Td "This action commonly fails but has no error handler in its surrounding scope."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.400 Tw
+BT 0 Tw 31.19 241.08 Td ["Suggestion:" -267.533" " "Wrap" -267.533" " "this" -267.533" " "action" -267.533" " "in" -267.533" " "a" -267.533" " "Try/Catch" -267.533" " "block" -267.533" " "or" -267.533" " "add" -267.533" " "error" -267.533" " "handler" -267.533" " "logic" -267.533" " "to" -267.533" " "recover" -267.533" " "from" ] TJ ET
+0 Tw
+BT 31.19 229.74 Td "failures."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 208.18 Td "4. Variable potentially uninitialized"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 192.89 Td "Rule: uninitialized-variable  |  Block: b-002"Tj ET
+BT 31.19 181.55 Td "Variable 'Browser' is used here but doesn't seem to be assigned anywhere in the flow."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+2.400 Tw
+BT 0 Tw 31.19 164.54 Td ["Suggestion:" -307.533" " "Ensure" -307.533" " "the" -307.533" " "variable" -307.533" " "is" -307.533" " "initialized" -307.533" " "with" -307.533" " "a" -307.533" " "SET" -307.533" " "action" -307.533" " "or" -307.533" " "as" -307.533" " "an" -307.533" " "output" -307.533" " "of" -307.533" " "another" ] TJ ET
+0 Tw
+BT 31.19 153.20 Td "action."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 12.00 Tf ET
+BT 31.19 128.21 Td "Info (3)"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 108.97 Td "1. Hardcoded URL"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 93.67 Td "Rule: hardcoded-url  |  Block: b-002"Tj ET
+BT 31.19 82.34 Td "Property 'Url' contains a hardcoded URL: http://example.com/status"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.562 Tw
+BT 0 Tw 31.19 65.33 Td ["Suggestion:" -63.312" " "Store" -63.312" " "the" -63.312" " "base" -63.312" " "URL" -63.312" " "in" -63.312" " "a" -63.312" " "variable" -63.312" " "so" -63.312" " "it" -63.312" " "can" -63.312" " "be" -63.312" " "changed" -63.312" " "per" -63.312" " "environment" -63.312" " "without" -63.312" " "editing" ] TJ ET
+0 Tw
+
+--- page 2
+0 J
+0 j
+0.57 w
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.000 G
+0.000 g
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 805.17 Td "the flow."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 783.61 Td "2. Transient operation without retry"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 768.32 Td "Rule: missing-retry  |  Block: b-002"Tj ET
+3.273 Tw
+BT 0 Tw 31.19 756.98 Td ["This" -419.364" " "network/external" -419.364" " "service" -419.364" " "action" -419.364" " "is" -419.364" " "prone" -419.364" " "to" -419.364" " "transient" -419.364" " "failures" -419.364" " "(timeouts," -419.364" " "rate" -419.364" " "limits," ] TJ ET
+0 Tw
+BT 31.19 745.64 Td "connection resets) but has no retry mechanism or error handler."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+0.500 Tw
+BT 0 Tw 31.19 728.64 Td ["Suggestion:" -56.278" " "Wrap" -56.278" " "this" -56.278" " "action" -56.278" " "in" -56.278" " "a" -56.278" " "loop" -56.278" " "with" -56.278" " "a" -56.278" " "retry" -56.278" " "counter" -56.278" " "and" -56.278" " "delay," -56.278" " "or" -56.278" " "add" -56.278" " "an" -56.278" " "'On" -56.278" " "Block" -56.278" " "Error'" ] TJ ET
+0 Tw
+BT 31.19 717.30 Td "handler that implements retry logic."Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 10.00 Tf ET
+BT 31.19 695.74 Td "3. Variable declared but never used"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 680.45 Td "Rule: unused-variable  |  Block: b-001"Tj ET
+BT 31.19 669.11 Td "This variable is set but never referenced elsewhere in the flow."Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 9.00 Tf ET
+BT 31.19 652.10 Td "Suggestion: Remove the unused variable or add a reference to it."Tj ET
+

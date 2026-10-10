@@ -85,7 +85,7 @@ func TestSqlInjectionRiskRule_SetCycleWithoutSourceStaysWarning(t *testing.T) {
 		t.Errorf("source-less SET cycle escalated to Error; want Warning")
 	}
 	if varTaintedByUntrusted(ctx, "A") || varTaintedByUntrusted(ctx, "B") {
-		t.Errorf("source-less cycle marked tainted: A=%v B=%v", ctx.TaintedVars["A"], ctx.TaintedVars["B"])
+		t.Errorf("source-less cycle marked tainted: A=%v B=%v", ctx.TaintedVars()["A"], ctx.TaintedVars()["B"])
 	}
 }
 

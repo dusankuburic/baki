@@ -53,4 +53,12 @@ func (r *SlowPatternRule) Check(block *models.Block, ctx *RuleContext) []models.
 	}}
 }
 
-func init() { registerRule(&SlowPatternRule{}) }
+func init() {
+	registerRule(&SlowPatternRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "insert-delay-in-loop",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

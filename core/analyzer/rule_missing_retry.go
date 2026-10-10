@@ -76,7 +76,16 @@ func isTransientOperation(rawType string) bool {
 }
 
 func isInsideRetryLoop(block *models.Block, ctx *RuleContext) bool {
-	return ctx.InsideRetryLoop[block.ID]
+	return ctx.InsideRetryLoop()[block.ID]
 }
 
-func init() { registerRule(&MissingRetryRule{}) }
+func init() {
+	registerRule(&MissingRetryRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "wrap-in-retry",
+		Related:      []Related{{To: "missing-timeout", Reason: "retry and timeout checks are related reliability concerns"}},
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

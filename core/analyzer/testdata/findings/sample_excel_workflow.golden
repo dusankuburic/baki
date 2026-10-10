@@ -1,0 +1,195 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_excel_workflow
+document: subflows=2 blocks=23 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":15,"info":4,"blocksAnalyzed":20,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=18 final=900/900 last="Loop body is too large"
+metrics: {"avgCognitive":4,"avgCyclomatic":2.5,"healthScore":36,"maxCognitive":8,"maxCyclomatic":4,"subflowCount":2,"totalBlocks":20,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":14,"cognitiveComplexity":8,"cyclomaticComplexity":4,"fanIn":0,"fanOut":0,"maxNestingDepth":4,"variableCount":0}
+  subflow FormatReport: {"blockCount":6,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":1,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=20
+  raw findings: hardcoded-filepath=3 subflow-no-error-handler=1 uncalled-subflow=1 unhandled-error=10 uninitialized-variable=4
+inventory: none
+findings: 19
+F-001 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#9 sf=Main fp=hardcoded-filepath:ce7d4f289d9ef3d4
+    title: Hardcoded file path
+    desc: Property 'FilePath' contains an absolute path: C:\\output\\contacts.txt
+    meta: {"path":"C:\\\\output\\\\contacts.txt","property":"FilePath"}
+F-002 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#12 sf=Main fp=hardcoded-filepath:acc2d151a1451bda
+    title: Hardcoded file path
+    desc: Property 'FilePath' contains an absolute path: C:\\output\\backup.xlsx
+    meta: {"path":"C:\\\\output\\\\backup.xlsx","property":"FilePath"}
+F-003 info/low hardcoded-filepath [Portability] fix=replace-with-variable @FormatReport#4 sf=FormatReport fp=hardcoded-filepath:17501115e52110da
+    title: Hardcoded file path
+    desc: Property 'FilePath' contains an absolute path: C:\\output\\header.txt
+    meta: {"path":"C:\\\\output\\\\header.txt","property":"FilePath"}
+F-004 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @FormatReport#0 sf=FormatReport fp=subflow-no-error-handler:83677b8261993fd4
+    title: Subflow without error handler
+    desc: Subflow "FormatReport" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-005 warning/medium uncalled-subflow [Logic] fix=- @FormatReport#0 sf=FormatReport fp=uncalled-subflow:83677b8261993fd4
+    title: Uncalled subflow
+    desc: Subflow 'FormatReport' is never called by any other subflow and is not the entry point. It is dead code at the flow level.
+    meta: {"subflow":"FormatReport"}
+F-006 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=unhandled-error:f3360bae2a8f260b
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-007 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:f5e67ac5befd1f54
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-008 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=unhandled-error:9686c4aa41ca87c6
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-009 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:94ae47b2bf75a073
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-010 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#12 sf=Main fp=unhandled-error:6138624ad25ccd36
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-011 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#16 sf=Main fp=unhandled-error:c4615815aa552c9d
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-012 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @FormatReport#0 sf=FormatReport fp=unhandled-error:83677b8261993fd4
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-013 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @FormatReport#1 sf=FormatReport fp=unhandled-error:5b00773b2aa40f06
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-014 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @FormatReport#2 sf=FormatReport fp=unhandled-error:6b6f8d82e7010e7d
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-015 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @FormatReport#5 sf=FormatReport fp=unhandled-error:be5027571869784d
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-016 warning/low uninitialized-variable [Logic] fix=init-variable @Main#1 sf=Main fp=uninitialized-variable:3dc45b704d14a98a
+    title: Variable potentially uninitialized
+    desc: Variable 'FreeRow' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"FreeRow"}
+F-017 warning/low uninitialized-variable [Logic] fix=init-variable @Main#3 sf=Main fp=uninitialized-variable:20327ef2613b0fd7
+    title: Variable potentially uninitialized
+    desc: Variable 'Name' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"Name"}
+F-018 warning/low uninitialized-variable [Logic] fix=init-variable @Main#4 sf=Main fp=uninitialized-variable:963c9a9c0551e39a
+    title: Variable potentially uninitialized
+    desc: Variable 'Email' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"Email"}
+F-019 warning/low uninitialized-variable [Logic] fix=init-variable @Main#12 sf=Main fp=uninitialized-variable:0cd3579104d5fc30
+    title: Variable potentially uninitialized
+    desc: Variable 'ExcelInstance' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"ExcelInstance"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":15,"info":4,"blocksAnalyzed":20,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=18 final=900/900 last="Loop body is too large"
+metrics: as default, healthScore=36
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=20
+  raw findings: hardcoded-filepath=3 subflow-no-error-handler=1 uncalled-subflow=1 unhandled-error=10 uninitialized-variable=4
+inventory: none
+findings: 19
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":15,"info":11,"blocksAnalyzed":20,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=18 final=900/900 last="Loop body is too large"
+metrics: as default, healthScore=29
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=20
+  raw findings: deep-nesting=4 hardcoded-filepath=3 large-subflow=2 subflow-no-error-handler=1 uncalled-subflow=1 unhandled-error=10 uninitialized-variable=4 wide-loop=1
+inventory: none
+findings: 26
+F-001 info/low deep-nesting [Style] fix=- @Main#6 sf=Main fp=deep-nesting:3bdedc2933f46a18
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-002 info/low deep-nesting [Style] fix=- @Main#7 sf=Main fp=deep-nesting:83d3b78dfaae43a8
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-003 info/low deep-nesting [Style] fix=- @Main#8 sf=Main fp=deep-nesting:ad972b13ec75e9f2
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-004 info/low deep-nesting [Style] fix=- @Main#9 sf=Main fp=deep-nesting:2c6e3f3b1bface3f
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-005 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#9 sf=Main fp=hardcoded-filepath:ce7d4f289d9ef3d4
+F-006 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#12 sf=Main fp=hardcoded-filepath:acc2d151a1451bda
+F-007 info/low hardcoded-filepath [Portability] fix=replace-with-variable @FormatReport#4 sf=FormatReport fp=hardcoded-filepath:17501115e52110da
+F-008 info/low large-subflow [Style] fix=- @Main#0 sf=Main fp=large-subflow:f3360bae2a8f260b
+    title: Large subflow
+    desc: Subflow 'Main' has 14 blocks (threshold: 5).
+F-009 info/low large-subflow [Style] fix=- @FormatReport#0 sf=FormatReport fp=large-subflow:83677b8261993fd4
+    title: Large subflow
+    desc: Subflow 'FormatReport' has 6 blocks (threshold: 5).
+F-010 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @FormatReport#0 sf=FormatReport fp=subflow-no-error-handler:83677b8261993fd4
+F-011 warning/medium uncalled-subflow [Logic] fix=- @FormatReport#0 sf=FormatReport fp=uncalled-subflow:83677b8261993fd4
+F-012 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=unhandled-error:f3360bae2a8f260b
+F-013 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:f5e67ac5befd1f54
+F-014 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=unhandled-error:9686c4aa41ca87c6
+F-015 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:94ae47b2bf75a073
+F-016 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#12 sf=Main fp=unhandled-error:6138624ad25ccd36
+F-017 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#16 sf=Main fp=unhandled-error:c4615815aa552c9d
+F-018 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @FormatReport#0 sf=FormatReport fp=unhandled-error:83677b8261993fd4
+F-019 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @FormatReport#1 sf=FormatReport fp=unhandled-error:5b00773b2aa40f06
+F-020 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @FormatReport#2 sf=FormatReport fp=unhandled-error:6b6f8d82e7010e7d
+F-021 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @FormatReport#5 sf=FormatReport fp=unhandled-error:be5027571869784d
+F-022 warning/low uninitialized-variable [Logic] fix=init-variable @Main#1 sf=Main fp=uninitialized-variable:3dc45b704d14a98a
+F-023 warning/low uninitialized-variable [Logic] fix=init-variable @Main#3 sf=Main fp=uninitialized-variable:20327ef2613b0fd7
+F-024 warning/low uninitialized-variable [Logic] fix=init-variable @Main#4 sf=Main fp=uninitialized-variable:963c9a9c0551e39a
+F-025 warning/low uninitialized-variable [Logic] fix=init-variable @Main#12 sf=Main fp=uninitialized-variable:0cd3579104d5fc30
+F-026 info/low wide-loop [Style] fix=- @Main#2 sf=Main fp=wide-loop:92877d488425e833
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":7,"maxBlocks":3}
+
+=== disabled
+stats: {"errors":0,"warnings":1,"info":3,"blocksAnalyzed":20,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=15 final=740/740 last="Loop body is too large"
+metrics: as default, healthScore=93
+profiles: rules=37 order=f7de49357acad250 blocksChecked=20
+  raw findings: hardcoded-filepath=3 uncalled-subflow=1
+inventory: none
+findings: 4
+F-001 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#9 sf=Main fp=hardcoded-filepath:ce7d4f289d9ef3d4
+F-002 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#12 sf=Main fp=hardcoded-filepath:acc2d151a1451bda
+F-003 info/low hardcoded-filepath [Portability] fix=replace-with-variable @FormatReport#4 sf=FormatReport fp=hardcoded-filepath:17501115e52110da
+F-004 warning/medium uncalled-subflow [Logic] fix=- @FormatReport#0 sf=FormatReport fp=uncalled-subflow:83677b8261993fd4
+
+=== severity
+stats: {"errors":11,"warnings":1,"info":7,"blocksAnalyzed":20,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=18 final=900/900 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=20
+  raw findings: hardcoded-filepath=3 subflow-no-error-handler=1 uncalled-subflow=1 unhandled-error=10 uninitialized-variable=4
+inventory: none
+findings: 19
+  as default; severity changes: F-004 info->error, F-006 warning->error, F-007 warning->error, F-008 warning->error, F-009 warning->error, F-010 warning->error, F-011 warning->error, F-012 warning->error, F-013 warning->error, F-014 warning->error, F-015 warning->error, F-016 warning->info, F-017 warning->info, F-018 warning->info, F-019 warning->info
+
+=== autofixable
+stats: {"errors":0,"warnings":14,"info":4,"blocksAnalyzed":20,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=640/640 last="Wait zero"
+metrics: as default, healthScore=40
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=20
+  raw findings: hardcoded-filepath=3 subflow-no-error-handler=1 unhandled-error=10 uninitialized-variable=4
+inventory: none
+findings: 18
+F-001 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#9 sf=Main fp=hardcoded-filepath:ce7d4f289d9ef3d4
+F-002 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#12 sf=Main fp=hardcoded-filepath:acc2d151a1451bda
+F-003 info/low hardcoded-filepath [Portability] fix=replace-with-variable @FormatReport#4 sf=FormatReport fp=hardcoded-filepath:17501115e52110da
+F-004 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @FormatReport#0 sf=FormatReport fp=subflow-no-error-handler:83677b8261993fd4
+F-005 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=unhandled-error:f3360bae2a8f260b
+F-006 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:f5e67ac5befd1f54
+F-007 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=unhandled-error:9686c4aa41ca87c6
+F-008 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:94ae47b2bf75a073
+F-009 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#12 sf=Main fp=unhandled-error:6138624ad25ccd36
+F-010 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#16 sf=Main fp=unhandled-error:c4615815aa552c9d
+F-011 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @FormatReport#0 sf=FormatReport fp=unhandled-error:83677b8261993fd4
+F-012 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @FormatReport#1 sf=FormatReport fp=unhandled-error:5b00773b2aa40f06
+F-013 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @FormatReport#2 sf=FormatReport fp=unhandled-error:6b6f8d82e7010e7d
+F-014 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @FormatReport#5 sf=FormatReport fp=unhandled-error:be5027571869784d
+F-015 warning/low uninitialized-variable [Logic] fix=init-variable @Main#1 sf=Main fp=uninitialized-variable:3dc45b704d14a98a
+F-016 warning/low uninitialized-variable [Logic] fix=init-variable @Main#3 sf=Main fp=uninitialized-variable:20327ef2613b0fd7
+F-017 warning/low uninitialized-variable [Logic] fix=init-variable @Main#4 sf=Main fp=uninitialized-variable:963c9a9c0551e39a
+F-018 warning/low uninitialized-variable [Logic] fix=init-variable @Main#12 sf=Main fp=uninitialized-variable:0cd3579104d5fc30

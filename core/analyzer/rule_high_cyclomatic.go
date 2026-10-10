@@ -18,34 +18,32 @@ func (r *HighCyclomaticComplexityRule) Category() string { return "Style" }
 
 const defaultMaxCyclomatic = 20
 
-func (r *HighCyclomaticComplexityRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	if ctx.SubflowCyclo == nil {
-		return nil
+func (r *HighCyclomaticComplexityRule) CheckFlow(ctx *RuleContext) []models.Finding {
+	cyclos := ctx.SubflowCyclo()
+	var out []models.Finding
+	for i := range ctx.Flow.Subflows {
+		sf := &ctx.Flow.Subflows[i]
+		cyclo := cyclos[sf.ID]
+		if cyclo <= defaultMaxCyclomatic {
+			continue
+		}
+		// One finding per subflow, on its first block.
+		anchor := subflowAnchor(ctx, sf)
+		if anchor == nil {
+			continue
+		}
+		out = append(out, models.Finding{
+			RuleID:      r.ID(),
+			Severity:    r.DefaultSeverity(),
+			Title:       "High cyclomatic complexity",
+			Description: "Subflow '" + sf.Name + "' has a cyclomatic complexity of " + itoa(cyclo) + " (threshold: " + itoa(defaultMaxCyclomatic) + "), indicating excessive branching that is hard to test and maintain.",
+			BlockID:     anchor.ID,
+			SubflowID:   sf.ID,
+			Suggestion:  "Split this subflow into smaller subflows, reduce nesting, or extract complex conditions into helper subflows.",
+			Metadata:    map[string]interface{}{"complexity": cyclo, "threshold": defaultMaxCyclomatic},
+		})
 	}
-	cyclo := ctx.SubflowCyclo[block.SubflowID]
-	if cyclo <= defaultMaxCyclomatic {
-		return nil
-	}
-
-	subflow := ctx.SubflowByID[block.SubflowID]
-	if subflow == nil {
-		return nil
-	}
-	// Only emit once per subflow — on the first block.
-	if len(subflow.Blocks) == 0 || block.ID != subflow.Blocks[0].ID {
-		return nil
-	}
-
-	return []models.Finding{{
-		RuleID:      r.ID(),
-		Severity:    r.DefaultSeverity(),
-		Title:       "High cyclomatic complexity",
-		Description: "Subflow '" + subflow.Name + "' has a cyclomatic complexity of " + itoa(cyclo) + " (threshold: " + itoa(defaultMaxCyclomatic) + "), indicating excessive branching that is hard to test and maintain.",
-		BlockID:     block.ID,
-		SubflowID:   block.SubflowID,
-		Suggestion:  "Split this subflow into smaller subflows, reduce nesting, or extract complex conditions into helper subflows.",
-		Metadata:    map[string]interface{}{"complexity": cyclo, "threshold": defaultMaxCyclomatic},
-	}}
+	return out
 }
 
 func itoa(n int) string {
@@ -70,4 +68,11 @@ func itoa(n int) string {
 	return string(buf[i:])
 }
 
-func init() { registerRule(&HighCyclomaticComplexityRule{}) }
+func init() {
+	registerRule(&HighCyclomaticComplexityRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

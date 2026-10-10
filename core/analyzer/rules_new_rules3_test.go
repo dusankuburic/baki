@@ -67,7 +67,7 @@ func TestEmptySubflowRule(t *testing.T) {
 		sf := makeSubflow("sf1", "Empty", comment)
 		flow := makeFlowWithSubflows(sf)
 		ctx := buildContext(flow, nil)
-		got := rule.Check(comment, ctx)
+		got := findingsAt(rule, ctx, comment)
 		if len(got) != 1 {
 			t.Fatalf("expected 1 finding, got %d", len(got))
 		}
@@ -82,7 +82,7 @@ func TestEmptySubflowRule(t *testing.T) {
 		sf := makeSubflow("sf1", "Active", action)
 		flow := makeFlowWithSubflows(sf)
 		ctx := buildContext(flow, nil)
-		got := rule.Check(action, ctx)
+		got := findingsAt(rule, ctx, action)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 for non-empty subflow, got %d", len(got))
 		}
@@ -159,8 +159,8 @@ func TestWaitZeroRule(t *testing.T) {
 		if got[0].RuleID != "wait-zero" {
 			t.Errorf("ruleID = %q", got[0].RuleID)
 		}
-		// AutoFix is stamped by the engine from ruleAutoFix map, not by Check
-		// directly. Verify the catalog reports the fixer.
+		// AutoFix is stamped by the engine from the rule's RuleMeta, not by
+		// Check directly. Verify the catalog reports the fixer.
 		if RuleAutoFix("wait-zero") != "remove-block" {
 			t.Errorf("RuleAutoFix(wait-zero) = %q, want remove-block", RuleAutoFix("wait-zero"))
 		}

@@ -1,10 +1,13 @@
 package metrics
 
 import (
+	"maps"
 	"strings"
 	"testing"
 
 	dto "github.com/prometheus/client_model/go"
+
+	"pad-core/cache"
 )
 
 // unboundedLabels are label names whose value space is driven by data rather
@@ -33,6 +36,19 @@ var closedLabelValues = map[string]map[string]struct{}{
 		"GET": {}, "HEAD": {}, "POST": {}, "PUT": {}, "PATCH": {}, "DELETE": {},
 		"CONNECT": {}, "OPTIONS": {}, "TRACE": {}, "OTHER": {},
 	},
+	"result": {cacheResultHit: {}, cacheResultMiss: {}, cacheResultRejected: {}},
+}
+
+// closedLabelSets is closedLabelValues plus the sets fixed at init: the cache label takes the declared cache names
+// only (cache.Declare runs at package level with a literal name), never a key.
+func closedLabelSets() map[string]map[string]struct{} {
+	out := maps.Clone(closedLabelValues)
+	names := map[string]struct{}{}
+	for _, s := range cache.Specs() {
+		names[s.Name] = struct{}{}
+	}
+	out["cache"] = names
+	return out
 }
 
 // TestMetrics_NoUnboundedLabels walks the gathered metrics and fails on a label
@@ -64,10 +80,15 @@ func TestMetrics_NoUnboundedLabels(t *testing.T) {
 		t.Fatal("no metrics registered — this test would pass vacuously")
 	}
 
+	closedLabelValues := closedLabelSets()
+	cacheLabels := 0
 	for _, mf := range families {
 		for _, m := range mf.GetMetric() {
 			for _, lp := range m.GetLabel() {
 				name := strings.ToLower(lp.GetName())
+				if name == "cache" {
+					cacheLabels++
+				}
 				if why, bad := unboundedLabels[name]; bad {
 					t.Errorf("metric %q carries unbounded label %q: %s",
 						mf.GetName(), lp.GetName(), why)
@@ -80,6 +101,9 @@ func TestMetrics_NoUnboundedLabels(t *testing.T) {
 				}
 			}
 		}
+	}
+	if cacheLabels == 0 {
+		t.Error("no cache series gathered (metricstest.cache is declared in this binary): the cache label went unchecked")
 	}
 }
 

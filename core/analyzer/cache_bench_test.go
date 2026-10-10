@@ -9,7 +9,7 @@ import (
 
 // BenchmarkFlowHash measures the analysis-cache key computation on a large
 // flow. FlowHash walks every block and sorts every block's property keys, and
-// it runs on every CachedAnalysis call — including cache hits — so a
+// it runs on every Analyze and Lookup call — including cache hits — so a
 // regression here taxes every analysis request even when fully cached.
 func BenchmarkFlowHash(b *testing.B) {
 	flow := buildLargeFlow(8000)

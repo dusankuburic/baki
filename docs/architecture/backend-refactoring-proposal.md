@@ -1,10 +1,182 @@
 # Backend refactoring proposal: making Baki extensible (revision 3, two review passes applied)
 
-## Status (2026-10-08)
+## Status (2026-10-10)
 
 **Fix first:** R1–R6 and S1–S3 are done. R7 and R8 come with Phase 4c.
 
-**Phase 3: done** (2026-10-08, uncommitted). Migrations 0034–0036, all `expand`.
+**Phase 4a: done** (2026-10-10, uncommitted). Migration 0037, `expand`.
+
+*Delivered:*
+- **Rule metadata at registration** (ADR 0014): each rule file registers `RuleMeta` (confidence, auto-fix, direct
+  fixes, `DisabledByDefault`, options, related rules, `IntroducedIn`, `Revision`, `Stage`); the engine's side tables,
+  the related-rules table and the fix switch are gone. Fixes register beside their builders (`registerFix`;
+  `LookupFix`/`FixTypes` exported, registration not: no package outside the analyzer adds a fix). `RuleEnabled`
+  answers an absent settings entry with the rule's default, for the engine, the inventory, the parse-error fallback,
+  the library runner and the catalog. `RuleSetVersion` 1: all 45 rules `IntroducedIn: 1`, stable; eight at Revision
+  2 (the determinism fixes below; a severity-only change keeps its revision). Completeness tests replace the hand-kept copies.
+- **Preview stage and one gating predicate** (ADR 0014, 0016): `analyzer.Gates` (fail closed). Preview findings stay
+  in the list and in `Stats` but leave the health score, `bakicli`'s exit code, the CI webhook verdict, policies
+  (`PolicyResult.preview`), drift and regression; SARIF `level: "note"` with `properties.stage`, JUnit a passing
+  testcase. No built-in per-flow rule is preview yet.
+- **Rule kinds and lazy facts** (`docs/architecture/analyzer.md`): `BlockRule` and `FlowRule` (the eight whole-flow
+  rules no longer fake a per-block check), one dispatcher for the walk and the suppression inventory, rule-only facts
+  built on first use (one `sync.Once` per group). Same findings, order and fingerprints (a differential oracle over
+  the corpus, the fuzz corpus and random graphs); memory per analysis down 13–51% across the analysis benchmarks.
+- **Rule sets on baselines and snapshots, new-rule notices** (ADR 0016, 0037): an analysis records its rule set
+  (`{ID, Rev, Stage}` per rule, an `rs1:` digest); baselines and health snapshots store it, valid only when written
+  with the row (a row the previous release rewrites reads as legacy). The scanner sends drift alerts only for rules
+  the baseline knew, compares regressions like for like, and raises one `new_rules` notice per scope (org, owner, or
+  the deployment without accounts) and rule set in the bell, announced once; no channel delivery until Phase 4c. The
+  CLI reads a v2 baseline file (`ruleSet`) and keeps writing v1.
+- **Library rules** (ADR 0014): `LibraryRule` (extract bounded JSON facts per flow, then check across flows) in a
+  separate registry, never in a per-flow report, cache, baseline or gate; the reference rule
+  `duplicate-subflow-across-flows` (preview). Run by `bakicli` with several paths and by the desktop folder batch
+  (`BatchAnalysis.library`); no cloud persistence or route.
+- **Custom-rule schema** (ADR 0015, `docs/custom-rules.md`): `kind` and `schemaVersion`, one decoder and compiler in
+  `pad-core`, strict on writes (save, validate, test, `bakicli rules test`, new `bakicli rules lint`), tolerant on
+  reads, a newer release's kind or version refused in both; typed errors with stable reasons (`details.field`,
+  `details.reason`); `MatchDigest` as a custom rule's revision. The org rule editor maps errors to fields, keeps the
+  id read-only when editing, shows each rule's problem, and pauses without re-validating.
+- **Export registry and one folder walker** (ADR 0018): `core/export` formats register themselves (`json` is one);
+  the CLI, analyze-raw, both export APIs, `ExportService` and the CI webhook render through it; the
+  `SetToolVersion` global is gone (`Options.ToolVersion`). `bakicli` analyze, fix, watch and `-new-from-rev` share
+  `parser.ParseFolderTree`/`ListFolder`; `.bakiignore` uses `path.Match` on every OS. The plan's `ServerRendered`
+  flag was dropped: only the UI's findings CSV is client-rendered, and it is a different document.
+- **Declared caches** (ADR 0017): `cache.Declare` + `cache.New`/`GetOrFill` with typed key parts (a tenant part or
+  a `Global` reason), `pad_cache_*` metrics, a caches golden. The analyzer cache is an injected
+  `*analyzer.CachedAnalyzer` keyed by tenant, flow, analyzer version, rule profile (`ProfileDigest`, which folds stage
+  and revision) and content plus parse identity; 17 service caches moved onto specs (19 declared). Ratchets: raw
+  cache constructions 10 → 1 (the undo ring), `singleflight.Group`s 13 → 11; memos left off the registry are listed
+  with their reason. `pad-core` builds standalone.
+- **Safety nets:** findings goldens (55 inputs × 6 settings variants), export byte goldens (5 reports × 7 formats),
+  the caches golden, the rule-order pin, determinism tests; 9 new contract scenarios (custom-rule renames and
+  isolation, rule sets, notices); typed endpoints for org rule list and save (hand-written routes in
+  `handlers_orgrules.go` 4 → 2).
+
+*Bugs fixed on the way:*
+- **Determinism:** circular-subflow detection reported a different set of cycle members from run to run (one member
+  in only about 40 of 300 runs); seven property rules picked the reported property in map order, so their
+  fingerprints could flap between runs (and `hardcoded-credential` its finding order); the sanitize-command-vars
+  patch applied its edits in map order.
+- **Severities:** `bakicli` without a config graded `hardcoded-credential` `warning`, the server `error`. Settings
+  flattened rule-graded severities: parse errors the parser grades `warning` became `error`, and
+  `sql-injection-risk`'s taint escalation to `error` was reset.
+- **Analyzer cache:** analyze-raw served one caller's report (root name, document and block ids) to another who posted
+  the same files; repeated analyze-raw posts got block ids their document does not have (SARIF lost its line
+  numbers); the suppression inventory showed another flow's line numbers; `"8"` and `8` options shared a report.
+- **Service caches:** a non-member collaborator's resolve filled the org's rule profile (hiding the org's custom rules
+  from members for 30 s) and a member's showed them to the non-member; a desktop file opened with another file's
+  bytes became that flow (the parsed-document key ignored the name); admin and non-admin sessions shared an analytics
+  view.
+- **bakicli:** several path arguments analyzed only the first (a fail-open gate for `bakicli flows/*.txt`); status
+  lines on stdout made SARIF and JSON invalid with `-baseline`, `-update-baseline` and `-new-from-rev`; an invalid
+  baseline exited 1 after writing the report; `fix` and `watch` walked `.git`, followed symlinks and, on Windows,
+  ignored `.bakiignore`'s `vendor/` and directory patterns, so `fix` changed files `analyze` never reported; a missing
+  named custom-rules file was ignored; the diff-reports gate did not fail closed on an unknown severity; SARIF always
+  said version `0.1.0`; `init` printed "(0 rules)".
+- **Custom rules:** unknown fields were dropped silently, so a misspelled matcher made a rule that fires on every
+  block; renaming a saved rule was a 500 on Postgres, and renaming onto another rule's id overwrote it; another org's
+  row id was a 500; pausing re-validated the config, so a legacy rule could not be paused; saving an edit re-enabled a
+  paused rule; the editor kept the previous rule's form when another was opened.
+- **Scanner:** after a restart or failover a persisting drift or regression was sent to every channel again (a Jira
+  bug each time).
+- **UI and API:** the findings JUnit export always failed ("non-JSON response"); the SARIF download was re-serialized;
+  the Findings tab dropped the Portability, Syntax and custom-rule categories; the catalog showed no fix for a rule
+  that stamps its own (`subflow-mismatch`); the CI webhook's SARIF was not valid SARIF 2.1.0 (`logicalLocation`).
+- **Suppression inventory:** a directive over an `empty-branch` finding was reported stale while it suppressed the
+  finding; one panicking rule broke the inventory.
+
+*Behaviour changes users will notice:*
+- **Findings:** parse errors keep the parser's `warning` and tainted SQL stays `error` under settings, so health
+  scores rise for flows with parse warnings and an `error` gate fails on tainted SQL; `circular-subflow-dependency`
+  flags every subflow on a cycle and `circularDependencies` lists each once; the property rules report the first
+  qualifying property in sorted key order (one wave of changed fingerprints on such blocks, a notice rather than
+  drift).
+- **bakicli:** hardcoded credentials fail the default `-fail-on error`; `-format markdown|pdf` (`pdf` refuses a
+  terminal); several paths with `text`/`json` (one report per flow plus a library section; other formats exit 2);
+  a flag after a path, an invalid or newer baseline, a newer custom rule and a missing named rules file exit 2;
+  status lines go to stderr for non-text formats; SARIF carries the CLI's version (`dev` from source); custom-rule
+  warnings on stderr; `rules test` is strict; `rules` shows a STAGE column, the library rule, and `kind`, `stage`,
+  `introducedIn` in JSON; `fix` and `watch` act on `analyze`'s file set; `.bakiignore`'s `*` no longer crosses `/`
+  on Windows, and patterns it cannot use are warned about.
+- **Server:** the rule catalog gains `stage`, `introducedIn`, `kind` and the direct fixes (auto-fixable KPI +1), and
+  lists the library rule without accounts; baselines return `ruleSetDigest`, drift `newRuleIds`, `newFromNewRules`
+  and `preview`, policies `preview`; the CI webhook's `format=sarif` is the core SARIF as `application/sarif+json`
+  (indented, compressed) and its verdict gains `preview`; analyze-raw SARIF/JUnit downloads are attachments and
+  analyze-raw records no diff pair or history snapshot; org rule saves are strict (400 with `details.field` and
+  `details.reason`), a rename or a newer release's rule is a 409, and pause/resume sends no config; the org rules
+  list adds `problem`, and the export keeps `kind`, `schemaVersion`, unknown fields and skipped rules (with
+  `problem`); validate answers per entry; the desktop folder batch adds `library`.
+- **Governance:** the first sweep after the deploy re-scans every flow and reads every baseline and snapshot as
+  legacy, so the findings of the eight revised rules arrive as one `new_rules` notice per scope instead of drift;
+  a health snapshot from before the upgrade is not compared: the sweep records its own analysis as the flow's
+  snapshot instead, so the dashboard shows the current rules' health for flows nobody opened; alerts already in the inbox are not resent after a restart.
+- **Gates:** a severity configured as anything but error, warning or info counts as an error everywhere (it used to
+  pass the CI webhook, policies, health and drift, and fail only `bakicli`); `POST /api/analysis/rule/config`
+  refuses one. A cloud deployment that never saved its settings graded `hardcoded-credential` `warning`; it is now
+  `error` there too, so its CI webhook (`failOn=error`) and error-gated policies fail on hardcoded secrets. A
+  non-member collaborator can no longer set an org flow's baseline (403); a member or the owner can.
+- **UI:** preview badges on rules and findings, "Across flows" on library rules; the Findings tab shows every
+  category (the filter now hides categories; saved views are converted); JUnit export works and SARIF is saved as
+  the server sent it; the custom-rule editor shows field errors, warnings and problems and makes a newer release's
+  rule read-only; the AI's `list_findings` marks preview findings.
+- **Operations:** schema v37; in-process caches start cold (`analyzerVersion` 5); `/metrics` gains `pad_cache_*`
+  for 19 caches; `GET /api/analysis/dependencies` is sorted; a desktop "fix all" on `my.flow.txt` reloads it as flow
+  "my.flow"; stored-rule warnings and a missing `PAD_CUSTOM_RULES` file are logged.
+
+*Found in review and fixed:* the cache's fill could store a value read before a concurrent invalidation (the guard
+was checked apart from the store); a rule-set record that carried only its digest, or rules not matching it, made
+every rule "new" and silenced drift and regression for the flow; the regression check dropped revised rules from
+the current score while the snapshot still counted them, hiding real regressions; a custom rule under the library
+rule's id was accepted and would never gate; baseline reads sent the full rule set (org custom-rule ids) to any
+flow reader; notices of flows skipped as unchanged were purged by retention and announced again; a newer release's
+org rule that retyped a field read as invalid, and saving its echo replaced it with a match-everything rule;
+membership changes left a member's rule profile stale for 30 s, and a pool read was cached as the caller's scoped
+view; several flows shared one baseline key set, so one flow's baselined finding hid the same new finding in
+another; `bakicli report` passed any `-format` spelling other than `sarif` ungated, `diff-reports` read a
+several-flows report as empty, and a flag after a path was ignored; analyze-raw entries evicted stored flows'
+reports and stopped counting as analysis runs; the webhook's SARIF lost compression; `Format.Bytes` bypassed a
+replaced `Render`; the inventory allocated 46% more than before the dispatcher change.
+
+*Final review* (six dimensions; engine, caches and modes re-run after the session ended): a custom rule under a
+preview or library rule's id never gated (its findings are now stamped `stable`, which the gates trust over the id,
+and take no built-in metadata); an unknown configured severity passed every server gate (normalised, unknown counts
+as an error, the rule-config route refuses it; JUnit, HTML, Markdown and PDF follow); `bakicli report -format sarif`
+cut the answer at 16 MiB and exited 0 (streamed; a cut connection exits 2); a stored org rule that does not decode
+echoed an empty stub that a save turned into a match-everything rule (the fields that decode are kept); the new
+bundle could not pause a rule on a rolled-back server (it retries the old way) and "New rule" silently replaced the
+rule with that id (refused in the editor); a non-member collaborator's analysis on a scoped route replaced the
+flow's recorded report, so members exported and diffed without the org's custom rules, and could set the org
+flow's baseline from that view (a non-member's view is `Narrowed`: cached apart, recorded nowhere, and
+`baseline/set` answers it 403); an unchanged desktop folder reload pushed the previous run out of the
+diff; `parse-error`'s severity-only change carried a revision that turned its new findings against older baselines
+into a notice instead of drift; the first sweep after the upgrade raised a health regression for unchanged flows
+(a legacy snapshot is not compared; the sweep records its analysis as the new snapshot); policy severities and the
+catalog's configured severity are read like the engine's (case, spacing, unknown as error); the parse identity hashed each block's subflow id again (now only where it
+differs). The final test runs exposed a Windows race outside the phase: a conversation file replaced by rename while
+a polling GET conversation held it open failed the save (the finished answer was lost) or the read (a 500); both
+now retry the transient sharing conflict (`atomicfile`), as the other on-disk stores do. Also closed from the open
+list: a newer release's rule that retypes a field reads as "needs a newer
+version" in a rules file; the toolbar's "N new" counts drift only.
+
+*Open:* the desktop UI does not show the folder batch's library findings yet (the JSON carries them); routes
+without row-level security still give a non-member collaborator the org's custom rules (a request-path membership
+decision, ADR 0013); a notice is per rule set, so rules still newer than old baselines are announced again at the
+next rule change until the flows are re-baselined; a revised rule counts on both sides of a regression, and a rule
+disabled or demoted since the snapshot lowers only the snapshot's score; a regression made between a flow's last
+snapshot before the upgrade and the first sweep goes unreported; a stale SPA opens no flow for a `new_rules` entry; the
+policy editor may offer library and preview rules where orgs and the folder batch coexist; the CI webhook answers an
+unknown `format` with the summary; block-less parse-error findings carry no category, and subflows without blocks
+are never flagged; `duplicate-action` panics (recovered) on duplicate subflow ids, which the parser never emits; the
+desktop's `LoadFlowFolder` keeps its own size pre-check, and a folder reload re-parses with new ids, so it analyzes
+again (no cache hit); a pause racing a full save can restore the older config; the editor's Try it refuses a legacy
+rule under a built-in id; a `.bakirc.json` whose inline newer-release rule retypes a field fails as a whole (exit 2)
+instead of "needs a newer bakicli"; a symlinked root folder lists nothing; `bakicli watch` takes one path (no
+library pass), and one path given twice is two flows; JUnit, CSV and Markdown downloads stay uncompressed; library
+extraction builds a second rule context per flow; `docs/testing.md` still lacks about 80 test files of earlier
+phases.
+
+**Phase 3: done** (2026-10-08, committed as 6b87f4e). Migrations 0034–0036, all `expand`.
 
 *Delivered:*
 - **The test fake meets the storage contract** with no known divergences, strict mode included: real users (email

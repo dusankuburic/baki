@@ -140,8 +140,8 @@ func TestDeadDataRule_PrecomputedReaderClassification(t *testing.T) {
 
 	t.Run("no terminator anywhere: AllReadersDead is not built", func(t *testing.T) {
 		ctx := buildContext(r3Flow(r3Set("w1", "X"), r3Read("r1", "X")), nil)
-		if ctx.AllReadersDead != nil {
-			t.Fatalf("AllReadersDead = %v, want nil without a terminator", ctx.AllReadersDead)
+		if dead := ctx.AllReadersDead(); dead != nil {
+			t.Fatalf("AllReadersDead = %v, want nil without a terminator", dead)
 		}
 		if got := (&DeadDataRule{}).Check(ctx.AllBlocks["w1"], ctx); len(got) != 0 {
 			t.Fatalf("findings = %v, want none", got)

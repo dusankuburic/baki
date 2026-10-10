@@ -9,7 +9,8 @@ import (
 	"pad-core/parser"
 )
 
-func TestRuleOptionInt_TypesAndFallback(t *testing.T) {
+func TestRuleOption_TypesAndFallback(t *testing.T) {
+	spec := OptionSpec{Key: "k", Default: 7, Min: 1}
 	mk := func(v any) *models.AppSettings {
 		return &models.AppSettings{Analysis: models.AnalysisSettings{Rules: map[string]models.RuleConfig{
 			"r": {Enabled: true, Options: map[string]any{"k": v}},
@@ -30,15 +31,15 @@ func TestRuleOptionInt_TypesAndFallback(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := ruleOptionInt(mk(c.v), "r", "k", 7, 1); got != c.want {
-				t.Errorf("ruleOptionInt(%v) = %d, want %d", c.v, got, c.want)
+			if got := ruleOption(mk(c.v), "r", spec); got != c.want {
+				t.Errorf("ruleOption(%v) = %d, want %d", c.v, got, c.want)
 			}
 		})
 	}
-	if got := ruleOptionInt(nil, "r", "k", 7, 1); got != 7 {
+	if got := ruleOption(nil, "r", spec); got != 7 {
 		t.Errorf("nil settings: got %d, want default", got)
 	}
-	if got := ruleOptionInt(mk(4.0), "other", "k", 7, 1); got != 7 {
+	if got := ruleOption(mk(4.0), "other", spec); got != 7 {
 		t.Errorf("unknown rule: got %d, want default", got)
 	}
 }

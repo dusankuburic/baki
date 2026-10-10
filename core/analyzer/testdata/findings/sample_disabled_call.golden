@@ -1,0 +1,70 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_disabled_call
+document: subflows=3 blocks=5 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":5,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=225/225 last="Loop body is too large"
+metrics: {"avgCognitive":0,"avgCyclomatic":1,"healthScore":99,"maxCognitive":0,"maxCyclomatic":1,"subflowCount":3,"totalBlocks":5,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":3,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":2,"maxNestingDepth":0,"variableCount":0}
+  subflow Helper: {"blockCount":1,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":1,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+  subflow AnotherSubflow: {"blockCount":1,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":1,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=5
+  raw findings: disabled-block=1
+inventory: none
+findings: 1
+F-001 info/medium disabled-block [Style] fix=remove-block @Main#1 sf=Main fp=disabled-block:d46344cef7c7bba8
+    title: Disabled block
+    desc: Block 'Call Helper (disabled)' is disabled.
+
+=== nil-settings
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":5,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=225/225 last="Loop body is too large"
+metrics: as default, healthScore=99
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=5
+  raw findings: disabled-block=1
+inventory: none
+findings: 1
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":5,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=225/225 last="Loop body is too large"
+metrics: as default, healthScore=99
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=5
+  raw findings: disabled-block=1
+inventory: none
+findings: 1
+  as default; severity changes: none
+
+=== disabled
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":5,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=4 final=185/185 last="Loop body is too large"
+metrics: as default, healthScore=99
+profiles: rules=37 order=f7de49357acad250 blocksChecked=5
+  raw findings: disabled-block=1
+inventory: none
+findings: 1
+  as default; severity changes: none
+
+=== severity
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":5,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=225/225 last="Loop body is too large"
+metrics: as default, healthScore=99
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=5
+  raw findings: disabled-block=1
+inventory: none
+findings: 1
+  as default; severity changes: none
+
+=== autofixable
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":5,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=4 final=160/160 last="Wait zero"
+metrics: as default, healthScore=99
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=5
+  raw findings: disabled-block=1
+inventory: none
+findings: 1
+  as default; severity changes: none

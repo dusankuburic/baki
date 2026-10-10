@@ -39,9 +39,9 @@ func (r *DeadDataRule) Check(block *models.Block, ctx *RuleContext) []models.Fin
 		return nil
 	}
 
-	// Classified once per variable in buildContext (see buildAllReadersDead);
-	// absent means no readers, or at least one live one.
-	if !ctx.AllReadersDead[outVar] {
+	// Classified once per variable (see buildAllReadersDead); absent means no
+	// readers, or at least one live one.
+	if !ctx.AllReadersDead()[outVar] {
 		return nil
 	}
 
@@ -177,9 +177,8 @@ func AnalyzeDataFlowCtx(ctx context.Context, doc *models.FlowDocument, limits Da
 	}
 	res := &DataFlowResult{DataFlowAnalysis: result, Limits: limits}
 
-	// Structural indexes only: data flow reads none of the rule-only work
-	// buildContext adds.
-	rctx := buildIndexContext(doc, nil)
+	// Structural indexes; of the lazy facts, data flow reads only UsedVariables.
+	rctx := buildContext(doc, nil)
 
 	ids := make([]string, 0, len(rctx.AllBlocks))
 	for id := range rctx.AllBlocks {
@@ -439,6 +438,7 @@ func computeTaintPaths(doc *models.FlowDocument, ctx *RuleContext, ids []string,
 // ids is the visiting order; at most limit paths.
 func computeDeadDataPaths(ctx *RuleContext, ids []string, limit int) (dead []models.DeadDataPath, truncated bool) {
 	deadReaders := make(map[string][]string)
+	used := ctx.UsedVariables()
 	for _, id := range ids {
 		b := ctx.AllBlocks[id]
 		outVar := outputVar(b)
@@ -446,7 +446,7 @@ func computeDeadDataPaths(ctx *RuleContext, ids []string, limit int) (dead []mod
 			continue
 		}
 
-		if !ctx.UsedVariables[outVar] {
+		if !used[outVar] {
 			continue
 		}
 
@@ -489,4 +489,12 @@ func computeDeadDataPaths(ctx *RuleContext, ids []string, limit int) (dead []mod
 	return dead, false
 }
 
-func init() { registerRule(&DeadDataRule{}) }
+func init() {
+	registerRule(&DeadDataRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "remove-block",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

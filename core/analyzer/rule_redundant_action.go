@@ -119,4 +119,12 @@ func isConversionAction(rawType string) bool {
 	return false
 }
 
-func init() { registerRule(&RedundantActionRule{}) }
+func init() {
+	registerRule(&RedundantActionRule{}, RuleMeta{
+		Confidence:   models.ConfidenceHigh,
+		AutoFix:      "remove-block",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

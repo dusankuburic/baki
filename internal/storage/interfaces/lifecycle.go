@@ -68,5 +68,6 @@ type PurgeResult struct {
 	TokenBlacklist      int `json:"tokenBlacklist"`
 	ShareTokens         int `json:"shareTokens"`
 	GovAlerts           int `json:"govAlerts"`
+	RuleNotices         int `json:"ruleNotices"`
 	IdempotencyKeys     int `json:"idempotencyKeys"`
 }

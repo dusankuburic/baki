@@ -4,13 +4,13 @@ import (
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
-	"pad-core/cache"
+	"pad-core/analyzer"
 )
 
-// ProvideFlowService builds the FlowService announcing its flow changes on the bus (an option, not a parameter:
-// NewFlowService has about 55 test call sites).
-func ProvideFlowService(notifier service.EventNotifier, settings service.SettingsProvider, docs service.DocumentProvider, backend storageif.StorageBackend, authz *service.AuthzService, astCache cache.Cache, bus *eventbus.Bus) *service.FlowService {
-	return service.NewFlowService(notifier, settings, docs, backend, authz, astCache, service.WithFlowEvents(bus))
+// ProvideFlowService builds the FlowService announcing its flow changes on the bus and dropping the process
+// analyzer's reports they make stale (options, not parameters: NewFlowService has about 55 test call sites).
+func ProvideFlowService(notifier service.EventNotifier, settings service.SettingsProvider, docs service.DocumentProvider, backend storageif.StorageBackend, authz *service.AuthzService, astCache *service.ASTCache, bus *eventbus.Bus, a *analyzer.CachedAnalyzer) *service.FlowService {
+	return service.NewFlowService(notifier, settings, docs, backend, authz, astCache, service.WithFlowEvents(bus), service.WithAnalyzer(a))
 }
 
 // SubscribeFlowCaches keeps the caches derived from flows coherent with FlowChanged, on the sync tier: each drop

@@ -14,32 +14,41 @@ func (r *DuplicateSubflowNameRule) Description() string {
 func (r *DuplicateSubflowNameRule) DefaultSeverity() models.Severity { return models.SeverityError }
 func (r *DuplicateSubflowNameRule) Category() string                 { return "Logic" }
 
-func (r *DuplicateSubflowNameRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	if len(ctx.DuplicateSubflowNames) == 0 {
+func (r *DuplicateSubflowNameRule) CheckFlow(ctx *RuleContext) []models.Finding {
+	dups := ctx.DuplicateSubflowNames()
+	if len(dups) == 0 {
 		return nil
 	}
-	subflow := ctx.SubflowByID[block.SubflowID]
-	if subflow == nil {
-		return nil
+	var out []models.Finding
+	for i := range ctx.Flow.Subflows {
+		sf := &ctx.Flow.Subflows[i]
+		if !dups[sf.Name] {
+			continue
+		}
+		// One finding per subflow, on its first block.
+		anchor := subflowAnchor(ctx, sf)
+		if anchor == nil {
+			continue
+		}
+		out = append(out, models.Finding{
+			RuleID:      r.ID(),
+			Severity:    r.DefaultSeverity(),
+			Title:       "Duplicate subflow name",
+			Description: "Subflow '" + sf.Name + "' shares its name with at least one other subflow. Only the first is used when CALL resolves by name — the others are silently unreachable.",
+			BlockID:     anchor.ID,
+			SubflowID:   sf.ID,
+			Suggestion:  "Rename one of the duplicate subflows so each has a unique name.",
+			Metadata:    map[string]interface{}{"subflow": sf.Name},
+		})
 	}
-	if !ctx.DuplicateSubflowNames[subflow.Name] {
-		return nil
-	}
-	// Only emit once per subflow — on the first block.
-	if len(subflow.Blocks) == 0 || block.ID != subflow.Blocks[0].ID {
-		return nil
-	}
-
-	return []models.Finding{{
-		RuleID:      r.ID(),
-		Severity:    r.DefaultSeverity(),
-		Title:       "Duplicate subflow name",
-		Description: "Subflow '" + subflow.Name + "' shares its name with at least one other subflow. Only the first is used when CALL resolves by name — the others are silently unreachable.",
-		BlockID:     block.ID,
-		SubflowID:   block.SubflowID,
-		Suggestion:  "Rename one of the duplicate subflows so each has a unique name.",
-		Metadata:    map[string]interface{}{"subflow": subflow.Name},
-	}}
+	return out
 }
 
-func init() { registerRule(&DuplicateSubflowNameRule{}) }
+func init() {
+	registerRule(&DuplicateSubflowNameRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

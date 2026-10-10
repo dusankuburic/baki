@@ -111,16 +111,16 @@ func TestAccountErased_DropsTheScopeListings(t *testing.T) {
 	providers := newProviderServiceWithFakeSecrets(t, secrets)
 	bus := eventbus.New(nil, 0)
 	SubscribeModelCache(bus, providers)
-	providers.modelCache["u1\x00openai"] = modelCacheEntry{expiresAt: time.Now().Add(time.Hour)}
-	providers.modelCache["u2\x00openai"] = modelCacheEntry{expiresAt: time.Now().Add(time.Hour)}
+	providers.modelCache[modelListingKey("u1", "openai")] = modelCacheEntry{expiresAt: time.Now().Add(time.Hour)}
+	providers.modelCache[modelListingKey("u2", "openai")] = modelCacheEntry{expiresAt: time.Now().Add(time.Hour)}
 	backend := &testutil.FakeBackend{Users: map[string]*storageif.User{"u1": {ID: "u1"}}}
 	if err := NewAccountLifecycleService(backend, nil, bus).DeleteAccount(context.Background(), "u1", "u1", nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := providers.modelCache["u1\x00openai"]; ok {
+	if _, ok := providers.modelCache[modelListingKey("u1", "openai")]; ok {
 		t.Error("the erased account's listing is still cached")
 	}
-	if _, ok := providers.modelCache["u2\x00openai"]; !ok {
+	if _, ok := providers.modelCache[modelListingKey("u2", "openai")]; !ok {
 		t.Error("another account's listing was dropped")
 	}
 }

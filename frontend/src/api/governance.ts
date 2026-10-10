@@ -1,8 +1,10 @@
-import {request, requestValidated} from './client'
+import {ApiError, request, requestValidated} from './client'
 import {getGovernanceAlertsSchema, getUnreadCountSchema} from './schemas'
 import type {Tolerant} from '@/types'
 
-export type GovernanceAlertType = 'drift' | 'health_regression' | 'finding_assigned' | 'comment_added'
+export type GovernanceAlertType = 'drift' | 'health_regression' | 'finding_assigned' | 'comment_added' | 'new_rules'
+/** Whose "new rules" notice: an organisation's, a user's own flows, or the whole deployment without accounts. */
+export type GovernanceNoticeScope = 'org' | 'user' | 'app'
 export type GovernanceAlertSeverity = 'error' | 'warning'
 
 // A governance alert row, mirroring storageif.GovernanceAlert on the backend.
@@ -26,6 +28,11 @@ export interface GovernanceAlert {
   dismissedAt?: string | null
   /** Personal delivery target (assignment/comment alerts); empty = team-wide. */
   targetUser?: string
+  /** A new_rules notice (flowId ""): the rules newer than the flows' baselines that report findings, sorted. */
+  ruleIds?: string[]
+  scope?: Tolerant<GovernanceNoticeScope>
+  /** Flows of the scope where those rules report findings. */
+  flowCount?: number
 }
 
 export interface GovernanceAlertFilter {
@@ -97,13 +104,19 @@ export const channelsApi = {
 }
 
 /**
- * A user-authored analyzer rule owned by an org (R4).
+ * A user-authored analyzer rule owned by an org (R4); the format is
+ * docs/custom-rules.md.
  *
  * `config.id` is the rule id that appears on findings and is unique PER ORG —
  * two orgs may both define `house-style` and mean different things. `id` is the
- * storage row's surrogate key, used for delete.
+ * storage row's surrogate key, used for delete. A saved rule's `config.id`
+ * cannot change (the server answers 409).
  */
 export interface OrgCustomRuleConfig {
+  /** `block` (the only kind this version runs); the server echoes it spelled out. A newer release may write others. */
+  kind?: string
+  /** 1; the server echoes it spelled out. */
+  schemaVersion?: number
   id: string
   name: string
   description?: string
@@ -125,13 +138,43 @@ export interface OrgCustomRule {
   enabled: boolean
   createdAt: string
   updatedAt: string
+  /** Why the analysis skips this rule; absent when it runs. */
+  problem?: string
+  /** The analyzer's reason code for `problem`, e.g. INVALID_SEVERITY, UNKNOWN_KIND, UNSUPPORTED_VERSION, INVALID_JSON. */
+  problemReason?: string
 }
+
+/** A rule a newer release of Baki wrote: this version cannot run or edit it (pause and delete still work). */
+export const isNewerRule = (rule: OrgCustomRule): boolean =>
+  rule.problemReason === 'UNKNOWN_KIND' ||
+  (rule.problemReason === 'UNSUPPORTED_VERSION' && (rule.config.schemaVersion ?? 1) > 1)
 
 export const orgRulesApi = {
   list: (orgId: string): Promise<OrgCustomRule[]> => request(`/api/orgs/${orgId}/rules`, {method: 'GET'}),
 
   save: (orgId: string, config: OrgCustomRuleConfig, enabled = true, rowId?: string): Promise<OrgCustomRule> =>
     request(`/api/orgs/${orgId}/rules`, {body: {id: rowId, config, enabled}}),
+
+  /**
+   * Pauses or resumes a saved rule without sending its config, so a rule that no longer validates can be paused.
+   * A server from before rule schemas (a rollback while this bundle is open) toggles only with the config and
+   * answers 400 "config.id is required"; then the toggle is resent with `config`, the old way.
+   */
+  setEnabled: async (
+    orgId: string,
+    rowId: string,
+    enabled: boolean,
+    config?: OrgCustomRuleConfig,
+  ): Promise<OrgCustomRule> => {
+    try {
+      return await request<OrgCustomRule>(`/api/orgs/${orgId}/rules`, {body: {id: rowId, enabled}})
+    } catch (e) {
+      if (config && e instanceof ApiError && e.status === 400 && e.message.includes('config.id is required')) {
+        return request<OrgCustomRule>(`/api/orgs/${orgId}/rules`, {body: {id: rowId, config, enabled}})
+      }
+      throw e
+    }
+  },
 
   remove: (orgId: string, rowId: string): Promise<void> =>
     request(`/api/orgs/${orgId}/rules/${rowId}`, {method: 'DELETE', body: {}}),

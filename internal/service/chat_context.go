@@ -78,29 +78,30 @@ func normalizeChatParams(temperature float64, maxTokens, ctxLimit, maxOutput int
 	return temperature, maxTokens
 }
 
+// The chat's context caches (ADR 0017): a turn's scrubbed context texts and the scrubbed clones of the flow they
+// point into, per caller (the scope), flow and edit generation (chatCtxGen); the texts also by every other input.
+var (
+	chatContexts = cache.Declare("chat.context",
+		cache.Keys(cache.KindTenant, cache.KindResource, cache.KindVersion,
+			cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam),
+		cache.ReplicaLocal("a turn is served by the replica its stream runs on; another rebuilds the context on a miss"))
+	scrubbedDocs = cache.Declare("chat.scrubbed-docs",
+		cache.Keys(cache.KindTenant, cache.KindResource, cache.KindVersion),
+		cache.ReplicaLocal("a turn is served by the replica its stream runs on; another re-scrubs the flow on a miss"))
+)
+
 // chatContextCache is the two-level memo: per-turn text entries plus the scrubbed clones they point into.
 type chatContextCache struct {
-	texts cache.Cache
-	docs  cache.Cache
+	texts *cache.Typed[chatContextEntry]
+	docs  *cache.Typed[scrubbedDocEntry]
 }
 
-func (c *chatContextCache) Get(ctx context.Context, key string) (any, bool) {
-	return c.texts.Get(ctx, key)
-}
-
-func (c *chatContextCache) Set(ctx context.Context, key string, value any, ttl time.Duration) {
-	c.texts.Set(ctx, key, value, ttl)
-}
-
-func (c *chatContextCache) Delete(ctx context.Context, key string) {
-	c.texts.Delete(ctx, key)
-}
-
-// newChatContextCache builds the bounded LRUs; size > 0 ⇒ constructor errors are impossible.
-func newChatContextCache() cache.Cache {
-	texts, _ := cache.NewLRUCache(maxChatContextCache)
-	docs, _ := cache.NewLRUCache(maxScrubbedDocCache)
-	return &chatContextCache{texts: texts, docs: docs}
+// newChatContextCache builds the bounded LRUs (one unit per entry).
+func newChatContextCache() *chatContextCache {
+	return &chatContextCache{
+		texts: cache.New[chatContextEntry](chatContexts, maxChatContextCache),
+		docs:  cache.New[scrubbedDocEntry](scrubbedDocs, maxScrubbedDocCache),
+	}
 }
 
 // InvalidateChatContext drops the flow's cached scrubbed context (FlowCacheSubscribers' "chat-context-cache"):
@@ -110,19 +111,23 @@ func (s *ChatService) InvalidateChatContext(flowID string) {
 	s.chatCtxGen.Bump(flowID)
 }
 
-// chatContextKeyAt is chatContextKey for a generation the caller already read.
-func (s *ChatService) chatContextKeyAt(scope, flowID string, gen uint64, req models.ChatRequest, providerID, model string, report *models.AnalysisReport, sourceFP string) string {
+// chatContextKeyAt keys a turn's context texts for a generation the caller already read; the zero Key (uncached)
+// for a flow without an id.
+func (s *ChatService) chatContextKeyAt(scope, flowID string, gen uint64, req models.ChatRequest, providerID, model string, report *models.AnalysisReport, sourceFP string) cache.Key {
+	if flowID == "" {
+		return cache.Key{}
+	}
 	reportFP := ""
 	if report != nil {
 		reportFP = fmt.Sprintf("%d-%d", report.GeneratedAt.UnixNano(), len(report.Findings))
 	}
 	// sourceFP keys a source selection AND any on-disk change to it; ExcludeContext MUST be in the key.
-	exclude := fmt.Sprintf("%t", req.ExcludeContext)
 	// req.SystemPrompt holds the MERGED suffix (settings + request), so editing the setting cannot serve a stale context.
-	return strings.Join([]string{
-		scope, flowID, fmt.Sprintf("%d", gen),
-		req.ContextBlockID, req.SystemPrompt, providerID, model, reportFP, sourceFP, exclude,
-	}, "|")
+	k, _ := chatContexts.Key(callerTenant(scope), cache.Resource(flowID), cache.Version(strconv.FormatUint(gen, 10)),
+		cache.Param("block", req.ContextBlockID), cache.Param("prompt", req.SystemPrompt), cache.Param("provider", providerID),
+		cache.Param("model", model), cache.Param("report", reportFP), cache.Param("sources", sourceFP),
+		cache.Param("exclude", strconv.FormatBool(req.ExcludeContext)))
+	return k
 }
 
 // sourceFilesFingerprint reduces the selected-files list to a stable key fragment:
@@ -175,27 +180,29 @@ type scrubbedDocEntry struct {
 	doc *models.FlowDocument
 }
 
-// scrubbedDocKey keys the doc cache: scope, flow and edit generation.
-func scrubbedDocKey(scope, flowID string, gen uint64) string {
-	return scope + "|" + flowID + "|" + strconv.FormatUint(gen, 10)
+// scrubbedDocKey keys the doc cache: scope, flow and edit generation; the zero Key (uncached) without a flow id.
+func scrubbedDocKey(scope, flowID string, gen uint64) cache.Key {
+	if flowID == "" {
+		return cache.Key{}
+	}
+	k, _ := scrubbedDocs.Key(callerTenant(scope), cache.Resource(flowID), cache.Version(strconv.FormatUint(gen, 10)))
+	return k
 }
 
 // scrubbedDocFor returns the flow's scrubbed clone for gen, cached when within maxCachedScrubbedBlocks and the
 // flow was not invalidated since gen was read.
 func (s *ChatService) scrubbedDocFor(ctx context.Context, scope string, doc *models.FlowDocument, gen uint64) *models.FlowDocument {
-	cc, twoLevel := s.chatCtxCache.(*chatContextCache)
+	cc := s.chatCtxCache
 	key := scrubbedDocKey(scope, doc.ID, gen)
 	src := weak.Make(doc)
-	if twoLevel {
-		if v, ok := cc.docs.Get(ctx, key); ok {
-			if e := v.(scrubbedDocEntry); e.src == src {
-				return e.doc
-			}
+	if cc != nil {
+		if e, ok := cc.docs.Get(key); ok && e.src == src {
+			return e.doc
 		}
 	}
 	sd := scrubOrSelf(doc)
-	if twoLevel && len(sd.BlocksByID) <= maxCachedScrubbedBlocks && s.chatCtxGen.FillOK(ctx, doc.ID, gen) {
-		cc.docs.Set(ctx, key, scrubbedDocEntry{src: src, doc: sd}, 0)
+	if cc != nil && len(sd.BlocksByID) <= maxCachedScrubbedBlocks && s.chatCtxGen.FillOK(ctx, doc.ID, gen) {
+		cc.docs.Set(key, scrubbedDocEntry{src: src, doc: sd}, 1, 0)
 	}
 	return sd
 }
@@ -305,16 +312,14 @@ func (s *ChatService) cachedContextCore(ctx context.Context, scope string, provi
 	src := weak.Make(doc)
 	key := s.chatContextKeyAt(scope, doc.ID, gen, req, provider.ID(), req.Model, report,
 		sourceFilesFingerprint(filepath.Dir(doc.FilePath), req.SelectedSourceFiles))
-	if v, ok := s.chatCtxCache.Get(ctx, key); ok {
-		// The texts are memoised; the clone comes from the doc cache, never the entry.
-		if e := v.(chatContextEntry); e.src == src {
-			return chatContextValue{scrubbedDoc: s.scrubbedDocFor(ctx, scope, doc, gen), sysPrompt: e.sysPrompt, contextText: e.contextText}
-		}
+	// The texts are memoised; the clone comes from the doc cache, never the entry.
+	if e, ok := s.chatCtxCache.texts.Get(key); ok && e.src == src {
+		return chatContextValue{scrubbedDoc: s.scrubbedDocFor(ctx, scope, doc, gen), sysPrompt: e.sysPrompt, contextText: e.contextText}
 	}
 	sd := s.scrubbedDocFor(ctx, scope, doc, gen)
 	cv := s.computeContextCoreWith(provider, doc, sd, report, req)
 	if s.chatCtxGen.FillOK(ctx, doc.ID, gen) {
-		s.chatCtxCache.Set(ctx, key, chatContextEntry{src: src, sysPrompt: cv.sysPrompt, contextText: cv.contextText}, 0)
+		s.chatCtxCache.texts.Set(key, chatContextEntry{src: src, sysPrompt: cv.sysPrompt, contextText: cv.contextText}, 1, 0)
 	}
 	return cv
 }

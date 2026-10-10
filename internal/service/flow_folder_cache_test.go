@@ -5,9 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"pad-analyzer/internal/testutil"
 
@@ -16,48 +14,31 @@ import (
 	"pad-core/parser"
 )
 
-// countingCache wraps the AST cache so a test can count what a folder load
-// did: a Get miss followed by a Set is one member parse (parseFolderMember), a
-// Get hit is a member served from the cache, a Set without a Get is a writer
-// seeding its own parse (cacheFolderMember).
+// countingCache counts what a folder load did through the AST cache's
+// statistics (no test in this package runs in parallel with these): a miss
+// followed by a store is one member parse (parseFolderMember), a hit is a
+// member served from the cache, a store without a miss is a writer seeding
+// its own parse (cacheFolderMember).
 type countingCache struct {
-	inner            cache.Cache
-	gets, hits, sets atomic.Int64
+	*ASTCache
+	base cache.Stats
 }
 
 func newCountingCache(t *testing.T) *countingCache {
 	t.Helper()
-	inner, err := cache.NewLRUCache(100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &countingCache{inner: inner}
+	c := &countingCache{ASTCache: NewASTCache(1 << 30)}
+	c.reset()
+	return c
 }
 
-func (c *countingCache) Get(ctx context.Context, key string) (any, bool) {
-	c.gets.Add(1)
-	v, ok := c.inner.Get(ctx, key)
-	if ok {
-		c.hits.Add(1)
-	}
-	return v, ok
-}
+func (c *countingCache) reset() { c.base = astDocs.Info().Stats }
 
-func (c *countingCache) Set(ctx context.Context, key string, value any, ttl time.Duration) {
-	c.sets.Add(1)
-	c.inner.Set(ctx, key, value, ttl)
-}
+func (c *countingCache) hits() int64 { return int64(astDocs.Info().Stats.Hits - c.base.Hits) }
 
-func (c *countingCache) Delete(ctx context.Context, key string) { c.inner.Delete(ctx, key) }
-
-func (c *countingCache) reset() {
-	c.gets.Store(0)
-	c.hits.Store(0)
-	c.sets.Store(0)
-}
+func (c *countingCache) sets() int64 { return int64(astDocs.Info().Stats.Stores - c.base.Stores) }
 
 // misses is the number of member parses a folder load performed.
-func (c *countingCache) misses() int64 { return c.gets.Load() - c.hits.Load() }
+func (c *countingCache) misses() int64 { return int64(astDocs.Info().Stats.Misses - c.base.Misses) }
 
 func writeMembers(t *testing.T, dir string, members map[string]string) {
 	t.Helper()
@@ -71,7 +52,7 @@ func writeMembers(t *testing.T, dir string, members map[string]string) {
 func newCachedFolderSvc(t *testing.T) (*FlowService, *countingCache) {
 	t.Helper()
 	cc := newCountingCache(t)
-	return NewFlowService(&testutil.CountingNotifier{}, newTestSettingsStore(t), NewLocalDocumentProvider(), nil, nil, cc), cc
+	return NewFlowService(&testutil.CountingNotifier{}, newTestSettingsStore(t), NewLocalDocumentProvider(), nil, nil, cc.ASTCache), cc
 }
 
 // assertSameFolderShape checks got against ParseFolder's own merge of the
@@ -153,8 +134,8 @@ func TestLoadFlowFolder_ReparsesOnlyChangedMembers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFlowFolder: %v", err)
 	}
-	if cc.misses() != 3 || cc.sets.Load() != 3 {
-		t.Fatalf("cold load: %d misses, %d sets; want every member parsed once (3/3)", cc.misses(), cc.sets.Load())
+	if cc.misses() != 3 || cc.sets() != 3 {
+		t.Fatalf("cold load: %d misses, %d sets; want every member parsed once (3/3)", cc.misses(), cc.sets())
 	}
 	ref, err := parser.ParseFolder(dir)
 	if err != nil {
@@ -168,8 +149,8 @@ func TestLoadFlowFolder_ReparsesOnlyChangedMembers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFlowFolder (warm): %v", err)
 	}
-	if cc.hits.Load() != 3 || cc.sets.Load() != 0 {
-		t.Fatalf("warm reload: %d hits, %d parses; want 3 hits and no parse", cc.hits.Load(), cc.sets.Load())
+	if cc.hits() != 3 || cc.sets() != 0 {
+		t.Fatalf("warm reload: %d hits, %d parses; want 3 hits and no parse", cc.hits(), cc.sets())
 	}
 	assertSameFolderShape(t, second, ref)
 	if ids1, ids2 := subflowIDsByFile(first), subflowIDsByFile(second); ids1["Main.txt"] != ids2["Main.txt"] || ids1["Alpha.txt"] != ids2["Alpha.txt"] || ids1["Beta.txt"] != ids2["Beta.txt"] {
@@ -183,8 +164,8 @@ func TestLoadFlowFolder_ReparsesOnlyChangedMembers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFlowFolder (one member changed): %v", err)
 	}
-	if cc.sets.Load() != 1 || cc.misses() != 1 || cc.hits.Load() != 2 {
-		t.Fatalf("after one member changed: %d parses (%d misses, %d hits); want exactly 1 parse, 2 hits", cc.sets.Load(), cc.misses(), cc.hits.Load())
+	if cc.sets() != 1 || cc.misses() != 1 || cc.hits() != 2 {
+		t.Fatalf("after one member changed: %d parses (%d misses, %d hits); want exactly 1 parse, 2 hits", cc.sets(), cc.misses(), cc.hits())
 	}
 	ref2, err := parser.ParseFolder(dir)
 	if err != nil {
@@ -256,8 +237,8 @@ func TestPatchFlow_FolderReloadReusesTheGateParse(t *testing.T) {
 	}
 	// One seed (the gate's parse of the written member), then a reload that
 	// parses nothing: 2 members, 2 hits, 0 misses.
-	if cc.misses() != 0 || cc.hits.Load() != 2 || cc.sets.Load() != 1 {
-		t.Fatalf("folder reload after a patch: %d misses, %d hits, %d sets; want 0 parses, 2 hits, 1 seed", cc.misses(), cc.hits.Load(), cc.sets.Load())
+	if cc.misses() != 0 || cc.hits() != 2 || cc.sets() != 1 {
+		t.Fatalf("folder reload after a patch: %d misses, %d hits, %d sets; want 0 parses, 2 hits, 1 seed", cc.misses(), cc.hits(), cc.sets())
 	}
 	ref, err := parser.ParseFolder(dir)
 	if err != nil {
@@ -288,8 +269,8 @@ func TestApplyFixBatch_FolderReloadReusesTheLoopParse(t *testing.T) {
 	if got := readMember(t, dir, "Subflow.txt"); strings.Contains(got, "SET X TO %X%") {
 		t.Fatalf("Subflow.txt still carries the redundant SET:\n%s", got)
 	}
-	if cc.misses() != 0 || cc.hits.Load() != 2 || cc.sets.Load() != 1 {
-		t.Fatalf("folder reload after a batch: %d misses, %d hits, %d sets; want 0 parses, 2 hits, 1 seed", cc.misses(), cc.hits.Load(), cc.sets.Load())
+	if cc.misses() != 0 || cc.hits() != 2 || cc.sets() != 1 {
+		t.Fatalf("folder reload after a batch: %d misses, %d hits, %d sets; want 0 parses, 2 hits, 1 seed", cc.misses(), cc.hits(), cc.sets())
 	}
 	ref, err := parser.ParseFolder(dir)
 	if err != nil {
@@ -298,18 +279,24 @@ func TestApplyFixBatch_FolderReloadReusesTheLoopParse(t *testing.T) {
 	assertSameFolderShape(t, out.Doc, ref)
 }
 
-// TestFolderMemberCacheKey_IsPerNameAndContent: the key must separate members
+// TestASTCacheKey_IsPerSourceNameAndContent: the key must separate members
 // with equal bytes but different names (the parse depends on the name) and
-// never collide with loadAndParse's content-only single-file entries.
-func TestFolderMemberCacheKey_IsPerNameAndContent(t *testing.T) {
-	a := folderMemberCacheKey("A.txt", "WAIT 1\n")
-	if a == folderMemberCacheKey("B.txt", "WAIT 1\n") {
+// never collide with loadAndParse's single-file entries of the same name and bytes.
+func TestASTCacheKey_IsPerSourceNameAndContent(t *testing.T) {
+	a := astKey(astFromMember, "A.txt", "WAIT 1\n")
+	if a == astKey(astFromMember, "B.txt", "WAIT 1\n") {
 		t.Error("two members with the same bytes and different names share a key")
 	}
-	if a == folderMemberCacheKey("A.txt", "WAIT 2\n") {
+	if a == astKey(astFromMember, "A.txt", "WAIT 2\n") {
 		t.Error("two versions of the same member share a key")
 	}
-	if !strings.HasPrefix(a, "ast:") || len(a) != len("ast:")+64 {
-		t.Errorf("key %q is not in the AST cache's ast:<sha256> form", a)
+	if a == astKey(astFromFile, "A.txt", "WAIT 1\n") {
+		t.Error("a folder member and a single file of the same name and bytes share a key")
+	}
+	if a == astKey(astFromMember, "A.txt\x00", "WAIT 1\n") || a == astKey(astFromMember, "A.tx", "tWAIT 1\n") {
+		t.Error("the name and the bytes are not separated in the digest")
+	}
+	if parts := a.Parts(); len(parts) != 3 || parts[0] != cache.Local() {
+		t.Errorf("key parts %v, want the local user's", parts)
 	}
 }

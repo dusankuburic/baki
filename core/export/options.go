@@ -26,4 +26,9 @@ type Options struct {
 	// consumer outside the checkout can resolve the relative URIs; when empty
 	// no originalUriBaseIds/uriBaseId is emitted.
 	SourceRootURI string
+
+	// ToolVersion is SARIF tool.driver.version: the build that produced the
+	// report (bakicli's version, the server's service.Version). Empty means
+	// "0.1.0".
+	ToolVersion string
 }

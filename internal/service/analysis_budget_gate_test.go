@@ -50,24 +50,22 @@ func newFakeRuns() *fakeRuns {
 
 func (f *fakeRuns) size(docID string, findings int) { f.sizes[docID] = findings }
 
-func (f *fakeRuns) run(_ context.Context, doc *models.FlowDocument, _ []analyzer.Rule, _ *models.AppSettings, _ func(int, int, string)) *models.AnalysisReport {
+func (f *fakeRuns) run(_ context.Context, in analyzer.Input) *models.AnalysisReport {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	r, ok := f.reports[doc.ID]
+	r, ok := f.reports[in.Doc.ID]
 	if !ok {
-		r = findingsReport(doc.ID, f.sizes[doc.ID])
-		f.reports[doc.ID] = r
+		r = findingsReport(in.Doc.ID, f.sizes[in.Doc.ID])
+		f.reports[in.Doc.ID] = r
 	}
 	return r
 }
 
 // newRound4Service builds a service with its own pair-cache budget and the fake
-// analyzer, on a cleared analyzer cache (the probe before the gate always misses,
+// analyzer, on its own empty analyzer cache (the probe before the gate always misses,
 // every call reaches the fake).
 func newRound4Service(t *testing.T, budget int64, runs *fakeRuns) *AnalysisService {
 	t.Helper()
-	analyzer.DefaultCache.Clear()
-	t.Cleanup(analyzer.DefaultCache.Clear)
 	svc, err := NewAnalysisService(NilNotifier{}, nilSettings{}, nil, AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("NewAnalysisService: %v", err)
@@ -350,8 +348,8 @@ func TestAnalyzeFlowFresh_ClaimMatchesARewalkOfUnchangedContent(t *testing.T) {
 
 	// Every call hands out a NEW report object with the given content hash.
 	hash := "content-v1"
-	svc.run = func(_ context.Context, doc *models.FlowDocument, _ []analyzer.Rule, _ *models.AppSettings, _ func(int, int, string)) *models.AnalysisReport {
-		r := findingsReport(doc.ID, 10)
+	svc.run = func(_ context.Context, in analyzer.Input) *models.AnalysisReport {
+		r := findingsReport(in.Doc.ID, 10)
 		r.ContentHash = hash
 		r.Stats = models.AnalysisStats{Warnings: 10, BlocksAnalyzed: 1}
 		return r
@@ -428,7 +426,8 @@ type gatedRuns struct {
 	small   atomic.Int32
 }
 
-func (g *gatedRuns) run(_ context.Context, doc *models.FlowDocument, _ []analyzer.Rule, _ *models.AppSettings, _ func(int, int, string)) *models.AnalysisReport {
+func (g *gatedRuns) run(_ context.Context, in analyzer.Input) *models.AnalysisReport {
+	doc := in.Doc
 	if countBlocks(doc) < largeAnalysisBlocks {
 		g.small.Add(1)
 		return findingsReport(doc.ID, 1)
@@ -452,8 +451,6 @@ func (g *gatedRuns) run(_ context.Context, doc *models.FlowDocument, _ []analyze
 // were 0.5-1 GiB on top of the caches). Small flows and cache hits never wait; a
 // waiter whose context is cancelled leaves with the context's error.
 func TestAnalyzeFlow_LargeAnalysesAreGated(t *testing.T) {
-	analyzer.DefaultCache.Clear()
-	t.Cleanup(analyzer.DefaultCache.Clear)
 	svc, err := NewAnalysisService(NilNotifier{}, nilSettings{}, nil, AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("NewAnalysisService: %v", err)

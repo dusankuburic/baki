@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"strings"
@@ -91,11 +92,12 @@ func TestCachedResults_DoNotPinTheSource(t *testing.T) {
 	}
 	settings := models.DefaultSettings()
 
-	report := CachedAnalysis(doc, AllRules(), settings, nil)
+	a := newTestAnalyzer()
+	report := a.Analyze(context.Background(), localIn(doc, AllRules(), settings, nil))
 	if len(report.Findings) == 0 {
 		t.Fatal("fixture rot: the source must produce findings")
 	}
-	inventory := SuppressionInventoryCached(doc, AllRules(), settings)
+	inventory := a.SuppressionInventory(localIn(doc, AllRules(), settings, nil))
 	if len(inventory) == 0 {
 		t.Fatal("fixture rot: the source must produce a suppression entry")
 	}

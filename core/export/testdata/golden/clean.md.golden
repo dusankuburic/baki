@@ -1,0 +1,19 @@
+# PAD Analyzer — Analysis Report
+
+**Flow:** Clean
+**File:** flows/clean.txt
+**Generated:** Thu, 08 Oct 2026 09:30:00 UTC
+**Duration:** 7ms
+
+## Summary
+
+| Metric | Count |
+|---|---|
+| Blocks analyzed | 3 |
+| Rules run | 45 |
+| Errors | 0 |
+| Warnings | 0 |
+| Info | 0 |
+| Suppressed inline | 0 |
+
+No findings detected. The flow looks good!

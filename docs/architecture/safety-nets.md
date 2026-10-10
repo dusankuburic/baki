@@ -60,6 +60,52 @@ an org outsider, a global admin and scoped API tokens, and records each status. 
 This pins every shipped step's checksum, so an edited migration fails CI instead of failing boot at deploy time.
 After adding a step, refresh with `-update-migration-checksums`.
 
+## Analysis goldens: `core/analyzer/testdata/findings/*.golden`
+
+`TestFindingsGolden` analyzes every sample flow under `core/parser/testdata/samples` (each file, and each sample
+folder through `ParseFolder`), an inline flow with `pad-ignore` directives, generated large flows and two
+determinism probes, under six variants: `DefaultSettings`, nil settings (`bakicli` without a config), changed
+thresholds, disabled rules, severity overrides and the auto-fixable rule subset. Each records the stats, progress,
+metrics, rule profiles, the suppression inventory and every finding with its severity, confidence, fix, anchor and
+fingerprint. Block and subflow ids are replaced by positions, so a golden holds across re-parses; variants that
+only regrade the default findings print the differences, and very large flows print digests. An intended change of
+rule output, finding order, fingerprints or health is a golden diff that explains itself:
+
+```
+go test ./core/analyzer/ -run TestFindingsGolden -update-findings
+```
+
+Beside it, `TestAllRules_OrderPinned` (`registry_order_test.go`) pins the rule order, which decides finding order,
+the `F-nnn` ids and the fix loop's pick order, and `registry_pin_test.go` pins each rule's `IntroducedIn`,
+`Revision` and `Stage` (ADR 0014). The full-corpus golden and determinism tests skip under `-short`.
+
+## Export goldens: `core/export/testdata/golden/*.golden`
+
+`TestExportGolden` renders every registered format (JSON, SARIF, JUnit, CSV, HTML, Markdown, PDF) for five
+reports: a flow with suppressions, a two-file folder with a policy verdict, a hand-built report without a document
+(unknown rule, invalid severity, formula-like text), a clean report, and preview findings (stamped, and a rule
+flipped to preview). The goldens are the exact bytes, except PDF: fpdf's test defaults make it deterministic, and
+its golden is the SHA-256 of the bytes plus every page's decoded content stream. Three of the reports come from a
+real analysis, so an intended analyzer change on those flows refreshes these goldens too:
+
+```
+go test ./core/export/ -run TestExportGolden -update-export-golden
+```
+
+Both golden tests compare with CR stripped (a CRLF checkout passes) and, in update mode only, delete goldens whose
+input is gone; otherwise a stale golden fails.
+
+## Declared caches: `internal/di/testdata/caches.golden`
+
+`TestCacheRegistry_Golden` lists every declared cache (ADR 0017): its name, the key parts every key must carry,
+its tenant (or the reason it is deliberately global) and where its entries live. Review a change like a
+route-policy change. `TestCacheRegistry_CoversEveryDeclaration` fails when a `cache.Declare` in the source is not
+linked into that test binary, so the golden cannot silently miss one:
+
+```
+go test ./internal/di/ -run TestCacheRegistry_Golden -update-caches
+```
+
 ## Previous release on the new schema: the `previous-release-boot` CI job
 
 A binary boots on a newer schema only when every newer step is marked `-- baki:compat expand`
@@ -94,6 +140,12 @@ BOOT_DATABASE_URL="postgres://baki_app:baki_app@127.0.0.1:55433/baki_boot?sslmod
 These tests pin today's exceptions to the layering and convention rules in [README.md](README.md). They fail
 when an exception grows and when it shrinks, so each pinned number can only go down.
 `TestArch_SystemReadsPinned` lists the jobs that may read across tenants (ADR 0013).
+
+`caches_test.go` scans `core/` as well (ADR 0017). It pins the caches still built without a declared spec
+(`cache.NewLRUCache`, `cache.NewSizedLRU`, golang-lru constructors; only the undo ring is left) and the
+`singleflight.Group`s, per file. `cache.Declare` may only be the value of a package-level var, with a literal name
+unique across both modules. `undeclaredMemos` lists the memos deliberately left off the registry, each with its
+reason, and `TestArch_UndeclaredMemosStillExist` checks that each is still where it says.
 
 ## Tenant scoping: `internal/storage/database/rls_scoped_methods_test.go`
 

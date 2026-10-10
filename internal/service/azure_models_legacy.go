@@ -37,8 +37,7 @@ const azureMemoPrune = 512
 func (s *AzureModelService) importMemoFresh(owner storageif.AzureOwner) bool {
 	s.memoMu.Lock()
 	defer s.memoMu.Unlock()
-	at, ok := s.importedMemo[owner]
-	return ok && s.now().Sub(at) < azureImportMemoTTL
+	return s.importedMemo.fresh(owner, s.now(), azureImportMemoTTL)
 }
 
 // recordImportMemo remembers owner's marker once its transaction committed — a rolled-back request must not hide the registry.
@@ -46,15 +45,7 @@ func (s *AzureModelService) recordImportMemo(ctx context.Context, owner storagei
 	txhook.Register(ctx, func(context.Context) {
 		s.memoMu.Lock()
 		defer s.memoMu.Unlock()
-		now := s.now()
-		if len(s.importedMemo) >= azureMemoPrune {
-			for o, at := range s.importedMemo {
-				if now.Sub(at) >= azureImportMemoTTL {
-					delete(s.importedMemo, o)
-				}
-			}
-		}
-		s.importedMemo[owner] = now
+		s.importedMemo.record(owner, s.now(), azureImportMemoTTL)
 	})
 }
 
@@ -62,17 +53,16 @@ func (s *AzureModelService) recordImportMemo(ctx context.Context, owner storagei
 func (s *AzureModelService) forgetOwner(owner storageif.AzureOwner) {
 	s.memoMu.Lock()
 	defer s.memoMu.Unlock()
-	delete(s.importedMemo, owner)
-	delete(s.sweptMemo, owner)
-	delete(s.deferredMemo, owner)
+	s.importedMemo.forget(owner)
+	s.sweptMemo.forget(owner)
+	s.deferredMemo.forget(owner)
 }
 
 // importDeferredFresh reports whether owner's legacy import was deferred less than azureImportMemoTTL ago.
 func (s *AzureModelService) importDeferredFresh(owner storageif.AzureOwner) bool {
 	s.memoMu.Lock()
 	defer s.memoMu.Unlock()
-	at, ok := s.deferredMemo[owner]
-	return ok && s.now().Sub(at) < azureImportMemoTTL
+	return s.deferredMemo.fresh(owner, s.now(), azureImportMemoTTL)
 }
 
 // setImportDeferred records (deferred) or clears owner's deferral.
@@ -80,18 +70,10 @@ func (s *AzureModelService) setImportDeferred(owner storageif.AzureOwner, deferr
 	s.memoMu.Lock()
 	defer s.memoMu.Unlock()
 	if !deferred {
-		delete(s.deferredMemo, owner)
+		s.deferredMemo.forget(owner)
 		return
 	}
-	now := s.now()
-	if len(s.deferredMemo) >= azureMemoPrune {
-		for o, at := range s.deferredMemo {
-			if now.Sub(at) >= azureImportMemoTTL {
-				delete(s.deferredMemo, o)
-			}
-		}
-	}
-	s.deferredMemo[owner] = now
+	s.deferredMemo.record(owner, s.now(), azureImportMemoTTL)
 }
 
 // azureLegacyState is what the legacy document of an owner is.

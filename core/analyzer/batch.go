@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"runtime"
 	"sync"
 	"time"
@@ -8,13 +9,17 @@ import (
 	"pad-core/models"
 )
 
-func RunBatchAnalysis(docs []*models.FlowDocument, rules []Rule, settings *models.AppSettings) *models.BatchAnalysis {
+// Batch analyzes docs with in's rules, settings and tenant (in.Doc and in.OnProgress are not used), through the
+// cache like Analyze; results keep docs' order.
+func (a *CachedAnalyzer) Batch(docs []*models.FlowDocument, in Input) *models.BatchAnalysis {
 	start := time.Now()
+	one := func(doc *models.FlowDocument) *models.AnalysisReport {
+		return a.Analyze(context.Background(), Input{Doc: doc, Rules: in.Rules, Settings: in.Settings, Tenant: in.Tenant})
+	}
 
 	// Each doc's analysis is CPU-bound and independent; a bounded pool
 	// parallelizes them, landing results by index so output order matches the
-	// sequential version (DefaultCache is mutex-guarded, so concurrent
-	// CachedAnalysis calls are safe).
+	// sequential version (the analyzer is safe for concurrent use).
 	workers := runtime.NumCPU()
 	if workers > 8 {
 		workers = 8 // bound: huge hosts add scheduling overhead, not throughput, for parse-sized work
@@ -26,7 +31,7 @@ func RunBatchAnalysis(docs []*models.FlowDocument, rules []Rule, settings *model
 	reports := make([]*models.AnalysisReport, len(docs))
 	if workers <= 1 || len(docs) <= 1 {
 		for i, doc := range docs {
-			reports[i] = CachedAnalysis(doc, rules, settings, nil)
+			reports[i] = one(doc)
 		}
 	} else {
 		idx := make(chan int)
@@ -36,7 +41,7 @@ func RunBatchAnalysis(docs []*models.FlowDocument, rules []Rule, settings *model
 			go func() {
 				defer wg.Done()
 				for i := range idx {
-					reports[i] = CachedAnalysis(docs[i], rules, settings, nil)
+					reports[i] = one(docs[i])
 				}
 			}()
 		}

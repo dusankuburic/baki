@@ -92,4 +92,7 @@ type PolicyResult struct {
 	// Waived counts findings excluded by unexpired waivers (how much a pass
 	// leans on documented exceptions).
 	Waived int `json:"waived"`
+	// Preview counts findings of the policy's enabled rules set aside because
+	// a preview rule produced them: never evaluated, waived or violating.
+	Preview int `json:"preview,omitempty"`
 }

@@ -514,27 +514,41 @@ const docTemplate = `{
         },
         "/api/analysis/analyze-raw": {
             "post": {
-                "description": "handleAnalyzeRaw analyzes raw PAD flow text WITHOUT requiring a pre-stored flow, so CI pipelines and wrappers can POST flow text and get findings JSON (or SARIF) back in one call — no library upload, no Go CLI install. Works in both modes (auth via PAT in cloud; open in local). Body: {files, name, format?} where format is \"json\" (default) or \"sarif\". Nothing is persisted.",
+                "description": "handleAnalyzeRaw analyzes raw PAD flow text WITHOUT requiring a pre-stored flow, so CI pipelines and wrappers can POST flow text and get findings back in one call — no library upload, no Go CLI install. Works in both modes (auth via PAT in cloud; open in local). Body: {files, name, format?} where format is \"json\" (default: the analysis report), \"sarif\" (SARIF 2.1.0), \"junit\" (JUnit XML) or \"csv\"; those three are sent as an attachment named pad-analysis.\u003cext\u003e. At most 50 files and 2048 KB in total. Nothing is persisted.",
                 "consumes": [
                     "application/json"
                 ],
                 "produces": [
-                    "application/json"
+                    "application/json",
+                    "application/sarif+json",
+                    "application/xml",
+                    "text/csv"
                 ],
                 "tags": [
                     "analysis"
                 ],
                 "summary": "Analyze raw PAD source",
+                "parameters": [
+                    {
+                        "description": "{files: {name: source}, name, format}",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "Analysis report (json), or the SARIF, JUnit or CSV document",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Bad Request (no files, unknown format, parse failure)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -544,6 +558,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "Too many files or payload too large",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -917,7 +940,7 @@ const docTemplate = `{
         },
         "/api/analysis/custom-rules/test": {
             "post": {
-                "description": "Runs one unsaved rule against a flow and returns the findings it would produce.",
+                "description": "Runs one unsaved rule, checked strictly, against a flow and returns the findings it would produce. The body is {rule, flowId} and nothing else; a rule the strict check refuses is a 400 with details.field (\"rule.\u003cfield\u003e\") and details.reason.",
                 "consumes": [
                     "application/json"
                 ],
@@ -939,10 +962,7 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -950,7 +970,7 @@ const docTemplate = `{
         },
         "/api/analysis/custom-rules/validate": {
             "post": {
-                "description": "Validates custom-rule JSON without installing it: per-entry validity, errors, and skip warnings.",
+                "description": "Validates custom-rule JSON (an array, one rule with an id, or {\"rules\": either}) strictly, without installing it. Each entry reports valid, its first error with field and reason, and every problem (problems; warning: true for one the rule runs with). A malformed document is a 400.",
                 "consumes": [
                     "application/json"
                 ],
@@ -967,6 +987,12 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Not a custom-rule document",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -1164,36 +1190,77 @@ const docTemplate = `{
         },
         "/api/analysis/export/junit": {
             "post": {
-                "produces": [
+                "description": "JUnit XML report of the flow's analysis (CI test-report viewers), sent as the attachment pad-analysis.xml. Analyzes on demand, like the SARIF export. An empty flowId means the current document in local mode.",
+                "consumes": [
                     "application/json"
+                ],
+                "produces": [
+                    "application/xml"
                 ],
                 "tags": [
                     "export"
                 ],
                 "summary": "Export analysis results as JUnit XML",
-                "responses": {
-                    "200": {
-                        "description": "OK",
+                "parameters": [
+                    {
+                        "description": "{flowId}",
+                        "name": "request",
+                        "in": "body",
                         "schema": {
                             "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "JUnit XML document",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
-                    "503": {
-                        "description": "Service Unavailable (cloud mode required)",
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
-                            "type": "object"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Flow not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -1201,12 +1268,12 @@ const docTemplate = `{
         },
         "/api/analysis/export/sarif": {
             "post": {
-                "description": "SARIF 2.1.0 report for GitHub Code Scanning.",
+                "description": "SARIF 2.1.0 report of the flow's analysis (GitHub Code Scanning and other SARIF consumers), sent as the attachment pad-analysis.sarif. Analyzes on demand (a fresh analysis records history, as analyze does). An empty flowId means the current document in local mode.",
                 "consumes": [
                     "application/json"
                 ],
                 "produces": [
-                    "application/json"
+                    "application/sarif+json"
                 ],
                 "tags": [
                     "analysis"
@@ -1214,10 +1281,9 @@ const docTemplate = `{
                 "summary": "Export SARIF report",
                 "parameters": [
                     {
-                        "description": "Flow reference",
+                        "description": "{flowId}",
                         "name": "request",
                         "in": "body",
-                        "required": true,
                         "schema": {
                             "type": "object"
                         }
@@ -1227,8 +1293,52 @@ const docTemplate = `{
                     "200": {
                         "description": "SARIF document",
                         "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
                             "type": "object",
-                            "additionalProperties": true
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Flow not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -1751,7 +1861,7 @@ const docTemplate = `{
         },
         "/api/analysis/rules": {
             "get": {
-                "description": "Returns all available analysis rules and their current configuration.",
+                "description": "Returns all available analysis rules and their current configuration, with each rule's stage (stable, preview), introducedIn and kind (block, flow, library; library rules are listed only where desktop folder analysis runs them).",
                 "produces": [
                     "application/json"
                 ],
@@ -3237,7 +3347,7 @@ const docTemplate = `{
         },
         "/api/chat/get": {
             "post": {
-                "description": "Retrieves the chat history for a specific flow and conversation key (the wire field is historically named ` + "`" + `provider` + "`" + `). The body is an object — {messages: [...]} (always an array) plus activeStreamId when the caller has a stream on this conversation whose question is stored but whose answer is not yet (live, or finished and still being stored) — so a client that reloads mid-turn can re-attach via /api/chat/resume instead of losing the answer until another reload. Before F-21 this route answered a bare message array.",
+                "description": "Retrieves the chat history for a specific flow and conversation key (the wire field is historically named ` + "`" + `provider` + "`" + `). The body is an object — {messages: [...]} (always an array) plus activeStreamId when the caller has a stream on this conversation whose question is stored but whose answer is not yet (live, or finished and still being stored) — so a client that reloads mid-turn can re-attach via /api/chat/resume instead of losing the answer until another reload. The frontend still accepts the bare array older servers answered with.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3773,7 +3883,7 @@ const docTemplate = `{
         },
         "/api/export/html": {
             "post": {
-                "description": "Self-contained HTML report (base64 response); server-side file write is desktop-only.",
+                "description": "Renders the flow's current analysis report as a self-contained HTML page and returns it base64-encoded under ` + "`" + `data` + "`" + `. Needs a report (409 until the flow was analyzed). On the desktop a ` + "`" + `path` + "`" + ` also writes the file there; with accounts the path is ignored.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3784,16 +3894,63 @@ const docTemplate = `{
                     "export"
                 ],
                 "summary": "Export HTML report",
+                "parameters": [
+                    {
+                        "description": "{flowId, path}",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
                 "responses": {
                     "200": {
-                        "description": "Base64 HTML",
+                        "description": "{status: ok, data: base64 HTML}",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Flow not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "409": {
                         "description": "No analysis report",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3806,7 +3963,7 @@ const docTemplate = `{
         },
         "/api/export/markdown": {
             "post": {
-                "description": "Exports the specified flow to a Markdown file. Returns base64 encoded data. Only available in local mode.",
+                "description": "Renders the flow's current analysis report as Markdown and returns it base64-encoded under ` + "`" + `data` + "`" + `. Needs a report (409 until the flow was analyzed). On the desktop a ` + "`" + `path` + "`" + ` also writes the file there; with accounts the path is ignored.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3819,7 +3976,7 @@ const docTemplate = `{
                 "summary": "Export flow as Markdown",
                 "parameters": [
                     {
-                        "description": "request",
+                        "description": "{flowId, path}",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -3830,7 +3987,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "{status: ok, data: base64 Markdown}",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -3838,6 +3995,33 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Flow not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "No analysis report",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3859,7 +4043,7 @@ const docTemplate = `{
         },
         "/api/export/pdf": {
             "post": {
-                "description": "Exports the specified flow to a PDF file. Returns base64 encoded data. Only available in local mode.",
+                "description": "Renders the flow's current analysis report as a PDF and returns it base64-encoded under ` + "`" + `data` + "`" + `. Needs a report (409 until the flow was analyzed). On the desktop a ` + "`" + `path` + "`" + ` also writes the file there; with accounts the path is ignored.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3872,7 +4056,7 @@ const docTemplate = `{
                 "summary": "Export flow as PDF",
                 "parameters": [
                     {
-                        "description": "request",
+                        "description": "{flowId, path}",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -3883,7 +4067,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "{status: ok, data: base64 PDF}",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -3891,6 +4075,33 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Flow not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "No analysis report",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3912,7 +4123,7 @@ const docTemplate = `{
         },
         "/api/export/save": {
             "post": {
-                "description": "Desktop only. Writes CSV/SARIF/JUnit text rendered by the findings panel to the absolute path chosen in the native save dialog (.csv, .sarif or .xml only). 403 in cloud mode.",
+                "description": "Desktop only. Writes the findings panel's CSV, or the SARIF / JUnit text it fetched, to the absolute path chosen in the native save dialog (.csv, .sarif or .xml only). 403 in cloud mode.",
                 "consumes": [
                     "application/json"
                 ],
@@ -5660,20 +5871,32 @@ const docTemplate = `{
         },
         "/api/integrations/ci": {
             "post": {
-                "description": "Token-authenticated CI integration endpoint.",
+                "description": "Analyzes a stored flow for a CI runner. Authenticated by an HMAC-SHA256 of \"\u003cX-Baki-Timestamp\u003e.\" + body under PAD_CI_WEBHOOK_SECRET, sent as X-Baki-Signature: sha256=\u003chex\u003e; the timestamp must be within 5 minutes. Body: {flowId, failOn, format}. failOn is error (default), warning, info or none; findings of preview rules never fail the gate and are counted in ` + "`" + `preview` + "`" + `. format \"summary\" (default) returns {flowId, flowName, passed, gate, errors, warnings, info, preview}, \"report\" adds the findings, \"sarif\" returns the SARIF 2.1.0 document instead (application/sarif+json).",
                 "consumes": [
                     "application/json"
                 ],
                 "produces": [
-                    "application/json"
+                    "application/json",
+                    "application/sarif+json"
                 ],
                 "tags": [
                     "analysis"
                 ],
                 "summary": "CI webhook",
+                "parameters": [
+                    {
+                        "description": "{flowId, failOn, format}",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "Gate verdict, or the SARIF document",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -5689,7 +5912,25 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": "Missing or invalid signature or timestamp",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Flow not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "Body over 1 MiB",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -5699,6 +5940,15 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "PAD_CI_WEBHOOK_SECRET not set",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -8212,6 +8462,7 @@ const docTemplate = `{
         },
         "/api/orgs/{id}/rules": {
             "get": {
+                "description": "Each rule's config as stored (kind and schemaVersion spelled out); problem says why the analysis skips a rule.",
                 "produces": [
                     "application/json"
                 ],
@@ -8241,6 +8492,7 @@ const docTemplate = `{
                 }
             },
             "post": {
+                "description": "With config: the rule is checked strictly (an unknown field, a missing id or a built-in rule's id is a 400 with details.field and details.reason) and stored. Without config: pauses or resumes the stored rule {id} (enabled required) and leaves its config as stored. A rule's id cannot change (409).",
                 "consumes": [
                     "application/json"
                 ],
@@ -8266,13 +8518,31 @@ const docTemplate = `{
                         "schema": {
                             "type": "object"
                         }
+                    },
+                    "400": {
+                        "description": "Invalid rule",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "No such rule",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Rule id changed, or the stored rule is from a newer version",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
                     }
                 }
             }
         },
         "/api/orgs/{id}/rules/export": {
             "get": {
-                "description": "Returns the org's rule profile + custom rules as a .bakirc.json document consumable by bakicli.",
+                "description": "Returns the org's rule profile + custom rules as a .bakirc.json document consumable by bakicli. A rule the server skips carries \"problem\"; a rule whose stored JSON does not decode, unless a newer release wrote it, makes the export a 409.",
                 "produces": [
                     "application/json"
                 ],
@@ -8294,6 +8564,12 @@ const docTemplate = `{
                         "description": "Config",
                         "schema": {
                             "type": "object"
+                        }
+                    },
+                    "409": {
+                        "description": "A stored rule is unreadable",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -9897,7 +10173,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "tenantId": {
-                    "description": "TenantID, ClientID and ClientSecret describe the app registration\n(AzureAuthModeEntra).",
+                    "description": "TenantID, ClientID and ClientSecret describe the app registration (AzureAuthModeEntra).",
                     "type": "string"
                 }
             }
@@ -9909,11 +10185,11 @@ const docTemplate = `{
                     "$ref": "#/definitions/ai.AzureFoundryAuth"
                 },
                 "chatDeployment": {
-                    "description": "ChatDeployment is the deployment offered as the default model;\nEmbeddingDeployment (optional) the one used for the knowledge base.\nDeployments (optional, ≤ azureMaxDeployments) are further chat\ndeployments offered in the model picker. No data-plane route lists an\nAPI-key caller's deployments (GET /openai/v1/models is the resource's\nmodel CATALOGUE), so the picker shows exactly these names — plus the\nproject's deployments with Entra ID and a project endpoint. Saving\nrequires a chat deployment (ChatDeployment or Deployments) unless\nEntra ID + project endpoint can list them (MISSING_DEPLOYMENT).",
+                    "description": "ChatDeployment is the deployment offered as the default model; EmbeddingDeployment (optional) the\nknowledge-base one; Deployments (≤ azureMaxDeployments) further chat deployments — an API-key caller's\ndeployments are not listable, so the picker shows exactly these names. Saving requires a chat deployment\nunless the project listing can supply one (MISSING_DEPLOYMENT).",
                     "type": "string"
                 },
                 "claudeDeployments": {
-                    "description": "ClaudeDeployments (optional, ≤ azureMaxClaudeDeployments) are the\nresource's Claude deployments, which answer on the Anthropic Messages\nroute ({endpoint}/anthropic/v1/messages), not on /openai/v1 (404).\nThey are offered in the model picker as \"claude:\u003cname\u003e\" (see\nazure_claude.go) and count as chat deployments for the save-time\nrule. With Entra ID and a project endpoint the project listing also\ndiscovers them (modelPublisher \"Anthropic\").",
+                    "description": "ClaudeDeployments (≤ azureMaxClaudeDeployments) answer on the Anthropic Messages route\n({endpoint}/anthropic/v1/messages), not /openai/v1 (404); offered as \"claude:\u003cname\u003e\" and also discovered\nby the project listing (modelPublisher \"Anthropic\").",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -9929,11 +10205,11 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "endpoint": {
-                    "description": "Endpoint is the resource endpoint, e.g. https://my-res.openai.azure.com\nor https://my-res.services.ai.azure.com (no path).",
+                    "description": "Endpoint is the resource endpoint, e.g. https://my-res.openai.azure.com or https://my-res.services.ai.azure.com (no path).",
                     "type": "string"
                 },
                 "projectEndpoint": {
-                    "description": "ProjectEndpoint (optional) is the Foundry project endpoint,\nhttps://\u003cres\u003e.services.ai.azure.com/api/projects/\u003cproject\u003e, which\nunlocks the project's agents (Entra ID only) and deployment metadata.",
+                    "description": "ProjectEndpoint (optional) is the Foundry project endpoint, https://\u003cres\u003e.services.ai.azure.com/api/projects/\u003cproject\u003e,\nwhich unlocks the project's agents (Entra ID only) and deployment metadata.",
                     "type": "string"
                 }
             }
@@ -10001,7 +10277,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "activeStreamId": {
-                    "description": "ActiveStreamID is the caller's stream on this (flow, conversation key)\nwhose question is stored and whose answer is not yet: live, or finished\nwith its answer still being stored (service.ActiveStreamFor). Omitted\notherwise — a finished stream whose answer is stored is not reported.",
+                    "description": "ActiveStreamID is the caller's stream whose answer is not yet stored (live, or finished and\nstill being stored); omitted once the answer is stored.",
                     "type": "string"
                 },
                 "messages": {
@@ -10057,11 +10333,11 @@ const docTemplate = `{
                     "$ref": "#/definitions/ai.AzureFoundryAuth"
                 },
                 "chatDeployment": {
-                    "description": "ChatDeployment is the deployment offered as the default model;\nEmbeddingDeployment (optional) the one used for the knowledge base.\nDeployments (optional, ≤ azureMaxDeployments) are further chat\ndeployments offered in the model picker. No data-plane route lists an\nAPI-key caller's deployments (GET /openai/v1/models is the resource's\nmodel CATALOGUE), so the picker shows exactly these names — plus the\nproject's deployments with Entra ID and a project endpoint. Saving\nrequires a chat deployment (ChatDeployment or Deployments) unless\nEntra ID + project endpoint can list them (MISSING_DEPLOYMENT).",
+                    "description": "ChatDeployment is the deployment offered as the default model; EmbeddingDeployment (optional) the\nknowledge-base one; Deployments (≤ azureMaxDeployments) further chat deployments — an API-key caller's\ndeployments are not listable, so the picker shows exactly these names. Saving requires a chat deployment\nunless the project listing can supply one (MISSING_DEPLOYMENT).",
                     "type": "string"
                 },
                 "claudeDeployments": {
-                    "description": "ClaudeDeployments (optional, ≤ azureMaxClaudeDeployments) are the\nresource's Claude deployments, which answer on the Anthropic Messages\nroute ({endpoint}/anthropic/v1/messages), not on /openai/v1 (404).\nThey are offered in the model picker as \"claude:\u003cname\u003e\" (see\nazure_claude.go) and count as chat deployments for the save-time\nrule. With Entra ID and a project endpoint the project listing also\ndiscovers them (modelPublisher \"Anthropic\").",
+                    "description": "ClaudeDeployments (≤ azureMaxClaudeDeployments) answer on the Anthropic Messages route\n({endpoint}/anthropic/v1/messages), not /openai/v1 (404); offered as \"claude:\u003cname\u003e\" and also discovered\nby the project listing (modelPublisher \"Anthropic\").",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -10077,11 +10353,11 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "endpoint": {
-                    "description": "Endpoint is the resource endpoint, e.g. https://my-res.openai.azure.com\nor https://my-res.services.ai.azure.com (no path).",
+                    "description": "Endpoint is the resource endpoint, e.g. https://my-res.openai.azure.com or https://my-res.services.ai.azure.com (no path).",
                     "type": "string"
                 },
                 "projectEndpoint": {
-                    "description": "ProjectEndpoint (optional) is the Foundry project endpoint,\nhttps://\u003cres\u003e.services.ai.azure.com/api/projects/\u003cproject\u003e, which\nunlocks the project's agents (Entra ID only) and deployment metadata.",
+                    "description": "ProjectEndpoint (optional) is the Foundry project endpoint, https://\u003cres\u003e.services.ai.azure.com/api/projects/\u003cproject\u003e,\nwhich unlocks the project's agents (Entra ID only) and deployment metadata.",
                     "type": "string"
                 },
                 "updatedAt": {
@@ -10230,7 +10506,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "fixProposal": {
-                    "description": "FixProposal snapshots the (single) apply_fix approval record, if any.\nLEGACY field: superseded by FixProposals; kept so conversations saved\nbefore the array migration still load.",
+                    "description": "FixProposal snapshots the single apply_fix approval record — LEGACY,\nsuperseded by FixProposals; kept for pre-migration conversations.",
                     "allOf": [
                         {
                             "$ref": "#/definitions/pad-core_models.FixProposalSnapshot"
@@ -10238,7 +10514,7 @@ const docTemplate = `{
                     ]
                 },
                 "fixProposals": {
-                    "description": "FixProposals snapshots every apply_fix/apply_fixes approval record on\nthis message — a stream can carry several sequential proposals, and a\nbatch carries several fixes behind one approval.",
+                    "description": "FixProposals snapshots every apply_fix/apply_fixes approval record: a\nstream can carry several sequential proposals, a batch several fixes.",
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/pad-core_models.FixProposalSnapshot"
@@ -10254,7 +10530,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "modelLabel": {
-                    "description": "ModelLabel is the model's friendly name when the message was sent —\nan Azure AI Foundry registry entry's display name, whose Model is the\nopaque \"m/\u003centryId\u003e\" — so history, bubbles and exports keep naming the\nmodel after it is renamed or removed. Empty for catalogue models.",
+                    "description": "ModelLabel is the model's friendly name at send time (Model is the opaque\n\"m/\u003centryId\u003e\"), so history and exports keep naming it after renames;\nempty for catalogue models.",
                     "type": "string"
                 },
                 "outputCostPerM": {
@@ -10267,7 +10543,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "servedModel": {
-                    "description": "ServedModel is the model that actually answered when Model is an\nalias the provider resolves (an Azure AI Foundry deployment,\nmodel-router, an agent); InputCostPerM / OutputCostPerM are the USD\nper 1M token rates the turn was billed at. All three come from the\nstream's done event and are saved with the message so a reloaded\nconversation keeps its served-model tag and prices the turn at what it\ncost, not at the current listing. Zero/empty = not reported.",
+                    "description": "ServedModel is the model that actually answered when Model is a resolvable\nalias, and Input/OutputCostPerM the USD per 1M rates billed — all from the\nstream's done event, so a reloaded conversation prices the turn at what it\ncost. Zero/empty = not reported.",
                     "type": "string"
                 },
                 "timestamp": {
@@ -10510,7 +10786,7 @@ const docTemplate = `{
                     "$ref": "#/definitions/service.AzureConnectionConfigInput"
                 },
                 "name": {
-                    "description": "Name is the resource's display name; \"\" takes the endpoint host's\nfirst label.",
+                    "description": "Name is the resource's display name; \"\" takes the endpoint host's first label.",
                     "type": "string"
                 }
             }
@@ -10522,22 +10798,22 @@ const docTemplate = `{
                     "$ref": "#/definitions/service.AzureConnectionConfigInput"
                 },
                 "credentialUpdatedAt": {
-                    "description": "CredentialUpdatedAt (org scope) is the credentialUpdatedAt last read,\nsent with a credential change: the compare-and-swap on the org's\nstored credential.",
+                    "description": "CredentialUpdatedAt (org scope): the CAS on the org's stored credential.",
                     "type": "string"
                 },
                 "dismissDiscovery": {
-                    "description": "DismissDiscovery hides (true) or brings back (false) the \"Found in\nyour project\" prompt.",
+                    "description": "DismissDiscovery hides (true) or brings back (false) the \"Found in your project\" prompt.",
                     "type": "boolean"
                 },
                 "force": {
-                    "description": "Force confirms a re-index: the endpoint change of a resource holding\nthe knowledge-base model of a non-empty corpus (else 409\nREINDEX_REQUIRED).",
+                    "description": "Force confirms the re-index an endpoint change of the KB model's resource needs (else 409 REINDEX_REQUIRED).",
                     "type": "boolean"
                 },
                 "name": {
                     "type": "string"
                 },
                 "updatedAt": {
-                    "description": "UpdatedAt is the resource's updatedAt as last read: a stale value is\n409 CONFLICT (compare-and-swap on the registry row).",
+                    "description": "UpdatedAt is the resource's last-read updatedAt: a stale value is 409 CONFLICT.",
                     "type": "string"
                 }
             }
@@ -10546,14 +10822,14 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "canDiscover": {
-                    "description": "CanDiscover and SupportsAgents: Entra ID (or the Azure CLI) with a\nproject endpoint — deployments and agents can be discovered, agents run.",
+                    "description": "CanDiscover and SupportsAgents: Entra ID (or the Azure CLI) with a project endpoint.",
                     "type": "boolean"
                 },
                 "config": {
                     "$ref": "#/definitions/service.AzureConnectionConfigView"
                 },
                 "credentialUpdatedAt": {
-                    "description": "CredentialUpdatedAt (org scope) is the stored credential's\ncompare-and-swap token, sent back with a credential change.",
+                    "description": "CredentialUpdatedAt (org scope) is the stored credential's compare-and-swap token.",
                     "type": "string"
                 },
                 "id": {
@@ -10580,11 +10856,11 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "shared": {
-                    "description": "Shared marks an organisation's resource: always in org scope, and on\nthe \"Shared with you\" entries of user scope (read-only there).",
+                    "description": "Shared marks an organisation's resource: org scope always, user scope read-only (\"Shared with you\").",
                     "type": "boolean"
                 },
                 "sharedBy": {
-                    "description": "SharedBy names who lent a shared resource's credential (display name,\nelse email); SharedByID is that admin's user id.",
+                    "description": "SharedBy names who lent a shared resource's credential (display name, else email); SharedByID is that admin's id.",
                     "type": "string"
                 },
                 "status": {
@@ -10594,7 +10870,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "suggestDiscovery": {
-                    "description": "SuggestDiscovery shows the \"Found in your project\" prompt: discoverable\nand not dismissed (never on a read-only shared entry).",
+                    "description": "SuggestDiscovery shows the \"Found in your project\" prompt when discoverable and not dismissed.",
                     "type": "boolean"
                 },
                 "supportsAgents": {
@@ -10622,11 +10898,11 @@ const docTemplate = `{
                     "$ref": "#/definitions/service.AzureRegistryLimits"
                 },
                 "recoveredCopyPath": {
-                    "description": "RecoveredCopyPath is where that copy was kept (recovered only). Only\nthe desktop list file is ever recovered, and its API is the local\nuser's own, so the path is theirs to see.",
+                    "description": "RecoveredCopyPath is where the recovered desktop list file's copy was kept (recovered only).",
                     "type": "string"
                 },
                 "registryState": {
-                    "description": "RegistryState is ok, read_only (a newer app wrote the desktop list\nfile) or recovered (a corrupt one was set aside, a copy kept).",
+                    "description": "RegistryState is ok, read_only (a newer app wrote the desktop list file) or recovered (a corrupt one set aside, copy kept).",
                     "type": "string"
                 }
             }
@@ -10642,11 +10918,11 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "deployment": {
-                    "description": "Deployment (agents) is the project deployment the agent runs on;\nWorkflow marks a workflow agent (a preview).",
+                    "description": "Deployment (agents) is the project deployment the agent runs on; Workflow marks a workflow agent.",
                     "type": "string"
                 },
                 "kind": {
-                    "description": "Kind is what it would be added as: chat, claude or embedding for a\ndeployment, agent for an agent.",
+                    "description": "Kind is what it would be added as: chat, claude or embedding for a deployment, agent for an agent.",
                     "type": "string"
                 },
                 "model": {
@@ -10743,7 +11019,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "isDefault": {
-                    "description": "IsDefault (org scope only) makes it the organisation's \"Default for\nmembers\"; IsKnowledgeEmbedding (an embedding model, where the knowledge\nbase embeds with Azure) the knowledge base's model.",
+                    "description": "IsDefault (org scope only) = the organisation's \"Default for members\";\nIsKnowledgeEmbedding (embedding model, KB embeds with Azure) = the KB's model.",
                     "type": "boolean"
                 },
                 "isKnowledgeEmbedding": {
@@ -10770,7 +11046,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "contextWindow": {
-                    "description": "ContextWindow and MaxOutputTokens: null clears the override. On the\nwire an integer or null (the swaggertype tags say so to the API docs:\nOptionalInt is how the decoder tells absent, null and a value apart).",
+                    "description": "ContextWindow and MaxOutputTokens: null clears the override; the\nswaggertype tags document the integer-or-null wire form (OptionalInt).",
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -10825,7 +11101,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "contextWindow": {
-                    "description": "ContextWindow and MaxOutputTokens are the user's overrides (absent\nwhen unset); ReportedContextWindow is the window the server knows from\nthe catalogue, the served model or a learned limit.",
+                    "description": "ContextWindow/MaxOutputTokens are the user's overrides; ReportedContextWindow is the server-known window.",
                     "type": "integer"
                 },
                 "deployment": {
@@ -10884,7 +11160,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "target": {
-                    "description": "Target is what the server routes to: \"\u003cdeployment\u003e\",\n\"claude:\u003cdeployment\u003e\" or \"agent:\u003cname\u003e\" (an embedding deployment's\nname for an embedding model).",
+                    "description": "Target is what the server routes to: \"\u003cdeployment\u003e\", \"claude:\u003cdeployment\u003e\" or \"agent:\u003cname\u003e\".",
                     "type": "string"
                 },
                 "updatedAt": {

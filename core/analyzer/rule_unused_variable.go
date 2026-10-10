@@ -26,7 +26,7 @@ func (r *UnusedVariableRule) Check(block *models.Block, ctx *RuleContext) []mode
 		return nil
 	}
 
-	if ctx.UsedVariables[declaredVar] {
+	if ctx.UsedVariables()[declaredVar] {
 		return nil
 	}
 
@@ -42,4 +42,12 @@ func (r *UnusedVariableRule) Check(block *models.Block, ctx *RuleContext) []mode
 	}}
 }
 
-func init() { registerRule(&UnusedVariableRule{}) }
+func init() {
+	registerRule(&UnusedVariableRule{}, RuleMeta{
+		Confidence:   models.ConfidenceLow,
+		AutoFix:      "remove-block",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

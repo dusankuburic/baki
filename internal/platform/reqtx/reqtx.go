@@ -1,7 +1,8 @@
 // Package reqtx is the request transaction as the HTTP layer sees it: a lazy row-level-security scope for the
 // authenticated caller, and the runner of the post-commit hooks registered under it (ADR 0004). The Postgres
 // backend implements it (storage/database.RequestTx) and di provides it, nil where requests run without row-level
-// security (the desktop, auth off), so internal/api never imports the database package.
+// security (the desktop, auth off), so internal/api never imports the database package. The backend also marks
+// each scope it puts on a context, so the layers below can ask whether their reads are filtered (ReadsFiltered).
 package reqtx
 
 import (
@@ -32,4 +33,20 @@ type Scope interface {
 	Rollback() error
 	// Err is the start failure, if any.
 	Err() error
+}
+
+type readFilterKey struct{}
+
+// WithReadFilter returns ctx whose storage reads filtered answers for (nil: none). The Postgres backend sets it with
+// every scope it puts on a context.
+func WithReadFilter(ctx context.Context, filtered func() bool) context.Context {
+	return context.WithValue(ctx, readFilterKey{}, filtered)
+}
+
+// ReadsFiltered reports whether storage reads under ctx are filtered by row-level security for a caller: ctx
+// carries a request's scope (or a post-commit hook's) that has not failed open. Without one they run on the pool,
+// where the policies allow every row.
+func ReadsFiltered(ctx context.Context) bool {
+	filtered, _ := ctx.Value(readFilterKey{}).(func() bool)
+	return filtered != nil && filtered()
 }

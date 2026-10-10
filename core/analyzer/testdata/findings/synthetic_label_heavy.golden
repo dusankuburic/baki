@@ -1,0 +1,352 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: synthetic_label_heavy
+document: subflows=1 blocks=134 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":38,"info":10,"blocksAnalyzed":134,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=101 final=6030/6030 last="Loop body is too large"
+metrics: {"avgCognitive":0,"avgCyclomatic":1,"healthScore":0,"maxCognitive":0,"maxCyclomatic":1,"subflowCount":1,"totalBlocks":134,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":134,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=134
+  raw findings: duplicate-action=1 duplicate-label=30 large-subflow=1 missing-delay=3 missing-retry=4 missing-timeout=4 subflow-no-error-handler=1 unhandled-error=4
+inventory: none
+findings: 48
+F-001 info/medium duplicate-action [Style] fix=remove-block @Main#130 sf=Main fp=duplicate-action:99e9111a7a26f486
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":4}
+F-002 warning/medium duplicate-label [Logic] fix=- @Main#0 sf=Main fp=duplicate-label:d0d4a22017ad4762
+    title: Duplicate label
+    desc: Label 'Label0' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label0"}
+F-003 warning/medium duplicate-label [Logic] fix=- @Main#1 sf=Main fp=duplicate-label:3b6176d93ba087d6
+    title: Duplicate label
+    desc: Label 'Label1' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label1"}
+F-004 warning/medium duplicate-label [Logic] fix=- @Main#2 sf=Main fp=duplicate-label:ce83aad795c3d048
+    title: Duplicate label
+    desc: Label 'Label2' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label2"}
+F-005 warning/medium duplicate-label [Logic] fix=- @Main#3 sf=Main fp=duplicate-label:6fea0d08ce0edb95
+    title: Duplicate label
+    desc: Label 'Label3' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label3"}
+F-006 warning/medium duplicate-label [Logic] fix=- @Main#4 sf=Main fp=duplicate-label:30e1a412641fa46f
+    title: Duplicate label
+    desc: Label 'Label4' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label4"}
+F-007 warning/medium duplicate-label [Logic] fix=- @Main#5 sf=Main fp=duplicate-label:038913110d144882
+    title: Duplicate label
+    desc: Label 'Label5' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label5"}
+F-008 warning/medium duplicate-label [Logic] fix=- @Main#6 sf=Main fp=duplicate-label:7d6b8bf56d86454c
+    title: Duplicate label
+    desc: Label 'Label6' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label6"}
+F-009 warning/medium duplicate-label [Logic] fix=- @Main#7 sf=Main fp=duplicate-label:087c6d550a620c18
+    title: Duplicate label
+    desc: Label 'Label7' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label7"}
+F-010 warning/medium duplicate-label [Logic] fix=- @Main#8 sf=Main fp=duplicate-label:09868a6356e1af34
+    title: Duplicate label
+    desc: Label 'Label8' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label8"}
+F-011 warning/medium duplicate-label [Logic] fix=- @Main#9 sf=Main fp=duplicate-label:53962224d3147fb6
+    title: Duplicate label
+    desc: Label 'Label9' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label9"}
+F-012 warning/medium duplicate-label [Logic] fix=- @Main#10 sf=Main fp=duplicate-label:c512c818f5aca058
+    title: Duplicate label
+    desc: Label 'Label10' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label10"}
+F-013 warning/medium duplicate-label [Logic] fix=- @Main#11 sf=Main fp=duplicate-label:7fa6f96325009ded
+    title: Duplicate label
+    desc: Label 'Label11' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label11"}
+F-014 warning/medium duplicate-label [Logic] fix=- @Main#12 sf=Main fp=duplicate-label:c244d65745184250
+    title: Duplicate label
+    desc: Label 'Label12' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label12"}
+F-015 warning/medium duplicate-label [Logic] fix=- @Main#13 sf=Main fp=duplicate-label:325c783637bc9292
+    title: Duplicate label
+    desc: Label 'Label13' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label13"}
+F-016 warning/medium duplicate-label [Logic] fix=- @Main#14 sf=Main fp=duplicate-label:0e9f2a9d86086d72
+    title: Duplicate label
+    desc: Label 'Label14' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label14"}
+F-017 warning/medium duplicate-label [Logic] fix=- @Main#15 sf=Main fp=duplicate-label:3d5d7203184e5e48
+    title: Duplicate label
+    desc: Label 'Label15' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label15"}
+F-018 warning/medium duplicate-label [Logic] fix=- @Main#16 sf=Main fp=duplicate-label:ac9b6562ce376377
+    title: Duplicate label
+    desc: Label 'Label16' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label16"}
+F-019 warning/medium duplicate-label [Logic] fix=- @Main#17 sf=Main fp=duplicate-label:971264dc12f437ce
+    title: Duplicate label
+    desc: Label 'Label17' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label17"}
+F-020 warning/medium duplicate-label [Logic] fix=- @Main#18 sf=Main fp=duplicate-label:286aaeca52a72dae
+    title: Duplicate label
+    desc: Label 'Label18' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label18"}
+F-021 warning/medium duplicate-label [Logic] fix=- @Main#19 sf=Main fp=duplicate-label:6ce49088e868d312
+    title: Duplicate label
+    desc: Label 'Label19' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label19"}
+F-022 warning/medium duplicate-label [Logic] fix=- @Main#20 sf=Main fp=duplicate-label:2562c3c1514ddf80
+    title: Duplicate label
+    desc: Label 'Label20' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label20"}
+F-023 warning/medium duplicate-label [Logic] fix=- @Main#21 sf=Main fp=duplicate-label:bfcc7edd62b22fe7
+    title: Duplicate label
+    desc: Label 'Label21' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label21"}
+F-024 warning/medium duplicate-label [Logic] fix=- @Main#22 sf=Main fp=duplicate-label:edf5b0b9fbc50d85
+    title: Duplicate label
+    desc: Label 'Label22' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label22"}
+F-025 warning/medium duplicate-label [Logic] fix=- @Main#23 sf=Main fp=duplicate-label:f7198acc0273ab96
+    title: Duplicate label
+    desc: Label 'Label23' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label23"}
+F-026 warning/medium duplicate-label [Logic] fix=- @Main#24 sf=Main fp=duplicate-label:8269b2f517f7382c
+    title: Duplicate label
+    desc: Label 'Label24' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label24"}
+F-027 warning/medium duplicate-label [Logic] fix=- @Main#25 sf=Main fp=duplicate-label:67a2feb05be264fb
+    title: Duplicate label
+    desc: Label 'Label25' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label25"}
+F-028 warning/medium duplicate-label [Logic] fix=- @Main#26 sf=Main fp=duplicate-label:f9c0e8b406776323
+    title: Duplicate label
+    desc: Label 'Label26' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label26"}
+F-029 warning/medium duplicate-label [Logic] fix=- @Main#27 sf=Main fp=duplicate-label:0fbee0b39f6338ec
+    title: Duplicate label
+    desc: Label 'Label27' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label27"}
+F-030 warning/medium duplicate-label [Logic] fix=- @Main#28 sf=Main fp=duplicate-label:712ee21fd801a3cb
+    title: Duplicate label
+    desc: Label 'Label28' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label28"}
+F-031 warning/medium duplicate-label [Logic] fix=- @Main#29 sf=Main fp=duplicate-label:b94739d13771c030
+    title: Duplicate label
+    desc: Label 'Label29' is defined 2 times. GOTO resolves to the first definition — the others are unreachable targets.
+    meta: {"count":2,"label":"Label29"}
+F-032 info/low large-subflow [Style] fix=- @Main#0 sf=Main fp=large-subflow:d0d4a22017ad4762
+    title: Large subflow
+    desc: Subflow 'Main' has 134 blocks (threshold: 50).
+F-033 info/medium missing-delay [Reliability] fix=insert-delay @Main#131 sf=Main fp=missing-delay:1b2b8407a90965cb
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-034 info/medium missing-delay [Reliability] fix=insert-delay @Main#132 sf=Main fp=missing-delay:fc3bbe4977affba4
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-035 info/medium missing-delay [Reliability] fix=insert-delay @Main#133 sf=Main fp=missing-delay:ae769b91ae98f893
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-036 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#130 sf=Main fp=missing-retry:99e9111a7a26f486
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-037 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#131 sf=Main fp=missing-retry:1b2b8407a90965cb
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-038 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#132 sf=Main fp=missing-retry:fc3bbe4977affba4
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-039 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#133 sf=Main fp=missing-retry:ae769b91ae98f893
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-040 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#130 sf=Main fp=missing-timeout:99e9111a7a26f486
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-041 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#131 sf=Main fp=missing-timeout:1b2b8407a90965cb
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-042 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#132 sf=Main fp=missing-timeout:fc3bbe4977affba4
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-043 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#133 sf=Main fp=missing-timeout:ae769b91ae98f893
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.Click.Click"}
+F-044 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:d0d4a22017ad4762
+    title: Subflow without error handler
+    desc: Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-045 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#130 sf=Main fp=unhandled-error:99e9111a7a26f486
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-046 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#131 sf=Main fp=unhandled-error:1b2b8407a90965cb
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-047 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#132 sf=Main fp=unhandled-error:fc3bbe4977affba4
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-048 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#133 sf=Main fp=unhandled-error:ae769b91ae98f893
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+
+=== nil-settings
+stats: {"errors":0,"warnings":38,"info":10,"blocksAnalyzed":134,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=101 final=6030/6030 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=134
+  raw findings: duplicate-action=1 duplicate-label=30 large-subflow=1 missing-delay=3 missing-retry=4 missing-timeout=4 subflow-no-error-handler=1 unhandled-error=4
+inventory: none
+findings: 48
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":38,"info":10,"blocksAnalyzed":134,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=101 final=6030/6030 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=134
+  raw findings: duplicate-action=1 duplicate-label=30 large-subflow=1 missing-delay=3 missing-retry=4 missing-timeout=4 subflow-no-error-handler=1 unhandled-error=4
+inventory: none
+findings: 48
+F-001 info/medium duplicate-action [Style] fix=remove-block @Main#130 sf=Main fp=duplicate-action:99e9111a7a26f486
+F-002 warning/medium duplicate-label [Logic] fix=- @Main#0 sf=Main fp=duplicate-label:d0d4a22017ad4762
+F-003 warning/medium duplicate-label [Logic] fix=- @Main#1 sf=Main fp=duplicate-label:3b6176d93ba087d6
+F-004 warning/medium duplicate-label [Logic] fix=- @Main#2 sf=Main fp=duplicate-label:ce83aad795c3d048
+F-005 warning/medium duplicate-label [Logic] fix=- @Main#3 sf=Main fp=duplicate-label:6fea0d08ce0edb95
+F-006 warning/medium duplicate-label [Logic] fix=- @Main#4 sf=Main fp=duplicate-label:30e1a412641fa46f
+F-007 warning/medium duplicate-label [Logic] fix=- @Main#5 sf=Main fp=duplicate-label:038913110d144882
+F-008 warning/medium duplicate-label [Logic] fix=- @Main#6 sf=Main fp=duplicate-label:7d6b8bf56d86454c
+F-009 warning/medium duplicate-label [Logic] fix=- @Main#7 sf=Main fp=duplicate-label:087c6d550a620c18
+F-010 warning/medium duplicate-label [Logic] fix=- @Main#8 sf=Main fp=duplicate-label:09868a6356e1af34
+F-011 warning/medium duplicate-label [Logic] fix=- @Main#9 sf=Main fp=duplicate-label:53962224d3147fb6
+F-012 warning/medium duplicate-label [Logic] fix=- @Main#10 sf=Main fp=duplicate-label:c512c818f5aca058
+F-013 warning/medium duplicate-label [Logic] fix=- @Main#11 sf=Main fp=duplicate-label:7fa6f96325009ded
+F-014 warning/medium duplicate-label [Logic] fix=- @Main#12 sf=Main fp=duplicate-label:c244d65745184250
+F-015 warning/medium duplicate-label [Logic] fix=- @Main#13 sf=Main fp=duplicate-label:325c783637bc9292
+F-016 warning/medium duplicate-label [Logic] fix=- @Main#14 sf=Main fp=duplicate-label:0e9f2a9d86086d72
+F-017 warning/medium duplicate-label [Logic] fix=- @Main#15 sf=Main fp=duplicate-label:3d5d7203184e5e48
+F-018 warning/medium duplicate-label [Logic] fix=- @Main#16 sf=Main fp=duplicate-label:ac9b6562ce376377
+F-019 warning/medium duplicate-label [Logic] fix=- @Main#17 sf=Main fp=duplicate-label:971264dc12f437ce
+F-020 warning/medium duplicate-label [Logic] fix=- @Main#18 sf=Main fp=duplicate-label:286aaeca52a72dae
+F-021 warning/medium duplicate-label [Logic] fix=- @Main#19 sf=Main fp=duplicate-label:6ce49088e868d312
+F-022 warning/medium duplicate-label [Logic] fix=- @Main#20 sf=Main fp=duplicate-label:2562c3c1514ddf80
+F-023 warning/medium duplicate-label [Logic] fix=- @Main#21 sf=Main fp=duplicate-label:bfcc7edd62b22fe7
+F-024 warning/medium duplicate-label [Logic] fix=- @Main#22 sf=Main fp=duplicate-label:edf5b0b9fbc50d85
+F-025 warning/medium duplicate-label [Logic] fix=- @Main#23 sf=Main fp=duplicate-label:f7198acc0273ab96
+F-026 warning/medium duplicate-label [Logic] fix=- @Main#24 sf=Main fp=duplicate-label:8269b2f517f7382c
+F-027 warning/medium duplicate-label [Logic] fix=- @Main#25 sf=Main fp=duplicate-label:67a2feb05be264fb
+F-028 warning/medium duplicate-label [Logic] fix=- @Main#26 sf=Main fp=duplicate-label:f9c0e8b406776323
+F-029 warning/medium duplicate-label [Logic] fix=- @Main#27 sf=Main fp=duplicate-label:0fbee0b39f6338ec
+F-030 warning/medium duplicate-label [Logic] fix=- @Main#28 sf=Main fp=duplicate-label:712ee21fd801a3cb
+F-031 warning/medium duplicate-label [Logic] fix=- @Main#29 sf=Main fp=duplicate-label:b94739d13771c030
+F-032 info/low large-subflow [Style] fix=- @Main#0 sf=Main fp=large-subflow:d0d4a22017ad4762
+    title: Large subflow
+    desc: Subflow 'Main' has 134 blocks (threshold: 5).
+F-033 info/medium missing-delay [Reliability] fix=insert-delay @Main#131 sf=Main fp=missing-delay:1b2b8407a90965cb
+F-034 info/medium missing-delay [Reliability] fix=insert-delay @Main#132 sf=Main fp=missing-delay:fc3bbe4977affba4
+F-035 info/medium missing-delay [Reliability] fix=insert-delay @Main#133 sf=Main fp=missing-delay:ae769b91ae98f893
+F-036 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#130 sf=Main fp=missing-retry:99e9111a7a26f486
+F-037 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#131 sf=Main fp=missing-retry:1b2b8407a90965cb
+F-038 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#132 sf=Main fp=missing-retry:fc3bbe4977affba4
+F-039 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#133 sf=Main fp=missing-retry:ae769b91ae98f893
+F-040 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#130 sf=Main fp=missing-timeout:99e9111a7a26f486
+F-041 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#131 sf=Main fp=missing-timeout:1b2b8407a90965cb
+F-042 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#132 sf=Main fp=missing-timeout:fc3bbe4977affba4
+F-043 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#133 sf=Main fp=missing-timeout:ae769b91ae98f893
+F-044 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:d0d4a22017ad4762
+F-045 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#130 sf=Main fp=unhandled-error:99e9111a7a26f486
+F-046 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#131 sf=Main fp=unhandled-error:1b2b8407a90965cb
+F-047 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#132 sf=Main fp=unhandled-error:fc3bbe4977affba4
+F-048 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#133 sf=Main fp=unhandled-error:ae769b91ae98f893
+
+=== disabled
+stats: {"errors":0,"warnings":34,"info":6,"blocksAnalyzed":134,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=100 final=4958/4958 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=37 order=f7de49357acad250 blocksChecked=134
+  raw findings: duplicate-action=1 duplicate-label=30 large-subflow=1 missing-retry=4 missing-timeout=4
+inventory: none
+findings: 40
+F-001 info/medium duplicate-action [Style] fix=remove-block @Main#130 sf=Main fp=duplicate-action:99e9111a7a26f486
+F-002 warning/medium duplicate-label [Logic] fix=- @Main#0 sf=Main fp=duplicate-label:d0d4a22017ad4762
+F-003 warning/medium duplicate-label [Logic] fix=- @Main#1 sf=Main fp=duplicate-label:3b6176d93ba087d6
+F-004 warning/medium duplicate-label [Logic] fix=- @Main#2 sf=Main fp=duplicate-label:ce83aad795c3d048
+F-005 warning/medium duplicate-label [Logic] fix=- @Main#3 sf=Main fp=duplicate-label:6fea0d08ce0edb95
+F-006 warning/medium duplicate-label [Logic] fix=- @Main#4 sf=Main fp=duplicate-label:30e1a412641fa46f
+F-007 warning/medium duplicate-label [Logic] fix=- @Main#5 sf=Main fp=duplicate-label:038913110d144882
+F-008 warning/medium duplicate-label [Logic] fix=- @Main#6 sf=Main fp=duplicate-label:7d6b8bf56d86454c
+F-009 warning/medium duplicate-label [Logic] fix=- @Main#7 sf=Main fp=duplicate-label:087c6d550a620c18
+F-010 warning/medium duplicate-label [Logic] fix=- @Main#8 sf=Main fp=duplicate-label:09868a6356e1af34
+F-011 warning/medium duplicate-label [Logic] fix=- @Main#9 sf=Main fp=duplicate-label:53962224d3147fb6
+F-012 warning/medium duplicate-label [Logic] fix=- @Main#10 sf=Main fp=duplicate-label:c512c818f5aca058
+F-013 warning/medium duplicate-label [Logic] fix=- @Main#11 sf=Main fp=duplicate-label:7fa6f96325009ded
+F-014 warning/medium duplicate-label [Logic] fix=- @Main#12 sf=Main fp=duplicate-label:c244d65745184250
+F-015 warning/medium duplicate-label [Logic] fix=- @Main#13 sf=Main fp=duplicate-label:325c783637bc9292
+F-016 warning/medium duplicate-label [Logic] fix=- @Main#14 sf=Main fp=duplicate-label:0e9f2a9d86086d72
+F-017 warning/medium duplicate-label [Logic] fix=- @Main#15 sf=Main fp=duplicate-label:3d5d7203184e5e48
+F-018 warning/medium duplicate-label [Logic] fix=- @Main#16 sf=Main fp=duplicate-label:ac9b6562ce376377
+F-019 warning/medium duplicate-label [Logic] fix=- @Main#17 sf=Main fp=duplicate-label:971264dc12f437ce
+F-020 warning/medium duplicate-label [Logic] fix=- @Main#18 sf=Main fp=duplicate-label:286aaeca52a72dae
+F-021 warning/medium duplicate-label [Logic] fix=- @Main#19 sf=Main fp=duplicate-label:6ce49088e868d312
+F-022 warning/medium duplicate-label [Logic] fix=- @Main#20 sf=Main fp=duplicate-label:2562c3c1514ddf80
+F-023 warning/medium duplicate-label [Logic] fix=- @Main#21 sf=Main fp=duplicate-label:bfcc7edd62b22fe7
+F-024 warning/medium duplicate-label [Logic] fix=- @Main#22 sf=Main fp=duplicate-label:edf5b0b9fbc50d85
+F-025 warning/medium duplicate-label [Logic] fix=- @Main#23 sf=Main fp=duplicate-label:f7198acc0273ab96
+F-026 warning/medium duplicate-label [Logic] fix=- @Main#24 sf=Main fp=duplicate-label:8269b2f517f7382c
+F-027 warning/medium duplicate-label [Logic] fix=- @Main#25 sf=Main fp=duplicate-label:67a2feb05be264fb
+F-028 warning/medium duplicate-label [Logic] fix=- @Main#26 sf=Main fp=duplicate-label:f9c0e8b406776323
+F-029 warning/medium duplicate-label [Logic] fix=- @Main#27 sf=Main fp=duplicate-label:0fbee0b39f6338ec
+F-030 warning/medium duplicate-label [Logic] fix=- @Main#28 sf=Main fp=duplicate-label:712ee21fd801a3cb
+F-031 warning/medium duplicate-label [Logic] fix=- @Main#29 sf=Main fp=duplicate-label:b94739d13771c030
+F-032 info/low large-subflow [Style] fix=- @Main#0 sf=Main fp=large-subflow:d0d4a22017ad4762
+F-033 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#130 sf=Main fp=missing-retry:99e9111a7a26f486
+F-034 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#131 sf=Main fp=missing-retry:1b2b8407a90965cb
+F-035 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#132 sf=Main fp=missing-retry:fc3bbe4977affba4
+F-036 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#133 sf=Main fp=missing-retry:ae769b91ae98f893
+F-037 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#130 sf=Main fp=missing-timeout:99e9111a7a26f486
+F-038 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#131 sf=Main fp=missing-timeout:1b2b8407a90965cb
+F-039 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#132 sf=Main fp=missing-timeout:fc3bbe4977affba4
+F-040 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#133 sf=Main fp=missing-timeout:ae769b91ae98f893
+
+=== severity
+stats: {"errors":5,"warnings":37,"info":6,"blocksAnalyzed":134,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=101 final=6030/6030 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=134
+  raw findings: duplicate-action=1 duplicate-label=30 large-subflow=1 missing-delay=3 missing-retry=4 missing-timeout=4 subflow-no-error-handler=1 unhandled-error=4
+inventory: none
+findings: 48
+  as default; severity changes: F-033 info->warning, F-034 info->warning, F-035 info->warning, F-044 info->error, F-045 warning->error, F-046 warning->error, F-047 warning->error, F-048 warning->error
+
+=== autofixable
+stats: {"errors":0,"warnings":8,"info":9,"blocksAnalyzed":134,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=86 final=4288/4288 last="Wait zero"
+metrics: as default, healthScore=59
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=134
+  raw findings: duplicate-action=1 missing-delay=3 missing-retry=4 missing-timeout=4 subflow-no-error-handler=1 unhandled-error=4
+inventory: none
+findings: 17
+F-001 info/medium duplicate-action [Style] fix=remove-block @Main#130 sf=Main fp=duplicate-action:99e9111a7a26f486
+F-002 info/medium missing-delay [Reliability] fix=insert-delay @Main#131 sf=Main fp=missing-delay:1b2b8407a90965cb
+F-003 info/medium missing-delay [Reliability] fix=insert-delay @Main#132 sf=Main fp=missing-delay:fc3bbe4977affba4
+F-004 info/medium missing-delay [Reliability] fix=insert-delay @Main#133 sf=Main fp=missing-delay:ae769b91ae98f893
+F-005 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#130 sf=Main fp=missing-retry:99e9111a7a26f486
+F-006 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#131 sf=Main fp=missing-retry:1b2b8407a90965cb
+F-007 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#132 sf=Main fp=missing-retry:fc3bbe4977affba4
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#133 sf=Main fp=missing-retry:ae769b91ae98f893
+F-009 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#130 sf=Main fp=missing-timeout:99e9111a7a26f486
+F-010 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#131 sf=Main fp=missing-timeout:1b2b8407a90965cb
+F-011 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#132 sf=Main fp=missing-timeout:fc3bbe4977affba4
+F-012 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#133 sf=Main fp=missing-timeout:ae769b91ae98f893
+F-013 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:d0d4a22017ad4762
+F-014 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#130 sf=Main fp=unhandled-error:99e9111a7a26f486
+F-015 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#131 sf=Main fp=unhandled-error:1b2b8407a90965cb
+F-016 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#132 sf=Main fp=unhandled-error:fc3bbe4977affba4
+F-017 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#133 sf=Main fp=unhandled-error:ae769b91ae98f893

@@ -1,0 +1,594 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: folder_browsercloser
+document: subflows=4 blocks=140 parseErrors=0 folder=true
+
+=== default
+stats: {"errors":0,"warnings":41,"info":15,"blocksAnalyzed":100,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=90 final=4500/4500 last="Loop body is too large"
+metrics: {"avgCognitive":13.25,"avgCyclomatic":8,"healthScore":0,"maxCognitive":17,"maxCyclomatic":8,"subflowCount":4,"totalBlocks":99,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":30,"cognitiveComplexity":17,"cyclomaticComplexity":8,"fanIn":0,"fanOut":3,"maxNestingDepth":4,"variableCount":0}
+  subflow CloseChrome: {"blockCount":23,"cognitiveComplexity":12,"cyclomaticComplexity":8,"fanIn":1,"fanOut":0,"maxNestingDepth":5,"variableCount":0}
+  subflow CloseEdge: {"blockCount":23,"cognitiveComplexity":12,"cyclomaticComplexity":8,"fanIn":1,"fanOut":0,"maxNestingDepth":5,"variableCount":0}
+  subflow CloseFirefox: {"blockCount":23,"cognitiveComplexity":12,"cyclomaticComplexity":8,"fanIn":1,"fanOut":0,"maxNestingDepth":5,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=100
+  raw findings: dead-code=4 duplicate-action=2 empty-handler=13 error-swallow=16 goto-antipattern=2 missing-delay=3 missing-timeout=7 unhandled-error=3 unused-variable=6
+inventory: none
+findings: 56
+F-001 info/medium dead-code [Style] fix=remove-block @Main#33 sf=Main fp=dead-code:7051dd95ff4f1eb0
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-002 info/medium dead-code [Style] fix=remove-block @CloseChrome#3 sf=CloseChrome fp=dead-code:c7d570773bd14c7a
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-003 info/medium dead-code [Style] fix=remove-block @CloseEdge#3 sf=CloseEdge fp=dead-code:6bb4578ae8a20a4e
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-004 info/medium dead-code [Style] fix=remove-block @CloseFirefox#3 sf=CloseFirefox fp=dead-code:26e5948c1af8ae8c
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-005 info/medium duplicate-action [Style] fix=remove-block @Main#18 sf=Main fp=duplicate-action:a5d72b0de6cd3b59
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":3}
+F-006 info/medium duplicate-action [Style] fix=remove-block @Main#26 sf=Main fp=duplicate-action:48440addde26d68b
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":3}
+F-007 warning/high empty-handler [Reliability] fix=insert-handler-log @Main#8 sf=Main fp=empty-handler:bbb65301b60de8c2
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-008 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#5 sf=CloseChrome fp=empty-handler:2e4fb16a1019b605
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-009 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#17 sf=CloseChrome fp=empty-handler:98f0ca5544bbf442
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-010 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#20 sf=CloseChrome fp=empty-handler:3b1b8dde7ed412b3
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-011 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#23 sf=CloseChrome fp=empty-handler:a61e1da29b5aefbd
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-012 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#5 sf=CloseEdge fp=empty-handler:f8cbd625c013778a
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-013 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#17 sf=CloseEdge fp=empty-handler:2f579f732e072f16
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-014 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#20 sf=CloseEdge fp=empty-handler:a796a6dfc5546cb4
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-015 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#23 sf=CloseEdge fp=empty-handler:1d29b8cf3fc6ba7b
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-016 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#5 sf=CloseFirefox fp=empty-handler:89e649adc5601619
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-017 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#17 sf=CloseFirefox fp=empty-handler:9481b4f05fcb602f
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-018 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#20 sf=CloseFirefox fp=empty-handler:48de0c69612cff15
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-019 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#23 sf=CloseFirefox fp=empty-handler:db503222d1534f06
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-020 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#8 sf=Main fp=error-swallow:bbb65301b60de8c2
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-021 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#5 sf=CloseChrome fp=error-swallow:2e4fb16a1019b605
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-022 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#8 sf=CloseChrome fp=error-swallow:8e7c1fea24627aa3
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-023 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#17 sf=CloseChrome fp=error-swallow:98f0ca5544bbf442
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-024 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#20 sf=CloseChrome fp=error-swallow:3b1b8dde7ed412b3
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-025 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#23 sf=CloseChrome fp=error-swallow:a61e1da29b5aefbd
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-026 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#5 sf=CloseEdge fp=error-swallow:f8cbd625c013778a
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-027 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#8 sf=CloseEdge fp=error-swallow:1058b46a213b5df6
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-028 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#17 sf=CloseEdge fp=error-swallow:2f579f732e072f16
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-029 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#20 sf=CloseEdge fp=error-swallow:a796a6dfc5546cb4
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-030 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#23 sf=CloseEdge fp=error-swallow:1d29b8cf3fc6ba7b
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-031 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#5 sf=CloseFirefox fp=error-swallow:89e649adc5601619
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-032 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#8 sf=CloseFirefox fp=error-swallow:0e6daf2b83eb8c0c
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-033 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#17 sf=CloseFirefox fp=error-swallow:9481b4f05fcb602f
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-034 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#20 sf=CloseFirefox fp=error-swallow:48de0c69612cff15
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-035 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#23 sf=CloseFirefox fp=error-swallow:db503222d1534f06
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-036 warning/medium goto-antipattern [Logic] fix=- @Main#12 sf=Main fp=goto-antipattern:16978560da08b65e
+    title: GOTO breaks scope boundary
+    desc: This GOTO jumps to a label outside its current scope (across loop/condition/switch boundaries), which creates fragile and hard-to-maintain control flow.
+    meta: {"targetLabel":"Exit"}
+F-037 warning/medium goto-antipattern [Logic] fix=- @Main#29 sf=Main fp=goto-antipattern:63ce805a84ce3fbb
+    title: GOTO breaks scope boundary
+    desc: This GOTO jumps to a label outside its current scope (across loop/condition/switch boundaries), which creates fragile and hard-to-maintain control flow.
+    meta: {"targetLabel":"Exit"}
+F-038 info/medium missing-delay [Reliability] fix=insert-delay @CloseChrome#12 sf=CloseChrome fp=missing-delay:058d6adfdb9073f9
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-039 info/medium missing-delay [Reliability] fix=insert-delay @CloseEdge#12 sf=CloseEdge fp=missing-delay:715adf1a0d65ddcb
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-040 info/medium missing-delay [Reliability] fix=insert-delay @CloseFirefox#12 sf=CloseFirefox fp=missing-delay:74ed4bced6d3a487
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-041 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:702424eeadcea8e4
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.CloseWebBrowser"}
+F-042 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#4 sf=CloseChrome fp=missing-timeout:867def5f8e57f9ec
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"UIAutomation.CloseWindow.CloseByTitleClass"}
+F-043 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#12 sf=CloseChrome fp=missing-timeout:058d6adfdb9073f9
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.CloseWebBrowser"}
+F-044 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#4 sf=CloseEdge fp=missing-timeout:e43e859d1a01773d
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"UIAutomation.CloseWindow.CloseByTitleClass"}
+F-045 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#12 sf=CloseEdge fp=missing-timeout:715adf1a0d65ddcb
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.CloseWebBrowser"}
+F-046 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseFirefox#4 sf=CloseFirefox fp=missing-timeout:cc67ec88a53e1ca6
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"UIAutomation.CloseWindow.CloseByTitleClass"}
+F-047 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseFirefox#12 sf=CloseFirefox fp=missing-timeout:74ed4bced6d3a487
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.CloseWebBrowser"}
+F-048 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseChrome#4 sf=CloseChrome fp=unhandled-error:867def5f8e57f9ec
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-049 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseEdge#4 sf=CloseEdge fp=unhandled-error:e43e859d1a01773d
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-050 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseFirefox#4 sf=CloseFirefox fp=unhandled-error:cc67ec88a53e1ca6
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-051 info/low unused-variable [Style] fix=remove-block @Main#0 sf=Main fp=unused-variable:c94d5cc590228f2d
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Output_Status"}
+F-052 info/low unused-variable [Style] fix=remove-block @Main#25 sf=Main fp=unused-variable:5b1e4b02552616d9
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Output_Message"}
+F-053 info/low unused-variable [Style] fix=remove-block @Main#36 sf=Main fp=unused-variable:a201fdd84941aa19
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Output_Status"}
+F-054 info/low unused-variable [Style] fix=remove-block @CloseChrome#31 sf=CloseChrome fp=unused-variable:a3570bb08ccd5a0f
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Output_Status"}
+F-055 info/low unused-variable [Style] fix=remove-block @CloseEdge#31 sf=CloseEdge fp=unused-variable:7d06aaf84b0d6d1a
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Output_Status"}
+F-056 info/low unused-variable [Style] fix=remove-block @CloseFirefox#31 sf=CloseFirefox fp=unused-variable:0b8ffea30b8aaa54
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Output_Status"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":41,"info":15,"blocksAnalyzed":100,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=90 final=4500/4500 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=100
+  raw findings: dead-code=4 duplicate-action=2 empty-handler=13 error-swallow=16 goto-antipattern=2 missing-delay=3 missing-timeout=7 unhandled-error=3 unused-variable=6
+inventory: none
+findings: 56
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":41,"info":62,"blocksAnalyzed":100,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=90 final=4500/4500 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=100
+  raw findings: dead-code=4 deep-nesting=37 duplicate-action=5 empty-handler=13 error-swallow=16 goto-antipattern=2 large-subflow=4 missing-delay=3 missing-timeout=7 unhandled-error=3 unused-variable=6 wide-loop=3
+inventory: none
+findings: 103
+F-001 info/medium dead-code [Style] fix=remove-block @Main#33 sf=Main fp=dead-code:7051dd95ff4f1eb0
+F-002 info/medium dead-code [Style] fix=remove-block @CloseChrome#3 sf=CloseChrome fp=dead-code:c7d570773bd14c7a
+F-003 info/medium dead-code [Style] fix=remove-block @CloseEdge#3 sf=CloseEdge fp=dead-code:6bb4578ae8a20a4e
+F-004 info/medium dead-code [Style] fix=remove-block @CloseFirefox#3 sf=CloseFirefox fp=dead-code:26e5948c1af8ae8c
+F-005 info/low deep-nesting [Style] fix=- @Main#7 sf=Main fp=deep-nesting:702424eeadcea8e4
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-006 info/low deep-nesting [Style] fix=- @Main#8 sf=Main fp=deep-nesting:bbb65301b60de8c2
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-007 info/low deep-nesting [Style] fix=- @Main#10 sf=Main fp=deep-nesting:22228fec5e4a6ccc
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-008 info/low deep-nesting [Style] fix=- @Main#11 sf=Main fp=deep-nesting:1ec64ad40d38fb38
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-009 info/low deep-nesting [Style] fix=- @Main#12 sf=Main fp=deep-nesting:16978560da08b65e
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-010 info/low deep-nesting [Style] fix=- @Main#19 sf=Main fp=deep-nesting:7eec489fc0829149
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-011 info/low deep-nesting [Style] fix=- @Main#21 sf=Main fp=deep-nesting:61c365ca21255fb6
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-012 info/low deep-nesting [Style] fix=- @Main#23 sf=Main fp=deep-nesting:90538b0e267aa024
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-013 info/low deep-nesting [Style] fix=- @Main#25 sf=Main fp=deep-nesting:fb0be2e7d3c22513
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-014 info/low deep-nesting [Style] fix=- @Main#26 sf=Main fp=deep-nesting:48440addde26d68b
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-015 info/low deep-nesting [Style] fix=- @Main#27 sf=Main fp=deep-nesting:d3d5a8a8c9889d6b
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-016 info/low deep-nesting [Style] fix=- @Main#28 sf=Main fp=deep-nesting:ad4268918a8457fd
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-017 info/low deep-nesting [Style] fix=- @Main#29 sf=Main fp=deep-nesting:63ce805a84ce3fbb
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-018 info/low deep-nesting [Style] fix=- @CloseChrome#5 sf=CloseChrome fp=deep-nesting:2e4fb16a1019b605
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-019 info/low deep-nesting [Style] fix=- @CloseChrome#17 sf=CloseChrome fp=deep-nesting:98f0ca5544bbf442
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-020 info/low deep-nesting [Style] fix=- @CloseChrome#19 sf=CloseChrome fp=deep-nesting:aab841123c65313d
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-021 info/low deep-nesting [Style] fix=- @CloseChrome#20 sf=CloseChrome fp=deep-nesting:3b1b8dde7ed412b3
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-022 info/low deep-nesting [Style] fix=- @CloseChrome#22 sf=CloseChrome fp=deep-nesting:b4b5485b2a7e5338
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-023 info/low deep-nesting [Style] fix=- @CloseChrome#23 sf=CloseChrome fp=deep-nesting:a61e1da29b5aefbd
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-024 info/low deep-nesting [Style] fix=- @CloseChrome#25 sf=CloseChrome fp=deep-nesting:27d57b1a33df24f0
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-025 info/low deep-nesting [Style] fix=- @CloseChrome#26 sf=CloseChrome fp=deep-nesting:fa2176c3216254b6
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-026 info/low deep-nesting [Style] fix=- @CloseEdge#5 sf=CloseEdge fp=deep-nesting:f8cbd625c013778a
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-027 info/low deep-nesting [Style] fix=- @CloseEdge#17 sf=CloseEdge fp=deep-nesting:2f579f732e072f16
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-028 info/low deep-nesting [Style] fix=- @CloseEdge#19 sf=CloseEdge fp=deep-nesting:c990741eedd47c20
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-029 info/low deep-nesting [Style] fix=- @CloseEdge#20 sf=CloseEdge fp=deep-nesting:a796a6dfc5546cb4
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-030 info/low deep-nesting [Style] fix=- @CloseEdge#22 sf=CloseEdge fp=deep-nesting:a1668d06eb59a8a7
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-031 info/low deep-nesting [Style] fix=- @CloseEdge#23 sf=CloseEdge fp=deep-nesting:1d29b8cf3fc6ba7b
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-032 info/low deep-nesting [Style] fix=- @CloseEdge#25 sf=CloseEdge fp=deep-nesting:e2b8a58fa7991843
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-033 info/low deep-nesting [Style] fix=- @CloseEdge#26 sf=CloseEdge fp=deep-nesting:e1760ae0c1b50492
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-034 info/low deep-nesting [Style] fix=- @CloseFirefox#5 sf=CloseFirefox fp=deep-nesting:89e649adc5601619
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-035 info/low deep-nesting [Style] fix=- @CloseFirefox#17 sf=CloseFirefox fp=deep-nesting:9481b4f05fcb602f
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-036 info/low deep-nesting [Style] fix=- @CloseFirefox#19 sf=CloseFirefox fp=deep-nesting:93eeeb4b3028938b
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-037 info/low deep-nesting [Style] fix=- @CloseFirefox#20 sf=CloseFirefox fp=deep-nesting:48de0c69612cff15
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-038 info/low deep-nesting [Style] fix=- @CloseFirefox#22 sf=CloseFirefox fp=deep-nesting:99e02f486fcef280
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-039 info/low deep-nesting [Style] fix=- @CloseFirefox#23 sf=CloseFirefox fp=deep-nesting:db503222d1534f06
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-040 info/low deep-nesting [Style] fix=- @CloseFirefox#25 sf=CloseFirefox fp=deep-nesting:c12658705288e77a
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-041 info/low deep-nesting [Style] fix=- @CloseFirefox#26 sf=CloseFirefox fp=deep-nesting:7e7ae8a6648aee4e
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-042 info/medium duplicate-action [Style] fix=remove-block @Main#18 sf=Main fp=duplicate-action:a5d72b0de6cd3b59
+F-043 info/medium duplicate-action [Style] fix=remove-block @Main#26 sf=Main fp=duplicate-action:48440addde26d68b
+F-044 info/medium duplicate-action [Style] fix=remove-block @CloseChrome#14 sf=CloseChrome fp=duplicate-action:42c0c0badfc895fe
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-045 info/medium duplicate-action [Style] fix=remove-block @CloseEdge#14 sf=CloseEdge fp=duplicate-action:9ebaf6af1bc64d56
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-046 info/medium duplicate-action [Style] fix=remove-block @CloseFirefox#14 sf=CloseFirefox fp=duplicate-action:f789fc7daa3bd12c
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-047 warning/high empty-handler [Reliability] fix=insert-handler-log @Main#8 sf=Main fp=empty-handler:bbb65301b60de8c2
+F-048 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#5 sf=CloseChrome fp=empty-handler:2e4fb16a1019b605
+F-049 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#17 sf=CloseChrome fp=empty-handler:98f0ca5544bbf442
+F-050 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#20 sf=CloseChrome fp=empty-handler:3b1b8dde7ed412b3
+F-051 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#23 sf=CloseChrome fp=empty-handler:a61e1da29b5aefbd
+F-052 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#5 sf=CloseEdge fp=empty-handler:f8cbd625c013778a
+F-053 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#17 sf=CloseEdge fp=empty-handler:2f579f732e072f16
+F-054 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#20 sf=CloseEdge fp=empty-handler:a796a6dfc5546cb4
+F-055 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#23 sf=CloseEdge fp=empty-handler:1d29b8cf3fc6ba7b
+F-056 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#5 sf=CloseFirefox fp=empty-handler:89e649adc5601619
+F-057 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#17 sf=CloseFirefox fp=empty-handler:9481b4f05fcb602f
+F-058 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#20 sf=CloseFirefox fp=empty-handler:48de0c69612cff15
+F-059 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#23 sf=CloseFirefox fp=empty-handler:db503222d1534f06
+F-060 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#8 sf=Main fp=error-swallow:bbb65301b60de8c2
+F-061 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#5 sf=CloseChrome fp=error-swallow:2e4fb16a1019b605
+F-062 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#8 sf=CloseChrome fp=error-swallow:8e7c1fea24627aa3
+F-063 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#17 sf=CloseChrome fp=error-swallow:98f0ca5544bbf442
+F-064 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#20 sf=CloseChrome fp=error-swallow:3b1b8dde7ed412b3
+F-065 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#23 sf=CloseChrome fp=error-swallow:a61e1da29b5aefbd
+F-066 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#5 sf=CloseEdge fp=error-swallow:f8cbd625c013778a
+F-067 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#8 sf=CloseEdge fp=error-swallow:1058b46a213b5df6
+F-068 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#17 sf=CloseEdge fp=error-swallow:2f579f732e072f16
+F-069 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#20 sf=CloseEdge fp=error-swallow:a796a6dfc5546cb4
+F-070 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#23 sf=CloseEdge fp=error-swallow:1d29b8cf3fc6ba7b
+F-071 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#5 sf=CloseFirefox fp=error-swallow:89e649adc5601619
+F-072 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#8 sf=CloseFirefox fp=error-swallow:0e6daf2b83eb8c0c
+F-073 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#17 sf=CloseFirefox fp=error-swallow:9481b4f05fcb602f
+F-074 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#20 sf=CloseFirefox fp=error-swallow:48de0c69612cff15
+F-075 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#23 sf=CloseFirefox fp=error-swallow:db503222d1534f06
+F-076 warning/medium goto-antipattern [Logic] fix=- @Main#12 sf=Main fp=goto-antipattern:16978560da08b65e
+F-077 warning/medium goto-antipattern [Logic] fix=- @Main#29 sf=Main fp=goto-antipattern:63ce805a84ce3fbb
+F-078 info/low large-subflow [Style] fix=- @Main#0 sf=Main fp=large-subflow:7afed7352371bc0e
+    title: Large subflow
+    desc: Subflow 'Main' has 30 blocks (threshold: 5).
+F-079 info/low large-subflow [Style] fix=- @CloseChrome#0 sf=CloseChrome fp=large-subflow:5aae260cdab914b2
+    title: Large subflow
+    desc: Subflow 'CloseChrome' has 23 blocks (threshold: 5).
+F-080 info/low large-subflow [Style] fix=- @CloseEdge#0 sf=CloseEdge fp=large-subflow:cf717e8a5250908a
+    title: Large subflow
+    desc: Subflow 'CloseEdge' has 23 blocks (threshold: 5).
+F-081 info/low large-subflow [Style] fix=- @CloseFirefox#0 sf=CloseFirefox fp=large-subflow:1e96cf8f3fbb51f9
+    title: Large subflow
+    desc: Subflow 'CloseFirefox' has 23 blocks (threshold: 5).
+F-082 info/medium missing-delay [Reliability] fix=insert-delay @CloseChrome#12 sf=CloseChrome fp=missing-delay:058d6adfdb9073f9
+F-083 info/medium missing-delay [Reliability] fix=insert-delay @CloseEdge#12 sf=CloseEdge fp=missing-delay:715adf1a0d65ddcb
+F-084 info/medium missing-delay [Reliability] fix=insert-delay @CloseFirefox#12 sf=CloseFirefox fp=missing-delay:74ed4bced6d3a487
+F-085 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:702424eeadcea8e4
+F-086 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#4 sf=CloseChrome fp=missing-timeout:867def5f8e57f9ec
+F-087 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#12 sf=CloseChrome fp=missing-timeout:058d6adfdb9073f9
+F-088 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#4 sf=CloseEdge fp=missing-timeout:e43e859d1a01773d
+F-089 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#12 sf=CloseEdge fp=missing-timeout:715adf1a0d65ddcb
+F-090 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseFirefox#4 sf=CloseFirefox fp=missing-timeout:cc67ec88a53e1ca6
+F-091 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseFirefox#12 sf=CloseFirefox fp=missing-timeout:74ed4bced6d3a487
+F-092 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseChrome#4 sf=CloseChrome fp=unhandled-error:867def5f8e57f9ec
+F-093 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseEdge#4 sf=CloseEdge fp=unhandled-error:e43e859d1a01773d
+F-094 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseFirefox#4 sf=CloseFirefox fp=unhandled-error:cc67ec88a53e1ca6
+F-095 info/low unused-variable [Style] fix=remove-block @Main#0 sf=Main fp=unused-variable:c94d5cc590228f2d
+F-096 info/low unused-variable [Style] fix=remove-block @Main#25 sf=Main fp=unused-variable:5b1e4b02552616d9
+F-097 info/low unused-variable [Style] fix=remove-block @Main#36 sf=Main fp=unused-variable:a201fdd84941aa19
+F-098 info/low unused-variable [Style] fix=remove-block @CloseChrome#31 sf=CloseChrome fp=unused-variable:a3570bb08ccd5a0f
+F-099 info/low unused-variable [Style] fix=remove-block @CloseEdge#31 sf=CloseEdge fp=unused-variable:7d06aaf84b0d6d1a
+F-100 info/low unused-variable [Style] fix=remove-block @CloseFirefox#31 sf=CloseFirefox fp=unused-variable:0b8ffea30b8aaa54
+F-101 info/low wide-loop [Style] fix=- @CloseChrome#15 sf=CloseChrome fp=wide-loop:b151fea711f59275
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":8,"maxBlocks":3}
+F-102 info/low wide-loop [Style] fix=- @CloseEdge#15 sf=CloseEdge fp=wide-loop:5ebb2be92aa45e38
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":8,"maxBlocks":3}
+F-103 info/low wide-loop [Style] fix=- @CloseFirefox#15 sf=CloseFirefox fp=wide-loop:4d17e4e0baef9c92
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":8,"maxBlocks":3}
+
+=== disabled
+stats: {"errors":0,"warnings":38,"info":12,"blocksAnalyzed":100,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=74 final=3700/3700 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=37 order=f7de49357acad250 blocksChecked=100
+  raw findings: dead-code=4 duplicate-action=2 empty-handler=13 error-swallow=16 goto-antipattern=2 missing-timeout=7 unused-variable=6
+inventory: none
+findings: 50
+F-001 info/medium dead-code [Style] fix=remove-block @Main#33 sf=Main fp=dead-code:7051dd95ff4f1eb0
+F-002 info/medium dead-code [Style] fix=remove-block @CloseChrome#3 sf=CloseChrome fp=dead-code:c7d570773bd14c7a
+F-003 info/medium dead-code [Style] fix=remove-block @CloseEdge#3 sf=CloseEdge fp=dead-code:6bb4578ae8a20a4e
+F-004 info/medium dead-code [Style] fix=remove-block @CloseFirefox#3 sf=CloseFirefox fp=dead-code:26e5948c1af8ae8c
+F-005 info/medium duplicate-action [Style] fix=remove-block @Main#18 sf=Main fp=duplicate-action:a5d72b0de6cd3b59
+F-006 info/medium duplicate-action [Style] fix=remove-block @Main#26 sf=Main fp=duplicate-action:48440addde26d68b
+F-007 warning/high empty-handler [Reliability] fix=insert-handler-log @Main#8 sf=Main fp=empty-handler:bbb65301b60de8c2
+F-008 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#5 sf=CloseChrome fp=empty-handler:2e4fb16a1019b605
+F-009 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#17 sf=CloseChrome fp=empty-handler:98f0ca5544bbf442
+F-010 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#20 sf=CloseChrome fp=empty-handler:3b1b8dde7ed412b3
+F-011 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#23 sf=CloseChrome fp=empty-handler:a61e1da29b5aefbd
+F-012 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#5 sf=CloseEdge fp=empty-handler:f8cbd625c013778a
+F-013 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#17 sf=CloseEdge fp=empty-handler:2f579f732e072f16
+F-014 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#20 sf=CloseEdge fp=empty-handler:a796a6dfc5546cb4
+F-015 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#23 sf=CloseEdge fp=empty-handler:1d29b8cf3fc6ba7b
+F-016 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#5 sf=CloseFirefox fp=empty-handler:89e649adc5601619
+F-017 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#17 sf=CloseFirefox fp=empty-handler:9481b4f05fcb602f
+F-018 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#20 sf=CloseFirefox fp=empty-handler:48de0c69612cff15
+F-019 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#23 sf=CloseFirefox fp=empty-handler:db503222d1534f06
+F-020 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#8 sf=Main fp=error-swallow:bbb65301b60de8c2
+F-021 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#5 sf=CloseChrome fp=error-swallow:2e4fb16a1019b605
+F-022 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#8 sf=CloseChrome fp=error-swallow:8e7c1fea24627aa3
+F-023 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#17 sf=CloseChrome fp=error-swallow:98f0ca5544bbf442
+F-024 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#20 sf=CloseChrome fp=error-swallow:3b1b8dde7ed412b3
+F-025 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#23 sf=CloseChrome fp=error-swallow:a61e1da29b5aefbd
+F-026 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#5 sf=CloseEdge fp=error-swallow:f8cbd625c013778a
+F-027 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#8 sf=CloseEdge fp=error-swallow:1058b46a213b5df6
+F-028 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#17 sf=CloseEdge fp=error-swallow:2f579f732e072f16
+F-029 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#20 sf=CloseEdge fp=error-swallow:a796a6dfc5546cb4
+F-030 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#23 sf=CloseEdge fp=error-swallow:1d29b8cf3fc6ba7b
+F-031 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#5 sf=CloseFirefox fp=error-swallow:89e649adc5601619
+F-032 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#8 sf=CloseFirefox fp=error-swallow:0e6daf2b83eb8c0c
+F-033 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#17 sf=CloseFirefox fp=error-swallow:9481b4f05fcb602f
+F-034 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#20 sf=CloseFirefox fp=error-swallow:48de0c69612cff15
+F-035 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#23 sf=CloseFirefox fp=error-swallow:db503222d1534f06
+F-036 warning/medium goto-antipattern [Logic] fix=- @Main#12 sf=Main fp=goto-antipattern:16978560da08b65e
+F-037 warning/medium goto-antipattern [Logic] fix=- @Main#29 sf=Main fp=goto-antipattern:63ce805a84ce3fbb
+F-038 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:702424eeadcea8e4
+F-039 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#4 sf=CloseChrome fp=missing-timeout:867def5f8e57f9ec
+F-040 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#12 sf=CloseChrome fp=missing-timeout:058d6adfdb9073f9
+F-041 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#4 sf=CloseEdge fp=missing-timeout:e43e859d1a01773d
+F-042 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#12 sf=CloseEdge fp=missing-timeout:715adf1a0d65ddcb
+F-043 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseFirefox#4 sf=CloseFirefox fp=missing-timeout:cc67ec88a53e1ca6
+F-044 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseFirefox#12 sf=CloseFirefox fp=missing-timeout:74ed4bced6d3a487
+F-045 info/low unused-variable [Style] fix=remove-block @Main#0 sf=Main fp=unused-variable:c94d5cc590228f2d
+F-046 info/low unused-variable [Style] fix=remove-block @Main#25 sf=Main fp=unused-variable:5b1e4b02552616d9
+F-047 info/low unused-variable [Style] fix=remove-block @Main#36 sf=Main fp=unused-variable:a201fdd84941aa19
+F-048 info/low unused-variable [Style] fix=remove-block @CloseChrome#31 sf=CloseChrome fp=unused-variable:a3570bb08ccd5a0f
+F-049 info/low unused-variable [Style] fix=remove-block @CloseEdge#31 sf=CloseEdge fp=unused-variable:7d06aaf84b0d6d1a
+F-050 info/low unused-variable [Style] fix=remove-block @CloseFirefox#31 sf=CloseFirefox fp=unused-variable:0b8ffea30b8aaa54
+
+=== severity
+stats: {"errors":3,"warnings":45,"info":8,"blocksAnalyzed":100,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=90 final=4500/4500 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=100
+  raw findings: dead-code=4 duplicate-action=2 empty-handler=13 error-swallow=16 goto-antipattern=2 missing-delay=3 missing-timeout=7 unhandled-error=3 unused-variable=6
+inventory: none
+findings: 56
+  as default; severity changes: F-001 info->warning, F-002 info->warning, F-003 info->warning, F-004 info->warning, F-038 info->warning, F-039 info->warning, F-040 info->warning, F-048 warning->error, F-049 warning->error, F-050 warning->error
+
+=== autofixable
+stats: {"errors":0,"warnings":39,"info":15,"blocksAnalyzed":100,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=64 final=3200/3200 last="Wait zero"
+metrics: as default, healthScore=0
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=100
+  raw findings: dead-code=4 duplicate-action=2 empty-handler=13 error-swallow=16 missing-delay=3 missing-timeout=7 unhandled-error=3 unused-variable=6
+inventory: none
+findings: 54
+F-001 info/medium dead-code [Style] fix=remove-block @Main#33 sf=Main fp=dead-code:7051dd95ff4f1eb0
+F-002 info/medium dead-code [Style] fix=remove-block @CloseChrome#3 sf=CloseChrome fp=dead-code:c7d570773bd14c7a
+F-003 info/medium dead-code [Style] fix=remove-block @CloseEdge#3 sf=CloseEdge fp=dead-code:6bb4578ae8a20a4e
+F-004 info/medium dead-code [Style] fix=remove-block @CloseFirefox#3 sf=CloseFirefox fp=dead-code:26e5948c1af8ae8c
+F-005 info/medium duplicate-action [Style] fix=remove-block @Main#18 sf=Main fp=duplicate-action:a5d72b0de6cd3b59
+F-006 info/medium duplicate-action [Style] fix=remove-block @Main#26 sf=Main fp=duplicate-action:48440addde26d68b
+F-007 warning/high empty-handler [Reliability] fix=insert-handler-log @Main#8 sf=Main fp=empty-handler:bbb65301b60de8c2
+F-008 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#5 sf=CloseChrome fp=empty-handler:2e4fb16a1019b605
+F-009 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#17 sf=CloseChrome fp=empty-handler:98f0ca5544bbf442
+F-010 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#20 sf=CloseChrome fp=empty-handler:3b1b8dde7ed412b3
+F-011 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#23 sf=CloseChrome fp=empty-handler:a61e1da29b5aefbd
+F-012 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#5 sf=CloseEdge fp=empty-handler:f8cbd625c013778a
+F-013 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#17 sf=CloseEdge fp=empty-handler:2f579f732e072f16
+F-014 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#20 sf=CloseEdge fp=empty-handler:a796a6dfc5546cb4
+F-015 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#23 sf=CloseEdge fp=empty-handler:1d29b8cf3fc6ba7b
+F-016 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#5 sf=CloseFirefox fp=empty-handler:89e649adc5601619
+F-017 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#17 sf=CloseFirefox fp=empty-handler:9481b4f05fcb602f
+F-018 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#20 sf=CloseFirefox fp=empty-handler:48de0c69612cff15
+F-019 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseFirefox#23 sf=CloseFirefox fp=empty-handler:db503222d1534f06
+F-020 warning/medium error-swallow [Reliability] fix=insert-error-log @Main#8 sf=Main fp=error-swallow:bbb65301b60de8c2
+F-021 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#5 sf=CloseChrome fp=error-swallow:2e4fb16a1019b605
+F-022 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#8 sf=CloseChrome fp=error-swallow:8e7c1fea24627aa3
+F-023 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#17 sf=CloseChrome fp=error-swallow:98f0ca5544bbf442
+F-024 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#20 sf=CloseChrome fp=error-swallow:3b1b8dde7ed412b3
+F-025 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#23 sf=CloseChrome fp=error-swallow:a61e1da29b5aefbd
+F-026 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#5 sf=CloseEdge fp=error-swallow:f8cbd625c013778a
+F-027 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#8 sf=CloseEdge fp=error-swallow:1058b46a213b5df6
+F-028 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#17 sf=CloseEdge fp=error-swallow:2f579f732e072f16
+F-029 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#20 sf=CloseEdge fp=error-swallow:a796a6dfc5546cb4
+F-030 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#23 sf=CloseEdge fp=error-swallow:1d29b8cf3fc6ba7b
+F-031 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#5 sf=CloseFirefox fp=error-swallow:89e649adc5601619
+F-032 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#8 sf=CloseFirefox fp=error-swallow:0e6daf2b83eb8c0c
+F-033 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#17 sf=CloseFirefox fp=error-swallow:9481b4f05fcb602f
+F-034 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#20 sf=CloseFirefox fp=error-swallow:48de0c69612cff15
+F-035 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseFirefox#23 sf=CloseFirefox fp=error-swallow:db503222d1534f06
+F-036 info/medium missing-delay [Reliability] fix=insert-delay @CloseChrome#12 sf=CloseChrome fp=missing-delay:058d6adfdb9073f9
+F-037 info/medium missing-delay [Reliability] fix=insert-delay @CloseEdge#12 sf=CloseEdge fp=missing-delay:715adf1a0d65ddcb
+F-038 info/medium missing-delay [Reliability] fix=insert-delay @CloseFirefox#12 sf=CloseFirefox fp=missing-delay:74ed4bced6d3a487
+F-039 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:702424eeadcea8e4
+F-040 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#4 sf=CloseChrome fp=missing-timeout:867def5f8e57f9ec
+F-041 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#12 sf=CloseChrome fp=missing-timeout:058d6adfdb9073f9
+F-042 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#4 sf=CloseEdge fp=missing-timeout:e43e859d1a01773d
+F-043 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#12 sf=CloseEdge fp=missing-timeout:715adf1a0d65ddcb
+F-044 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseFirefox#4 sf=CloseFirefox fp=missing-timeout:cc67ec88a53e1ca6
+F-045 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseFirefox#12 sf=CloseFirefox fp=missing-timeout:74ed4bced6d3a487
+F-046 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseChrome#4 sf=CloseChrome fp=unhandled-error:867def5f8e57f9ec
+F-047 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseEdge#4 sf=CloseEdge fp=unhandled-error:e43e859d1a01773d
+F-048 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseFirefox#4 sf=CloseFirefox fp=unhandled-error:cc67ec88a53e1ca6
+F-049 info/low unused-variable [Style] fix=remove-block @Main#0 sf=Main fp=unused-variable:c94d5cc590228f2d
+F-050 info/low unused-variable [Style] fix=remove-block @Main#25 sf=Main fp=unused-variable:5b1e4b02552616d9
+F-051 info/low unused-variable [Style] fix=remove-block @Main#36 sf=Main fp=unused-variable:a201fdd84941aa19
+F-052 info/low unused-variable [Style] fix=remove-block @CloseChrome#31 sf=CloseChrome fp=unused-variable:a3570bb08ccd5a0f
+F-053 info/low unused-variable [Style] fix=remove-block @CloseEdge#31 sf=CloseEdge fp=unused-variable:7d06aaf84b0d6d1a
+F-054 info/low unused-variable [Style] fix=remove-block @CloseFirefox#31 sf=CloseFirefox fp=unused-variable:0b8ffea30b8aaa54

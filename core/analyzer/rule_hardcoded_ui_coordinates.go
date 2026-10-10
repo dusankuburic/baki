@@ -47,7 +47,9 @@ func (r *HardcodedUICoordinatesRule) Check(block *models.Block, ctx *RuleContext
 		return nil
 	}
 
-	for key, val := range block.Properties {
+	var keys [16]string
+	for _, key := range sortedPropertyKeys(keys[:0], block.Properties) {
+		val := block.Properties[key]
 		if !coordinateProp.MatchString(key) {
 			continue
 		}
@@ -102,4 +104,12 @@ func isNumericLiteral(s string) bool {
 	return true
 }
 
-func init() { registerRule(&HardcodedUICoordinatesRule{}) }
+func init() {
+	registerRule(&HardcodedUICoordinatesRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "replace-with-variable",
+		IntroducedIn: 1,
+		Revision:     2,
+		Stage:        StageStable,
+	})
+}

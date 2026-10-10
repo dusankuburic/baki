@@ -1,0 +1,262 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: synthetic_resource_open
+document: subflows=1 blocks=12 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":36,"info":1,"blocksAnalyzed":12,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=540/540 last="Loop body is too large"
+metrics: {"avgCognitive":0,"avgCyclomatic":1,"healthScore":0,"maxCognitive":0,"maxCyclomatic":1,"subflowCount":1,"totalBlocks":12,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":12,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=12
+  raw findings: file-op-no-error-handler=12 resource-leak=12 subflow-no-error-handler=1 unhandled-error=12
+inventory: none
+findings: 37
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=file-op-no-error-handler:6012b49e82aab387
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.OpenTextFile"}
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=file-op-no-error-handler:adc688595275796b
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.OpenTextFile"}
+F-003 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=file-op-no-error-handler:96c1774d1a26d05d
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.OpenTextFile"}
+F-004 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=file-op-no-error-handler:ec669fe9884eaf14
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.OpenTextFile"}
+F-005 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=file-op-no-error-handler:094280ff2477c61f
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.OpenTextFile"}
+F-006 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#5 sf=Main fp=file-op-no-error-handler:2ea2d6fb0e06fa47
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.OpenTextFile"}
+F-007 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=file-op-no-error-handler:c2ea30e8f072d8ad
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.OpenTextFile"}
+F-008 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=file-op-no-error-handler:8ada5c112da21355
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.OpenTextFile"}
+F-009 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=file-op-no-error-handler:46bf436c719ec5d5
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.OpenTextFile"}
+F-010 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=file-op-no-error-handler:aa638f29c42d21fd
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.OpenTextFile"}
+F-011 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#10 sf=Main fp=file-op-no-error-handler:bb436199fcc152ec
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.OpenTextFile"}
+F-012 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#11 sf=Main fp=file-op-no-error-handler:6a5c70d959718cb9
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.OpenTextFile"}
+F-013 warning/high resource-leak [Reliability] fix=insert-close @Main#0 sf=Main fp=resource-leak:0332e68fa8c3e061
+    title: Resource opened but never closed
+    desc: This action opens a file (stored in %handle0%) but no matching close action was found in the flow.
+    meta: {"resource":"file","variable":"handle0"}
+F-014 warning/high resource-leak [Reliability] fix=insert-close @Main#1 sf=Main fp=resource-leak:b80bc733e71d81d0
+    title: Resource opened but never closed
+    desc: This action opens a file (stored in %handle1%) but no matching close action was found in the flow.
+    meta: {"resource":"file","variable":"handle1"}
+F-015 warning/high resource-leak [Reliability] fix=insert-close @Main#2 sf=Main fp=resource-leak:690475948a7f2e3d
+    title: Resource opened but never closed
+    desc: This action opens a file (stored in %handle2%) but no matching close action was found in the flow.
+    meta: {"resource":"file","variable":"handle2"}
+F-016 warning/high resource-leak [Reliability] fix=insert-close @Main#3 sf=Main fp=resource-leak:8919d4cd3d1c7a0f
+    title: Resource opened but never closed
+    desc: This action opens a file (stored in %handle3%) but no matching close action was found in the flow.
+    meta: {"resource":"file","variable":"handle3"}
+F-017 warning/high resource-leak [Reliability] fix=insert-close @Main#4 sf=Main fp=resource-leak:5cb9a3cdb62052cc
+    title: Resource opened but never closed
+    desc: This action opens a file (stored in %handle4%) but no matching close action was found in the flow.
+    meta: {"resource":"file","variable":"handle4"}
+F-018 warning/high resource-leak [Reliability] fix=insert-close @Main#5 sf=Main fp=resource-leak:35d990e20c9c5b0b
+    title: Resource opened but never closed
+    desc: This action opens a file (stored in %handle5%) but no matching close action was found in the flow.
+    meta: {"resource":"file","variable":"handle5"}
+F-019 warning/high resource-leak [Reliability] fix=insert-close @Main#6 sf=Main fp=resource-leak:4b017ecd8e1a1cd9
+    title: Resource opened but never closed
+    desc: This action opens a file (stored in %handle6%) but no matching close action was found in the flow.
+    meta: {"resource":"file","variable":"handle6"}
+F-020 warning/high resource-leak [Reliability] fix=insert-close @Main#7 sf=Main fp=resource-leak:9491084aa8db45ed
+    title: Resource opened but never closed
+    desc: This action opens a file (stored in %handle7%) but no matching close action was found in the flow.
+    meta: {"resource":"file","variable":"handle7"}
+F-021 warning/high resource-leak [Reliability] fix=insert-close @Main#8 sf=Main fp=resource-leak:aae2be1b01d54625
+    title: Resource opened but never closed
+    desc: This action opens a file (stored in %handle8%) but no matching close action was found in the flow.
+    meta: {"resource":"file","variable":"handle8"}
+F-022 warning/high resource-leak [Reliability] fix=insert-close @Main#9 sf=Main fp=resource-leak:f3a6c43f6cf2eccc
+    title: Resource opened but never closed
+    desc: This action opens a file (stored in %handle9%) but no matching close action was found in the flow.
+    meta: {"resource":"file","variable":"handle9"}
+F-023 warning/high resource-leak [Reliability] fix=insert-close @Main#10 sf=Main fp=resource-leak:536c475f722e7f1e
+    title: Resource opened but never closed
+    desc: This action opens a file (stored in %handle10%) but no matching close action was found in the flow.
+    meta: {"resource":"file","variable":"handle10"}
+F-024 warning/high resource-leak [Reliability] fix=insert-close @Main#11 sf=Main fp=resource-leak:62e19ce90f5e1f2a
+    title: Resource opened but never closed
+    desc: This action opens a file (stored in %handle11%) but no matching close action was found in the flow.
+    meta: {"resource":"file","variable":"handle11"}
+F-025 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:6012b49e82aab387
+    title: Subflow without error handler
+    desc: Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-026 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=unhandled-error:6012b49e82aab387
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-027 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:adc688595275796b
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-028 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=unhandled-error:96c1774d1a26d05d
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-029 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=unhandled-error:ec669fe9884eaf14
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-030 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:094280ff2477c61f
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-031 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#5 sf=Main fp=unhandled-error:2ea2d6fb0e06fa47
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-032 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=unhandled-error:c2ea30e8f072d8ad
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-033 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=unhandled-error:8ada5c112da21355
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-034 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=unhandled-error:46bf436c719ec5d5
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-035 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=unhandled-error:aa638f29c42d21fd
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-036 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#10 sf=Main fp=unhandled-error:bb436199fcc152ec
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-037 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#11 sf=Main fp=unhandled-error:6a5c70d959718cb9
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+
+=== nil-settings
+stats: {"errors":0,"warnings":36,"info":1,"blocksAnalyzed":12,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=540/540 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=12
+  raw findings: file-op-no-error-handler=12 resource-leak=12 subflow-no-error-handler=1 unhandled-error=12
+inventory: none
+findings: 37
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":36,"info":2,"blocksAnalyzed":12,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=540/540 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=12
+  raw findings: file-op-no-error-handler=12 large-subflow=1 resource-leak=12 subflow-no-error-handler=1 unhandled-error=12
+inventory: none
+findings: 38
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=file-op-no-error-handler:6012b49e82aab387
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=file-op-no-error-handler:adc688595275796b
+F-003 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=file-op-no-error-handler:96c1774d1a26d05d
+F-004 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=file-op-no-error-handler:ec669fe9884eaf14
+F-005 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=file-op-no-error-handler:094280ff2477c61f
+F-006 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#5 sf=Main fp=file-op-no-error-handler:2ea2d6fb0e06fa47
+F-007 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=file-op-no-error-handler:c2ea30e8f072d8ad
+F-008 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=file-op-no-error-handler:8ada5c112da21355
+F-009 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=file-op-no-error-handler:46bf436c719ec5d5
+F-010 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=file-op-no-error-handler:aa638f29c42d21fd
+F-011 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#10 sf=Main fp=file-op-no-error-handler:bb436199fcc152ec
+F-012 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#11 sf=Main fp=file-op-no-error-handler:6a5c70d959718cb9
+F-013 info/low large-subflow [Style] fix=- @Main#0 sf=Main fp=large-subflow:6012b49e82aab387
+    title: Large subflow
+    desc: Subflow 'Main' has 12 blocks (threshold: 5).
+F-014 warning/high resource-leak [Reliability] fix=insert-close @Main#0 sf=Main fp=resource-leak:0332e68fa8c3e061
+F-015 warning/high resource-leak [Reliability] fix=insert-close @Main#1 sf=Main fp=resource-leak:b80bc733e71d81d0
+F-016 warning/high resource-leak [Reliability] fix=insert-close @Main#2 sf=Main fp=resource-leak:690475948a7f2e3d
+F-017 warning/high resource-leak [Reliability] fix=insert-close @Main#3 sf=Main fp=resource-leak:8919d4cd3d1c7a0f
+F-018 warning/high resource-leak [Reliability] fix=insert-close @Main#4 sf=Main fp=resource-leak:5cb9a3cdb62052cc
+F-019 warning/high resource-leak [Reliability] fix=insert-close @Main#5 sf=Main fp=resource-leak:35d990e20c9c5b0b
+F-020 warning/high resource-leak [Reliability] fix=insert-close @Main#6 sf=Main fp=resource-leak:4b017ecd8e1a1cd9
+F-021 warning/high resource-leak [Reliability] fix=insert-close @Main#7 sf=Main fp=resource-leak:9491084aa8db45ed
+F-022 warning/high resource-leak [Reliability] fix=insert-close @Main#8 sf=Main fp=resource-leak:aae2be1b01d54625
+F-023 warning/high resource-leak [Reliability] fix=insert-close @Main#9 sf=Main fp=resource-leak:f3a6c43f6cf2eccc
+F-024 warning/high resource-leak [Reliability] fix=insert-close @Main#10 sf=Main fp=resource-leak:536c475f722e7f1e
+F-025 warning/high resource-leak [Reliability] fix=insert-close @Main#11 sf=Main fp=resource-leak:62e19ce90f5e1f2a
+F-026 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:6012b49e82aab387
+F-027 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=unhandled-error:6012b49e82aab387
+F-028 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:adc688595275796b
+F-029 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=unhandled-error:96c1774d1a26d05d
+F-030 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=unhandled-error:ec669fe9884eaf14
+F-031 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:094280ff2477c61f
+F-032 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#5 sf=Main fp=unhandled-error:2ea2d6fb0e06fa47
+F-033 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=unhandled-error:c2ea30e8f072d8ad
+F-034 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=unhandled-error:8ada5c112da21355
+F-035 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=unhandled-error:46bf436c719ec5d5
+F-036 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=unhandled-error:aa638f29c42d21fd
+F-037 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#10 sf=Main fp=unhandled-error:bb436199fcc152ec
+F-038 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#11 sf=Main fp=unhandled-error:6a5c70d959718cb9
+
+=== disabled
+stats: {"errors":0,"warnings":24,"info":0,"blocksAnalyzed":12,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=9 final=444/444 last="Loop body is too large"
+metrics: as default, healthScore=4
+profiles: rules=37 order=f7de49357acad250 blocksChecked=12
+  raw findings: file-op-no-error-handler=12 resource-leak=12
+inventory: none
+findings: 24
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=file-op-no-error-handler:6012b49e82aab387
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=file-op-no-error-handler:adc688595275796b
+F-003 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=file-op-no-error-handler:96c1774d1a26d05d
+F-004 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=file-op-no-error-handler:ec669fe9884eaf14
+F-005 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=file-op-no-error-handler:094280ff2477c61f
+F-006 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#5 sf=Main fp=file-op-no-error-handler:2ea2d6fb0e06fa47
+F-007 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=file-op-no-error-handler:c2ea30e8f072d8ad
+F-008 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=file-op-no-error-handler:8ada5c112da21355
+F-009 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=file-op-no-error-handler:46bf436c719ec5d5
+F-010 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=file-op-no-error-handler:aa638f29c42d21fd
+F-011 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#10 sf=Main fp=file-op-no-error-handler:bb436199fcc152ec
+F-012 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#11 sf=Main fp=file-op-no-error-handler:6a5c70d959718cb9
+F-013 warning/high resource-leak [Reliability] fix=insert-close @Main#0 sf=Main fp=resource-leak:0332e68fa8c3e061
+F-014 warning/high resource-leak [Reliability] fix=insert-close @Main#1 sf=Main fp=resource-leak:b80bc733e71d81d0
+F-015 warning/high resource-leak [Reliability] fix=insert-close @Main#2 sf=Main fp=resource-leak:690475948a7f2e3d
+F-016 warning/high resource-leak [Reliability] fix=insert-close @Main#3 sf=Main fp=resource-leak:8919d4cd3d1c7a0f
+F-017 warning/high resource-leak [Reliability] fix=insert-close @Main#4 sf=Main fp=resource-leak:5cb9a3cdb62052cc
+F-018 warning/high resource-leak [Reliability] fix=insert-close @Main#5 sf=Main fp=resource-leak:35d990e20c9c5b0b
+F-019 warning/high resource-leak [Reliability] fix=insert-close @Main#6 sf=Main fp=resource-leak:4b017ecd8e1a1cd9
+F-020 warning/high resource-leak [Reliability] fix=insert-close @Main#7 sf=Main fp=resource-leak:9491084aa8db45ed
+F-021 warning/high resource-leak [Reliability] fix=insert-close @Main#8 sf=Main fp=resource-leak:aae2be1b01d54625
+F-022 warning/high resource-leak [Reliability] fix=insert-close @Main#9 sf=Main fp=resource-leak:f3a6c43f6cf2eccc
+F-023 warning/high resource-leak [Reliability] fix=insert-close @Main#10 sf=Main fp=resource-leak:536c475f722e7f1e
+F-024 warning/high resource-leak [Reliability] fix=insert-close @Main#11 sf=Main fp=resource-leak:62e19ce90f5e1f2a
+
+=== severity
+stats: {"errors":13,"warnings":24,"info":0,"blocksAnalyzed":12,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=540/540 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=12
+  raw findings: file-op-no-error-handler=12 resource-leak=12 subflow-no-error-handler=1 unhandled-error=12
+inventory: none
+findings: 37
+  as default; severity changes: F-025 info->error, F-026 warning->error, F-027 warning->error, F-028 warning->error, F-029 warning->error, F-030 warning->error, F-031 warning->error, F-032 warning->error, F-033 warning->error, F-034 warning->error, F-035 warning->error, F-036 warning->error, F-037 warning->error
+
+=== autofixable
+stats: {"errors":0,"warnings":36,"info":1,"blocksAnalyzed":12,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=8 final=384/384 last="Wait zero"
+metrics: as default, healthScore=0
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=12
+  raw findings: file-op-no-error-handler=12 resource-leak=12 subflow-no-error-handler=1 unhandled-error=12
+inventory: none
+findings: 37
+  as default; severity changes: none

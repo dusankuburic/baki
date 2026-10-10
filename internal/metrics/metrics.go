@@ -428,6 +428,7 @@ var registry = func() *prometheus.Registry {
 		eventsPublishedTotal,
 		eventSubscriberFailedTotal,
 		eventSubscriberDuration,
+		cacheStats,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)

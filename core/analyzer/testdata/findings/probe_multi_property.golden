@@ -1,0 +1,249 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: probe_multi_property
+document: subflows=1 blocks=7 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":4,"warnings":16,"info":9,"blocksAnalyzed":7,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=7 final=315/315 last="Loop body is too large"
+metrics: {"avgCognitive":0,"avgCyclomatic":1,"healthScore":0,"maxCognitive":0,"maxCyclomatic":1,"subflowCount":1,"totalBlocks":7,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":7,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=7
+  raw findings: command-injection-risk=1 file-op-no-error-handler=2 hardcoded-credential=3 hardcoded-filepath=1 hardcoded-ip=1 hardcoded-ui-coordinates=1 hardcoded-url=3 insecure-http-url=1 missing-retry=3 missing-timeout=4 path-traversal-risk=1 sql-injection-risk=1 subflow-no-error-handler=1 unhandled-error=6
+inventory: none
+findings: 29
+F-001 error/medium command-injection-risk [Security] fix=sanitize-command-vars @Main#5 sf=Main fp=command-injection-risk:3a7573c9b65cfd6d
+    title: Command injection risk
+    desc: A system command interpolates variables into the command line. A malicious value can chain additional shell commands.
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=file-op-no-error-handler:67046f6af93b5d63
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.Copy"}
+F-003 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=file-op-no-error-handler:153439f6b970259b
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.Move"}
+F-004 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#6 sf=Main fp=hardcoded-credential:ea9b2344c9593a16
+    title: Hardcoded credential detected
+    desc: A property value matches a known credential pattern.
+    meta: {"property":"Body"}
+F-005 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#6 sf=Main fp=hardcoded-credential:905bcc8741c905c8
+    title: Credential property set to literal value
+    desc: Property 'Password' of 'Email.SendEmail' carries a credential and is set to a literal value instead of a variable.
+    meta: {"property":"Password"}
+F-006 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#6 sf=Main fp=hardcoded-credential:01633bf4b541ecbe
+    title: Credential property set to literal value
+    desc: Property 'SmtpPassword' of 'Email.SendEmail' carries a credential and is set to a literal value instead of a variable.
+    meta: {"property":"SmtpPassword"}
+F-007 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#1 sf=Main fp=hardcoded-filepath:03e1a01956eff3ab
+    title: Hardcoded file path
+    desc: Property 'Destination' contains an absolute path: C:\data\in.txt
+    meta: {"path":"C:\\data\\in.txt","property":"Destination"}
+F-008 info/low hardcoded-ip [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-ip:91c0c05991db8ec6
+    title: Hardcoded IP address
+    desc: Property 'Host' contains a hardcoded IP address: 10.0.0.5
+    meta: {"ip":"10.0.0.5","property":"Host"}
+F-009 warning/medium hardcoded-ui-coordinates [Security] fix=replace-with-variable @Main#4 sf=Main fp=hardcoded-ui-coordinates:3790fa154bf47c7b
+    title: Hardcoded UI coordinate
+    desc: UI action targets a fixed screen coordinate (Left: 5). Any layout, resolution, or theme change makes the click miss its target silently.
+    meta: {"property":"Left"}
+F-010 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-url:8f55628b36ecb38c
+    title: Hardcoded URL
+    desc: Property 'Address' contains a hardcoded URL: http://insecure.example.com
+    meta: {"property":"Address","url":"http://insecure.example.com"}
+F-011 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-url:b918133dacb9a6f3
+    title: Hardcoded URL
+    desc: Property 'ApiAddress' contains a hardcoded URL: https://other.example.com/x
+    meta: {"property":"ApiAddress","url":"https://other.example.com/x"}
+F-012 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-url:9a9d76251c77eb85
+    title: Hardcoded URL
+    desc: Property 'Endpoint' contains a hardcoded URL: https://api.example.com/v1
+    meta: {"property":"Endpoint","url":"https://api.example.com/v1"}
+F-013 warning/medium insecure-http-url [Security] fix=upgrade-to-https @Main#0 sf=Main fp=insecure-http-url:8f55628b36ecb38c
+    title: Insecure HTTP URL
+    desc: Action targets a cleartext http:// URL. Any data sent (credentials, tokens, PII) travels unencrypted and is interceptable on the wire.
+    meta: {"property":"Address","url":"http://insecure.example.com"}
+F-014 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#0 sf=Main fp=missing-retry:01da3bae911a9a09
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.GoToWebPage"}
+F-015 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#3 sf=Main fp=missing-retry:6426fc05caea4d28
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"Database.ExecuteSqlStatement"}
+F-016 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#6 sf=Main fp=missing-retry:cfa918590e01f84e
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"Email.SendEmail"}
+F-017 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#0 sf=Main fp=missing-timeout:01da3bae911a9a09
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.GoToWebPage"}
+F-018 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#3 sf=Main fp=missing-timeout:6426fc05caea4d28
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"Database.ExecuteSqlStatement"}
+F-019 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#4 sf=Main fp=missing-timeout:a6f57b214a9d377f
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"UIAutomation.Click"}
+F-020 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#6 sf=Main fp=missing-timeout:cfa918590e01f84e
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"Email.SendEmail"}
+F-021 warning/medium path-traversal-risk [Security] fix=- @Main#2 sf=Main fp=path-traversal-risk:63ed6466e1759965
+    title: Path traversal risk
+    desc: File action uses a variable path. A caller-controlled value containing ../ sequences can escape the intended directory and read or overwrite arbitrary files.
+    meta: {"property":"Destination"}
+F-022 warning/high sql-injection-risk [Security] fix=parameterize-sql @Main#3 sf=Main fp=sql-injection-risk:17cafef14cac7a7e
+    title: SQL injection risk
+    desc: SQL statement interpolates variables directly. A malicious value could alter the query.
+    meta: {"property":"Query","tainted":false}
+F-023 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:01da3bae911a9a09
+    title: Subflow without error handler
+    desc: Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-024 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=unhandled-error:01da3bae911a9a09
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-025 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:67046f6af93b5d63
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-026 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=unhandled-error:153439f6b970259b
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-027 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=unhandled-error:6426fc05caea4d28
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-028 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:a6f57b214a9d377f
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-029 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=unhandled-error:cfa918590e01f84e
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+
+=== nil-settings
+stats: {"errors":4,"warnings":16,"info":9,"blocksAnalyzed":7,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=7 final=315/315 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=7
+  raw findings: command-injection-risk=1 file-op-no-error-handler=2 hardcoded-credential=3 hardcoded-filepath=1 hardcoded-ip=1 hardcoded-ui-coordinates=1 hardcoded-url=3 insecure-http-url=1 missing-retry=3 missing-timeout=4 path-traversal-risk=1 sql-injection-risk=1 subflow-no-error-handler=1 unhandled-error=6
+inventory: none
+findings: 29
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":4,"warnings":16,"info":10,"blocksAnalyzed":7,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=7 final=315/315 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=7
+  raw findings: command-injection-risk=1 file-op-no-error-handler=2 hardcoded-credential=3 hardcoded-filepath=1 hardcoded-ip=1 hardcoded-ui-coordinates=1 hardcoded-url=3 insecure-http-url=1 large-subflow=1 missing-retry=3 missing-timeout=4 path-traversal-risk=1 sql-injection-risk=1 subflow-no-error-handler=1 unhandled-error=6
+inventory: none
+findings: 30
+F-001 error/medium command-injection-risk [Security] fix=sanitize-command-vars @Main#5 sf=Main fp=command-injection-risk:3a7573c9b65cfd6d
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=file-op-no-error-handler:67046f6af93b5d63
+F-003 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=file-op-no-error-handler:153439f6b970259b
+F-004 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#6 sf=Main fp=hardcoded-credential:ea9b2344c9593a16
+F-005 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#6 sf=Main fp=hardcoded-credential:905bcc8741c905c8
+F-006 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#6 sf=Main fp=hardcoded-credential:01633bf4b541ecbe
+F-007 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#1 sf=Main fp=hardcoded-filepath:03e1a01956eff3ab
+F-008 info/low hardcoded-ip [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-ip:91c0c05991db8ec6
+F-009 warning/medium hardcoded-ui-coordinates [Security] fix=replace-with-variable @Main#4 sf=Main fp=hardcoded-ui-coordinates:3790fa154bf47c7b
+F-010 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-url:8f55628b36ecb38c
+F-011 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-url:b918133dacb9a6f3
+F-012 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-url:9a9d76251c77eb85
+F-013 warning/medium insecure-http-url [Security] fix=upgrade-to-https @Main#0 sf=Main fp=insecure-http-url:8f55628b36ecb38c
+F-014 info/low large-subflow [Style] fix=- @Main#0 sf=Main fp=large-subflow:01da3bae911a9a09
+    title: Large subflow
+    desc: Subflow 'Main' has 7 blocks (threshold: 5).
+F-015 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#0 sf=Main fp=missing-retry:01da3bae911a9a09
+F-016 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#3 sf=Main fp=missing-retry:6426fc05caea4d28
+F-017 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#6 sf=Main fp=missing-retry:cfa918590e01f84e
+F-018 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#0 sf=Main fp=missing-timeout:01da3bae911a9a09
+F-019 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#3 sf=Main fp=missing-timeout:6426fc05caea4d28
+F-020 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#4 sf=Main fp=missing-timeout:a6f57b214a9d377f
+F-021 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#6 sf=Main fp=missing-timeout:cfa918590e01f84e
+F-022 warning/medium path-traversal-risk [Security] fix=- @Main#2 sf=Main fp=path-traversal-risk:63ed6466e1759965
+F-023 warning/high sql-injection-risk [Security] fix=parameterize-sql @Main#3 sf=Main fp=sql-injection-risk:17cafef14cac7a7e
+F-024 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:01da3bae911a9a09
+F-025 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=unhandled-error:01da3bae911a9a09
+F-026 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:67046f6af93b5d63
+F-027 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=unhandled-error:153439f6b970259b
+F-028 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=unhandled-error:6426fc05caea4d28
+F-029 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:a6f57b214a9d377f
+F-030 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=unhandled-error:cfa918590e01f84e
+
+=== disabled
+stats: {"errors":1,"warnings":10,"info":8,"blocksAnalyzed":7,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=6 final=259/259 last="Loop body is too large"
+metrics: as default, healthScore=40
+profiles: rules=37 order=f7de49357acad250 blocksChecked=7
+  raw findings: command-injection-risk=1 file-op-no-error-handler=2 hardcoded-filepath=1 hardcoded-ip=1 hardcoded-ui-coordinates=1 hardcoded-url=3 insecure-http-url=1 missing-retry=3 missing-timeout=4 path-traversal-risk=1 sql-injection-risk=1
+inventory: none
+findings: 19
+F-001 error/medium command-injection-risk [Security] fix=sanitize-command-vars @Main#5 sf=Main fp=command-injection-risk:3a7573c9b65cfd6d
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=file-op-no-error-handler:67046f6af93b5d63
+F-003 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=file-op-no-error-handler:153439f6b970259b
+F-004 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#1 sf=Main fp=hardcoded-filepath:03e1a01956eff3ab
+F-005 info/low hardcoded-ip [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-ip:91c0c05991db8ec6
+F-006 warning/medium hardcoded-ui-coordinates [Security] fix=replace-with-variable @Main#4 sf=Main fp=hardcoded-ui-coordinates:3790fa154bf47c7b
+F-007 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-url:8f55628b36ecb38c
+F-008 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-url:b918133dacb9a6f3
+F-009 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-url:9a9d76251c77eb85
+F-010 warning/medium insecure-http-url [Security] fix=upgrade-to-https @Main#0 sf=Main fp=insecure-http-url:8f55628b36ecb38c
+F-011 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#0 sf=Main fp=missing-retry:01da3bae911a9a09
+F-012 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#3 sf=Main fp=missing-retry:6426fc05caea4d28
+F-013 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#6 sf=Main fp=missing-retry:cfa918590e01f84e
+F-014 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#0 sf=Main fp=missing-timeout:01da3bae911a9a09
+F-015 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#3 sf=Main fp=missing-timeout:6426fc05caea4d28
+F-016 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#4 sf=Main fp=missing-timeout:a6f57b214a9d377f
+F-017 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#6 sf=Main fp=missing-timeout:cfa918590e01f84e
+F-018 warning/medium path-traversal-risk [Security] fix=- @Main#2 sf=Main fp=path-traversal-risk:63ed6466e1759965
+F-019 warning/high sql-injection-risk [Security] fix=parameterize-sql @Main#3 sf=Main fp=sql-injection-risk:17cafef14cac7a7e
+
+=== severity
+stats: {"errors":11,"warnings":13,"info":5,"blocksAnalyzed":7,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=7 final=315/315 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=7
+  raw findings: command-injection-risk=1 file-op-no-error-handler=2 hardcoded-credential=3 hardcoded-filepath=1 hardcoded-ip=1 hardcoded-ui-coordinates=1 hardcoded-url=3 insecure-http-url=1 missing-retry=3 missing-timeout=4 path-traversal-risk=1 sql-injection-risk=1 subflow-no-error-handler=1 unhandled-error=6
+inventory: none
+findings: 29
+  as default; severity changes: F-010 info->warning, F-011 info->warning, F-012 info->warning, F-023 info->error, F-024 warning->error, F-025 warning->error, F-026 warning->error, F-027 warning->error, F-028 warning->error, F-029 warning->error
+
+=== autofixable
+stats: {"errors":4,"warnings":15,"info":9,"blocksAnalyzed":7,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=224/224 last="Wait zero"
+metrics: as default, healthScore=0
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=7
+  raw findings: command-injection-risk=1 file-op-no-error-handler=2 hardcoded-credential=3 hardcoded-filepath=1 hardcoded-ip=1 hardcoded-ui-coordinates=1 hardcoded-url=3 insecure-http-url=1 missing-retry=3 missing-timeout=4 sql-injection-risk=1 subflow-no-error-handler=1 unhandled-error=6
+inventory: none
+findings: 28
+F-001 error/medium command-injection-risk [Security] fix=sanitize-command-vars @Main#5 sf=Main fp=command-injection-risk:3a7573c9b65cfd6d
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=file-op-no-error-handler:67046f6af93b5d63
+F-003 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=file-op-no-error-handler:153439f6b970259b
+F-004 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#6 sf=Main fp=hardcoded-credential:ea9b2344c9593a16
+F-005 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#6 sf=Main fp=hardcoded-credential:905bcc8741c905c8
+F-006 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#6 sf=Main fp=hardcoded-credential:01633bf4b541ecbe
+F-007 info/low hardcoded-filepath [Portability] fix=replace-with-variable @Main#1 sf=Main fp=hardcoded-filepath:03e1a01956eff3ab
+F-008 info/low hardcoded-ip [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-ip:91c0c05991db8ec6
+F-009 warning/medium hardcoded-ui-coordinates [Security] fix=replace-with-variable @Main#4 sf=Main fp=hardcoded-ui-coordinates:3790fa154bf47c7b
+F-010 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-url:8f55628b36ecb38c
+F-011 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-url:b918133dacb9a6f3
+F-012 info/low hardcoded-url [Portability] fix=replace-with-variable @Main#0 sf=Main fp=hardcoded-url:9a9d76251c77eb85
+F-013 warning/medium insecure-http-url [Security] fix=upgrade-to-https @Main#0 sf=Main fp=insecure-http-url:8f55628b36ecb38c
+F-014 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#0 sf=Main fp=missing-retry:01da3bae911a9a09
+F-015 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#3 sf=Main fp=missing-retry:6426fc05caea4d28
+F-016 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#6 sf=Main fp=missing-retry:cfa918590e01f84e
+F-017 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#0 sf=Main fp=missing-timeout:01da3bae911a9a09
+F-018 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#3 sf=Main fp=missing-timeout:6426fc05caea4d28
+F-019 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#4 sf=Main fp=missing-timeout:a6f57b214a9d377f
+F-020 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#6 sf=Main fp=missing-timeout:cfa918590e01f84e
+F-021 warning/high sql-injection-risk [Security] fix=parameterize-sql @Main#3 sf=Main fp=sql-injection-risk:17cafef14cac7a7e
+F-022 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=subflow-no-error-handler:01da3bae911a9a09
+F-023 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#0 sf=Main fp=unhandled-error:01da3bae911a9a09
+F-024 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=unhandled-error:67046f6af93b5d63
+F-025 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#2 sf=Main fp=unhandled-error:153439f6b970259b
+F-026 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#3 sf=Main fp=unhandled-error:6426fc05caea4d28
+F-027 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#4 sf=Main fp=unhandled-error:a6f57b214a9d377f
+F-028 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=unhandled-error:cfa918590e01f84e

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"pad-analyzer/internal/api/render"
+	"pad-core/analyzer"
+	"pad-core/export"
 	"pad-core/logger"
 	"pad-core/models"
 )
@@ -86,6 +88,8 @@ type ciWebhookRequest struct {
 
 // ciWebhookResponse is the summary shape returned for format="summary". It
 // carries enough for a CI step to gate AND to print a compact job log.
+// Errors/Warnings/Info count every finding (report.Stats); Passed is decided
+// on the gating ones only.
 type ciWebhookResponse struct {
 	FlowID   string `json:"flowId"`
 	FlowName string `json:"flowName,omitempty"`
@@ -94,6 +98,8 @@ type ciWebhookResponse struct {
 	Errors   int    `json:"errors"`
 	Warnings int    `json:"warnings"`
 	Info     int    `json:"info"`
+	// Preview counts the findings of preview rules: reported, never gating.
+	Preview int `json:"preview,omitempty"`
 	// Findings is omitted unless format="report".
 	Findings []models.Finding `json:"findings,omitempty"`
 }
@@ -103,14 +109,18 @@ type ciWebhookResponse struct {
 // this handler does its own signature check. The flow is loaded without per-user authz (like the
 // public share viewer): the runner needs only the flow ID + the secret.
 // @Summary      CI webhook
-// @Description  Token-authenticated CI integration endpoint.
+// @Description  Analyzes a stored flow for a CI runner. Authenticated by an HMAC-SHA256 of "<X-Baki-Timestamp>." + body under PAD_CI_WEBHOOK_SECRET, sent as X-Baki-Signature: sha256=<hex>; the timestamp must be within 5 minutes. Body: {flowId, failOn, format}. failOn is error (default), warning, info or none; findings of preview rules never fail the gate and are counted in `preview`. format "summary" (default) returns {flowId, flowName, passed, gate, errors, warnings, info, preview}, "report" adds the findings, "sarif" returns the SARIF 2.1.0 document instead (application/sarif+json).
 // @Tags         analysis
 // @Accept       json
-// @Produce      json
-// @Success      200 {object} map[string]interface{} "OK"
+// @Produce      json,application/sarif+json
+// @Param        request body object true "{flowId, failOn, format}"
+// @Success      200 {object} map[string]interface{} "Gate verdict, or the SARIF document"
 // @Failure      400 {object} map[string]string "Bad Request"
-// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      401 {object} map[string]string "Missing or invalid signature or timestamp"
+// @Failure      404 {object} map[string]string "Flow not found"
+// @Failure      413 {object} map[string]string "Body over 1 MiB"
 // @Failure      500 {object} map[string]string "Error"
+// @Failure      503 {object} map[string]string "PAD_CI_WEBHOOK_SECRET not set"
 // @Router       /api/integrations/ci [post]
 func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request) {
 	if h.ciSecret == "" {
@@ -192,21 +202,29 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 		h.dashboard.RecordAnalysis(r.Context(), doc, report)
 	}
 
-	// SARIF format short-circuits the summary envelope.
+	// SARIF format short-circuits the summary envelope: the same document as
+	// analyze-raw and /api/analysis/export/sarif, as rendered.
 	if format == "sarif" {
-		render.JSON(w, sarifFor(report))
+		body, f, err := h.exports.Render("sarif", export.Input{Report: report, Doc: doc}, export.Options{})
+		if err != nil {
+			render.Error(w, err, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", f.MIME)
+		_, _ = w.Write(body)
 		return
 	}
 
-	passed := gatePasses(report, gate)
+	counts := analyzer.CountGating(report.Findings)
 	resp := ciWebhookResponse{
 		FlowID:   doc.ID,
 		FlowName: doc.Name,
-		Passed:   passed,
+		Passed:   gatePasses(counts, gate),
 		Gate:     gate,
 		Errors:   report.Stats.Errors,
 		Warnings: report.Stats.Warnings,
 		Info:     report.Stats.Info,
+		Preview:  counts.Preview,
 	}
 	if format == "report" {
 		resp.Findings = report.Findings
@@ -216,76 +234,19 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 	render.JSON(w, resp)
 }
 
-// gatePasses reports whether the report clears the requested severity gate.
-// gate="none" always passes (report-only); "error" passes with zero errors;
-// "warning" requires zero errors AND zero warnings; "info" requires a clean report.
-func gatePasses(report *models.AnalysisReport, gate string) bool {
-	if report == nil {
-		return true
-	}
+// gatePasses reports whether the gating findings (analyzer.CountGating: preview
+// findings never gate) clear the requested severity gate. gate="none" always
+// passes (report-only); "error" passes with zero errors; "warning" requires
+// zero errors AND zero warnings; "info" requires a clean report.
+func gatePasses(c analyzer.GateCounts, gate string) bool {
 	switch gate {
 	case "none":
 		return true
 	case "warning":
-		return report.Stats.Errors == 0 && report.Stats.Warnings == 0
+		return c.Errors == 0 && c.Warnings == 0
 	case "info":
-		return report.Stats.Errors == 0 && report.Stats.Warnings == 0 && report.Stats.Info == 0
-	case "error", "":
-		return report.Stats.Errors == 0
-	default:
-		return report.Stats.Errors == 0
-	}
-}
-
-// sarifFor builds a minimal SARIF 2.1.0 document from a report. CI runners that
-// already consume bakicli SARIF can point at this endpoint with format="sarif".
-func sarifFor(report *models.AnalysisReport) map[string]any {
-	results := make([]map[string]any, 0, len(report.Findings))
-	for _, f := range report.Findings {
-		entry := map[string]any{
-			"ruleId": f.RuleID,
-			"level":  sarifLevel(string(f.Severity)),
-			"message": map[string]string{
-				"text": f.Title,
-			},
-		}
-		// Finding carries no source line, so mark the location logically by the
-		// subflow + block rather than a physical region.
-		if f.SubflowID != "" || f.BlockID != "" {
-			entry["locations"] = []map[string]any{
-				{
-					"logicalLocation": map[string]string{
-						"name": f.BlockID,
-					},
-				},
-			}
-		}
-		results = append(results, entry)
-	}
-	return map[string]any{
-		"$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/cs01/schemas/sarif-schema-2.1.0.json",
-		"version": "2.1.0",
-		"runs": []map[string]any{
-			{
-				"tool": map[string]any{
-					"driver": map[string]any{
-						"name":    "baki",
-						"version": "ci-webhook",
-					},
-				},
-				"results": results,
-			},
-		},
-	}
-}
-
-func sarifLevel(severity string) string {
-	switch severity {
-	case "error":
-		return "error"
-	case "warning":
-		return "warning"
-	default:
-		return "note"
+		return c.Errors == 0 && c.Warnings == 0 && c.Info == 0
+	default: // "error", "" and unknown gates
+		return c.Errors == 0
 	}
 }

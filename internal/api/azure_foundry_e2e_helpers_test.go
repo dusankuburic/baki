@@ -354,10 +354,11 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	authzSvc := service.NewAuthzService(store, orgSvc)
 	docProv := service.NewCloudDocumentProvider(store)
 	bus := eventbus.New(nil, 0)
-	flowSvc := service.NewFlowService(events, settings, docProv, store, authzSvc, nil, service.WithFlowEvents(bus))
+	cachedAnalyzer := service.NewDefaultAnalyzer()
+	flowSvc := service.NewFlowService(events, settings, docProv, store, authzSvc, nil, service.WithFlowEvents(bus), service.WithAnalyzer(cachedAnalyzer))
 	scopes := service.NewFlowScopeResolver(store, authzSvc)
 	libSvc := service.NewLibraryService(store, bus, authzSvc, scopes)
-	analysisSvc, err := service.NewAnalysisService(events, settings, nil, service.AnalysisOptions{})
+	analysisSvc, err := service.NewAnalysisService(events, settings, nil, service.AnalysisOptions{Analyzer: cachedAnalyzer})
 	if err != nil {
 		t.Fatalf("analysis service: %v", err)
 	}
@@ -410,7 +411,7 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 		NewFlowHandler(flowSvc, docProv, store, security, shareSvc, auditRec),
 		NewLibraryHandler(libSvc, store, security, auditRec),
 		NewChatHandler(chatSvc, flowSvc, security, auditRec),
-		NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, store, security, service.NewWebhookNotifier(nil), mail, "", service.NewPolicyService(store), service.NewGovernanceAlertService(store), triageSvc, service.NewCommentService(store, triageSvc, nil), shareSvc, auditRec),
+		NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, store, security, service.NewWebhookNotifier(nil), mail, "", service.NewPolicyService(store), service.NewGovernanceAlertService(store), triageSvc, service.NewCommentService(store, triageSvc, nil), shareSvc, auditRec, exportSvc),
 		NewDashboardHandler(dashboardSvc, security),
 		NewExportHandler(exportSvc, flowSvc, analysisSvc, security, auditRec),
 		NewAuthHandler(service.NewSessionService(newMockTokenStore()), store, security, nil, service.NewIdentityService(store, nil), mail, service.NewAuthService(store, mail), service.NewAccountLifecycleService(store, nil, nil), service.NewAPITokenService(store), auditRec),

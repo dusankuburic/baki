@@ -10,6 +10,7 @@ import {useAuthStore, useOrgStore} from '@/stores'
 import {settingsApi} from '@/api'
 import {useToast} from '@/components/shared/Toast'
 import {useAsync} from '@/hooks/useAsync'
+import PreviewBadge from '@/components/analyzer/PreviewBadge'
 import clsx from 'clsx'
 
 // SCOPE_DEPLOYMENT is the sentinel for "the whole deployment" in the scope
@@ -237,6 +238,15 @@ export default function RulesPanel() {
                     <span className="text-2xs font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-surface-3 text-text-tertiary">
                       {rule.category}
                     </span>
+                    {rule.stage === 'preview' && <PreviewBadge of="rule" />}
+                    {rule.kind === 'library' && (
+                      <span
+                        className="text-2xs font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-surface-3 text-text-tertiary"
+                        title={t('rules.libraryKindHint')}
+                      >
+                        {t('rules.libraryKind')}
+                      </span>
+                    )}
                     {/* An org admin needs to tell "we decided this" from "this is
                       just the default" — the resolver merges per rule, so most
                       rules in an org scope are inherited. */}

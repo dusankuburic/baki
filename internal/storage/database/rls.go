@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"pad-analyzer/internal/platform/reqtx"
 	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/storage/interfaces"
 )
@@ -51,16 +52,22 @@ type RLSScope struct {
 // the caller must End the scope with Commit or Rollback when the request is done.
 func WithLazyRLS(ctx context.Context, b RLSBeginner, userID string, failOpen bool) (context.Context, *RLSScope) {
 	s := &RLSScope{beginner: b, userID: userID, base: ctx, failOpen: failOpen}
-	return context.WithValue(ctx, rlsTxKey, s), s
+	return withScope(ctx, s), s
 }
 
 // WithRLSTx returns a new context carrying an already-started RLS transaction (the caller owns commit
 // and rollback). A nil tx clears any scope on ctx.
 func WithRLSTx(ctx context.Context, tx *sql.Tx) context.Context {
 	if tx == nil {
-		return context.WithValue(ctx, rlsTxKey, (*RLSScope)(nil))
+		return withScope(ctx, nil)
 	}
-	return context.WithValue(ctx, rlsTxKey, &RLSScope{started: true, tx: tx})
+	return withScope(ctx, &RLSScope{started: true, tx: tx})
+}
+
+// withScope returns ctx carrying s (nil: none) and its answer to reqtx.ReadsFiltered, for the layers that must not
+// import this package.
+func withScope(ctx context.Context, s *RLSScope) context.Context {
+	return reqtx.WithReadFilter(context.WithValue(ctx, rlsTxKey, s), s.filtered)
 }
 
 func rlsScopeFromContext(ctx context.Context) *RLSScope {
@@ -175,7 +182,12 @@ func EnsureRLS(ctx context.Context) error {
 // open (and commit) a transaction of their own: inside a scope they must not. A fail-open failed scope no
 // longer counts; an ended scope still does (no own pool transaction for a request that is over).
 func hasRLSTx(ctx context.Context) bool {
-	s := rlsScopeFromContext(ctx)
+	return rlsScopeFromContext(ctx).filtered()
+}
+
+// filtered is hasRLSTx's answer for the scope: its reads do not fall through to the pool. A transaction a storage
+// method opened for itself (WithRLSTx) counts too; only storage code runs under one.
+func (s *RLSScope) filtered() bool {
 	if s == nil {
 		return false
 	}

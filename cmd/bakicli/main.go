@@ -9,14 +9,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"maps"
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -83,12 +84,13 @@ func printUsage() {
 	fmt.Fprintf(w, `bakicli %s — static analysis for Power Automate Desktop flows
 
 Usage:
-  bakicli [flags] <file.txt | folder | ->        Analyze (default) and gate
+  bakicli [flags] <file.txt | folder | -> ...    Analyze (default) and gate
   bakicli fix [flags] <file|folder> ...          Apply auto-fixers (dry-run unless -apply)
   bakicli diff [flags] <old.txt> <new.txt>       Compare two flows structurally
   bakicli diff-reports [flags] <old> <new>       Compare two saved JSON reports
   bakicli rules [-format json] [rule-id]         List or describe rules
   bakicli rules test [flags] <rules.json> <flow> Try custom rules against a flow
+  bakicli rules lint [flags] <rules.json>        Check a custom-rules file (or a .bakirc.json)
   bakicli suppressions [flags] <file|folder|->   List inline pad-ignore directives, flag stale ones
   bakicli report [flags] [report.json]           Record a run on a PAD Analyzer server (CI webhook)
   bakicli init [-o .bakirc.json]                 Generate a starter config
@@ -97,24 +99,27 @@ Usage:
   bakicli --version                              Print version
   bakicli <subcommand> -h                        Flags of a subcommand
 
-Output formats (-format): text, json, sarif, junit, csv, html
+Output formats (-format): %s
   -report-json <path> additionally writes the JSON report from the same run.
+  Several flows (one per path) are analyzed together with -format text or json;
+  their cross-flow library findings (preview) never gate. Flags go before the
+  paths: a flag after a path is an error (exit 2).
 
 Exit codes:
   0  gate passed
   1  gate failed: findings at/above -fail-on, policy violated, stale suppressions
      with -fail-on-stale, or the output could not be written
-  2  usage error, invalid config/policy, parse error, or file not found
+  2  usage error, invalid config/policy/baseline, parse error, or file not found
      (no report is produced — do not upload the output file)
 
 Analyze flags:
-`, version)
+`, version, strings.Join(outputFormats(), ", "))
 	flag.PrintDefaults()
 }
 
 func runAnalyze() {
 	failOn := flag.String("fail-on", "error", "minimum severity that causes exit 1: error, warning, info")
-	format := flag.String("format", "text", "output format: text, json, sarif, junit, csv, html")
+	format := flag.String("format", textFormat, "output format: "+strings.Join(outputFormats(), ", "))
 	rulesFlag := flag.String("rules", "", "comma-separated rule IDs to run (empty = all)")
 	customRulesFlag := flag.String("custom-rules", "", "path to custom rules JSON file")
 	policyFlag := flag.String("policy", "", "policy JSON file; gate on its rules + gateSeverity (overrides -fail-on)")
@@ -130,8 +135,16 @@ func runAnalyze() {
 	flag.Parse()
 
 	if flag.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: bakicli [flags] <file.txt|folder|->")
+		fmt.Fprintln(os.Stderr, "usage: bakicli [flags] <file.txt|folder|-> [more flows ...]")
 		os.Exit(2)
+	}
+	// Flag parsing stops at the first path, so a flag after it would be read
+	// as a flow (and was silently ignored before several paths existed).
+	for _, arg := range flag.Args() {
+		if len(arg) > 1 && strings.HasPrefix(arg, "-") {
+			fmt.Fprintf(os.Stderr, "bakicli: flags must come before the paths: %s (a path that starts with '-' can be written ./%s)\n", arg, arg)
+			os.Exit(2)
+		}
 	}
 
 	// -policy short-circuits the baseline ratchet; reject the combination up front.
@@ -177,193 +190,199 @@ func runAnalyze() {
 		fmt.Fprintf(os.Stderr, "bakicli: unknown -fail-on value %q (%s)\n", *failOn, failOnUsage)
 		os.Exit(2)
 	}
-
-	validFormats := map[string]bool{"text": true, "json": true, "sarif": true, "junit": true, "csv": true, "html": true}
-	if !validFormats[*format] {
-		fmt.Fprintf(os.Stderr, "bakicli: unknown -format value %q (must be text, json, sarif, junit, csv, or html)\n", *format)
+	if !isValidFormat(*format) {
+		fmt.Fprintf(os.Stderr, "bakicli: unknown -format value %q (must be %s)\n", *format, formatChoices())
+		os.Exit(2)
+	}
+	targets := flag.Args()
+	if err := checkOutput(*format, targets, isTerminal(os.Stdout)); err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli: %v\n", err)
 		os.Exit(2)
 	}
 
-	target := flag.Arg(0)
-
-	if !*quiet {
-		fmt.Fprintf(os.Stderr, "bakicli: analyzing %s\n", target)
-	}
-
-	doc, err := load(target)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "bakicli: parse error: %v\n", err)
-		os.Exit(2)
-	}
-
-	rules := selectRules(*rulesFlag, *customRulesFlag, inlineRulesOf(loadedCfg))
-	settings := buildSettingsFromConfig(loadedCfg)
-	report := analyzer.RunAnalysis(doc, rules, settings, nil)
-
-	// A policy is the authoritative gate (its rules + GateSeverity), replacing
-	// -fail-on; load up front so a bad file fails fast.
-	var policyResult *models.PolicyResult
+	// Every input that can fail with exit 2 is read before anything is written,
+	// so exit 2 never leaves a report behind.
+	var policy *models.Policy
 	if *policyFlag != "" {
-		policy, err := loadPolicy(*policyFlag)
+		p, err := loadPolicy(*policyFlag)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "bakicli: read policy: %v\n", err)
 			os.Exit(2)
 		}
-		policyResult = analyzer.EvaluatePolicy(report, policy)
+		policy = &p
+	}
+	var baseline baselineFile
+	if *baselineFlag != "" && *updateBaseline == "" { // -update-baseline wins and may be rewriting a broken file
+		var err error
+		if baseline, err = loadBaseline(*baselineFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli: %v\n", err)
+			os.Exit(2)
+		}
+	}
+
+	rules, libraryRules := selectRules(*rulesFlag, *customRulesFlag, inlineRulesOf(loadedCfg))
+	if len(rules) == 0 && len(targets) < 2 {
+		fmt.Fprintf(os.Stderr, "bakicli: warning: -rules %q selects only library rules, which run across two or more flows\n", *rulesFlag)
+	}
+	settings := buildSettingsFromConfig(loadedCfg)
+
+	runs := make([]flowRun, 0, len(targets))
+	for _, target := range targets {
+		if !*quiet {
+			fmt.Fprintf(os.Stderr, "bakicli: analyzing %s\n", target)
+		}
+		doc, err := load(target)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli: parse error: %v\n", err)
+			os.Exit(2)
+		}
+		run := flowRun{target: target, doc: doc, report: analyzer.RunAnalysis(doc, rules, settings, nil)}
+		if policy != nil {
+			// A policy is the authoritative gate (its rules + GateSeverity), replacing -fail-on.
+			run.policy = analyzer.EvaluatePolicy(run.report, *policy)
+		}
+		if *newFromRev != "" {
+			if run.revKeys, err = keysAtRev(target, *newFromRev, rules, settings); err != nil {
+				fmt.Fprintf(os.Stderr, "bakicli: -new-from-rev: %v\n", err)
+				os.Exit(2)
+			}
+		}
+		runs = append(runs, run)
+	}
+	var library *models.LibraryReport
+	if len(runs) > 1 {
+		docs := make([]*models.FlowDocument, len(runs))
+		for i, r := range runs {
+			docs[i] = r.doc
+		}
+		library = analyzer.AnalyzeLibrary(context.Background(), docs, libraryRules, settings)
 	}
 
 	// Structured formats carry the policy verdict and analysed root so SARIF/JUnit/JSON can say why the gate failed.
-	exportOpts := export.Options{Policy: policyResult}
-	exportOpts.SourceRoot, exportOpts.SourceRootURI = sarifSourceRoot(target)
-	jsonReport := cliReport{AnalysisReport: report, Policy: policyResult}
-
+	exportOpts := export.Options{ToolVersion: version}
+	if len(runs) == 1 {
+		exportOpts.Policy = runs[0].policy
+		exportOpts.SourceRoot, exportOpts.SourceRootURI = sarifSourceRoot(targets[0])
+	}
 	if *reportJSON != "" {
-		if err := writeJSONFile(*reportJSON, jsonReport); err != nil {
+		if err := writeReportJSON(*reportJSON, runs, library, exportOpts); err != nil {
 			fmt.Fprintf(os.Stderr, "bakicli: write -report-json: %v\n", err)
 			os.Exit(1)
 		}
 	}
-
-	switch *format {
-	case "json":
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(jsonReport); err != nil {
-			fmt.Fprintf(os.Stderr, "error writing output: %v\n", err)
-			os.Exit(1)
-		}
-	case "sarif":
-		out, err := export.ReportToSARIFWithOptions(report, doc, exportOpts)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error writing output: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stdout, "%s\n", out)
-	case "junit":
-		out, err := export.ReportToJUnitWithOptions(report, doc, exportOpts)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error writing output: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stdout, "%s\n", out)
-	case "csv":
-		out, err := export.ReportToCSV(report, doc)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error writing output: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stdout, "%s", out)
-	case "html":
-		fmt.Fprintf(os.Stdout, "%s", export.ReportToHTML(report, doc))
-	default:
-		printText(report, *quiet)
-		if policyResult != nil {
-			printPolicyResult(policyResult, *quiet)
-		}
+	if err := renderReport(*format, runs, library, exportOpts, *quiet); err != nil {
+		fmt.Fprintf(os.Stderr, "error writing output: %v\n", err)
+		os.Exit(1)
 	}
 
-	if policyResult != nil {
-		if !policyResult.Passed {
-			os.Exit(1)
-		}
-		return
-	}
-
-	if *updateBaseline != "" {
-		if err := writeBaseline(*updateBaseline, report); err != nil {
-			fmt.Fprintf(os.Stderr, "bakicli: failed to write baseline: %v\n", err)
-			os.Exit(1)
-		}
-		if !*quiet {
-			fmt.Printf("baseline written: %d findings → %s\n", len(report.Findings), *updateBaseline)
-		}
-		return
-	}
-
-	// -new-from-rev: the ratchet without a committed artifact; reuses
-	// ComputeDrift so "new" means what it means for -baseline.
-	if *newFromRev != "" {
-		oldFiles, err := flowFilesAtRev(target, *newFromRev)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "bakicli: -new-from-rev: %v\n", err)
-			os.Exit(2)
-		}
-		var keys []string
-		if len(oldFiles) > 0 {
-			oldDoc, perr := parser.ParseFiles(oldFiles, filepath.Base(target))
-			if perr != nil {
-				fmt.Fprintf(os.Stderr, "bakicli: -new-from-rev: parse at %s: %v\n", *newFromRev, perr)
-				os.Exit(2)
-			}
-			oldReport := analyzer.RunAnalysis(oldDoc, rules, settings, nil)
-			seen := map[string]bool{}
-			for _, f := range oldReport.Findings {
-				k := f.Fingerprint
-				if k == "" {
-					k = f.Key()
-				}
-				if !seen[k] {
-					seen[k] = true
-					keys = append(keys, k)
-				}
-			}
-		}
-		drift := analyzer.ComputeDrift(report.FlowID, report, keys)
-		if !*quiet {
-			fmt.Printf("new since %s: %d (%d errors, %d warnings, %d info) out of %d total\n",
-				*newFromRev, len(drift.New), drift.NewErrors, drift.NewWarnings, drift.NewInfo, len(report.Findings))
-		}
-		if shouldFail(drift.New, *failOn) {
-			os.Exit(1)
-		}
-		return
-	}
-
-	// -baseline: gate on NEW findings only (the ratchet); a missing baseline
-	// gates on everything.
-	if *baselineFlag != "" {
-		keys, hadBaseline, err := loadBaseline(*baselineFlag)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "bakicli: %v\n", err)
-			os.Exit(1)
-		}
-		if !hadBaseline {
-			if !*quiet {
-				fmt.Printf("no baseline at %s — gating on all findings; run with -update-baseline %s to accept the current state\n", *baselineFlag, *baselineFlag)
-			}
-			if shouldFail(report.Findings, *failOn) {
-				os.Exit(1)
-			}
-			return
-		}
-		drift := analyzer.ComputeDrift(report.FlowID, report, keys)
-		if !*quiet {
-			fmt.Printf("baseline drift: %d new (%d errors, %d warnings, %d info) out of %d total\n",
-				len(drift.New), drift.NewErrors, drift.NewWarnings, drift.NewInfo, len(report.Findings))
-		}
-		if shouldFail(drift.New, *failOn) {
-			os.Exit(1)
-		}
-		return
-	}
-
-	if shouldFail(report.Findings, *failOn) {
+	if gateFailed(runs, *format, *failOn, analyzeGate{
+		policy: policy != nil, updateBaseline: *updateBaseline, newFromRev: *newFromRev,
+		baselinePath: *baselineFlag, baseline: baseline, quiet: *quiet,
+	}) {
 		os.Exit(1)
 	}
 }
 
-// cliReport is what -format json/-report-json emit: an AnalysisReport plus the policy verdict.
-type cliReport struct {
-	*models.AnalysisReport
-	Policy *models.PolicyResult `json:"policy,omitempty"`
+// analyzeGate is how an analyze run decides its exit code.
+type analyzeGate struct {
+	policy         bool
+	updateBaseline string
+	newFromRev     string
+	baselinePath   string
+	baseline       baselineFile
+	quiet          bool
 }
 
-func writeJSONFile(path string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
+// gateFailed applies the run's gate after the report was written and prints
+// its informational lines (stdout beside text, stderr otherwise). A write
+// failure of -update-baseline exits 1 itself.
+func gateFailed(runs []flowRun, format, failOn string, g analyzeGate) bool {
+	info := infoOut(format)
+	var findings, newFindings []models.Finding
+	for _, r := range runs {
+		findings = append(findings, r.report.Findings...)
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o600) // #nosec G306 -- report file, operator path
+	switch {
+	case g.policy:
+		for _, r := range runs {
+			if !r.policy.Passed {
+				return true
+			}
+		}
+		return false
+
+	case g.updateBaseline != "":
+		if err := writeBaseline(g.updateBaseline, baselineKeys(runs)); err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli: failed to write baseline: %v\n", err)
+			os.Exit(1)
+		}
+		if !g.quiet {
+			fmt.Fprintf(info, "baseline written: %d findings → %s\n", len(findings), g.updateBaseline)
+		}
+		return false
+
+	case g.newFromRev != "":
+		// The ratchet without a committed artifact; reuses ComputeDrift so
+		// "new" means what it means for -baseline.
+		var errs, warns, infos int
+		for _, r := range runs {
+			drift := analyzer.ComputeDrift(r.report.FlowID, r.report, r.revKeys)
+			newFindings = append(newFindings, drift.New...)
+			errs, warns, infos = errs+drift.NewErrors, warns+drift.NewWarnings, infos+drift.NewInfo
+		}
+		if !g.quiet {
+			fmt.Fprintf(info, "new since %s: %d (%d errors, %d warnings, %d info) out of %d total%s\n",
+				g.newFromRev, len(newFindings), errs, warns, infos, len(findings), previewNote(newFindings))
+		}
+		return shouldFail(newFindings, failOn)
+
+	case g.baselinePath != "":
+		// Gate on NEW findings only (the ratchet); a missing baseline gates on everything.
+		if !g.baseline.Found {
+			if !g.quiet {
+				fmt.Fprintf(info, "no baseline at %s — gating on all findings; run with -update-baseline %s to accept the current state\n", g.baselinePath, g.baselinePath)
+			}
+			return shouldFail(findings, failOn)
+		}
+		var errs, warns, infos, newer int
+		for _, r := range runs {
+			keys := g.baseline.Keys
+			if len(runs) > 1 {
+				keys = keysInScope(keys, r.target) // see baselineKeys
+			}
+			drift := analyzer.ComputeDrift(r.report.FlowID, r.report, keys)
+			newFindings = append(newFindings, drift.New...)
+			errs, warns, infos = errs+drift.NewErrors, warns+drift.NewWarnings, infos+drift.NewInfo
+			newer += newerRuleFindings(g.baseline, r.report, drift)
+		}
+		if !g.quiet {
+			fmt.Fprintf(info, "baseline drift: %d new (%d errors, %d warnings, %d info) out of %d total%s\n",
+				len(newFindings), errs, warns, infos, len(findings), previewNote(newFindings))
+			if g.baseline.RuleSet != nil {
+				fmt.Fprintf(info, "%d findings from rules newer than this baseline\n", newer)
+			}
+		}
+		return shouldFail(newFindings, failOn)
+	}
+	return shouldFail(findings, failOn)
+}
+
+// keysAtRev analyzes target as it was at rev with the same rules and returns
+// its finding keys (fingerprints, legacy keys as fallback); a target that did
+// not exist at rev has none.
+func keysAtRev(target, rev string, rules []analyzer.Rule, settings *models.AppSettings) ([]string, error) {
+	oldFiles, err := flowFilesAtRev(target, rev)
+	if err != nil {
+		return nil, err
+	}
+	if len(oldFiles) == 0 {
+		return nil, nil
+	}
+	oldDoc, err := parser.ParseFiles(oldFiles, filepath.Base(target))
+	if err != nil {
+		return nil, fmt.Errorf("parse at %s: %w", rev, err)
+	}
+	return findingKeys(analyzer.RunAnalysis(oldDoc, rules, settings, nil)), nil
 }
 
 // sarifSourceRoot derives SourceRoot/SourceRootURI: the analysed root relative
@@ -415,7 +434,7 @@ func loadPolicy(path string) (models.Policy, error) {
 	return p, nil
 }
 
-func printPolicyResult(res *models.PolicyResult, quiet bool) {
+func printPolicyResult(w io.Writer, res *models.PolicyResult, quiet bool) {
 	verdict := "PASS"
 	if !res.Passed {
 		verdict = "FAIL"
@@ -428,13 +447,16 @@ func printPolicyResult(res *models.PolicyResult, quiet bool) {
 	if res.Waived > 0 {
 		extra = fmt.Sprintf("  waived: %d", res.Waived)
 	}
-	fmt.Printf("policy %q: %s — %d violation(s) (errors: %d  warnings: %d  info: %d)%s\n",
+	if res.Preview > 0 {
+		extra += fmt.Sprintf("  preview (not gated): %d", res.Preview)
+	}
+	fmt.Fprintf(w, "policy %q: %s — %d violation(s) (errors: %d  warnings: %d  info: %d)%s\n",
 		name, verdict, len(res.Violations), res.Errors, res.Warnings, res.Info, extra)
 	if quiet {
 		return
 	}
 	for _, v := range res.Violations {
-		fmt.Printf("  [%s] %s (rule: %s)\n", strings.ToUpper(string(v.Severity)), v.Title, v.RuleID)
+		fmt.Fprintf(w, "  [%s] %s (rule: %s)\n", strings.ToUpper(string(v.Severity)), v.Title, v.RuleID)
 	}
 }
 
@@ -460,166 +482,37 @@ func load(target string) (*models.FlowDocument, error) {
 	return parser.ParseText(string(data), filepath.Base(target), info.Size())
 }
 
-// loadFolder loads every .txt/.pad flow under dir recursively, honoring
-// .bakiignore; keys are slash-paths relative to dir so same-named flows stay distinct.
+// loadFolder loads the folder's file set (parser.TreeFolder: every .txt/.pad
+// under dir, outside dot directories and .bakiignore matches, symlinks
+// skipped, reads confined to dir) as one flow; keys are slash paths relative
+// to dir so same-named flows stay distinct.
 func loadFolder(dir string) (*models.FlowDocument, error) {
-	ignorePatterns := loadIgnorePatterns(dir)
-	files := make(map[string]string)
-
-	// Read via os.Root, never the walked path: ParseError.Snippet embeds
-	// verbatim source into the uploaded SARIF — a symlink must not escape dir (TOCTOU, gosec G122).
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return nil, fmt.Errorf("open folder: %w", err)
-	}
-	defer func() { _ = root.Close() }()
-
-	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, werr error) error {
-		if werr != nil {
-			return werr
-		}
-		rel, rerr := filepath.Rel(dir, path)
-		if rerr != nil {
-			return rerr
-		}
-		rel = filepath.ToSlash(rel)
-
-		if d.IsDir() {
-			if rel == "." {
-				return nil
-			}
-			// Skip dot-directories (.git, .github, …): never operator-intended.
-			if strings.HasPrefix(d.Name(), ".") {
-				return fs.SkipDir
-			}
-			// Prune ignored directories so "vendor/" costs nothing on a large tree.
-			if shouldIgnoreFile(rel+"/", ignorePatterns) || shouldIgnoreFile(rel, ignorePatterns) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-
-		ext := strings.ToLower(filepath.Ext(d.Name()))
-		if ext != ".txt" && ext != ".pad" {
-			return nil
-		}
-		if shouldIgnoreFile(rel, ignorePatterns) {
-			return nil
-		}
-		// Symlinks are skipped: WalkDir reports them via Lstat.
-		if d.Type()&fs.ModeSymlink != 0 {
-			return nil
-		}
-		f, readErr := root.Open(rel)
-		if readErr != nil {
-			return fmt.Errorf("read %s: %w", rel, readErr)
-		}
-		data, readErr := io.ReadAll(f)
-		_ = f.Close()
-		if readErr != nil {
-			return fmt.Errorf("read %s: %w", rel, readErr)
-		}
-		files[rel] = string(data)
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("read folder: %w", err)
-	}
-	if len(files) == 0 {
-		return nil, fmt.Errorf("no .txt or .pad files found in %s", dir)
-	}
-	doc, perr := parser.ParseFiles(files, filepath.Base(dir))
-	if perr != nil {
-		return nil, perr
-	}
-	// ParseFiles is path-less; record the folder so output paths read naturally.
-	doc.FilePath = dir
-	return doc, nil
+	warnIgnoreFile(dir)
+	return parser.ParseFolderTree(dir, parser.TreeFolder())
 }
 
-func selectRules(rulesFlag, customRulesPath string, inline []analyzer.CustomRuleConfig) []analyzer.Rule {
-	all := analyzer.AllRules()
-	if customRulesPath != "" {
-		custom, warnings, err := analyzer.LoadCustomRules(customRulesPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "bakicli: -custom-rules: %v\n", err)
-			os.Exit(2)
-		}
-		for _, w := range warnings {
-			fmt.Fprintf(os.Stderr, "bakicli: -custom-rules: warning: %s\n", w)
-		}
-		all = append(all, custom...)
-	}
-	// Inline rules from the config file. A bad entry is SKIPPED WITH A WARNING,
-	// matching LoadCustomRules — never silently.
-	for i, cfg := range inline {
-		r, err := analyzer.NewCustomRule(cfg)
-		if err != nil {
-			id := cfg.ID
-			if id == "" {
-				id = fmt.Sprintf("#%d (no id)", i)
-			}
-			fmt.Fprintf(os.Stderr, "bakicli: config customRulesInline: entry %d (rule %q) skipped: %v\n", i, id, err)
-			continue
-		}
-		all = append(all, r)
-	}
-	if rulesFlag == "" {
-		return all
-	}
-	wanted := make(map[string]bool)
-	for _, id := range strings.Split(rulesFlag, ",") {
-		wanted[strings.TrimSpace(id)] = true
-	}
-	var out []analyzer.Rule
-	for _, r := range all {
-		if wanted[r.ID()] {
-			out = append(out, r)
-		}
-	}
-	if len(out) == 0 {
-		fmt.Fprintf(os.Stderr, "bakicli: -rules %q matched no known rules\n", rulesFlag)
-		os.Exit(2)
-	}
-	return out
-}
+// warnedIgnoreFiles holds the folders whose .bakiignore was checked, so watch
+// (which reloads on every save) warns once.
+var warnedIgnoreFiles sync.Map
 
-// isValidFailOn reports whether s is a gate threshold; validated everywhere
-// because shouldFail silently falls back to error-gating on a typo. "none" is
-// rejected — the GitHub Action maps it to info itself.
-func isValidFailOn(s string) bool {
-	switch s {
-	case string(models.SeverityError), string(models.SeverityWarning), string(models.SeverityInfo):
-		return true
-	default:
-		return false
+// warnIgnoreFile warns on stderr about .bakiignore patterns that match nothing
+// the way they are written: path.Match rejects them, or a backslash (an
+// escape, not a separator) is in them.
+func warnIgnoreFile(dir string) {
+	key := dir
+	if abs, err := filepath.Abs(dir); err == nil {
+		key = abs
 	}
-}
-
-const failOnUsage = "must be error, warning, or info"
-
-func shouldFail(findings []models.Finding, threshold string) bool {
-	rank := map[string]int{
-		string(models.SeverityInfo):    1,
-		string(models.SeverityWarning): 2,
-		string(models.SeverityError):   3,
+	if _, done := warnedIgnoreFiles.LoadOrStore(key, true); done {
+		return
 	}
-	min := rank[threshold]
-	if min == 0 {
-		min = rank[string(models.SeverityError)]
-	}
-	for _, f := range findings {
-		r, known := rank[string(f.Severity)]
-		if !known {
-			// Fail CLOSED on an unrecognised severity: a plain lookup would rank
-			// it below every threshold and never trip the gate.
-			return true
-		}
-		if r >= min {
-			return true
+	for _, p := range parser.ReadIgnoreFile(dir, ".bakiignore") {
+		if _, err := path.Match(p, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli: warning: %s: .bakiignore pattern %q is malformed and matches nothing (use '/' between directories)\n", dir, p)
+		} else if strings.Contains(p, `\`) {
+			fmt.Fprintf(os.Stderr, "bakicli: warning: %s: .bakiignore pattern %q has a backslash, which escapes the next character; use '/' between directories\n", dir, p)
 		}
 	}
-	return false
 }
 
 // ---- bakicli watch ----
@@ -693,18 +586,16 @@ func runWatch(args []string) {
 			os.Exit(2)
 		}
 	}
-	var baselineKeys []string
-	hadBaseline := false
+	var baseline baselineFile
 	if *baselineFlag != "" {
 		var err error
-		baselineKeys, hadBaseline, err = loadBaseline(*baselineFlag)
-		if err != nil {
+		if baseline, err = loadBaseline(*baselineFlag); err != nil {
 			fmt.Fprintf(os.Stderr, "bakicli watch: %v\n", err)
 			os.Exit(2)
 		}
 	}
 
-	rules := selectRules(*rulesFlag, *customRulesFlag, inlineRulesOf(watchCfg))
+	rules, _ := selectRules(*rulesFlag, *customRulesFlag, inlineRulesOf(watchCfg))
 	files, err := expandFixTargets(target)
 	if err != nil || len(files) == 0 {
 		fmt.Fprintf(os.Stderr, "bakicli watch: %s: no .txt/.pad files to watch\n", target)
@@ -730,14 +621,14 @@ func runWatch(args []string) {
 		switch {
 		case *policyFlag != "":
 			res := analyzer.EvaluatePolicy(report, policy)
-			printPolicyResult(res, *quiet)
+			printPolicyResult(os.Stdout, res, *quiet)
 			if res.Passed {
 				fmt.Fprintln(os.Stderr, "  → gate PASS (policy)")
 			} else {
 				fmt.Fprintln(os.Stderr, "  → gate FAIL (policy)")
 			}
 		case *baselineFlag != "":
-			if !hadBaseline {
+			if !baseline.Found {
 				if shouldFail(report.Findings, *failOn) {
 					fmt.Fprintf(os.Stderr, "  → gate FAIL (no baseline yet; ≥%s)\n", *failOn)
 				} else {
@@ -745,8 +636,11 @@ func runWatch(args []string) {
 				}
 				return
 			}
-			drift := analyzer.ComputeDrift(report.FlowID, report, baselineKeys)
-			fmt.Fprintf(os.Stderr, "  baseline drift: %d new / %d total\n", len(drift.New), len(report.Findings))
+			drift := analyzer.ComputeDrift(report.FlowID, report, baseline.Keys)
+			fmt.Fprintf(os.Stderr, "  baseline drift: %d new / %d total%s\n", len(drift.New), len(report.Findings), previewNote(drift.New))
+			if baseline.RuleSet != nil {
+				fmt.Fprintf(os.Stderr, "  %d findings from rules newer than this baseline\n", newerRuleFindings(baseline, report, drift))
+			}
 			if shouldFail(drift.New, *failOn) {
 				fmt.Fprintf(os.Stderr, "  → gate FAIL (new findings ≥%s)\n", *failOn)
 			} else {
@@ -819,45 +713,6 @@ func separator() string {
 	return strings.Repeat("-", 60)
 }
 
-// loadBaseline reads a []string of finding fingerprints; a missing file
-// returns (nil, false, nil) — "no baseline yet".
-func loadBaseline(path string) (keys []string, hadBaseline bool, err error) {
-	data, readErr := os.ReadFile(path) // #nosec G304 -- baseline path is a CLI argument supplied by the operator
-	if readErr != nil {
-		if os.IsNotExist(readErr) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("read baseline %s: %w", path, readErr)
-	}
-	var ks []string
-	if err := json.Unmarshal(data, &ks); err != nil {
-		return nil, false, fmt.Errorf("invalid baseline JSON %s: %w", path, err)
-	}
-	return ks, true, nil
-}
-
-// writeBaseline captures the run's finding fingerprints; the keys are
-// content-stable, so re-imports don't trip the gate.
-func writeBaseline(path string, report *models.AnalysisReport) error {
-	keys := make([]string, 0, len(report.Findings))
-	seen := make(map[string]bool, len(report.Findings))
-	for _, f := range report.Findings {
-		k := f.Fingerprint
-		if k == "" {
-			k = f.Key()
-		}
-		if !seen[k] {
-			seen[k] = true
-			keys = append(keys, k)
-		}
-	}
-	data, err := json.MarshalIndent(keys, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644) // #nosec G306 -- baseline is a shared, repo-committed artifact; group-readable is intended
-}
-
 func printText(report *models.AnalysisReport, quiet bool) {
 	if !quiet {
 		fmt.Printf("Analysis complete in %dms | blocks: %d | health: ",
@@ -872,20 +727,20 @@ func printText(report *models.AnalysisReport, quiet bool) {
 		if report.Stats.Suppressed > 0 {
 			fmt.Printf("  (suppressed: %d)", report.Stats.Suppressed)
 		}
-		fmt.Print("\n\n")
+		fmt.Printf("%s\n\n", previewNote(report.Findings))
 	}
 
 	// Rule-skip warnings (safeCheck recovered a panic) go to stderr so CI sees
 	// them without polluting the stdout report stream.
-	if report.Stats.RulesSkipped > 0 {
-		fmt.Fprintf(os.Stderr,
-			"warning: %d rule evaluation(s) were skipped due to internal errors; findings may be incomplete.\n",
-			report.Stats.RulesSkipped)
-	}
+	warnSkippedRules(report)
 
-	for _, f := range report.Findings {
-		sev := strings.ToUpper(string(f.Severity))
-		fmt.Printf("[%s] %s\n", sev, f.Title)
+	for i := range report.Findings {
+		f := &report.Findings[i]
+		tag := "[" + strings.ToUpper(string(f.Severity)) + "]"
+		if !analyzer.Gates(f) {
+			tag += "[PREVIEW]"
+		}
+		fmt.Printf("%s %s\n", tag, f.Title)
 		fmt.Printf("  subflow: %s  block: %s\n", f.SubflowID, f.BlockID)
 		if f.Description != "" {
 			fmt.Printf("  %s\n", f.Description)
@@ -980,7 +835,8 @@ func runFix(args []string) {
 	}
 }
 
-// expandFixTargets resolves a path arg to files: dirs walked recursively for .txt/.pad honoring .bakiignore; files as-is.
+// expandFixTargets resolves a path arg to files: a folder gives analyze's
+// file set (parser.TreeFolder, sorted), a file itself.
 func expandFixTargets(path string) ([]string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -989,27 +845,14 @@ func expandFixTargets(path string) ([]string, error) {
 	if !info.IsDir() {
 		return []string{path}, nil
 	}
-	ignorePatterns := loadIgnorePatterns(path)
-	var files []string
-	err = filepath.Walk(path, func(p string, fi os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if fi.IsDir() {
-			return nil
-		}
-		rel, _ := filepath.Rel(path, p)
-		if shouldIgnoreFile(rel, ignorePatterns) {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(p))
-		if ext == ".txt" || ext == ".pad" {
-			files = append(files, p)
-		}
-		return nil
-	})
+	warnIgnoreFile(path)
+	keys, err := parser.ListFolder(path, parser.TreeFolder())
 	if err != nil {
 		return nil, err
+	}
+	files := make([]string, len(keys))
+	for i, k := range keys {
+		files[i] = filepath.Join(path, filepath.FromSlash(k))
 	}
 	return files, nil
 }
@@ -1297,200 +1140,6 @@ func blockName(b models.BlockComparison) string {
 	return "(unknown)"
 }
 
-// ---- bakicli rules ----
-
-func runRules(args []string) {
-	fs := flag.NewFlagSet("rules", flag.ExitOnError)
-	format := fs.String("format", "text", "output format: text, json")
-	_ = fs.Parse(args)
-	if *format == "json" {
-		printRulesJSON()
-		return
-	}
-	if fs.NArg() == 0 {
-		printRulesTable()
-		return
-	}
-	if fs.Arg(0) == "test" {
-		runRulesTest(fs.Args()[1:])
-		return
-	}
-	describeRule(fs.Arg(0))
-}
-
-// runRulesTest tries custom rules against a flow; construction errors are
-// fatal. Exit 2 invalid rule file, 1 no match unless --fail-on-none.
-func runRulesTest(args []string) {
-	fs := flag.NewFlagSet("rules test", flag.ExitOnError)
-	failOnNone := fs.Bool("fail-on-none", false, "exit 1 when no rule matched")
-	_ = fs.Parse(args)
-	if fs.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "usage: bakicli rules test <rules.json> <flow.txt|folder|->")
-		fmt.Fprintln(os.Stderr, "  <rules.json>: custom-rule JSON — an array, or a single rule object")
-		os.Exit(2)
-	}
-	rulesPath, flowTarget := fs.Arg(0), fs.Arg(1)
-
-	configs, err := readCustomRuleConfigs(rulesPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "bakicli: rules test: %v\n", err)
-		os.Exit(2)
-	}
-	var rules []analyzer.Rule
-	invalid := 0
-	for i, cfg := range configs {
-		r, cerr := analyzer.NewCustomRule(cfg)
-		if cerr != nil {
-			fmt.Fprintf(os.Stderr, "bakicli: rules test: entry %d (id %q) invalid: %v\n", i, cfg.ID, cerr)
-			invalid++
-			continue
-		}
-		rules = append(rules, r)
-	}
-	if invalid > 0 {
-		fmt.Fprintf(os.Stderr, "bakicli: rules test: %d of %d rule(s) invalid\n", invalid, len(configs))
-		os.Exit(2)
-	}
-	if len(rules) == 0 {
-		fmt.Fprintln(os.Stderr, "bakicli: rules test: no rules in file")
-		os.Exit(2)
-	}
-
-	doc, err := load(flowTarget)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "bakicli: rules test: load flow: %v\n", err)
-		os.Exit(2)
-	}
-	report := analyzer.RunAnalysis(doc, rules, models.DefaultSettings(), nil)
-
-	matched := 0
-	fmt.Printf("%d custom rule(s) against %q (%d block(s)):\n", len(rules), flowTarget, doc.Metadata.BlockCount)
-	for _, f := range report.Findings {
-		matched++
-		fmt.Printf("  [%s] %s — %s (block %s, subflow %s)\n",
-			strings.ToUpper(string(f.Severity)), f.RuleID, f.Title, f.BlockID, f.SubflowID)
-	}
-	perRule := map[string]int{}
-	for _, f := range report.Findings {
-		perRule[f.RuleID]++
-	}
-	for _, r := range rules {
-		fmt.Printf("rule %-20s %d match(es)\n", r.ID(), perRule[r.ID()])
-	}
-	if matched == 0 {
-		fmt.Println("no matches")
-		if *failOnNone {
-			os.Exit(1)
-		}
-		return
-	}
-	fmt.Printf("%d finding(s)\n", matched)
-}
-
-// readCustomRuleConfigs accepts the custom-rules file as an array or a single rule object.
-func readCustomRuleConfigs(path string) ([]analyzer.CustomRuleConfig, error) {
-	data, err := os.ReadFile(path) // #nosec G304 -- operator-supplied path
-	if err != nil {
-		return nil, err
-	}
-	var arr []analyzer.CustomRuleConfig
-	if err := json.Unmarshal(data, &arr); err == nil {
-		return arr, nil
-	}
-	var one analyzer.CustomRuleConfig
-	if err := json.Unmarshal(data, &one); err == nil && one.ID != "" {
-		return []analyzer.CustomRuleConfig{one}, nil
-	}
-	return nil, fmt.Errorf("%s: not a custom-rule JSON array or object", path)
-}
-
-func printRulesTable() {
-	rules := analyzer.AllRules()
-	fmt.Printf("%-30s %-8s %-14s %-10s %s\n", "RULE", "SEVERITY", "CATEGORY", "AUTO-FIX", "NAME")
-	fmt.Printf("%-30s %-8s %-14s %-10s %s\n", strings.Repeat("-", 30), strings.Repeat("-", 8), strings.Repeat("-", 14), strings.Repeat("-", 10), strings.Repeat("-", 30))
-	for _, r := range rules {
-		fix := analyzer.RuleAutoFix(r.ID())
-		if fix == "" {
-			fix = "-"
-		}
-		fmt.Printf("%-30s %-8s %-14s %-10s %s\n",
-			r.ID(),
-			r.DefaultSeverity(),
-			r.Category(),
-			fix,
-			r.Name(),
-		)
-	}
-	fmt.Printf("\n%d rules (%d with auto-fix)\n", len(rules), countAutoFixable(rules))
-}
-
-func printRulesJSON() {
-	rules := analyzer.AllRules()
-	type ruleEntry struct {
-		ID          string `json:"id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Category    string `json:"category"`
-		Severity    string `json:"defaultSeverity"`
-		Confidence  string `json:"confidence"`
-		AutoFix     string `json:"autoFix,omitempty"`
-		// Options: tunable thresholds — the keys .bakirc.json ruleConfig.<id>.options accepts.
-		Options map[string]any `json:"options,omitempty"`
-	}
-	defaults := models.DefaultSettings()
-	entries := make([]ruleEntry, 0, len(rules))
-	for _, r := range rules {
-		e := ruleEntry{
-			ID:          r.ID(),
-			Name:        r.Name(),
-			Description: r.Description(),
-			Category:    r.Category(),
-			Severity:    string(r.DefaultSeverity()),
-			Confidence:  string(analyzer.RuleConfidence(r.ID())),
-			AutoFix:     analyzer.RuleAutoFix(r.ID()),
-		}
-		if rc, ok := defaults.Analysis.Rules[r.ID()]; ok && len(rc.Options) > 0 {
-			e.Options = maps.Clone(rc.Options)
-		}
-		entries = append(entries, e)
-	}
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(entries)
-}
-
-func describeRule(ruleID string) {
-	for _, r := range analyzer.AllRules() {
-		if r.ID() == ruleID {
-			fmt.Printf("Rule:       %s\n", r.ID())
-			fmt.Printf("Name:       %s\n", r.Name())
-			fmt.Printf("Category:   %s\n", r.Category())
-			fmt.Printf("Severity:   %s\n", r.DefaultSeverity())
-			fmt.Printf("Confidence: %s\n", analyzer.RuleConfidence(r.ID()))
-			fix := analyzer.RuleAutoFix(r.ID())
-			if fix != "" {
-				fmt.Printf("Auto-fix:   %s\n", fix)
-			} else {
-				fmt.Printf("Auto-fix:   (none)\n")
-			}
-			fmt.Printf("\n%s\n", r.Description())
-			return
-		}
-	}
-	fmt.Fprintf(os.Stderr, "bakicli rules: unknown rule %q (run 'bakicli rules' to list all rules)\n", ruleID)
-	os.Exit(2)
-}
-
-func countAutoFixable(rules []analyzer.Rule) int {
-	n := 0
-	for _, r := range rules {
-		if analyzer.RuleAutoFix(r.ID()) != "" {
-			n++
-		}
-	}
-	return n
-}
-
 // ---- bakicli init ----
 
 func runInit(args []string) {
@@ -1508,7 +1157,7 @@ func runInit(args []string) {
 		fmt.Fprintf(os.Stderr, "bakicli init: write %s: %v\n", *out, err)
 		os.Exit(1)
 	}
-	fmt.Printf("wrote %s (%d rules)\n", *out, len(config.Rules))
+	fmt.Printf("wrote %s (%d rules)\n", *out, len(config.RuleCfg))
 }
 
 // ---- bakicli migrate ----
@@ -1657,28 +1306,23 @@ type bakiRuleConf struct {
 	Options map[string]any `json:"options,omitempty"`
 }
 
+// buildDefaultConfig is what `bakicli init` writes: every built-in rule's
+// default (enabled, severity, thresholds) from the rule registry.
 func buildDefaultConfig() bakiConfig {
 	cfg := bakiConfig{
 		FailOn: "error",
 		Format: "text",
 	}
-	defaults := models.DefaultSettings()
-	cfg.RuleCfg = make(map[string]bakiRuleConf)
-	for _, r := range analyzer.AllRules() {
-		sev := r.DefaultSeverity()
-		enabled := true
-		if rc, ok := defaults.Analysis.Rules[r.ID()]; ok {
-			if rc.Severity != "" {
-				sev = models.Severity(rc.Severity)
-			}
-			enabled = rc.Enabled
-		}
-		rc := bakiRuleConf{Severity: string(sev), Enabled: &enabled}
+	defaults := analyzer.DefaultRuleConfigs()
+	cfg.RuleCfg = make(map[string]bakiRuleConf, len(defaults))
+	for id, d := range defaults {
+		enabled := d.Enabled
+		rc := bakiRuleConf{Severity: d.Severity, Enabled: &enabled}
 		// Emit the thresholds the rule honours so `init` documents their defaults.
-		if d, ok := defaults.Analysis.Rules[r.ID()]; ok && len(d.Options) > 0 {
+		if len(d.Options) > 0 {
 			rc.Options = maps.Clone(d.Options)
 		}
-		cfg.RuleCfg[r.ID()] = rc
+		cfg.RuleCfg[id] = rc
 	}
 	return cfg
 }
@@ -1697,43 +1341,6 @@ func loadConfig(path string) (*bakiConfig, error) {
 		return nil, fmt.Errorf("invalid config JSON: %w", err)
 	}
 	return &cfg, nil
-}
-
-// loadIgnorePatterns reads .bakiignore lines as glob patterns; missing file returns nil.
-func loadIgnorePatterns(dir string) []string {
-	data, err := os.ReadFile(filepath.Join(dir, ".bakiignore")) // #nosec G304 -- dir is a CLI argument supplied by the operator
-	if err != nil {
-		return nil
-	}
-	var patterns []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		patterns = append(patterns, line)
-	}
-	return patterns
-}
-
-// shouldIgnoreFile matches relPath against patterns (filepath.Match wildcards, base-name, and "dir/" prefix).
-func shouldIgnoreFile(relPath string, patterns []string) bool {
-	for _, p := range patterns {
-		if matched, _ := filepath.Match(p, relPath); matched {
-			return true
-		}
-		// Also match against the base name (e.g. "*.tmp" matches "foo.tmp")
-		if matched, _ := filepath.Match(p, filepath.Base(relPath)); matched {
-			return true
-		}
-		// Directory prefix patterns (e.g. "vendor/" matches "vendor/anything")
-		if strings.HasSuffix(p, "/") {
-			if strings.HasPrefix(relPath, p) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // buildSettingsFromConfig translates RuleCfg into per-rule AppSettings overrides; nil when no config is loaded.
@@ -1765,10 +1372,11 @@ func buildFixOptions(cfg *bakiConfig, ruleFlag, customRulesPath string, limit in
 	if ruleFilter == nil && cfg != nil && cfg.Rules != "" {
 		ruleFilter = parseRuleSet(cfg.Rules)
 	}
+	fixRules, _ := selectRules("", customRulesPath, inlineRulesOf(cfg))
 	return analyzer.FixOptions{
 		RuleFilter: ruleFilter,
 		Settings:   buildSettingsFromConfig(cfg),
-		Rules:      selectRules("", customRulesPath, inlineRulesOf(cfg)),
+		Rules:      fixRules,
 		Limit:      limit,
 	}
 }
@@ -1873,7 +1481,8 @@ func runSuppressions(args []string) {
 		fmt.Fprintf(os.Stderr, "bakicli suppressions: %v\n", err)
 		os.Exit(2)
 	}
-	entries := analyzer.SuppressionInventory(doc, selectRules("", *customRulesFlag, inlineRulesOf(cfg)), buildSettingsFromConfig(cfg))
+	rules, _ := selectRules("", *customRulesFlag, inlineRulesOf(cfg))
+	entries := analyzer.SuppressionInventory(doc, rules, buildSettingsFromConfig(cfg))
 
 	if *format == "json" {
 		enc := json.NewEncoder(os.Stdout)
@@ -1937,22 +1546,19 @@ func readReport(path string) (*models.AnalysisReport, error) {
 		defer func() { _ = f.Close() }()
 		r = f
 	}
-	var report models.AnalysisReport
-	if err := json.NewDecoder(r).Decode(&report); err != nil {
+	var doc struct {
+		models.AnalysisReport
+		// Flows marks the several-flows document (cliMultiReport), which
+		// would otherwise decode as an empty report without error.
+		Flows json.RawMessage `json:"flows"`
+	}
+	if err := json.NewDecoder(r).Decode(&doc); err != nil {
 		return nil, fmt.Errorf("%s: invalid analysis report: %w", path, err)
 	}
-	return &report, nil
-}
-
-func countAtOrAbove(findings []models.Finding, min string) int {
-	rank := map[string]int{"error": 3, "warning": 2, "info": 1}
-	n := 0
-	for _, f := range findings {
-		if rank[string(f.Severity)] >= rank[min] {
-			n++
-		}
+	if doc.Flows != nil {
+		return nil, fmt.Errorf("%s is a several-flows report; this takes one flow's report (run bakicli with one path)", path)
 	}
-	return n
+	return &doc.AnalysisReport, nil
 }
 
 func inlineRulesOf(cfg *bakiConfig) []analyzer.CustomRuleConfig {

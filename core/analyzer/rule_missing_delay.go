@@ -64,4 +64,12 @@ func isWaitAction(rawType string) bool {
 	return strings.Contains(rt, "wait") || strings.Contains(rt, "delay")
 }
 
-func init() { registerRule(&MissingDelayRule{}) }
+func init() {
+	registerRule(&MissingDelayRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "insert-delay",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

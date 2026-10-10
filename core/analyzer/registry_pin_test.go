@@ -7,70 +7,79 @@ import (
 	"pad-core/models"
 )
 
-// expectedRuleIDs is the authoritative catalog of shipped rules.
+// expectedRules is the authoritative catalog of shipped rules, with the
+// metadata a recorded rule set compares against (ADR 0014): a rule is "new"
+// to a baseline when it was introduced after it, revised, or promoted.
 //
 // Rules self-register from each rule file's init(), which makes ADDING one
-// frictionless but makes LOSING one silent: registry_test.go asserts only that
-// the list is non-empty, that every rule has an ID and Name, and that IDs do
-// not collide. Delete a rule file, or drop its init(), and all three still
-// pass. A mutation sweep found 10 rules that could be deregistered with a fully
-// green suite, path-traversal-risk (Security) among them.
+// frictionless but makes LOSING one silent: registry_test.go (since deleted)
+// asserted only that the list is non-empty, that every rule has an ID and
+// Name, and that IDs do not collide. Delete a rule file, or drop its init(),
+// and all three still passed. A mutation sweep found 10 rules that could be
+// deregistered with a fully green suite, path-traversal-risk (Security) among
+// them.
 //
-// So this list is a deliberate, reviewed inventory: removing or renaming a rule
-// is a two-place edit, and the diff shows a reviewer exactly which detection
-// the product gained or lost. Adding a rule means adding its ID here.
-var expectedRuleIDs = []string{
-	"circular-subflow-dependency",
-	"command-injection-risk",
-	"dead-code",
-	"dead-data",
-	"deep-nesting",
-	"disabled-block",
-	"duplicate-action",
-	"duplicate-label",
-	"duplicate-subflow-name",
-	"empty-branch",
-	"empty-handler",
-	"empty-subflow",
-	"error-swallow",
-	"file-op-no-error-handler",
-	"goto-antipattern",
-	"hardcoded-credential",
-	"hardcoded-filepath",
-	"hardcoded-ip",
-	"hardcoded-ui-coordinates",
-	"hardcoded-url",
-	"high-cyclomatic-complexity",
-	"infinite-loop-risk",
-	"insecure-http-url",
-	"large-subflow",
-	"missing-delay",
-	"missing-retry",
-	"missing-timeout",
-	"parse-error",
-	"path-traversal-risk",
-	"redundant-action",
-	"resource-leak",
-	"sensitive-exposure",
-	"slow-pattern",
-	"sql-injection-risk",
-	"subflow-mismatch",
-	"subflow-no-error-handler",
-	"switch-no-default",
-	"tainted-sink",
-	"todo-in-comment",
-	"uncalled-subflow",
-	"unhandled-error",
-	"uninitialized-variable",
-	"unused-variable",
-	"wait-zero",
-	"wide-loop",
+// So this list is a deliberate, reviewed inventory: removing or renaming a
+// rule, shipping a new one, bumping a Revision or promoting a preview rule is a
+// two-place edit, and the diff shows a reviewer exactly what changed. Revision
+// 2 marks the rules whose findings Phase 4a's determinism fixes changed.
+type expectedRule struct {
+	introducedIn, revision int
+	stage                  Stage
+}
+
+var expectedRules = map[string]expectedRule{
+	"circular-subflow-dependency": {introducedIn: 1, revision: 2, stage: StageStable},
+	"command-injection-risk":      {introducedIn: 1, revision: 1, stage: StageStable},
+	"dead-code":                   {introducedIn: 1, revision: 1, stage: StageStable},
+	"dead-data":                   {introducedIn: 1, revision: 1, stage: StageStable},
+	"deep-nesting":                {introducedIn: 1, revision: 1, stage: StageStable},
+	"disabled-block":              {introducedIn: 1, revision: 1, stage: StageStable},
+	"duplicate-action":            {introducedIn: 1, revision: 1, stage: StageStable},
+	"duplicate-label":             {introducedIn: 1, revision: 1, stage: StageStable},
+	"duplicate-subflow-name":      {introducedIn: 1, revision: 1, stage: StageStable},
+	"empty-branch":                {introducedIn: 1, revision: 1, stage: StageStable},
+	"empty-handler":               {introducedIn: 1, revision: 1, stage: StageStable},
+	"empty-subflow":               {introducedIn: 1, revision: 1, stage: StageStable},
+	"error-swallow":               {introducedIn: 1, revision: 1, stage: StageStable},
+	"file-op-no-error-handler":    {introducedIn: 1, revision: 1, stage: StageStable},
+	"goto-antipattern":            {introducedIn: 1, revision: 1, stage: StageStable},
+	"hardcoded-credential":        {introducedIn: 1, revision: 1, stage: StageStable},
+	"hardcoded-filepath":          {introducedIn: 1, revision: 2, stage: StageStable},
+	"hardcoded-ip":                {introducedIn: 1, revision: 2, stage: StageStable},
+	"hardcoded-ui-coordinates":    {introducedIn: 1, revision: 2, stage: StageStable},
+	"hardcoded-url":               {introducedIn: 1, revision: 2, stage: StageStable},
+	"high-cyclomatic-complexity":  {introducedIn: 1, revision: 1, stage: StageStable},
+	"infinite-loop-risk":          {introducedIn: 1, revision: 1, stage: StageStable},
+	"insecure-http-url":           {introducedIn: 1, revision: 2, stage: StageStable},
+	"large-subflow":               {introducedIn: 1, revision: 1, stage: StageStable},
+	"missing-delay":               {introducedIn: 1, revision: 1, stage: StageStable},
+	"missing-retry":               {introducedIn: 1, revision: 1, stage: StageStable},
+	"missing-timeout":             {introducedIn: 1, revision: 1, stage: StageStable},
+	"parse-error":                 {introducedIn: 1, revision: 1, stage: StageStable},
+	"path-traversal-risk":         {introducedIn: 1, revision: 2, stage: StageStable},
+	"redundant-action":            {introducedIn: 1, revision: 1, stage: StageStable},
+	"resource-leak":               {introducedIn: 1, revision: 1, stage: StageStable},
+	"sensitive-exposure":          {introducedIn: 1, revision: 1, stage: StageStable},
+	"slow-pattern":                {introducedIn: 1, revision: 1, stage: StageStable},
+	"sql-injection-risk":          {introducedIn: 1, revision: 2, stage: StageStable},
+	"subflow-mismatch":            {introducedIn: 1, revision: 1, stage: StageStable},
+	"subflow-no-error-handler":    {introducedIn: 1, revision: 1, stage: StageStable},
+	"switch-no-default":           {introducedIn: 1, revision: 1, stage: StageStable},
+	"tainted-sink":                {introducedIn: 1, revision: 1, stage: StageStable},
+	"todo-in-comment":             {introducedIn: 1, revision: 1, stage: StageStable},
+	"uncalled-subflow":            {introducedIn: 1, revision: 1, stage: StageStable},
+	"unhandled-error":             {introducedIn: 1, revision: 1, stage: StageStable},
+	"uninitialized-variable":      {introducedIn: 1, revision: 1, stage: StageStable},
+	"unused-variable":             {introducedIn: 1, revision: 1, stage: StageStable},
+	"wait-zero":                   {introducedIn: 1, revision: 1, stage: StageStable},
+	"wide-loop":                   {introducedIn: 1, revision: 1, stage: StageStable},
 }
 
 // expectedRuleAutoFix is the authoritative rule -> fixer wiring.
 //
-// A finding is only offerable as a fix when engine.go's ruleAutoFix table maps
-// its rule ID to a fixer. The round-trip fix gates call the fixer FUNCTIONS
+// A finding is only offerable as a fix when its rule's RuleMeta.AutoFix names
+// a fixer. The round-trip fix gates call the fixer FUNCTIONS
 // directly (e.g. MaskSensitiveVariablePatch(...)), so they stay green whether
 // or not any finding can actually reach that fixer — renaming a key so the
 // lookup misses was survivable for 22 of these, including every security
@@ -110,9 +119,10 @@ var expectedRuleAutoFix = map[string]string{
 	"wait-zero":                "remove-block",
 }
 
-// TestRegistry_ExactRuleSet pins the shipped catalog. It fails in BOTH
-// directions on purpose: a lost rule is a silent loss of detection, and an
-// unlisted new rule is a reminder to record it here.
+// TestRegistry_ExactRuleSet pins the shipped catalog and each rule's
+// IntroducedIn, Revision and Stage. It fails in BOTH directions on purpose: a
+// lost rule is a silent loss of detection, and an unlisted new rule is a
+// reminder to record it here.
 func TestRegistry_ExactRuleSet(t *testing.T) {
 	var got []string
 	for _, r := range AllRules() {
@@ -120,31 +130,34 @@ func TestRegistry_ExactRuleSet(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	want := append([]string(nil), expectedRuleIDs...)
-	sort.Strings(want)
-
-	inWant := map[string]bool{}
-	for _, id := range want {
-		inWant[id] = true
-	}
 	inGot := map[string]bool{}
 	for _, id := range got {
 		inGot[id] = true
 	}
-
-	for _, id := range want {
+	for id := range expectedRules {
 		if !inGot[id] {
 			t.Errorf("rule %q is no longer registered — the product silently lost this detection", id)
 		}
 	}
 	for _, id := range got {
-		if !inWant[id] {
-			t.Errorf("rule %q is registered but not listed in expectedRuleIDs — add it, so the "+
+		want, ok := expectedRules[id]
+		if !ok {
+			t.Errorf("rule %q is registered but not listed in expectedRules — add it, so the "+
 				"catalog stays a reviewed inventory", id)
+			continue
+		}
+		m, _ := LookupMeta(id)
+		gotRev := m.Revision
+		if gotRev == 0 {
+			gotRev = 1
+		}
+		if m.IntroducedIn != want.introducedIn || gotRev != want.revision || m.Stage != want.stage {
+			t.Errorf("rule %q: IntroducedIn %d, Revision %d, Stage %q; pinned %d, %d, %q",
+				id, m.IntroducedIn, gotRev, m.Stage, want.introducedIn, want.revision, want.stage)
 		}
 	}
-	if len(got) != len(want) {
-		t.Errorf("rule count %d, want %d", len(got), len(want))
+	if len(got) != len(expectedRules) {
+		t.Errorf("rule count %d, want %d", len(got), len(expectedRules))
 	}
 }
 
@@ -154,8 +167,8 @@ func TestRegistry_ExactRuleSet(t *testing.T) {
 // function directly.
 func TestRegistry_ExactAutoFixWiring(t *testing.T) {
 	for ruleID, fixType := range expectedRuleAutoFix {
-		got, ok := ruleAutoFix[ruleID]
-		if !ok {
+		got := RuleAutoFix(ruleID)
+		if got == "" {
 			t.Errorf("rule %q lost its auto-fix wiring (want %q) — findings from it are no longer "+
 				"offerable as a fix, and no fixer unit test notices", ruleID, fixType)
 			continue
@@ -164,25 +177,32 @@ func TestRegistry_ExactAutoFixWiring(t *testing.T) {
 			t.Errorf("rule %q is wired to fixer %q, want %q", ruleID, got, fixType)
 		}
 	}
-	for ruleID, fixType := range ruleAutoFix {
-		if _, ok := expectedRuleAutoFix[ruleID]; !ok {
-			t.Errorf("rule %q is wired to fixer %q but is not in expectedRuleAutoFix — add it", ruleID, fixType)
+	for _, r := range AllRules() {
+		if fixType := RuleAutoFix(r.ID()); fixType != "" {
+			if _, ok := expectedRuleAutoFix[r.ID()]; !ok {
+				t.Errorf("rule %q is wired to fixer %q but is not in expectedRuleAutoFix — add it", r.ID(), fixType)
+			}
 		}
 	}
 }
 
-// TestRegistry_EveryWiredRuleExists catches the other half of a rename: a
-// ruleAutoFix key that matches no registered rule is dead weight that looks
-// like working coverage.
-func TestRegistry_EveryWiredRuleExists(t *testing.T) {
+// TestRegistry_EveryMetaEntryIsARule catches the other half of a rename: a
+// metadata entry under an ID no registered rule has is dead weight that looks
+// like working coverage (only SetRuleMetaForTesting may add one).
+func TestRegistry_EveryMetaEntryIsARule(t *testing.T) {
 	registered := map[string]bool{}
 	for _, r := range AllRules() {
 		registered[r.ID()] = true
+		if _, ok := LookupMeta(r.ID()); !ok {
+			t.Errorf("rule %q has no RuleMeta", r.ID())
+		}
 	}
-	for ruleID := range ruleAutoFix {
-		if !registered[ruleID] {
-			t.Errorf("ruleAutoFix maps %q, which is not a registered rule — the wiring can never "+
-				"fire, so the fix it names is unreachable", ruleID)
+	for _, r := range LibraryRules() {
+		registered[r.ID()] = true
+	}
+	for id := range metaTable() {
+		if !registered[id] {
+			t.Errorf("RuleMeta is registered under %q, which is not a registered rule", id)
 		}
 	}
 }
@@ -201,10 +221,17 @@ func TestRegistry_EveryWiredFixerIsDispatchable(t *testing.T) {
 		Properties: map[string]string{"Url": "https://example.com"},
 		Variables:  []string{},
 	}
-	for ruleID, fixType := range ruleAutoFix {
-		if _, err := PatchForFix(block, fixType, ruleID, "v", "Url"); err != nil {
-			t.Errorf("rule %q advertises fixer %q, which the dispatcher rejects: %v",
-				ruleID, fixType, err)
+	for _, r := range AllRules() {
+		m := MetaOf(r)
+		fixes := append([]string(nil), m.DirectFixes...)
+		if m.AutoFix != "" {
+			fixes = append(fixes, m.AutoFix)
+		}
+		for _, fixType := range fixes {
+			if _, err := PatchForFix(block, fixType, r.ID(), "v", "Url"); err != nil {
+				t.Errorf("rule %q advertises fixer %q, which the dispatcher rejects: %v",
+					r.ID(), fixType, err)
+			}
 		}
 	}
 }

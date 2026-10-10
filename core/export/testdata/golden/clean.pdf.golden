@@ -1,0 +1,25 @@
+bytes: 17937 sha256: fc844fb0da7e6bda340b8245ccdb026a32e4578ba5961faa04b36037bdba6105
+pages: 1
+--- page 1
+0 J
+0 j
+0.57 w
+0.000 G
+0.000 g
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 20.00 Tf ET
+BT 31.19 790.53 Td "PAD Analyzer"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 11.00 Tf ET
+BT 31.19 779.06 Td "Analysis Report"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 10.00 Tf ET
+BT 31.19 746.76 Td "Flow: Clean"Tj ET
+BT 31.19 732.59 Td "Generated: 2026-10-08 09:30:00"Tj ET
+BT 31.19 718.41 Td "Duration: 7ms"Tj ET
+BT /F550851cda6bacbd3dfc30d21c2dd0b47acbc206d 14.00 Tf ET
+BT 31.19 684.62 Td "Summary"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 10.00 Tf ET
+BT 31.19 667.39 Td "Blocks analyzed: 3"Tj ET
+BT 31.19 653.22 Td "Rules run: 45"Tj ET
+BT 31.19 639.04 Td "Errors: 0  |  Warnings: 0  |  Info: 0"Tj ET
+BT /F48c1051e943a89b497c13fbd7767f68b12af9e93 11.00 Tf ET
+BT 31.19 608.98 Td "No findings detected. The flow looks good!"Tj ET
+

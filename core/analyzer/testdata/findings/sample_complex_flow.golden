@@ -1,0 +1,274 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_complex_flow
+document: subflows=2 blocks=32 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":1,"warnings":18,"info":12,"blocksAnalyzed":29,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=27 final=1305/1305 last="Loop body is too large"
+metrics: {"avgCognitive":2.5,"avgCyclomatic":2.5,"healthScore":4,"maxCognitive":5,"maxCyclomatic":4,"subflowCount":2,"totalBlocks":25,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":13,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+  subflow Helpers: {"blockCount":12,"cognitiveComplexity":5,"cyclomaticComplexity":4,"fanIn":0,"fanOut":0,"maxNestingDepth":3,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=29
+  raw findings: file-op-no-error-handler=1 hardcoded-credential=1 hardcoded-url=1 missing-delay=4 missing-retry=6 missing-timeout=7 path-traversal-risk=1 slow-pattern=1 subflow-no-error-handler=1 uncalled-subflow=1 unhandled-error=7
+inventory: none
+findings: 31
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#13 sf=Main fp=file-op-no-error-handler:ad62a86447cbe74a
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.WriteText"}
+F-002 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#3 sf=Main fp=hardcoded-credential:de29037c23a9c4cf
+    title: Credential variable set to literal value
+    desc: Variable 'Password' has a name that suggests it holds a credential and is assigned a literal string value.
+    meta: {"variable":"Password"}
+F-003 info/low hardcoded-url [Portability] fix=replace-with-variable @Helpers#14 sf=Helpers fp=hardcoded-url:f9e97e3b753ef31c
+    title: Hardcoded URL
+    desc: Property 'Url' contains a hardcoded URL: https://example.com
+    meta: {"property":"Url","url":"https://example.com"}
+F-004 info/medium missing-delay [Reliability] fix=insert-delay @Main#6 sf=Main fp=missing-delay:91db14631026004a
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-005 info/medium missing-delay [Reliability] fix=insert-delay @Main#7 sf=Main fp=missing-delay:535bedeaad4cc9ba
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-006 info/medium missing-delay [Reliability] fix=insert-delay @Main#8 sf=Main fp=missing-delay:e37953e2970e4d27
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-007 info/medium missing-delay [Reliability] fix=insert-delay @Main#9 sf=Main fp=missing-delay:e11b3ca23b7b2ad0
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#5 sf=Main fp=missing-retry:d53b6831cabb9108
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.LaunchBrowser"}
+F-009 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#6 sf=Main fp=missing-retry:91db14631026004a
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.NavigateTo"}
+F-010 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#7 sf=Main fp=missing-retry:535bedeaad4cc9ba
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.PopulateTextField"}
+F-011 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#8 sf=Main fp=missing-retry:e37953e2970e4d27
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.PopulateTextField"}
+F-012 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#9 sf=Main fp=missing-retry:e11b3ca23b7b2ad0
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.ClickClick"}
+F-013 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#12 sf=Main fp=missing-retry:b65b5999b04c4b30
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.CloseBrowser"}
+F-014 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#6 sf=Main fp=missing-timeout:91db14631026004a
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.NavigateTo"}
+F-015 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:535bedeaad4cc9ba
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.PopulateTextField"}
+F-016 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#8 sf=Main fp=missing-timeout:e37953e2970e4d27
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.PopulateTextField"}
+F-017 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#9 sf=Main fp=missing-timeout:e11b3ca23b7b2ad0
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.ClickClick"}
+F-018 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#12 sf=Main fp=missing-timeout:b65b5999b04c4b30
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.CloseBrowser"}
+F-019 warning/medium missing-timeout [Reliability] fix=set-timeout @Helpers#4 sf=Helpers fp=missing-timeout:a664f83d1bbb7faa
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.LaunchBrowser"}
+F-020 warning/medium missing-timeout [Reliability] fix=set-timeout @Helpers#14 sf=Helpers fp=missing-timeout:539d7dccc08bbbb6
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.NavigateTo"}
+F-021 warning/medium path-traversal-risk [Security] fix=- @Main#13 sf=Main fp=path-traversal-risk:2dff43de0795cabf
+    title: Path traversal risk
+    desc: File action uses a variable path. A caller-controlled value containing ../ sequences can escape the intended directory and read or overwrite arbitrary files.
+    meta: {"property":"File"}
+F-022 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Helpers#2 sf=Helpers fp=slow-pattern:b43bed2a4ed933ce
+    title: UI automation in tight loop
+    desc: This loop contains UI/web automation actions without any delay, which can overwhelm the target application.
+F-023 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:0d8b30d682d5a040
+    title: Subflow without error handler
+    desc: Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-024 warning/medium uncalled-subflow [Logic] fix=- @Helpers#0 sf=Helpers fp=uncalled-subflow:54bb75be7f84b07e
+    title: Uncalled subflow
+    desc: Subflow 'Helpers' is never called by any other subflow and is not the entry point. It is dead code at the flow level.
+    meta: {"subflow":"Helpers"}
+F-025 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#5 sf=Main fp=unhandled-error:d53b6831cabb9108
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-026 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=unhandled-error:91db14631026004a
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-027 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=unhandled-error:535bedeaad4cc9ba
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-028 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=unhandled-error:e37953e2970e4d27
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-029 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=unhandled-error:e11b3ca23b7b2ad0
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-030 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#12 sf=Main fp=unhandled-error:b65b5999b04c4b30
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-031 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#13 sf=Main fp=unhandled-error:ad62a86447cbe74a
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+
+=== nil-settings
+stats: {"errors":1,"warnings":18,"info":12,"blocksAnalyzed":29,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=27 final=1305/1305 last="Loop body is too large"
+metrics: as default, healthScore=4
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=29
+  raw findings: file-op-no-error-handler=1 hardcoded-credential=1 hardcoded-url=1 missing-delay=4 missing-retry=6 missing-timeout=7 path-traversal-risk=1 slow-pattern=1 subflow-no-error-handler=1 uncalled-subflow=1 unhandled-error=7
+inventory: none
+findings: 31
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":1,"warnings":18,"info":18,"blocksAnalyzed":29,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=27 final=1305/1305 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=29
+  raw findings: deep-nesting=3 file-op-no-error-handler=1 hardcoded-credential=1 hardcoded-url=1 large-subflow=2 missing-delay=4 missing-retry=6 missing-timeout=7 path-traversal-risk=1 slow-pattern=1 subflow-no-error-handler=1 uncalled-subflow=1 unhandled-error=7 wide-loop=1
+inventory: none
+findings: 37
+F-001 info/low deep-nesting [Style] fix=- @Helpers#13 sf=Helpers fp=deep-nesting:1283e137551f498e
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-002 info/low deep-nesting [Style] fix=- @Helpers#14 sf=Helpers fp=deep-nesting:539d7dccc08bbbb6
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-003 info/low deep-nesting [Style] fix=- @Helpers#15 sf=Helpers fp=deep-nesting:06da67c17d4470fc
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-004 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#13 sf=Main fp=file-op-no-error-handler:ad62a86447cbe74a
+F-005 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#3 sf=Main fp=hardcoded-credential:de29037c23a9c4cf
+F-006 info/low hardcoded-url [Portability] fix=replace-with-variable @Helpers#14 sf=Helpers fp=hardcoded-url:f9e97e3b753ef31c
+F-007 info/low large-subflow [Style] fix=- @Main#1 sf=Main fp=large-subflow:0d8b30d682d5a040
+    title: Large subflow
+    desc: Subflow 'Main' has 13 blocks (threshold: 5).
+F-008 info/low large-subflow [Style] fix=- @Helpers#0 sf=Helpers fp=large-subflow:54bb75be7f84b07e
+    title: Large subflow
+    desc: Subflow 'Helpers' has 12 blocks (threshold: 5).
+F-009 info/medium missing-delay [Reliability] fix=insert-delay @Main#6 sf=Main fp=missing-delay:91db14631026004a
+F-010 info/medium missing-delay [Reliability] fix=insert-delay @Main#7 sf=Main fp=missing-delay:535bedeaad4cc9ba
+F-011 info/medium missing-delay [Reliability] fix=insert-delay @Main#8 sf=Main fp=missing-delay:e37953e2970e4d27
+F-012 info/medium missing-delay [Reliability] fix=insert-delay @Main#9 sf=Main fp=missing-delay:e11b3ca23b7b2ad0
+F-013 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#5 sf=Main fp=missing-retry:d53b6831cabb9108
+F-014 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#6 sf=Main fp=missing-retry:91db14631026004a
+F-015 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#7 sf=Main fp=missing-retry:535bedeaad4cc9ba
+F-016 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#8 sf=Main fp=missing-retry:e37953e2970e4d27
+F-017 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#9 sf=Main fp=missing-retry:e11b3ca23b7b2ad0
+F-018 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#12 sf=Main fp=missing-retry:b65b5999b04c4b30
+F-019 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#6 sf=Main fp=missing-timeout:91db14631026004a
+F-020 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:535bedeaad4cc9ba
+F-021 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#8 sf=Main fp=missing-timeout:e37953e2970e4d27
+F-022 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#9 sf=Main fp=missing-timeout:e11b3ca23b7b2ad0
+F-023 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#12 sf=Main fp=missing-timeout:b65b5999b04c4b30
+F-024 warning/medium missing-timeout [Reliability] fix=set-timeout @Helpers#4 sf=Helpers fp=missing-timeout:a664f83d1bbb7faa
+F-025 warning/medium missing-timeout [Reliability] fix=set-timeout @Helpers#14 sf=Helpers fp=missing-timeout:539d7dccc08bbbb6
+F-026 warning/medium path-traversal-risk [Security] fix=- @Main#13 sf=Main fp=path-traversal-risk:2dff43de0795cabf
+F-027 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Helpers#2 sf=Helpers fp=slow-pattern:b43bed2a4ed933ce
+F-028 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:0d8b30d682d5a040
+F-029 warning/medium uncalled-subflow [Logic] fix=- @Helpers#0 sf=Helpers fp=uncalled-subflow:54bb75be7f84b07e
+F-030 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#5 sf=Main fp=unhandled-error:d53b6831cabb9108
+F-031 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=unhandled-error:91db14631026004a
+F-032 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=unhandled-error:535bedeaad4cc9ba
+F-033 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=unhandled-error:e37953e2970e4d27
+F-034 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=unhandled-error:e11b3ca23b7b2ad0
+F-035 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#12 sf=Main fp=unhandled-error:b65b5999b04c4b30
+F-036 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#13 sf=Main fp=unhandled-error:ad62a86447cbe74a
+F-037 info/low wide-loop [Style] fix=- @Helpers#2 sf=Helpers fp=wide-loop:b43bed2a4ed933ce
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":9,"maxBlocks":3}
+
+=== disabled
+stats: {"errors":0,"warnings":11,"info":7,"blocksAnalyzed":29,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=22 final=1073/1073 last="Loop body is too large"
+metrics: as default, healthScore=49
+profiles: rules=37 order=f7de49357acad250 blocksChecked=29
+  raw findings: file-op-no-error-handler=1 hardcoded-url=1 missing-retry=6 missing-timeout=7 path-traversal-risk=1 slow-pattern=1 uncalled-subflow=1
+inventory: none
+findings: 18
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#13 sf=Main fp=file-op-no-error-handler:ad62a86447cbe74a
+F-002 info/low hardcoded-url [Portability] fix=replace-with-variable @Helpers#14 sf=Helpers fp=hardcoded-url:f9e97e3b753ef31c
+F-003 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#5 sf=Main fp=missing-retry:d53b6831cabb9108
+F-004 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#6 sf=Main fp=missing-retry:91db14631026004a
+F-005 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#7 sf=Main fp=missing-retry:535bedeaad4cc9ba
+F-006 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#8 sf=Main fp=missing-retry:e37953e2970e4d27
+F-007 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#9 sf=Main fp=missing-retry:e11b3ca23b7b2ad0
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#12 sf=Main fp=missing-retry:b65b5999b04c4b30
+F-009 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#6 sf=Main fp=missing-timeout:91db14631026004a
+F-010 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:535bedeaad4cc9ba
+F-011 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#8 sf=Main fp=missing-timeout:e37953e2970e4d27
+F-012 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#9 sf=Main fp=missing-timeout:e11b3ca23b7b2ad0
+F-013 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#12 sf=Main fp=missing-timeout:b65b5999b04c4b30
+F-014 warning/medium missing-timeout [Reliability] fix=set-timeout @Helpers#4 sf=Helpers fp=missing-timeout:a664f83d1bbb7faa
+F-015 warning/medium missing-timeout [Reliability] fix=set-timeout @Helpers#14 sf=Helpers fp=missing-timeout:539d7dccc08bbbb6
+F-016 warning/medium path-traversal-risk [Security] fix=- @Main#13 sf=Main fp=path-traversal-risk:2dff43de0795cabf
+F-017 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Helpers#2 sf=Helpers fp=slow-pattern:b43bed2a4ed933ce
+F-018 warning/medium uncalled-subflow [Logic] fix=- @Helpers#0 sf=Helpers fp=uncalled-subflow:54bb75be7f84b07e
+
+=== severity
+stats: {"errors":9,"warnings":16,"info":6,"blocksAnalyzed":29,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=27 final=1305/1305 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=29
+  raw findings: file-op-no-error-handler=1 hardcoded-credential=1 hardcoded-url=1 missing-delay=4 missing-retry=6 missing-timeout=7 path-traversal-risk=1 slow-pattern=1 subflow-no-error-handler=1 uncalled-subflow=1 unhandled-error=7
+inventory: none
+findings: 31
+  as default; severity changes: F-003 info->warning, F-004 info->warning, F-005 info->warning, F-006 info->warning, F-007 info->warning, F-023 info->error, F-025 warning->error, F-026 warning->error, F-027 warning->error, F-028 warning->error, F-029 warning->error, F-030 warning->error, F-031 warning->error
+
+=== autofixable
+stats: {"errors":1,"warnings":16,"info":12,"blocksAnalyzed":29,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=19 final=928/928 last="Wait zero"
+metrics: as default, healthScore=12
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=29
+  raw findings: file-op-no-error-handler=1 hardcoded-credential=1 hardcoded-url=1 missing-delay=4 missing-retry=6 missing-timeout=7 slow-pattern=1 subflow-no-error-handler=1 unhandled-error=7
+inventory: none
+findings: 29
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#13 sf=Main fp=file-op-no-error-handler:ad62a86447cbe74a
+F-002 error/high hardcoded-credential [Security] fix=replace-with-variable @Main#3 sf=Main fp=hardcoded-credential:de29037c23a9c4cf
+F-003 info/low hardcoded-url [Portability] fix=replace-with-variable @Helpers#14 sf=Helpers fp=hardcoded-url:f9e97e3b753ef31c
+F-004 info/medium missing-delay [Reliability] fix=insert-delay @Main#6 sf=Main fp=missing-delay:91db14631026004a
+F-005 info/medium missing-delay [Reliability] fix=insert-delay @Main#7 sf=Main fp=missing-delay:535bedeaad4cc9ba
+F-006 info/medium missing-delay [Reliability] fix=insert-delay @Main#8 sf=Main fp=missing-delay:e37953e2970e4d27
+F-007 info/medium missing-delay [Reliability] fix=insert-delay @Main#9 sf=Main fp=missing-delay:e11b3ca23b7b2ad0
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#5 sf=Main fp=missing-retry:d53b6831cabb9108
+F-009 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#6 sf=Main fp=missing-retry:91db14631026004a
+F-010 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#7 sf=Main fp=missing-retry:535bedeaad4cc9ba
+F-011 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#8 sf=Main fp=missing-retry:e37953e2970e4d27
+F-012 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#9 sf=Main fp=missing-retry:e11b3ca23b7b2ad0
+F-013 info/medium missing-retry [Reliability] fix=wrap-in-retry @Main#12 sf=Main fp=missing-retry:b65b5999b04c4b30
+F-014 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#6 sf=Main fp=missing-timeout:91db14631026004a
+F-015 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#7 sf=Main fp=missing-timeout:535bedeaad4cc9ba
+F-016 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#8 sf=Main fp=missing-timeout:e37953e2970e4d27
+F-017 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#9 sf=Main fp=missing-timeout:e11b3ca23b7b2ad0
+F-018 warning/medium missing-timeout [Reliability] fix=set-timeout @Main#12 sf=Main fp=missing-timeout:b65b5999b04c4b30
+F-019 warning/medium missing-timeout [Reliability] fix=set-timeout @Helpers#4 sf=Helpers fp=missing-timeout:a664f83d1bbb7faa
+F-020 warning/medium missing-timeout [Reliability] fix=set-timeout @Helpers#14 sf=Helpers fp=missing-timeout:539d7dccc08bbbb6
+F-021 warning/medium slow-pattern [Performance] fix=insert-delay-in-loop @Helpers#2 sf=Helpers fp=slow-pattern:b43bed2a4ed933ce
+F-022 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:0d8b30d682d5a040
+F-023 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#5 sf=Main fp=unhandled-error:d53b6831cabb9108
+F-024 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#6 sf=Main fp=unhandled-error:91db14631026004a
+F-025 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=unhandled-error:535bedeaad4cc9ba
+F-026 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=unhandled-error:e37953e2970e4d27
+F-027 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=unhandled-error:e11b3ca23b7b2ad0
+F-028 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#12 sf=Main fp=unhandled-error:b65b5999b04c4b30
+F-029 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#13 sf=Main fp=unhandled-error:ad62a86447cbe74a

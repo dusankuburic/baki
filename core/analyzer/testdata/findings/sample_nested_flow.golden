@@ -1,0 +1,132 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_nested_flow
+document: subflows=1 blocks=20 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":6,"info":2,"blocksAnalyzed":14,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=630/630 last="Loop body is too large"
+metrics: {"avgCognitive":14,"avgCyclomatic":7,"healthScore":74,"maxCognitive":14,"maxCyclomatic":7,"subflowCount":1,"totalBlocks":10,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":10,"cognitiveComplexity":14,"cyclomaticComplexity":7,"fanIn":0,"fanOut":0,"maxNestingDepth":4,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=14
+  raw findings: uninitialized-variable=9 unused-variable=2
+inventory: none
+findings: 8
+F-001 warning/low uninitialized-variable [Logic] fix=init-variable @Main#1 sf=Main fp=uninitialized-variable:7805b4df8e3d96da
+    title: Variable potentially uninitialized
+    desc: Variable 'ItemList' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"ItemList"}
+F-002 warning/low uninitialized-variable [Logic] fix=init-variable @Main#1 sf=Main fp=uninitialized-variable:6962cd45000fe91f
+    title: Variable potentially uninitialized
+    desc: Variable 'Item' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"Item"}
+F-003 warning/low uninitialized-variable [Logic] fix=init-variable @Main#3 sf=Main fp=uninitialized-variable:8e2d4e4c1c57d66d
+    title: Variable potentially uninitialized
+    desc: Variable 'SubItemList' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"SubItemList"}
+F-004 warning/low uninitialized-variable [Logic] fix=init-variable @Main#3 sf=Main fp=uninitialized-variable:23e27376be509e75
+    title: Variable potentially uninitialized
+    desc: Variable 'SubItem' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"SubItem"}
+F-005 warning/low uninitialized-variable [Logic] fix=init-variable @Main#15 sf=Main fp=uninitialized-variable:34ec9a60e14bbe72
+    title: Variable potentially uninitialized
+    desc: Variable 'RetryList' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"RetryList"}
+F-006 warning/low uninitialized-variable [Logic] fix=init-variable @Main#15 sf=Main fp=uninitialized-variable:c74b9f8ee283b57e
+    title: Variable potentially uninitialized
+    desc: Variable 'Retry' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"Retry"}
+F-007 info/low unused-variable [Style] fix=remove-block @Main#11 sf=Main fp=unused-variable:171e2852b7eceea7
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"SmallItem"}
+F-008 info/low unused-variable [Style] fix=remove-block @Main#17 sf=Main fp=unused-variable:c9a2a0701eb5813d
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"CurrentRetry"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":6,"info":2,"blocksAnalyzed":14,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=630/630 last="Loop body is too large"
+metrics: as default, healthScore=74
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=14
+  raw findings: uninitialized-variable=9 unused-variable=2
+inventory: none
+findings: 8
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":6,"info":9,"blocksAnalyzed":14,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=630/630 last="Loop body is too large"
+metrics: as default, healthScore=67
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=14
+  raw findings: deep-nesting=5 large-subflow=1 uninitialized-variable=9 unused-variable=2 wide-loop=1
+inventory: none
+findings: 15
+F-001 info/low deep-nesting [Style] fix=- @Main#4 sf=Main fp=deep-nesting:df21b538cc6258c2
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-002 info/low deep-nesting [Style] fix=- @Main#5 sf=Main fp=deep-nesting:f1aa79e7ef5a722c
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-003 info/low deep-nesting [Style] fix=- @Main#6 sf=Main fp=deep-nesting:3bdedc2933f46a18
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-004 info/low deep-nesting [Style] fix=- @Main#10 sf=Main fp=deep-nesting:b0703bd863716d13
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-005 info/low deep-nesting [Style] fix=- @Main#11 sf=Main fp=deep-nesting:1c802556c9d1cc94
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-006 info/low large-subflow [Style] fix=- @Main#1 sf=Main fp=large-subflow:922a2933401b38ec
+    title: Large subflow
+    desc: Subflow 'Main' has 10 blocks (threshold: 5).
+F-007 warning/low uninitialized-variable [Logic] fix=init-variable @Main#1 sf=Main fp=uninitialized-variable:7805b4df8e3d96da
+F-008 warning/low uninitialized-variable [Logic] fix=init-variable @Main#1 sf=Main fp=uninitialized-variable:6962cd45000fe91f
+F-009 warning/low uninitialized-variable [Logic] fix=init-variable @Main#3 sf=Main fp=uninitialized-variable:8e2d4e4c1c57d66d
+F-010 warning/low uninitialized-variable [Logic] fix=init-variable @Main#3 sf=Main fp=uninitialized-variable:23e27376be509e75
+F-011 warning/low uninitialized-variable [Logic] fix=init-variable @Main#15 sf=Main fp=uninitialized-variable:34ec9a60e14bbe72
+F-012 warning/low uninitialized-variable [Logic] fix=init-variable @Main#15 sf=Main fp=uninitialized-variable:c74b9f8ee283b57e
+F-013 info/low unused-variable [Style] fix=remove-block @Main#11 sf=Main fp=unused-variable:171e2852b7eceea7
+F-014 info/low unused-variable [Style] fix=remove-block @Main#17 sf=Main fp=unused-variable:c9a2a0701eb5813d
+F-015 info/low wide-loop [Style] fix=- @Main#1 sf=Main fp=wide-loop:922a2933401b38ec
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":6,"maxBlocks":3}
+
+=== disabled
+stats: {"errors":0,"warnings":0,"info":2,"blocksAnalyzed":14,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=518/518 last="Loop body is too large"
+metrics: as default, healthScore=98
+profiles: rules=37 order=f7de49357acad250 blocksChecked=14
+  raw findings: unused-variable=2
+inventory: none
+findings: 2
+F-001 info/low unused-variable [Style] fix=remove-block @Main#11 sf=Main fp=unused-variable:171e2852b7eceea7
+F-002 info/low unused-variable [Style] fix=remove-block @Main#17 sf=Main fp=unused-variable:c9a2a0701eb5813d
+
+=== severity
+stats: {"errors":0,"warnings":0,"info":8,"blocksAnalyzed":14,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=630/630 last="Loop body is too large"
+metrics: as default, healthScore=92
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=14
+  raw findings: uninitialized-variable=9 unused-variable=2
+inventory: none
+findings: 8
+  as default; severity changes: F-001 warning->info, F-002 warning->info, F-003 warning->info, F-004 warning->info, F-005 warning->info, F-006 warning->info
+
+=== autofixable
+stats: {"errors":0,"warnings":6,"info":2,"blocksAnalyzed":14,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=9 final=448/448 last="Wait zero"
+metrics: as default, healthScore=74
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=14
+  raw findings: uninitialized-variable=9 unused-variable=2
+inventory: none
+findings: 8
+  as default; severity changes: none

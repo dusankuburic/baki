@@ -21,8 +21,6 @@ func (r *TaintedSinkRule) Description() string {
 func (r *TaintedSinkRule) DefaultSeverity() models.Severity { return models.SeverityError }
 func (r *TaintedSinkRule) Category() string                 { return "Security" }
 
-func (r *TaintedSinkRule) Confidence() models.Confidence { return models.ConfidenceMedium }
-
 // taintedInputPrefixes — variable name prefixes that mark user-controlled data.
 var taintedInputPrefixes = []string{
 	"Input_",
@@ -62,4 +60,11 @@ func (r *TaintedSinkRule) Check(block *models.Block, ctx *RuleContext) []models.
 	return nil
 }
 
-func init() { registerRule(&TaintedSinkRule{}) }
+func init() {
+	registerRule(&TaintedSinkRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

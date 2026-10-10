@@ -11,7 +11,7 @@ import {
   Share2,
   Undo2,
 } from 'lucide-react'
-import {useAnalysisStore, type FindingCategory, type SavedFilterView} from '@/stores/analysisStore'
+import {FINDING_CATEGORIES, useAnalysisStore, viewHiddenCategories, type SavedFilterView} from '@/stores/analysisStore'
 import {useAuthStore} from '@/stores/authStore'
 import type {TriageStatus} from '@/types'
 import {categoryColors, categoryBackgrounds} from '@/lib/findingsColors'
@@ -24,8 +24,6 @@ import {severityTone, triageTone} from '@/lib/severityTone'
 import {useState} from 'react'
 import {relativeTime} from '@/lib/time'
 import {useTranslation} from 'react-i18next'
-
-const ALL_CATEGORIES: FindingCategory[] = ['Security', 'Reliability', 'Performance', 'Style', 'Logic']
 
 // FindingsToolbar is the filter + actions bar above the findings list: severity
 // and category filter chips, re-analyze, sort cycle, diff/dedup toggles, and
@@ -73,6 +71,8 @@ interface FindingsToolbarProps {
   // Live per-severity counts of the CURRENT (non-severity-filtered) set —
   // shown on the chips so toggling is an informed choice (U2.3).
   severityCounts?: Record<Severity, number>
+  // Category chips in order: the known categories, then any other the report carries.
+  categories?: readonly string[]
   hasFindings: boolean
 }
 
@@ -95,15 +95,16 @@ export default function FindingsToolbar({
   sortMode,
   onSetSortMode,
   severityCounts,
+  categories = FINDING_CATEGORIES,
   hasFindings,
 }: FindingsToolbarProps) {
   const {t} = useTranslation('findings')
   const severityFilter = useAnalysisStore(s => s.severityFilter)
-  const categoryFilter = useAnalysisStore(s => s.categoryFilter)
+  const hiddenCategories = useAnalysisStore(s => s.hiddenCategories)
   const toggleSeverityFilter = useAnalysisStore(s => s.toggleSeverityFilter)
   const setSeverityFilter = useAnalysisStore(s => s.setSeverityFilter)
-  const toggleCategoryFilter = useAnalysisStore(s => s.toggleCategoryFilter)
-  const setCategoryFilter = useAnalysisStore(s => s.setCategoryFilter)
+  const toggleCategory = useAnalysisStore(s => s.toggleCategory)
+  const setHiddenCategories = useAnalysisStore(s => s.setHiddenCategories)
   const statusFilter = useAnalysisStore(s => s.statusFilter)
   const toggleStatusFilter = useAnalysisStore(s => s.toggleStatusFilter)
   const setStatusFilter = useAnalysisStore(s => s.setStatusFilter)
@@ -141,13 +142,13 @@ export default function FindingsToolbar({
     setShowViews(false)
     const name = await prompt({title: 'Save filter view', message: 'Name this filter view'})
     if (!name?.trim()) return
-    saveCurrentView(name.trim(), severityFilter, categoryFilter)
+    saveCurrentView(name.trim(), severityFilter, hiddenCategories)
   }
 
   const handleApplyView = (view: SavedFilterView) => {
     setShowViews(false)
     setSeverityFilter(new Set(view.severities))
-    setCategoryFilter(new Set(view.categories as FindingCategory[]))
+    setHiddenCategories(viewHiddenCategories(view))
   }
 
   const handleDeleteView = (e: React.MouseEvent, name: string) => {
@@ -178,14 +179,15 @@ export default function FindingsToolbar({
           )
         })}
         <span className="text-border-subtle mx-0.5">|</span>
-        {ALL_CATEGORIES.map(cat => {
+        {categories.map(cat => {
           return (
             <button
               key={cat}
-              onClick={() => toggleCategoryFilter(cat)}
+              onClick={() => toggleCategory(cat)}
+              aria-pressed={!hiddenCategories.has(cat)}
               className={clsx(
                 'text-2xs font-bold px-2 py-0.5 rounded-full border transition-all duration-fast',
-                categoryFilter.has(cat)
+                !hiddenCategories.has(cat)
                   ? `${categoryBackgrounds[cat] ?? 'bg-surface-3'} ${categoryColors[cat] ?? 'text-text-tertiary'} border-transparent`
                   : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary',
               )}
@@ -230,11 +232,11 @@ export default function FindingsToolbar({
             Mine
           </button>
         )}
-        {(severityFilter.size < 3 || categoryFilter.size < 5 || statusFilter.size < 4 || assignedToMeOnly) && (
+        {(severityFilter.size < 3 || hiddenCategories.size > 0 || statusFilter.size < 4 || assignedToMeOnly) && (
           <button
             onClick={() => {
               setSeverityFilter(new Set(['error', 'warning', 'info']))
-              useAnalysisStore.getState().setCategoryFilter(new Set(ALL_CATEGORIES))
+              setHiddenCategories([])
               setStatusFilter(new Set(['open', 'acknowledged', 'in_progress', 'resolved']))
               if (assignedToMeOnly) toggleAssignedToMe()
             }}

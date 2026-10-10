@@ -6,10 +6,31 @@ package analyzer
 // of sync at least once).
 var registeredRules []Rule
 
-// registerRule adds r to the rule catalog. Called from each rule file's
-// init(); not intended to be called directly elsewhere.
-func registerRule(r Rule) {
+// The rules whose findings are per subflow or per document are flow rules;
+// custom rules match blocks. TestAllRules_HaveAKind covers every registered rule.
+var (
+	_ FlowRule  = (*CircularSubflowRule)(nil)
+	_ FlowRule  = (*DuplicateSubflowNameRule)(nil)
+	_ FlowRule  = (*EmptySubflowRule)(nil)
+	_ FlowRule  = (*HighCyclomaticComplexityRule)(nil)
+	_ FlowRule  = (*LargeSubflowRule)(nil)
+	_ FlowRule  = (*ParseErrorRule)(nil)
+	_ FlowRule  = (*SubflowNoErrorHandlerRule)(nil)
+	_ FlowRule  = (*UncalledSubflowRule)(nil)
+	_ BlockRule = (*CustomRule)(nil)
+)
+
+// registerRule adds r and its metadata to the rule catalog. Called from each
+// rule file's init() (single-threaded); not intended to be called elsewhere.
+// Completeness of m is enforced by meta_test.go, not at init.
+func registerRule(r Rule, m RuleMeta) {
 	registeredRules = append(registeredRules, r)
+	t := metaTable()
+	if t == nil {
+		t = ruleMetaTable{}
+		ruleMetas.Store(&t)
+	}
+	t[r.ID()] = &m
 }
 
 // AllRules returns every registered rule. Returns a fresh copy so a caller
@@ -33,4 +54,17 @@ func AutoFixableRules(rules []Rule) []Rule {
 		}
 	}
 	return out
+}
+
+// mayEmitAutoFix mirrors stampFindings, which stamps by RuleID: the built-in
+// metadata under r's ID names a fix (stamped or direct), or r is a custom rule
+// with an autoFix.
+func mayEmitAutoFix(r Rule) bool {
+	if m := lookupMetaRef(r.ID()); m != nil && (m.AutoFix != "" || len(m.DirectFixes) > 0) {
+		return true
+	}
+	if cr, ok := r.(*CustomRule); ok {
+		return cr.config.AutoFix != ""
+	}
+	return false
 }

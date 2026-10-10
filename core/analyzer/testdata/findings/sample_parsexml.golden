@@ -1,0 +1,136 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_parsexml
+document: subflows=1 blocks=43 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":1,"info":9,"blocksAnalyzed":32,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=29 final=1440/1440 last="Loop body is too large"
+metrics: {"avgCognitive":1,"avgCyclomatic":2,"healthScore":87,"maxCognitive":1,"maxCyclomatic":2,"subflowCount":1,"totalBlocks":32,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow parsexml: {"blockCount":32,"cognitiveComplexity":1,"cyclomaticComplexity":2,"fanIn":0,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=32
+  raw findings: duplicate-action=1 hardcoded-filepath=1 uninitialized-variable=1 unused-variable=6 wide-loop=1
+inventory: none
+findings: 10
+F-001 info/medium duplicate-action [Style] fix=remove-block @parsexml#5 sf=parsexml fp=duplicate-action:5162245192d18f21
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":5}
+F-002 info/low hardcoded-filepath [Portability] fix=replace-with-variable @parsexml#0 sf=parsexml fp=hardcoded-filepath:eaa4a8bdf8ac6d7e
+    title: Hardcoded file path
+    desc: Property 'File' contains an absolute path: C:\\Users\\dusanku\\Music\\exercise4_xml.txt
+    meta: {"path":"C:\\\\Users\\\\dusanku\\\\Music\\\\exercise4_xml.txt","property":"File"}
+F-003 warning/low uninitialized-variable [Logic] fix=init-variable @parsexml#3 sf=parsexml fp=uninitialized-variable:7b555c8bf1cf727a
+    title: Variable potentially uninitialized
+    desc: Variable 'CurrentNode' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"CurrentNode"}
+F-004 info/low unused-variable [Style] fix=remove-block @parsexml#4 sf=parsexml fp=unused-variable:518e2abe8aa30295
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"CurrArtikal"}
+F-005 info/low unused-variable [Style] fix=remove-block @parsexml#10 sf=parsexml fp=unused-variable:2fc400e0d3256e70
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"CurrArtikal['Id']"}
+F-006 info/low unused-variable [Style] fix=remove-block @parsexml#17 sf=parsexml fp=unused-variable:30f21648b3493f60
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"CurrArtikal['Name']"}
+F-007 info/low unused-variable [Style] fix=remove-block @parsexml#24 sf=parsexml fp=unused-variable:4d5f73d2078e6822
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"CurrArtikal['Cena']"}
+F-008 info/low unused-variable [Style] fix=remove-block @parsexml#31 sf=parsexml fp=unused-variable:0d7b96030dfd358e
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"CurrArtikal['Kolicina']"}
+F-009 info/low unused-variable [Style] fix=remove-block @parsexml#38 sf=parsexml fp=unused-variable:4a7b77d7d3648b2b
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"CurrArtikal['Opis']"}
+F-010 info/low wide-loop [Style] fix=- @parsexml#3 sf=parsexml fp=wide-loop:8ed5f3985799ba8c
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":27,"maxBlocks":20}
+
+=== nil-settings
+stats: {"errors":0,"warnings":1,"info":9,"blocksAnalyzed":32,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=29 final=1440/1440 last="Loop body is too large"
+metrics: as default, healthScore=87
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=32
+  raw findings: duplicate-action=1 hardcoded-filepath=1 uninitialized-variable=1 unused-variable=6 wide-loop=1
+inventory: none
+findings: 10
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":1,"info":10,"blocksAnalyzed":32,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=29 final=1440/1440 last="Loop body is too large"
+metrics: as default, healthScore=86
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=32
+  raw findings: duplicate-action=1 hardcoded-filepath=1 large-subflow=1 uninitialized-variable=1 unused-variable=6 wide-loop=1
+inventory: none
+findings: 11
+F-001 info/medium duplicate-action [Style] fix=remove-block @parsexml#5 sf=parsexml fp=duplicate-action:5162245192d18f21
+F-002 info/low hardcoded-filepath [Portability] fix=replace-with-variable @parsexml#0 sf=parsexml fp=hardcoded-filepath:eaa4a8bdf8ac6d7e
+F-003 info/low large-subflow [Style] fix=- @parsexml#0 sf=parsexml fp=large-subflow:60fcf4039226bdf5
+    title: Large subflow
+    desc: Subflow 'parsexml' has 32 blocks (threshold: 5).
+F-004 warning/low uninitialized-variable [Logic] fix=init-variable @parsexml#3 sf=parsexml fp=uninitialized-variable:7b555c8bf1cf727a
+F-005 info/low unused-variable [Style] fix=remove-block @parsexml#4 sf=parsexml fp=unused-variable:518e2abe8aa30295
+F-006 info/low unused-variable [Style] fix=remove-block @parsexml#10 sf=parsexml fp=unused-variable:2fc400e0d3256e70
+F-007 info/low unused-variable [Style] fix=remove-block @parsexml#17 sf=parsexml fp=unused-variable:30f21648b3493f60
+F-008 info/low unused-variable [Style] fix=remove-block @parsexml#24 sf=parsexml fp=unused-variable:4d5f73d2078e6822
+F-009 info/low unused-variable [Style] fix=remove-block @parsexml#31 sf=parsexml fp=unused-variable:0d7b96030dfd358e
+F-010 info/low unused-variable [Style] fix=remove-block @parsexml#38 sf=parsexml fp=unused-variable:4a7b77d7d3648b2b
+F-011 info/low wide-loop [Style] fix=- @parsexml#3 sf=parsexml fp=wide-loop:8ed5f3985799ba8c
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":27,"maxBlocks":3}
+
+=== disabled
+stats: {"errors":0,"warnings":0,"info":9,"blocksAnalyzed":32,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=24 final=1184/1184 last="Loop body is too large"
+metrics: as default, healthScore=91
+profiles: rules=37 order=f7de49357acad250 blocksChecked=32
+  raw findings: duplicate-action=1 hardcoded-filepath=1 unused-variable=6 wide-loop=1
+inventory: none
+findings: 9
+F-001 info/medium duplicate-action [Style] fix=remove-block @parsexml#5 sf=parsexml fp=duplicate-action:5162245192d18f21
+F-002 info/low hardcoded-filepath [Portability] fix=replace-with-variable @parsexml#0 sf=parsexml fp=hardcoded-filepath:eaa4a8bdf8ac6d7e
+F-003 info/low unused-variable [Style] fix=remove-block @parsexml#4 sf=parsexml fp=unused-variable:518e2abe8aa30295
+F-004 info/low unused-variable [Style] fix=remove-block @parsexml#10 sf=parsexml fp=unused-variable:2fc400e0d3256e70
+F-005 info/low unused-variable [Style] fix=remove-block @parsexml#17 sf=parsexml fp=unused-variable:30f21648b3493f60
+F-006 info/low unused-variable [Style] fix=remove-block @parsexml#24 sf=parsexml fp=unused-variable:4d5f73d2078e6822
+F-007 info/low unused-variable [Style] fix=remove-block @parsexml#31 sf=parsexml fp=unused-variable:0d7b96030dfd358e
+F-008 info/low unused-variable [Style] fix=remove-block @parsexml#38 sf=parsexml fp=unused-variable:4a7b77d7d3648b2b
+F-009 info/low wide-loop [Style] fix=- @parsexml#3 sf=parsexml fp=wide-loop:8ed5f3985799ba8c
+
+=== severity
+stats: {"errors":0,"warnings":0,"info":10,"blocksAnalyzed":32,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=29 final=1440/1440 last="Loop body is too large"
+metrics: as default, healthScore=90
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=32
+  raw findings: duplicate-action=1 hardcoded-filepath=1 uninitialized-variable=1 unused-variable=6 wide-loop=1
+inventory: none
+findings: 10
+  as default; severity changes: F-003 warning->info
+
+=== autofixable
+stats: {"errors":0,"warnings":1,"info":8,"blocksAnalyzed":32,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=21 final=1024/1024 last="Wait zero"
+metrics: as default, healthScore=88
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=32
+  raw findings: duplicate-action=1 hardcoded-filepath=1 uninitialized-variable=1 unused-variable=6
+inventory: none
+findings: 9
+F-001 info/medium duplicate-action [Style] fix=remove-block @parsexml#5 sf=parsexml fp=duplicate-action:5162245192d18f21
+F-002 info/low hardcoded-filepath [Portability] fix=replace-with-variable @parsexml#0 sf=parsexml fp=hardcoded-filepath:eaa4a8bdf8ac6d7e
+F-003 warning/low uninitialized-variable [Logic] fix=init-variable @parsexml#3 sf=parsexml fp=uninitialized-variable:7b555c8bf1cf727a
+F-004 info/low unused-variable [Style] fix=remove-block @parsexml#4 sf=parsexml fp=unused-variable:518e2abe8aa30295
+F-005 info/low unused-variable [Style] fix=remove-block @parsexml#10 sf=parsexml fp=unused-variable:2fc400e0d3256e70
+F-006 info/low unused-variable [Style] fix=remove-block @parsexml#17 sf=parsexml fp=unused-variable:30f21648b3493f60
+F-007 info/low unused-variable [Style] fix=remove-block @parsexml#24 sf=parsexml fp=unused-variable:4d5f73d2078e6822
+F-008 info/low unused-variable [Style] fix=remove-block @parsexml#31 sf=parsexml fp=unused-variable:0d7b96030dfd358e
+F-009 info/low unused-variable [Style] fix=remove-block @parsexml#38 sf=parsexml fp=unused-variable:4a7b77d7d3648b2b

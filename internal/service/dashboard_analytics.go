@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/cache"
 	"pad-core/logger"
 	"pad-core/models"
 )
@@ -100,6 +102,59 @@ type anaCacheEntry struct {
 	orgIDs []string
 }
 
+// anaStore is the analytics cache's storage (spec analyticsViews): entries by encoded key, each remembering whose
+// view it is and which organisations it spans, which no key part can say (InvalidateFlowViews drops by both).
+type anaStore struct {
+	mu sync.Mutex
+	m  map[string]*anaCacheEntry
+	// seq numbers inserts so entry-cap eviction has a deterministic tie-break when entries share one fetchedAt;
+	// map order otherwise picked the victim.
+	seq uint64
+}
+
+func newAnaStore() *anaStore {
+	s := &anaStore{m: make(map[string]*anaCacheEntry)}
+	cache.Track(analyticsViews, s)
+	return s
+}
+
+// Len and Cost size the store for the cache metrics (one unit per view).
+func (s *anaStore) Len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.m)
+}
+
+func (s *anaStore) Cost() int64 { return int64(s.Len()) }
+
+// clear drops every view.
+func (s *anaStore) clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := range s.m {
+		delete(s.m, k)
+		analyticsViews.RecordEviction(cache.EvictDeleted)
+	}
+}
+
+// dropViews drops ownerID's views and every view spanning orgID (either may be empty).
+func (s *anaStore) dropViews(ownerID, orgID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, e := range s.m {
+		if (ownerID != "" && e.userID == ownerID) || (orgID != "" && slices.Contains(e.orgIDs, orgID)) {
+			delete(s.m, k)
+			analyticsViews.RecordEviction(cache.EvictDeleted)
+		}
+	}
+}
+
+// analyticsKey keys userID's view of q; isAdmin is part of it because the payload's instance-wide security counts
+// depend on it.
+func analyticsKey(userID string, isAdmin bool, q AnalyticsQuery) (cache.Key, error) {
+	return analyticsViews.Key(cache.User(userID), cache.Param("admin", strconv.FormatBool(isAdmin)), cache.Param("query", q.Key()))
+}
+
 // anaFence is what an analytics build captured before it read, for its fill to be checked against the
 // invalidations that ran meanwhile (DashboardService.anaGen).
 type anaFence struct {
@@ -156,9 +211,9 @@ type ruleMeta struct {
 func (s *DashboardService) CloudMode() bool { return s.backend != nil }
 
 func (s *DashboardService) anaCacheGet(key string) *models.DashboardAnalyticsData {
-	s.dashMu.Lock()
-	defer s.dashMu.Unlock()
-	if e, ok := s.anaCache[key]; ok && time.Since(e.fetchedAt) < dashboardCacheTTL {
+	s.ana.mu.Lock()
+	defer s.ana.mu.Unlock()
+	if e, ok := s.ana.m[key]; ok && time.Since(e.fetchedAt) < dashboardCacheTTL {
 		return e.data
 	}
 	return nil
@@ -167,21 +222,24 @@ func (s *DashboardService) anaCacheGet(key string) *models.DashboardAnalyticsDat
 // anaCacheFill stores a view built under fence unless an invalidation it overlapped refuses it; checked under
 // the lock InvalidateFlowViews deletes under.
 func (s *DashboardService) anaCacheFill(ctx context.Context, key string, data *models.DashboardAnalyticsData, f *anaFence) {
-	s.dashMu.Lock()
-	defer s.dashMu.Unlock()
+	st := s.ana
+	st.mu.Lock()
+	defer st.mu.Unlock()
 	if !s.anaFillOK(ctx, f) {
 		return
 	}
-	if s.anaCache == nil {
-		s.anaCache = make(map[string]*anaCacheEntry)
+	st.seq++
+	if _, replaced := st.m[key]; replaced {
+		analyticsViews.RecordEviction(cache.EvictReplaced)
 	}
-	s.anaSeq++
-	s.anaCache[key] = &anaCacheEntry{data: data, fetchedAt: time.Now(), seq: s.anaSeq, userID: f.userID, orgIDs: f.orgIDs}
-	// Same write-time sweep as the home cache: entries past the TTL are dead
-	// weight the hit check skips anyway.
-	for k, e := range s.anaCache {
+	st.m[key] = &anaCacheEntry{data: data, fetchedAt: time.Now(), seq: st.seq, userID: f.userID, orgIDs: f.orgIDs}
+	analyticsViews.RecordStore()
+	// The TTL governs freshness, not lifetime: entries past it are dead weight the hit check skips anyway, so
+	// sweep them at write time.
+	for k, e := range st.m {
 		if time.Since(e.fetchedAt) >= dashboardCacheTTL {
-			delete(s.anaCache, k)
+			delete(st.m, k)
+			analyticsViews.RecordEviction(cache.EvictExpired)
 		}
 	}
 	// The TTL sweep cannot shrink a cache filled with fresh distinct keys, so also cap
@@ -189,14 +247,15 @@ func (s *DashboardService) anaCacheFill(ctx context.Context, key string, data *m
 	// oldest fetchedAt — entries expire fetchedAt+TTL; equal timestamps fall back to
 	// insertion order so the victim is deterministic). Same expired-first/nearest-expiry
 	// order as pruneModelCacheLocked.
-	for len(s.anaCache) > anaCacheMaxEntries {
+	for len(st.m) > anaCacheMaxEntries {
 		oldestKey, oldestAt, oldestSeq, first := "", time.Time{}, uint64(0), true
-		for k, e := range s.anaCache {
+		for k, e := range st.m {
 			if first || e.fetchedAt.Before(oldestAt) || (e.fetchedAt.Equal(oldestAt) && e.seq < oldestSeq) {
 				oldestKey, oldestAt, oldestSeq, first = k, e.fetchedAt, e.seq, false
 			}
 		}
-		delete(s.anaCache, oldestKey)
+		delete(st.m, oldestKey)
+		analyticsViews.RecordEviction(cache.EvictCapacity)
 	}
 }
 
@@ -210,11 +269,19 @@ func (s *DashboardService) BuildAnalytics(ctx context.Context, userID string, ca
 	if s.scope == nil {
 		return nil, fmt.Errorf("analytics: no scope resolver wired")
 	}
-	key := userID + "\x00" + q.Key()
+	k, kerr := analyticsKey(userID, caller.IsAdmin, q)
+	if kerr != nil {
+		// No user to key the view by: build it uncached (the fence still runs, nothing stores).
+		return s.buildAnalytics(ctx, userID, caller, q, s.beginAnaFill(userID))
+	}
+	key := k.String()
 	if hit := s.anaCacheGet(key); hit != nil {
+		analyticsViews.RecordHit()
 		return hit, nil
 	}
-	v, err, _ := s.anaSF.Do("analytics:"+key, func() (any, error) {
+	analyticsViews.RecordMiss()
+	// The flight is keyed like the cache, so an admin and a non-admin session of one user never share a build.
+	v, err, _ := s.anaSF.Do(key, func() (any, error) {
 		if hit := s.anaCacheGet(key); hit != nil {
 			return hit, nil
 		}

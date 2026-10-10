@@ -1,0 +1,237 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_basic_flow
+document: subflows=3 blocks=35 parseErrors=1 folder=false
+
+=== default
+stats: {"errors":0,"warnings":16,"info":11,"blocksAnalyzed":30,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=27 final=1350/1350 last="Loop body is too large"
+metrics: {"avgCognitive":2,"avgCyclomatic":2.6666666666666665,"healthScore":25,"maxCognitive":3,"maxCyclomatic":4,"subflowCount":3,"totalBlocks":25,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":12,"cognitiveComplexity":3,"cyclomaticComplexity":4,"fanIn":0,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+  subflow ProcessData: {"blockCount":6,"cognitiveComplexity":3,"cyclomaticComplexity":3,"fanIn":0,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+  subflow ErrorHandling: {"blockCount":7,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":1,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=30
+  raw findings: hardcoded-url=1 missing-delay=3 missing-retry=4 missing-timeout=4 parse-error=1 subflow-no-error-handler=2 uncalled-subflow=2 unhandled-error=6 uninitialized-variable=4 unused-variable=1
+inventory: none
+findings: 27
+F-001 info/low hardcoded-url [Portability] fix=replace-with-variable @ErrorHandling#6 sf=ErrorHandling fp=hardcoded-url:098efca0ddc72f31
+    title: Hardcoded URL
+    desc: Property 'Url' contains a hardcoded URL: https://example.com
+    meta: {"property":"Url","url":"https://example.com"}
+F-002 info/medium missing-delay [Reliability] fix=insert-delay @ErrorHandling#6 sf=ErrorHandling fp=missing-delay:82f47428193b9166
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-003 info/medium missing-delay [Reliability] fix=insert-delay @ErrorHandling#7 sf=ErrorHandling fp=missing-delay:6ae997da7cd6d068
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-004 info/medium missing-delay [Reliability] fix=insert-delay @ErrorHandling#8 sf=ErrorHandling fp=missing-delay:fe084d8f47d14445
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-005 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#5 sf=ErrorHandling fp=missing-retry:d782a41e536f5dcd
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.LaunchBrowser"}
+F-006 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#6 sf=ErrorHandling fp=missing-retry:82f47428193b9166
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.NavigateTo"}
+F-007 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#7 sf=ErrorHandling fp=missing-retry:6ae997da7cd6d068
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.ClickClick"}
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#8 sf=ErrorHandling fp=missing-retry:fe084d8f47d14445
+    title: Transient operation without retry
+    desc: This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
+    meta: {"rawType":"WebAutomation.CloseBrowser"}
+F-009 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#5 sf=ErrorHandling fp=missing-timeout:d782a41e536f5dcd
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.LaunchBrowser"}
+F-010 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#6 sf=ErrorHandling fp=missing-timeout:82f47428193b9166
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.NavigateTo"}
+F-011 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#7 sf=ErrorHandling fp=missing-timeout:6ae997da7cd6d068
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.ClickClick"}
+F-012 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#8 sf=ErrorHandling fp=missing-timeout:fe084d8f47d14445
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.CloseBrowser"}
+F-013 warning/high parse-error [Syntax] fix=- @Main#0 sf=Main fp=parse-error:9762abb4ea46bd58
+    title: Parse error (line 22)
+    desc: malformed line
+    meta: {"column":0,"line":22,"snippet":"    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %ExcelInstance% ReadOption: Excel.ReadOption.CellRange Range: $'''A1:B10''' =\u003e ExcelData"}
+F-014 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:646bb0a4fec2c428
+    title: Subflow without error handler
+    desc: Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-015 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @ProcessData#0 sf=ProcessData fp=subflow-no-error-handler:5e7aaccc172aac5d
+    title: Subflow without error handler
+    desc: Subflow "ProcessData" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-016 warning/medium uncalled-subflow [Logic] fix=- @ProcessData#0 sf=ProcessData fp=uncalled-subflow:5e7aaccc172aac5d
+    title: Uncalled subflow
+    desc: Subflow 'ProcessData' is never called by any other subflow and is not the entry point. It is dead code at the flow level.
+    meta: {"subflow":"ProcessData"}
+F-017 warning/medium uncalled-subflow [Logic] fix=- @ErrorHandling#0 sf=ErrorHandling fp=uncalled-subflow:ccb673e88c9719e0
+    title: Uncalled subflow
+    desc: Subflow 'ErrorHandling' is never called by any other subflow and is not the entry point. It is dead code at the flow level.
+    meta: {"subflow":"ErrorHandling"}
+F-018 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ProcessData#0 sf=ProcessData fp=unhandled-error:5e7aaccc172aac5d
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-019 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ProcessData#8 sf=ProcessData fp=unhandled-error:5e35f9e17daff1e0
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-020 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ErrorHandling#5 sf=ErrorHandling fp=unhandled-error:d782a41e536f5dcd
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-021 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ErrorHandling#6 sf=ErrorHandling fp=unhandled-error:82f47428193b9166
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-022 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ErrorHandling#7 sf=ErrorHandling fp=unhandled-error:6ae997da7cd6d068
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-023 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ErrorHandling#8 sf=ErrorHandling fp=unhandled-error:fe084d8f47d14445
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-024 warning/low uninitialized-variable [Logic] fix=init-variable @ProcessData#1 sf=ProcessData fp=uninitialized-variable:8527822538fe45bf
+    title: Variable potentially uninitialized
+    desc: Variable 'ExcelData' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"ExcelData"}
+F-025 warning/low uninitialized-variable [Logic] fix=init-variable @ProcessData#1 sf=ProcessData fp=uninitialized-variable:676d11f14a1b9510
+    title: Variable potentially uninitialized
+    desc: Variable 'CurrentRow' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"CurrentRow"}
+F-026 warning/low uninitialized-variable [Logic] fix=init-variable @ErrorHandling#2 sf=ErrorHandling fp=uninitialized-variable:98b41010b4c00405
+    title: Variable potentially uninitialized
+    desc: Variable 'WorkflowError' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"WorkflowError"}
+F-027 info/low unused-variable [Style] fix=remove-block @ErrorHandling#3 sf=ErrorHandling fp=unused-variable:db05dd708899d2a8
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"ErrorHandled"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":16,"info":11,"blocksAnalyzed":30,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=27 final=1350/1350 last="Loop body is too large"
+metrics: as default, healthScore=25
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=30
+  raw findings: hardcoded-url=1 missing-delay=3 missing-retry=4 missing-timeout=4 parse-error=1 subflow-no-error-handler=2 uncalled-subflow=2 unhandled-error=6 uninitialized-variable=4 unused-variable=1
+inventory: none
+findings: 27
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":16,"info":14,"blocksAnalyzed":30,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=27 final=1350/1350 last="Loop body is too large"
+metrics: as default, healthScore=22
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=30
+  raw findings: hardcoded-url=1 large-subflow=3 missing-delay=3 missing-retry=4 missing-timeout=4 parse-error=1 subflow-no-error-handler=2 uncalled-subflow=2 unhandled-error=6 uninitialized-variable=4 unused-variable=1
+inventory: none
+findings: 30
+F-001 info/low hardcoded-url [Portability] fix=replace-with-variable @ErrorHandling#6 sf=ErrorHandling fp=hardcoded-url:098efca0ddc72f31
+F-002 info/low large-subflow [Style] fix=- @Main#1 sf=Main fp=large-subflow:646bb0a4fec2c428
+    title: Large subflow
+    desc: Subflow 'Main' has 12 blocks (threshold: 5).
+F-003 info/low large-subflow [Style] fix=- @ProcessData#0 sf=ProcessData fp=large-subflow:5e7aaccc172aac5d
+    title: Large subflow
+    desc: Subflow 'ProcessData' has 6 blocks (threshold: 5).
+F-004 info/low large-subflow [Style] fix=- @ErrorHandling#0 sf=ErrorHandling fp=large-subflow:ccb673e88c9719e0
+    title: Large subflow
+    desc: Subflow 'ErrorHandling' has 7 blocks (threshold: 5).
+F-005 info/medium missing-delay [Reliability] fix=insert-delay @ErrorHandling#6 sf=ErrorHandling fp=missing-delay:82f47428193b9166
+F-006 info/medium missing-delay [Reliability] fix=insert-delay @ErrorHandling#7 sf=ErrorHandling fp=missing-delay:6ae997da7cd6d068
+F-007 info/medium missing-delay [Reliability] fix=insert-delay @ErrorHandling#8 sf=ErrorHandling fp=missing-delay:fe084d8f47d14445
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#5 sf=ErrorHandling fp=missing-retry:d782a41e536f5dcd
+F-009 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#6 sf=ErrorHandling fp=missing-retry:82f47428193b9166
+F-010 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#7 sf=ErrorHandling fp=missing-retry:6ae997da7cd6d068
+F-011 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#8 sf=ErrorHandling fp=missing-retry:fe084d8f47d14445
+F-012 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#5 sf=ErrorHandling fp=missing-timeout:d782a41e536f5dcd
+F-013 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#6 sf=ErrorHandling fp=missing-timeout:82f47428193b9166
+F-014 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#7 sf=ErrorHandling fp=missing-timeout:6ae997da7cd6d068
+F-015 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#8 sf=ErrorHandling fp=missing-timeout:fe084d8f47d14445
+F-016 warning/high parse-error [Syntax] fix=- @Main#0 sf=Main fp=parse-error:9762abb4ea46bd58
+F-017 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:646bb0a4fec2c428
+F-018 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @ProcessData#0 sf=ProcessData fp=subflow-no-error-handler:5e7aaccc172aac5d
+F-019 warning/medium uncalled-subflow [Logic] fix=- @ProcessData#0 sf=ProcessData fp=uncalled-subflow:5e7aaccc172aac5d
+F-020 warning/medium uncalled-subflow [Logic] fix=- @ErrorHandling#0 sf=ErrorHandling fp=uncalled-subflow:ccb673e88c9719e0
+F-021 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ProcessData#0 sf=ProcessData fp=unhandled-error:5e7aaccc172aac5d
+F-022 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ProcessData#8 sf=ProcessData fp=unhandled-error:5e35f9e17daff1e0
+F-023 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ErrorHandling#5 sf=ErrorHandling fp=unhandled-error:d782a41e536f5dcd
+F-024 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ErrorHandling#6 sf=ErrorHandling fp=unhandled-error:82f47428193b9166
+F-025 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ErrorHandling#7 sf=ErrorHandling fp=unhandled-error:6ae997da7cd6d068
+F-026 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ErrorHandling#8 sf=ErrorHandling fp=unhandled-error:fe084d8f47d14445
+F-027 warning/low uninitialized-variable [Logic] fix=init-variable @ProcessData#1 sf=ProcessData fp=uninitialized-variable:8527822538fe45bf
+F-028 warning/low uninitialized-variable [Logic] fix=init-variable @ProcessData#1 sf=ProcessData fp=uninitialized-variable:676d11f14a1b9510
+F-029 warning/low uninitialized-variable [Logic] fix=init-variable @ErrorHandling#2 sf=ErrorHandling fp=uninitialized-variable:98b41010b4c00405
+F-030 info/low unused-variable [Style] fix=remove-block @ErrorHandling#3 sf=ErrorHandling fp=unused-variable:db05dd708899d2a8
+
+=== disabled
+stats: {"errors":0,"warnings":6,"info":6,"blocksAnalyzed":30,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=23 final=1110/1110 last="Loop body is too large"
+metrics: as default, healthScore=70
+profiles: rules=37 order=f7de49357acad250 blocksChecked=30
+  raw findings: hardcoded-url=1 missing-retry=4 missing-timeout=4 uncalled-subflow=2 unused-variable=1
+inventory: none
+findings: 12
+F-001 info/low hardcoded-url [Portability] fix=replace-with-variable @ErrorHandling#6 sf=ErrorHandling fp=hardcoded-url:098efca0ddc72f31
+F-002 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#5 sf=ErrorHandling fp=missing-retry:d782a41e536f5dcd
+F-003 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#6 sf=ErrorHandling fp=missing-retry:82f47428193b9166
+F-004 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#7 sf=ErrorHandling fp=missing-retry:6ae997da7cd6d068
+F-005 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#8 sf=ErrorHandling fp=missing-retry:fe084d8f47d14445
+F-006 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#5 sf=ErrorHandling fp=missing-timeout:d782a41e536f5dcd
+F-007 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#6 sf=ErrorHandling fp=missing-timeout:82f47428193b9166
+F-008 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#7 sf=ErrorHandling fp=missing-timeout:6ae997da7cd6d068
+F-009 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#8 sf=ErrorHandling fp=missing-timeout:fe084d8f47d14445
+F-010 warning/medium uncalled-subflow [Logic] fix=- @ProcessData#0 sf=ProcessData fp=uncalled-subflow:5e7aaccc172aac5d
+F-011 warning/medium uncalled-subflow [Logic] fix=- @ErrorHandling#0 sf=ErrorHandling fp=uncalled-subflow:ccb673e88c9719e0
+F-012 info/low unused-variable [Style] fix=remove-block @ErrorHandling#3 sf=ErrorHandling fp=unused-variable:db05dd708899d2a8
+
+=== severity
+stats: {"errors":8,"warnings":11,"info":8,"blocksAnalyzed":30,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=27 final=1350/1350 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=30
+  raw findings: hardcoded-url=1 missing-delay=3 missing-retry=4 missing-timeout=4 parse-error=1 subflow-no-error-handler=2 uncalled-subflow=2 unhandled-error=6 uninitialized-variable=4 unused-variable=1
+inventory: none
+findings: 27
+  as default; severity changes: F-001 info->warning, F-002 info->warning, F-003 info->warning, F-004 info->warning, F-014 info->error, F-015 info->error, F-018 warning->error, F-019 warning->error, F-020 warning->error, F-021 warning->error, F-022 warning->error, F-023 warning->error, F-024 warning->info, F-025 warning->info, F-026 warning->info
+
+=== autofixable
+stats: {"errors":0,"warnings":14,"info":11,"blocksAnalyzed":30,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=20 final=960/960 last="Wait zero"
+metrics: as default, healthScore=33
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=30
+  raw findings: hardcoded-url=1 missing-delay=3 missing-retry=4 missing-timeout=4 subflow-no-error-handler=2 unhandled-error=6 uninitialized-variable=4 unused-variable=1
+inventory: none
+findings: 25
+F-001 info/low hardcoded-url [Portability] fix=replace-with-variable @ErrorHandling#6 sf=ErrorHandling fp=hardcoded-url:098efca0ddc72f31
+F-002 info/medium missing-delay [Reliability] fix=insert-delay @ErrorHandling#6 sf=ErrorHandling fp=missing-delay:82f47428193b9166
+F-003 info/medium missing-delay [Reliability] fix=insert-delay @ErrorHandling#7 sf=ErrorHandling fp=missing-delay:6ae997da7cd6d068
+F-004 info/medium missing-delay [Reliability] fix=insert-delay @ErrorHandling#8 sf=ErrorHandling fp=missing-delay:fe084d8f47d14445
+F-005 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#5 sf=ErrorHandling fp=missing-retry:d782a41e536f5dcd
+F-006 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#6 sf=ErrorHandling fp=missing-retry:82f47428193b9166
+F-007 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#7 sf=ErrorHandling fp=missing-retry:6ae997da7cd6d068
+F-008 info/medium missing-retry [Reliability] fix=wrap-in-retry @ErrorHandling#8 sf=ErrorHandling fp=missing-retry:fe084d8f47d14445
+F-009 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#5 sf=ErrorHandling fp=missing-timeout:d782a41e536f5dcd
+F-010 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#6 sf=ErrorHandling fp=missing-timeout:82f47428193b9166
+F-011 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#7 sf=ErrorHandling fp=missing-timeout:6ae997da7cd6d068
+F-012 warning/medium missing-timeout [Reliability] fix=set-timeout @ErrorHandling#8 sf=ErrorHandling fp=missing-timeout:fe084d8f47d14445
+F-013 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:646bb0a4fec2c428
+F-014 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @ProcessData#0 sf=ProcessData fp=subflow-no-error-handler:5e7aaccc172aac5d
+F-015 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ProcessData#0 sf=ProcessData fp=unhandled-error:5e7aaccc172aac5d
+F-016 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ProcessData#8 sf=ProcessData fp=unhandled-error:5e35f9e17daff1e0
+F-017 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ErrorHandling#5 sf=ErrorHandling fp=unhandled-error:d782a41e536f5dcd
+F-018 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ErrorHandling#6 sf=ErrorHandling fp=unhandled-error:82f47428193b9166
+F-019 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ErrorHandling#7 sf=ErrorHandling fp=unhandled-error:6ae997da7cd6d068
+F-020 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @ErrorHandling#8 sf=ErrorHandling fp=unhandled-error:fe084d8f47d14445
+F-021 warning/low uninitialized-variable [Logic] fix=init-variable @ProcessData#1 sf=ProcessData fp=uninitialized-variable:8527822538fe45bf
+F-022 warning/low uninitialized-variable [Logic] fix=init-variable @ProcessData#1 sf=ProcessData fp=uninitialized-variable:676d11f14a1b9510
+F-023 warning/low uninitialized-variable [Logic] fix=init-variable @ErrorHandling#2 sf=ErrorHandling fp=uninitialized-variable:98b41010b4c00405
+F-024 info/low unused-variable [Style] fix=remove-block @ErrorHandling#3 sf=ErrorHandling fp=unused-variable:db05dd708899d2a8
+F-025 warning/high parse-error [-] fix=- @- sf=Main fp=parse-error:
+    title: Parse error (line 22)
+    desc: malformed line
+    meta: {"column":0,"line":22,"snippet":"    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %ExcelInstance% ReadOption: Excel.ReadOption.CellRange Range: $'''A1:B10''' =\u003e ExcelData"}

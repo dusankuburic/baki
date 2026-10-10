@@ -1,0 +1,127 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_padframework_Framework_LogMessage
+document: subflows=1 blocks=13 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":9,"info":1,"blocksAnalyzed":11,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=10 final=495/495 last="Loop body is too large"
+metrics: {"avgCognitive":8,"avgCyclomatic":5,"healthScore":63,"maxCognitive":8,"maxCyclomatic":5,"subflowCount":1,"totalBlocks":10,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Framework_LogMessage: {"blockCount":10,"cognitiveComplexity":8,"cyclomaticComplexity":5,"fanIn":0,"fanOut":0,"maxNestingDepth":4,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=11
+  raw findings: file-op-no-error-handler=3 subflow-no-error-handler=1 unhandled-error=3 uninitialized-variable=3
+inventory: none
+findings: 10
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#5 sf=Framework_LogMessage fp=file-op-no-error-handler:3b4d6394c5be2fe1
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.WriteText"}
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#8 sf=Framework_LogMessage fp=file-op-no-error-handler:c5d2d56a69535ead
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.WriteText"}
+F-003 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#10 sf=Framework_LogMessage fp=file-op-no-error-handler:e9d14dc720c7bccd
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.WriteText"}
+F-004 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#1 sf=Framework_LogMessage fp=subflow-no-error-handler:07258f2acf390899
+    title: Subflow without error handler
+    desc: Subflow "Framework_LogMessage" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-005 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#5 sf=Framework_LogMessage fp=unhandled-error:3b4d6394c5be2fe1
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-006 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#8 sf=Framework_LogMessage fp=unhandled-error:c5d2d56a69535ead
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-007 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#10 sf=Framework_LogMessage fp=unhandled-error:e9d14dc720c7bccd
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-008 warning/low uninitialized-variable [Logic] fix=init-variable @Framework_LogMessage#4 sf=Framework_LogMessage fp=uninitialized-variable:17d70e05a9ef2699
+    title: Variable potentially uninitialized
+    desc: Variable 'Config' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"Config"}
+F-009 warning/low uninitialized-variable [Logic] fix=init-variable @Framework_LogMessage#8 sf=Framework_LogMessage fp=uninitialized-variable:beb06debe71ae617
+    title: Variable potentially uninitialized
+    desc: Variable 'LogLevel' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-010 warning/low uninitialized-variable [Logic] fix=init-variable @Framework_LogMessage#8 sf=Framework_LogMessage fp=uninitialized-variable:83b68a5e3c2e1ef4
+    title: Variable potentially uninitialized
+    desc: Variable 'LogMessage' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"LogMessage"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":9,"info":1,"blocksAnalyzed":11,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=10 final=495/495 last="Loop body is too large"
+metrics: as default, healthScore=63
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=11
+  raw findings: file-op-no-error-handler=3 subflow-no-error-handler=1 unhandled-error=3 uninitialized-variable=3
+inventory: none
+findings: 10
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":9,"info":5,"blocksAnalyzed":11,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=10 final=495/495 last="Loop body is too large"
+metrics: as default, healthScore=59
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=11
+  raw findings: deep-nesting=3 file-op-no-error-handler=3 large-subflow=1 subflow-no-error-handler=1 unhandled-error=3 uninitialized-variable=3
+inventory: none
+findings: 14
+F-001 info/low deep-nesting [Style] fix=- @Framework_LogMessage#8 sf=Framework_LogMessage fp=deep-nesting:c5d2d56a69535ead
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-002 info/low deep-nesting [Style] fix=- @Framework_LogMessage#9 sf=Framework_LogMessage fp=deep-nesting:a813c92e93bd1b56
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-003 info/low deep-nesting [Style] fix=- @Framework_LogMessage#10 sf=Framework_LogMessage fp=deep-nesting:e9d14dc720c7bccd
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-004 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#5 sf=Framework_LogMessage fp=file-op-no-error-handler:3b4d6394c5be2fe1
+F-005 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#8 sf=Framework_LogMessage fp=file-op-no-error-handler:c5d2d56a69535ead
+F-006 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#10 sf=Framework_LogMessage fp=file-op-no-error-handler:e9d14dc720c7bccd
+F-007 info/low large-subflow [Style] fix=- @Framework_LogMessage#1 sf=Framework_LogMessage fp=large-subflow:07258f2acf390899
+    title: Large subflow
+    desc: Subflow 'Framework_LogMessage' has 10 blocks (threshold: 5).
+F-008 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#1 sf=Framework_LogMessage fp=subflow-no-error-handler:07258f2acf390899
+F-009 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#5 sf=Framework_LogMessage fp=unhandled-error:3b4d6394c5be2fe1
+F-010 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#8 sf=Framework_LogMessage fp=unhandled-error:c5d2d56a69535ead
+F-011 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_LogMessage#10 sf=Framework_LogMessage fp=unhandled-error:e9d14dc720c7bccd
+F-012 warning/low uninitialized-variable [Logic] fix=init-variable @Framework_LogMessage#4 sf=Framework_LogMessage fp=uninitialized-variable:17d70e05a9ef2699
+F-013 warning/low uninitialized-variable [Logic] fix=init-variable @Framework_LogMessage#8 sf=Framework_LogMessage fp=uninitialized-variable:beb06debe71ae617
+F-014 warning/low uninitialized-variable [Logic] fix=init-variable @Framework_LogMessage#8 sf=Framework_LogMessage fp=uninitialized-variable:83b68a5e3c2e1ef4
+
+=== disabled
+stats: {"errors":0,"warnings":3,"info":0,"blocksAnalyzed":11,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=9 final=407/407 last="Loop body is too large"
+metrics: as default, healthScore=88
+profiles: rules=37 order=f7de49357acad250 blocksChecked=11
+  raw findings: file-op-no-error-handler=3
+inventory: none
+findings: 3
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#5 sf=Framework_LogMessage fp=file-op-no-error-handler:3b4d6394c5be2fe1
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#8 sf=Framework_LogMessage fp=file-op-no-error-handler:c5d2d56a69535ead
+F-003 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Framework_LogMessage#10 sf=Framework_LogMessage fp=file-op-no-error-handler:e9d14dc720c7bccd
+
+=== severity
+stats: {"errors":4,"warnings":3,"info":3,"blocksAnalyzed":11,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=10 final=495/495 last="Loop body is too large"
+metrics: as default, healthScore=37
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=11
+  raw findings: file-op-no-error-handler=3 subflow-no-error-handler=1 unhandled-error=3 uninitialized-variable=3
+inventory: none
+findings: 10
+  as default; severity changes: F-004 info->error, F-005 warning->error, F-006 warning->error, F-007 warning->error, F-008 warning->info, F-009 warning->info, F-010 warning->info
+
+=== autofixable
+stats: {"errors":0,"warnings":9,"info":1,"blocksAnalyzed":11,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=8 final=352/352 last="Wait zero"
+metrics: as default, healthScore=63
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=11
+  raw findings: file-op-no-error-handler=3 subflow-no-error-handler=1 unhandled-error=3 uninitialized-variable=3
+inventory: none
+findings: 10
+  as default; severity changes: none

@@ -2,16 +2,18 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/platform/reqtx"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
+	"pad-core/cache"
 	"pad-core/logger"
 	"pad-core/models"
 )
@@ -20,9 +22,24 @@ import (
 // 30s bounds cross-replica staleness without re-querying storage every run.
 const ruleProfileTTL = 30 * time.Second
 
-// ruleProfileCacheMax bounds the cache by org count; entries expire by TTL
-// anyway, so this only caps orgs analyzing within one TTL (oldest re-resolves).
-const ruleProfileCacheMax = 256
+// ruleProfileCacheMax bounds the cache by reader count (an org's own entry and one per caller who resolved it);
+// entries expire by TTL anyway, so this only caps the readers resolving within one TTL (oldest re-resolves).
+const ruleProfileCacheMax = 1024
+
+// ruleProfiles caches resolved org profiles per reader (ADR 0017). An org's custom rules are visible to its
+// members only (row-level security), so a profile is what its reader's scope showed and is served to that reader
+// alone: a resolve in a request's scope is its caller's entry (OrgUser); one without a scope (a background job, a
+// route exempt from it) reads every row on the pool, the org's own (Org). A non-member's resolve, which sees no
+// custom rules, can no longer hide them from the members, nor a pool read show them on a scoped route.
+// deploymentProfile is the one profile without an org: the deployment settings and the operator's rule file.
+var (
+	ruleProfiles = cache.Declare("rules.profiles",
+		cache.Keys(cache.KindTenant),
+		cache.ReplicaLocal("30 s TTL bounds another replica's rule change; this replica's changes invalidate at once"))
+	deploymentProfile = cache.Declare("rules.deployment-profile",
+		cache.Global("the deployment layer alone (no org): deployment settings and the operator's rule file, the same for every reader"),
+		cache.ReplicaLocal("30 s TTL bounds another replica's settings change; this replica's changes invalidate at once"))
+)
 
 // DeploymentCustomRules are the PAD_CUSTOM_RULES rules compiled once at boot — a
 // named type (fx disambiguation) and the node breaking the resolver cycle.
@@ -33,6 +50,10 @@ type DeploymentCustomRules []analyzer.Rule
 type RuleProfile struct {
 	Settings *models.AppSettings
 	Rules    []analyzer.Rule
+	// Narrowed: the reader is not a member of the org and reads under row-level security, which hides the org's
+	// custom rules from them (a collaborator the flow was shared with). An analysis under it is the reader's
+	// alone: it must not stand in for the org's report (AnalysisService records none).
+	Narrowed bool
 }
 
 // RuleProfileResolver answers "what rules, at what severity, for this flow's
@@ -47,49 +68,78 @@ type RuleProfileResolver struct {
 	// rules to every tenant.
 	deploymentRules DeploymentCustomRules
 
-	mu     sync.RWMutex
-	cached map[string]*cachedProfile
+	store *profileStore
 	// gen fences a resolve against Invalidate: a profile read before a change committed is not cached.
 	gen eventbus.Gen[string]
-	// flights deduplicates cold resolves per org (see Resolve).
+	// flights deduplicates cold resolves per cache key, never across readers the key separates (see Resolve).
 	flights singleflight.Group
 }
 
+// profileStore holds the cached profiles by key (either spec's); each entry remembers its org ("" for the
+// deployment profile), which Invalidate drops by.
+type profileStore struct {
+	mu sync.RWMutex
+	m  map[cache.Key]*cachedProfile
+}
+
 type cachedProfile struct {
+	orgID    string
 	profile  *RuleProfile
 	resolved time.Time
 }
 
+// Len and Cost size the org profiles for the cache metrics (one unit per profile).
+func (s *profileStore) Len() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for k := range s.m {
+		if k.Spec() == ruleProfiles {
+			n++
+		}
+	}
+	return n
+}
+
+func (s *profileStore) Cost() int64 { return int64(s.Len()) }
+
 func NewRuleProfileResolver(backend storageif.StorageBackend, settings SettingsProvider, deploymentRules DeploymentCustomRules) *RuleProfileResolver {
+	store := &profileStore{m: make(map[cache.Key]*cachedProfile)}
+	cache.Track(ruleProfiles, store)
 	return &RuleProfileResolver{
 		backend:         backend,
 		settings:        settings,
 		deploymentRules: deploymentRules,
-		cached:          make(map[string]*cachedProfile),
+		store:           store,
 	}
 }
 
-// Invalidate drops an org's cached profile (every entry when orgID is empty —
-// a deployment-settings change affects all orgs, which inherit from it) and
-// refuses the resolves in flight.
+// Invalidate drops an org's cached profiles, every reader's (every entry when
+// orgID is empty — a deployment-settings change affects all orgs, which inherit
+// from it), and refuses the resolves in flight.
 func (r *RuleProfileResolver) Invalidate(orgID string) {
 	if r == nil {
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
 	if orgID == "" {
 		r.gen.BumpAll()
-		clear(r.cached)
-		return
+	} else {
+		r.gen.Bump(orgID)
 	}
-	r.gen.Bump(orgID)
-	delete(r.cached, orgID)
+	for k, c := range r.store.m {
+		if orgID == "" || c.orgID == orgID {
+			delete(r.store.m, k)
+			k.Spec().RecordEviction(cache.EvictDeleted)
+		}
+	}
 }
 
 // SubscribeRuleProfiles drops cached rule profiles when what they are resolved from changes: the deployment
-// settings (every org inherits them), an org's settings or custom rules (SettingsChanged{OrgSettings}), and an
-// org's deletion. Subscribe it after the settings cache, whose fresh value the next resolve reads.
+// settings (every org inherits them), an org's settings or custom rules (SettingsChanged{OrgSettings}), an org's
+// deletion, and its membership, which decides what a member's entry shows. Subscribe it after the settings cache,
+// whose fresh value the next resolve reads.
 func SubscribeRuleProfiles(bus *eventbus.Bus, r *RuleProfileResolver) {
 	eventbus.Subscribe(bus, eventbus.Sync, "rule-profiles", func(_ context.Context, e events.SettingsChanged) {
 		switch e.Scope {
@@ -102,10 +152,35 @@ func SubscribeRuleProfiles(bus *eventbus.Bus, r *RuleProfileResolver) {
 		}
 	})
 	eventbus.Subscribe(bus, eventbus.Sync, "rule-profiles", func(_ context.Context, e events.OrgMemberChanged) {
-		if e.Kind == events.OrgDeleted && e.OrgID != "" {
+		switch {
+		case e.OrgID == "":
+		case e.Kind == events.OrgDeleted:
 			r.Invalidate(e.OrgID)
+		case e.Kind == events.OrgMemberAdded || e.Kind == events.OrgMemberRemoved:
+			r.invalidateReader(e.OrgID, e.UserID)
 		}
 	})
+}
+
+// invalidateReader drops userID's own entry of orgID's profile, whose view their membership decides, and refuses
+// the org's resolves in flight; every entry of the org without a user id.
+func (r *RuleProfileResolver) invalidateReader(orgID, userID string) {
+	if userID == "" {
+		r.Invalidate(orgID)
+		return
+	}
+	k, err := ruleProfiles.Key(cache.OrgUser(orgID, userID))
+	if err != nil {
+		r.Invalidate(orgID)
+		return
+	}
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
+	r.gen.Bump(orgID)
+	if _, ok := r.store.m[k]; ok {
+		delete(r.store.m, k)
+		ruleProfiles.RecordEviction(cache.EvictDeleted)
+	}
 }
 
 // Resolve returns the profile for orgID (empty = pre-R4 deployment behaviour).
@@ -115,15 +190,22 @@ func (r *RuleProfileResolver) Resolve(ctx context.Context, orgID string) *RulePr
 	if r == nil {
 		return &RuleProfile{Settings: nil, Rules: analyzer.AllRules()}
 	}
-	if p := r.cachedFor(orgID); p != nil {
+	k, entryOrg, cacheable := r.profileKey(ctx, orgID)
+	if !cacheable {
+		return r.resolveUncached(context.WithoutCancel(ctx), orgID)
+	}
+	if p := r.store.get(k); p != nil {
+		k.Spec().RecordHit()
 		return p
 	}
+	k.Spec().RecordMiss()
 
-	// One cold build per org: concurrent analyses for the same org (a
-	// "fix all" batch, the scanner sweep, interactive analyses) each ran
-	// the full resolve — two storage reads plus a regex compile per custom
-	// rule — racing to write identical cache entries. The resolve runs
-	// detached from the caller's cancellation so a caller that abandons
+	// One cold build per key: concurrent analyses of the same org by the same
+	// reader (a "fix all" batch, the scanner sweep, interactive analyses) each
+	// ran the full resolve — two storage reads plus a regex compile per custom
+	// rule — racing to write identical cache entries. The flight is keyed like
+	// the cache, so it never hands one reader's view to another. The resolve
+	// runs detached from the caller's cancellation so a caller that abandons
 	// its request mid-resolve does not hand every waiter its degraded
 	// (storage-unavailable) profile; the inner re-check serves callers that
 	// waited out a flight which already refreshed the entry. The builder
@@ -131,54 +213,101 @@ func (r *RuleProfileResolver) Resolve(ctx context.Context, orgID string) *RulePr
 	// The flight stores what it resolved only if no invalidation ran since it
 	// began (and its transaction announced no change of its own): a resolve
 	// that read before a change committed must not be cached for the TTL.
-	v, _, _ := r.flights.Do(orgID, func() (any, error) {
-		if p := r.cachedFor(orgID); p != nil {
+	v, _, _ := r.flights.Do(k.String(), func() (any, error) {
+		if p := r.store.get(k); p != nil {
 			return p, nil
 		}
-		captured := r.gen.Load(orgID)
+		captured := r.gen.Load(entryOrg)
 		profile := r.resolveUncached(context.WithoutCancel(ctx), orgID)
-		r.mu.Lock()
-		if r.gen.FillOK(ctx, orgID, captured) {
+		// A fail-open scope that could not start read the pool instead: not the view k names.
+		after, _, _ := r.profileKey(ctx, orgID)
+		r.store.mu.Lock()
+		if after == k && r.gen.FillOK(ctx, entryOrg, captured) {
 			now := time.Now()
-			r.pruneLocked(now)
-			r.cached[orgID] = &cachedProfile{profile: profile, resolved: now}
+			r.store.pruneLocked(now)
+			r.store.m[k] = &cachedProfile{orgID: entryOrg, profile: profile, resolved: now}
+			k.Spec().RecordStore()
 		}
-		r.mu.Unlock()
+		r.store.mu.Unlock()
 		return profile, nil
 	})
 	return v.(*RuleProfile)
+}
+
+// profileKey is the cache key of orgID's profile as ctx's reader sees it and the org Invalidate drops it by. The
+// deployment layer alone (no org, or no backend to read one from) is one entry for every reader; an org's profile
+// is its reader's (profileReader). A scope without a calling user id is nobody's entry: false, resolved uncached.
+func (r *RuleProfileResolver) profileKey(ctx context.Context, orgID string) (k cache.Key, entryOrg string, ok bool) {
+	if orgID == "" || r.backend == nil {
+		k, err := deploymentProfile.Key()
+		return k, "", err == nil
+	}
+	reader := profileReader(ctx, orgID)
+	if reader.IsZero() {
+		return cache.Key{}, "", false
+	}
+	k, err := ruleProfiles.Key(reader)
+	return k, orgID, err == nil
+}
+
+// profileReader is whose view of orgID's custom rules a resolve under ctx reads. In a request's scope it is the
+// caller's, which row-level security shows them to only when a member. Without one (a background job, a route
+// exempt from the scope) the read runs on the pool and sees every row, whoever asks: the org's own view. A scope
+// without a calling user id is nobody's (zero).
+func profileReader(ctx context.Context, orgID string) cache.Part {
+	if !reqtx.ReadsFiltered(ctx) {
+		return cache.Org(orgID)
+	}
+	a := auth.ActorFromContext(ctx)
+	if a == nil || a.Kind == auth.ActorSystem {
+		return cache.Part{}
+	}
+	return cache.OrgUser(orgID, a.UserID)
+}
+
+// get returns the fresh profile under k, nil when none is.
+func (s *profileStore) get(k cache.Key) *RuleProfile {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if c, ok := s.m[k]; ok && time.Since(c.resolved) < ruleProfileTTL {
+		return c.profile
+	}
+	return nil
 }
 
 // pruneLocked makes room for one insert: it drops expired profiles — reads
 // skip them, but nothing removed them, so every org that ever ran an analysis
 // (deleted orgs included) kept its rule set, compiled custom-rule regexes and
 // settings clone for the life of the process — then, while the cache is at
-// ruleProfileCacheMax, the oldest. Caller holds r.mu. One pass per insert, and
-// an org inserts at most once per ruleProfileTTL.
-func (r *RuleProfileResolver) pruneLocked(now time.Time) {
-	for id, c := range r.cached {
+// ruleProfileCacheMax, the oldest. Caller holds s.mu. One pass per insert, and
+// a key inserts at most once per ruleProfileTTL.
+func (s *profileStore) pruneLocked(now time.Time) {
+	for k, c := range s.m {
 		if now.Sub(c.resolved) >= ruleProfileTTL {
-			delete(r.cached, id)
+			delete(s.m, k)
+			k.Spec().RecordEviction(cache.EvictExpired)
 		}
 	}
-	for len(r.cached) >= ruleProfileCacheMax {
-		oldest, oldestAt, first := "", time.Time{}, true
-		for id, c := range r.cached {
+	for len(s.m) >= ruleProfileCacheMax {
+		var oldest cache.Key
+		oldestAt, first := time.Time{}, true
+		for k, c := range s.m {
 			if first || c.resolved.Before(oldestAt) {
-				oldest, oldestAt, first = id, c.resolved, false
+				oldest, oldestAt, first = k, c.resolved, false
 			}
 		}
-		delete(r.cached, oldest)
+		delete(s.m, oldest)
+		oldest.Spec().RecordEviction(cache.EvictCapacity)
 	}
 }
 
+// cachedFor is the profile cached for a background job's resolve of orgID, nil when none is fresh (tests).
 func (r *RuleProfileResolver) cachedFor(orgID string) *RuleProfile {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if c, ok := r.cached[orgID]; ok && time.Since(c.resolved) < ruleProfileTTL {
-		return c.profile
+	k, _, ok := r.profileKey(context.Background(), orgID)
+	if !ok {
+		return nil
 	}
-	return nil
+	return r.store.get(k)
 }
 
 func (r *RuleProfileResolver) resolveUncached(ctx context.Context, orgID string) *RuleProfile {
@@ -190,6 +319,7 @@ func (r *RuleProfileResolver) resolveUncached(ctx context.Context, orgID string)
 	if orgID == "" || r.backend == nil {
 		return &RuleProfile{Settings: settings, Rules: rules}
 	}
+	narrowed := r.outsider(ctx, orgID)
 
 	// Org settings layer: merge the org's per-rule overrides over the
 	// deployment's, entry by entry. A wholesale replace would silently drop
@@ -213,28 +343,25 @@ func (r *RuleProfileResolver) resolveUncached(ctx context.Context, orgID string)
 	if err != nil {
 		logger.Warn("rule profile: org custom rules unavailable, using deployment rules only",
 			"orgId", orgID, "error", err)
-		return &RuleProfile{Settings: settings, Rules: rules}
+		return &RuleProfile{Settings: settings, Rules: rules, Narrowed: narrowed}
 	}
-	for _, stored := range orgRules {
-		var cfg analyzer.CustomRuleConfig
-		if err := json.Unmarshal(stored.Config, &cfg); err != nil {
-			// Writes are validated before they land, so this means the row was
-			// edited outside the API or the schema moved. Skip the one rule and
-			// say which — a silent skip is how R0-5 found operators believing a
-			// typo'd rule was enforcing.
-			logger.Warn("rule profile: stored custom rule is unreadable, skipping",
-				"orgId", orgID, "ruleId", stored.RuleID, "error", err)
-			continue
-		}
-		compiled, err := analyzer.NewCustomRule(cfg)
-		if err != nil {
-			logger.Warn("rule profile: stored custom rule failed to compile, skipping",
-				"orgId", orgID, "ruleId", stored.RuleID, "error", err)
-			continue
-		}
-		rules = append(rules, compiled)
+	rules = append(rules, compileOrgRules(orgID, orgRules)...)
+	return &RuleProfile{Settings: settings, Rules: rules, Narrowed: narrowed}
+}
+
+// outsider reports whether ctx's reader reads orgID's rows filtered as a non-member (RuleProfile.Narrowed). An
+// unknown membership counts as outside, so such a view is never taken for the org's; a read on the pool, or in a
+// scope without a calling user, is not a member's or an outsider's and keeps the org's view.
+func (r *RuleProfileResolver) outsider(ctx context.Context, orgID string) bool {
+	if !reqtx.ReadsFiltered(ctx) {
+		return false
 	}
-	return &RuleProfile{Settings: settings, Rules: rules}
+	a := auth.ActorFromContext(ctx)
+	if a == nil || a.Kind == auth.ActorSystem || a.UserID == "" {
+		return false
+	}
+	_, member, err := r.backend.OrgMemberRole(ctx, orgID, a.UserID)
+	return err != nil || !member
 }
 
 // toModelRuleConfig converts the storage-layer RuleConfig to the analyzer's.

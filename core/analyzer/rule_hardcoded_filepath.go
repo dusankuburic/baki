@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	"pad-core/models"
@@ -26,7 +27,9 @@ func (r *HardcodedFilePathRule) Check(block *models.Block, ctx *RuleContext) []m
 	var findings []models.Finding
 	seen := make(map[string]bool)
 
-	for key, val := range block.Properties {
+	var keys [16]string
+	for _, key := range sortedPropertyKeys(keys[:0], block.Properties) {
+		val := block.Properties[key]
 		if strings.Contains(val, "%") {
 			continue
 		}
@@ -82,4 +85,24 @@ func truncate(s string, max int) string {
 	return string(r[:max-3]) + "..."
 }
 
-func init() { registerRule(&HardcodedFilePathRule{}) }
+// sortedPropertyKeys appends props' keys to dst in sorted order. Rules that
+// report the first or a deduplicated property iterate this instead of the map,
+// so the reported property does not depend on map order; a caller's stack
+// array as dst keeps the common case allocation-free.
+func sortedPropertyKeys(dst []string, props map[string]string) []string {
+	for k := range props {
+		dst = append(dst, k)
+	}
+	slices.Sort(dst)
+	return dst
+}
+
+func init() {
+	registerRule(&HardcodedFilePathRule{}, RuleMeta{
+		Confidence:   models.ConfidenceLow,
+		AutoFix:      "replace-with-variable",
+		IntroducedIn: 1,
+		Revision:     2,
+		Stage:        StageStable,
+	})
+}

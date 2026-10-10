@@ -555,6 +555,16 @@ func TestScanOnce_RescansAFlowWhenAnInputChanges(t *testing.T) {
 		{"baseline removed", func(t *testing.T, h *skipHarness) {
 			delete(h.b.Baselines, "f1")
 		}, ""},
+		{"baseline rule set", func(t *testing.T, h *skipHarness) {
+			// Re-baselined with the same keys, now recording the rule set it was taken under.
+			if err := h.b.SetFlowBaseline(ctx, &storageif.FlowBaseline{FlowID: "f1", Keys: []string{"r1:b1", "r2:b2"},
+				RuleSet: analyzer.NewRuleSet([]models.RuleRef{{ID: "r1"}, {ID: "r2"}})}); err != nil {
+				t.Fatal(err)
+			}
+		}, ""},
+		{"recorded health rule set", func(t *testing.T, h *skipHarness) {
+			h.b.health["f1"] = &storageif.HealthSnapshot{HealthScore: 60, RuleSetDigest: "rs1:recorded"}
+		}, ""},
 		{"recorded health", func(t *testing.T, h *skipHarness) {
 			h.b.health["f1"] = &storageif.HealthSnapshot{HealthScore: 90}
 		}, notify.EventHealthRegression},
@@ -757,8 +767,9 @@ func (p *panickySSE) EmitTo(string, string, any) {
 // TestScanOnce_AnInterruptedScanIsNotRecorded: a scan that dies part-way
 // (here a panic after the dedup state moved on, before the dispatch) must not
 // leave the PREVIOUS scan's key in place — otherwise the restored state is
-// skipped although lastSig holds the interrupted scan's signature, and never
-// alerts.
+// skipped although lastSig holds the interrupted scan's signature. The
+// restored drift is the first scan's alert, already in the inbox and
+// delivered, so it is not delivered again.
 func TestScanOnce_AnInterruptedScanIsNotRecorded(t *testing.T) {
 	ctx := context.Background()
 	b := newBackend()
@@ -795,7 +806,10 @@ func TestScanOnce_AnInterruptedScanIsNotRecorded(t *testing.T) {
 	if n := h.runsOf("f1"); n != 3 {
 		t.Fatalf("f1 analyzed %d times, want 3", n)
 	}
-	if got := h.cap.all(); len(got) != 2 {
-		t.Fatalf("restored drift raised %d alerts in total, want 2 (it changed shape twice)", len(got))
+	if got := h.cap.all(); len(got) != 1 {
+		t.Fatalf("restored drift delivered %d alerts in total, want 1 (the first scan's, already in the inbox)", len(got))
+	}
+	if h.s.lastScanKey("f1") == "" {
+		t.Fatal("the restored scan was not recorded")
 	}
 }

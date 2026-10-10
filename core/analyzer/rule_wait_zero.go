@@ -64,4 +64,12 @@ func isWaitZero(raw string) bool {
 	return false
 }
 
-func init() { registerRule(&WaitZeroRule{}) }
+func init() {
+	registerRule(&WaitZeroRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		AutoFix:      "remove-block",
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

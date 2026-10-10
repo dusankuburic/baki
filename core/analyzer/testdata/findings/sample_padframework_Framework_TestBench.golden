@@ -1,0 +1,72 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_padframework_Framework_TestBench
+document: subflows=1 blocks=5 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":0,"info":2,"blocksAnalyzed":5,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=225/225 last="Loop body is too large"
+metrics: {"avgCognitive":0,"avgCyclomatic":1,"healthScore":98,"maxCognitive":0,"maxCyclomatic":1,"subflowCount":1,"totalBlocks":4,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Framework_TestBench: {"blockCount":4,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=5
+  raw findings: duplicate-action=1 subflow-no-error-handler=1
+inventory: none
+findings: 2
+F-001 info/medium duplicate-action [Style] fix=remove-block @Framework_TestBench#1 sf=Framework_TestBench fp=duplicate-action:ed3dbfdfd715e350
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":3}
+F-002 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_TestBench#1 sf=Framework_TestBench fp=subflow-no-error-handler:ed3dbfdfd715e350
+    title: Subflow without error handler
+    desc: Subflow "Framework_TestBench" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+
+=== nil-settings
+stats: {"errors":0,"warnings":0,"info":2,"blocksAnalyzed":5,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=225/225 last="Loop body is too large"
+metrics: as default, healthScore=98
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=5
+  raw findings: duplicate-action=1 subflow-no-error-handler=1
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":0,"info":2,"blocksAnalyzed":5,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=225/225 last="Loop body is too large"
+metrics: as default, healthScore=98
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=5
+  raw findings: duplicate-action=1 subflow-no-error-handler=1
+inventory: none
+findings: 2
+  as default; severity changes: none
+
+=== disabled
+stats: {"errors":0,"warnings":0,"info":1,"blocksAnalyzed":5,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=4 final=185/185 last="Loop body is too large"
+metrics: as default, healthScore=99
+profiles: rules=37 order=f7de49357acad250 blocksChecked=5
+  raw findings: duplicate-action=1
+inventory: none
+findings: 1
+F-001 info/medium duplicate-action [Style] fix=remove-block @Framework_TestBench#1 sf=Framework_TestBench fp=duplicate-action:ed3dbfdfd715e350
+
+=== severity
+stats: {"errors":1,"warnings":0,"info":1,"blocksAnalyzed":5,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=5 final=225/225 last="Loop body is too large"
+metrics: as default, healthScore=87
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=5
+  raw findings: duplicate-action=1 subflow-no-error-handler=1
+inventory: none
+findings: 2
+  as default; severity changes: F-002 info->error
+
+=== autofixable
+stats: {"errors":0,"warnings":0,"info":2,"blocksAnalyzed":5,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=4 final=160/160 last="Wait zero"
+metrics: as default, healthScore=98
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=5
+  raw findings: duplicate-action=1 subflow-no-error-handler=1
+inventory: none
+findings: 2
+  as default; severity changes: none

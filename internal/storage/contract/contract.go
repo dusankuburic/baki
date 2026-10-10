@@ -85,4 +85,6 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend, opts ...Option) {
 	runLookupScenarios(ctx, b, runID, run)
 	runBugScenarios(ctx, b, runID, run)
 	runLifecycleScenarios(ctx, b, runID, run)
+	runRuleSetScenarios(ctx, b, runID, run)
+	runCustomRuleScenarios(ctx, b, runID, run)
 }

@@ -18,12 +18,39 @@ import {logger} from '@/lib/logger'
 import {notifyIfBackground} from '@/hooks/usePlatform'
 import {useFlowStore} from './flowStore'
 
-export type FindingCategory = 'Security' | 'Reliability' | 'Performance' | 'Style' | 'Logic'
+// The categories the built-in rules file findings under (core/analyzer
+// TestRuleMeta_KnownCategories). The category filter HIDES categories rather
+// than listing the shown ones, so a category no chip and no saved view knows
+// (a custom rule's, a newer server's) still shows.
+export const FINDING_CATEGORIES = [
+  'Security',
+  'Reliability',
+  'Performance',
+  'Style',
+  'Logic',
+  'Portability',
+  'Syntax',
+] as const
+export type FindingCategory = (typeof FINDING_CATEGORIES)[number]
+
+// The categories a saved view of an older bundle chose from: it lists the ones
+// it SHOWS, so any category outside these was never one it hid.
+const LEGACY_VIEW_CATEGORIES: readonly string[] = ['Security', 'Reliability', 'Performance', 'Style', 'Logic']
 
 export interface SavedFilterView {
   name: string
   severities: Severity[]
-  categories: FindingCategory[]
+  /** The categories the view hides; every other one shows. Absent in views saved by older bundles. */
+  hiddenCategories?: string[]
+  /** The legacy five categories the view shows: what older bundles read (they know only these five). */
+  categories: string[]
+}
+
+/** The categories a saved view hides; for an older view, the legacy categories it did not show. */
+export function viewHiddenCategories(view: SavedFilterView): Set<string> {
+  if (Array.isArray(view.hiddenCategories)) return new Set(view.hiddenCategories)
+  const shown = new Set(Array.isArray(view.categories) ? view.categories : LEGACY_VIEW_CATEGORIES)
+  return new Set(LEGACY_VIEW_CATEGORIES.filter(c => !shown.has(c)))
 }
 
 const SAVED_VIEWS_KEY = 'baki:savedFilterViews'
@@ -90,7 +117,8 @@ interface AnalysisState {
   analyzingGen: number
   progress: {current: number; total: number; ruleName: string}
   severityFilter: Set<Severity>
-  categoryFilter: Set<FindingCategory>
+  // Categories the findings list hides; empty shows every category, known or not.
+  hiddenCategories: Set<string>
   // Triage-queue filters (R0-3): status chips + "assigned to me" narrow the
   // list to the user's working set — resolved/acknowledged findings used to
   // stay fully visible with no way to hide them.
@@ -121,8 +149,8 @@ interface AnalysisState {
   setProgress: (p: {current: number; total: number; ruleName: string}) => void
   toggleSeverityFilter: (s: Severity) => void
   setSeverityFilter: (s: Set<Severity>) => void
-  toggleCategoryFilter: (c: FindingCategory) => void
-  setCategoryFilter: (c: Set<FindingCategory>) => void
+  toggleCategory: (c: string) => void
+  setHiddenCategories: (c: Iterable<string>) => void
   toggleStatusFilter: (st: TriageStatus) => void
   setStatusFilter: (sts: Set<TriageStatus>) => void
   toggleAssignedToMe: () => void
@@ -144,7 +172,7 @@ interface AnalysisState {
   loadBaseline: (flowId: string) => Promise<void>
   handleSetBaseline: () => Promise<void>
   handleClearBaseline: () => Promise<void>
-  saveCurrentView: (name: string, severities: Set<Severity>, categories: Set<FindingCategory>) => void
+  saveCurrentView: (name: string, severities: Set<Severity>, hiddenCategories: Set<string>) => void
   deleteSavedView: (name: string) => void
   toggleFindingSelection: (id: string) => void
   selectAllFindings: (ids: string[]) => void
@@ -164,8 +192,6 @@ const defaultSeverityFilter = (): Set<Severity> => new Set(['error', 'warning', 
 // All statuses on by default: 'suppressed' is listed for completeness, but
 // suppressed findings are hidden by the suppress filter regardless.
 const defaultStatusFilter = (): Set<TriageStatus> => new Set(['open', 'acknowledged', 'in_progress', 'resolved'])
-const defaultCategoryFilter = (): Set<FindingCategory> =>
-  new Set<FindingCategory>(['Security', 'Reliability', 'Performance', 'Style', 'Logic'])
 
 export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   reports: new Map(),
@@ -173,7 +199,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   analyzingGen: 0,
   progress: {current: 0, total: 0, ruleName: ''},
   severityFilter: defaultSeverityFilter(),
-  categoryFilter: defaultCategoryFilter(),
+  hiddenCategories: new Set(),
   statusFilter: defaultStatusFilter(),
   assignedToMeOnly: false,
   variableLineage: null,
@@ -240,12 +266,12 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
   setSeverityFilter: s => set({severityFilter: new Set(s)}),
 
-  toggleCategoryFilter: c =>
+  toggleCategory: c =>
     set(state => ({
-      categoryFilter: toggleSetMember(state.categoryFilter, c),
+      hiddenCategories: toggleSetMember(state.hiddenCategories, c),
     })),
 
-  setCategoryFilter: c => set({categoryFilter: new Set(c)}),
+  setHiddenCategories: c => set({hiddenCategories: new Set(c)}),
 
   toggleStatusFilter: (st: TriageStatus) =>
     set(state => ({
@@ -529,7 +555,10 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       const [bl, drift] = await Promise.all([analysisApi.getBaseline(flowId), analysisApi.baselineDrift(flowId)])
       // Guard against a stale response overwriting the now-current flow's baseline.
       if (useFlowStore.getState().document?.id !== flowId) return
-      set({baseline: bl, baselineNewCount: drift.hasBaseline ? drift.new.length : null})
+      // The badge counts drift: findings of a rule newer than the baseline's rule
+      // set (one notice, not drift) and of preview rules are in `new` too.
+      const driftCount = drift.new.length - (drift.newFromNewRules ?? 0) - (drift.preview ?? 0)
+      set({baseline: bl, baselineNewCount: drift.hasBaseline ? Math.max(0, driftCount) : null})
     } catch (err) {
       logger.warn('Failed to load baseline', err)
     }
@@ -560,11 +589,14 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     }
   },
 
-  saveCurrentView: (name, severities, categories) => {
+  saveCurrentView: (name, severities, hiddenCategories) => {
     const view: SavedFilterView = {
       name,
       severities: [...severities],
-      categories: [...categories],
+      hiddenCategories: [...hiddenCategories],
+      // Written the way an older bundle would have (out of the five it knows), so a
+      // rolled-back bundle applying this view gets a filter it could have saved itself.
+      categories: LEGACY_VIEW_CATEGORIES.filter(c => !hiddenCategories.has(c)),
     }
     set(state => {
       const views = [...state.savedViews.filter(v => v.name !== name), view]
@@ -616,7 +648,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       analyzingGen: 0,
       progress: {current: 0, total: 0, ruleName: ''},
       severityFilter: defaultSeverityFilter(),
-      categoryFilter: defaultCategoryFilter(),
+      hiddenCategories: new Set(),
       statusFilter: defaultStatusFilter(),
       assignedToMeOnly: false,
       variableLineage: null,

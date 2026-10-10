@@ -278,6 +278,17 @@ export const shell = {
     dismissAlert: 'Dismiss alert',
     clear: 'Clear',
     empty: 'No governance alerts',
+    // A "new rules" notice: rules newer than the flows' baselines report findings.
+    newRules: {
+      chip: 'rules',
+      open: 'Open the analysis rules',
+      more: '+{{count}} more',
+      flows_one: 'Findings in {{count}} flow; no drift or health alerts from them until it is baselined again',
+      flows_other: 'Findings in {{count}} flows; no drift or health alerts from them until they are baselined again',
+      scopeOrg: 'Your organisation',
+      scopeUser: 'Your flows',
+      scopeApp: 'All flows',
+    },
   },
   mainPane: {
     loadFailedTitle: 'Failed to load flow',

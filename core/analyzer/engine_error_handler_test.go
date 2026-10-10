@@ -1,7 +1,6 @@
 package analyzer
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -9,7 +8,7 @@ import (
 	"pad-core/models"
 )
 
-// naiveHasErrorHandler is the ancestor walk computeHasErrorHandler is defined
+// naiveHasErrorHandler is the ancestor walk buildHasErrorHandler is defined
 // by, written against the block tree itself (parent.Children) rather than any
 // RuleContext index, so it is an independent oracle: a block has an error
 // handler iff some ancestor is itself an error handler or has an error-handler
@@ -132,7 +131,7 @@ func buildErrorHandlerFixture() (*models.FlowDocument, map[string]bool) {
 }
 
 // TestHasErrorHandler_GroupFlagMatchesAncestorWalk pins that the per-group
-// GroupHasHandler flag computeHasErrorHandler now reads gives, for every
+// GroupHasHandler flag buildHasErrorHandler now reads gives, for every
 // block, exactly what the old per-block sibling rescan gave: the oracle
 // walks parent.Children directly.
 func TestHasErrorHandler_GroupFlagMatchesAncestorWalk(t *testing.T) {
@@ -143,7 +142,7 @@ func TestHasErrorHandler_GroupFlagMatchesAncestorWalk(t *testing.T) {
 		t.Fatalf("fixture has %d blocks, expectations cover %d", len(ctx.AllBlocks), len(want))
 	}
 	for id := range ctx.AllBlocks {
-		got, ok := ctx.HasErrorHandler[id]
+		got, ok := ctx.HasErrorHandler()[id]
 		if !ok {
 			t.Errorf("%s: no HasErrorHandler entry", id)
 			continue
@@ -202,24 +201,24 @@ func buildWideContainerFlow(n int) *models.FlowDocument {
 }
 
 // TestHasErrorHandler_WideContainerIsLinear is the regression gate for the
-// s² sibling rescan in computeHasErrorHandler: buildContext (via the
-// zero-rule analysis path) over one block with wideChildrenCount children
-// must finish inside wideChildrenBudget.
+// s² sibling rescan in buildHasErrorHandler: the context and the fact over
+// one block with wideChildrenCount children must be built inside
+// wideChildrenBudget.
 func TestHasErrorHandler_WideContainerIsLinear(t *testing.T) {
 	flow := buildWideContainerFlow(wideChildrenCount)
 
-	done := make(chan *models.AnalysisReport, 1)
+	done := make(chan int, 1)
 	start := time.Now()
-	go func() { done <- runAnalysisCore(context.Background(), flow, nil, nil, nil, false) }()
+	go func() { done <- len(buildContext(flow, nil).HasErrorHandler()) }()
 
 	select {
-	case report := <-done:
-		t.Logf("zero-rule analysis of %d children took %v", wideChildrenCount, time.Since(start))
-		if report == nil {
-			t.Fatal("runAnalysisCore returned nil")
+	case n := <-done:
+		t.Logf("HasErrorHandler over %d children took %v", wideChildrenCount, time.Since(start))
+		if n != wideChildrenCount+1 {
+			t.Fatalf("HasErrorHandler has %d entries, want %d", n, wideChildrenCount+1)
 		}
 	case <-time.After(wideChildrenBudget):
 		t.Fatalf("analysis of one block with %d children did not finish within %v — "+
-			"computeHasErrorHandler is rescanning the sibling group per block again", wideChildrenCount, wideChildrenBudget)
+			"buildHasErrorHandler is rescanning the sibling group per block again", wideChildrenCount, wideChildrenBudget)
 	}
 }

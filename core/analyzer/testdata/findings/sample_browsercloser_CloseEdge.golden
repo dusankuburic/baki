@@ -1,0 +1,182 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_browsercloser_CloseEdge
+document: subflows=1 blocks=34 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":12,"info":3,"blocksAnalyzed":23,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=21 final=1035/1035 last="Loop body is too large"
+metrics: {"avgCognitive":12,"avgCyclomatic":8,"healthScore":49,"maxCognitive":12,"maxCyclomatic":8,"subflowCount":1,"totalBlocks":23,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow CloseEdge: {"blockCount":23,"cognitiveComplexity":12,"cyclomaticComplexity":8,"fanIn":0,"fanOut":0,"maxNestingDepth":5,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=23
+  raw findings: dead-code=1 empty-handler=4 error-swallow=5 missing-delay=1 missing-timeout=2 unhandled-error=1 unused-variable=1
+inventory: none
+findings: 15
+F-001 info/medium dead-code [Style] fix=remove-block @CloseEdge#3 sf=CloseEdge fp=dead-code:6bb4578ae8a20a4e
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-002 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#5 sf=CloseEdge fp=empty-handler:f8cbd625c013778a
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-003 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#17 sf=CloseEdge fp=empty-handler:2f579f732e072f16
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-004 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#20 sf=CloseEdge fp=empty-handler:a796a6dfc5546cb4
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-005 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#23 sf=CloseEdge fp=empty-handler:1d29b8cf3fc6ba7b
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-006 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#5 sf=CloseEdge fp=error-swallow:f8cbd625c013778a
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-007 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#8 sf=CloseEdge fp=error-swallow:1058b46a213b5df6
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-008 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#17 sf=CloseEdge fp=error-swallow:2f579f732e072f16
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-009 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#20 sf=CloseEdge fp=error-swallow:a796a6dfc5546cb4
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-010 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#23 sf=CloseEdge fp=error-swallow:1d29b8cf3fc6ba7b
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-011 info/medium missing-delay [Reliability] fix=insert-delay @CloseEdge#12 sf=CloseEdge fp=missing-delay:715adf1a0d65ddcb
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-012 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#4 sf=CloseEdge fp=missing-timeout:e43e859d1a01773d
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"UIAutomation.CloseWindow.CloseByTitleClass"}
+F-013 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#12 sf=CloseEdge fp=missing-timeout:715adf1a0d65ddcb
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.CloseWebBrowser"}
+F-014 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseEdge#4 sf=CloseEdge fp=unhandled-error:e43e859d1a01773d
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-015 info/low unused-variable [Style] fix=remove-block @CloseEdge#31 sf=CloseEdge fp=unused-variable:7d06aaf84b0d6d1a
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Output_Status"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":12,"info":3,"blocksAnalyzed":23,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=21 final=1035/1035 last="Loop body is too large"
+metrics: as default, healthScore=49
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=23
+  raw findings: dead-code=1 empty-handler=4 error-swallow=5 missing-delay=1 missing-timeout=2 unhandled-error=1 unused-variable=1
+inventory: none
+findings: 15
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":12,"info":14,"blocksAnalyzed":23,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=21 final=1035/1035 last="Loop body is too large"
+metrics: as default, healthScore=38
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=23
+  raw findings: dead-code=1 deep-nesting=8 duplicate-action=1 empty-handler=4 error-swallow=5 large-subflow=1 missing-delay=1 missing-timeout=2 unhandled-error=1 unused-variable=1 wide-loop=1
+inventory: none
+findings: 26
+F-001 info/medium dead-code [Style] fix=remove-block @CloseEdge#3 sf=CloseEdge fp=dead-code:6bb4578ae8a20a4e
+F-002 info/low deep-nesting [Style] fix=- @CloseEdge#5 sf=CloseEdge fp=deep-nesting:f8cbd625c013778a
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-003 info/low deep-nesting [Style] fix=- @CloseEdge#17 sf=CloseEdge fp=deep-nesting:2f579f732e072f16
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-004 info/low deep-nesting [Style] fix=- @CloseEdge#19 sf=CloseEdge fp=deep-nesting:c990741eedd47c20
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-005 info/low deep-nesting [Style] fix=- @CloseEdge#20 sf=CloseEdge fp=deep-nesting:a796a6dfc5546cb4
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-006 info/low deep-nesting [Style] fix=- @CloseEdge#22 sf=CloseEdge fp=deep-nesting:a1668d06eb59a8a7
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-007 info/low deep-nesting [Style] fix=- @CloseEdge#23 sf=CloseEdge fp=deep-nesting:1d29b8cf3fc6ba7b
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-008 info/low deep-nesting [Style] fix=- @CloseEdge#25 sf=CloseEdge fp=deep-nesting:e2b8a58fa7991843
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-009 info/low deep-nesting [Style] fix=- @CloseEdge#26 sf=CloseEdge fp=deep-nesting:e1760ae0c1b50492
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-010 info/medium duplicate-action [Style] fix=remove-block @CloseEdge#14 sf=CloseEdge fp=duplicate-action:9ebaf6af1bc64d56
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-011 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#5 sf=CloseEdge fp=empty-handler:f8cbd625c013778a
+F-012 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#17 sf=CloseEdge fp=empty-handler:2f579f732e072f16
+F-013 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#20 sf=CloseEdge fp=empty-handler:a796a6dfc5546cb4
+F-014 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#23 sf=CloseEdge fp=empty-handler:1d29b8cf3fc6ba7b
+F-015 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#5 sf=CloseEdge fp=error-swallow:f8cbd625c013778a
+F-016 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#8 sf=CloseEdge fp=error-swallow:1058b46a213b5df6
+F-017 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#17 sf=CloseEdge fp=error-swallow:2f579f732e072f16
+F-018 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#20 sf=CloseEdge fp=error-swallow:a796a6dfc5546cb4
+F-019 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#23 sf=CloseEdge fp=error-swallow:1d29b8cf3fc6ba7b
+F-020 info/low large-subflow [Style] fix=- @CloseEdge#0 sf=CloseEdge fp=large-subflow:cf717e8a5250908a
+    title: Large subflow
+    desc: Subflow 'CloseEdge' has 23 blocks (threshold: 5).
+F-021 info/medium missing-delay [Reliability] fix=insert-delay @CloseEdge#12 sf=CloseEdge fp=missing-delay:715adf1a0d65ddcb
+F-022 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#4 sf=CloseEdge fp=missing-timeout:e43e859d1a01773d
+F-023 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#12 sf=CloseEdge fp=missing-timeout:715adf1a0d65ddcb
+F-024 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseEdge#4 sf=CloseEdge fp=unhandled-error:e43e859d1a01773d
+F-025 info/low unused-variable [Style] fix=remove-block @CloseEdge#31 sf=CloseEdge fp=unused-variable:7d06aaf84b0d6d1a
+F-026 info/low wide-loop [Style] fix=- @CloseEdge#15 sf=CloseEdge fp=wide-loop:5ebb2be92aa45e38
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":8,"maxBlocks":3}
+
+=== disabled
+stats: {"errors":0,"warnings":11,"info":2,"blocksAnalyzed":23,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=18 final=851/851 last="Loop body is too large"
+metrics: as default, healthScore=54
+profiles: rules=37 order=f7de49357acad250 blocksChecked=23
+  raw findings: dead-code=1 empty-handler=4 error-swallow=5 missing-timeout=2 unused-variable=1
+inventory: none
+findings: 13
+F-001 info/medium dead-code [Style] fix=remove-block @CloseEdge#3 sf=CloseEdge fp=dead-code:6bb4578ae8a20a4e
+F-002 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#5 sf=CloseEdge fp=empty-handler:f8cbd625c013778a
+F-003 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#17 sf=CloseEdge fp=empty-handler:2f579f732e072f16
+F-004 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#20 sf=CloseEdge fp=empty-handler:a796a6dfc5546cb4
+F-005 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseEdge#23 sf=CloseEdge fp=empty-handler:1d29b8cf3fc6ba7b
+F-006 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#5 sf=CloseEdge fp=error-swallow:f8cbd625c013778a
+F-007 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#8 sf=CloseEdge fp=error-swallow:1058b46a213b5df6
+F-008 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#17 sf=CloseEdge fp=error-swallow:2f579f732e072f16
+F-009 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#20 sf=CloseEdge fp=error-swallow:a796a6dfc5546cb4
+F-010 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseEdge#23 sf=CloseEdge fp=error-swallow:1d29b8cf3fc6ba7b
+F-011 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#4 sf=CloseEdge fp=missing-timeout:e43e859d1a01773d
+F-012 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseEdge#12 sf=CloseEdge fp=missing-timeout:715adf1a0d65ddcb
+F-013 info/low unused-variable [Style] fix=remove-block @CloseEdge#31 sf=CloseEdge fp=unused-variable:7d06aaf84b0d6d1a
+
+=== severity
+stats: {"errors":1,"warnings":13,"info":1,"blocksAnalyzed":23,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=21 final=1035/1035 last="Loop body is too large"
+metrics: as default, healthScore=35
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=23
+  raw findings: dead-code=1 empty-handler=4 error-swallow=5 missing-delay=1 missing-timeout=2 unhandled-error=1 unused-variable=1
+inventory: none
+findings: 15
+  as default; severity changes: F-001 info->warning, F-011 info->warning, F-014 warning->error
+
+=== autofixable
+stats: {"errors":0,"warnings":12,"info":3,"blocksAnalyzed":23,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=15 final=736/736 last="Wait zero"
+metrics: as default, healthScore=49
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=23
+  raw findings: dead-code=1 empty-handler=4 error-swallow=5 missing-delay=1 missing-timeout=2 unhandled-error=1 unused-variable=1
+inventory: none
+findings: 15
+  as default; severity changes: none

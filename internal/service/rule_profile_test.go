@@ -164,28 +164,30 @@ func TestRuleProfileResolver_InvalidateForcesReresolve(t *testing.T) {
 	}
 }
 
-// TestRuleProfileResolver_CacheIsSweptAndCapped guards the org-keyed cache's
-// growth: expiry was checked only on read and expired entries were never
-// removed, so every org that ever analyzed kept its profile (rules, compiled
-// regexes, settings clone) for the life of the process.
+// TestRuleProfileResolver_CacheIsSweptAndCapped guards the cache's growth:
+// expiry was checked only on read and expired entries were never removed, so
+// every org that ever analyzed kept its profile (rules, compiled regexes,
+// settings clone) for the life of the process.
 func TestRuleProfileResolver_CacheIsSweptAndCapped(t *testing.T) {
-	r := NewRuleProfileResolver(nil, deploymentSettings(nil), nil)
+	r := NewRuleProfileResolver(testutil.NewFakeBackend(), deploymentSettings(nil), nil)
 	ctx := context.Background()
+	size := func() int {
+		r.store.mu.RLock()
+		defer r.store.mu.RUnlock()
+		return len(r.store.m)
+	}
 
 	for i := 0; i < 10; i++ {
 		r.Resolve(ctx, fmt.Sprintf("org-%d", i))
 	}
 	// Age every entry past the TTL; the next insert must sweep them all.
-	r.mu.Lock()
-	for _, c := range r.cached {
+	r.store.mu.Lock()
+	for _, c := range r.store.m {
 		c.resolved = c.resolved.Add(-2 * ruleProfileTTL)
 	}
-	r.mu.Unlock()
+	r.store.mu.Unlock()
 	r.Resolve(ctx, "org-fresh")
-	r.mu.RLock()
-	n := len(r.cached)
-	r.mu.RUnlock()
-	if n != 1 {
+	if n := size(); n != 1 {
 		t.Errorf("after an insert past the TTL the cache holds %d entries, want 1 (the fresh one)", n)
 	}
 
@@ -193,10 +195,7 @@ func TestRuleProfileResolver_CacheIsSweptAndCapped(t *testing.T) {
 	for i := 0; i < ruleProfileCacheMax+50; i++ {
 		r.Resolve(ctx, fmt.Sprintf("burst-%d", i))
 	}
-	r.mu.RLock()
-	n = len(r.cached)
-	r.mu.RUnlock()
-	if n > ruleProfileCacheMax {
+	if n := size(); n > ruleProfileCacheMax {
 		t.Errorf("cache holds %d entries, want <= %d", n, ruleProfileCacheMax)
 	}
 	if p := r.Resolve(ctx, fmt.Sprintf("burst-%d", ruleProfileCacheMax+49)); p == nil {

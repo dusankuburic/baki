@@ -14,31 +14,28 @@ func (r *EmptySubflowRule) Description() string {
 func (r *EmptySubflowRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
 func (r *EmptySubflowRule) Category() string                 { return "Style" }
 
-func (r *EmptySubflowRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	if _, hasParent := ctx.ParentMap[block.ID]; hasParent {
-		return nil
+func (r *EmptySubflowRule) CheckFlow(ctx *RuleContext) []models.Finding {
+	var out []models.Finding
+	for i := range ctx.Flow.Subflows {
+		sf := &ctx.Flow.Subflows[i]
+		// Fire on the first top-level block (any type) of the subflow; a
+		// subflow without blocks has no anchor and is not flagged.
+		anchor := subflowAnchor(ctx, sf)
+		if anchor == nil || countActionableBlocks(sf.Blocks) > 0 {
+			continue
+		}
+		out = append(out, models.Finding{
+			RuleID:      r.ID(),
+			Severity:    r.DefaultSeverity(),
+			Title:       "Empty subflow",
+			Description: "Subflow '" + sf.Name + "' contains no actionable blocks.",
+			BlockID:     anchor.ID,
+			SubflowID:   sf.ID,
+			Suggestion:  "Remove the empty subflow or add actions to it.",
+			Metadata:    map[string]interface{}{"subflow": sf.Name},
+		})
 	}
-	subflow := ctx.SubflowByID[block.SubflowID]
-	if subflow == nil {
-		return nil
-	}
-	// Fire on the first top-level block (any type) of the subflow.
-	if len(subflow.Blocks) == 0 || block.ID != subflow.Blocks[0].ID {
-		return nil
-	}
-	if countActionableBlocks(subflow.Blocks) > 0 {
-		return nil
-	}
-	return []models.Finding{{
-		RuleID:      r.ID(),
-		Severity:    r.DefaultSeverity(),
-		Title:       "Empty subflow",
-		Description: "Subflow '" + subflow.Name + "' contains no actionable blocks.",
-		BlockID:     block.ID,
-		SubflowID:   block.SubflowID,
-		Suggestion:  "Remove the empty subflow or add actions to it.",
-		Metadata:    map[string]interface{}{"subflow": subflow.Name},
-	}}
+	return out
 }
 
 // countActionableBlocks counts non-comment, non-END blocks in the tree.
@@ -58,4 +55,13 @@ func countActionableBlocks(blocks []models.Block) int {
 	return count
 }
 
-func init() { registerRule(&EmptySubflowRule{}) }
+// No AutoFix: remove-block would strip one action per iteration, and
+// subflows may be invoked dynamically.
+func init() {
+	registerRule(&EmptySubflowRule{}, RuleMeta{
+		Confidence:   models.ConfidenceMedium,
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

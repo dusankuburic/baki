@@ -33,6 +33,91 @@ import (
 	"pad-core/search"
 )
 
+// The flow service's caches (ADR 0017).
+var (
+	// astDocs is the parsed-document cache (ProvideASTCache): a file opened by path, a folder member or an upload,
+	// parsed once per name and bytes. The parse depends on the name as well (the flow's name, the implicit subflow's,
+	// every subflow's SourceFile), so the name is part of the content digest: the same bytes under another name are
+	// another document.
+	astDocs = cache.Declare("flow.ast",
+		cache.Keys(cache.KindTenant, cache.KindParam, cache.KindContent),
+		cache.ReplicaLocal("desktop and local mode only (no storage backend): parsed from bytes the caller holds, re-parsed on a miss"))
+	// uploadFlowIDs remembers, per caller, the flow id an upload minted, so an identical re-upload updates that flow.
+	uploadFlowIDs = cache.Declare("flow.upload-ids",
+		cache.Keys(cache.KindTenant, cache.KindContent),
+		cache.ReplicaLocal("a miss mints a new flow id: an identical re-upload through another replica creates a second flow, as after the TTL"))
+	// searchIndexes memoises a flow's search index, valid only for the document object it was built from.
+	searchIndexes = cache.Declare("flow.search-index",
+		cache.Keys(cache.KindResource),
+		cache.Global("served only for the exact document object it was built from, which the caller resolved through an authorized read"),
+		cache.ReplicaLocal("rebuilt from the document on a miss"))
+)
+
+// ASTCache is the parsed-document cache (internal/di.ProvideASTCache). FlowService keeps none in cloud mode: the
+// stored library is the source of truth there.
+type ASTCache = cache.Typed[*models.FlowDocument]
+
+// astCacheTTL is how long a parsed document is kept.
+const astCacheTTL = 24 * time.Hour
+
+// NewASTCache builds the parsed-document cache within budget (FlowDocumentCost per document).
+func NewASTCache(budget int64) *ASTCache {
+	return cache.New[*models.FlowDocument](astDocs, budget, cache.WithTTL(astCacheTTL))
+}
+
+// What an AST cache entry was parsed from: a file opened by path, a member of a folder flow, an upload's files.
+const (
+	astFromFile   = "file"
+	astFromMember = "folder-member"
+	astFromUpload = "upload"
+)
+
+// contentDigest is the hex SHA-256 of parts, each length-prefixed, so distinct tuples never collide.
+func contentDigest(parts ...string) string {
+	h := sha256.New()
+	var n [20]byte
+	for _, p := range parts {
+		h.Write(strconv.AppendInt(n[:0], int64(len(p)), 10))
+		h.Write([]byte{':'})
+		h.Write([]byte(p))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// astKey keys the parse of text named name (a file opened by path or a folder member) for the single local user.
+func astKey(from, name, text string) cache.Key {
+	k, _ := astDocs.Key(cache.Local(), cache.Param("from", from), cache.Content(contentDigest(name, text)))
+	return k
+}
+
+// callerTenant is the cache tenant of callerID: the user, or the local user when there is none (accounts off).
+func callerTenant(callerID string) cache.Part {
+	if callerID == "" {
+		return cache.Local()
+	}
+	return cache.User(callerID)
+}
+
+// sortedFileNames returns the names of files in order (Go's map iteration order is random).
+func sortedFileNames(files map[string]string) []string {
+	names := make([]string, 0, len(files))
+	for k := range files {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// filesDigest digests an upload's files, names and contents (and the root name, when given).
+func filesDigest(rootName string, names []string, files map[string]string) string {
+	parts := make([]string, 0, 1+2*len(names))
+	parts = append(parts, rootName)
+	for _, name := range names {
+		parts = append(parts, name, files[name])
+	}
+	return contentDigest(parts...)
+}
+
 // FlowService owns document state, search index, and all file-related operations.
 type FlowService struct {
 	notifier    EventNotifier
@@ -40,15 +125,18 @@ type FlowService struct {
 	docProvider DocumentProvider
 	storage     storageif.StorageBackend
 	authz       *AuthzService
-	astCache    cache.Cache
-	// uploadIDs (cloud) remembers the upload's minted flow id, keyed like the AST cache so a re-upload updates that flow.
-	uploadIDs cache.Cache
+	astCache    *ASTCache
+	// uploadIDs (cloud) remembers the upload's minted flow id per caller, so a re-upload updates that flow.
+	uploadIDs *cache.Typed[string]
 
 	// idxCache memoises search indexes by flow ID, each valid only for the document object it was built from.
-	idxCache cache.Cache
+	idxCache *cache.Typed[*searchIndexEntry]
 
 	// profiles resolves the per-org rule profile so "fix all" cannot apply a rule the org disabled; nil in desktop/tests.
 	profiles *RuleProfileResolver
+	// analyzer is the process's cached analyzer (WithAnalyzer), whose reports a reimport, a deleted flow and a desktop
+	// folder open drop; nil in tests that build no analyzer.
+	analyzer *analyzer.CachedAnalyzer
 
 	// snapshots is the in-memory undo ring (flow_snapshots.go); nil when disabled.
 	snapshots *snapshotStore
@@ -98,8 +186,13 @@ func FlowLoadedSummaryOf(doc *models.FlowDocument) FlowLoadedSummary {
 	return FlowLoadedSummary{ID: doc.ID, Name: doc.Name, FilePath: doc.FilePath, IsFolder: doc.IsFolder}
 }
 
-func NewFlowService(notifier EventNotifier, settings SettingsProvider, docProvider DocumentProvider, storage storageif.StorageBackend, authz *AuthzService, astCache cache.Cache, opts ...FlowOption) *FlowService {
-	idxCache := cache.NewSizedLRU(searchIndexCacheBudget, cache.WithMaxEntries(maxSearchIndexCache))
+// newSearchIndexCache builds the search-index cache (searchIndexCost per index).
+func newSearchIndexCache() *cache.Typed[*searchIndexEntry] {
+	return cache.New[*searchIndexEntry](searchIndexes, searchIndexCacheBudget, cache.WithMaxEntries(maxSearchIndexCache))
+}
+
+func NewFlowService(notifier EventNotifier, settings SettingsProvider, docProvider DocumentProvider, storage storageif.StorageBackend, authz *AuthzService, astCache *ASTCache, opts ...FlowOption) *FlowService {
+	idxCache := newSearchIndexCache()
 	snapshotBudget := maxSnapshotBytes
 	if storage != nil {
 		// Cloud keeps no AST cache: the stored library is the source of truth; the undo ring is container-budgeted.
@@ -117,7 +210,7 @@ func NewFlowService(notifier EventNotifier, settings SettingsProvider, docProvid
 		snapshots:   newSnapshotStoreWithBudget(snapshotBudget),
 	}
 	if storage != nil {
-		svc.uploadIDs, _ = cache.NewLRUCache(uploadIDMemoSize) // size > 0 ⇒ error impossible
+		svc.uploadIDs = cache.New[string](uploadFlowIDs, uploadIDMemoSize, cache.WithTTL(astCacheTTL))
 	}
 	for _, opt := range opts {
 		opt(svc)
@@ -273,7 +366,12 @@ func (s *FlowService) DocProvider() DocumentProvider {
 
 // InvalidateSearchIndex drops the flow's cached search index (FlowCacheSubscribers' "flow-search-index").
 func (s *FlowService) InvalidateSearchIndex(flowID string) {
-	s.idxCache.Delete(context.Background(), flowID)
+	if s.idxCache == nil || flowID == "" {
+		return
+	}
+	if k, err := searchIndexes.Key(cache.Resource(flowID)); err == nil {
+		s.idxCache.Delete(k)
+	}
 }
 
 // FindBlockByID resolves a block by ID via the BlocksByID map, then a tree walk (the map is transient).
@@ -353,31 +451,20 @@ func (s *FlowService) LoadFlowFolder(folderPath string) (doc *models.FlowDocumen
 	return doc, nil
 }
 
-// folderMemberCacheKey hashes NAME and bytes (the parse depends on the name).
-func folderMemberCacheKey(name, text string) string {
-	h := sha256.New()
-	h.Write([]byte(name))
-	h.Write([]byte{0})
-	h.Write([]byte(text))
-	return "ast:" + hex.EncodeToString(h.Sum(nil))
-}
-
 // parseFolderMember memoises member parses by name+content; the cached doc is shared, never mutated.
 func (s *FlowService) parseFolderMember(text, name string, size int64) (*models.FlowDocument, error) {
 	if s.astCache == nil {
 		return parser.ParseText(text, name, size)
 	}
-	key := folderMemberCacheKey(name, text)
-	if cached, ok := s.astCache.Get(context.Background(), key); ok {
-		if doc, ok := cached.(*models.FlowDocument); ok {
-			return doc, nil
-		}
+	key := astKey(astFromMember, name, text)
+	if doc, ok := s.astCache.Get(key); ok {
+		return doc, nil
 	}
 	doc, err := parser.ParseText(text, name, size)
 	if err != nil {
 		return nil, err
 	}
-	s.astCache.Set(context.Background(), key, doc, 24*time.Hour)
+	s.astCache.Set(key, doc, FlowDocumentCost(doc), 0)
 	return doc, nil
 }
 
@@ -386,7 +473,15 @@ func (s *FlowService) cacheFolderMember(name, text string, doc *models.FlowDocum
 	if s.astCache == nil || doc == nil {
 		return
 	}
-	s.astCache.Set(context.Background(), folderMemberCacheKey(name, text), doc, 24*time.Hour)
+	s.astCache.Set(astKey(astFromMember, name, text), doc, FlowDocumentCost(doc), 0)
+}
+
+// cacheFileParse seeds the single-file cache with doc, the parse of text written to path (its base name).
+func (s *FlowService) cacheFileParse(path, text string, doc *models.FlowDocument) {
+	if s.astCache == nil || doc == nil {
+		return
+	}
+	s.astCache.Set(astKey(astFromFile, filepath.Base(path), text), doc, FlowDocumentCost(doc), 0)
 }
 
 // LoadAllFromFolder parses every .txt flow export in folderPath; unreadable or unparseable files are skipped but reported in loadErrors (filename → reason).
@@ -445,41 +540,27 @@ func (s *FlowService) LoadAllFromFolder(ctx context.Context, folderPath string) 
 	return docs, loadErrors, nil
 }
 
-// LoadFlowFiles parses an upload, memoised keyed by authenticated callerID + content (content-only keys would let users swap flow IDs).
+// LoadFlowFiles parses an upload, memoised per caller (callerTenant) and content: content-only keys would let users
+// swap flow IDs.
 func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string, rootName, callerID string) (doc *models.FlowDocument, err error) {
 	defer logger.Guard("App.LoadFlowFiles", &err)
 
-	h := sha256.New()
-	// Caller identity first, length-prefixed so a chosen user id can't be confused with content.
-	h.Write([]byte(strconv.Itoa(len(callerID))))
-	h.Write([]byte(":"))
-	h.Write([]byte(callerID))
-	// Sort keys for a deterministic hash (Go's map iteration order is random).
-	fileNames := make([]string, 0, len(files))
-	for k := range files {
-		fileNames = append(fileNames, k)
-	}
-	sort.Strings(fileNames)
-	for _, name := range fileNames {
-		h.Write([]byte(name))
-		h.Write([]byte(files[name]))
-	}
-	key := "ast-files:" + hex.EncodeToString(h.Sum(nil))
-
+	fileNames := sortedFileNames(files)
+	// The parse depends on the root name too (the flow's name); the minted id only on the files.
+	var astK cache.Key
 	if s.astCache != nil {
-		if cached, ok := s.astCache.Get(ctx, key); ok {
-			if doc, ok := cached.(*models.FlowDocument); ok {
-				// Shallow-copy so concurrent callers loading identical content
-				// don't share the same mutable pointer (matches loadAndParse).
-				docCopy := *doc
-				doc = &docCopy
-				s.docProvider.SetCurrentDoc(doc)
-				// EmitTo, not Emit: reachable from the cloud upload route, where
-				// Emit would broadcast to every connected SSE client.
-				s.notifier.EmitTo(callerID, "flow:loaded", FlowLoadedSummaryOf(doc))
-				logger.Info("flow files loaded from cache", "root", rootName)
-				return doc, nil
-			}
+		astK, _ = astDocs.Key(callerTenant(callerID), cache.Param("from", astFromUpload), cache.Content(filesDigest(rootName, fileNames, files)))
+		if doc, ok := s.astCache.Get(astK); ok {
+			// Shallow-copy so concurrent callers loading identical content
+			// don't share the same mutable pointer (matches loadAndParse).
+			docCopy := *doc
+			doc = &docCopy
+			s.docProvider.SetCurrentDoc(doc)
+			// EmitTo, not Emit: reachable from the cloud upload route, where
+			// Emit would broadcast to every connected SSE client.
+			s.notifier.EmitTo(callerID, "flow:loaded", FlowLoadedSummaryOf(doc))
+			logger.Info("flow files loaded from cache", "root", rootName)
+			return doc, nil
 		}
 	}
 
@@ -488,22 +569,21 @@ func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string
 		return nil, err
 	}
 
-	if s.uploadIDs != nil {
+	if s.uploadIDs != nil && callerID != "" {
 		// Cloud: an identical re-upload keeps its flow id; only ids whose flow still exists are reused.
-		if prev, ok := s.uploadIDs.Get(ctx, key); ok {
-			if id, ok := prev.(string); ok && id != "" {
-				if _, herr := s.storage.LoadFlowHeader(ctx, id); herr == nil {
-					doc.ID = id
-				} else {
-					s.uploadIDs.Delete(ctx, key)
-				}
+		idK, _ := uploadFlowIDs.Key(cache.User(callerID), cache.Content(filesDigest("", fileNames, files)))
+		if id, ok := s.uploadIDs.Get(idK); ok && id != "" {
+			if _, herr := s.storage.LoadFlowHeader(ctx, id); herr == nil {
+				doc.ID = id
+			} else {
+				s.uploadIDs.Delete(idK)
 			}
 		}
-		s.uploadIDs.Set(ctx, key, doc.ID, 24*time.Hour)
+		s.uploadIDs.Set(idK, doc.ID, 1, 0)
 	}
 
 	if s.astCache != nil {
-		s.astCache.Set(ctx, key, doc, 24*time.Hour)
+		s.astCache.Set(astK, doc, FlowDocumentCost(doc), 0)
 		// Hand back a SHALLOW COPY: the cache's contract is shared read-only,
 		// but the upload handler legitimately stamps doc.Source after load.
 		copied := *doc
@@ -627,26 +707,21 @@ type searchIndexEntry struct {
 
 // searchIndexFor returns doc's index; reused only for the SAME doc object — a version change rebuilds.
 func (s *FlowService) searchIndexFor(doc *models.FlowDocument) *search.SearchIndex {
-	if v, ok := s.idxCache.Get(context.Background(), doc.ID); ok {
-		if e, ok := v.(*searchIndexEntry); ok && e.doc.Value() == doc {
-			return e.idx
-		}
+	k, err := searchIndexes.Key(cache.Resource(doc.ID))
+	if err != nil || s.idxCache == nil {
+		return search.NewSearchIndex(doc.ID, doc)
 	}
-	v, _, _ := s.idxFlights.Do(doc.ID, func() (any, error) {
+	if e, ok := s.idxCache.Get(k); ok && e.doc.Value() == doc {
+		return e.idx
+	}
+	// The flight is keyed like the cache (the flow id); the entry's document decides whether it may be served.
+	v, _, _ := s.idxFlights.Do(k.String(), func() (any, error) {
 		// Re-check inside the flight: a waiter's doc may differ from the winner's.
-		if v, ok := s.idxCache.Get(context.Background(), doc.ID); ok {
-			if e, ok := v.(*searchIndexEntry); ok && e.doc.Value() == doc {
-				return e.idx, nil
-			}
+		if e, ok := s.idxCache.Get(k); ok && e.doc.Value() == doc {
+			return e.idx, nil
 		}
 		idx := search.NewSearchIndex(doc.ID, doc)
-		entry := &searchIndexEntry{doc: weak.Make(doc), idx: idx}
-		// Charged by block count; a count-only cache (a test's) just counts the entry.
-		if sized, ok := s.idxCache.(cache.SizedCache); ok {
-			sized.SetWithCost(context.Background(), doc.ID, entry, searchIndexCost(idx), 0)
-		} else {
-			s.idxCache.Set(context.Background(), doc.ID, entry, 0)
-		}
+		s.idxCache.Set(k, &searchIndexEntry{doc: weak.Make(doc), idx: idx}, searchIndexCost(idx), 0)
 		return idx, nil
 	})
 	return v.(*search.SearchIndex)
@@ -853,25 +928,23 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 		return nil, fmt.Errorf("couldn't read file: %w", err)
 	}
 
-	hash := sha256.Sum256(data)
-	key := "ast:" + hex.EncodeToString(hash[:])
-
-	if s.astCache != nil {
-		if cached, ok := s.astCache.Get(context.Background(), key); ok {
-			if doc, ok := cached.(*models.FlowDocument); ok {
-				// Shallow-copy before mutating FilePath so the cached original stays pristine.
-				docCopy := *doc
-				docCopy.FilePath = path
-				doc = &docCopy
-				s.notifier.EmitTo(LocalUser, "flow:loaded", FlowLoadedSummaryOf(doc))
-				logger.Info("flow loaded from cache", "file", filepath.Base(path))
-				return doc, nil
-			}
-		}
-	}
-
 	text := string(data)
 	fileName := filepath.Base(path)
+	// The same bytes under another file name are another document: the name is the flow's name and its subflows'
+	// SourceFile.
+	key := astKey(astFromFile, fileName, text)
+
+	if s.astCache != nil {
+		if doc, ok := s.astCache.Get(key); ok {
+			// Shallow-copy before mutating FilePath so the cached original stays pristine.
+			docCopy := *doc
+			docCopy.FilePath = path
+			doc = &docCopy
+			s.notifier.EmitTo(LocalUser, "flow:loaded", FlowLoadedSummaryOf(doc))
+			logger.Info("flow loaded from cache", "file", fileName)
+			return doc, nil
+		}
+	}
 
 	var doc *models.FlowDocument
 	if info.Size() > 1_000_000 {
@@ -890,7 +963,7 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 	doc.FilePath = path
 
 	if s.astCache != nil {
-		s.astCache.Set(context.Background(), key, doc, 24*time.Hour)
+		s.astCache.Set(key, doc, FlowDocumentCost(doc), 0)
 	}
 
 	if s.settings != nil {
@@ -995,10 +1068,7 @@ func (s *FlowService) PatchFlow(ctx context.Context, doc *models.FlowDocument, p
 		return s.LoadFlowFolder(doc.FilePath)
 	}
 	afterDoc.FilePath = doc.FilePath
-	if s.astCache != nil {
-		hash := sha256.Sum256([]byte(patched))
-		s.astCache.Set(context.Background(), "ast:"+hex.EncodeToString(hash[:]), afterDoc, 24*time.Hour)
-	}
+	s.cacheFileParse(targetPath, patched, afterDoc)
 	if s.settings != nil {
 		_ = s.settings.AddRecentFile(doc.FilePath, int64(len(patched)))
 	}
@@ -1238,8 +1308,13 @@ func (s *FlowService) ApplyFixBatchResult(ctx context.Context, doc *models.FlowD
 		source = string(data)
 	}
 
-	// One loop pass replaces four parses and reports both error counts.
-	res, err := analyzer.ApplyFixesToSourceDocCtx(ctx, &source, doc.Name, s.fixOptions(ctx, doc, ruleFilter, limit))
+	// One loop pass replaces four parses and reports both error counts. A desktop file is parsed under its file
+	// name, as a load does, so the loop's last parse is exactly what a reload of the written bytes would parse.
+	parseName := doc.Name
+	if !cloud {
+		parseName = filepath.Base(targetPath)
+	}
+	res, err := analyzer.ApplyFixesToSourceDocCtx(ctx, &source, parseName, s.fixOptions(ctx, doc, ruleFilter, limit))
 	if err != nil && !res.Partial {
 		return FixBatchResult{Applied: res.Fixed}, err
 	}
@@ -1278,10 +1353,7 @@ func (s *FlowService) ApplyFixBatchResult(ctx context.Context, doc *models.FlowD
 	s.pushSnapshot(doc, snap)
 	s.publishDesktopChange(ctx, doc)
 	// Seed the AST cache so the reload below is a hit, not another parse.
-	if s.astCache != nil {
-		hash := sha256.Sum256([]byte(source))
-		s.astCache.Set(pctx, "ast:"+hex.EncodeToString(hash[:]), res.Doc, 24*time.Hour)
-	}
+	s.cacheFileParse(targetPath, source, res.Doc)
 	updated, err := s.LoadFlowFromPath(doc.FilePath)
 	if err != nil {
 		return FixBatchResult{Applied: res.Fixed}, err

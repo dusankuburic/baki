@@ -41,6 +41,8 @@ type StorageBackend interface {
 	UserTokenStore
 	PolicyStore
 	GovernanceAlertStore
+	RuleNoticeStore
+	RuleSetStore
 	RefreshTokenStore
 	IdentityLinkStore
 }

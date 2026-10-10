@@ -18,10 +18,10 @@ func customRuleSet(t *testing.T, cfg CustomRuleConfig) []Rule {
 	return []Rule{r}
 }
 
-// TestCachedAnalysis_RuleSetParticipatesInKey is the guard for org-scoped custom
-// rules.
+// TestCachedAnalyzer_RuleSetParticipatesInKey is the guard for org-scoped custom
+// rules, within one tenant (the tenant part keeps tenants apart on its own).
 //
-// The cache is keyed on StableFlowID(doc) plus
+// The cache was keyed on StableFlowID(doc) plus
 // analyzerVersion + FlowHash(doc) + settingsDigest(settings). None of those
 // depend on WHICH RULES RAN:
 //
@@ -41,7 +41,7 @@ func customRuleSet(t *testing.T, cfg CustomRuleConfig) []Rule {
 //
 // This test pins the property the feature depends on: same document, different
 // rule set, different report.
-func TestCachedAnalysis_RuleSetParticipatesInKey(t *testing.T) {
+func TestCachedAnalyzer_RuleSetParticipatesInKey(t *testing.T) {
 	// Same file name AND same content in both tenants — the colliding case.
 	const src = "#Region \"Main\"\n    SET Token TO 'abc'\n#EndRegion\n"
 	const name = "Main.txt"
@@ -77,11 +77,11 @@ func TestCachedAnalysis_RuleSetParticipatesInKey(t *testing.T) {
 	})...)
 	orgBRules := AllRules()
 
-	DefaultCache.Clear()
-	defer DefaultCache.Clear()
-
-	reportA := CachedAnalysisCtx(context.Background(), docA, orgARules, nil, nil)
-	reportB := CachedAnalysisCtx(context.Background(), docB, orgBRules, nil, nil)
+	a := newTestAnalyzer()
+	// docB as a copy of docA: the same parse, so only the rule set separates the two keys.
+	docB = docA
+	reportA := a.Analyze(context.Background(), localIn(docA, orgARules, nil, nil))
+	reportB := a.Analyze(context.Background(), localIn(docB, orgBRules, nil, nil))
 
 	nA := 0
 	for _, f := range reportA.Findings {
@@ -104,21 +104,18 @@ func TestCachedAnalysis_RuleSetParticipatesInKey(t *testing.T) {
 	}
 }
 
-// TestCachedAnalysis_SameRuleIDDifferentConfig covers the subtler half: user
+// TestCachedAnalyzer_SameRuleIDDifferentConfig covers the subtler half: user
 // rule IDs have no global namespace, so two orgs can define DIFFERENT rules
 // under the SAME id. Digesting only the ID would collapse them onto one cache
 // entry and serve org B the behaviour org A configured.
-func TestCachedAnalysis_SameRuleIDDifferentConfig(t *testing.T) {
+func TestCachedAnalyzer_SameRuleIDDifferentConfig(t *testing.T) {
 	const src = "#Region \"Main\"\n    SET Token TO 'abc'\n    WAIT 5\n#EndRegion\n"
 	const name = "Main.txt"
 
-	docA, err := parser.ParseFiles(map[string]string{name: src}, "Main")
+	// One document: only the rule configuration separates the two keys.
+	doc, err := parser.ParseFiles(map[string]string{name: src}, "Main")
 	if err != nil {
-		t.Fatalf("parse A: %v", err)
-	}
-	docB, err := parser.ParseFiles(map[string]string{name: src}, "Main")
-	if err != nil {
-		t.Fatalf("parse B: %v", err)
+		t.Fatalf("parse: %v", err)
 	}
 
 	// Same ID, different matcher: A flags SET, B flags WAIT.
@@ -131,11 +128,9 @@ func TestCachedAnalysis_SameRuleIDDifferentConfig(t *testing.T) {
 		Category: "Style", RawTypeMatch: "^WAIT$",
 	})
 
-	DefaultCache.Clear()
-	defer DefaultCache.Clear()
-
-	reportA := CachedAnalysisCtx(context.Background(), docA, rulesA, nil, nil)
-	reportB := CachedAnalysisCtx(context.Background(), docB, rulesB, nil, nil)
+	ca := newTestAnalyzer()
+	reportA := ca.Analyze(context.Background(), localIn(doc, rulesA, nil, nil))
+	reportB := ca.Analyze(context.Background(), localIn(doc, rulesB, nil, nil))
 
 	blockOf := func(r *models.AnalysisReport) []string {
 		var out []string

@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/testutil"
-
-	"pad-core/cache"
 )
 
 const uploadFlowText = "#Region \"Main\"\n" +
@@ -24,7 +22,7 @@ const uploadFlowText = "#Region \"Main\"\n" +
 // already said "LoadFlowFiles is a desktop-only code path"; POST /api/flow/upload is
 // exactly that JWT/cloud handler.
 func TestLoadFlowFiles_CacheIsScopedToTheCaller(t *testing.T) {
-	astCache, _ := cache.NewLRUCache(100)
+	astCache := NewASTCache(1 << 30)
 	svc := NewFlowService(&testutil.CountingNotifier{}, nil, NewLocalDocumentProvider(), nil, nil, astCache)
 	ctx := context.Background()
 
@@ -54,7 +52,7 @@ func TestLoadFlowFiles_CacheIsScopedToTheCaller(t *testing.T) {
 // Scoping by caller must not turn it into a no-op, or this is a performance
 // regression dressed as a security fix.
 func TestLoadFlowFiles_SameCallerStillHitsTheCache(t *testing.T) {
-	astCache, _ := cache.NewLRUCache(100)
+	astCache := NewASTCache(1 << 30)
 	svc := NewFlowService(&testutil.CountingNotifier{}, nil, NewLocalDocumentProvider(), nil, nil, astCache)
 	ctx := context.Background()
 
@@ -74,12 +72,31 @@ func TestLoadFlowFiles_SameCallerStillHitsTheCache(t *testing.T) {
 	}
 }
 
+// The parse depends on the root name (the flow's name), so the same files uploaded under another name are another
+// document: the key used to ignore it and served the first upload's name (B6, for uploads).
+func TestLoadFlowFiles_SameFilesUnderAnotherRootNameAreAnotherDocument(t *testing.T) {
+	svc := NewFlowService(&testutil.CountingNotifier{}, nil, NewLocalDocumentProvider(), nil, nil, NewASTCache(1<<30))
+	ctx := context.Background()
+	files := map[string]string{"Main.txt": uploadFlowText}
+
+	if _, err := svc.LoadFlowFiles(ctx, files, "Payroll", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := svc.LoadFlowFiles(ctx, files, "Invoices", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.Name != "Invoices" {
+		t.Errorf("the upload named Invoices was served as %q", renamed.Name)
+	}
+}
+
 // TestLoadFlowFiles_AnonymousCallersDoNotShareEntries covers the desktop/local
 // shape, where there is no JWT and so no caller id. Two empty-id callers are
 // the same local user, so sharing is correct there — but an empty id must not
 // become a wildcard that also matches an identified caller's entry.
 func TestLoadFlowFiles_AnonymousCallersDoNotShareEntries(t *testing.T) {
-	astCache, _ := cache.NewLRUCache(100)
+	astCache := NewASTCache(1 << 30)
 	svc := NewFlowService(&testutil.CountingNotifier{}, nil, NewLocalDocumentProvider(), nil, nil, astCache)
 	ctx := context.Background()
 
@@ -182,7 +199,7 @@ func (n *targetingNotifierStub) targetedPayload(userID, name string) []any {
 // other tenant with an open event stream. No collision or attacker needed; it
 // happened on every single upload.
 func TestLoadFlowFiles_LoadedEventIsAddressedToTheCaller(t *testing.T) {
-	astCache, _ := cache.NewLRUCache(100)
+	astCache := NewASTCache(1 << 30)
 	notifier := newTargetingNotifierStub()
 	svc := NewFlowService(notifier, nil, NewLocalDocumentProvider(), nil, nil, astCache)
 	ctx := context.Background()
@@ -214,7 +231,7 @@ func TestLoadFlowFiles_LoadedEventIsAddressedToTheCaller(t *testing.T) {
 // few stalled connections. Both the parse (miss) and cache-hit emission paths
 // are covered.
 func TestLoadFlowFiles_LoadedEventCarriesOnlyASummary(t *testing.T) {
-	astCache, _ := cache.NewLRUCache(100)
+	astCache := NewASTCache(1 << 30)
 	notifier := newTargetingNotifierStub()
 	svc := NewFlowService(notifier, nil, NewLocalDocumentProvider(), nil, nil, astCache)
 	ctx := context.Background()

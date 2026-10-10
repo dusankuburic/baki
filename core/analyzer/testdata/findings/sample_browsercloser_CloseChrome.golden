@@ -1,0 +1,182 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_browsercloser_CloseChrome
+document: subflows=1 blocks=34 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":12,"info":3,"blocksAnalyzed":23,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=21 final=1035/1035 last="Loop body is too large"
+metrics: {"avgCognitive":12,"avgCyclomatic":8,"healthScore":49,"maxCognitive":12,"maxCyclomatic":8,"subflowCount":1,"totalBlocks":23,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow CloseChrome: {"blockCount":23,"cognitiveComplexity":12,"cyclomaticComplexity":8,"fanIn":0,"fanOut":0,"maxNestingDepth":5,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=23
+  raw findings: dead-code=1 empty-handler=4 error-swallow=5 missing-delay=1 missing-timeout=2 unhandled-error=1 unused-variable=1
+inventory: none
+findings: 15
+F-001 info/medium dead-code [Style] fix=remove-block @CloseChrome#3 sf=CloseChrome fp=dead-code:c7d570773bd14c7a
+    title: Unreachable code
+    desc: This block follows an unconditional exit action and will never be executed.
+F-002 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#5 sf=CloseChrome fp=empty-handler:2e4fb16a1019b605
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-003 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#17 sf=CloseChrome fp=empty-handler:98f0ca5544bbf442
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-004 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#20 sf=CloseChrome fp=empty-handler:3b1b8dde7ed412b3
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-005 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#23 sf=CloseChrome fp=empty-handler:a61e1da29b5aefbd
+    title: Error handler is empty
+    desc: This error handler has no actions inside it, so errors will be silently ignored.
+F-006 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#5 sf=CloseChrome fp=error-swallow:2e4fb16a1019b605
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-007 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#8 sf=CloseChrome fp=error-swallow:8e7c1fea24627aa3
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-008 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#17 sf=CloseChrome fp=error-swallow:98f0ca5544bbf442
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-009 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#20 sf=CloseChrome fp=error-swallow:3b1b8dde7ed412b3
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-010 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#23 sf=CloseChrome fp=error-swallow:a61e1da29b5aefbd
+    title: Error handler swallows errors silently
+    desc: This error handler catches errors but doesn't appear to log them, set error variables, or take any meaningful action.
+F-011 info/medium missing-delay [Reliability] fix=insert-delay @CloseChrome#12 sf=CloseChrome fp=missing-delay:058d6adfdb9073f9
+    title: Web action without wait
+    desc: Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
+F-012 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#4 sf=CloseChrome fp=missing-timeout:867def5f8e57f9ec
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"UIAutomation.CloseWindow.CloseByTitleClass"}
+F-013 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#12 sf=CloseChrome fp=missing-timeout:058d6adfdb9073f9
+    title: Network operation without timeout
+    desc: This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
+    meta: {"rawType":"WebAutomation.CloseWebBrowser"}
+F-014 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseChrome#4 sf=CloseChrome fp=unhandled-error:867def5f8e57f9ec
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-015 info/low unused-variable [Style] fix=remove-block @CloseChrome#31 sf=CloseChrome fp=unused-variable:a3570bb08ccd5a0f
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Output_Status"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":12,"info":3,"blocksAnalyzed":23,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=21 final=1035/1035 last="Loop body is too large"
+metrics: as default, healthScore=49
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=23
+  raw findings: dead-code=1 empty-handler=4 error-swallow=5 missing-delay=1 missing-timeout=2 unhandled-error=1 unused-variable=1
+inventory: none
+findings: 15
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":12,"info":14,"blocksAnalyzed":23,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=21 final=1035/1035 last="Loop body is too large"
+metrics: as default, healthScore=38
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=23
+  raw findings: dead-code=1 deep-nesting=8 duplicate-action=1 empty-handler=4 error-swallow=5 large-subflow=1 missing-delay=1 missing-timeout=2 unhandled-error=1 unused-variable=1 wide-loop=1
+inventory: none
+findings: 26
+F-001 info/medium dead-code [Style] fix=remove-block @CloseChrome#3 sf=CloseChrome fp=dead-code:c7d570773bd14c7a
+F-002 info/low deep-nesting [Style] fix=- @CloseChrome#5 sf=CloseChrome fp=deep-nesting:2e4fb16a1019b605
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-003 info/low deep-nesting [Style] fix=- @CloseChrome#17 sf=CloseChrome fp=deep-nesting:98f0ca5544bbf442
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-004 info/low deep-nesting [Style] fix=- @CloseChrome#19 sf=CloseChrome fp=deep-nesting:aab841123c65313d
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-005 info/low deep-nesting [Style] fix=- @CloseChrome#20 sf=CloseChrome fp=deep-nesting:3b1b8dde7ed412b3
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-006 info/low deep-nesting [Style] fix=- @CloseChrome#22 sf=CloseChrome fp=deep-nesting:b4b5485b2a7e5338
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-007 info/low deep-nesting [Style] fix=- @CloseChrome#23 sf=CloseChrome fp=deep-nesting:a61e1da29b5aefbd
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-008 info/low deep-nesting [Style] fix=- @CloseChrome#25 sf=CloseChrome fp=deep-nesting:27d57b1a33df24f0
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":3,"maxDepth":2}
+F-009 info/low deep-nesting [Style] fix=- @CloseChrome#26 sf=CloseChrome fp=deep-nesting:fa2176c3216254b6
+    title: Deeply nested logic
+    desc: This block is nested beyond the recommended depth, which reduces readability.
+    meta: {"depth":4,"maxDepth":2}
+F-010 info/medium duplicate-action [Style] fix=remove-block @CloseChrome#14 sf=CloseChrome fp=duplicate-action:42c0c0badfc895fe
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":2}
+F-011 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#5 sf=CloseChrome fp=empty-handler:2e4fb16a1019b605
+F-012 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#17 sf=CloseChrome fp=empty-handler:98f0ca5544bbf442
+F-013 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#20 sf=CloseChrome fp=empty-handler:3b1b8dde7ed412b3
+F-014 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#23 sf=CloseChrome fp=empty-handler:a61e1da29b5aefbd
+F-015 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#5 sf=CloseChrome fp=error-swallow:2e4fb16a1019b605
+F-016 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#8 sf=CloseChrome fp=error-swallow:8e7c1fea24627aa3
+F-017 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#17 sf=CloseChrome fp=error-swallow:98f0ca5544bbf442
+F-018 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#20 sf=CloseChrome fp=error-swallow:3b1b8dde7ed412b3
+F-019 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#23 sf=CloseChrome fp=error-swallow:a61e1da29b5aefbd
+F-020 info/low large-subflow [Style] fix=- @CloseChrome#0 sf=CloseChrome fp=large-subflow:5aae260cdab914b2
+    title: Large subflow
+    desc: Subflow 'CloseChrome' has 23 blocks (threshold: 5).
+F-021 info/medium missing-delay [Reliability] fix=insert-delay @CloseChrome#12 sf=CloseChrome fp=missing-delay:058d6adfdb9073f9
+F-022 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#4 sf=CloseChrome fp=missing-timeout:867def5f8e57f9ec
+F-023 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#12 sf=CloseChrome fp=missing-timeout:058d6adfdb9073f9
+F-024 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @CloseChrome#4 sf=CloseChrome fp=unhandled-error:867def5f8e57f9ec
+F-025 info/low unused-variable [Style] fix=remove-block @CloseChrome#31 sf=CloseChrome fp=unused-variable:a3570bb08ccd5a0f
+F-026 info/low wide-loop [Style] fix=- @CloseChrome#15 sf=CloseChrome fp=wide-loop:b151fea711f59275
+    title: Loop body is too large
+    desc: This loop contains blocks that should be extracted into subflows for better readability and maintainability.
+    meta: {"blockCount":8,"maxBlocks":3}
+
+=== disabled
+stats: {"errors":0,"warnings":11,"info":2,"blocksAnalyzed":23,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=18 final=851/851 last="Loop body is too large"
+metrics: as default, healthScore=54
+profiles: rules=37 order=f7de49357acad250 blocksChecked=23
+  raw findings: dead-code=1 empty-handler=4 error-swallow=5 missing-timeout=2 unused-variable=1
+inventory: none
+findings: 13
+F-001 info/medium dead-code [Style] fix=remove-block @CloseChrome#3 sf=CloseChrome fp=dead-code:c7d570773bd14c7a
+F-002 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#5 sf=CloseChrome fp=empty-handler:2e4fb16a1019b605
+F-003 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#17 sf=CloseChrome fp=empty-handler:98f0ca5544bbf442
+F-004 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#20 sf=CloseChrome fp=empty-handler:3b1b8dde7ed412b3
+F-005 warning/high empty-handler [Reliability] fix=insert-handler-log @CloseChrome#23 sf=CloseChrome fp=empty-handler:a61e1da29b5aefbd
+F-006 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#5 sf=CloseChrome fp=error-swallow:2e4fb16a1019b605
+F-007 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#8 sf=CloseChrome fp=error-swallow:8e7c1fea24627aa3
+F-008 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#17 sf=CloseChrome fp=error-swallow:98f0ca5544bbf442
+F-009 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#20 sf=CloseChrome fp=error-swallow:3b1b8dde7ed412b3
+F-010 warning/medium error-swallow [Reliability] fix=insert-error-log @CloseChrome#23 sf=CloseChrome fp=error-swallow:a61e1da29b5aefbd
+F-011 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#4 sf=CloseChrome fp=missing-timeout:867def5f8e57f9ec
+F-012 warning/medium missing-timeout [Reliability] fix=set-timeout @CloseChrome#12 sf=CloseChrome fp=missing-timeout:058d6adfdb9073f9
+F-013 info/low unused-variable [Style] fix=remove-block @CloseChrome#31 sf=CloseChrome fp=unused-variable:a3570bb08ccd5a0f
+
+=== severity
+stats: {"errors":1,"warnings":13,"info":1,"blocksAnalyzed":23,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=21 final=1035/1035 last="Loop body is too large"
+metrics: as default, healthScore=35
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=23
+  raw findings: dead-code=1 empty-handler=4 error-swallow=5 missing-delay=1 missing-timeout=2 unhandled-error=1 unused-variable=1
+inventory: none
+findings: 15
+  as default; severity changes: F-001 info->warning, F-011 info->warning, F-014 warning->error
+
+=== autofixable
+stats: {"errors":0,"warnings":12,"info":3,"blocksAnalyzed":23,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=15 final=736/736 last="Wait zero"
+metrics: as default, healthScore=49
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=23
+  raw findings: dead-code=1 empty-handler=4 error-swallow=5 missing-delay=1 missing-timeout=2 unhandled-error=1 unused-variable=1
+inventory: none
+findings: 15
+  as default; severity changes: none

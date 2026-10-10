@@ -1,0 +1,522 @@
+{
+  "flowId": "doc-preview",
+  "flowName": "Preview rules",
+  "generatedAt": "2026-10-08T09:30:00Z",
+  "findings": [
+    {
+      "id": "F-001",
+      "fingerprint": "hardcoded-credential:464c56f389b63631",
+      "ruleId": "hardcoded-credential",
+      "severity": "error",
+      "confidence": "high",
+      "title": "Credential variable set to literal value",
+      "description": "Variable 'Password' has a name that suggests it holds a credential and is assigned a literal string value.",
+      "blockId": "b-001",
+      "subflowId": "sf-1",
+      "suggestion": "Store credentials in a secured vault, Windows Credential Manager, or use a PAD input variable instead of a literal string in the flow.",
+      "autoFix": "replace-with-variable",
+      "category": "Security",
+      "metadata": {
+        "variable": "Password"
+      },
+      "stage": "preview"
+    },
+    {
+      "id": "F-002",
+      "fingerprint": "hardcoded-url:d3e3110436d64cb6",
+      "ruleId": "hardcoded-url",
+      "severity": "info",
+      "confidence": "low",
+      "title": "Hardcoded URL",
+      "description": "Property 'Url' contains a hardcoded URL: http://example.com/status",
+      "blockId": "b-002",
+      "subflowId": "sf-1",
+      "suggestion": "Store the base URL in a variable so it can be changed per environment without editing the flow.",
+      "autoFix": "replace-with-variable",
+      "category": "Portability",
+      "metadata": {
+        "property": "Url",
+        "url": "http://example.com/status"
+      }
+    },
+    {
+      "id": "F-003",
+      "fingerprint": "insecure-http-url:d3e3110436d64cb6",
+      "ruleId": "insecure-http-url",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Insecure HTTP URL",
+      "description": "Action targets a cleartext http:// URL. Any data sent (credentials, tokens, PII) travels unencrypted and is interceptable on the wire.",
+      "blockId": "b-002",
+      "subflowId": "sf-1",
+      "suggestion": "Use the https:// scheme for the target endpoint so transport is TLS-encrypted.",
+      "autoFix": "upgrade-to-https",
+      "category": "Security",
+      "metadata": {
+        "property": "Url",
+        "url": "http://example.com/status"
+      }
+    },
+    {
+      "id": "F-004",
+      "fingerprint": "missing-retry:bc169b9f27eba1be",
+      "ruleId": "missing-retry",
+      "severity": "info",
+      "confidence": "medium",
+      "title": "Transient operation without retry",
+      "description": "This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.",
+      "blockId": "b-002",
+      "subflowId": "sf-1",
+      "suggestion": "Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.",
+      "autoFixHint": "Wrap the action: SET %RetryCount% = 0 \u003e LOOP while %RetryCount% \u003c 3 \u003e [action] \u003e ON ERROR: Wait 2s, SET %RetryCount% = %RetryCount% + 1 \u003e END LOOP.",
+      "autoFix": "wrap-in-retry",
+      "category": "Reliability",
+      "metadata": {
+        "rawType": "WebAutomation.NavigateTo"
+      }
+    },
+    {
+      "id": "F-005",
+      "fingerprint": "missing-timeout:bc169b9f27eba1be",
+      "ruleId": "missing-timeout",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Network operation without timeout",
+      "description": "This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.",
+      "blockId": "b-002",
+      "subflowId": "sf-1",
+      "suggestion": "Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior.",
+      "autoFix": "set-timeout",
+      "category": "Reliability",
+      "metadata": {
+        "rawType": "WebAutomation.NavigateTo"
+      }
+    },
+    {
+      "id": "F-006",
+      "fingerprint": "unhandled-error:bc169b9f27eba1be",
+      "ruleId": "unhandled-error",
+      "severity": "warning",
+      "confidence": "medium",
+      "title": "Unhandled error in fallible action",
+      "description": "This action commonly fails but has no error handler in its surrounding scope.",
+      "blockId": "b-002",
+      "subflowId": "sf-1",
+      "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+      "autoFix": "wrap-error-handler",
+      "category": "Reliability"
+    },
+    {
+      "id": "F-007",
+      "fingerprint": "uninitialized-variable:a0027d794ec56617",
+      "ruleId": "uninitialized-variable",
+      "severity": "warning",
+      "confidence": "low",
+      "title": "Variable potentially uninitialized",
+      "description": "Variable 'Browser' is used here but doesn't seem to be assigned anywhere in the flow.",
+      "blockId": "b-002",
+      "subflowId": "sf-1",
+      "suggestion": "Ensure the variable is initialized with a SET action or as an output of another action.",
+      "autoFix": "init-variable",
+      "category": "Logic",
+      "metadata": {
+        "variable": "Browser"
+      }
+    },
+    {
+      "id": "F-008",
+      "fingerprint": "unused-variable:464c56f389b63631",
+      "ruleId": "unused-variable",
+      "severity": "info",
+      "confidence": "low",
+      "title": "Variable declared but never used",
+      "description": "This variable is set but never referenced elsewhere in the flow.",
+      "blockId": "b-001",
+      "subflowId": "sf-1",
+      "suggestion": "Remove the unused variable or add a reference to it.",
+      "autoFix": "remove-block",
+      "category": "Style",
+      "metadata": {
+        "variable": "Password"
+      }
+    }
+  ],
+  "stats": {
+    "errors": 1,
+    "warnings": 4,
+    "info": 3,
+    "blocksAnalyzed": 2,
+    "rulesRun": 45,
+    "rulesSkipped": 0,
+    "suppressed": 0
+  },
+  "durationMs": 1234,
+  "metrics": {
+    "subflows": [
+      {
+        "subflowId": "sf-1",
+        "subflowName": "Main",
+        "blockCount": 2,
+        "cyclomaticComplexity": 1,
+        "cognitiveComplexity": 0,
+        "maxNestingDepth": 0,
+        "variableCount": 0,
+        "fanIn": 0,
+        "fanOut": 0
+      }
+    ],
+    "totalBlocks": 2,
+    "totalVariables": 0,
+    "maxCyclomatic": 1,
+    "avgCyclomatic": 1,
+    "maxCognitive": 0,
+    "avgCognitive": 0,
+    "healthScore": 81,
+    "variableDensity": 0,
+    "subflowCount": 1
+  },
+  "ruleProfiles": [
+    {
+      "ruleId": "dead-data",
+      "ruleName": "Dead data path",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "circular-subflow-dependency",
+      "ruleName": "Circular subflow dependency",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "command-injection-risk",
+      "ruleName": "Command or script injection risk",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "dead-code",
+      "ruleName": "Unreachable code",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "deep-nesting",
+      "ruleName": "Deeply nested logic",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "disabled-block",
+      "ruleName": "Disabled block",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "duplicate-action",
+      "ruleName": "Repeated action pattern",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "duplicate-label",
+      "ruleName": "Duplicate label",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "duplicate-subflow-name",
+      "ruleName": "Duplicate subflow name",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "empty-branch",
+      "ruleName": "Empty condition branch",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "empty-handler",
+      "ruleName": "Error handler is empty",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "empty-subflow",
+      "ruleName": "Empty subflow",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "error-swallow",
+      "ruleName": "Error handler swallows errors",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "file-op-no-error-handler",
+      "ruleName": "File operation without error handler",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "goto-antipattern",
+      "ruleName": "GOTO anti-pattern detected",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "hardcoded-credential",
+      "ruleName": "Hardcoded credential detected",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "hardcoded-filepath",
+      "ruleName": "Hardcoded file path",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "hardcoded-ip",
+      "ruleName": "Hardcoded IP address",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "hardcoded-ui-coordinates",
+      "ruleName": "Hardcoded UI coordinates",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "hardcoded-url",
+      "ruleName": "Hardcoded URL",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "high-cyclomatic-complexity",
+      "ruleName": "High cyclomatic complexity",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "infinite-loop-risk",
+      "ruleName": "Loop may run forever",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "insecure-http-url",
+      "ruleName": "Insecure HTTP URL",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "large-subflow",
+      "ruleName": "Large subflow",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "missing-delay",
+      "ruleName": "Web action without wait",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "missing-retry",
+      "ruleName": "Transient operation without retry",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "missing-timeout",
+      "ruleName": "Network operation without timeout",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "parse-error",
+      "ruleName": "Parse error",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "path-traversal-risk",
+      "ruleName": "Path traversal risk",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "redundant-action",
+      "ruleName": "Redundant action detected",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "resource-leak",
+      "ruleName": "Resource opened but never closed",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "sensitive-exposure",
+      "ruleName": "Sensitive data exposure",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "slow-pattern",
+      "ruleName": "UI automation in tight loop",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "sql-injection-risk",
+      "ruleName": "SQL injection risk",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "subflow-mismatch",
+      "ruleName": "Subflow call parameter mismatch",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "subflow-no-error-handler",
+      "ruleName": "Subflow without error handler",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "switch-no-default",
+      "ruleName": "Switch without default case",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "tainted-sink",
+      "ruleName": "Tainted data in dangerous sink",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "todo-in-comment",
+      "ruleName": "TODO in comment",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "uncalled-subflow",
+      "ruleName": "Uncalled subflow",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "unhandled-error",
+      "ruleName": "Unhandled error in fallible action",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "uninitialized-variable",
+      "ruleName": "Variable used before being initialized",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "unused-variable",
+      "ruleName": "Variable declared but never used",
+      "durationMs": 0,
+      "findingCount": 1,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "wait-zero",
+      "ruleName": "Wait zero",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    },
+    {
+      "ruleId": "wide-loop",
+      "ruleName": "Loop body is too large",
+      "durationMs": 0,
+      "findingCount": 0,
+      "blocksChecked": 2
+    }
+  ],
+  "policy": {
+    "policyId": "pol-preview",
+    "policyName": "Preview never gates",
+    "passed": false,
+    "violations": [
+      {
+        "id": "F-006",
+        "fingerprint": "unhandled-error:bc169b9f27eba1be",
+        "ruleId": "unhandled-error",
+        "severity": "warning",
+        "confidence": "medium",
+        "title": "Unhandled error in fallible action",
+        "description": "This action commonly fails but has no error handler in its surrounding scope.",
+        "blockId": "b-002",
+        "subflowId": "sf-1",
+        "suggestion": "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+        "autoFix": "wrap-error-handler",
+        "category": "Reliability"
+      }
+    ],
+    "errors": 0,
+    "warnings": 1,
+    "info": 0,
+    "evaluated": 1,
+    "waived": 0,
+    "preview": 2
+  }
+}

@@ -1,0 +1,7 @@
+# PAD Analyzer: 5 finding(s) — 1 error(s), 2 warning(s), 1 info; 2 suppressed inline
+Rule,Severity,Title,Description,Suggestion,Flow,File,BlockID,SubflowID,Line,Fingerprint,Category
+org-no-msgbox,warning,"'=HYPERLINK(""http://x"")","Line one Line two <b>&amp;</b> 'quoted' ""dq""",'@risk: use a log action,,,blk-1,sf-1,,,Custom
+parse-error,error,Parse error (line 3),malformed line,,,,,,,parse-error:,Syntax
+todo-in-comment,info,TODO in comment,Ünïcödé — 日本語 TODO,,,,blk-2,sf-1,,todo-in-comment:0011223344556677,
+unhandled-error,warning,Unhandled error in fallible action,This action can fail at runtime.,Wrap it in ON BLOCK ERROR.,,,blk-3,sf-1,,unhandled-error:8899aabbccddeeff,
+org-legacy,critical,Legacy severity,A severity no consumer knows.,,,,blk-4,sf-2,,org-legacy:1234,

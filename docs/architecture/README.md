@@ -12,6 +12,7 @@ lasting consequences are recorded as ADRs in [`../adr/`](../adr/).
 | DI wiring and the post-construction setters that remain | [di-wiring.md](di-wiring.md) |
 | What the export, erasure, organisation deletion and retention do with each table | [data-lifecycle.md](data-lifecycle.md) |
 | How a storage write gets its transaction (`withTx` and its variants) | [transactions.md](transactions.md) |
+| The analyzer: rule kinds, the walk, lazy facts, adding a rule | [analyzer.md](analyzer.md) |
 | Per-package test map | [`../testing.md`](../testing.md) |
 
 ## Rules for new code
@@ -55,6 +56,11 @@ and when it shrinks, so the pinned numbers keep going down.
   from an `fx.Invoke`. Cache invalidation is a sync subscriber, and the cache's fills are generation-checked
   (`eventbus.Gen`); side effects (email, realtime, notifications) are async subscribers, which run only after the
   commit. Never call into another service to tell it something changed, and never add a hook setter for it.
+- **Caches.** A cache is declared once, as a package-level `cache.Declare(name, cache.Keys(...), ...)`: its key
+  parts include a tenant unless `cache.Global(reason)` says why not, and it states where its entries live
+  (`cache.ReplicaLocal(reason)`). Build its storage with `cache.New` and fill it through `GetOrFill`, which flies
+  on the full key. Raw LRU constructions and `singleflight.Group`s are pinned per file (`internal/archtest`), and
+  every declaration is in `internal/di/testdata/caches.golden` (ADR 0017).
 - **Background work.** Anything that must not hold up the request runs on a `lifecycle.NewBounded` runner,
   which is capped, reports panics and is drained at shutdown, never a bare `go func`.
 - **Request logs.** Log on the request path through `logger.FromContext(ctx)`, so the line carries the

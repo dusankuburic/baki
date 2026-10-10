@@ -17,6 +17,7 @@ import (
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-core/analyzer"
+	"pad-core/cache"
 	"pad-core/logger"
 	"pad-core/models"
 )
@@ -36,8 +37,8 @@ const (
 // largeAnalysisSem is the process-wide gate for large uncached analyses (shared by every instance).
 var largeAnalysisSem = semaphore.NewWeighted(largeAnalysisConcurrency)
 
-// analysisRunFunc is the uncached analysis entry point called after the cache probe and gate; replaceable in tests.
-type analysisRunFunc func(ctx context.Context, doc *models.FlowDocument, rules []analyzer.Rule, settings *models.AppSettings, onProgress func(int, int, string)) *models.AnalysisReport
+// analysisRunFunc is the analysis entry point called after the cache probe and gate; replaceable in tests.
+type analysisRunFunc func(ctx context.Context, in analyzer.Input) *models.AnalysisReport
 
 // reportPair tracks the two most recent distinct reports for a flow (for /api/analysis/diff).
 type reportPair struct {
@@ -219,10 +220,15 @@ type AnalysisService struct {
 	// authEnabled: with accounts, a claim-less analysis has no one to send progress to (EmitTo(LocalUser) reaches
 	// only identity-less clients, which exist only in desktop mode).
 	authEnabled bool
+	// runsLibrary: the deployment runs the library rules (AnalysisOptions.LibraryRules), so the catalog lists them.
+	runsLibrary bool
 	// bus announces the rule toggles (deployment SettingsChanged); nil publishes nothing.
 	bus *eventbus.Bus
+	// analyzer caches reports and inventories; the process's one, shared with FlowService, which invalidates it.
+	analyzer *analyzer.CachedAnalyzer
 
-	// largeSem gates uncached analyses of large flows (nil disables); run is the uncached entry point.
+	// largeSem gates uncached analyses of large flows (nil disables); run is the entry point after the probe
+	// (s.analyzer.Analyze unless a test replaces it).
 	largeSem *semaphore.Weighted
 	run      analysisRunFunc
 
@@ -241,12 +247,22 @@ type AnalysisOptions struct {
 	Profiles *RuleProfileResolver
 	// AuthEnabled: requests carry auth, so claim-less progress is dropped (not broadcast).
 	AuthEnabled bool
+	// LibraryRules: the deployment runs the library rules (desktop folder analysis, AnalyzeBatch: no accounts), so
+	// the rule catalog lists them; elsewhere they never run and stay out of it.
+	LibraryRules bool
 	// Bus announces the deployment rule toggles (SettingsChanged); nil publishes nothing.
 	Bus *eventbus.Bus
+	// Analyzer is the process's cached analyzer (internal/di), shared with FlowService so a reimport, a deleted
+	// flow and a desktop folder open reach the reports this service serves; nil builds a private one.
+	Analyzer *analyzer.CachedAnalyzer
 }
 
 // NewAnalysisService builds the service; the error return is kept for the DI signature.
 func NewAnalysisService(notifier EventNotifier, settings SettingsProvider, history *analyzer.HistoryStore, opts AnalysisOptions) (*AnalysisService, error) {
+	a := opts.Analyzer
+	if a == nil {
+		a = NewDefaultAnalyzer()
+	}
 	return &AnalysisService{
 		notifier:    notifier,
 		settings:    settings,
@@ -254,32 +270,44 @@ func NewAnalysisService(notifier EventNotifier, settings SettingsProvider, histo
 		customRules: opts.CustomRules,
 		profiles:    opts.Profiles,
 		authEnabled: opts.AuthEnabled,
+		runsLibrary: opts.LibraryRules,
 		bus:         opts.Bus,
+		analyzer:    a,
 		largeSem:    largeAnalysisSem,
 		reports:     newReportLRU(analysisReportBudget),
 		claims:      newRecordClaims(maxRecordClaims),
 	}, nil
 }
 
+// NewDefaultAnalyzer is a cached analyzer with the default bounds: 50 reports within analyzer.DefaultCacheBudget,
+// 64 suppression inventories.
+func NewDefaultAnalyzer() *analyzer.CachedAnalyzer {
+	return analyzer.NewCachedAnalyzer(
+		analyzer.WithReportCache(analyzer.DefaultReportCacheEntries, analyzer.DefaultCacheBudget),
+		analyzer.WithInventoryCache(analyzer.DefaultInventoryCacheEntries))
+}
+
+// cacheTenant is whose report doc's is, for the analyzer's cache. A report depends on the flow's content and its
+// owning org's rule profile, not on who asks, so a stored flow has one entry for everyone who may read it. With
+// accounts off (the desktop, local mode) everything is the local user's; another path-less input is the caller's
+// (AnalyzeRaw skips the cache with accounts); without either there is nobody to scope to, and the zero part analyzes
+// without caching.
+func (s *AnalysisService) cacheTenant(ctx context.Context, doc *models.FlowDocument) cache.Part {
+	if !s.authEnabled {
+		return cache.Local()
+	}
+	if t := cache.Tenant(doc.OrganizationID, doc.OwnerID); !t.IsZero() {
+		return t // a stored flow: resolveStoredFlow sets both
+	}
+	if c := auth.ClaimsFromContext(ctx); c != nil && c.UserID != "" {
+		return cache.User(c.UserID)
+	}
+	return cache.Part{}
+}
+
 // AuthEnabled reports AnalysisOptions.AuthEnabled.
 func (s *AnalysisService) AuthEnabled() bool {
 	return s.authEnabled
-}
-
-func (s *AnalysisService) LoadCustomRules(path string) {
-	if path == "" {
-		return
-	}
-	custom, warnings, err := analyzer.LoadCustomRules(path)
-	if err != nil {
-		// Don't fail boot — log and continue with built-in rules only.
-		fmt.Printf("analysis service: custom rules load failed: %v\n", err)
-		return
-	}
-	for _, w := range warnings {
-		logger.Warn("custom rule skipped", "file", path, "detail", w)
-	}
-	s.customRules = custom
 }
 
 func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocument) (report *models.AnalysisReport, err error) {
@@ -306,18 +334,30 @@ func (s *AnalysisService) AnalyzeFlowBackground(ctx context.Context, doc *models
 	return report, err
 }
 
+// AnalyzeRaw analyzes a path-less input (POST /api/analysis/analyze-raw) with progress but WITHOUT recording: it is
+// no stored flow, so it has no diff pair or history to update. It still counts as an analysis run. With accounts it
+// bypasses the report cache: each post is a fresh parse that no later request hits, and only the desktop session
+// analytics (no accounts) read entries back.
+func (s *AnalysisService) AnalyzeRaw(ctx context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
+	report, _, err := s.analyzeFlow(ctx, doc, analyzeOpts{count: true, progress: true, uncached: s.authEnabled})
+	return report, err
+}
+
 // AnalyzeFlowReadOnly analyzes WITHOUT recording or progress, so internal analyses cannot overwrite the diff pair.
 func (s *AnalysisService) AnalyzeFlowReadOnly(ctx context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
 	report, _, err := s.analyzeFlow(ctx, doc, analyzeOpts{})
 	return report, err
 }
 
-// analyzeOpts selects what an analyzeFlow call records and emits (claim and background imply record).
+// analyzeOpts selects what an analyzeFlow call records and emits (claim and background imply record, record implies
+// count).
 type analyzeOpts struct {
 	record     bool
+	count      bool // an analysis run for pad_analysis_runs_total
 	progress   bool
 	claim      bool
 	background bool
+	uncached   bool // the zero tenant: neither served from nor stored in the report cache
 }
 
 // analyzeFlow runs the cached analysis under opts; fresh reports whether a claim was still free.
@@ -326,7 +366,7 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 
 	record, progress, claim := opts.record, opts.progress, opts.claim
 
-	if record {
+	if record || opts.count {
 		metrics.RecordAnalysisRun()
 	}
 
@@ -341,7 +381,14 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 	}
 
 	// Rules run per the flow's OWNING ORG (pre-R4: process-global, one tenant's toggle changed every tenant).
-	settings, rules := s.ruleSetFor(ctx, doc)
+	profile := s.profileFor(ctx, doc)
+	settings, rules := profile.Settings, profile.Rules
+	// A non-member's view lacks the org's custom rules: the run is theirs alone, cached apart from the org's
+	// report (whose entry it would replace) and recorded nowhere members read (the diff pair, exports, chat,
+	// history, the dashboard).
+	if profile.Narrowed {
+		record, claim = false, false
+	}
 
 	// Extract userID for per-user event delivery (prevents cross-tenant leaks).
 	userID := ""
@@ -360,10 +407,17 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 			})
 		}
 	}
+	in := analyzer.Input{Doc: doc, Rules: rules, Settings: settings, OnProgress: onProgress}
+	if !opts.uncached {
+		in.Tenant = s.cacheTenant(ctx, doc)
+		if profile.Narrowed {
+			in.Tenant = narrowedTenant(ctx, doc)
+		}
+	}
 	// Probe the cache first so a hit never queues behind the large-analysis gate.
-	result := analyzer.LookupCachedReport(doc, rules, settings)
+	result := s.analyzer.Lookup(in)
 	if result == nil {
-		result, err = s.runGated(ctx, doc, rules, settings, onProgress)
+		result, err = s.runGated(ctx, in)
 		if err != nil {
 			span.RecordError(err)
 			return nil, false, err
@@ -392,7 +446,7 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 		attribute.Int("analysis.findings", len(result.Findings)),
 	)
 
-	// Track the two most recent distinct runs for diffing (pointer identity detects a new run).
+	// Track the two most recent distinct runs for diffing.
 	if record {
 		key := analysisHistoryKey(doc)
 		s.mu.Lock()
@@ -400,8 +454,15 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 		if !ok {
 			pair = &reportPair{}
 		}
-		newRun := pair.current != result
-		if newRun {
+		newRun := false
+		switch {
+		case pair.current == result: // a cache hit
+		case sameRun(pair.current, result):
+			// The same content and findings from a fresh parse (a desktop folder reload mints new ids): the
+			// current report takes the new ids, and the previous distinct run stays for the diff.
+			pair.current = result
+		default:
+			newRun = true
 			pair.prev = pair.current
 			pair.current = result
 		}
@@ -430,18 +491,51 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 	return result, fresh, nil
 }
 
-// runGated runs the uncached analysis holding a large-analysis slot when large; released on every exit.
-func (s *AnalysisService) runGated(ctx context.Context, doc *models.FlowDocument, rules []analyzer.Rule, settings *models.AppSettings, onProgress func(int, int, string)) (*models.AnalysisReport, error) {
-	release, err := s.acquireLargeSlot(ctx, doc)
+// ReadsOrgView reports whether ctx's reader analyzes doc under its organisation's own rules: false for a
+// non-member reading under row-level security (RuleProfile.Narrowed), whose run must not become the flow's shared
+// state (a baseline, for one).
+func (s *AnalysisService) ReadsOrgView(ctx context.Context, doc *models.FlowDocument) bool {
+	return doc == nil || !s.profileFor(ctx, doc).Narrowed
+}
+
+// narrowedTenant is the report cache tenant of a narrowed run (RuleProfile.Narrowed): the reader's own within the
+// org, so it neither serves nor replaces the org's entry for the flow; zero (uncached) without a calling user.
+func narrowedTenant(ctx context.Context, doc *models.FlowDocument) cache.Part {
+	a := auth.ActorFromContext(ctx)
+	if a == nil || a.UserID == "" || doc.OrganizationID == "" {
+		return cache.Part{}
+	}
+	return cache.OrgUser(doc.OrganizationID, a.UserID)
+}
+
+// sameRun reports whether b repeats a: the same content (ContentHash; reports of uncached paths carry none, and
+// only their pointer identifies them) and the same findings in the same order. Ids aside, a re-parse of unchanged
+// text under an unchanged profile is not a new run.
+func sameRun(a, b *models.AnalysisReport) bool {
+	if a == nil || b == nil || a.ContentHash == "" || a.ContentHash != b.ContentHash || len(a.Findings) != len(b.Findings) {
+		return false
+	}
+	for i := range a.Findings {
+		fa, fb := &a.Findings[i], &b.Findings[i]
+		if fa.RuleID != fb.RuleID || fa.Fingerprint != fb.Fingerprint || fa.Severity != fb.Severity || fa.Stage != fb.Stage {
+			return false
+		}
+	}
+	return a.Stats == b.Stats
+}
+
+// runGated runs the analysis holding a large-analysis slot when large; released on every exit.
+func (s *AnalysisService) runGated(ctx context.Context, in analyzer.Input) (*models.AnalysisReport, error) {
+	release, err := s.acquireLargeSlot(ctx, in.Doc)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
 	run := s.run
 	if run == nil {
-		run = analyzer.CachedAnalysisCtx
+		run = s.analyzer.Analyze
 	}
-	return run(ctx, doc, rules, settings, onProgress), nil
+	return run(ctx, in), nil
 }
 
 // acquireLargeSlot takes a largeAnalysisSem slot for a large uncached flow; small flows get a no-op release.
@@ -477,12 +571,13 @@ func countBlockTree(blocks []models.Block) int {
 	return n
 }
 
-// TestRule runs ONE candidate rule and returns its findings — nothing cached, recorded or emitted.
+// TestRule runs ONE candidate rule and returns its findings — nothing cached, recorded or emitted. The rule is
+// checked strictly, as a save would; a rule it refuses is the *analyzer.CustomRuleError.
 func (s *AnalysisService) TestRule(ctx context.Context, doc *models.FlowDocument, cfg analyzer.CustomRuleConfig) ([]models.Finding, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
 	}
-	rule, err := analyzer.NewCustomRule(cfg)
+	rule, _, err := analyzer.CompileCustomRule(cfg, analyzer.CustomRuleStrict)
 	if err != nil {
 		return nil, fmt.Errorf("invalid rule: %w", err)
 	}
@@ -576,7 +671,13 @@ func (s *AnalysisService) AnalyzeBatch(docs []*models.FlowDocument) (batch *mode
 	if len(s.customRules) > 0 {
 		rules = append(rules, s.customRules...)
 	}
-	return analyzer.RunBatchAnalysis(docs, rules, settings), nil
+	// Desktop only (the route is refused with accounts): the reports join the local session analytics.
+	batch = s.analyzer.Batch(docs, analyzer.Input{Rules: rules, Settings: settings, Tenant: cache.Local()})
+	// The library rules (preview) compare the folder's flows with each other: one pass over every document, after
+	// the per-flow analyses. Their findings stay in batch.Library (nil when no library rule is enabled), never in
+	// a flow's report, its cache entry or a gate.
+	batch.Library = analyzer.AnalyzeLibrary(context.Background(), docs, analyzer.LibraryRules(), settings)
+	return batch, nil
 }
 
 func (s *AnalysisService) DiffReports(old, new *models.AnalysisReport) *models.AnalysisDiff {
@@ -587,17 +688,26 @@ func (s *AnalysisService) GetDependencyAnalysis() *models.DependencyAnalysis {
 	return analyzer.AnalyzeRuleDependencies()
 }
 
+// ComputeDashboard aggregates the desktop session analytics: the local user's cached reports, one per flow.
 func (s *AnalysisService) ComputeDashboard() *models.DashboardStats {
-	return analyzer.ComputeDashboard(sortedReports(analyzer.DefaultCache.AllReports()))
+	return analyzer.ComputeDashboard(sortedReports(s.sessionReports()))
 }
 
 // DashboardData returns stats and reports from one cache snapshot, so all sections see a consistent view.
 func (s *AnalysisService) DashboardData() (*models.DashboardStats, []*models.AnalysisReport) {
-	reports := sortedReports(analyzer.DefaultCache.AllReports())
+	reports := sortedReports(s.sessionReports())
 	return analyzer.ComputeDashboard(reports), reports
 }
 
-// sortedReports orders a cache snapshot by FlowID (AllReports iterates a map).
+// sessionReports is the local user's cached reports; another tenant's never reach the session analytics.
+func (s *AnalysisService) sessionReports() []*models.AnalysisReport {
+	if s == nil {
+		return nil
+	}
+	return s.analyzer.Reports(cache.Local())
+}
+
+// sortedReports orders a cache snapshot by FlowID (the cache iterates a map).
 func sortedReports(reports []*models.AnalysisReport) []*models.AnalysisReport {
 	sort.Slice(reports, func(i, j int) bool { return reports[i].FlowID < reports[j].FlowID })
 	return reports
@@ -620,7 +730,8 @@ func (s *AnalysisService) GetRules() []models.Rule {
 	return s.GetRulesFor(context.Background(), "")
 }
 
-// GetRulesFor returns the catalog as it applies to orgID — through the same resolver the analysis uses.
+// GetRulesFor returns the catalog as it applies to orgID — through the same resolver the analysis uses — plus the
+// library rules where the deployment runs them (AnalysisOptions.LibraryRules).
 func (s *AnalysisService) GetRulesFor(ctx context.Context, orgID string) (result []models.Rule) {
 	defer logger.GuardRecover("App.GetRules")
 
@@ -638,39 +749,67 @@ func (s *AnalysisService) GetRulesFor(ctx context.Context, orgID string) (result
 			rules = append(rules, s.customRules...)
 		}
 	}
-	defaults := models.DefaultSettings()
+	if s.runsLibrary {
+		// A new slice: a profile's rule slice is the resolver's and must not be appended to in place.
+		lib := analyzer.LibraryRules()
+		all := make([]analyzer.Rule, 0, len(rules)+len(lib))
+		all = append(all, rules...)
+		for _, r := range lib {
+			all = append(all, r)
+		}
+		rules = all
+	}
+	defaults := analyzer.DefaultRuleConfigs()
 	result = make([]models.Rule, len(rules))
 	for i, r := range rules {
-		result[i] = models.Rule{
-			ID:              r.ID(),
-			Name:            r.Name(),
-			Description:     r.Description(),
-			DefaultSeverity: r.DefaultSeverity(),
-			Category:        r.Category(),
-			Enabled:         true,
-			Confidence:      analyzer.RuleConfidence(r.ID()),
-			AutoFix:         analyzer.RuleAutoFix(r.ID()),
-		}
-		if settings != nil {
-			if rc, ok := settings.Analysis.Rules[r.ID()]; ok {
-				result[i].Enabled = rc.Enabled
-				// Surface the configured severity override, else a later config save silently reverts it.
-				if rc.Severity != "" {
-					result[i].DefaultSeverity = models.Severity(rc.Severity)
-				}
-				if len(rc.Options) > 0 {
-					result[i].Options = rc.Options
-				}
+		result[i] = catalogRule(r, settings, defaults)
+	}
+	return result
+}
+
+// catalogRule is r's catalog entry under settings: enabled and metadata as the engine applies them
+// (RuleEnabled, MetaOf), the configured severity and options, else the built-in option defaults.
+func catalogRule(r analyzer.Rule, settings *models.AppSettings, defaults map[string]models.RuleConfig) models.Rule {
+	m := analyzer.MetaOf(r)
+	out := models.Rule{
+		ID:              r.ID(),
+		Name:            r.Name(),
+		Description:     r.Description(),
+		DefaultSeverity: r.DefaultSeverity(),
+		Category:        r.Category(),
+		Enabled:         analyzer.RuleEnabled(r, settings),
+		Confidence:      m.Confidence,
+		AutoFix:         m.AutoFix,
+		Stage:           string(m.Stage),
+		IntroducedIn:    m.IntroducedIn,
+		Kind:            analyzer.RuleKind(r),
+	}
+	if out.Confidence == "" {
+		out.Confidence = models.ConfidenceMedium
+	}
+	// A fix the rule stamps itself (subflow-mismatch's append-output, a custom rule's autoFix) is one-click too.
+	if out.AutoFix == "" && len(m.DirectFixes) > 0 {
+		out.AutoFix = m.DirectFixes[0]
+	}
+	if settings != nil {
+		if rc, ok := settings.Analysis.Rules[r.ID()]; ok {
+			// Surface the configured severity override, else a later config save silently reverts it; as the engine
+			// applies it (a stored "critical" runs as error, and the config route refuses it on the way back).
+			if sev := analyzer.NormalizeSeverity(rc.Severity); sev != "" {
+				out.DefaultSeverity = sev
 			}
-		}
-		// Surface built-in threshold defaults for rules that carry them (reachable only by hand-editing settings JSON).
-		if result[i].Options == nil {
-			if d, ok := defaults.Analysis.Rules[r.ID()]; ok && len(d.Options) > 0 {
-				result[i].Options = d.Options
+			if len(rc.Options) > 0 {
+				out.Options = rc.Options
 			}
 		}
 	}
-	return result
+	// Surface built-in threshold defaults for rules that carry them (reachable only by hand-editing settings JSON).
+	if out.Options == nil {
+		if d, ok := defaults[r.ID()]; ok && len(d.Options) > 0 {
+			out.Options = d.Options
+		}
+	}
+	return out
 }
 
 // GetRulesSummary folds the catalog into the dashboard's counts, reusing GetRules (same overrides).

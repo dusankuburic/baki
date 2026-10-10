@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useMemo, useState, lazy, Suspense} from 'react'
 import {Search} from 'lucide-react'
 import {analysisApi, flowApi} from '@/api'
-import {useAnalysisStore, findingKey, type FindingCategory} from '@/stores/analysisStore'
+import {useAnalysisStore, findingKey, FINDING_CATEGORIES} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAuthStore} from '@/stores/authStore'
 import {EmptyState, useToast} from '@/components/shared'
@@ -52,7 +52,7 @@ export default function FindingsTab() {
     return () => clearTimeout(t)
   }, [searchInput, findingSearch, setFindingSearch])
   const severityFilter = useAnalysisStore(s => s.severityFilter)
-  const categoryFilter = useAnalysisStore(s => s.categoryFilter)
+  const hiddenCategories = useAnalysisStore(s => s.hiddenCategories)
   const statusFilter = useAnalysisStore(s => s.statusFilter)
   const assignedToMeOnly = useAnalysisStore(s => s.assignedToMeOnly)
   const triageMap = useAnalysisStore(s => s.triageMap)
@@ -97,7 +97,9 @@ export default function FindingsTab() {
     const q = findingSearch.toLowerCase()
     return report.findings.filter(f => {
       if (dedupGroups && !dedupGroups.has(f.id)) return false
-      if (f.category && !categoryFilter.has(f.category as FindingCategory)) return false
+      // Only a category the user hid is filtered out: one no chip knows (Portability and Syntax used
+      // to vanish here, so does a custom rule's or a newer server's) shows.
+      if (f.category && hiddenCategories.has(f.category)) return false
       if (suppressedKeys.has(findingKey(f))) return false
       // Triage-queue filters (R0-3): status chips narrow to a working set
       // (hide resolved/acknowledged while grinding through the backlog);
@@ -119,7 +121,7 @@ export default function FindingsTab() {
     })
   }, [
     report,
-    categoryFilter,
+    hiddenCategories,
     statusFilter,
     assignedToMeOnly,
     triageMap,
@@ -133,6 +135,16 @@ export default function FindingsTab() {
     () => baseFindings.filter(f => severityFilter.has(f.severity)),
     [baseFindings, severityFilter],
   )
+
+  // A chip per known category, then one per other category the report carries or the user hid (sorted), so
+  // every category the list can show can also be hidden and shown again.
+  const categoryChips = useMemo(() => {
+    const known = new Set<string>(FINDING_CATEGORIES)
+    const extra = new Set<string>()
+    for (const f of report?.findings ?? []) if (f.category && !known.has(f.category)) extra.add(f.category)
+    for (const c of hiddenCategories) if (!known.has(c)) extra.add(c)
+    return [...FINDING_CATEGORIES, ...[...extra].sort()]
+  }, [report, hiddenCategories])
 
   const severityCounts = useMemo(() => {
     const counts: Record<Finding['severity'], number> = {error: 0, warning: 0, info: 0}
@@ -344,6 +356,7 @@ export default function FindingsTab() {
         sortMode={sortMode}
         onSetSortMode={setSortMode}
         severityCounts={severityCounts}
+        categories={categoryChips}
         hasFindings={report.findings.length > 0}
       />
       {dedupGroups && (

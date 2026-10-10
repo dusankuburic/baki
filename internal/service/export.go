@@ -12,13 +12,7 @@ import (
 	"pad-core/parser"
 )
 
-func init() {
-	// Surface the build version in SARIF tool.driver.version so consumers
-	// (GitHub Code Scanning, Azure DevOps) can correlate results to a build.
-	export.SetToolVersion(Version)
-}
-
-// ExportService handles flow diff, markdown, and PDF export operations.
+// ExportService renders reports through the export registry (pad-core/export) and diffs flows.
 type ExportService struct {
 	notifier EventNotifier
 	flow     *FlowService
@@ -53,95 +47,62 @@ func (s *ExportService) CompareCurrentWith(newDoc *models.FlowDocument, oldPath 
 	return parser.DiffFlows(oldDoc, newDoc), nil
 }
 
-func (s *ExportService) ExportMarkdown(doc *models.FlowDocument, report *models.AnalysisReport, path string) (content []byte, err error) {
-	defer logger.Guard("App.ExportMarkdown", &err)
-
-	if doc == nil {
-		return nil, fmt.Errorf("no flow loaded")
+// Render renders in as the registered format id, stamped with this build's version (SARIF
+// tool.driver.version, so code-scanning consumers can tie results to a build). An unknown id is
+// invalid input. It holds no state, so a nil *ExportService renders too.
+func (s *ExportService) Render(id string, in export.Input, opts export.Options) ([]byte, export.Format, error) {
+	f, ok := export.Lookup(id)
+	if !ok {
+		return nil, export.Format{}, fmt.Errorf("%w: unknown export format %q", ErrInvalidInput, id)
 	}
-
-	if report == nil {
-		return nil, fmt.Errorf("no analysis report available — run analysis first")
+	if opts.ToolVersion == "" {
+		opts.ToolVersion = Version
 	}
-
-	md := export.ReportToMarkdown(report, doc)
-	content = []byte(md)
-
-	if path != "" {
-		if err = validateUserPath(path); err != nil {
-			return nil, err
-		}
-		//nolint:gosec // G306: user-chosen export path; world-readable is intended for sharing.
-		if err = os.WriteFile(path, content, 0644); err != nil {
-			return nil, fmt.Errorf("write file: %w", err)
-		}
-	}
-
-	return content, nil
-}
-
-func (s *ExportService) ExportHTML(doc *models.FlowDocument, report *models.AnalysisReport, path string) (content []byte, err error) {
-	defer logger.Guard("App.ExportHTML", &err)
-
-	if doc == nil {
-		return nil, fmt.Errorf("no flow loaded")
-	}
-
-	if report == nil {
-		return nil, fmt.Errorf("no analysis report available — run analysis first")
-	}
-
-	content = []byte(export.ReportToHTML(report, doc))
-
-	if path != "" {
-		if err = validateUserPath(path); err != nil {
-			return nil, err
-		}
-		//nolint:gosec // G306: user-chosen export path; world-readable is intended for sharing.
-		if err = os.WriteFile(path, content, 0644); err != nil {
-			return nil, fmt.Errorf("write file: %w", err)
-		}
-	}
-
-	return content, nil
-}
-
-func (s *ExportService) ExportPDF(doc *models.FlowDocument, report *models.AnalysisReport, path string) (content []byte, err error) {
-	defer logger.Guard("App.ExportPDF", &err)
-
-	if doc == nil {
-		return nil, fmt.Errorf("no flow loaded")
-	}
-
-	if report == nil {
-		return nil, fmt.Errorf("no analysis report available — run analysis first")
-	}
-
-	pdfBytes, err := export.ReportToPDF(report, doc)
+	content, err := f.Bytes(in, opts)
 	if err != nil {
-		return nil, fmt.Errorf("generate PDF: %w", err)
+		return nil, f, fmt.Errorf("generate %s: %w", f.Label, err)
+	}
+	return content, f, nil
+}
+
+// Export renders a flow's report as the format id and, when path is set (desktop only: the
+// handler drops it with accounts), also writes it there.
+func (s *ExportService) Export(id string, doc *models.FlowDocument, report *models.AnalysisReport, path string) (content []byte, f export.Format, err error) {
+	defer logger.Guard("App.Export", &err)
+
+	if doc == nil {
+		return nil, f, fmt.Errorf("no flow loaded")
+	}
+
+	if report == nil {
+		return nil, f, fmt.Errorf("no analysis report available — run analysis first")
+	}
+
+	content, f, err = s.Render(id, export.Input{Report: report, Doc: doc}, export.Options{})
+	if err != nil {
+		return nil, f, err
 	}
 
 	if path != "" {
 		if err = validateUserPath(path); err != nil {
-			return nil, err
+			return nil, f, err
 		}
 		//nolint:gosec // G306: user-chosen export path; world-readable is intended for sharing.
-		if err = os.WriteFile(path, pdfBytes, 0644); err != nil {
-			return nil, fmt.Errorf("write file: %w", err)
+		if err = os.WriteFile(path, content, 0644); err != nil {
+			return nil, f, fmt.Errorf("write file: %w", err)
 		}
 	}
 
-	return pdfBytes, nil
+	return content, f, nil
 }
 
-// clientExportExts are the file types the findings panel renders in the browser (CSV of
-// the filtered list, SARIF, JUnit XML) and SaveClientExport may write. An allowlist, not
-// "any path": this endpoint writes caller-supplied text, unlike the PDF/Markdown/HTML
-// exports whose bytes the server renders.
+// clientExportExts are the file types the findings panel saves through SaveClientExport:
+// its CSV of the filtered list (rendered in the browser) and the SARIF and JUnit XML it
+// fetched from /api/analysis/export. An allowlist, not "any path": this endpoint writes
+// caller-supplied text, unlike the PDF/Markdown/HTML exports whose bytes the server renders.
 var clientExportExts = map[string]bool{".csv": true, ".sarif": true, ".xml": true}
 
-// SaveClientExport writes a browser-rendered findings export to the path the desktop
+// SaveClientExport writes a findings export the browser holds to the path the desktop
 // native save dialog returned. The webview cannot write files itself, so CSV/SARIF/JUnit
 // used to fall back to an anchor download on desktop and skip the save dialog the
 // PDF/Markdown/HTML exports show. Desktop only — the handler refuses it in cloud mode.

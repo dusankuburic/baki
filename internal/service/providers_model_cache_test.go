@@ -186,7 +186,7 @@ func TestDynamicModels_EmptyListingCachedBriefly(t *testing.T) {
 		t.Errorf("empty listing was not cached: %d upstream calls, want 1", n)
 	}
 	svc.modelMu.Lock()
-	e, cached := svc.modelCache["u1\x00glm"]
+	e, cached := svc.modelCache[modelListingKey("u1", "glm")]
 	svc.modelMu.Unlock()
 	if !cached {
 		t.Fatal("the empty listing is not in the cache")
@@ -228,7 +228,7 @@ func TestDynamicModels_OtherKeyInvalidationDoesNotFenceWriteBack(t *testing.T) {
 		close(release)
 		<-done
 		svc.modelMu.Lock()
-		_, cached := svc.modelCache["u2\x00glm"]
+		_, cached := svc.modelCache[modelListingKey("u2", "glm")]
 		svc.modelMu.Unlock()
 		if !cached {
 			t.Error("an invalidation for another key/scope fenced off the write-back")
@@ -266,7 +266,7 @@ func TestDynamicModels_OtherKeyInvalidationDoesNotFenceWriteBack(t *testing.T) {
 		close(release)
 		<-done
 		svc.modelMu.Lock()
-		_, cached := svc.modelCache["u2\x00glm"]
+		_, cached := svc.modelCache[modelListingKey("u2", "glm")]
 		svc.modelMu.Unlock()
 		if cached {
 			t.Error("a listing started before InvalidateScope of its own scope was written back")
@@ -333,12 +333,12 @@ func TestSaveApiKey_InvalidatesTheProviderListing(t *testing.T) {
 	sys := NewSystemService(nil, secrets, nil, nil, "", nil, bus)
 	svc := newProviderServiceWithFakeSecrets(t, secrets)
 	SubscribeModelCache(bus, svc)
-	svc.modelCache["u1\x00openai"] = modelCacheEntry{models: []ai.ModelInfo{{ID: "old"}}, expiresAt: time.Now().Add(time.Hour)}
+	svc.modelCache[modelListingKey("u1", "openai")] = modelCacheEntry{models: []ai.ModelInfo{{ID: "old"}}, expiresAt: time.Now().Add(time.Hour)}
 	gen := svc.modelGen
 	if err := sys.SaveApiKey(context.Background(), "u1", "openai", "k2"); err != nil {
 		t.Fatal(err)
 	}
-	if _, cached := svc.modelCache["u1\x00openai"]; cached || svc.modelGen == gen {
+	if _, cached := svc.modelCache[modelListingKey("u1", "openai")]; cached || svc.modelGen == gen {
 		t.Error("saving a replacement key must drop the cached listing and bump the generation")
 	}
 	if v, _ := secrets.Get("u1", "openai"); v != "k2" {

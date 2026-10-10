@@ -311,13 +311,13 @@ func TestApplyFixesToSourceDocCtx_StopsOnCancel(t *testing.T) {
 // cancellingRule cancels the context the first time it runs, then behaves as
 // the rule it wraps (same ID, so the fix loop keeps it).
 type cancellingRule struct {
-	Rule
+	BlockRule
 	cancel func()
 }
 
 func (r cancellingRule) Check(b *models.Block, ctx *RuleContext) []models.Finding {
 	r.cancel()
-	return r.Rule.Check(b, ctx)
+	return r.BlockRule.Check(b, ctx)
 }
 
 // TestApplyFixesToSourceDocCtx_CancelDuringAnalysis: cancelled mid-walk, the
@@ -329,7 +329,7 @@ func TestApplyFixesToSourceDocCtx_CancelDuringAnalysis(t *testing.T) {
 	rules := AllRules()
 	for i, r := range rules {
 		if r.ID() == "redundant-action" {
-			rules[i] = cancellingRule{Rule: r, cancel: cancel}
+			rules[i] = cancellingRule{BlockRule: r.(BlockRule), cancel: cancel}
 		}
 	}
 	src := buildFixableSource(3) // first block: SET X0 TO %X0% (redundant-action)
@@ -344,7 +344,7 @@ func TestApplyFixesToSourceDocCtx_CancelDuringAnalysis(t *testing.T) {
 	defer cancel2()
 	for i, r := range rules {
 		if c, ok := r.(cancellingRule); ok {
-			rules[i] = cancellingRule{Rule: c.Rule, cancel: cancel2}
+			rules[i] = cancellingRule{BlockRule: c.BlockRule, cancel: cancel2}
 		}
 	}
 	doc, err := parser.ParseText(orig, "Main.txt", int64(len(orig)))

@@ -1,0 +1,468 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "PAD Analyzer",
+          "version": "0.1.0",
+          "rules": [
+            {
+              "id": "hardcoded-credential",
+              "name": "Hardcoded credential detected",
+              "shortDescription": {
+                "text": "Hardcoded credential detected"
+              },
+              "fullDescription": {
+                "text": "String values matching credential patterns, and credential-typed action properties (Password, ApiKey, Token, …) set to a literal."
+              },
+              "help": {
+                "text": "String values matching credential patterns, and credential-typed action properties (Password, ApiKey, Token, …) set to a literal.\n\nAuto-fix available: replace-with-variable (apply with `bakicli fix`).\n\nRun `bakicli rules hardcoded-credential` for the full rule description.",
+                "markdown": "String values matching credential patterns, and credential-typed action properties (Password, ApiKey, Token, …) set to a literal.\n\nAuto-fix available: replace-with-variable (apply with `bakicli fix`).\n\nRun `bakicli rules hardcoded-credential` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Security",
+                "confidence": "high"
+              }
+            },
+            {
+              "id": "hardcoded-url",
+              "name": "Hardcoded URL",
+              "shortDescription": {
+                "text": "Hardcoded URL"
+              },
+              "fullDescription": {
+                "text": "Hardcoded URLs and API endpoints that should be parameterized for different environments."
+              },
+              "help": {
+                "text": "Hardcoded URLs and API endpoints that should be parameterized for different environments.\n\nAuto-fix available: replace-with-variable (apply with `bakicli fix`).\n\nRun `bakicli rules hardcoded-url` for the full rule description.",
+                "markdown": "Hardcoded URLs and API endpoints that should be parameterized for different environments.\n\nAuto-fix available: replace-with-variable (apply with `bakicli fix`).\n\nRun `bakicli rules hardcoded-url` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Portability",
+                "confidence": "low"
+              }
+            },
+            {
+              "id": "insecure-http-url",
+              "name": "Insecure HTTP URL",
+              "shortDescription": {
+                "text": "Insecure HTTP URL"
+              },
+              "fullDescription": {
+                "text": "Network actions targeting a cleartext http:// URL. Data sent over http:// (credentials, tokens, PII) is interceptable on the wire; use https://."
+              },
+              "help": {
+                "text": "Network actions targeting a cleartext http:// URL. Data sent over http:// (credentials, tokens, PII) is interceptable on the wire; use https://.\n\nAuto-fix available: upgrade-to-https (apply with `bakicli fix`).\n\nRun `bakicli rules insecure-http-url` for the full rule description.",
+                "markdown": "Network actions targeting a cleartext http:// URL. Data sent over http:// (credentials, tokens, PII) is interceptable on the wire; use https://.\n\nAuto-fix available: upgrade-to-https (apply with `bakicli fix`).\n\nRun `bakicli rules insecure-http-url` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Security",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "missing-retry",
+              "name": "Transient operation without retry",
+              "shortDescription": {
+                "text": "Transient operation without retry"
+              },
+              "fullDescription": {
+                "text": "Network/external service actions prone to transient failures that lack retry logic."
+              },
+              "help": {
+                "text": "Network/external service actions prone to transient failures that lack retry logic.\n\nAuto-fix available: wrap-in-retry (apply with `bakicli fix`).\n\nRun `bakicli rules missing-retry` for the full rule description.",
+                "markdown": "Network/external service actions prone to transient failures that lack retry logic.\n\nAuto-fix available: wrap-in-retry (apply with `bakicli fix`).\n\nRun `bakicli rules missing-retry` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "missing-timeout",
+              "name": "Network operation without timeout",
+              "shortDescription": {
+                "text": "Network operation without timeout"
+              },
+              "fullDescription": {
+                "text": "Network/UI automation actions that may hang because no explicit timeout is configured."
+              },
+              "help": {
+                "text": "Network/UI automation actions that may hang because no explicit timeout is configured.\n\nAuto-fix available: set-timeout (apply with `bakicli fix`).\n\nRun `bakicli rules missing-timeout` for the full rule description.",
+                "markdown": "Network/UI automation actions that may hang because no explicit timeout is configured.\n\nAuto-fix available: set-timeout (apply with `bakicli fix`).\n\nRun `bakicli rules missing-timeout` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "unhandled-error",
+              "name": "Unhandled error in fallible action",
+              "shortDescription": {
+                "text": "Unhandled error in fallible action"
+              },
+              "fullDescription": {
+                "text": "Actions that commonly fail (network, file, UI automation) where no error handler exists in the surrounding scope."
+              },
+              "help": {
+                "text": "Actions that commonly fail (network, file, UI automation) where no error handler exists in the surrounding scope.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules unhandled-error` for the full rule description.",
+                "markdown": "Actions that commonly fail (network, file, UI automation) where no error handler exists in the surrounding scope.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules unhandled-error` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "uninitialized-variable",
+              "name": "Variable used before being initialized",
+              "shortDescription": {
+                "text": "Variable used before being initialized"
+              },
+              "fullDescription": {
+                "text": "Detects variables that are referenced but never assigned in the flow."
+              },
+              "help": {
+                "text": "Detects variables that are referenced but never assigned in the flow.\n\nAuto-fix available: init-variable (apply with `bakicli fix`).\n\nRun `bakicli rules uninitialized-variable` for the full rule description.",
+                "markdown": "Detects variables that are referenced but never assigned in the flow.\n\nAuto-fix available: init-variable (apply with `bakicli fix`).\n\nRun `bakicli rules uninitialized-variable` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Logic",
+                "confidence": "low"
+              }
+            },
+            {
+              "id": "unused-variable",
+              "name": "Variable declared but never used",
+              "shortDescription": {
+                "text": "Variable declared but never used"
+              },
+              "fullDescription": {
+                "text": "Variables that are declared but never referenced."
+              },
+              "help": {
+                "text": "Variables that are declared but never referenced.\n\nAuto-fix available: remove-block (apply with `bakicli fix`).\n\nRun `bakicli rules unused-variable` for the full rule description.",
+                "markdown": "Variables that are declared but never referenced.\n\nAuto-fix available: remove-block (apply with `bakicli fix`).\n\nRun `bakicli rules unused-variable` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Style",
+                "confidence": "low"
+              }
+            }
+          ]
+        }
+      },
+      "automationDetails": {
+        "id": "pad-analysis"
+      },
+      "invocations": [
+        {
+          "executionSuccessful": false
+        }
+      ],
+      "results": [
+        {
+          "ruleId": "hardcoded-credential",
+          "ruleIndex": 0,
+          "level": "note",
+          "message": {
+            "text": "Variable 'Password' has a name that suggests it holds a credential and is assigned a literal string value.\n\nSuggestion: Store credentials in a secured vault, Windows Credential Manager, or use a PAD input variable instead of a literal string in the flow."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 2
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-001",
+                  "fullyQualifiedName": "sf-1/b-001",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "091b84d3bc286151"
+          },
+          "properties": {
+            "stage": "preview"
+          }
+        },
+        {
+          "ruleId": "hardcoded-url",
+          "ruleIndex": 1,
+          "level": "note",
+          "message": {
+            "text": "Property 'Url' contains a hardcoded URL: http://example.com/status\n\nSuggestion: Store the base URL in a variable so it can be changed per environment without editing the flow."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-002",
+                  "fullyQualifiedName": "sf-1/b-002",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "79e8a0b0585745b9"
+          }
+        },
+        {
+          "ruleId": "insecure-http-url",
+          "ruleIndex": 2,
+          "level": "note",
+          "message": {
+            "text": "Action targets a cleartext http:// URL. Any data sent (credentials, tokens, PII) travels unencrypted and is interceptable on the wire.\n\nSuggestion: Use the https:// scheme for the target endpoint so transport is TLS-encrypted."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-002",
+                  "fullyQualifiedName": "sf-1/b-002",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "b62a69828d045825"
+          },
+          "properties": {
+            "stage": "preview"
+          }
+        },
+        {
+          "ruleId": "missing-retry",
+          "ruleIndex": 3,
+          "level": "note",
+          "message": {
+            "text": "This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.\n\nSuggestion: Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-002",
+                  "fullyQualifiedName": "sf-1/b-002",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "702bfef3973eb3d5"
+          }
+        },
+        {
+          "ruleId": "missing-timeout",
+          "ruleIndex": 4,
+          "level": "warning",
+          "message": {
+            "text": "This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.\n\nSuggestion: Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-002",
+                  "fullyQualifiedName": "sf-1/b-002",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "77b6a161e68bf34e"
+          }
+        },
+        {
+          "ruleId": "unhandled-error",
+          "ruleIndex": 5,
+          "level": "warning",
+          "message": {
+            "text": "This action commonly fails but has no error handler in its surrounding scope.\n\nSuggestion: Wrap this action in a Try/Catch block or add error handler logic to recover from failures."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-002",
+                  "fullyQualifiedName": "sf-1/b-002",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "cba48bac1172e52d"
+          },
+          "properties": {
+            "policyViolation": true
+          }
+        },
+        {
+          "ruleId": "uninitialized-variable",
+          "ruleIndex": 6,
+          "level": "warning",
+          "message": {
+            "text": "Variable 'Browser' is used here but doesn't seem to be assigned anywhere in the flow.\n\nSuggestion: Ensure the variable is initialized with a SET action or as an output of another action."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-002",
+                  "fullyQualifiedName": "sf-1/b-002",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "f982a438f2451788"
+          }
+        },
+        {
+          "ruleId": "unused-variable",
+          "ruleIndex": 7,
+          "level": "note",
+          "message": {
+            "text": "This variable is set but never referenced elsewhere in the flow.\n\nSuggestion: Remove the unused variable or add a reference to it."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Main.txt"
+                },
+                "region": {
+                  "startLine": 2
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-001",
+                  "fullyQualifiedName": "sf-1/b-001",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "2a95d8efa3249a30"
+          }
+        }
+      ],
+      "properties": {
+        "policy": {
+          "errors": 0,
+          "evaluated": 1,
+          "info": 0,
+          "passed": false,
+          "policyId": "pol-preview",
+          "policyName": "Preview never gates",
+          "preview": 2,
+          "violationFingerprints": [
+            "cba48bac1172e52d"
+          ],
+          "violations": 1,
+          "waived": 0,
+          "warnings": 1
+        }
+      }
+    }
+  ]
+}

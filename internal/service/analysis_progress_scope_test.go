@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/auth"
-	"pad-core/analyzer"
+	"pad-core/cache"
 	"pad-core/models"
 )
 
@@ -55,8 +55,6 @@ func progressDoc() *models.FlowDocument {
 
 func newProgressScopeService(t *testing.T, rec *progressRecorder) *AnalysisService {
 	t.Helper()
-	analyzer.DefaultCache.Clear()
-	t.Cleanup(analyzer.DefaultCache.Clear)
 	svc, err := NewAnalysisService(rec, nilSettings{}, nil, AnalysisOptions{})
 	if err != nil {
 		t.Fatalf("NewAnalysisService: %v", err)
@@ -158,7 +156,7 @@ func TestAnalyzeFlow_CancelledIsNotRecorded(t *testing.T) {
 	if _, ok := svc.CurrentReport(doc); ok {
 		t.Fatal("cancelled analysis was recorded as the flow's current report")
 	}
-	if n := len(analyzer.DefaultCache.AllReports()); n != 0 {
+	if n := len(svc.analyzer.Reports(cache.Local())); n != 0 {
 		t.Fatalf("cancelled analysis left %d report(s) in the dashboard cache", n)
 	}
 

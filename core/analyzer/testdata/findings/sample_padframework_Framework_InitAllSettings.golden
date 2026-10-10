@@ -1,0 +1,178 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_padframework_Framework_InitAllSettings
+document: subflows=1 blocks=28 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":6,"info":15,"blocksAnalyzed":26,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=24 final=1170/1170 last="Loop body is too large"
+metrics: {"avgCognitive":2,"avgCyclomatic":3,"healthScore":61,"maxCognitive":2,"maxCyclomatic":3,"subflowCount":1,"totalBlocks":24,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Framework_InitAllSettings: {"blockCount":24,"cognitiveComplexity":2,"cyclomaticComplexity":3,"fanIn":0,"fanOut":0,"maxNestingDepth":1,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=26
+  raw findings: subflow-no-error-handler=1 unhandled-error=6 unused-variable=14
+inventory: none
+findings: 21
+F-001 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=subflow-no-error-handler:9856e30edb8328eb
+    title: Subflow without error handler
+    desc: Subflow "Framework_InitAllSettings" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-002 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#8 sf=Framework_InitAllSettings fp=unhandled-error:55c182d7279f3b6d
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-003 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#9 sf=Framework_InitAllSettings fp=unhandled-error:e38ac981b4d5620b
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-004 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#13 sf=Framework_InitAllSettings fp=unhandled-error:518ca48a778c8eb9
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-005 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#22 sf=Framework_InitAllSettings fp=unhandled-error:930d6f20636e1c1b
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-006 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#23 sf=Framework_InitAllSettings fp=unhandled-error:f9c3dbd6556447c3
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-007 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#27 sf=Framework_InitAllSettings fp=unhandled-error:6365e19bfe964130
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-008 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=unused-variable:65bb66a5474496f4
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Config"}
+F-009 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#3 sf=Framework_InitAllSettings fp=unused-variable:7c1b8b5c36ef07cd
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"TransactionNumber"}
+F-010 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#4 sf=Framework_InitAllSettings fp=unused-variable:93d5b534780416db
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-011 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#5 sf=Framework_InitAllSettings fp=unused-variable:212d8f90d7ac7e70
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-012 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#6 sf=Framework_InitAllSettings fp=unused-variable:68280398cbe8f644
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"SystemException"}
+F-013 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#7 sf=Framework_InitAllSettings fp=unused-variable:5ae6b2560b2259a8
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"BusinessException"}
+F-014 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#11 sf=Framework_InitAllSettings fp=unused-variable:417e185b03787d7b
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Config[CurrentItem['Name']]"}
+F-015 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#15 sf=Framework_InitAllSettings fp=unused-variable:ae5114d435c03f54
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Config"}
+F-016 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#17 sf=Framework_InitAllSettings fp=unused-variable:27174303c5439e21
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"TransactionNumber"}
+F-017 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#18 sf=Framework_InitAllSettings fp=unused-variable:fa1e96cbda6965d2
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogLevel"}
+F-018 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#19 sf=Framework_InitAllSettings fp=unused-variable:20b596a8670f5b13
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"LogMessage"}
+F-019 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#20 sf=Framework_InitAllSettings fp=unused-variable:5ee7e3e50e70d9d6
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"SystemException"}
+F-020 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#21 sf=Framework_InitAllSettings fp=unused-variable:7e18bd7d3f665d7e
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"BusinessException"}
+F-021 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#25 sf=Framework_InitAllSettings fp=unused-variable:6db7221598196b65
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Config[CurrentItem['Name']]"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":6,"info":15,"blocksAnalyzed":26,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=24 final=1170/1170 last="Loop body is too large"
+metrics: as default, healthScore=61
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=26
+  raw findings: subflow-no-error-handler=1 unhandled-error=6 unused-variable=14
+inventory: none
+findings: 21
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":6,"info":16,"blocksAnalyzed":26,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=24 final=1170/1170 last="Loop body is too large"
+metrics: as default, healthScore=60
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=26
+  raw findings: large-subflow=1 subflow-no-error-handler=1 unhandled-error=6 unused-variable=14
+inventory: none
+findings: 22
+F-001 info/low large-subflow [Style] fix=- @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=large-subflow:9856e30edb8328eb
+    title: Large subflow
+    desc: Subflow 'Framework_InitAllSettings' has 24 blocks (threshold: 5).
+F-002 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=subflow-no-error-handler:9856e30edb8328eb
+F-003 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#8 sf=Framework_InitAllSettings fp=unhandled-error:55c182d7279f3b6d
+F-004 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#9 sf=Framework_InitAllSettings fp=unhandled-error:e38ac981b4d5620b
+F-005 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#13 sf=Framework_InitAllSettings fp=unhandled-error:518ca48a778c8eb9
+F-006 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#22 sf=Framework_InitAllSettings fp=unhandled-error:930d6f20636e1c1b
+F-007 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#23 sf=Framework_InitAllSettings fp=unhandled-error:f9c3dbd6556447c3
+F-008 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Framework_InitAllSettings#27 sf=Framework_InitAllSettings fp=unhandled-error:6365e19bfe964130
+F-009 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=unused-variable:65bb66a5474496f4
+F-010 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#3 sf=Framework_InitAllSettings fp=unused-variable:7c1b8b5c36ef07cd
+F-011 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#4 sf=Framework_InitAllSettings fp=unused-variable:93d5b534780416db
+F-012 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#5 sf=Framework_InitAllSettings fp=unused-variable:212d8f90d7ac7e70
+F-013 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#6 sf=Framework_InitAllSettings fp=unused-variable:68280398cbe8f644
+F-014 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#7 sf=Framework_InitAllSettings fp=unused-variable:5ae6b2560b2259a8
+F-015 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#11 sf=Framework_InitAllSettings fp=unused-variable:417e185b03787d7b
+F-016 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#15 sf=Framework_InitAllSettings fp=unused-variable:ae5114d435c03f54
+F-017 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#17 sf=Framework_InitAllSettings fp=unused-variable:27174303c5439e21
+F-018 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#18 sf=Framework_InitAllSettings fp=unused-variable:fa1e96cbda6965d2
+F-019 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#19 sf=Framework_InitAllSettings fp=unused-variable:20b596a8670f5b13
+F-020 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#20 sf=Framework_InitAllSettings fp=unused-variable:5ee7e3e50e70d9d6
+F-021 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#21 sf=Framework_InitAllSettings fp=unused-variable:7e18bd7d3f665d7e
+F-022 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#25 sf=Framework_InitAllSettings fp=unused-variable:6db7221598196b65
+
+=== disabled
+stats: {"errors":0,"warnings":0,"info":14,"blocksAnalyzed":26,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=20 final=962/962 last="Loop body is too large"
+metrics: as default, healthScore=86
+profiles: rules=37 order=f7de49357acad250 blocksChecked=26
+  raw findings: unused-variable=14
+inventory: none
+findings: 14
+F-001 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#1 sf=Framework_InitAllSettings fp=unused-variable:65bb66a5474496f4
+F-002 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#3 sf=Framework_InitAllSettings fp=unused-variable:7c1b8b5c36ef07cd
+F-003 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#4 sf=Framework_InitAllSettings fp=unused-variable:93d5b534780416db
+F-004 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#5 sf=Framework_InitAllSettings fp=unused-variable:212d8f90d7ac7e70
+F-005 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#6 sf=Framework_InitAllSettings fp=unused-variable:68280398cbe8f644
+F-006 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#7 sf=Framework_InitAllSettings fp=unused-variable:5ae6b2560b2259a8
+F-007 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#11 sf=Framework_InitAllSettings fp=unused-variable:417e185b03787d7b
+F-008 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#15 sf=Framework_InitAllSettings fp=unused-variable:ae5114d435c03f54
+F-009 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#17 sf=Framework_InitAllSettings fp=unused-variable:27174303c5439e21
+F-010 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#18 sf=Framework_InitAllSettings fp=unused-variable:fa1e96cbda6965d2
+F-011 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#19 sf=Framework_InitAllSettings fp=unused-variable:20b596a8670f5b13
+F-012 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#20 sf=Framework_InitAllSettings fp=unused-variable:5ee7e3e50e70d9d6
+F-013 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#21 sf=Framework_InitAllSettings fp=unused-variable:7e18bd7d3f665d7e
+F-014 info/low unused-variable [Style] fix=remove-block @Framework_InitAllSettings#25 sf=Framework_InitAllSettings fp=unused-variable:6db7221598196b65
+
+=== severity
+stats: {"errors":7,"warnings":0,"info":14,"blocksAnalyzed":26,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=24 final=1170/1170 last="Loop body is too large"
+metrics: as default, healthScore=2
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=26
+  raw findings: subflow-no-error-handler=1 unhandled-error=6 unused-variable=14
+inventory: none
+findings: 21
+  as default; severity changes: F-001 info->error, F-002 warning->error, F-003 warning->error, F-004 warning->error, F-005 warning->error, F-006 warning->error, F-007 warning->error
+
+=== autofixable
+stats: {"errors":0,"warnings":6,"info":15,"blocksAnalyzed":26,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=17 final=832/832 last="Wait zero"
+metrics: as default, healthScore=61
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=26
+  raw findings: subflow-no-error-handler=1 unhandled-error=6 unused-variable=14
+inventory: none
+findings: 21
+  as default; severity changes: none

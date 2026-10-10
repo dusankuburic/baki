@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"strings"
 	"time"
 
 	"pad-core/models"
@@ -24,8 +25,9 @@ func policySeverityRank(s models.Severity) int {
 // EvaluatePolicy gates a report against a policy: it counts only findings from
 // the policy's enabled rules (with any per-rule severity override) and flags as
 // violations those whose effective severity meets GateSeverity or exceeds a
-// per-rule count budget. A policy with no (or unknown) GateSeverity is
-// report-only and always passes. It evaluates an already-computed report
+// per-rule count budget. Preview findings (Gates false) are only counted in
+// Preview. An unknown finding or override severity counts as an error. A
+// policy with no (or unknown) GateSeverity is report-only and always passes. It evaluates an already-computed report
 // (analyze once, gate against many policies) and is safe on a nil report.
 func EvaluatePolicy(report *models.AnalysisReport, policy models.Policy) *models.PolicyResult {
 	res := &models.PolicyResult{
@@ -61,13 +63,14 @@ func EvaluatePolicy(report *models.AnalysisReport, policy models.Policy) *models
 		}
 		waived[w.FindingKey] = true
 	}
-	gate := policySeverityRank(policy.GateSeverity)
+	gate := policySeverityRank(models.Severity(strings.ToLower(strings.TrimSpace(string(policy.GateSeverity)))))
 
 	// Ordinal counters for budget accounting (stable report order): per-rule
 	// occurrences, and per-effective-severity occurrences among gate-meeting
 	// findings.
 	ruleOrdinal := make(map[string]int)
 	sevOrdinal := make(map[models.Severity]int)
+	metas := metaTable()
 
 	for i := range report.Findings {
 		f := &report.Findings[i]
@@ -75,14 +78,19 @@ func EvaluatePolicy(report *models.AnalysisReport, policy models.Policy) *models
 		if !ok {
 			continue // this rule is not part of the policy
 		}
+		if !gates(metas, f) {
+			res.Preview++ // preview never gates, whatever the policy says
+			continue
+		}
 		if waived[findingWaiverKey(f)] {
 			res.Waived++
 			continue
 		}
 		eff := f.Severity
-		if override != "" {
-			eff = override
+		if o := NormalizeSeverity(string(override)); o != "" {
+			eff = o
 		}
+		eff = gateSeverity(eff)
 
 		res.Evaluated++
 		switch eff {

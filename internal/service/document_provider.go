@@ -90,16 +90,24 @@ type cloudDocEntry struct {
 	doc     *models.FlowDocument
 }
 
+// cloudDocs is the resolved-document cache (ADR 0017). It is keyed by the flow alone: flow ids are global, and an
+// entry is served only to a caller whose own header read (under its RLS scope) passed and named the same version.
+var cloudDocs = cache.Declare("flow.documents",
+	cache.Keys(cache.KindResource),
+	cache.Global("flow ids are globally unique; every read re-checks the header under the caller's RLS and serves the entry only at the stored version"),
+	cache.ReplicaLocal("validated against the stored version on every read: another replica's write is seen at once"))
+
 // CloudDocumentProvider loads flows from a shared storage backend, caching resolved documents keyed by
 // (flowID, version). A cold resolve costs a DB row + a blob round-trip + a JSON unmarshal + an O(blocks) index
 // rebuild; the cache replaces all but a cheap indexed header query. Correctness: ResolveDoc re-reads the header
 // on EVERY call, so a cached doc is served only while the stored version is unchanged — no TTL, no stale window,
-// safe across replicas; concurrent cold loads share one load via singleflight.
+// safe across replicas; concurrent cold loads share one load via singleflight (keyed by the flow, like the cache:
+// the entry's version decides whether it may be served, which a GetOrFill hit could not check).
 // Contract: returned docs are SHARED READ-ONLY (mutating paths build new docs). The cache is byte-weighted; a
 // document above cloudDocCacheMaxEntry is served but never cached.
 type CloudDocumentProvider struct {
 	storage storageif.StorageBackend
-	cache   *cache.SizedLRU
+	cache   *cache.Typed[*cloudDocEntry]
 	sf      singleflight.Group
 }
 
@@ -109,7 +117,7 @@ func NewCloudDocumentProvider(storage storageif.StorageBackend) *CloudDocumentPr
 
 // newCloudDocumentProviderWithBudget is NewCloudDocumentProvider with the cache bounds as parameters for tests.
 func newCloudDocumentProviderWithBudget(storage storageif.StorageBackend, budget, maxEntry int64) *CloudDocumentProvider {
-	c := cache.NewSizedLRU(budget, cache.WithMaxEntryCost(maxEntry))
+	c := cache.New[*cloudDocEntry](cloudDocs, budget, cache.WithMaxEntryCost(maxEntry))
 	return &CloudDocumentProvider{storage: storage, cache: c}
 }
 
@@ -154,10 +162,12 @@ func (p *CloudDocumentProvider) ResolveDocUncached(ctx context.Context, id strin
 // time via singleflight) and caches it if store is set and it fits. Two callers sharing one flight get the
 // leader's caching decision — at worst a search-scan load leaves a concurrent resolve uncached for one request.
 func (p *CloudDocumentProvider) resolve(ctx context.Context, id string, header *storageif.FlowDocument, store bool) (*models.FlowDocument, bool, error) {
-	if v, ok := p.cache.Get(ctx, id); ok {
-		if entry, ok := v.(*cloudDocEntry); ok && entry.version == header.Version {
-			return entry.doc, true, nil
-		}
+	var k cache.Key
+	if id != "" {
+		k, _ = cloudDocs.Key(cache.Resource(id))
+	}
+	if entry, ok := p.cache.Get(k); ok && entry.version == header.Version {
+		return entry.doc, true, nil
 	}
 	v, err, _ := p.sf.Do(id, func() (any, error) {
 		libDoc, err := p.storage.LoadFlow(ctx, id)
@@ -169,7 +179,7 @@ func (p *CloudDocumentProvider) resolve(ctx context.Context, id string, header *
 			return nil, err
 		}
 		if store {
-			p.cache.SetWithCost(ctx, id, &cloudDocEntry{version: libDoc.Version, doc: doc}, FlowDocumentCost(doc), 0)
+			p.cache.Set(k, &cloudDocEntry{version: libDoc.Version, doc: doc}, FlowDocumentCost(doc), 0)
 		}
 		return doc, nil
 	})
@@ -202,7 +212,12 @@ func resolveStoredFlow(id string, libDoc *storageif.FlowDocument) (*models.FlowD
 // Invalidate drops the cached document for a flow — not required for correctness (the version check self-heals),
 // but immediate for a same-process delete.
 func (p *CloudDocumentProvider) Invalidate(flowID string) {
-	p.cache.Delete(context.Background(), flowID)
+	if flowID == "" {
+		return
+	}
+	if k, err := cloudDocs.Key(cache.Resource(flowID)); err == nil {
+		p.cache.Delete(k)
+	}
 }
 
 func (p *CloudDocumentProvider) SetCurrentDoc(doc *models.FlowDocument) {

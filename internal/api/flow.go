@@ -15,7 +15,6 @@ import (
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
-	"pad-core/analyzer"
 	"pad-core/models"
 )
 
@@ -204,7 +203,7 @@ func (h *FlowHandler) handleLoadFlowFolder(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// Opening a base folder is a deliberate workspace switch — the ONLY action that resets desktop session analytics.
-	analyzer.DefaultCache.Clear()
+	h.flowSvc.ResetSessionAnalytics()
 	render.JSON(w, doc)
 }
 

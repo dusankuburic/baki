@@ -1,0 +1,109 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_edge_cases
+document: subflows=1 blocks=17 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":3,"info":5,"blocksAnalyzed":14,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=630/630 last="Loop body is too large"
+metrics: {"avgCognitive":4,"avgCyclomatic":4,"healthScore":83,"maxCognitive":4,"maxCyclomatic":4,"subflowCount":1,"totalBlocks":7,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":7,"cognitiveComplexity":4,"cyclomaticComplexity":4,"fanIn":0,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=14
+  raw findings: duplicate-action=1 subflow-no-error-handler=1 uninitialized-variable=4 unused-variable=3
+inventory: none
+findings: 8
+F-001 info/medium duplicate-action [Style] fix=remove-block @Main#13 sf=Main fp=duplicate-action:bd619fdebb42fe48
+    title: Repeated action pattern
+    desc: This action is repeated multiple times in sequence.
+    meta: {"repeatCount":4}
+F-002 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:328686ce752436fe
+    title: Subflow without error handler
+    desc: Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-003 warning/low uninitialized-variable [Logic] fix=init-variable @Main#5 sf=Main fp=uninitialized-variable:607dd5950def1072
+    title: Variable potentially uninitialized
+    desc: Variable 'EmptyList' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"EmptyList"}
+F-004 warning/low uninitialized-variable [Logic] fix=init-variable @Main#5 sf=Main fp=uninitialized-variable:257f0dbf2432752b
+    title: Variable potentially uninitialized
+    desc: Variable 'Item' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"Item"}
+F-005 warning/low uninitialized-variable [Logic] fix=init-variable @Main#8 sf=Main fp=uninitialized-variable:c0085ccea9fe2b77
+    title: Variable potentially uninitialized
+    desc: Variable 'x' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"x"}
+F-006 info/low unused-variable [Style] fix=remove-block @Main#1 sf=Main fp=unused-variable:c2f06e06d44f2711
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"EmptyVar"}
+F-007 info/low unused-variable [Style] fix=remove-block @Main#2 sf=Main fp=unused-variable:65308b24af46fadb
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"UnicodeVar"}
+F-008 info/low unused-variable [Style] fix=remove-block @Main#3 sf=Main fp=unused-variable:7d00854b9354ff6e
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"SpecialChars"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":3,"info":5,"blocksAnalyzed":14,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=630/630 last="Loop body is too large"
+metrics: as default, healthScore=83
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=14
+  raw findings: duplicate-action=1 subflow-no-error-handler=1 uninitialized-variable=4 unused-variable=3
+inventory: none
+findings: 8
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":3,"info":6,"blocksAnalyzed":14,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=630/630 last="Loop body is too large"
+metrics: as default, healthScore=82
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=14
+  raw findings: duplicate-action=1 large-subflow=1 subflow-no-error-handler=1 uninitialized-variable=4 unused-variable=3
+inventory: none
+findings: 9
+F-001 info/medium duplicate-action [Style] fix=remove-block @Main#13 sf=Main fp=duplicate-action:bd619fdebb42fe48
+F-002 info/low large-subflow [Style] fix=- @Main#1 sf=Main fp=large-subflow:328686ce752436fe
+    title: Large subflow
+    desc: Subflow 'Main' has 7 blocks (threshold: 5).
+F-003 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:328686ce752436fe
+F-004 warning/low uninitialized-variable [Logic] fix=init-variable @Main#5 sf=Main fp=uninitialized-variable:607dd5950def1072
+F-005 warning/low uninitialized-variable [Logic] fix=init-variable @Main#5 sf=Main fp=uninitialized-variable:257f0dbf2432752b
+F-006 warning/low uninitialized-variable [Logic] fix=init-variable @Main#8 sf=Main fp=uninitialized-variable:c0085ccea9fe2b77
+F-007 info/low unused-variable [Style] fix=remove-block @Main#1 sf=Main fp=unused-variable:c2f06e06d44f2711
+F-008 info/low unused-variable [Style] fix=remove-block @Main#2 sf=Main fp=unused-variable:65308b24af46fadb
+F-009 info/low unused-variable [Style] fix=remove-block @Main#3 sf=Main fp=unused-variable:7d00854b9354ff6e
+
+=== disabled
+stats: {"errors":0,"warnings":0,"info":4,"blocksAnalyzed":14,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=11 final=518/518 last="Loop body is too large"
+metrics: as default, healthScore=96
+profiles: rules=37 order=f7de49357acad250 blocksChecked=14
+  raw findings: duplicate-action=1 unused-variable=3
+inventory: none
+findings: 4
+F-001 info/medium duplicate-action [Style] fix=remove-block @Main#13 sf=Main fp=duplicate-action:bd619fdebb42fe48
+F-002 info/low unused-variable [Style] fix=remove-block @Main#1 sf=Main fp=unused-variable:c2f06e06d44f2711
+F-003 info/low unused-variable [Style] fix=remove-block @Main#2 sf=Main fp=unused-variable:65308b24af46fadb
+F-004 info/low unused-variable [Style] fix=remove-block @Main#3 sf=Main fp=unused-variable:7d00854b9354ff6e
+
+=== severity
+stats: {"errors":1,"warnings":0,"info":7,"blocksAnalyzed":14,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=13 final=630/630 last="Loop body is too large"
+metrics: as default, healthScore=81
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=14
+  raw findings: duplicate-action=1 subflow-no-error-handler=1 uninitialized-variable=4 unused-variable=3
+inventory: none
+findings: 8
+  as default; severity changes: F-002 info->error, F-003 warning->info, F-004 warning->info, F-005 warning->info
+
+=== autofixable
+stats: {"errors":0,"warnings":3,"info":5,"blocksAnalyzed":14,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=9 final=448/448 last="Wait zero"
+metrics: as default, healthScore=83
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=14
+  raw findings: duplicate-action=1 subflow-no-error-handler=1 uninitialized-variable=4 unused-variable=3
+inventory: none
+findings: 8
+  as default; severity changes: none

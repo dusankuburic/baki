@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/testutil"
-	"pad-core/cache"
 	"pad-core/models"
 )
 
@@ -16,7 +15,7 @@ import (
 func TestSearchFlow_OversizeCloudDocumentIndexIsNotCached(t *testing.T) {
 	backend := testutil.NewFakeBackend()
 	svc := NewFlowService(&testutil.CountingNotifier{}, nil, NewCloudDocumentProvider(backend), backend, nil, nil)
-	idxCache := svc.idxCache.(*cache.SizedLRU)
+	idxCache := svc.idxCache
 
 	// Few real blocks (a cheap index), but a block count the provider would
 	// refuse to cache: the guard must act on the document's cost, not the
@@ -52,7 +51,7 @@ func TestSearchFlow_OversizeCloudDocumentIndexIsNotCached(t *testing.T) {
 	if _, err := local.SearchFlow(oversize, models.SearchQuery{Text: "message"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := local.idxCache.(*cache.SizedLRU).Len(); got != 1 {
+	if got := local.idxCache.Len(); got != 1 {
 		t.Errorf("desktop search of a large document cached %d indexes, want 1", got)
 	}
 }

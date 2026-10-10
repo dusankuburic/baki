@@ -1,0 +1,160 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_actions_flow
+document: subflows=3 blocks=27 parseErrors=0 folder=false
+
+=== default
+stats: {"errors":0,"warnings":13,"info":3,"blocksAnalyzed":25,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=23 final=1125/1125 last="Loop body is too large"
+metrics: {"avgCognitive":1,"avgCyclomatic":1.6666666666666667,"healthScore":45,"maxCognitive":3,"maxCyclomatic":3,"subflowCount":3,"totalBlocks":22,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":15,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+  subflow ProcessList: {"blockCount":5,"cognitiveComplexity":3,"cyclomaticComplexity":3,"fanIn":0,"fanOut":0,"maxNestingDepth":2,"variableCount":0}
+  subflow Cleanup: {"blockCount":2,"cognitiveComplexity":0,"cyclomaticComplexity":1,"fanIn":0,"fanOut":0,"maxNestingDepth":0,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=25
+  raw findings: file-op-no-error-handler=2 path-traversal-risk=2 subflow-no-error-handler=1 uncalled-subflow=2 unhandled-error=6 uninitialized-variable=1 unused-variable=2
+inventory: none
+findings: 16
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=file-op-no-error-handler:5b9d56555febe750
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.ReadFromFile"}
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Cleanup#1 sf=Cleanup fp=file-op-no-error-handler:1bca65829958e156
+    title: File operation without error handler
+    desc: This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
+    meta: {"rawType":"File.Delete"}
+F-003 warning/medium path-traversal-risk [Security] fix=- @Main#9 sf=Main fp=path-traversal-risk:7c2669b4936026c3
+    title: Path traversal risk
+    desc: File action uses a variable path. A caller-controlled value containing ../ sequences can escape the intended directory and read or overwrite arbitrary files.
+    meta: {"property":"File"}
+F-004 warning/medium path-traversal-risk [Security] fix=- @Cleanup#1 sf=Cleanup fp=path-traversal-risk:5fdfa9f16dae36f5
+    title: Path traversal risk
+    desc: File action uses a variable path. A caller-controlled value containing ../ sequences can escape the intended directory and read or overwrite arbitrary files.
+    meta: {"property":"Files"}
+F-005 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:df3bb4c18e92d48d
+    title: Subflow without error handler
+    desc: Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+F-006 warning/medium uncalled-subflow [Logic] fix=- @ProcessList#0 sf=ProcessList fp=uncalled-subflow:fbb04332a28a4365
+    title: Uncalled subflow
+    desc: Subflow 'ProcessList' is never called by any other subflow and is not the entry point. It is dead code at the flow level.
+    meta: {"subflow":"ProcessList"}
+F-007 warning/medium uncalled-subflow [Logic] fix=- @Cleanup#0 sf=Cleanup fp=uncalled-subflow:1e523ce0f9161842
+    title: Uncalled subflow
+    desc: Subflow 'Cleanup' is never called by any other subflow and is not the entry point. It is dead code at the flow level.
+    meta: {"subflow":"Cleanup"}
+F-008 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=unhandled-error:5b9d56555febe750
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-009 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#12 sf=Main fp=unhandled-error:97a233ac6ad2da69
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-010 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#13 sf=Main fp=unhandled-error:a14921689c05bdce
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-011 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#14 sf=Main fp=unhandled-error:f33d0b49665378fb
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-012 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#15 sf=Main fp=unhandled-error:755af44cfa5f258a
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-013 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Cleanup#1 sf=Cleanup fp=unhandled-error:1bca65829958e156
+    title: Unhandled error in fallible action
+    desc: This action commonly fails but has no error handler in its surrounding scope.
+F-014 warning/low uninitialized-variable [Logic] fix=init-variable @ProcessList#0 sf=ProcessList fp=uninitialized-variable:389b71ae4062361f
+    title: Variable potentially uninitialized
+    desc: Variable 'List' is used here but doesn't seem to be assigned anywhere in the flow.
+    meta: {"variable":"List"}
+F-015 info/low unused-variable [Style] fix=remove-block @Main#2 sf=Main fp=unused-variable:9313826431766371
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"MyVar"}
+F-016 info/low unused-variable [Style] fix=remove-block @ProcessList#0 sf=ProcessList fp=unused-variable:0eb54b2f1699cc23
+    title: Variable declared but never used
+    desc: This variable is set but never referenced elsewhere in the flow.
+    meta: {"variable":"Items"}
+
+=== nil-settings
+stats: {"errors":0,"warnings":13,"info":3,"blocksAnalyzed":25,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=23 final=1125/1125 last="Loop body is too large"
+metrics: as default, healthScore=45
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=25
+  raw findings: file-op-no-error-handler=2 path-traversal-risk=2 subflow-no-error-handler=1 uncalled-subflow=2 unhandled-error=6 uninitialized-variable=1 unused-variable=2
+inventory: none
+findings: 16
+  as default; severity changes: none
+
+=== thresholds
+stats: {"errors":0,"warnings":13,"info":4,"blocksAnalyzed":25,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=23 final=1125/1125 last="Loop body is too large"
+metrics: as default, healthScore=44
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=25
+  raw findings: file-op-no-error-handler=2 large-subflow=1 path-traversal-risk=2 subflow-no-error-handler=1 uncalled-subflow=2 unhandled-error=6 uninitialized-variable=1 unused-variable=2
+inventory: none
+findings: 17
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=file-op-no-error-handler:5b9d56555febe750
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Cleanup#1 sf=Cleanup fp=file-op-no-error-handler:1bca65829958e156
+F-003 info/low large-subflow [Style] fix=- @Main#1 sf=Main fp=large-subflow:df3bb4c18e92d48d
+    title: Large subflow
+    desc: Subflow 'Main' has 15 blocks (threshold: 5).
+F-004 warning/medium path-traversal-risk [Security] fix=- @Main#9 sf=Main fp=path-traversal-risk:7c2669b4936026c3
+F-005 warning/medium path-traversal-risk [Security] fix=- @Cleanup#1 sf=Cleanup fp=path-traversal-risk:5fdfa9f16dae36f5
+F-006 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:df3bb4c18e92d48d
+F-007 warning/medium uncalled-subflow [Logic] fix=- @ProcessList#0 sf=ProcessList fp=uncalled-subflow:fbb04332a28a4365
+F-008 warning/medium uncalled-subflow [Logic] fix=- @Cleanup#0 sf=Cleanup fp=uncalled-subflow:1e523ce0f9161842
+F-009 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=unhandled-error:5b9d56555febe750
+F-010 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#12 sf=Main fp=unhandled-error:97a233ac6ad2da69
+F-011 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#13 sf=Main fp=unhandled-error:a14921689c05bdce
+F-012 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#14 sf=Main fp=unhandled-error:f33d0b49665378fb
+F-013 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#15 sf=Main fp=unhandled-error:755af44cfa5f258a
+F-014 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Cleanup#1 sf=Cleanup fp=unhandled-error:1bca65829958e156
+F-015 warning/low uninitialized-variable [Logic] fix=init-variable @ProcessList#0 sf=ProcessList fp=uninitialized-variable:389b71ae4062361f
+F-016 info/low unused-variable [Style] fix=remove-block @Main#2 sf=Main fp=unused-variable:9313826431766371
+F-017 info/low unused-variable [Style] fix=remove-block @ProcessList#0 sf=ProcessList fp=unused-variable:0eb54b2f1699cc23
+
+=== disabled
+stats: {"errors":0,"warnings":6,"info":2,"blocksAnalyzed":25,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=19 final=925/925 last="Loop body is too large"
+metrics: as default, healthScore=74
+profiles: rules=37 order=f7de49357acad250 blocksChecked=25
+  raw findings: file-op-no-error-handler=2 path-traversal-risk=2 uncalled-subflow=2 unused-variable=2
+inventory: none
+findings: 8
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=file-op-no-error-handler:5b9d56555febe750
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Cleanup#1 sf=Cleanup fp=file-op-no-error-handler:1bca65829958e156
+F-003 warning/medium path-traversal-risk [Security] fix=- @Main#9 sf=Main fp=path-traversal-risk:7c2669b4936026c3
+F-004 warning/medium path-traversal-risk [Security] fix=- @Cleanup#1 sf=Cleanup fp=path-traversal-risk:5fdfa9f16dae36f5
+F-005 warning/medium uncalled-subflow [Logic] fix=- @ProcessList#0 sf=ProcessList fp=uncalled-subflow:fbb04332a28a4365
+F-006 warning/medium uncalled-subflow [Logic] fix=- @Cleanup#0 sf=Cleanup fp=uncalled-subflow:1e523ce0f9161842
+F-007 info/low unused-variable [Style] fix=remove-block @Main#2 sf=Main fp=unused-variable:9313826431766371
+F-008 info/low unused-variable [Style] fix=remove-block @ProcessList#0 sf=ProcessList fp=unused-variable:0eb54b2f1699cc23
+
+=== severity
+stats: {"errors":7,"warnings":6,"info":3,"blocksAnalyzed":25,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=23 final=1125/1125 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=25
+  raw findings: file-op-no-error-handler=2 path-traversal-risk=2 subflow-no-error-handler=1 uncalled-subflow=2 unhandled-error=6 uninitialized-variable=1 unused-variable=2
+inventory: none
+findings: 16
+  as default; severity changes: F-005 info->error, F-008 warning->error, F-009 warning->error, F-010 warning->error, F-011 warning->error, F-012 warning->error, F-013 warning->error, F-014 warning->info
+
+=== autofixable
+stats: {"errors":0,"warnings":9,"info":3,"blocksAnalyzed":25,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=16 final=800/800 last="Wait zero"
+metrics: as default, healthScore=61
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=25
+  raw findings: file-op-no-error-handler=2 subflow-no-error-handler=1 unhandled-error=6 uninitialized-variable=1 unused-variable=2
+inventory: none
+findings: 12
+F-001 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=file-op-no-error-handler:5b9d56555febe750
+F-002 warning/medium file-op-no-error-handler [Reliability] fix=wrap-error-handler @Cleanup#1 sf=Cleanup fp=file-op-no-error-handler:1bca65829958e156
+F-003 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @Main#1 sf=Main fp=subflow-no-error-handler:df3bb4c18e92d48d
+F-004 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#9 sf=Main fp=unhandled-error:5b9d56555febe750
+F-005 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#12 sf=Main fp=unhandled-error:97a233ac6ad2da69
+F-006 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#13 sf=Main fp=unhandled-error:a14921689c05bdce
+F-007 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#14 sf=Main fp=unhandled-error:f33d0b49665378fb
+F-008 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#15 sf=Main fp=unhandled-error:755af44cfa5f258a
+F-009 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Cleanup#1 sf=Cleanup fp=unhandled-error:1bca65829958e156
+F-010 warning/low uninitialized-variable [Logic] fix=init-variable @ProcessList#0 sf=ProcessList fp=uninitialized-variable:389b71ae4062361f
+F-011 info/low unused-variable [Style] fix=remove-block @Main#2 sf=Main fp=unused-variable:9313826431766371
+F-012 info/low unused-variable [Style] fix=remove-block @ProcessList#0 sf=ProcessList fp=unused-variable:0eb54b2f1699cc23

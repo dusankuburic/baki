@@ -16,7 +16,9 @@ type cacheEntry struct {
 	expiration int64
 }
 
-// NewLRUCache creates a new in-memory LRU cache with the given size.
+// NewLRUCache creates a new in-memory LRU cache bounded by entry count. It is
+// a building block: production code declares a Spec and builds its cache with
+// New (raw constructions outside this package are ratcheted in archtest).
 func NewLRUCache(size int) (Cache, error) {
 	inner, err := lru.New[string, cacheEntry](size)
 	if err != nil {

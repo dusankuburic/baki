@@ -1,0 +1,79 @@
+# Analysis golden (core/analyzer/findings_golden_test.go). Blocks are <subflow>#<pre-order index>.
+# Later variants print "as default" plus severity changes when only severities differ; otherwise they
+# show title/desc/meta only for findings whose content differs from every default finding.
+input: sample_synthetic_10k
+document: subflows=8 blocks=9533 parseErrors=667 folder=false
+
+=== default
+stats: {"errors":0,"warnings":5532,"info":4184,"blocksAnalyzed":9149,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=sharded final=411705/411705 last="Loop body is too large"
+metrics: {"avgCognitive":120,"avgCyclomatic":73,"healthScore":0,"maxCognitive":120,"maxCyclomatic":73,"subflowCount":8,"totalBlocks":9141,"totalVariables":0,"variableDensity":0} circular=[]
+  subflow Main: {"blockCount":1138,"cognitiveComplexity":120,"cyclomaticComplexity":73,"fanIn":0,"fanOut":0,"maxNestingDepth":3,"variableCount":0}
+  subflow ProcessData: {"blockCount":1144,"cognitiveComplexity":120,"cyclomaticComplexity":73,"fanIn":0,"fanOut":0,"maxNestingDepth":3,"variableCount":0}
+  subflow HandleErrors: {"blockCount":1138,"cognitiveComplexity":120,"cyclomaticComplexity":73,"fanIn":0,"fanOut":0,"maxNestingDepth":3,"variableCount":0}
+  subflow GenerateReport: {"blockCount":1148,"cognitiveComplexity":120,"cyclomaticComplexity":73,"fanIn":0,"fanOut":0,"maxNestingDepth":3,"variableCount":0}
+  subflow Cleanup: {"blockCount":1147,"cognitiveComplexity":120,"cyclomaticComplexity":73,"fanIn":0,"fanOut":0,"maxNestingDepth":3,"variableCount":0}
+  subflow Validation: {"blockCount":1141,"cognitiveComplexity":120,"cyclomaticComplexity":73,"fanIn":0,"fanOut":0,"maxNestingDepth":3,"variableCount":0}
+  subflow Export: {"blockCount":1149,"cognitiveComplexity":120,"cyclomaticComplexity":73,"fanIn":0,"fanOut":0,"maxNestingDepth":3,"variableCount":0}
+  subflow Logging: {"blockCount":1136,"cognitiveComplexity":120,"cyclomaticComplexity":73,"fanIn":0,"fanOut":0,"maxNestingDepth":3,"variableCount":0}
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=9149
+  raw findings: file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 high-cyclomatic-complexity=8 large-subflow=8 missing-delay=196 missing-retry=1973 missing-timeout=1973 parse-error=101 slow-pattern=135 subflow-no-error-handler=8 uncalled-subflow=7 unhandled-error=2639 uninitialized-variable=4 unused-variable=670
+inventory: none
+findings: 9716
+  by rule: file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 high-cyclomatic-complexity=8 large-subflow=8 missing-delay=196 missing-retry=1973 missing-timeout=1973 parse-error=101 slow-pattern=135 subflow-no-error-handler=8 uncalled-subflow=7 unhandled-error=2639 uninitialized-variable=3 unused-variable=670
+  digest: full=ff329abbf30daf4c ordered-fingerprints=5818ddbcbc193c96 fingerprint-set=6adf6a37e50301ec
+
+=== nil-settings
+stats: {"errors":0,"warnings":5532,"info":4184,"blocksAnalyzed":9149,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=sharded final=411705/411705 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=9149
+  raw findings: file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 high-cyclomatic-complexity=8 large-subflow=8 missing-delay=196 missing-retry=1973 missing-timeout=1973 parse-error=101 slow-pattern=135 subflow-no-error-handler=8 uncalled-subflow=7 unhandled-error=2639 uninitialized-variable=4 unused-variable=670
+inventory: none
+findings: 9716
+  by rule: file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 high-cyclomatic-complexity=8 large-subflow=8 missing-delay=196 missing-retry=1973 missing-timeout=1973 parse-error=101 slow-pattern=135 subflow-no-error-handler=8 uncalled-subflow=7 unhandled-error=2639 uninitialized-variable=3 unused-variable=670
+  digest: full=ff329abbf30daf4c ordered-fingerprints=5818ddbcbc193c96 fingerprint-set=6adf6a37e50301ec
+
+=== thresholds
+stats: {"errors":0,"warnings":5532,"info":4909,"blocksAnalyzed":9149,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=sharded final=411705/411705 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=9149
+  raw findings: deep-nesting=533 file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 high-cyclomatic-complexity=8 large-subflow=8 missing-delay=196 missing-retry=1973 missing-timeout=1973 parse-error=101 slow-pattern=135 subflow-no-error-handler=8 uncalled-subflow=7 unhandled-error=2639 uninitialized-variable=4 unused-variable=670 wide-loop=192
+inventory: none
+findings: 10441
+  by rule: deep-nesting=533 file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 high-cyclomatic-complexity=8 large-subflow=8 missing-delay=196 missing-retry=1973 missing-timeout=1973 parse-error=101 slow-pattern=135 subflow-no-error-handler=8 uncalled-subflow=7 unhandled-error=2639 uninitialized-variable=3 unused-variable=670 wide-loop=192
+  digest: full=61b4c2f763071594 ordered-fingerprints=3f3641052b00decf fingerprint-set=5f5f854ead687a2f
+
+=== disabled
+stats: {"errors":0,"warnings":2789,"info":3980,"blocksAnalyzed":9149,"rulesRun":37,"rulesSkipped":0,"suppressed":0}
+progress: events=sharded final=338513/338513 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=37 order=f7de49357acad250 blocksChecked=9149
+  raw findings: file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 high-cyclomatic-complexity=8 large-subflow=8 missing-retry=1973 missing-timeout=1973 slow-pattern=135 uncalled-subflow=7 unused-variable=670
+inventory: none
+findings: 6769
+  by rule: file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 high-cyclomatic-complexity=8 large-subflow=8 missing-retry=1973 missing-timeout=1973 slow-pattern=135 uncalled-subflow=7 unused-variable=670
+  digest: full=c361a772b110569f ordered-fingerprints=fe002969eadae300 fingerprint-set=0b08d0fea03a32dc
+
+=== severity
+stats: {"errors":2647,"warnings":3749,"info":3320,"blocksAnalyzed":9149,"rulesRun":45,"rulesSkipped":0,"suppressed":0}
+progress: events=sharded final=411705/411705 last="Loop body is too large"
+metrics: as default, healthScore=0
+profiles: rules=45 order=c60dd8f9183dbce7 blocksChecked=9149
+  raw findings: file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 high-cyclomatic-complexity=8 large-subflow=8 missing-delay=196 missing-retry=1973 missing-timeout=1973 parse-error=101 slow-pattern=135 subflow-no-error-handler=8 uncalled-subflow=7 unhandled-error=2639 uninitialized-variable=4 unused-variable=670
+inventory: none
+findings: 9716
+  by rule: file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 high-cyclomatic-complexity=8 large-subflow=8 missing-delay=196 missing-retry=1973 missing-timeout=1973 parse-error=101 slow-pattern=135 subflow-no-error-handler=8 uncalled-subflow=7 unhandled-error=2639 uninitialized-variable=3 unused-variable=670
+  digest: full=bc39d04d995225e5 ordered-fingerprints=5818ddbcbc193c96 fingerprint-set=6adf6a37e50301ec
+
+=== autofixable
+stats: {"errors":0,"warnings":5517,"info":4176,"blocksAnalyzed":9149,"rulesRun":32,"rulesSkipped":0,"suppressed":0}
+progress: events=sharded final=292768/292768 last="Wait zero"
+metrics: as default, healthScore=0
+profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=9149
+  raw findings: file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 missing-delay=196 missing-retry=1973 missing-timeout=1973 slow-pattern=135 subflow-no-error-handler=8 unhandled-error=2639 uninitialized-variable=4 unused-variable=670
+inventory: none
+findings: 9693
+  by rule: file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 missing-delay=196 missing-retry=1973 missing-timeout=1973 slow-pattern=135 subflow-no-error-handler=8 unhandled-error=2639 uninitialized-variable=3 unused-variable=670 parse-error=101
+  digest: full=2ced2c73da904fe1 ordered-fingerprints=5752883341edc53b fingerprint-set=f42c282b72016ac4

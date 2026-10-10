@@ -81,4 +81,13 @@ func findSink(rawType string) string {
 	return ""
 }
 
-func init() { registerRule(&SensitiveDataExposureRule{}) }
+func init() {
+	registerRule(&SensitiveDataExposureRule{}, RuleMeta{
+		Confidence:   models.ConfidenceHigh,
+		AutoFix:      "mask-sensitive-variable",
+		Related:      []Related{{To: "hardcoded-credential", Reason: "sensitive exposure may involve hardcoded credentials"}},
+		IntroducedIn: 1,
+		Revision:     1,
+		Stage:        StageStable,
+	})
+}

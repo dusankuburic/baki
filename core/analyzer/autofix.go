@@ -30,6 +30,12 @@ func indentColsDeeper(block *models.Block, levels int) string {
 	return strings.Repeat(" ", block.Indent+4*levels)
 }
 
+// blockFix adapts a builder that needs only the block. Each builder below
+// registers its fix type right after its definition (fix_dispatch.go).
+func blockFix(build func(*models.Block) models.Patch) FixBuilder {
+	return func(in FixInput) models.Patch { return build(in.Block) }
+}
+
 // SuppressFindingPatch inserts `# pad-ignore[ruleID]` before the block's line; ruleID "" suppresses all rules.
 func SuppressFindingPatch(block *models.Block, ruleID string) models.Patch {
 	directive := "# pad-ignore"
@@ -45,6 +51,10 @@ func SuppressFindingPatch(block *models.Block, ruleID string) models.Patch {
 		}},
 	}
 }
+
+var _ = registerFix("suppress", func(in FixInput) models.Patch {
+	return SuppressFindingPatch(in.Block, in.RuleID)
+}, FixUsesRuleID|FixStandalone)
 
 // ApplyPatch applies a Patch's line-level edits to raw source text; purely
 // textual — the caller re-parses the result to validate structure.
@@ -276,6 +286,8 @@ func WrapInErrorHandlerPatch(block *models.Block) models.Patch {
 	}}}
 }
 
+var _ = registerFix("wrap-error-handler", blockFix(WrapInErrorHandlerPatch), 0)
+
 // InsertClosePatch inserts a matching Close after the resource open, referencing
 // the open's output variable so resource-leak sees it closed.
 func InsertClosePatch(block *models.Block) models.Patch {
@@ -300,6 +312,8 @@ func InsertClosePatch(block *models.Block) models.Patch {
 	}}}
 }
 
+var _ = registerFix("insert-close", blockFix(InsertClosePatch), 0)
+
 // defaultTimeoutSeconds: 30s prevents indefinite hangs while allowing slow legitimate responses.
 const defaultTimeoutSeconds = "30"
 
@@ -314,6 +328,8 @@ func SetTimeoutPatch(block *models.Block) models.Patch {
 	}}}
 }
 
+var _ = registerFix("set-timeout", blockFix(SetTimeoutPatch), 0)
+
 // InsertDelayPatch inserts `WAIT 1` before the block, resolving missing-delay.
 func InsertDelayPatch(block *models.Block) models.Patch {
 	indent := indentCols(block)
@@ -324,6 +340,8 @@ func InsertDelayPatch(block *models.Block) models.Patch {
 		Lines:      []string{delayLine},
 	}}}
 }
+
+var _ = registerFix("insert-delay", blockFix(InsertDelayPatch), 0)
 
 // InsertDelayInLoopPatch inserts `WAIT 1` inside the loop body, one indent deeper than InsertDelayPatch.
 func InsertDelayInLoopPatch(block *models.Block) models.Patch {
@@ -343,6 +361,8 @@ func InsertDelayInLoopPatch(block *models.Block) models.Patch {
 	}}}
 }
 
+var _ = registerFix("insert-delay-in-loop", blockFix(InsertDelayInLoopPatch), 0)
+
 // InsertHandlerLogPatch inserts a placeholder logging action before the handler's END.
 func InsertHandlerLogPatch(block *models.Block) models.Patch {
 	indent := indentColsDeeper(block, 1)
@@ -353,6 +373,8 @@ func InsertHandlerLogPatch(block *models.Block) models.Patch {
 		Lines:      []string{logLine},
 	}}}
 }
+
+var _ = registerFix("insert-handler-log", blockFix(InsertHandlerLogPatch), 0)
 
 // InsertVariableInitPatch inserts `SET <var> TO ""` before the first read; the
 // SET's _output registers it in WritersByVar.
@@ -369,6 +391,10 @@ func InsertVariableInitPatch(block *models.Block, varName string) models.Patch {
 	}}}
 }
 
+var _ = registerFix("init-variable", func(in FixInput) models.Patch {
+	return InsertVariableInitPatch(in.Block, in.Variable)
+}, FixUsesVariable)
+
 // InsertErrorLogPatch inserts an error-logging action before the handler's END; %LastError% carries the actual message.
 func InsertErrorLogPatch(block *models.Block) models.Patch {
 	indent := indentColsDeeper(block, 1)
@@ -379,6 +405,8 @@ func InsertErrorLogPatch(block *models.Block) models.Patch {
 		Lines:      []string{logLine},
 	}}}
 }
+
+var _ = registerFix("insert-error-log", blockFix(InsertErrorLogPatch), 0)
 
 // ReplaceWithVariablePatch replaces a hardcoded literal with %input_<key>%;
 // a SET would just move the secret somewhere the rule still flags.
@@ -400,6 +428,18 @@ func ReplaceWithVariablePatch(block *models.Block, propKey string) models.Patch 
 	}}}
 }
 
+// replace-with-variable swaps a working literal for %input_<prop>% with NO
+// companion initialisation, leaving the flow referencing a variable defined
+// nowhere — the same failure mode mask-sensitive-variable is gated for, and
+// the analyzer calls the result clean (rule_uninitialized_variable
+// deliberately ignores the input_ prefix). It is the auto-fix for the
+// hardcoded-* security findings a user is most likely to accept from a
+// one-line approval card: parameterising is the right advice, doing it
+// unattended is not — it stays behind the explicit opt-in.
+var _ = registerFix("replace-with-variable", func(in FixInput) models.Patch {
+	return ReplaceWithVariablePatch(in.Block, in.Property)
+}, FixBehaviourChanging|FixUsesProperty)
+
 // WrapInRetryPatch appends PAD's native inline retry (`ON ERROR REPEAT 3
 // TIMES WAIT 5`). NOT a counting loop: no error check or success exit, and it
 // would re-run side effects; the parser folds the directive into
@@ -411,6 +451,8 @@ func WrapInRetryPatch(block *models.Block) models.Patch {
 		Lines:      []string{indentCols(block) + "ON ERROR REPEAT 3 TIMES WAIT 5"},
 	}}}
 }
+
+var _ = registerFix("wrap-in-retry", blockFix(WrapInRetryPatch), 0)
 
 // InsertExitConditionPatch inserts a loop guard: the counter init goes OUTSIDE
 // the loop so it persists across iterations, the increment + IF + EXIT LOOP
@@ -443,6 +485,8 @@ func InsertExitConditionPatch(block *models.Block) models.Patch {
 	}}}
 }
 
+var _ = registerFix("insert-exit-condition", blockFix(InsertExitConditionPatch), 0)
+
 // RemoveBlockPatch deletes the block's lines outright (itself plus descendants);
 // for duplicate-action the finding anchors the first of a ≥3 identical run.
 func RemoveBlockPatch(block *models.Block) models.Patch {
@@ -452,6 +496,8 @@ func RemoveBlockPatch(block *models.Block) models.Patch {
 		EndLine:   blockEndLine(block),
 	}}}
 }
+
+var _ = registerFix("remove-block", blockFix(RemoveBlockPatch), 0)
 
 // ParameterizeSqlPatch rewrites each %VarName% in a SQL property as @VarName
 // (PAD parameter syntax), one op per distinct var; scoped to single-line SQL
@@ -485,6 +531,10 @@ func ParameterizeSqlPatch(block *models.Block, propKey string) models.Patch {
 	return models.Patch{Ops: ops}
 }
 
+var _ = registerFix("parameterize-sql", func(in FixInput) models.Patch {
+	return ParameterizeSqlPatch(in.Block, in.Property)
+}, FixUsesProperty)
+
 // AppendOutputPatch appends ` => Output_Result` to the CALL line. The name must
 // be BARE: the parser's reOutputVar only matches `=>\s*(\w+)\s*$`, so a
 // %wrapped% name would leave _output unset and the finding would survive.
@@ -496,6 +546,8 @@ func AppendOutputPatch(block *models.Block) models.Patch {
 	}}}
 }
 
+var _ = registerFix("append-output", blockFix(AppendOutputPatch), 0)
+
 // InsertDefaultPatch inserts a DEFAULT branch as the SWITCH's last child, resolving switch-no-default.
 func InsertDefaultPatch(block *models.Block) models.Patch {
 	indent := indentColsDeeper(block, 1)
@@ -506,6 +558,8 @@ func InsertDefaultPatch(block *models.Block) models.Patch {
 		Lines:      []string{defaultLine},
 	}}}
 }
+
+var _ = registerFix("insert-default", blockFix(InsertDefaultPatch), 0)
 
 // MaskSensitiveVariablePatch replaces %var% with '*** MASKED ***' on the block's
 // line — a stop-the-bleed fix; behavior changes, so the user must follow up.
@@ -521,6 +575,12 @@ func MaskSensitiveVariablePatch(block *models.Block, varName string) models.Patc
 	}}}
 }
 
+// mask-sensitive-variable substitutes '*** MASKED ***' for a credential
+// reference, so the request still goes out and now fails authentication.
+var _ = registerFix("mask-sensitive-variable", func(in FixInput) models.Patch {
+	return MaskSensitiveVariablePatch(in.Block, in.Variable)
+}, FixBehaviourChanging|FixUsesVariable)
+
 // UpgradeToHttpsPatch replaces a cleartext http:// prefix with https:// on the block's line.
 func UpgradeToHttpsPatch(block *models.Block) models.Patch {
 	return models.Patch{Ops: []models.PatchOp{{
@@ -531,13 +591,17 @@ func UpgradeToHttpsPatch(block *models.Block) models.Patch {
 	}}}
 }
 
+var _ = registerFix("upgrade-to-https", blockFix(UpgradeToHttpsPatch), 0)
+
 // SanitizeCommandVarsPatch strips %VarName% references from a system-command
 // line — a stop-the-bleed removal of the injection vector; the Suggestion
 // explains proper argument passing.
 func SanitizeCommandVarsPatch(block *models.Block) models.Patch {
 	seen := make(map[string]bool)
 	var ops []models.PatchOp
-	for _, val := range block.Properties {
+	var keys [16]string
+	for _, key := range sortedPropertyKeys(keys[:0], block.Properties) {
+		val := block.Properties[key]
 		for _, m := range sqlVarRef.FindAllString(val, -1) {
 			if seen[m] {
 				continue
@@ -556,3 +620,7 @@ func SanitizeCommandVarsPatch(block *models.Block) models.Patch {
 	}
 	return models.Patch{Ops: ops}
 }
+
+// sanitize-command-vars replaces each %Var% in a command line with NOTHING
+// (`robocopy %Src% %Dst% /MIR` becomes a mirror-delete against an empty source).
+var _ = registerFix("sanitize-command-vars", blockFix(SanitizeCommandVarsPatch), FixBehaviourChanging)

@@ -46,6 +46,9 @@ const (
 	// EventTest is a synthetic probe for the channel "test" button (R2-3):
 	// org admins verify a newly configured channel without a real signal.
 	EventTest EventType = "test"
+	// EventNewRules: rules newer than the flows' baselines or health snapshots report findings, announced once per
+	// scope and rule set (ADR 0016). In-app only for now (the inbox and SSE); no channel delivers it.
+	EventNewRules EventType = "new_rules"
 )
 
 // Valid channel kinds for per-org channels (R2-3). Email/Jira stay

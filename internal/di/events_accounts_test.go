@@ -2,7 +2,6 @@ package di
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"go.uber.org/fx"
@@ -58,8 +57,8 @@ func TestServiceModule_RuleProfilesFollowOrgRuleChanges(t *testing.T) {
 	if has() {
 		t.Fatal("precondition: the rule does not exist yet")
 	}
-	raw, _ := json.Marshal(analyzer.CustomRuleConfig{ID: "org-rule", Name: "org-rule", Severity: "warning", Category: "Style", RawTypeMatch: "^SET$"})
-	if err := rules.Save(ctx, &storageif.OrgCustomRule{ID: "r1", OrgID: "org-1", RuleID: "org-rule", Config: raw, Enabled: true}); err != nil {
+	rule := analyzer.CustomRuleConfig{ID: "org-rule", Name: "org-rule", Severity: "warning", Category: "Style", RawTypeMatch: "^SET$"}
+	if _, err := rules.SaveRule(ctx, "org-1", service.OrgRuleSave{RowID: "r1", Config: &rule}); err != nil {
 		t.Fatal(err)
 	}
 	if !has() {

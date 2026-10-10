@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -105,20 +106,32 @@ func unreadGovAlertCountSQL(userID string) (string, []any) {
 // (ON CONFLICT DO NOTHING) so a scanner retry is safe. Server stamps
 // read_at/dismissed_at NULL.
 func (b *PostgresStorageBackend) RecordGovernanceAlert(ctx context.Context, a *storageif.GovernanceAlert) error {
+	_, err := b.InsertGovernanceAlert(ctx, a)
+	return err
+}
+
+// InsertGovernanceAlert is RecordGovernanceAlert reporting whether the row is new: RETURNING yields no row when the
+// ID was already there.
+func (b *PostgresStorageBackend) InsertGovernanceAlert(ctx context.Context, a *storageif.GovernanceAlert) (bool, error) {
 	if a == nil || a.ID == "" {
-		return errGovAlertMissingID
+		return false, errGovAlertMissingID
 	}
 	if a.CreatedAt.IsZero() {
 		a.CreatedAt = time.Now().UTC()
 	}
-	_, err := b.query(ctx).ExecContext(ctx, `
+	var id string
+	err := b.query(ctx).QueryRowContext(ctx, `
 		INSERT INTO gov_alerts (id, flow_id, org_id, type, title, message, severity,
 		                        new_errors, new_warnings, health_score, prev_health, created_at, target_user_id)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-		ON CONFLICT (id) DO NOTHING`,
+		ON CONFLICT (id) DO NOTHING
+		RETURNING id`,
 		a.ID, a.FlowID, a.OrgID, a.Type, a.Title, a.Message, a.Severity,
-		a.NewErrors, a.NewWarnings, a.HealthScore, a.PrevHealth, a.CreatedAt, a.TargetUser)
-	return err
+		a.NewErrors, a.NewWarnings, a.HealthScore, a.PrevHealth, a.CreatedAt, a.TargetUser).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // ListGovernanceAlerts returns visible alerts newest-first. Dismissed alerts are

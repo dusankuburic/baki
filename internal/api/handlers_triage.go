@@ -389,6 +389,13 @@ func (h *AnalysisHandler) handleSetBaseline(w http.ResponseWriter, r *http.Reque
 		render.Error(w, err, 0)
 		return
 	}
+	// The baseline is the flow's, read by every member and the scanner. A non-member collaborator's view lacks the
+	// org's custom rules: its keys and rule set would file those rules' findings as new rules, not drift, until
+	// someone re-baselined.
+	if !h.analysisSvc.ReadsOrgView(r.Context(), doc) {
+		render.Error(w, fmt.Errorf("only members of the flow's organisation can set its baseline"), http.StatusForbidden)
+		return
+	}
 
 	report, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
 	if err != nil {
@@ -411,13 +418,19 @@ func (h *AnalysisHandler) handleSetBaseline(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	bl := &storageif.FlowBaseline{FlowID: req.FlowID, Keys: keys, CreatedBy: userID}
+	// The rule set the keys came from: findings of rules newer than it raise a notice, not drift (ADR 0016).
+	bl := &storageif.FlowBaseline{FlowID: req.FlowID, Keys: keys, CreatedBy: userID, RuleSet: report.RuleSet}
 	if err := h.triage.SetBaseline(r.Context(), service.FlowRef{ID: req.FlowID, Name: doc.Name, OwnerID: doc.OwnerID, OrgID: doc.OrganizationID}, bl); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	meta := map[string]string{"keys": fmt.Sprintf("%d", len(keys))}
+	if report.RuleSet != nil {
+		bl.RuleSetDigest = report.RuleSet.Digest
+		meta["ruleSet"] = report.RuleSet.Digest
+	}
 	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionBaselineSet, ResourceType: "flow", ResourceID: req.FlowID, OrgID: doc.OrganizationID,
-		Meta: map[string]string{"keys": fmt.Sprintf("%d", len(keys))}})
+		Meta: meta})
 	render.JSON(w, bl)
 }
 
@@ -454,6 +467,8 @@ func (h *AnalysisHandler) handleClearBaseline(w http.ResponseWriter, r *http.Req
 
 // handleBaselineDrift reports findings introduced since the accepted baseline (the "new since
 // baseline" ratchet). With no baseline set, every finding is reported as new (HasBaseline=false).
+// With one, the response also says which of the new findings come from rules newer than the
+// baseline's rule set and how many from preview rules (newRuleIds, newFromNewRules, preview).
 // @Summary      Compare current analysis against the baseline
 // @Tags         baseline
 // @Produce      json
@@ -498,7 +513,11 @@ func (h *AnalysisHandler) handleBaselineDrift(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	render.JSON(w, analyzer.ComputeDrift(req.FlowID, report, keys))
+	drift := analyzer.ComputeDrift(req.FlowID, report, keys)
+	if bl != nil {
+		analyzer.SplitDrift(drift.New, analyzer.NewRuleAge(bl.RuleSet, report.RuleSet)).Annotate(drift)
+	}
+	render.JSON(w, drift)
 }
 
 // registerTriageRoutes wires the finding-triage and baseline sub-routes

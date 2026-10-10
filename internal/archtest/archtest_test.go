@@ -278,7 +278,7 @@ var handWrittenRoutes = map[string]int{
 	"internal/api/handlers_dashboard.go":    2,
 	"internal/api/handlers_export.go":       5,
 	"internal/api/handlers_governance.go":   5,
-	"internal/api/handlers_orgrules.go":     4,
+	"internal/api/handlers_orgrules.go":     2,
 	"internal/api/handlers_policy.go":       6,
 	"internal/api/handlers_providers.go":    12,
 	"internal/api/handlers_sharing.go":      4,

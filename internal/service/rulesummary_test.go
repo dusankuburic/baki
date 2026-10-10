@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"pad-core/analyzer"
+	"pad-core/models"
 )
 
 // TestGetRulesSummary verifies the catalog rollup the dashboard consumes for
@@ -24,10 +25,11 @@ func TestGetRulesSummary(t *testing.T) {
 	}
 
 	// Auto-fixable rules: the dashboard advertises "fix availability", so the
-	// count must equal the number of rules that resolve to a non-empty fixType.
+	// count must equal the number of rules with a one-click fix: the one the
+	// engine stamps or one the rule stamps itself (subflow-mismatch).
 	wantFixable := 0
 	for _, r := range analyzer.AllRules() {
-		if analyzer.RuleAutoFix(r.ID()) != "" {
+		if m := analyzer.MetaOf(r); m.AutoFix != "" || len(m.DirectFixes) > 0 {
 			wantFixable++
 		}
 	}
@@ -86,5 +88,22 @@ func TestGetRulesSummary_HonoursSettingsOverrides(t *testing.T) {
 	}
 	if got := svc.GetRulesSummary().TotalRules; got != totalBefore {
 		t.Errorf("TotalRules changed after toggle: %d, want %d", got, totalBefore)
+	}
+}
+
+// s2-4: the catalog reports a configured severity as the engine applies it. A stored "critical" showed as the
+// rule's severity, matched no option, and the threshold save re-posted it to the config route, which refuses it.
+func TestCatalogRule_EffectiveConfiguredSeverity(t *testing.T) {
+	r := &analyzer.WaitZeroRule{}
+	for configured, want := range map[string]models.Severity{
+		"critical": models.SeverityError,
+		" Warning": models.SeverityWarning,
+		"":         r.DefaultSeverity(),
+	} {
+		s := models.DefaultSettings()
+		s.Analysis.Rules = map[string]models.RuleConfig{r.ID(): {Enabled: true, Severity: configured}}
+		if got := catalogRule(r, s, nil).DefaultSeverity; got != want {
+			t.Errorf("configured %q: catalog severity %q, want %q", configured, got, want)
+		}
 	}
 }

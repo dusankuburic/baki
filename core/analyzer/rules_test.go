@@ -897,7 +897,7 @@ func TestLargeSubflowRule(t *testing.T) {
 		b := &blocks[0]
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: blocks}}}
 		ctx := buildContext(flow, nil)
-		got := rule.Check(b, ctx)
+		got := findingsAt(rule, ctx, b)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 findings for small subflow, got %d", len(got))
 		}
@@ -913,7 +913,7 @@ func TestLargeSubflowRule(t *testing.T) {
 		b := &blocks[0]
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "BigFlow", Blocks: blocks}}}
 		ctx := buildContext(flow, nil)
-		got := rule.Check(b, ctx)
+		got := findingsAt(rule, ctx, b)
 		if len(got) != 1 {
 			t.Fatalf("expected 1 finding for large subflow, got %d", len(got))
 		}
@@ -932,7 +932,7 @@ func TestLargeSubflowRule(t *testing.T) {
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "BigFlow", Blocks: blocks}}}
 		ctx := buildContext(flow, nil)
 		b1 := &blocks[1]
-		got := rule.Check(b1, ctx)
+		got := findingsAt(rule, ctx, b1)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 findings for non-first block, got %d", len(got))
 		}

@@ -1,0 +1,1148 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "PAD Analyzer",
+          "version": "0.1.0",
+          "rules": [
+            {
+              "id": "file-op-no-error-handler",
+              "name": "File operation without error handler",
+              "shortDescription": {
+                "text": "File operation without error handler"
+              },
+              "fullDescription": {
+                "text": "File/Folder operations that commonly fail (locks, permissions, missing paths) without an error handler."
+              },
+              "help": {
+                "text": "File/Folder operations that commonly fail (locks, permissions, missing paths) without an error handler.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules file-op-no-error-handler` for the full rule description.",
+                "markdown": "File/Folder operations that commonly fail (locks, permissions, missing paths) without an error handler.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules file-op-no-error-handler` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "hardcoded-filepath",
+              "name": "Hardcoded file path",
+              "shortDescription": {
+                "text": "Hardcoded file path"
+              },
+              "fullDescription": {
+                "text": "Absolute file paths that break when the flow runs on a different machine."
+              },
+              "help": {
+                "text": "Absolute file paths that break when the flow runs on a different machine.\n\nAuto-fix available: replace-with-variable (apply with `bakicli fix`).\n\nRun `bakicli rules hardcoded-filepath` for the full rule description.",
+                "markdown": "Absolute file paths that break when the flow runs on a different machine.\n\nAuto-fix available: replace-with-variable (apply with `bakicli fix`).\n\nRun `bakicli rules hardcoded-filepath` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Portability",
+                "confidence": "low"
+              }
+            },
+            {
+              "id": "hardcoded-ip",
+              "name": "Hardcoded IP address",
+              "shortDescription": {
+                "text": "Hardcoded IP address"
+              },
+              "fullDescription": {
+                "text": "Hardcoded IP addresses in network-related properties that should be parameterized for different environments."
+              },
+              "help": {
+                "text": "Hardcoded IP addresses in network-related properties that should be parameterized for different environments.\n\nAuto-fix available: replace-with-variable (apply with `bakicli fix`).\n\nRun `bakicli rules hardcoded-ip` for the full rule description.",
+                "markdown": "Hardcoded IP addresses in network-related properties that should be parameterized for different environments.\n\nAuto-fix available: replace-with-variable (apply with `bakicli fix`).\n\nRun `bakicli rules hardcoded-ip` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Portability",
+                "confidence": "low"
+              }
+            },
+            {
+              "id": "missing-delay",
+              "name": "Web action without wait",
+              "shortDescription": {
+                "text": "Web action without wait"
+              },
+              "fullDescription": {
+                "text": "Two consecutive WebAutomation/UIAutomation actions with no wait between them."
+              },
+              "help": {
+                "text": "Two consecutive WebAutomation/UIAutomation actions with no wait between them.\n\nAuto-fix available: insert-delay (apply with `bakicli fix`).\n\nRun `bakicli rules missing-delay` for the full rule description.",
+                "markdown": "Two consecutive WebAutomation/UIAutomation actions with no wait between them.\n\nAuto-fix available: insert-delay (apply with `bakicli fix`).\n\nRun `bakicli rules missing-delay` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "missing-retry",
+              "name": "Transient operation without retry",
+              "shortDescription": {
+                "text": "Transient operation without retry"
+              },
+              "fullDescription": {
+                "text": "Network/external service actions prone to transient failures that lack retry logic."
+              },
+              "help": {
+                "text": "Network/external service actions prone to transient failures that lack retry logic.\n\nAuto-fix available: wrap-in-retry (apply with `bakicli fix`).\n\nRun `bakicli rules missing-retry` for the full rule description.",
+                "markdown": "Network/external service actions prone to transient failures that lack retry logic.\n\nAuto-fix available: wrap-in-retry (apply with `bakicli fix`).\n\nRun `bakicli rules missing-retry` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "missing-timeout",
+              "name": "Network operation without timeout",
+              "shortDescription": {
+                "text": "Network operation without timeout"
+              },
+              "fullDescription": {
+                "text": "Network/UI automation actions that may hang because no explicit timeout is configured."
+              },
+              "help": {
+                "text": "Network/UI automation actions that may hang because no explicit timeout is configured.\n\nAuto-fix available: set-timeout (apply with `bakicli fix`).\n\nRun `bakicli rules missing-timeout` for the full rule description.",
+                "markdown": "Network/UI automation actions that may hang because no explicit timeout is configured.\n\nAuto-fix available: set-timeout (apply with `bakicli fix`).\n\nRun `bakicli rules missing-timeout` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "resource-leak",
+              "name": "Resource opened but never closed",
+              "shortDescription": {
+                "text": "Resource opened but never closed"
+              },
+              "fullDescription": {
+                "text": "Actions that open files, connections, or application instances without a corresponding close action."
+              },
+              "help": {
+                "text": "Actions that open files, connections, or application instances without a corresponding close action.\n\nAuto-fix available: insert-close (apply with `bakicli fix`).\n\nRun `bakicli rules resource-leak` for the full rule description.",
+                "markdown": "Actions that open files, connections, or application instances without a corresponding close action.\n\nAuto-fix available: insert-close (apply with `bakicli fix`).\n\nRun `bakicli rules resource-leak` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "high"
+              }
+            },
+            {
+              "id": "slow-pattern",
+              "name": "UI automation in tight loop",
+              "shortDescription": {
+                "text": "UI automation in tight loop"
+              },
+              "fullDescription": {
+                "text": "UI automation actions inside a loop without a delay action."
+              },
+              "help": {
+                "text": "UI automation actions inside a loop without a delay action.\n\nAuto-fix available: insert-delay-in-loop (apply with `bakicli fix`).\n\nRun `bakicli rules slow-pattern` for the full rule description.",
+                "markdown": "UI automation actions inside a loop without a delay action.\n\nAuto-fix available: insert-delay-in-loop (apply with `bakicli fix`).\n\nRun `bakicli rules slow-pattern` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Performance",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "sql-injection-risk",
+              "name": "SQL injection risk",
+              "shortDescription": {
+                "text": "SQL injection risk"
+              },
+              "fullDescription": {
+                "text": "SQL statements that interpolate variables directly instead of using parameterized queries."
+              },
+              "help": {
+                "text": "SQL statements that interpolate variables directly instead of using parameterized queries.\n\nAuto-fix available: parameterize-sql (apply with `bakicli fix`).\n\nRun `bakicli rules sql-injection-risk` for the full rule description.",
+                "markdown": "SQL statements that interpolate variables directly instead of using parameterized queries.\n\nAuto-fix available: parameterize-sql (apply with `bakicli fix`).\n\nRun `bakicli rules sql-injection-risk` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Security",
+                "confidence": "high"
+              }
+            },
+            {
+              "id": "subflow-no-error-handler",
+              "name": "Subflow without error handler",
+              "shortDescription": {
+                "text": "Subflow without error handler"
+              },
+              "fullDescription": {
+                "text": "Non-trivial subflows that contain no error handler block."
+              },
+              "help": {
+                "text": "Non-trivial subflows that contain no error handler block.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules subflow-no-error-handler` for the full rule description.",
+                "markdown": "Non-trivial subflows that contain no error handler block.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules subflow-no-error-handler` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "unhandled-error",
+              "name": "Unhandled error in fallible action",
+              "shortDescription": {
+                "text": "Unhandled error in fallible action"
+              },
+              "fullDescription": {
+                "text": "Actions that commonly fail (network, file, UI automation) where no error handler exists in the surrounding scope."
+              },
+              "help": {
+                "text": "Actions that commonly fail (network, file, UI automation) where no error handler exists in the surrounding scope.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules unhandled-error` for the full rule description.",
+                "markdown": "Actions that commonly fail (network, file, UI automation) where no error handler exists in the surrounding scope.\n\nAuto-fix available: wrap-error-handler (apply with `bakicli fix`).\n\nRun `bakicli rules unhandled-error` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Reliability",
+                "confidence": "medium"
+              }
+            },
+            {
+              "id": "uninitialized-variable",
+              "name": "Variable used before being initialized",
+              "shortDescription": {
+                "text": "Variable used before being initialized"
+              },
+              "fullDescription": {
+                "text": "Detects variables that are referenced but never assigned in the flow."
+              },
+              "help": {
+                "text": "Detects variables that are referenced but never assigned in the flow.\n\nAuto-fix available: init-variable (apply with `bakicli fix`).\n\nRun `bakicli rules uninitialized-variable` for the full rule description.",
+                "markdown": "Detects variables that are referenced but never assigned in the flow.\n\nAuto-fix available: init-variable (apply with `bakicli fix`).\n\nRun `bakicli rules uninitialized-variable` for the full rule description."
+              },
+              "helpUri": "https://github.com/dusankuburic/baki#features",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "Logic",
+                "confidence": "low"
+              }
+            }
+          ]
+        }
+      },
+      "automationDetails": {
+        "id": "pad-analysis"
+      },
+      "invocations": [
+        {
+          "executionSuccessful": false
+        }
+      ],
+      "originalUriBaseIds": {
+        "%SRCROOT%": {
+          "uri": "file:///home/runner/work/baki/baki/"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "file-op-no-error-handler",
+          "ruleIndex": 0,
+          "level": "warning",
+          "message": {
+            "text": "This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.\n\nSuggestion: Wrap this action in an 'On Block Error' handler to manage missing files, permission errors, and file lock issues gracefully."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Billing.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 4
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-009",
+                  "fullyQualifiedName": "sf-2/b-009",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "2e56ae26ed766fde"
+          }
+        },
+        {
+          "ruleId": "hardcoded-filepath",
+          "ruleIndex": 1,
+          "level": "note",
+          "message": {
+            "text": "Property 'Files' contains an absolute path: /home/ops/tmp/invoice.csv\n\nSuggestion: Use a relative path or store the base directory in a variable configured per environment."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Billing.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 4
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-009",
+                  "fullyQualifiedName": "sf-2/b-009",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "b532522a9ff11f19"
+          },
+          "properties": {
+            "policyViolation": true
+          }
+        },
+        {
+          "ruleId": "hardcoded-ip",
+          "ruleIndex": 2,
+          "level": "note",
+          "message": {
+            "text": "Property 'ConnectionString' contains a hardcoded IP address: 10.0.0.5\n\nSuggestion: Store the IP address in a variable so it can be changed per environment."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Billing.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 2
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-007",
+                  "fullyQualifiedName": "sf-2/b-007",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "d5a27a077e0097d0"
+          }
+        },
+        {
+          "ruleId": "missing-delay",
+          "ruleIndex": 3,
+          "level": "note",
+          "message": {
+            "text": "Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.\n\nSuggestion: Add a 'Wait for element' or 'Delay' action between UI automation steps to improve reliability."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 6
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-005",
+                  "fullyQualifiedName": "sf-1/b-005",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "7f529b99d8947334"
+          }
+        },
+        {
+          "ruleId": "missing-retry",
+          "ruleIndex": 4,
+          "level": "note",
+          "message": {
+            "text": "This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.\n\nSuggestion: Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 5
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-004",
+                  "fullyQualifiedName": "sf-1/b-004",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "635df1c6cc579c31"
+          }
+        },
+        {
+          "ruleId": "missing-retry",
+          "ruleIndex": 4,
+          "level": "note",
+          "message": {
+            "text": "This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.\n\nSuggestion: Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 6
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-005",
+                  "fullyQualifiedName": "sf-1/b-005",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "d79300587fccd577"
+          }
+        },
+        {
+          "ruleId": "missing-retry",
+          "ruleIndex": 4,
+          "level": "note",
+          "message": {
+            "text": "This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.\n\nSuggestion: Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Billing.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 2
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-007",
+                  "fullyQualifiedName": "sf-2/b-007",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "4012ed0eeaaa3ace"
+          }
+        },
+        {
+          "ruleId": "missing-retry",
+          "ruleIndex": 4,
+          "level": "note",
+          "message": {
+            "text": "This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.\n\nSuggestion: Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Billing.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-008",
+                  "fullyQualifiedName": "sf-2/b-008",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "9dc73aafdd8838f2"
+          }
+        },
+        {
+          "ruleId": "missing-timeout",
+          "ruleIndex": 5,
+          "level": "warning",
+          "message": {
+            "text": "This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.\n\nSuggestion: Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 5
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-004",
+                  "fullyQualifiedName": "sf-1/b-004",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "b5301b3e11ef452a"
+          }
+        },
+        {
+          "ruleId": "missing-timeout",
+          "ruleIndex": 5,
+          "level": "warning",
+          "message": {
+            "text": "This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.\n\nSuggestion: Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 6
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-005",
+                  "fullyQualifiedName": "sf-1/b-005",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "327690590f76592c"
+          }
+        },
+        {
+          "ruleId": "missing-timeout",
+          "ruleIndex": 5,
+          "level": "warning",
+          "message": {
+            "text": "This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.\n\nSuggestion: Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Billing.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 2
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-007",
+                  "fullyQualifiedName": "sf-2/b-007",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "f3b250e7c73ea911"
+          }
+        },
+        {
+          "ruleId": "resource-leak",
+          "ruleIndex": 6,
+          "level": "warning",
+          "message": {
+            "text": "This action opens a Excel instance (stored in %ExcelInstance%) but no matching close action was found in the flow.\n\nSuggestion: Add a 'Excel.Close' action to release the resource. Place it inside an 'On Block Error' handler to guarantee cleanup even on failure."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-002",
+                  "fullyQualifiedName": "sf-1/b-002",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "0ffbc30d24621eeb"
+          }
+        },
+        {
+          "ruleId": "resource-leak",
+          "ruleIndex": 6,
+          "level": "warning",
+          "message": {
+            "text": "This action opens a database connection (stored in %SQLConnection%) but no matching close action was found in the flow.\n\nSuggestion: Add a 'Database.Close' action to release the resource. Place it inside an 'On Block Error' handler to guarantee cleanup even on failure."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Billing.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 2
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-007",
+                  "fullyQualifiedName": "sf-2/b-007",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "d77d9ceeeaafac76"
+          }
+        },
+        {
+          "ruleId": "slow-pattern",
+          "ruleIndex": 7,
+          "level": "warning",
+          "message": {
+            "text": "This loop contains UI/web automation actions without any delay, which can overwhelm the target application.\n\nSuggestion: Add a 'Wait' or 'Delay' action inside the loop to reduce load on the target application."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 4
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-003",
+                  "fullyQualifiedName": "sf-1/b-003",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "8a3b1b6d9cada08a"
+          }
+        },
+        {
+          "ruleId": "sql-injection-risk",
+          "ruleIndex": 8,
+          "level": "warning",
+          "message": {
+            "text": "SQL statement interpolates variables directly. A malicious value could alter the query.\n\nSuggestion: Use parameterized queries (@paramName or ? placeholders) instead of embedding %variables% directly in the SQL string."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Billing.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-008",
+                  "fullyQualifiedName": "sf-2/b-008",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "bbe38f4919aba0be"
+          },
+          "properties": {
+            "policyViolation": true
+          }
+        },
+        {
+          "ruleId": "subflow-no-error-handler",
+          "ruleIndex": 9,
+          "level": "note",
+          "message": {
+            "text": "Subflow \"Main\" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.\n\nSuggestion: Add a Try/Catch or On Block Error handler to protect against unexpected failures."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 2
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-001",
+                  "fullyQualifiedName": "sf-1/b-001",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "8b75c2036adb7156"
+          }
+        },
+        {
+          "ruleId": "unhandled-error",
+          "ruleIndex": 10,
+          "level": "warning",
+          "message": {
+            "text": "This action commonly fails but has no error handler in its surrounding scope.\n\nSuggestion: Wrap this action in a Try/Catch block or add error handler logic to recover from failures."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-002",
+                  "fullyQualifiedName": "sf-1/b-002",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "037cad1e20ac0364"
+          },
+          "properties": {
+            "policyViolation": true
+          }
+        },
+        {
+          "ruleId": "unhandled-error",
+          "ruleIndex": 10,
+          "level": "warning",
+          "message": {
+            "text": "This action commonly fails but has no error handler in its surrounding scope.\n\nSuggestion: Wrap this action in a Try/Catch block or add error handler logic to recover from failures."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 5
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-004",
+                  "fullyQualifiedName": "sf-1/b-004",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "53424c9794288137"
+          },
+          "properties": {
+            "policyViolation": true
+          }
+        },
+        {
+          "ruleId": "unhandled-error",
+          "ruleIndex": 10,
+          "level": "warning",
+          "message": {
+            "text": "This action commonly fails but has no error handler in its surrounding scope.\n\nSuggestion: Wrap this action in a Try/Catch block or add error handler logic to recover from failures."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 6
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-005",
+                  "fullyQualifiedName": "sf-1/b-005",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "771d967fcd119754"
+          },
+          "properties": {
+            "policyViolation": true
+          }
+        },
+        {
+          "ruleId": "unhandled-error",
+          "ruleIndex": 10,
+          "level": "warning",
+          "message": {
+            "text": "This action commonly fails but has no error handler in its surrounding scope.\n\nSuggestion: Wrap this action in a Try/Catch block or add error handler logic to recover from failures."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Billing.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 2
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-007",
+                  "fullyQualifiedName": "sf-2/b-007",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "183c4d3c9819a490"
+          },
+          "properties": {
+            "policyViolation": true
+          }
+        },
+        {
+          "ruleId": "unhandled-error",
+          "ruleIndex": 10,
+          "level": "warning",
+          "message": {
+            "text": "This action commonly fails but has no error handler in its surrounding scope.\n\nSuggestion: Wrap this action in a Try/Catch block or add error handler logic to recover from failures."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Billing.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-008",
+                  "fullyQualifiedName": "sf-2/b-008",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "58c0f9fabf99fabc"
+          },
+          "properties": {
+            "policyViolation": true
+          }
+        },
+        {
+          "ruleId": "unhandled-error",
+          "ruleIndex": 10,
+          "level": "warning",
+          "message": {
+            "text": "This action commonly fails but has no error handler in its surrounding scope.\n\nSuggestion: Wrap this action in a Try/Catch block or add error handler logic to recover from failures."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Billing.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 4
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-009",
+                  "fullyQualifiedName": "sf-2/b-009",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "ac1635a835a72ca2"
+          },
+          "properties": {
+            "policyViolation": true
+          }
+        },
+        {
+          "ruleId": "uninitialized-variable",
+          "ruleIndex": 11,
+          "level": "warning",
+          "message": {
+            "text": "Variable 'ExcelData' is used here but doesn't seem to be assigned anywhere in the flow.\n\nSuggestion: Ensure the variable is initialized with a SET action or as an output of another action."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 4
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-003",
+                  "fullyQualifiedName": "sf-1/b-003",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "f2d3fab588daaab4"
+          }
+        },
+        {
+          "ruleId": "uninitialized-variable",
+          "ruleIndex": 11,
+          "level": "warning",
+          "message": {
+            "text": "Variable 'CurrentRow' is used here but doesn't seem to be assigned anywhere in the flow.\n\nSuggestion: Ensure the variable is initialized with a SET action or as an output of another action."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 4
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-003",
+                  "fullyQualifiedName": "sf-1/b-003",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "91855a90fce18592"
+          }
+        },
+        {
+          "ruleId": "uninitialized-variable",
+          "ruleIndex": 11,
+          "level": "warning",
+          "message": {
+            "text": "Variable 'Browser' is used here but doesn't seem to be assigned anywhere in the flow.\n\nSuggestion: Ensure the variable is initialized with a SET action or as an output of another action."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Main.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 5
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-004",
+                  "fullyQualifiedName": "sf-1/b-004",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "d306b43b18408c35"
+          }
+        },
+        {
+          "ruleId": "uninitialized-variable",
+          "ruleIndex": 11,
+          "level": "warning",
+          "message": {
+            "text": "Variable 'InvoiceId' is used here but doesn't seem to be assigned anywhere in the flow.\n\nSuggestion: Ensure the variable is initialized with a SET action or as an output of another action."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "flows/teamA/Billing.txt",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "b-008",
+                  "fullyQualifiedName": "sf-2/b-008",
+                  "kind": "member"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "padFindingId/v1": "432432325c6d6133"
+          }
+        }
+      ],
+      "properties": {
+        "policy": {
+          "errors": 1,
+          "evaluated": 9,
+          "info": 2,
+          "passed": false,
+          "policyId": "pol-release",
+          "policyName": "Release gate \u003cv2\u003e",
+          "violationFingerprints": [
+            "b532522a9ff11f19",
+            "bbe38f4919aba0be",
+            "037cad1e20ac0364",
+            "53424c9794288137",
+            "771d967fcd119754",
+            "183c4d3c9819a490",
+            "58c0f9fabf99fabc",
+            "ac1635a835a72ca2"
+          ],
+          "violations": 8,
+          "waived": 0,
+          "warnings": 6
+        }
+      }
+    }
+  ]
+}
